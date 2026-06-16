@@ -18,7 +18,7 @@ VITE_USE_MOCKS=false
 VITE_API_BASE_URL=http://localhost:8080
 ```
 
-The API wrapper lives in `src/api/` and maps to the requested routes:
+API wrapper lives in `src/api/` and maps to the requested routes:
 
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
