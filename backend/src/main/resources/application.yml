@@ -1,0 +1,45 @@
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    session:
+      cookie:
+        name: GLR_HR_SESSION
+        http-only: true
+        same-site: lax
+
+spring:
+  application:
+    name: glr-hr-backend
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/hris}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      minimum-idle: ${DB_MIN_IDLE:1}
+      data-source-properties:
+        reWriteBatchedInserts: true
+  flyway:
+    enabled: ${APP_FLYWAY_ENABLED:true}
+    schemas: hr,hr_restricted
+    default-schema: hr
+    baseline-on-migrate: true
+    baseline-version: 1
+  sql:
+    init:
+      mode: never
+  jackson:
+    deserialization:
+      accept-empty-string-as-null-object: true
+
+app:
+  cors:
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174}
+  demo-seed:
+    enabled: ${APP_DEMO_SEED_ENABLED:false}
+  auth:
+    quick-role-login-enabled: ${APP_QUICK_ROLE_LOGIN_ENABLED:false}
+
+logging:
+  level:
+    th.co.glr.hr: INFO

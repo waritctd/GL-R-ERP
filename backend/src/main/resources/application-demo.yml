@@ -1,0 +1,5 @@
+app:
+  demo-seed:
+    enabled: true
+  auth:
+    quick-role-login-enabled: true

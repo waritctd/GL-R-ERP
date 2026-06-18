@@ -1,35 +1,50 @@
-# GL&R HR React Frontend
+# GL&R HR Portal
 
-React/Vite implementation of the phase 1 HR portal.
+This repository is split into two clear applications:
 
-## Run
+```text
+frontend/  React + Vite HR portal
+backend/   Spring Boot API for PostgreSQL/Supabase
+```
+
+The frontend can still run with mock data, or it can call the Spring Boot backend through the existing `/api/*` contract.
+
+## Frontend
 
 ```bash
+cd frontend
 npm install
-npm run dev -- --host 127.0.0.1 --port 5174
+npm run dev
 ```
 
-## Spring Boot API Switch
-
-The app uses mock data by default. To call the Spring Boot backend instead:
+To use the backend instead of mocks:
 
 ```bash
-VITE_USE_MOCKS=false
-VITE_API_BASE_URL=http://localhost:8080
+cd frontend
+VITE_USE_MOCKS=false VITE_API_BASE_URL=http://127.0.0.1:8080 npm run dev
 ```
 
-API wrapper lives in `src/api/` and maps to the requested routes:
+See [frontend/README.md](frontend/README.md).
 
-- `POST /api/auth/login`
-- `POST /api/auth/logout`
-- `GET /api/auth/me`
-- `GET /api/employees`
-- `POST /api/employees`
-- `GET /api/employees/[id]`
-- `PATCH /api/employees/[id]`
-- `GET /api/profile-requests`
-- `POST /api/profile-requests`
-- `PATCH /api/profile-requests/[id]`
-- `GET /api/users`
-- `POST /api/users`
-- `PATCH /api/users/[id]`
+## Backend
+
+The backend uses Spring Boot, Flyway, and PostgreSQL. Your Supabase demo connection is stored locally in ignored file `backend/.env.local`; commit only `backend/.env.example`.
+
+```bash
+cd backend
+set -a
+source .env.local
+set +a
+mvn spring-boot:run
+```
+
+See [backend/README.md](backend/README.md).
+
+## Production Shape
+
+For on-prem production, use the same backend and schema migrations with a different PostgreSQL datasource. Keep demo seeding and quick role login disabled:
+
+```bash
+APP_DEMO_SEED_ENABLED=false
+APP_QUICK_ROLE_LOGIN_ENABLED=false
+```
