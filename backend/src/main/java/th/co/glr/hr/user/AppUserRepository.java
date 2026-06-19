@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -85,7 +86,13 @@ public class AppUserRepository {
               LEFT JOIN hr.employee e ON e.employee_id = au.employee_id
              ORDER BY au.user_id
             """, Map.of(), (rs, rowNum) -> mapUser(rs));
-        return users.stream().map(user -> userWithRoles(user, loadRoles(user.id()))).toList();
+        if (users.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, List<String>> rolesByUser = loadAllRoles();
+        return users.stream()
+            .map(user -> userWithRoles(user, rolesByUser.getOrDefault(user.id(), List.of())))
+            .toList();
     }
 
     public long create(CreateUserRequest request, String passwordHash) {
@@ -191,6 +198,19 @@ public class AppUserRepository {
              WHERE ur.user_id = :userId
              ORDER BY r.name
             """, Map.of("userId", userId), String.class);
+    }
+
+    private Map<Long, List<String>> loadAllRoles() {
+        return jdbc.query("""
+            SELECT ur.user_id, r.name
+              FROM hr.user_role ur
+              JOIN hr.role r ON r.role_id = ur.role_id
+             ORDER BY r.name
+            """, Map.of(), (rs, rowNum) -> Map.entry(rs.getLong("user_id"), rs.getString("name")))
+            .stream()
+            .collect(Collectors.groupingBy(
+                Map.Entry::getKey,
+                Collectors.mapping(Map.Entry::getValue, Collectors.toList())));
     }
 
     private AppUserRecord mapUser(ResultSet rs) throws SQLException {

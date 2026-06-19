@@ -7,6 +7,7 @@ server:
         name: GLR_HR_SESSION
         http-only: true
         same-site: lax
+        secure: ${SERVER_SESSION_COOKIE_SECURE:true}
 
 spring:
   application:
