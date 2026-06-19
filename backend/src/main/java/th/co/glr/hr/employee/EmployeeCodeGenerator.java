@@ -13,7 +13,7 @@ public class EmployeeCodeGenerator {
     }
 
     public String nextEmployeeCode() {
-        Long next = jdbc.queryForObject("SELECT COALESCE(MAX(employee_id), 0) + 1001 FROM hr.employee", Map.of(), Long.class);
+        Long next = jdbc.queryForObject("SELECT nextval('hr.employee_code_seq')", Map.of(), Long.class);
         return "GLR-" + next;
     }
 }

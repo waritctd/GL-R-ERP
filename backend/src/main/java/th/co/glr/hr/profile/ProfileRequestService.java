@@ -49,7 +49,14 @@ public class ProfileRequestService {
         }
         ProfileRequestRecord existing = profileRequests.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Profile request not found"));
-        profileRequests.updateStatus(id, request.status(), reviewer.id(), request.reviewerNote());
+        if (!"pending".equals(existing.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "Profile request has already been reviewed");
+        }
+
+        int updated = profileRequests.updatePendingStatus(id, request.status(), reviewer.id(), request.reviewerNote());
+        if (updated != 1) {
+            throw new ApiException(HttpStatus.CONFLICT, "Profile request has already been reviewed");
+        }
         if ("approved".equals(request.status()) && "pending".equals(existing.status())) {
             applyApprovedRequest(existing);
         }

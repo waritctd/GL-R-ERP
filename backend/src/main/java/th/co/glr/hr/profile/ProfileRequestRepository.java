@@ -94,14 +94,15 @@ public class ProfileRequestRepository {
         return id == null ? 0 : id;
     }
 
-    public void updateStatus(long id, String status, long reviewerUserId, String reviewerNote) {
-        jdbc.update("""
+    public int updatePendingStatus(long id, String status, long reviewerUserId, String reviewerNote) {
+        return jdbc.update("""
             UPDATE hr.profile_change_request
                SET status = :status,
                    reviewed_by_user_id = :reviewerUserId,
                    reviewed_at = now(),
                    reviewer_note = :reviewerNote
              WHERE request_id = :id
+               AND status = 'pending'
             """, new MapSqlParameterSource()
             .addValue("id", id)
             .addValue("status", status)
