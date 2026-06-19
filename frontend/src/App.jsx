@@ -137,39 +137,41 @@ export function App() {
   }
 
   async function createEmployee(payload) {
-    await api.employees.create(payload);
-    await loadData(user, 'employees');
+    const response = await api.employees.create(payload);
+    setEmployees((current) => [response.employee, ...current]);
+    setRoute(allowedRoute('employees', user));
     showToast('success', 'เพิ่มพนักงานเรียบร้อย');
   }
 
   async function updateEmployee(id, payload) {
     const response = await api.employees.update(id, payload);
     setSelectedEmployee(response.employee);
-    await loadData(user, 'detail');
+    setEmployees((current) => current.map((employee) => (employee.id === id ? response.employee : employee)));
+    setCurrentEmployee((current) => (current?.id === id ? response.employee : current));
     showToast('success', 'บันทึกข้อมูลพนักงานแล้ว');
   }
 
   async function createProfileRequest(payload) {
-    await api.profileRequests.create(payload);
-    await loadData(user, route);
+    const response = await api.profileRequests.create(payload);
+    setProfileRequests((current) => [response.profileRequest, ...current]);
     showToast('success', 'ส่งคำขอแก้ไขเรียบร้อย');
   }
 
   async function reviewProfileRequest(id, status) {
-    await api.profileRequests.update(id, { status });
-    await loadData(user, 'requests');
+    const response = await api.profileRequests.update(id, { status });
+    setProfileRequests((current) => current.map((request) => (request.id === id ? response.profileRequest : request)));
     showToast(status === 'approved' ? 'success' : 'info', status === 'approved' ? 'อนุมัติคำขอแล้ว' : 'ปฏิเสธคำขอแล้ว');
   }
 
   async function createUser(payload) {
-    await api.users.create(payload);
-    await loadData(user, 'users');
+    const response = await api.users.create(payload);
+    setUsers((current) => [...current, response.user]);
     showToast('success', 'สร้างผู้ใช้งานเรียบร้อย');
   }
 
   async function updateUser(id, payload) {
-    await api.users.update(id, payload);
-    await loadData(user, 'users');
+    const response = await api.users.update(id, payload);
+    setUsers((current) => current.map((account) => (account.id === id ? response.user : account)));
     showToast('info', 'ปรับสถานะบัญชีแล้ว');
   }
 
