@@ -1,11 +1,11 @@
 # Render Blueprint for the GL&R HR Spring Boot backend.
 # Import via Render Dashboard -> New -> Blueprint, pointing at this repo.
 # The service name is pinned so the public URL is deterministic:
-#   https://glr-hr-backend.onrender.com
+#   https://gl-r-erp.onrender.com
 # which is what the Vercel frontend proxies /api to (see frontend/vercel.json).
 services:
   - type: web
-    name: glr-hr-backend
+    name: gl-r-erp
     runtime: docker
     rootDir: backend
     dockerfilePath: ./Dockerfile
