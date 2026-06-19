@@ -1,11 +1,13 @@
 server:
   port: ${SERVER_PORT:8080}
+  forward-headers-strategy: framework
   servlet:
     session:
       cookie:
         name: GLR_HR_SESSION
         http-only: true
         same-site: lax
+        secure: ${SERVER_SESSION_COOKIE_SECURE:true}
 
 spring:
   application:

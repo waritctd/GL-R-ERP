@@ -3,6 +3,8 @@ package th.co.glr.hr.auth;
 import jakarta.servlet.http.HttpSession;
 import java.util.Comparator;
 import java.util.List;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -17,11 +19,16 @@ public class AuthService {
 
     private final AppUserRepository users;
     private final AppProperties properties;
+    private final boolean demoProfileActive;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
-    public AuthService(AppUserRepository users, AppProperties properties) {
+    public AuthService(AppUserRepository users, AppProperties properties, Environment environment) {
         this.users = users;
         this.properties = properties;
+        // Passwordless quick-role login is a demo-only convenience. Binding it to the
+        // "demo" profile guarantees it cannot activate in production even if the
+        // APP_QUICK_ROLE_LOGIN_ENABLED flag is mistakenly set there.
+        this.demoProfileActive = environment.acceptsProfiles(Profiles.of("demo"));
     }
 
     public AuthResponse login(LoginRequest request, HttpSession session) {
@@ -29,7 +36,7 @@ public class AuthService {
         String selectedRole;
 
         if (hasText(request.role())) {
-            if (!properties.getAuth().isQuickRoleLoginEnabled()) {
+            if (!demoProfileActive || !properties.getAuth().isQuickRoleLoginEnabled()) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "Quick role login is disabled");
             }
             user = users.findFirstEnabledByRole(request.role())
