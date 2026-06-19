@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ROLE_PERMISSIONS } from '../../api/index.js';
+import { hasPermission } from '../../app/permissions.js';
 import { Avatar } from '../../components/common/Avatar.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -15,7 +15,7 @@ export function EmployeeListPage({ user, employees, onOpenEmployee, onCreateEmpl
   const [filters, setFilters] = useState({ search: '', divisionId: '', departmentTh: '', statusId: '', active: 'all' });
   const [page, setPage] = useState(1);
   const [creating, setCreating] = useState(false);
-  const canCreate = ROLE_PERMISSIONS.canManageEmployees.includes(user.role);
+  const canCreate = hasPermission(user.role, 'canManageEmployees');
 
   const departmentOptions = filters.divisionId
     ? departments[filters.divisionId] || []

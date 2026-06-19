@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ROLE_PERMISSIONS } from '../../api/index.js';
+import { hasPermission } from '../../app/permissions.js';
 import { Avatar } from '../../components/common/Avatar.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -17,7 +17,7 @@ const tabDefs = [
 export function EmployeeDetailPage({ user, employee, onBack, onUpdateEmployee }) {
   const [activeTab, setActiveTab] = useState('personal');
   const [editing, setEditing] = useState(false);
-  const canManage = ROLE_PERMISSIONS.canManageEmployees.includes(user.role);
+  const canManage = hasPermission(user.role, 'canManageEmployees');
   const canSeeSensitive = ['hr', 'admin'].includes(user.role);
 
   if (!employee) {

@@ -29,9 +29,16 @@ public class EmployeeRepository {
     };
 
     private final NamedParameterJdbcTemplate jdbc;
+    private final EmployeeReferenceRepository references;
+    private final EmployeeCodeGenerator employeeCodes;
 
-    public EmployeeRepository(NamedParameterJdbcTemplate jdbc) {
+    public EmployeeRepository(
+            NamedParameterJdbcTemplate jdbc,
+            EmployeeReferenceRepository references,
+            EmployeeCodeGenerator employeeCodes) {
         this.jdbc = jdbc;
+        this.references = references;
+        this.employeeCodes = employeeCodes;
     }
 
     public List<EmployeeDto> findEmployees(EmployeeFilter filter, boolean includeSensitive) {
@@ -59,7 +66,7 @@ public class EmployeeRepository {
             params.addValue("departmentTh", filter.departmentTh());
         }
         if (hasText(filter.statusId())) {
-            sql.append(" AND ").append(statusCaseExpression()).append(" = :statusId");
+            sql.append(" AND ").append(EmployeeStatus.sqlCaseExpression()).append(" = :statusId");
             params.addValue("statusId", filter.statusId());
         }
         if (filter.active() != null) {
@@ -135,16 +142,16 @@ public class EmployeeRepository {
 
         NameParts thaiName = splitName(request.nameTh());
         NameParts englishName = splitName(request.nameEn());
-        Long titleId = ensureTitle(defaultText(request.titleTh(), "นาย"));
-        Long divisionId = ensureDivision(request.divisionId(), defaultText(request.divisionTh(), request.divisionId()));
-        Long departmentId = ensureDepartment(request.departmentTh(), divisionId);
-        Long positionId = ensurePosition(defaultText(request.positionTh(), "เจ้าหน้าที่"));
-        Long levelId = ensureLevel(defaultText(request.level(), "O2"));
-        Long locationId = ensureLocation(defaultText(request.locationTh(), "สำนักงานใหญ่ กรุงเทพฯ"));
-        Long statusId = ensureStatus(defaultText(request.statusId(), "ACT"));
-        boolean active = statusActive(defaultText(request.statusId(), "ACT"));
+        Long titleId = references.ensureTitle(defaultText(request.titleTh(), "นาย"));
+        Long divisionId = references.ensureDivision(request.divisionId(), defaultText(request.divisionTh(), request.divisionId()));
+        Long departmentId = references.ensureDepartment(request.departmentTh(), divisionId);
+        Long positionId = references.ensurePosition(defaultText(request.positionTh(), "เจ้าหน้าที่"));
+        Long levelId = references.ensureLevel(defaultText(request.level(), "O2"));
+        Long locationId = references.ensureLocation(defaultText(request.locationTh(), "สำนักงานใหญ่ กรุงเทพฯ"));
+        Long statusId = references.ensureStatus(defaultText(request.statusId(), "ACT"));
+        boolean active = EmployeeStatus.active(defaultText(request.statusId(), "ACT"));
 
-        String employeeCode = hasText(request.code()) ? request.code().trim() : nextEmployeeCode();
+        String employeeCode = hasText(request.code()) ? request.code().trim() : employeeCodes.nextEmployeeCode();
         LocalDate hireDate = request.hireDate() == null ? LocalDate.now() : request.hireDate();
 
         MapSqlParameterSource params = new MapSqlParameterSource()
@@ -235,36 +242,36 @@ public class EmployeeRepository {
         }
         if (request.titleTh() != null) {
             sets.add("title_id = :titleId");
-            params.addValue("titleId", ensureTitle(defaultText(request.titleTh(), "นาย")));
+            params.addValue("titleId", references.ensureTitle(defaultText(request.titleTh(), "นาย")));
         }
         Long divisionId = null;
         if (request.divisionId() != null || request.divisionTh() != null) {
-            divisionId = ensureDivision(request.divisionId(), defaultText(request.divisionTh(), request.divisionId()));
+            divisionId = references.ensureDivision(request.divisionId(), defaultText(request.divisionTh(), request.divisionId()));
             sets.add("division_id = :divisionId");
             params.addValue("divisionId", divisionId);
         }
         if (request.departmentTh() != null) {
-            Long departmentDivisionId = divisionId == null ? currentDivisionId(id) : divisionId;
+            Long departmentDivisionId = divisionId == null ? references.currentDivisionId(id) : divisionId;
             sets.add("department_id = :departmentId");
-            params.addValue("departmentId", ensureDepartment(request.departmentTh(), departmentDivisionId));
+            params.addValue("departmentId", references.ensureDepartment(request.departmentTh(), departmentDivisionId));
         }
         if (request.positionTh() != null) {
             sets.add("position_id = :positionId");
-            params.addValue("positionId", ensurePosition(request.positionTh()));
+            params.addValue("positionId", references.ensurePosition(request.positionTh()));
         }
         if (request.level() != null) {
             sets.add("level_id = :levelId");
-            params.addValue("levelId", ensureLevel(request.level()));
+            params.addValue("levelId", references.ensureLevel(request.level()));
         }
         if (request.locationTh() != null) {
             sets.add("location_id = :locationId");
-            params.addValue("locationId", ensureLocation(request.locationTh()));
+            params.addValue("locationId", references.ensureLocation(request.locationTh()));
         }
         if (request.statusId() != null) {
             sets.add("status_id = :statusId");
             sets.add("is_active = :active");
-            params.addValue("statusId", ensureStatus(request.statusId()));
-            params.addValue("active", statusActive(request.statusId()));
+            params.addValue("statusId", references.ensureStatus(request.statusId()));
+            params.addValue("active", EmployeeStatus.active(request.statusId()));
         }
 
         if (!sets.isEmpty()) {
@@ -334,8 +341,8 @@ public class EmployeeRepository {
             rs.getString("level_code"),
             rs.getString("location_th"),
             statusId,
-            defaultText(rs.getString("status_th"), statusName(statusId)),
-            statusTone(statusId),
+            defaultText(rs.getString("status_th"), EmployeeStatus.name(statusId)),
+            EmployeeStatus.tone(statusId),
             rs.getBoolean("is_active"),
             payTypeLabel(rs.getString("pay_type")),
             rs.getBigDecimal("current_salary"),
@@ -455,18 +462,7 @@ public class EmployeeRepository {
               LEFT JOIN hr.employee_address addr ON addr.employee_id = e.employee_id AND addr.address_type = 'CURRENT'
               LEFT JOIN hr.employee_emergency_contact em ON em.employee_id = e.employee_id
               %s
-            """.formatted(statusCaseExpression(), sensitiveColumns, sensitiveJoin);
-    }
-
-    private String statusCaseExpression() {
-        return """
-            CASE
-                WHEN e.is_active = FALSE OR s.name_th ILIKE '%ลาออก%' THEN 'RSG'
-                WHEN s.name_th ILIKE '%ทดลอง%' THEN 'PRB'
-                WHEN s.source_code IN ('ACT', 'PRB', 'RSG') THEN s.source_code
-                ELSE 'ACT'
-            END
-            """;
+            """.formatted(EmployeeStatus.sqlCaseExpression(), sensitiveColumns, sensitiveJoin);
     }
 
     private List<AssignmentDto> loadAssignments(long employeeId) {
@@ -567,111 +563,6 @@ public class EmployeeRepository {
             .addValue("phone", phone));
     }
 
-    private Long ensureTitle(String name) {
-        jdbc.update("""
-            INSERT INTO hr.title(name_th)
-            VALUES (:name)
-            ON CONFLICT (name_th) DO NOTHING
-            """, Map.of("name", name));
-        return jdbc.queryForObject("SELECT title_id FROM hr.title WHERE name_th = :name", Map.of("name", name), Long.class);
-    }
-
-    private Long ensureDivision(String sourceCode, String name) {
-        String fallbackName = defaultText(name, defaultText(sourceCode, "ไม่ระบุ"));
-        if (hasText(sourceCode)) {
-            jdbc.update("""
-                INSERT INTO hr.division(source_code, name_th, is_active)
-                VALUES (:sourceCode, :name, TRUE)
-                ON CONFLICT (source_code) DO UPDATE SET name_th = EXCLUDED.name_th, is_active = TRUE
-                """, Map.of("sourceCode", sourceCode, "name", fallbackName));
-            return jdbc.queryForObject("SELECT division_id FROM hr.division WHERE source_code = :sourceCode",
-                Map.of("sourceCode", sourceCode), Long.class);
-        }
-        return findOrInsertByName("hr.division", "division_id", fallbackName);
-    }
-
-    private Long ensureDepartment(String name, Long divisionId) {
-        if (!hasText(name)) {
-            return null;
-        }
-        List<Long> existing = jdbc.queryForList("""
-            SELECT department_id
-             FROM hr.department
-             WHERE name_th = :name
-               AND ((:divisionId IS NULL AND division_id IS NULL) OR division_id = :divisionId)
-             LIMIT 1
-            """, new MapSqlParameterSource().addValue("name", name).addValue("divisionId", divisionId), Long.class);
-        if (!existing.isEmpty()) {
-            return existing.getFirst();
-        }
-        return jdbc.queryForObject("""
-            INSERT INTO hr.department(name_th, division_id, is_active)
-            VALUES (:name, :divisionId, TRUE)
-            RETURNING department_id
-            """, new MapSqlParameterSource().addValue("name", name).addValue("divisionId", divisionId), Long.class);
-    }
-
-    private Long ensurePosition(String name) {
-        if (!hasText(name)) {
-            return null;
-        }
-        return findOrInsertByName("hr.position", "position_id", name);
-    }
-
-    private Long ensureLevel(String level) {
-        if (!hasText(level)) {
-            return null;
-        }
-        jdbc.update("""
-            INSERT INTO hr.employee_level(source_code, name_th)
-            VALUES (:level, :level)
-            ON CONFLICT (source_code) DO UPDATE SET name_th = EXCLUDED.name_th
-            """, Map.of("level", level));
-        return jdbc.queryForObject("SELECT level_id FROM hr.employee_level WHERE source_code = :level", Map.of("level", level), Long.class);
-    }
-
-    private Long ensureLocation(String name) {
-        if (!hasText(name)) {
-            return null;
-        }
-        jdbc.update("""
-            INSERT INTO hr.work_location(name_th)
-            VALUES (:name)
-            ON CONFLICT (name_th) DO NOTHING
-            """, Map.of("name", name));
-        return jdbc.queryForObject("SELECT location_id FROM hr.work_location WHERE name_th = :name", Map.of("name", name), Long.class);
-    }
-
-    private Long ensureStatus(String statusId) {
-        String normalized = defaultText(statusId, "ACT");
-        jdbc.update("""
-            INSERT INTO hr.employment_status(source_code, name_th, name_en)
-            VALUES (:sourceCode, :nameTh, :nameEn)
-            ON CONFLICT (source_code) DO UPDATE SET name_th = EXCLUDED.name_th, name_en = EXCLUDED.name_en
-            """, Map.of("sourceCode", normalized, "nameTh", statusName(normalized), "nameEn", statusEnglishName(normalized)));
-        return jdbc.queryForObject("SELECT status_id FROM hr.employment_status WHERE source_code = :sourceCode",
-            Map.of("sourceCode", normalized), Long.class);
-    }
-
-    private Long findOrInsertByName(String table, String idColumn, String name) {
-        List<Long> existing = jdbc.queryForList("SELECT " + idColumn + " FROM " + table + " WHERE name_th = :name LIMIT 1",
-            Map.of("name", name), Long.class);
-        if (!existing.isEmpty()) {
-            return existing.getFirst();
-        }
-        return jdbc.queryForObject("INSERT INTO " + table + "(name_th, is_active) VALUES (:name, TRUE) RETURNING " + idColumn,
-            Map.of("name", name), Long.class);
-    }
-
-    private Long currentDivisionId(long employeeId) {
-        return jdbc.queryForObject("SELECT division_id FROM hr.employee WHERE employee_id = :id", Map.of("id", employeeId), Long.class);
-    }
-
-    private String nextEmployeeCode() {
-        Long next = jdbc.queryForObject("SELECT COALESCE(MAX(employee_id), 0) + 1001 FROM hr.employee", Map.of(), Long.class);
-        return "GLR-" + next;
-    }
-
     private static void addSet(List<String> sets, MapSqlParameterSource params, String column, String param, Object value) {
         if (value != null) {
             sets.add(column + " = :" + param);
@@ -702,34 +593,6 @@ public class EmployeeRepository {
 
     private static String payTypeLabel(String code) {
         return "D".equals(code) ? "รายวัน" : "รายเดือน";
-    }
-
-    private static boolean statusActive(String statusId) {
-        return !"RSG".equalsIgnoreCase(defaultText(statusId, "ACT"));
-    }
-
-    private static String statusName(String statusId) {
-        return switch (defaultText(statusId, "ACT")) {
-            case "PRB" -> "ทดลองงาน";
-            case "RSG" -> "ลาออก";
-            default -> "ทำงานปกติ";
-        };
-    }
-
-    private static String statusEnglishName(String statusId) {
-        return switch (defaultText(statusId, "ACT")) {
-            case "PRB" -> "Probation";
-            case "RSG" -> "Resigned";
-            default -> "Active";
-        };
-    }
-
-    private static String statusTone(String statusId) {
-        return switch (defaultText(statusId, "ACT")) {
-            case "PRB" -> "warning";
-            case "RSG" -> "danger";
-            default -> "success";
-        };
     }
 
     private static String fullName(String first, String last) {
