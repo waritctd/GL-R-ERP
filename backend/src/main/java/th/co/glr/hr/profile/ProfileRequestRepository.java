@@ -110,13 +110,17 @@ public class ProfileRequestRepository {
             .addValue("reviewerNote", reviewerNote));
     }
 
-    public Map<Long, Integer> pendingCountsByEmployee() {
+    public Map<Long, Integer> pendingCountsByEmployeeIds(List<Long> employeeIds) {
+        if (employeeIds == null || employeeIds.isEmpty()) {
+            return Map.of();
+        }
         return jdbc.query("""
             SELECT employee_id, COUNT(*)::int AS pending_count
               FROM hr.profile_change_request
              WHERE status = 'pending'
+               AND employee_id IN (:employeeIds)
              GROUP BY employee_id
-            """, Map.of(), (rs, rowNum) -> Map.entry(rs.getLong("employee_id"), rs.getInt("pending_count")))
+            """, Map.of("employeeIds", employeeIds), (rs, rowNum) -> Map.entry(rs.getLong("employee_id"), rs.getInt("pending_count")))
             .stream()
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }

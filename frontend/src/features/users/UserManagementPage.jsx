@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Avatar } from '../../components/common/Avatar.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -9,6 +9,10 @@ import { UserFormModal } from './UserFormModal.jsx';
 export function UserManagementPage({ users, employees, onCreateUser, onUpdateUser }) {
   const [creating, setCreating] = useState(false);
   const activeCount = users.filter((user) => user.active).length;
+  const employeesById = useMemo(
+    () => new Map(employees.map((employee) => [employee.id, employee])),
+    [employees],
+  );
 
   async function submitCreate(payload) {
     await onCreateUser(payload);
@@ -38,7 +42,7 @@ export function UserManagementPage({ users, employees, onCreateUser, onUpdateUse
           <span>การจัดการ</span>
         </div>
         {users.map((user) => {
-          const employee = employees.find((item) => item.id === user.employeeId);
+          const employee = employeesById.get(user.employeeId);
           return (
             <div className="user-table table-row" key={user.id}>
               <span className="employee-cell">
