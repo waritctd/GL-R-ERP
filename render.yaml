@@ -10,7 +10,7 @@ services:
     rootDir: backend
     dockerfilePath: ./Dockerfile
     region: singapore          # closest Render region to the Supabase ap-northeast-1 DB
-    plan: free                 # free tier cold-starts after inactivity; upgrade for prod
+    plan: starter              # free tier is CPU-throttled (slow startup races the port scan) and cold-starts; starter avoids both
     autoDeploy: true
     envVars:
       # Do NOT enable the demo profile in production (it turns on passwordless quick-login).
