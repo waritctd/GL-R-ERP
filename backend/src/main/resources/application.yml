@@ -41,6 +41,11 @@ app:
     enabled: ${APP_DEMO_SEED_ENABLED:false}
   auth:
     quick-role-login-enabled: ${APP_QUICK_ROLE_LOGIN_ENABLED:false}
+  bootstrap:
+    enabled: ${APP_BOOTSTRAP_ENABLED:false}
+    email: ${APP_BOOTSTRAP_EMAIL:}
+    password: ${APP_BOOTSTRAP_PASSWORD:}
+    role: ${APP_BOOTSTRAP_ROLE:hr}
 
 logging:
   level:
