@@ -21,9 +21,9 @@ import th.co.glr.hr.user.AppUserRepository;
  *   APP_BOOTSTRAP_ROLE=hr        # default
  * </pre>
  *
- * <p>Idempotent: if a user with that email already exists, it does nothing. The user is linked to
- * the first available employee so the HR dashboard (which loads the actor's own employee record)
- * has data to render. Disable it again after the account exists.
+ * <p>If a user with that email already exists, its password and role are synced from the env vars.
+ * New users are linked to the first available employee so the HR dashboard (which loads the
+ * actor's own employee record) has data to render. Disable it again after the account is correct.
  */
 @Component
 public class BootstrapUserSeeder implements ApplicationRunner {
@@ -57,8 +57,12 @@ public class BootstrapUserSeeder implements ApplicationRunner {
 
         String role = cfg.getRole() == null || cfg.getRole().isBlank() ? "hr" : cfg.getRole().trim().toLowerCase();
 
-        if (users.existsByEmail(email)) {
-            log.info("Bootstrap user {} already exists; leaving it unchanged.", email);
+        var existingUser = users.findByEmail(email);
+        if (existingUser.isPresent()) {
+            long userId = existingUser.get().id();
+            users.updatePasswordAndEnable(userId, passwordEncoder.encode(password));
+            users.assignSingleRole(userId, role);
+            log.info("Synced bootstrap user {} with role '{}'.", email, role);
             return;
         }
 

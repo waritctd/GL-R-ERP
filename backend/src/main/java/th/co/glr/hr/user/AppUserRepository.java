@@ -129,6 +129,15 @@ public class AppUserRepository {
         }
     }
 
+    public void updatePasswordAndEnable(long id, String passwordHash) {
+        jdbc.update("""
+            UPDATE hr.app_user
+               SET password_hash = :passwordHash,
+                   is_enabled = TRUE
+             WHERE user_id = :id
+            """, Map.of("id", id, "passwordHash", passwordHash));
+    }
+
     public long ensureRole(String role) {
         String normalized = role.toLowerCase(Locale.ROOT);
         jdbc.update("""
