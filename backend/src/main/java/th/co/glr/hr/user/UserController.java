@@ -36,13 +36,13 @@ public class UserController {
     UserResponse create(@Valid @RequestBody CreateUserRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         sessions.requireAnyRole(user, "admin");
-        return new UserResponse(userService.create(request));
+        return new UserResponse(userService.create(request, user));
     }
 
     @PatchMapping("/{id}")
     UserResponse update(@PathVariable long id, @Valid @RequestBody UpdateUserRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         sessions.requireAnyRole(user, "admin");
-        return new UserResponse(userService.update(id, request));
+        return new UserResponse(userService.update(id, request, user));
     }
 }

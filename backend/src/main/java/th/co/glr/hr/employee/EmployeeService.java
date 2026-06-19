@@ -5,6 +5,7 @@ import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.profile.ProfileRequestRepository;
@@ -13,10 +14,12 @@ import th.co.glr.hr.profile.ProfileRequestRepository;
 public class EmployeeService {
     private final EmployeeRepository employees;
     private final ProfileRequestRepository profileRequests;
+    private final AuditService audit;
 
-    public EmployeeService(EmployeeRepository employees, ProfileRequestRepository profileRequests) {
+    public EmployeeService(EmployeeRepository employees, ProfileRequestRepository profileRequests, AuditService audit) {
         this.employees = employees;
         this.profileRequests = profileRequests;
+        this.audit = audit;
     }
 
     public List<EmployeeDto> list(EmployeeFilter filter) {
@@ -42,12 +45,17 @@ public class EmployeeService {
     @Transactional
     public EmployeeDto create(UpsertEmployeeRequest request, UserPrincipal user) {
         long id = employees.create(request);
-        return get(id, user);
+        EmployeeDto created = get(id, user);
+        audit.record(user.id(), "employee.create", "employee", id, null, created);
+        return created;
     }
 
     @Transactional
     public EmployeeDto update(long id, UpsertEmployeeRequest request, UserPrincipal user) {
+        EmployeeDto before = get(id, user);
         employees.update(id, request);
-        return get(id, user);
+        EmployeeDto after = get(id, user);
+        audit.record(user.id(), "employee.update", "employee", id, before, after);
+        return after;
     }
 }

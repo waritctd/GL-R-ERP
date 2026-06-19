@@ -5,17 +5,21 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.AuthService;
+import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
 @Service
 public class UserService {
     private final AppUserRepository users;
     private final AuthService authService;
+    private final AuditService audit;
 
-    public UserService(AppUserRepository users, AuthService authService) {
+    public UserService(AppUserRepository users, AuthService authService, AuditService audit) {
         this.users = users;
         this.authService = authService;
+        this.audit = audit;
     }
 
     public List<UserDto> list() {
@@ -23,26 +27,29 @@ public class UserService {
     }
 
     @Transactional
-    public UserDto create(CreateUserRequest request) {
+    public UserDto create(CreateUserRequest request, UserPrincipal actor) {
         if (users.existsByEmail(request.email())) {
             throw new ApiException(HttpStatus.CONFLICT, "User email already exists");
         }
         try {
             long id = users.create(request, authService.hashPassword(request.password()));
-            return users.findById(id).map(this::toDto).orElseThrow();
+            UserDto created = users.findById(id).map(this::toDto).orElseThrow();
+            audit.record(actor.id(), "user.create", "user", id, null, created);
+            return created;
         } catch (DataIntegrityViolationException exception) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid employee or role");
         }
     }
 
     @Transactional
-    public UserDto update(long id, UpdateUserRequest request) {
-        if (users.findById(id).isEmpty()) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "User not found");
-        }
+    public UserDto update(long id, UpdateUserRequest request, UserPrincipal actor) {
+        UserDto before = users.findById(id).map(this::toDto)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "User not found"));
         try {
             users.update(id, request);
-            return users.findById(id).map(this::toDto).orElseThrow();
+            UserDto after = users.findById(id).map(this::toDto).orElseThrow();
+            audit.record(actor.id(), "user.update", "user", id, before, after);
+            return after;
         } catch (DataIntegrityViolationException exception) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid user update");
         }
