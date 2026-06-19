@@ -19,9 +19,9 @@ services:
       - key: APP_FLYWAY_ENABLED
         value: "true"
       # Frontend origin is only needed as a CORS fallback; the Vercel proxy keeps calls
-      # same-origin so CORS normally isn't exercised. Replace with your real Vercel URL.
+      # same-origin so CORS normally isn't exercised.
       - key: APP_CORS_ALLOWED_ORIGINS
-        value: https://your-app.vercel.app
+        value: https://demo-glr.vercel.app
       # Secrets — set these in the Render dashboard (sync:false keeps them out of git).
       - key: SPRING_DATASOURCE_URL
         sync: false

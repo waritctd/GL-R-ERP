@@ -40,6 +40,12 @@ mvn spring-boot:run
 
 See [backend/README.md](backend/README.md).
 
+## Vercel Frontend Deployment
+
+This repo includes a root-level `vercel.json` for Vercel projects whose Root Directory is the repository root. It installs and builds `frontend/`, publishes `frontend/dist`, proxies `/api/*` to the Render backend, and serves `index.html` for React SPA routes.
+
+If the Vercel project Root Directory is set to `frontend`, the matching `frontend/vercel.json` can be used instead.
+
 ## Production Shape
 
 For on-prem production, use the same backend and schema migrations with a different PostgreSQL datasource. Keep demo seeding and quick role login disabled:
