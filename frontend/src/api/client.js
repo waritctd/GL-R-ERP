@@ -9,13 +9,23 @@ export class ApiError extends Error {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'TRACE']);
+
+function readCookie(name) {
+  const prefix = `${name}=`;
+  const entry = document.cookie.split('; ').find((part) => part.startsWith(prefix));
+  return entry ? decodeURIComponent(entry.slice(prefix.length)) : null;
+}
+
 export async function apiRequest(path, options = {}) {
   const { method = 'GET', body, headers, signal } = options;
+  const csrfToken = SAFE_METHODS.has(method.toUpperCase()) ? null : readCookie('XSRF-TOKEN');
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method,
     credentials: 'include',
     headers: {
       ...(body ? { 'Content-Type': 'application/json' } : {}),
+      ...(csrfToken ? { 'X-XSRF-TOKEN': csrfToken } : {}),
       ...headers,
     },
     body: body ? JSON.stringify(body) : undefined,
