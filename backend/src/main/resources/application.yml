@@ -1,6 +1,6 @@
 server:
-  port: ${SERVER_PORT:8080}
-  forward-headers-strategy: framework
+  # PORT is injected by the host platform (e.g. Render); fall back to SERVER_PORT, then 8080.
+  port: ${PORT:${SERVER_PORT:8080}}
   servlet:
     session:
       cookie:
