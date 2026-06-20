@@ -24,7 +24,7 @@ public class ProfileRequestService {
     }
 
     public List<ProfileRequestDto> list(UserPrincipal user) {
-        List<ProfileRequestRecord> records = user.role().equals("hr") || user.role().equals("admin")
+        List<ProfileRequestRecord> records = user.role().equals("hr")
             ? profileRequests.findAll()
             : user.employeeId() == null ? List.of() : profileRequests.findByEmployee(user.employeeId());
         Map<Long, EmployeeDto> employeesById = employees.findEmployeeSummariesByIds(records.stream()
@@ -59,7 +59,7 @@ public class ProfileRequestService {
             throw new ApiException(HttpStatus.CONFLICT, "Profile request has already been reviewed");
         }
 
-        int updated = profileRequests.updatePendingStatus(id, request.status(), reviewer.id(), request.reviewerNote());
+        int updated = profileRequests.updatePendingStatus(id, request.status(), reviewer, request.reviewerNote());
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "Profile request has already been reviewed");
         }

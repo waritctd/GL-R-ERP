@@ -9,7 +9,8 @@ class ApplicationRolesTest {
     @Test
     void normalizesAndAllowsOnlyKnownApplicationRoles() {
         assertThat(ApplicationRoles.requireAllowed(" HR ")).isEqualTo("hr");
-        assertThat(ApplicationRoles.isAllowed("director")).isTrue();
+        assertThat(ApplicationRoles.isAllowed("employee")).isTrue();
+        assertThat(ApplicationRoles.isAllowed("director")).isFalse();
         assertThat(ApplicationRoles.isAllowed("owner")).isFalse();
     }
 

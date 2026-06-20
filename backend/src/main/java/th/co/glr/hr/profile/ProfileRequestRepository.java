@@ -76,11 +76,11 @@ public class ProfileRequestRepository {
         Long id = jdbc.queryForObject("""
             INSERT INTO hr.profile_change_request(
                 employee_id, field_key, field_label, old_value, new_value,
-                requested_by_user_id, requested_by_name
+                requested_by_name
             )
             VALUES (
                 :employeeId, :fieldKey, :fieldLabel, :oldValue, :newValue,
-                :requestedByUserId, :requestedByName
+                :requestedByName
             )
             RETURNING request_id
             """, new MapSqlParameterSource()
@@ -89,16 +89,14 @@ public class ProfileRequestRepository {
             .addValue("fieldLabel", request.fieldLabel())
             .addValue("oldValue", request.oldValue())
             .addValue("newValue", request.newValue())
-            .addValue("requestedByUserId", requestedBy.id())
             .addValue("requestedByName", requestedBy.name()), Long.class);
         return id == null ? 0 : id;
     }
 
-    public int updatePendingStatus(long id, String status, long reviewerUserId, String reviewerNote) {
+    public int updatePendingStatus(long id, String status, UserPrincipal reviewer, String reviewerNote) {
         return jdbc.update("""
             UPDATE hr.profile_change_request
                SET status = :status,
-                   reviewed_by_user_id = :reviewerUserId,
                    reviewed_at = now(),
                    reviewer_note = :reviewerNote
              WHERE request_id = :id
@@ -106,7 +104,6 @@ public class ProfileRequestRepository {
             """, new MapSqlParameterSource()
             .addValue("id", id)
             .addValue("status", status)
-            .addValue("reviewerUserId", reviewerUserId)
             .addValue("reviewerNote", reviewerNote));
     }
 

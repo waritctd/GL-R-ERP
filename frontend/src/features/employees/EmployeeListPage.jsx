@@ -6,10 +6,22 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate } from '../../utils/format.js';
-import { departments, divisions, statuses } from '../../data/demoData.js';
+import { statuses } from '../../data/referenceData.js';
 import { EmployeeFormModal } from './EmployeeFormModal.jsx';
 
 const pageSize = 8;
+
+function uniqueOptions(rows, valueKey, labelKey) {
+  const options = new Map();
+  rows.forEach((row) => {
+    const value = row[valueKey];
+    const label = row[labelKey] || value;
+    if (value && label && !options.has(value)) {
+      options.set(value, { value, label });
+    }
+  });
+  return [...options.values()].sort((a, b) => a.label.localeCompare(b.label, 'th'));
+}
 
 export function EmployeeListPage({ user, employees, onOpenEmployee, onCreateEmployee }) {
   const [filters, setFilters] = useState({ search: '', divisionId: '', departmentTh: '', statusId: '', active: 'all' });
@@ -17,18 +29,21 @@ export function EmployeeListPage({ user, employees, onOpenEmployee, onCreateEmpl
   const [creating, setCreating] = useState(false);
   const canCreate = hasPermission(user.role, 'canManageEmployees');
 
-  const departmentOptions = filters.divisionId
-    ? departments[filters.divisionId] || []
-    : Object.values(departments).flat();
+  const divisionOptions = useMemo(() => uniqueOptions(employees, 'divisionId', 'divisionTh'), [employees]);
+  const departmentOptions = useMemo(() => uniqueOptions(
+    filters.divisionId ? employees.filter((employee) => employee.divisionId === filters.divisionId) : employees,
+    'departmentTh',
+    'departmentTh',
+  ), [employees, filters.divisionId]);
 
   const filteredEmployees = useMemo(() => {
     const query = filters.search.trim().toLowerCase();
     return employees.filter((employee) => {
       const matchQuery = !query
-        || employee.nameTh.includes(filters.search)
-        || employee.nameEn.toLowerCase().includes(query)
-        || employee.code.toLowerCase().includes(query)
-        || employee.nickName.includes(filters.search);
+        || employee.nameTh?.includes(filters.search)
+        || employee.nameEn?.toLowerCase().includes(query)
+        || employee.code?.toLowerCase().includes(query)
+        || employee.nickName?.includes(filters.search);
       const matchDivision = !filters.divisionId || employee.divisionId === filters.divisionId;
       const matchDepartment = !filters.departmentTh || employee.departmentTh === filters.departmentTh;
       const matchStatus = !filters.statusId || employee.statusId === filters.statusId;
@@ -79,11 +94,11 @@ export function EmployeeListPage({ user, employees, onOpenEmployee, onCreateEmpl
         </label>
         <select value={filters.divisionId} onChange={(event) => updateFilter('divisionId', event.target.value)}>
           <option value="">ทุกฝ่าย</option>
-          {divisions.map((division) => <option key={division.id} value={division.id}>{division.th}</option>)}
+          {divisionOptions.map((division) => <option key={division.value} value={division.value}>{division.label}</option>)}
         </select>
         <select value={filters.departmentTh} onChange={(event) => updateFilter('departmentTh', event.target.value)}>
           <option value="">ทุกแผนก</option>
-          {departmentOptions.map((department) => <option key={department} value={department}>{department}</option>)}
+          {departmentOptions.map((department) => <option key={department.value} value={department.value}>{department.label}</option>)}
         </select>
         <select value={filters.statusId} onChange={(event) => updateFilter('statusId', event.target.value)}>
           <option value="">ทุกสถานะ</option>
@@ -152,7 +167,7 @@ export function EmployeeListPage({ user, employees, onOpenEmployee, onCreateEmpl
         </footer>
       </section>
 
-      {creating ? <EmployeeFormModal onClose={() => setCreating(false)} onSubmit={submitCreate} /> : null}
+      {creating ? <EmployeeFormModal employees={employees} onClose={() => setCreating(false)} onSubmit={submitCreate} /> : null}
     </div>
   );
 }

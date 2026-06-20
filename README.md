@@ -7,7 +7,7 @@ frontend/  React + Vite HR portal
 backend/   Spring Boot API for PostgreSQL/Supabase
 ```
 
-The frontend can still run with mock data, or it can call the Spring Boot backend through the existing `/api/*` contract.
+The frontend calls the Spring Boot backend through the existing `/api/*` contract.
 
 ## Frontend
 
@@ -17,18 +17,18 @@ npm install
 npm run dev
 ```
 
-To use the backend instead of mocks:
+To point the frontend at a local backend:
 
 ```bash
 cd frontend
-VITE_USE_MOCKS=false VITE_API_BASE_URL=http://127.0.0.1:8080 npm run dev
+VITE_API_BASE_URL=http://127.0.0.1:8080 npm run dev
 ```
 
 See [frontend/README.md](frontend/README.md).
 
 ## Backend
 
-The backend uses Spring Boot, Flyway, and PostgreSQL. Your Supabase demo connection is stored locally in ignored file `backend/.env.local`; commit only `backend/.env.example`.
+The backend uses Spring Boot, Flyway, and PostgreSQL/Supabase. Local database secrets belong in ignored file `backend/.env.local`; commit only `backend/.env.example`.
 
 ```bash
 cd backend
@@ -73,9 +73,4 @@ If the Vercel project Root Directory is set to `frontend`, the matching `fronten
 
 ## Production Shape
 
-For on-prem production, use the same backend and schema migrations with a different PostgreSQL datasource. Keep demo seeding and quick role login disabled:
-
-```bash
-APP_DEMO_SEED_ENABLED=false
-APP_QUICK_ROLE_LOGIN_ENABLED=false
-```
+For production/on-prem, use the same backend and schema migrations with the target PostgreSQL datasource. Authentication uses employee email from `hr.employee`; the temporary password is the employee database id or employee code.

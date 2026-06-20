@@ -32,12 +32,12 @@ public class EmployeeService {
     }
 
     public EmployeeDto get(long id, UserPrincipal user) {
-        boolean canSeeAnyEmployee = user.role().equals("hr") || user.role().equals("director") || user.role().equals("admin");
+        boolean canSeeAnyEmployee = user.role().equals("hr");
         if (!canSeeAnyEmployee && (user.employeeId() == null || user.employeeId() != id)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
 
-        boolean includeSensitive = user.role().equals("hr") || user.role().equals("admin");
+        boolean includeSensitive = user.role().equals("hr");
         EmployeeDto employee = employees.findEmployeeById(id, includeSensitive)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Employee not found"));
         int pendingCount = profileRequests.pendingCountByEmployee(employee.id());

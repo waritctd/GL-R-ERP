@@ -36,7 +36,7 @@ public class EmployeeController {
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        sessions.requireAnyRole(user, "hr", "director", "admin");
+        sessions.requireAnyRole(user, "hr");
         Boolean activeFilter = "true".equalsIgnoreCase(active) ? Boolean.TRUE : "false".equalsIgnoreCase(active) ? Boolean.FALSE : null;
         return new EmployeesResponse(employeeService.list(new EmployeeFilter(search, divisionId, departmentTh, statusId, activeFilter)));
     }
@@ -44,7 +44,7 @@ public class EmployeeController {
     @PostMapping
     EmployeeResponse create(@Valid @RequestBody UpsertEmployeeRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        sessions.requireAnyRole(user, "hr", "admin");
+        sessions.requireAnyRole(user, "hr");
         return new EmployeeResponse(employeeService.create(request, user));
     }
 
@@ -57,7 +57,7 @@ public class EmployeeController {
     @PatchMapping("/{id}")
     EmployeeResponse update(@PathVariable long id, @Valid @RequestBody UpsertEmployeeRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        sessions.requireAnyRole(user, "hr", "admin");
+        sessions.requireAnyRole(user, "hr");
         return new EmployeeResponse(employeeService.update(id, request, user));
     }
 }

@@ -18,7 +18,7 @@ export function EmployeeDetailPage({ user, employee, onBack, onUpdateEmployee })
   const [activeTab, setActiveTab] = useState('personal');
   const [editing, setEditing] = useState(false);
   const canManage = hasPermission(user.role, 'canManageEmployees');
-  const canSeeSensitive = ['hr', 'admin'].includes(user.role);
+  const canSeeSensitive = user.role === 'hr';
 
   if (!employee) {
     return <EmptyState title="ไม่พบข้อมูลพนักงาน" description="กลับไปเลือกรายชื่อพนักงานอีกครั้ง" />;

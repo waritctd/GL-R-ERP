@@ -1,17 +1,39 @@
 import { useMemo, useState } from 'react';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { divisions, departments, statuses } from '../../data/demoData.js';
+import { divisions, statuses } from '../../data/referenceData.js';
 
-export function EmployeeFormModal({ employee, onClose, onSubmit }) {
+function uniqueOptions(rows, valueKey, labelKey) {
+  const options = new Map();
+  rows.forEach((row) => {
+    const value = row[valueKey];
+    const label = row[labelKey] || value;
+    if (value && label && !options.has(value)) {
+      options.set(value, { value, label });
+    }
+  });
+  return [...options.values()].sort((a, b) => a.label.localeCompare(b.label, 'th'));
+}
+
+export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit }) {
+  const divisionOptions = useMemo(() => {
+    const existing = uniqueOptions(employees, 'divisionId', 'divisionTh');
+    const known = divisions.map((division) => ({ value: division.id, label: division.th }));
+    const merged = new Map([...known, ...existing].map((option) => [option.value, option]));
+    if (employee?.divisionId && !merged.has(employee.divisionId)) {
+      merged.set(employee.divisionId, { value: employee.divisionId, label: employee.divisionTh || employee.divisionId });
+    }
+    return [...merged.values()];
+  }, [employee, employees]);
+  const defaultDivision = employee?.divisionId || divisionOptions[0]?.value || '';
   const [form, setForm] = useState(() => ({
     nameTh: employee?.nameTh || '',
     nameEn: employee?.nameEn || '',
     nickName: employee?.nickName || '',
     email: employee?.email || '',
     phone: employee?.phone || '',
-    divisionId: employee?.divisionId || divisions[0].id,
-    departmentTh: employee?.departmentTh || departments[divisions[0].id][0],
+    divisionId: defaultDivision,
+    departmentTh: employee?.departmentTh || '',
     positionTh: employee?.positionTh || 'เจ้าหน้าที่',
     level: employee?.level || 'O2',
     salary: employee?.salary || '',
@@ -23,14 +45,18 @@ export function EmployeeFormModal({ employee, onClose, onSubmit }) {
     emergencyPhone: employee?.emergencyContact?.phone || '',
   }));
 
-  const departmentOptions = useMemo(() => departments[form.divisionId] || [], [form.divisionId]);
+  const departmentOptions = useMemo(() => uniqueOptions(
+    employees.filter((item) => !form.divisionId || item.divisionId === form.divisionId),
+    'departmentTh',
+    'departmentTh',
+  ), [employees, form.divisionId]);
 
   function update(field, value) {
     setForm((current) => {
       const next = { ...current, [field]: value };
       if (field === 'divisionId') {
-        next.departmentTh = departments[value]?.[0] || '';
-        next.divisionTh = divisions.find((division) => division.id === value)?.th;
+        next.departmentTh = '';
+        next.divisionTh = divisionOptions.find((division) => division.value === value)?.label;
       }
       return next;
     });
@@ -38,8 +64,8 @@ export function EmployeeFormModal({ employee, onClose, onSubmit }) {
 
   function submit(event) {
     event.preventDefault();
-    const division = divisions.find((item) => item.id === form.divisionId);
-    onSubmit({ ...form, divisionTh: division?.th, salary: Number(form.salary || 0) });
+    const division = divisionOptions.find((item) => item.value === form.divisionId);
+    onSubmit({ ...form, divisionTh: division?.label, salary: Number(form.salary || 0) });
   }
 
   return (
@@ -81,14 +107,15 @@ export function EmployeeFormModal({ employee, onClose, onSubmit }) {
         <label>
           ฝ่าย
           <select value={form.divisionId} onChange={(event) => update('divisionId', event.target.value)}>
-            {divisions.map((division) => <option key={division.id} value={division.id}>{division.th}</option>)}
+            {divisionOptions.map((division) => <option key={division.value} value={division.value}>{division.label}</option>)}
           </select>
         </label>
         <label>
           แผนก
-          <select value={form.departmentTh} onChange={(event) => update('departmentTh', event.target.value)}>
-            {departmentOptions.map((department) => <option key={department} value={department}>{department}</option>)}
-          </select>
+          <input list="department-options" value={form.departmentTh} onChange={(event) => update('departmentTh', event.target.value)} />
+          <datalist id="department-options">
+            {departmentOptions.map((department) => <option key={department.value} value={department.value}>{department.label}</option>)}
+          </datalist>
         </label>
         <label>
           ตำแหน่ง

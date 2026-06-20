@@ -29,7 +29,7 @@ class ProfileRequestServiceTest {
             .isInstanceOfSatisfying(ApiException.class, exception ->
                 org.assertj.core.api.Assertions.assertThat(exception.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
-        verify(profileRequests, never()).updatePendingStatus(101L, "rejected", reviewer.id(), null);
+        verify(profileRequests, never()).updatePendingStatus(101L, "rejected", reviewer, null);
         verify(employees, never()).updateEmail(existing.employeeId(), existing.newValue());
     }
 
@@ -37,7 +37,7 @@ class ProfileRequestServiceTest {
     void rejectsStalePendingReviewWhenConditionalUpdateMisses() {
         ProfileRequestRecord existing = requestWithStatus("pending");
         when(profileRequests.findById(101L)).thenReturn(Optional.of(existing));
-        when(profileRequests.updatePendingStatus(101L, "approved", reviewer.id(), null)).thenReturn(0);
+        when(profileRequests.updatePendingStatus(101L, "approved", reviewer, null)).thenReturn(0);
 
         assertThatThrownBy(() -> service.update(101L, new UpdateProfileRequestRequest("approved", null), reviewer))
             .isInstanceOfSatisfying(ApiException.class, exception ->
@@ -51,7 +51,7 @@ class ProfileRequestServiceTest {
         ProfileRequestRecord existing = requestWithStatus("pending");
         ProfileRequestRecord reviewed = requestWithStatus("approved");
         when(profileRequests.findById(101L)).thenReturn(Optional.of(existing), Optional.of(reviewed));
-        when(profileRequests.updatePendingStatus(101L, "approved", reviewer.id(), null)).thenReturn(1);
+        when(profileRequests.updatePendingStatus(101L, "approved", reviewer, null)).thenReturn(1);
         when(employees.findEmployeeSummaryById(existing.employeeId())).thenReturn(Optional.empty());
 
         service.update(101L, new UpdateProfileRequestRequest("approved", null), reviewer);

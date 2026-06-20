@@ -27,9 +27,4 @@ export const api = {
     create: (payload) => apiRequest(API_ROUTES.profileRequests.create, { method: 'POST', body: payload }),
     update: (id, payload) => apiRequest(API_ROUTES.profileRequests.detail(id), { method: 'PATCH', body: payload }),
   },
-  users: {
-    list: () => apiRequest(API_ROUTES.users.list),
-    create: (payload) => apiRequest(API_ROUTES.users.create, { method: 'POST', body: payload }),
-    update: (id, payload) => apiRequest(API_ROUTES.users.detail(id), { method: 'PATCH', body: payload }),
-  },
 };

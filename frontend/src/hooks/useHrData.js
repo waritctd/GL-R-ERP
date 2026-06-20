@@ -6,7 +6,6 @@ export function useHrData({ user, showToast }) {
   const [currentEmployee, setCurrentEmployee] = useState(null);
   const [employees, setEmployees] = useState([]);
   const [profileRequests, setProfileRequests] = useState([]);
-  const [users, setUsers] = useState([]);
   const [route, setRoute] = useState('dashboard');
   const [selectedEmployee, setSelectedEmployee] = useState(null);
 
@@ -20,30 +19,24 @@ export function useHrData({ user, showToast }) {
     const requestsPromise = api.profileRequests.list()
       .then((response) => response.profileRequests)
       .catch(() => []);
-    const usersPromise = hasPermission(nextUser.role, 'canManageUsers')
-      ? api.users.list().then((response) => response.users)
-      : Promise.resolve([]);
 
-    const [nextCurrentEmployee, nextEmployees, nextRequests, nextUsers] = await Promise.all([
+    const [nextCurrentEmployee, nextEmployees, nextRequests] = await Promise.all([
       currentEmployeePromise,
       employeesPromise,
       requestsPromise,
-      usersPromise,
     ]);
 
     setCurrentEmployee(nextCurrentEmployee);
     setEmployees(nextEmployees);
     setProfileRequests(nextRequests);
-    setUsers(nextUsers);
     setRoute(safeRoute);
-    return { nextCurrentEmployee, nextEmployees, nextRequests, nextUsers };
+    return { nextCurrentEmployee, nextEmployees, nextRequests };
   }
 
   function resetData() {
     setCurrentEmployee(null);
     setEmployees([]);
     setProfileRequests([]);
-    setUsers([]);
     setRoute('dashboard');
     setSelectedEmployee(null);
   }
@@ -86,23 +79,10 @@ export function useHrData({ user, showToast }) {
     showToast(status === 'approved' ? 'success' : 'info', status === 'approved' ? 'อนุมัติคำขอแล้ว' : 'ปฏิเสธคำขอแล้ว');
   }
 
-  async function createUser(payload) {
-    const response = await api.users.create(payload);
-    setUsers((current) => [...current, response.user]);
-    showToast('success', 'สร้างผู้ใช้งานเรียบร้อย');
-  }
-
-  async function updateUser(id, payload) {
-    const response = await api.users.update(id, payload);
-    setUsers((current) => current.map((account) => (account.id === id ? response.user : account)));
-    showToast('info', 'ปรับสถานะบัญชีแล้ว');
-  }
-
   return {
     currentEmployee,
     employees,
     profileRequests,
-    users,
     route,
     selectedEmployee,
     loadData,
@@ -113,7 +93,5 @@ export function useHrData({ user, showToast }) {
     updateEmployee,
     createProfileRequest,
     reviewProfileRequest,
-    createUser,
-    updateUser,
   };
 }

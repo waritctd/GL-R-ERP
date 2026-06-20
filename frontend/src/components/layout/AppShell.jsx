@@ -9,9 +9,8 @@ export function AppShell({ user, employee, route, onRoute, onLogout, pendingRequ
     { route: 'dashboard', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
     { route: 'employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', show: hasPermission(user.role, 'canViewEmployees') },
     { route: 'requests', label: 'คำขอแก้ไขข้อมูล', helper: 'Profile requests', icon: 'clipboard', show: hasPermission(user.role, 'canReviewProfileRequests'), badge: pendingRequestCount },
-    { route: 'users', label: 'จัดการผู้ใช้งาน', helper: 'Users', icon: 'userCog', show: hasPermission(user.role, 'canManageUsers') },
     { route: 'profile', label: 'ข้อมูลของฉัน', helper: 'My profile', icon: 'badge', show: true },
-    { route: 'myrequests', label: 'คำขอของฉัน', helper: 'My requests', icon: 'clock', show: user.role === 'employee', badge: pendingRequestCount },
+    { route: 'myrequests', label: 'คำขอของฉัน', helper: 'My requests', icon: 'clock', show: hasPermission(user.role, 'canSubmitProfileRequests'), badge: pendingRequestCount },
   ].filter((item) => item.show);
 
   return (

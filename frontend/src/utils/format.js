@@ -31,10 +31,7 @@ export function initialsFromName(name = '') {
 
 export function roleLabel(role) {
   const labels = {
-    admin: 'ADMIN',
-    director: 'DIRECTOR',
     hr: 'HR',
-    supervisor: 'SUPERVISOR',
     employee: 'EMPLOYEE',
   };
   return labels[role] ?? role?.toUpperCase() ?? '-';
