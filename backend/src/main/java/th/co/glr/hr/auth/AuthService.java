@@ -65,7 +65,7 @@ public class AuthService {
 
     private boolean passwordMatches(String rawPassword, EmployeeLoginRecord employee) {
         String password = rawPassword.trim();
-        return password.equals(String.valueOf(employee.employeeId()));
+        return hasText(employee.employeeCode()) && password.equals(employee.employeeCode().trim());
     }
 
     private static boolean hasText(String value) {

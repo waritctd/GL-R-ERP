@@ -8,7 +8,7 @@ Spring Boot API for the existing React HR portal. It targets PostgreSQL/Supabase
 - Flyway `V1` contains the attached employee master schema. On a fresh database it creates the HR schemas; on an existing Supabase database, `baseline-on-migrate=true` treats the current schema as version 1.
 - Flyway `V2` adds backend-owned tables for profile change requests and emergency contacts.
 - Flyway `V5` removes the old app-user UAM tables; access is derived from the employee's current division.
-- Auth uses `hr.employee.email`, stores the principal in the HTTP session cookie, and temporarily accepts employee database id or employee code as the password.
+- Auth uses `hr.employee.email`, stores the principal in the HTTP session cookie, and temporarily accepts employee code as the password.
 - PDPA-sensitive fields are read from `hr_restricted.employee_pii` only for `hr` users.
 
 ## Run With Supabase/PostgreSQL
