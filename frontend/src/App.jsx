@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, ROLE_PERMISSIONS } from './api/index.js';
+import { useEffect, useMemo, useState } from 'react';
+import { api } from './api/index.js';
 import { AppShell } from './components/layout/AppShell.jsx';
 import { Toast } from './components/common/Toast.jsx';
 import { LoginPage } from './features/auth/LoginPage.jsx';
@@ -11,74 +11,38 @@ import { ProfileRequestsPage } from './features/profileRequests/ProfileRequestsP
 import { ProfilePage } from './features/profile/ProfilePage.jsx';
 import { MyRequestsPage } from './features/profile/MyRequestsPage.jsx';
 import { UserManagementPage } from './features/users/UserManagementPage.jsx';
-
-function hasPermission(role, key) {
-  return ROLE_PERMISSIONS[key].includes(role);
-}
-
-function allowedRoute(route, user) {
-  if (!user) return 'dashboard';
-  if (route === 'employees' && !hasPermission(user.role, 'canViewEmployees')) return 'dashboard';
-  if (route === 'detail' && !hasPermission(user.role, 'canViewEmployees')) return 'dashboard';
-  if (route === 'requests' && !hasPermission(user.role, 'canReviewProfileRequests')) return 'dashboard';
-  if (route === 'users' && !hasPermission(user.role, 'canManageUsers')) return 'dashboard';
-  if (route === 'myrequests' && user.role !== 'employee') return 'dashboard';
-  return route;
-}
+import { useHrData } from './hooks/useHrData.js';
+import { useToast } from './hooks/useToast.js';
 
 export function App() {
   const [user, setUser] = useState(null);
-  const [currentEmployee, setCurrentEmployee] = useState(null);
-  const [employees, setEmployees] = useState([]);
-  const [profileRequests, setProfileRequests] = useState([]);
-  const [users, setUsers] = useState([]);
-  const [route, setRoute] = useState('dashboard');
-  const [selectedEmployee, setSelectedEmployee] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
-  const [toast, setToast] = useState(null);
-  const toastTimer = useRef(null);
+  const { toast, showToast, dismissToast } = useToast();
+  const {
+    currentEmployee,
+    employees,
+    profileRequests,
+    users,
+    route,
+    selectedEmployee,
+    loadData,
+    resetData,
+    routeTo,
+    openEmployee,
+    createEmployee,
+    updateEmployee,
+    createProfileRequest,
+    reviewProfileRequest,
+    createUser,
+    updateUser,
+  } = useHrData({ user, showToast });
 
   const ownRequests = useMemo(
     () => profileRequests.filter((request) => request.employeeId === currentEmployee?.id),
     [profileRequests, currentEmployee],
   );
   const pendingCount = (user?.role === 'employee' ? ownRequests : profileRequests).filter((request) => request.status === 'pending').length;
-
-  function showToast(kind, message) {
-    window.clearTimeout(toastTimer.current);
-    setToast({ kind, message });
-    toastTimer.current = window.setTimeout(() => setToast(null), 3200);
-  }
-
-  async function loadData(nextUser, preferredRoute = route) {
-    const safeRoute = allowedRoute(preferredRoute, nextUser);
-    const currentEmployeePromise = api.employees.get(nextUser.employeeId)
-      .then((response) => response.employee);
-    const employeesPromise = hasPermission(nextUser.role, 'canViewEmployees')
-      ? api.employees.list().then((response) => response.employees)
-      : currentEmployeePromise.then((employee) => [employee]);
-    const requestsPromise = api.profileRequests.list()
-      .then((response) => response.profileRequests)
-      .catch(() => []);
-    const usersPromise = hasPermission(nextUser.role, 'canManageUsers')
-      ? api.users.list().then((response) => response.users)
-      : Promise.resolve([]);
-
-    const [nextCurrentEmployee, nextEmployees, nextRequests, nextUsers] = await Promise.all([
-      currentEmployeePromise,
-      employeesPromise,
-      requestsPromise,
-      usersPromise,
-    ]);
-
-    setCurrentEmployee(nextCurrentEmployee);
-    setEmployees(nextEmployees);
-    setProfileRequests(nextRequests);
-    setUsers(nextUsers);
-    setRoute(safeRoute);
-    return { nextCurrentEmployee, nextEmployees, nextRequests, nextUsers };
-  }
 
   useEffect(() => {
     let alive = true;
@@ -95,7 +59,6 @@ export function App() {
     restoreSession();
     return () => {
       alive = false;
-      window.clearTimeout(toastTimer.current);
     };
   }, []);
 
@@ -117,88 +80,33 @@ export function App() {
   async function handleLogout() {
     await api.auth.logout();
     setUser(null);
-    setCurrentEmployee(null);
-    setEmployees([]);
-    setProfileRequests([]);
-    setUsers([]);
-    setRoute('dashboard');
-    setSelectedEmployee(null);
-  }
-
-  function handleRoute(nextRoute) {
-    setRoute(allowedRoute(nextRoute, user));
-    if (nextRoute !== 'detail') setSelectedEmployee(null);
-  }
-
-  async function openEmployee(id) {
-    const response = await api.employees.get(id);
-    setSelectedEmployee(response.employee);
-    setRoute('detail');
-  }
-
-  async function createEmployee(payload) {
-    const response = await api.employees.create(payload);
-    setEmployees((current) => [response.employee, ...current]);
-    setRoute(allowedRoute('employees', user));
-    showToast('success', 'เพิ่มพนักงานเรียบร้อย');
-  }
-
-  async function updateEmployee(id, payload) {
-    const response = await api.employees.update(id, payload);
-    setSelectedEmployee(response.employee);
-    setEmployees((current) => current.map((employee) => (employee.id === id ? response.employee : employee)));
-    setCurrentEmployee((current) => (current?.id === id ? response.employee : current));
-    showToast('success', 'บันทึกข้อมูลพนักงานแล้ว');
-  }
-
-  async function createProfileRequest(payload) {
-    const response = await api.profileRequests.create(payload);
-    setProfileRequests((current) => [response.profileRequest, ...current]);
-    showToast('success', 'ส่งคำขอแก้ไขเรียบร้อย');
-  }
-
-  async function reviewProfileRequest(id, status) {
-    const response = await api.profileRequests.update(id, { status });
-    setProfileRequests((current) => current.map((request) => (request.id === id ? response.profileRequest : request)));
-    showToast(status === 'approved' ? 'success' : 'info', status === 'approved' ? 'อนุมัติคำขอแล้ว' : 'ปฏิเสธคำขอแล้ว');
-  }
-
-  async function createUser(payload) {
-    const response = await api.users.create(payload);
-    setUsers((current) => [...current, response.user]);
-    showToast('success', 'สร้างผู้ใช้งานเรียบร้อย');
-  }
-
-  async function updateUser(id, payload) {
-    const response = await api.users.update(id, payload);
-    setUsers((current) => current.map((account) => (account.id === id ? response.user : account)));
-    showToast('info', 'ปรับสถานะบัญชีแล้ว');
+    resetData();
   }
 
   if (!user) {
     return (
       <>
         <LoginPage onLogin={handleLogin} loading={loading} error={loginError} />
-        <Toast toast={toast} onDismiss={() => setToast(null)} />
+        <Toast toast={toast} onDismiss={dismissToast} />
       </>
     );
   }
 
   const screen = route === 'dashboard'
     ? user.role === 'employee'
-      ? <EmployeeDashboard employee={currentEmployee} profileRequests={ownRequests} onRoute={handleRoute} />
-      : <HrDashboard employee={currentEmployee} employees={employees} profileRequests={profileRequests} onRoute={handleRoute} />
+      ? <EmployeeDashboard employee={currentEmployee} profileRequests={ownRequests} onRoute={routeTo} />
+      : <HrDashboard employee={currentEmployee} employees={employees} profileRequests={profileRequests} onRoute={routeTo} />
     : route === 'employees'
       ? <EmployeeListPage user={user} employees={employees} onOpenEmployee={openEmployee} onCreateEmployee={createEmployee} />
       : route === 'detail'
-        ? <EmployeeDetailPage user={user} employee={selectedEmployee} onBack={() => handleRoute('employees')} onUpdateEmployee={updateEmployee} />
+        ? <EmployeeDetailPage user={user} employee={selectedEmployee} onBack={() => routeTo('employees')} onUpdateEmployee={updateEmployee} />
         : route === 'requests'
           ? <ProfileRequestsPage profileRequests={profileRequests} onReview={reviewProfileRequest} />
           : route === 'users'
             ? <UserManagementPage users={users} employees={employees} onCreateUser={createUser} onUpdateUser={updateUser} />
             : route === 'myrequests'
-              ? <MyRequestsPage profileRequests={ownRequests} onNewRequest={() => handleRoute('profile')} />
-              : <ProfilePage user={user} employee={currentEmployee} profileRequests={ownRequests} onCreateRequest={createProfileRequest} onRoute={handleRoute} />;
+              ? <MyRequestsPage profileRequests={ownRequests} onNewRequest={() => routeTo('profile')} />
+              : <ProfilePage user={user} employee={currentEmployee} profileRequests={ownRequests} onCreateRequest={createProfileRequest} onRoute={routeTo} />;
 
   return (
     <>
@@ -206,13 +114,13 @@ export function App() {
         user={user}
         employee={currentEmployee}
         route={route}
-        onRoute={handleRoute}
+        onRoute={routeTo}
         onLogout={handleLogout}
         pendingRequestCount={pendingCount}
       >
         {screen}
       </AppShell>
-      <Toast toast={toast} onDismiss={() => setToast(null)} />
+      <Toast toast={toast} onDismiss={dismissToast} />
       {loading ? <div className="loading-veil">Loading...</div> : null}
     </>
   );

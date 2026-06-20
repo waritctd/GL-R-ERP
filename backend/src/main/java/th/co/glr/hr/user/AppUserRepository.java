@@ -4,7 +4,6 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -14,6 +13,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.auth.ApplicationRoles;
 
 @Repository
 public class AppUserRepository {
@@ -139,7 +139,7 @@ public class AppUserRepository {
     }
 
     public long ensureRole(String role) {
-        String normalized = role.toLowerCase(Locale.ROOT);
+        String normalized = ApplicationRoles.requireAllowed(role);
         jdbc.update("""
             INSERT INTO hr.role(name, description)
             VALUES (:name, :description)

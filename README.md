@@ -40,6 +40,31 @@ mvn spring-boot:run
 
 See [backend/README.md](backend/README.md).
 
+## Tests And Builds
+
+Run the backend unit/controller tests:
+
+```bash
+cd backend
+mvn test
+```
+
+Build the backend package:
+
+```bash
+cd backend
+mvn -DskipTests package
+```
+
+Build the frontend:
+
+```bash
+cd frontend
+npm run build
+```
+
+The frontend currently has no `lint` or `test` npm scripts; use `npm run lint --if-present` and `npm test --if-present` in automation until those scripts are added.
+
 ## Vercel Frontend Deployment
 
 This repo includes a root-level `vercel.json` for Vercel projects whose Root Directory is the repository root. It installs and builds `frontend/`, publishes `frontend/dist`, proxies `/api/*` to the Render backend, and serves `index.html` for React SPA routes.

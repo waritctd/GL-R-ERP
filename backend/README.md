@@ -39,6 +39,35 @@ The `demo` profile enables:
 - password `demo1234`
 - quick role login for the frontend demo buttons
 
+## Environment Variables
+
+| Variable | Required | Default | Notes |
+| --- | --- | --- | --- |
+| `SPRING_PROFILES_ACTIVE` | No | none | Use `demo` locally for seeded demo accounts. Use `prod` on Render/production. |
+| `SPRING_DATASOURCE_URL` | Yes outside local Postgres | `jdbc:postgresql://localhost:5432/hris` | PostgreSQL JDBC URL. Add `sslmode=require` for Supabase. |
+| `SPRING_DATASOURCE_USERNAME` | Yes outside local Postgres | `postgres` | Database user. Prefer a least-privilege app role outside demos. |
+| `SPRING_DATASOURCE_PASSWORD` | Yes outside local Postgres | `postgres` | Database password. Keep in `.env.local` or host secrets only. |
+| `DB_POOL_SIZE` | No | `10` | Hikari maximum pool size. |
+| `DB_MIN_IDLE` | No | `1` | Hikari minimum idle connections. Production override sets this to `0`. |
+| `APP_FLYWAY_ENABLED` | No | `true` | Runs schema migrations on startup. |
+| `APP_DEMO_SEED_ENABLED` | No | `false` | Seeds demo users. Enable only with the `demo` profile. |
+| `APP_QUICK_ROLE_LOGIN_ENABLED` | No | `false` | Enables passwordless role buttons only when the `demo` profile is active. |
+| `APP_CORS_ALLOWED_ORIGINS` | No | local Vite origins | Comma-separated absolute `http` or `https` origins. Wildcards are rejected. |
+| `SERVER_SESSION_COOKIE_SECURE` | No | `true` | Set `false` only for local plain-HTTP backend runs. |
+| `APP_BOOTSTRAP_ENABLED` | No | `false` | Creates or syncs one non-demo login from env vars. |
+| `APP_BOOTSTRAP_EMAIL` | When bootstrap enabled | empty | Bootstrap account email. |
+| `APP_BOOTSTRAP_PASSWORD` | When bootstrap enabled | empty | Bootstrap account password. Store as a secret. |
+| `APP_BOOTSTRAP_ROLE` | No | `hr` | One of `admin`, `hr`, `director`, `supervisor`, `employee`. |
+
+## Tests
+
+```bash
+cd backend
+mvn test
+```
+
+The tests cover business rules, service behavior, validation, controller auth/permission checks, and security-sensitive auth behavior.
+
 ## Production Notes
 
 For production/on-prem, do not enable the `demo` profile.

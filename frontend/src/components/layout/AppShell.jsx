@@ -1,19 +1,15 @@
-import { ROLE_PERMISSIONS } from '../../api/index.js';
+import { hasPermission } from '../../app/permissions.js';
 import { roleLabel } from '../../utils/format.js';
 import { Avatar } from '../common/Avatar.jsx';
 import { Icon } from '../common/Icon.jsx';
 import { Sidebar } from './Sidebar.jsx';
 
-function can(role, key) {
-  return ROLE_PERMISSIONS[key].includes(role);
-}
-
 export function AppShell({ user, employee, route, onRoute, onLogout, pendingRequestCount, children }) {
   const navItems = [
     { route: 'dashboard', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
-    { route: 'employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', show: can(user.role, 'canViewEmployees') },
-    { route: 'requests', label: 'คำขอแก้ไขข้อมูล', helper: 'Profile requests', icon: 'clipboard', show: can(user.role, 'canReviewProfileRequests'), badge: pendingRequestCount },
-    { route: 'users', label: 'จัดการผู้ใช้งาน', helper: 'Users', icon: 'userCog', show: can(user.role, 'canManageUsers') },
+    { route: 'employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', show: hasPermission(user.role, 'canViewEmployees') },
+    { route: 'requests', label: 'คำขอแก้ไขข้อมูล', helper: 'Profile requests', icon: 'clipboard', show: hasPermission(user.role, 'canReviewProfileRequests'), badge: pendingRequestCount },
+    { route: 'users', label: 'จัดการผู้ใช้งาน', helper: 'Users', icon: 'userCog', show: hasPermission(user.role, 'canManageUsers') },
     { route: 'profile', label: 'ข้อมูลของฉัน', helper: 'My profile', icon: 'badge', show: true },
     { route: 'myrequests', label: 'คำขอของฉัน', helper: 'My requests', icon: 'clock', show: user.role === 'employee', badge: pendingRequestCount },
   ].filter((item) => item.show);

@@ -10,8 +10,18 @@ const roles = [
   ['admin', 'ADMIN · ผู้ดูแลระบบ'],
 ];
 
+const demoPasswordEnabled = import.meta.env.DEV || import.meta.env.VITE_USE_MOCKS === 'true';
+const passwordAlphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
+
+function temporaryPassword() {
+  if (demoPasswordEnabled) return 'demo1234';
+  const bytes = new Uint8Array(14);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => passwordAlphabet[byte % passwordAlphabet.length]).join('');
+}
+
 export function UserFormModal({ employees, onClose, onSubmit }) {
-  const [form, setForm] = useState({ employeeId: employees[0]?.id || '', email: '', role: 'employee', password: 'demo1234' });
+  const [form, setForm] = useState(() => ({ employeeId: employees[0]?.id || '', email: '', role: 'employee', password: temporaryPassword() }));
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }));

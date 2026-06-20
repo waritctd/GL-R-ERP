@@ -2,6 +2,7 @@ package th.co.glr.hr.profile;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -12,6 +13,8 @@ import th.co.glr.hr.employee.EmployeeRepository;
 
 @Service
 public class ProfileRequestService {
+    private static final Set<String> SUPPORTED_FIELDS = Set.of("phone", "email", "address", "emergency");
+
     private final ProfileRequestRepository profileRequests;
     private final EmployeeRepository employees;
 
@@ -38,6 +41,9 @@ public class ProfileRequestService {
         if (user.employeeId() == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "User is not linked to an employee");
         }
+        if (!SUPPORTED_FIELDS.contains(request.fieldKey())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Unsupported profile field");
+        }
         long id = profileRequests.create(user.employeeId(), request, user);
         return profileRequests.findById(id).map(this::toDto).orElseThrow();
     }
@@ -49,7 +55,14 @@ public class ProfileRequestService {
         }
         ProfileRequestRecord existing = profileRequests.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Profile request not found"));
-        profileRequests.updateStatus(id, request.status(), reviewer.id(), request.reviewerNote());
+        if (!"pending".equals(existing.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "Profile request has already been reviewed");
+        }
+
+        int updated = profileRequests.updatePendingStatus(id, request.status(), reviewer.id(), request.reviewerNote());
+        if (updated != 1) {
+            throw new ApiException(HttpStatus.CONFLICT, "Profile request has already been reviewed");
+        }
         if ("approved".equals(request.status()) && "pending".equals(existing.status())) {
             applyApprovedRequest(existing);
         }

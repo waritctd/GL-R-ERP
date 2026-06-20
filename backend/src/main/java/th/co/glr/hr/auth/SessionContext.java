@@ -24,8 +24,4 @@ public class SessionContext {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
     }
-
-    public boolean hasAnyRole(UserPrincipal user, String... roles) {
-        return Arrays.stream(roles).anyMatch(role -> role.equals(user.role()));
-    }
 }

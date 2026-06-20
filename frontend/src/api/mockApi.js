@@ -124,7 +124,7 @@ export const api = {
         : db.users.find((item) => item.email.toLowerCase() === email && item.active);
 
       if (!user) fail('Invalid email or inactive user', 401);
-      if (!requestedRole && payload?.password && payload.password !== user.password) fail('Invalid password', 401);
+      if (!requestedRole && payload?.password !== user.password) fail('Invalid password', 401);
 
       sessionUser = user;
       return delay({ user: publicUser(user) });
@@ -218,6 +218,7 @@ export const api = {
       hasRole('hr');
       const request = db.profileRequests.find((item) => item.id === Number(id));
       if (!request) fail('Profile request not found', 404);
+      if (request.status !== 'pending') fail('Profile request has already been reviewed', 409);
       request.status = payload.status;
       request.reviewedAt = new Date().toISOString().slice(0, 10);
       if (request.status === 'approved') applyApprovedProfileRequest(request);

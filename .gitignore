@@ -3,6 +3,7 @@ dist/
 .vite/
 backend/target/
 .DS_Store
+*.timestamp-*.mjs
 *.log
 .env
 .env.local

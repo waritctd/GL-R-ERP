@@ -20,8 +20,13 @@ public class EmployeeService {
     }
 
     public List<EmployeeDto> list(EmployeeFilter filter) {
-        Map<Long, Integer> pendingCounts = profileRequests.pendingCountsByEmployee();
-        return employees.findEmployees(filter, false).stream()
+        List<EmployeeDto> filteredEmployees = employees.findEmployees(filter, false);
+        if (filteredEmployees.isEmpty()) {
+            return List.of();
+        }
+        List<Long> employeeIds = filteredEmployees.stream().map(EmployeeDto::id).toList();
+        Map<Long, Integer> pendingCounts = profileRequests.pendingCountsByEmployeeIds(employeeIds);
+        return filteredEmployees.stream()
             .map(employee -> employee.withPendingRequestCount(pendingCounts.getOrDefault(employee.id(), 0)))
             .toList();
     }

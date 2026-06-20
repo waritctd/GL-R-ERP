@@ -94,14 +94,15 @@ public class ProfileRequestRepository {
         return id == null ? 0 : id;
     }
 
-    public void updateStatus(long id, String status, long reviewerUserId, String reviewerNote) {
-        jdbc.update("""
+    public int updatePendingStatus(long id, String status, long reviewerUserId, String reviewerNote) {
+        return jdbc.update("""
             UPDATE hr.profile_change_request
                SET status = :status,
                    reviewed_by_user_id = :reviewerUserId,
                    reviewed_at = now(),
                    reviewer_note = :reviewerNote
              WHERE request_id = :id
+               AND status = 'pending'
             """, new MapSqlParameterSource()
             .addValue("id", id)
             .addValue("status", status)
@@ -109,13 +110,17 @@ public class ProfileRequestRepository {
             .addValue("reviewerNote", reviewerNote));
     }
 
-    public Map<Long, Integer> pendingCountsByEmployee() {
+    public Map<Long, Integer> pendingCountsByEmployeeIds(List<Long> employeeIds) {
+        if (employeeIds == null || employeeIds.isEmpty()) {
+            return Map.of();
+        }
         return jdbc.query("""
             SELECT employee_id, COUNT(*)::int AS pending_count
               FROM hr.profile_change_request
              WHERE status = 'pending'
+               AND employee_id IN (:employeeIds)
              GROUP BY employee_id
-            """, Map.of(), (rs, rowNum) -> Map.entry(rs.getLong("employee_id"), rs.getInt("pending_count")))
+            """, Map.of("employeeIds", employeeIds), (rs, rowNum) -> Map.entry(rs.getLong("employee_id"), rs.getInt("pending_count")))
             .stream()
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
