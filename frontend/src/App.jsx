@@ -10,9 +10,9 @@ import { EmployeeDetailPage } from './features/employees/EmployeeDetailPage.jsx'
 import { ProfileRequestsPage } from './features/profileRequests/ProfileRequestsPage.jsx';
 import { ProfilePage } from './features/profile/ProfilePage.jsx';
 import { MyRequestsPage } from './features/profile/MyRequestsPage.jsx';
-import { UserManagementPage } from './features/users/UserManagementPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
+import { hasPermission } from './app/permissions.js';
 
 export function App() {
   const [user, setUser] = useState(null);
@@ -23,7 +23,6 @@ export function App() {
     currentEmployee,
     employees,
     profileRequests,
-    users,
     route,
     selectedEmployee,
     loadData,
@@ -34,15 +33,14 @@ export function App() {
     updateEmployee,
     createProfileRequest,
     reviewProfileRequest,
-    createUser,
-    updateUser,
   } = useHrData({ user, showToast });
 
   const ownRequests = useMemo(
     () => profileRequests.filter((request) => request.employeeId === currentEmployee?.id),
     [profileRequests, currentEmployee],
   );
-  const pendingCount = (user?.role === 'employee' ? ownRequests : profileRequests).filter((request) => request.status === 'pending').length;
+  const isEmployeeExperience = hasPermission(user?.role, 'canUseEmployeeExperience');
+  const pendingCount = (isEmployeeExperience ? ownRequests : profileRequests).filter((request) => request.status === 'pending').length;
 
   useEffect(() => {
     let alive = true;
@@ -93,7 +91,7 @@ export function App() {
   }
 
   const screen = route === 'dashboard'
-    ? user.role === 'employee'
+    ? isEmployeeExperience
       ? <EmployeeDashboard employee={currentEmployee} profileRequests={ownRequests} onRoute={routeTo} />
       : <HrDashboard employee={currentEmployee} employees={employees} profileRequests={profileRequests} onRoute={routeTo} />
     : route === 'employees'
@@ -102,11 +100,9 @@ export function App() {
         ? <EmployeeDetailPage user={user} employee={selectedEmployee} onBack={() => routeTo('employees')} onUpdateEmployee={updateEmployee} />
         : route === 'requests'
           ? <ProfileRequestsPage profileRequests={profileRequests} onReview={reviewProfileRequest} />
-          : route === 'users'
-            ? <UserManagementPage users={users} employees={employees} onCreateUser={createUser} onUpdateUser={updateUser} />
-            : route === 'myrequests'
-              ? <MyRequestsPage profileRequests={ownRequests} onNewRequest={() => routeTo('profile')} />
-              : <ProfilePage user={user} employee={currentEmployee} profileRequests={ownRequests} onCreateRequest={createProfileRequest} onRoute={routeTo} />;
+          : route === 'myrequests'
+            ? <MyRequestsPage profileRequests={ownRequests} onNewRequest={() => routeTo('profile')} />
+            : <ProfilePage user={user} employee={currentEmployee} profileRequests={ownRequests} onCreateRequest={createProfileRequest} onRoute={routeTo} />;
 
   return (
     <>

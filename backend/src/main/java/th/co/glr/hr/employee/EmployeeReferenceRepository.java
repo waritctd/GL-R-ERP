@@ -26,6 +26,14 @@ public class EmployeeReferenceRepository {
     public Long ensureDivision(String sourceCode, String name) {
         String fallbackName = defaultText(name, defaultText(sourceCode, "ไม่ระบุ"));
         if (hasText(sourceCode)) {
+            Long databaseId = parseLong(sourceCode);
+            if (databaseId != null && divisionExists(databaseId)) {
+                if (hasText(name)) {
+                    jdbc.update("UPDATE hr.division SET name_th = :name, is_active = TRUE WHERE division_id = :id",
+                        Map.of("id", databaseId, "name", fallbackName));
+                }
+                return databaseId;
+            }
             jdbc.update("""
                 INSERT INTO hr.division(source_code, name_th, is_active)
                 VALUES (:sourceCode, :name, TRUE)
@@ -35,6 +43,13 @@ public class EmployeeReferenceRepository {
                 Map.of("sourceCode", sourceCode), Long.class);
         }
         return findOrInsertDivisionByName(fallbackName);
+    }
+
+    private boolean divisionExists(long divisionId) {
+        Boolean exists = jdbc.queryForObject("""
+            SELECT EXISTS(SELECT 1 FROM hr.division WHERE division_id = :id)
+            """, Map.of("id", divisionId), Boolean.class);
+        return Boolean.TRUE.equals(exists);
     }
 
     public Long ensureDepartment(String name, Long divisionId) {
@@ -144,5 +159,13 @@ public class EmployeeReferenceRepository {
 
     private static boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private static Long parseLong(String value) {
+        try {
+            return Long.valueOf(value.trim());
+        } catch (NumberFormatException exception) {
+            return null;
+        }
     }
 }

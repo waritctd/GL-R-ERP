@@ -4,28 +4,40 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { Avatar } from '../../components/common/Avatar.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
-import { divisions } from '../../data/demoData.js';
+import { divisions, findDivision } from '../../data/referenceData.js';
 
 export function HrDashboard({ employee, employees, profileRequests, onRoute }) {
   const dashboardStats = useMemo(() => {
-    const headcountByDivision = new Map(divisions.map((division) => [division.id, 0]));
+    const headcountByDivision = new Map(divisions.map((division) => [division.id, { division, count: 0 }]));
+    const extraDivisions = new Map();
     let activeCount = 0;
     let probationCount = 0;
 
     employees.forEach((item) => {
       if (item.active) activeCount += 1;
       if (item.statusId === 'PRB') probationCount += 1;
-      if (headcountByDivision.has(item.divisionId)) {
-        headcountByDivision.set(item.divisionId, headcountByDivision.get(item.divisionId) + 1);
+      const knownDivision = findDivision(item.divisionId, item.divisionTh);
+      if (knownDivision && headcountByDivision.has(knownDivision.id)) {
+        headcountByDivision.get(knownDivision.id).count += 1;
+      } else {
+        const key = item.divisionId || item.divisionTh || 'unknown';
+        const current = extraDivisions.get(key) || {
+          division: { id: key, th: item.divisionTh || 'ไม่ระบุฝ่าย', en: item.divisionId || 'Unassigned' },
+          count: 0,
+        };
+        current.count += 1;
+        extraDivisions.set(key, current);
       }
     });
+
+    const divisionRows = [...headcountByDivision.values(), ...extraDivisions.values()];
 
     return {
       activeCount,
       probationCount,
       pendingCount: profileRequests.reduce((count, item) => count + (item.status === 'pending' ? 1 : 0), 0),
-      headcountByDivision,
-      maxHeadcount: Math.max(...headcountByDivision.values(), 1),
+      divisionRows,
+      maxHeadcount: Math.max(...divisionRows.map((item) => item.count), 1),
     };
   }, [employees, profileRequests]);
 
@@ -50,8 +62,7 @@ export function HrDashboard({ employee, employees, profileRequests, onRoute }) {
             <button type="button" className="text-button" onClick={() => onRoute('employees')}>ดูรายชื่อ</button>
           </div>
           <div className="bar-list">
-            {divisions.map((division) => {
-              const count = dashboardStats.headcountByDivision.get(division.id) || 0;
+            {dashboardStats.divisionRows.map(({ division, count }) => {
               return (
                 <div className="bar-row" key={division.id}>
                   <span>

@@ -1,21 +1,8 @@
 import { useState } from 'react';
 import { Icon } from '../../components/common/Icon.jsx';
 
-const quickAccounts = [
-  { role: 'hr', label: 'HR', helper: 'พนักงานทั้งหมด · อนุมัติคำขอ', icon: 'badgeCheck' },
-  { role: 'employee', label: 'Employee', helper: 'โปรไฟล์ของฉัน · ส่งคำขอแก้ไข', icon: 'user' },
-  { role: 'admin', label: 'Admin', helper: 'จัดการบัญชีผู้ใช้งาน', icon: 'userCog' },
-];
-
-const demoLoginEnabled = import.meta.env.DEV
-  || import.meta.env.VITE_USE_MOCKS === 'true'
-  || import.meta.env.VITE_DEMO_LOGIN === 'true';
-
 export function LoginPage({ onLogin, loading, error }) {
-  const [form, setForm] = useState(() => ({
-    email: demoLoginEnabled ? 'hr@glr.co.th' : '',
-    password: demoLoginEnabled ? 'demo1234' : '',
-  }));
+  const [form, setForm] = useState({ email: '', password: '' });
 
   function updateField(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -84,19 +71,6 @@ export function LoginPage({ onLogin, loading, error }) {
           </button>
         </form>
 
-        {demoLoginEnabled ? (
-          <div className="quick-login">
-            {quickAccounts.map((account) => (
-              <button key={account.role} type="button" onClick={() => onLogin({ role: account.role })} disabled={loading}>
-                <Icon name={account.icon} />
-                <span>
-                  <strong>{account.label}</strong>
-                  <small>{account.helper}</small>
-                </span>
-              </button>
-            ))}
-          </div>
-        ) : null}
       </section>
     </main>
   );

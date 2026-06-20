@@ -37,15 +37,6 @@ spring:
 app:
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174}
-  demo-seed:
-    enabled: ${APP_DEMO_SEED_ENABLED:false}
-  auth:
-    quick-role-login-enabled: ${APP_QUICK_ROLE_LOGIN_ENABLED:false}
-  bootstrap:
-    enabled: ${APP_BOOTSTRAP_ENABLED:false}
-    email: ${APP_BOOTSTRAP_EMAIL:}
-    password: ${APP_BOOTSTRAP_PASSWORD:}
-    role: ${APP_BOOTSTRAP_ROLE:hr}
 
 logging:
   level:

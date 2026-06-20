@@ -5,7 +5,7 @@ import java.util.Locale;
 import java.util.Set;
 
 public final class ApplicationRoles {
-    private static final List<String> PRIORITY = List.of("admin", "hr", "director", "supervisor", "employee");
+    private static final List<String> PRIORITY = List.of("hr", "employee");
     private static final Set<String> ALLOWED = Set.copyOf(PRIORITY);
 
     private ApplicationRoles() {

@@ -1,41 +1,27 @@
 package th.co.glr.hr.auth;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
-import org.springframework.core.env.Environment;
-import org.springframework.core.env.Profiles;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
-import th.co.glr.hr.user.AppUserRecord;
-import th.co.glr.hr.user.AppUserRepository;
 
 class AuthServiceTest {
-    private final AppUserRepository users = mock(AppUserRepository.class);
-    private final Environment environment = mock(Environment.class);
-    private final AppProperties properties = new AppProperties();
-    private final AuthService service;
-
-    AuthServiceTest() {
-        when(environment.acceptsProfiles(any(Profiles.class))).thenReturn(false);
-        service = new AuthService(users, properties, environment);
-    }
+    private final EmployeeAuthRepository employees = mock(EmployeeAuthRepository.class);
+    private final AuthService service = new AuthService(employees);
 
     @Test
-    void usesGenericCredentialErrorForWrongPassword() {
-        AppUserRecord user = userWithHash(service.hashPassword("correct-password"));
-        when(users.findByEmail("hr@glr.co.th")).thenReturn(Optional.of(user));
+    void usesGenericCredentialErrorForWrongEmployeeIdPassword() {
+        when(employees.findByEmail("hr@glr.co.th")).thenReturn(Optional.of(employee(17L)));
 
         assertThatThrownBy(() -> service.login(
-            new LoginRequest("hr@glr.co.th", "wrong-password", null),
+            new LoginRequest("hr@glr.co.th", "999", null),
             new MockHttpServletRequest()))
             .isInstanceOfSatisfying(ApiException.class, exception -> {
                 org.assertj.core.api.Assertions.assertThat(exception.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED);
@@ -44,26 +30,44 @@ class AuthServiceTest {
     }
 
     @Test
-    void rejectsNoopPasswordHashesOutsideDemoProfile() {
-        when(users.findByEmail("hr@glr.co.th")).thenReturn(Optional.of(userWithHash("{noop}demo1234")));
+    void derivesHrRoleFromHrMdMnDivision() {
+        when(employees.findByEmail("hr@glr.co.th")).thenReturn(Optional.of(employee(17L)));
 
-        assertThatThrownBy(() -> service.login(
-            new LoginRequest("hr@glr.co.th", "demo1234", null),
-            new MockHttpServletRequest()))
-            .isInstanceOfSatisfying(ApiException.class, exception ->
-                org.assertj.core.api.Assertions.assertThat(exception.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED));
+        AuthResponse response = service.login(new LoginRequest("hr@glr.co.th", "42", null), new MockHttpServletRequest());
+
+        assertThat(response.user().role()).isEqualTo("hr");
+        assertThat(response.user().employeeId()).isEqualTo(42L);
     }
 
-    private AppUserRecord userWithHash(String passwordHash) {
-        return new AppUserRecord(
-            1L,
+    @Test
+    void derivesEmployeeRoleFromOtherDivisions() {
+        when(employees.findByEmail("employee@glr.co.th")).thenReturn(Optional.of(employee(3L)));
+
+        AuthResponse response = service.login(new LoginRequest("employee@glr.co.th", "42", null), new MockHttpServletRequest());
+
+        assertThat(response.user().role()).isEqualTo("employee");
+    }
+
+    @Test
+    void rejectsRoleOnlyLogin() {
+        assertThatThrownBy(() -> service.login(
+            new LoginRequest(null, null, "hr"),
+            new MockHttpServletRequest()
+        ))
+            .isInstanceOfSatisfying(ApiException.class, exception ->
+                org.assertj.core.api.Assertions.assertThat(exception.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    private EmployeeLoginRecord employee(long divisionId) {
+        return new EmployeeLoginRecord(
+            42L,
             "hr@glr.co.th",
-            passwordHash,
             "HR",
-            10L,
             true,
-            LocalDate.now(),
-            List.of("hr")
+            divisionId,
+            null,
+            null,
+            LocalDate.now()
         );
     }
 }

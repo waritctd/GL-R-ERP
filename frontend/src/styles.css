@@ -59,8 +59,7 @@ code {
   box-shadow: 0 24px 70px rgba(2, 6, 23, 0.24);
 }
 
-.login-brand,
-.quick-login {
+.login-brand {
   background: #f8fafc;
 }
 
@@ -189,28 +188,6 @@ textarea:focus {
   font-size: 13px;
 }
 
-.quick-login {
-  padding: 0 34px 34px;
-  display: grid;
-  gap: 10px;
-  border-right: 1px solid #e6eaf0;
-}
-
-.quick-login button {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  min-height: 54px;
-  padding: 12px 14px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fff;
-  color: #0f172a;
-  text-align: left;
-}
-
-.quick-login small,
 .nav-item small,
 .employee-cell small,
 .topbar-user span,
@@ -1064,8 +1041,7 @@ textarea:focus {
     padding: 28px;
   }
 
-  .login-brand,
-  .quick-login {
+  .login-brand {
     border-right: 0;
   }
 

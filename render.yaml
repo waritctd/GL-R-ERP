@@ -13,7 +13,6 @@ services:
     plan: starter              # free tier is CPU-throttled (slow startup races the port scan) and cold-starts; starter avoids both
     autoDeploy: true
     envVars:
-      # Do NOT enable the demo profile in production (it turns on passwordless quick-login).
       - key: SPRING_PROFILES_ACTIVE
         value: prod
       - key: APP_FLYWAY_ENABLED
@@ -21,7 +20,7 @@ services:
       # Frontend origin is only needed as a CORS fallback; the Vercel proxy keeps calls
       # same-origin so CORS normally isn't exercised.
       - key: APP_CORS_ALLOWED_ORIGINS
-        value: https://demo-glr.vercel.app
+        sync: false
       # Secrets — set these in the Render dashboard (sync:false keeps them out of git).
       - key: SPRING_DATASOURCE_URL
         sync: false
