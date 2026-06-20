@@ -22,7 +22,7 @@ public class EmployeeAuthRepository {
             EmployeeLoginRecord employee = jdbc.queryForObject("""
                 SELECT e.employee_id,
                        e.employee_code,
-                       e.email,
+                       COALESCE(substring(e.email from '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+'), btrim(e.email)) AS email,
                        e.is_active,
                        e.created_at::date AS created_at,
                        d.division_id,
@@ -31,7 +31,12 @@ public class EmployeeAuthRepository {
                        COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), e.email) AS display_name
                   FROM hr.employee e
                   LEFT JOIN hr.division d ON d.division_id = e.division_id
-                 WHERE LOWER(e.email) = LOWER(:email)
+                 WHERE e.email IS NOT NULL
+                   AND btrim(e.email) <> ''
+                   AND (
+                       LOWER(btrim(e.email)) = LOWER(:email)
+                       OR LOWER(substring(e.email from '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+')) = LOWER(:email)
+                   )
                  ORDER BY e.is_active DESC, e.employee_id
                  LIMIT 1
                 """, Map.of("email", email), (rs, rowNum) -> mapEmployee(rs));
