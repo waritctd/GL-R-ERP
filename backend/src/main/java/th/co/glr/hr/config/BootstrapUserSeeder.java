@@ -8,6 +8,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.auth.ApplicationRoles;
 import th.co.glr.hr.user.AppUserRepository;
 
 /**
@@ -55,7 +56,13 @@ public class BootstrapUserSeeder implements ApplicationRunner {
             return;
         }
 
-        String role = cfg.getRole() == null || cfg.getRole().isBlank() ? "hr" : cfg.getRole().trim().toLowerCase();
+        String role;
+        try {
+            role = ApplicationRoles.requireAllowed(cfg.getRole() == null || cfg.getRole().isBlank() ? "hr" : cfg.getRole());
+        } catch (IllegalArgumentException exception) {
+            log.warn("Bootstrap user enabled with unsupported APP_BOOTSTRAP_ROLE; skipping.");
+            return;
+        }
 
         var existingUser = users.findByEmail(email);
         if (existingUser.isPresent()) {

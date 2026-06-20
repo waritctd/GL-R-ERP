@@ -1,6 +1,8 @@
 package th.co.glr.hr.auth;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
+import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -18,8 +20,8 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    AuthResponse login(@RequestBody LoginRequest request, HttpSession session) {
-        return authService.login(request, session);
+    AuthResponse login(@Valid @RequestBody LoginRequest request, HttpServletRequest httpRequest) {
+        return authService.login(request, httpRequest);
     }
 
     @PostMapping("/logout")

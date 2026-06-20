@@ -1,5 +1,6 @@
 package th.co.glr.hr.auth;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import java.util.Comparator;
 import java.util.List;
@@ -15,7 +16,7 @@ import th.co.glr.hr.user.AppUserRepository;
 
 @Service
 public class AuthService {
-    private static final List<String> ROLE_PRIORITY = List.of("admin", "hr", "director", "supervisor", "employee");
+    private static final String INVALID_CREDENTIALS = "Invalid email or password";
 
     private final AppUserRepository users;
     private final AppProperties properties;
@@ -31,33 +32,42 @@ public class AuthService {
         this.demoProfileActive = environment.acceptsProfiles(Profiles.of("demo"));
     }
 
-    public AuthResponse login(LoginRequest request, HttpSession session) {
+    public AuthResponse login(LoginRequest request, HttpServletRequest httpRequest) {
+        LoginRequest safeRequest = request == null ? new LoginRequest(null, null, null) : request;
         AppUserRecord user;
         String selectedRole;
 
-        if (hasText(request.role())) {
+        if (hasText(safeRequest.role())) {
             if (!demoProfileActive || !properties.getAuth().isQuickRoleLoginEnabled()) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "Quick role login is disabled");
             }
-            user = users.findFirstEnabledByRole(request.role())
+            String role = ApplicationRoles.normalize(safeRequest.role());
+            if (!ApplicationRoles.isAllowed(role)) {
+                throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid role or inactive user");
+            }
+            user = users.findFirstEnabledByRole(role)
                 .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Invalid role or inactive user"));
-            selectedRole = request.role();
+            selectedRole = role;
         } else {
-            if (!hasText(request.email())) {
-                throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid email or inactive user");
+            if (!hasText(safeRequest.email())) {
+                throw new ApiException(HttpStatus.UNAUTHORIZED, INVALID_CREDENTIALS);
             }
-            user = users.findByEmail(request.email().trim())
-                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Invalid email or inactive user"));
+            user = users.findByEmail(safeRequest.email().trim())
+                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, INVALID_CREDENTIALS));
             if (!user.active()) {
-                throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid email or inactive user");
+                throw new ApiException(HttpStatus.UNAUTHORIZED, INVALID_CREDENTIALS);
             }
-            if (!passwordMatches(request.password(), user.passwordHash())) {
-                throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid password");
+            if (!passwordMatches(safeRequest.password(), user.passwordHash())) {
+                throw new ApiException(HttpStatus.UNAUTHORIZED, INVALID_CREDENTIALS);
             }
             selectedRole = primaryRole(user.roles());
         }
 
         UserPrincipal principal = toPrincipal(user, selectedRole);
+        HttpSession session = httpRequest.getSession(true);
+        if (httpRequest.getRequestedSessionId() != null) {
+            httpRequest.changeSessionId();
+        }
         session.setAttribute(SessionContext.SESSION_USER_KEY, principal);
         return new AuthResponse(principal);
     }
@@ -88,8 +98,8 @@ public class AuthService {
     private String primaryRole(List<String> roles) {
         return roles.stream()
             .min(Comparator.comparingInt(role -> {
-                int index = ROLE_PRIORITY.indexOf(role);
-                return index < 0 ? ROLE_PRIORITY.size() : index;
+                int index = ApplicationRoles.priority().indexOf(role);
+                return index < 0 ? ApplicationRoles.priority().size() : index;
             }))
             .orElseThrow(() -> new ApiException(HttpStatus.FORBIDDEN, "User has no application role"));
     }
@@ -99,6 +109,9 @@ public class AuthService {
             return false;
         }
         if (passwordHash.startsWith("{noop}")) {
+            if (!demoProfileActive) {
+                return false;
+            }
             return rawPassword.equals(passwordHash.substring("{noop}".length()));
         }
         return passwordEncoder.matches(rawPassword, passwordHash);

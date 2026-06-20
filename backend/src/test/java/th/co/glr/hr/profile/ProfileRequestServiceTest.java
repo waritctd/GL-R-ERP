@@ -59,6 +59,17 @@ class ProfileRequestServiceTest {
         verify(employees).updateEmail(existing.employeeId(), existing.newValue());
     }
 
+    @Test
+    void rejectsUnsupportedProfileFieldOnCreate() {
+        UserPrincipal employee = new UserPrincipal(8L, "employee@glr.co.th", "Employee", "employee", 22L, true, LocalDate.now());
+
+        assertThatThrownBy(() -> service.create(new CreateProfileRequestRequest("salary", "เงินเดือน", "1", "2"), employee))
+            .isInstanceOfSatisfying(ApiException.class, exception ->
+                org.assertj.core.api.Assertions.assertThat(exception.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+
+        verify(profileRequests, never()).create(22L, new CreateProfileRequestRequest("salary", "เงินเดือน", "1", "2"), employee);
+    }
+
     private ProfileRequestRecord requestWithStatus(String status) {
         return new ProfileRequestRecord(
             101L,

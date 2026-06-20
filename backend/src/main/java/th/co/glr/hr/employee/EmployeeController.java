@@ -1,6 +1,7 @@
 package th.co.glr.hr.employee;
 
 import jakarta.servlet.http.HttpSession;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -41,7 +42,7 @@ public class EmployeeController {
     }
 
     @PostMapping
-    EmployeeResponse create(@RequestBody UpsertEmployeeRequest request, HttpSession session) {
+    EmployeeResponse create(@Valid @RequestBody UpsertEmployeeRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         sessions.requireAnyRole(user, "hr", "admin");
         return new EmployeeResponse(employeeService.create(request, user));
@@ -54,7 +55,7 @@ public class EmployeeController {
     }
 
     @PatchMapping("/{id}")
-    EmployeeResponse update(@PathVariable long id, @RequestBody UpsertEmployeeRequest request, HttpSession session) {
+    EmployeeResponse update(@PathVariable long id, @Valid @RequestBody UpsertEmployeeRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         sessions.requireAnyRole(user, "hr", "admin");
         return new EmployeeResponse(employeeService.update(id, request, user));

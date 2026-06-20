@@ -34,7 +34,7 @@ public class EmployeeReferenceRepository {
             return jdbc.queryForObject("SELECT division_id FROM hr.division WHERE source_code = :sourceCode",
                 Map.of("sourceCode", sourceCode), Long.class);
         }
-        return findOrInsertByName("hr.division", "division_id", fallbackName);
+        return findOrInsertDivisionByName(fallbackName);
     }
 
     public Long ensureDepartment(String name, Long divisionId) {
@@ -62,7 +62,7 @@ public class EmployeeReferenceRepository {
         if (!hasText(name)) {
             return null;
         }
-        return findOrInsertByName("hr.position", "position_id", name);
+        return findOrInsertPositionByName(name);
     }
 
     public Long ensureLevel(String level) {
@@ -104,14 +104,38 @@ public class EmployeeReferenceRepository {
         return jdbc.queryForObject("SELECT division_id FROM hr.employee WHERE employee_id = :id", Map.of("id", employeeId), Long.class);
     }
 
-    private Long findOrInsertByName(String table, String idColumn, String name) {
-        List<Long> existing = jdbc.queryForList("SELECT " + idColumn + " FROM " + table + " WHERE name_th = :name LIMIT 1",
-            Map.of("name", name), Long.class);
+    private Long findOrInsertDivisionByName(String name) {
+        List<Long> existing = jdbc.queryForList("""
+            SELECT division_id
+              FROM hr.division
+             WHERE name_th = :name
+             LIMIT 1
+            """, Map.of("name", name), Long.class);
         if (!existing.isEmpty()) {
             return existing.getFirst();
         }
-        return jdbc.queryForObject("INSERT INTO " + table + "(name_th, is_active) VALUES (:name, TRUE) RETURNING " + idColumn,
-            Map.of("name", name), Long.class);
+        return jdbc.queryForObject("""
+            INSERT INTO hr.division(name_th, is_active)
+            VALUES (:name, TRUE)
+            RETURNING division_id
+            """, Map.of("name", name), Long.class);
+    }
+
+    private Long findOrInsertPositionByName(String name) {
+        List<Long> existing = jdbc.queryForList("""
+            SELECT position_id
+              FROM hr.position
+             WHERE name_th = :name
+             LIMIT 1
+            """, Map.of("name", name), Long.class);
+        if (!existing.isEmpty()) {
+            return existing.getFirst();
+        }
+        return jdbc.queryForObject("""
+            INSERT INTO hr.position(name_th, is_active)
+            VALUES (:name, TRUE)
+            RETURNING position_id
+            """, Map.of("name", name), Long.class);
     }
 
     private static String defaultText(String value, String fallback) {

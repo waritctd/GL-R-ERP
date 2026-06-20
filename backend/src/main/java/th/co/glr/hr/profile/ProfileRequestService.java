@@ -2,6 +2,7 @@ package th.co.glr.hr.profile;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -12,6 +13,8 @@ import th.co.glr.hr.employee.EmployeeRepository;
 
 @Service
 public class ProfileRequestService {
+    private static final Set<String> SUPPORTED_FIELDS = Set.of("phone", "email", "address", "emergency");
+
     private final ProfileRequestRepository profileRequests;
     private final EmployeeRepository employees;
 
@@ -37,6 +40,9 @@ public class ProfileRequestService {
     public ProfileRequestDto create(CreateProfileRequestRequest request, UserPrincipal user) {
         if (user.employeeId() == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "User is not linked to an employee");
+        }
+        if (!SUPPORTED_FIELDS.contains(request.fieldKey())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Unsupported profile field");
         }
         long id = profileRequests.create(user.employeeId(), request, user);
         return profileRequests.findById(id).map(this::toDto).orElseThrow();
