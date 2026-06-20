@@ -4,6 +4,7 @@ import java.time.LocalDate;
 
 public record EmployeeLoginRecord(
     long employeeId,
+    String employeeCode,
     String email,
     String name,
     boolean active,

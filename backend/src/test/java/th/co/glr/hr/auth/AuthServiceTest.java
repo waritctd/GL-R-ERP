@@ -17,7 +17,7 @@ class AuthServiceTest {
     private final AuthService service = new AuthService(employees);
 
     @Test
-    void usesGenericCredentialErrorForWrongEmployeeIdPassword() {
+    void usesGenericCredentialErrorForWrongEmployeeCodePassword() {
         when(employees.findByEmail("hr@glr.co.th")).thenReturn(Optional.of(employee(17L)));
 
         assertThatThrownBy(() -> service.login(
@@ -33,7 +33,7 @@ class AuthServiceTest {
     void derivesHrRoleFromHrMdMnDivision() {
         when(employees.findByEmail("hr@glr.co.th")).thenReturn(Optional.of(employee(17L)));
 
-        AuthResponse response = service.login(new LoginRequest("hr@glr.co.th", "42", null), new MockHttpServletRequest());
+        AuthResponse response = service.login(new LoginRequest("hr@glr.co.th", "GLR-42", null), new MockHttpServletRequest());
 
         assertThat(response.user().role()).isEqualTo("hr");
         assertThat(response.user().employeeId()).isEqualTo(42L);
@@ -43,7 +43,7 @@ class AuthServiceTest {
     void derivesEmployeeRoleFromOtherDivisions() {
         when(employees.findByEmail("employee@glr.co.th")).thenReturn(Optional.of(employee(3L)));
 
-        AuthResponse response = service.login(new LoginRequest("employee@glr.co.th", "42", null), new MockHttpServletRequest());
+        AuthResponse response = service.login(new LoginRequest("employee@glr.co.th", "GLR-42", null), new MockHttpServletRequest());
 
         assertThat(response.user().role()).isEqualTo("employee");
     }
@@ -61,6 +61,7 @@ class AuthServiceTest {
     private EmployeeLoginRecord employee(long divisionId) {
         return new EmployeeLoginRecord(
             42L,
+            "GLR-42",
             "hr@glr.co.th",
             "HR",
             true,

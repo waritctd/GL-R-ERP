@@ -73,4 +73,4 @@ If the Vercel project Root Directory is set to `frontend`, the matching `fronten
 
 ## Production Shape
 
-For production/on-prem, use the same backend and schema migrations with the target PostgreSQL datasource. Authentication uses employee email from `hr.employee`; the temporary password is the employee database id or employee code.
+For production/on-prem, use the same backend and schema migrations with the target PostgreSQL datasource. Authentication uses employee email from `hr.employee`; the temporary password is the employee code.

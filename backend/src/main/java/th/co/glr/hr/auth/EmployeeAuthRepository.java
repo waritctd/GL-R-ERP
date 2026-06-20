@@ -21,6 +21,7 @@ public class EmployeeAuthRepository {
         try {
             EmployeeLoginRecord employee = jdbc.queryForObject("""
                 SELECT e.employee_id,
+                       e.employee_code,
                        e.email,
                        e.is_active,
                        e.created_at::date AS created_at,
@@ -43,6 +44,7 @@ public class EmployeeAuthRepository {
     private EmployeeLoginRecord mapEmployee(ResultSet rs) throws SQLException {
         return new EmployeeLoginRecord(
             rs.getLong("employee_id"),
+            rs.getString("employee_code"),
             rs.getString("email"),
             rs.getString("display_name"),
             rs.getBoolean("is_active"),
