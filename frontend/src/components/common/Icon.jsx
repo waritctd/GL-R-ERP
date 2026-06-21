@@ -1,4 +1,6 @@
 import Badge from 'lucide-react/dist/esm/icons/badge.js';
+import Bell from 'lucide-react/dist/esm/icons/bell.js';
+import FileText from 'lucide-react/dist/esm/icons/file-text.js';
 import BadgeCheck from 'lucide-react/dist/esm/icons/badge-check.js';
 import BriefcaseBusiness from 'lucide-react/dist/esm/icons/briefcase-business.js';
 import Building2 from 'lucide-react/dist/esm/icons/building-2.js';
@@ -28,6 +30,8 @@ import X from 'lucide-react/dist/esm/icons/x.js';
 
 const icons = {
   badge: Badge,
+  bell: Bell,
+  fileText: FileText,
   badgeCheck: BadgeCheck,
   briefcase: BriefcaseBusiness,
   building: Building2,

@@ -9,21 +9,21 @@ public final class DivisionAccessPolicy {
         Map.entry(10L, "employee"), // AC-ฝ่ายบัญชี
         Map.entry(7L, "employee"),  // AM-ฝ่ายธุรการ
         Map.entry(17L, "hr"),       // HR-ฝ่ายบุคคล
-        Map.entry(2L, "hr"),        // MD-ผู้บริหารระดับสูง
+        Map.entry(2L,  "ceo"),      // MD-ผู้บริหารระดับสูง → CEO role for ticket approval
         Map.entry(16L, "hr"),       // MN-ผู้บริหาร
         Map.entry(14L, "employee"), // PC-ฝ่ายจัดซื้อ
-        Map.entry(5L, "employee"),  // PCIM-จัดซื้อต่างประเทศ
+        Map.entry(5L,  "import"),   // PCIM-จัดซื้อต่างประเทศ → Import role for price proposals
         Map.entry(11L, "employee"), // PD-ฝ่ายผลิต
         Map.entry(18L, "employee"), // QC&ISO
-        Map.entry(9L, "employee"),  // SA-ฝ่ายขาย
+        Map.entry(9L,  "sales"),    // SA-ฝ่ายขาย → Sales role for creating tickets
         Map.entry(15L, "employee"), // SADS-ออกแบบ
         Map.entry(13L, "employee"), // Sales Support 2
         Map.entry(12L, "employee"), // Sales Support 1
-        Map.entry(6L, "employee"),  // Sales Support 1
-        Map.entry(8L, "employee"),  // Sales Support 2
-        Map.entry(4L, "employee"),  // SR-โชว์รูม
-        Map.entry(1L, "employee"),  // SV-ฝ่ายบริการ
-        Map.entry(3L, "employee")   // WH-ฝ่ายคลังสินค้า
+        Map.entry(6L,  "employee"), // Sales Support 1
+        Map.entry(8L,  "employee"), // Sales Support 2
+        Map.entry(4L,  "employee"), // SR-โชว์รูม
+        Map.entry(1L,  "employee"), // SV-ฝ่ายบริการ
+        Map.entry(3L,  "employee")  // WH-ฝ่ายคลังสินค้า
     );
     private static final Set<String> HR_DIVISION_CODES = Set.of("hr", "md", "mn");
 

@@ -10,6 +10,8 @@ import { EmployeeDetailPage } from './features/employees/EmployeeDetailPage.jsx'
 import { ProfileRequestsPage } from './features/profileRequests/ProfileRequestsPage.jsx';
 import { ProfilePage } from './features/profile/ProfilePage.jsx';
 import { MyRequestsPage } from './features/profile/MyRequestsPage.jsx';
+import { TicketListPage } from './features/tickets/TicketListPage.jsx';
+import { TicketDetailPage } from './features/tickets/TicketDetailPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
 import { hasPermission } from './app/permissions.js';
@@ -18,6 +20,7 @@ export function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
+  const [selectedTicket, setSelectedTicket] = useState(null);
   const { toast, showToast, dismissToast } = useToast();
   const {
     currentEmployee,
@@ -55,9 +58,7 @@ export function App() {
       }
     }
     restoreSession();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
   async function handleLogin(payload) {
@@ -78,7 +79,18 @@ export function App() {
   async function handleLogout() {
     await api.auth.logout();
     setUser(null);
+    setSelectedTicket(null);
     resetData();
+  }
+
+  function handleRoute(nextRoute) {
+    if (nextRoute !== 'ticket-detail') setSelectedTicket(null);
+    routeTo(nextRoute);
+  }
+
+  function openTicket(id) {
+    setSelectedTicket(id);
+    routeTo('ticket-detail');
   }
 
   if (!user) {
@@ -92,17 +104,21 @@ export function App() {
 
   const screen = route === 'dashboard'
     ? isEmployeeExperience
-      ? <EmployeeDashboard employee={currentEmployee} profileRequests={ownRequests} onRoute={routeTo} />
-      : <HrDashboard employee={currentEmployee} employees={employees} profileRequests={profileRequests} onRoute={routeTo} />
+      ? <EmployeeDashboard employee={currentEmployee} profileRequests={ownRequests} onRoute={handleRoute} />
+      : <HrDashboard employee={currentEmployee} employees={employees} profileRequests={profileRequests} onRoute={handleRoute} />
     : route === 'employees'
       ? <EmployeeListPage user={user} employees={employees} onOpenEmployee={openEmployee} onCreateEmployee={createEmployee} />
       : route === 'detail'
-        ? <EmployeeDetailPage user={user} employee={selectedEmployee} onBack={() => routeTo('employees')} onUpdateEmployee={updateEmployee} />
+        ? <EmployeeDetailPage user={user} employee={selectedEmployee} onBack={() => handleRoute('employees')} onUpdateEmployee={updateEmployee} />
         : route === 'requests'
           ? <ProfileRequestsPage profileRequests={profileRequests} onReview={reviewProfileRequest} />
           : route === 'myrequests'
-            ? <MyRequestsPage profileRequests={ownRequests} onNewRequest={() => routeTo('profile')} />
-            : <ProfilePage user={user} employee={currentEmployee} profileRequests={ownRequests} onCreateRequest={createProfileRequest} onRoute={routeTo} />;
+            ? <MyRequestsPage profileRequests={ownRequests} onNewRequest={() => handleRoute('profile')} />
+            : route === 'tickets'
+              ? <TicketListPage user={user} onOpenTicket={openTicket} showToast={showToast} />
+              : route === 'ticket-detail'
+                ? <TicketDetailPage user={user} ticketId={selectedTicket} onBack={() => handleRoute('tickets')} showToast={showToast} />
+                : <ProfilePage user={user} employee={currentEmployee} profileRequests={ownRequests} onCreateRequest={createProfileRequest} onRoute={handleRoute} />;
 
   return (
     <>
@@ -110,7 +126,7 @@ export function App() {
         user={user}
         employee={currentEmployee}
         route={route}
-        onRoute={routeTo}
+        onRoute={handleRoute}
         onLogout={handleLogout}
         pendingRequestCount={pendingCount}
       >

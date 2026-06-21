@@ -5,11 +5,14 @@ import { Icon } from '../common/Icon.jsx';
 import { Sidebar } from './Sidebar.jsx';
 
 export function AppShell({ user, employee, route, onRoute, onLogout, pendingRequestCount, children }) {
+  const isSalesOnlyRole = hasPermission(user.role, 'canViewTickets') && !hasPermission(user.role, 'canViewEmployees');
+
   const navItems = [
-    { route: 'dashboard', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
+    { route: 'dashboard', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: !isSalesOnlyRole },
+    { route: 'tickets', label: 'ใบขอราคา', helper: 'Price requests', icon: 'fileText', show: hasPermission(user.role, 'canViewTickets') },
     { route: 'employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', show: hasPermission(user.role, 'canViewEmployees') },
     { route: 'requests', label: 'คำขอแก้ไขข้อมูล', helper: 'Profile requests', icon: 'clipboard', show: hasPermission(user.role, 'canReviewProfileRequests'), badge: pendingRequestCount },
-    { route: 'profile', label: 'ข้อมูลของฉัน', helper: 'My profile', icon: 'badge', show: true },
+    { route: 'profile', label: 'ข้อมูลของฉัน', helper: 'My profile', icon: 'badge', show: !!user.employeeId },
     { route: 'myrequests', label: 'คำขอของฉัน', helper: 'My requests', icon: 'clock', show: hasPermission(user.role, 'canSubmitProfileRequests'), badge: pendingRequestCount },
   ].filter((item) => item.show);
 

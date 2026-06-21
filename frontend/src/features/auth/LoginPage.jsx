@@ -1,8 +1,17 @@
 import { useState } from 'react';
 import { Icon } from '../../components/common/Icon.jsx';
 
+const quickAccounts = [
+  { role: 'hr', label: 'HR', helper: 'พนักงานทั้งหมด · อนุมัติคำขอ', icon: 'badgeCheck' },
+  { role: 'employee', label: 'Employee', helper: 'โปรไฟล์ของฉัน · ส่งคำขอแก้ไข', icon: 'user' },
+  { role: 'sales', label: 'Sales', helper: 'สร้างใบขอราคา · ออกใบเสนอราคา', icon: 'briefcase' },
+  { role: 'import', label: 'Import', helper: 'รับเรื่อง · เสนอราคาสินค้า', icon: 'clipboard' },
+  { role: 'ceo', label: 'CEO', helper: 'อนุมัติใบขอราคา · ภาพรวมทั้งหมด', icon: 'shield' },
+];
+
 export function LoginPage({ onLogin, loading, error }) {
   const [form, setForm] = useState({ email: '', password: '' });
+  const isMock = import.meta.env.VITE_USE_MOCKS === 'true';
 
   function updateField(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -69,8 +78,31 @@ export function LoginPage({ onLogin, loading, error }) {
             <Icon name="check" />
             เข้าสู่ระบบ
           </button>
-        </form>
 
+          {isMock && (
+            <div style={{ borderTop: '1px solid #e6eaf0', paddingTop: 14 }}>
+              <p style={{ margin: '0 0 10px', fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>DEMO — เข้าสู่ระบบด่วน</p>
+              <div style={{ display: 'grid', gap: 6 }}>
+                {quickAccounts.map((account) => (
+                  <button
+                    key={account.role}
+                    type="button"
+                    className="secondary-button"
+                    style={{ justifyContent: 'flex-start', gap: 10, padding: '6px 12px' }}
+                    disabled={loading}
+                    onClick={() => onLogin({ role: account.role })}
+                  >
+                    <Icon name={account.icon} size={15} />
+                    <span>
+                      <strong style={{ fontSize: 13 }}>{account.label}</strong>
+                      <small style={{ display: 'block', color: '#94a3b8', fontSize: 11 }}>{account.helper}</small>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </form>
       </section>
     </main>
   );

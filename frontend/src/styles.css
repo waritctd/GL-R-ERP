@@ -474,6 +474,11 @@ textarea:focus {
   color: #475569;
 }
 
+.status-info {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
 .stat-value {
   color: #0f172a;
   font-size: 28px;
@@ -689,6 +694,73 @@ textarea:focus {
 
 .user-table {
   grid-template-columns: 1.8fr 1.7fr 1fr 0.9fr 0.9fr 1fr;
+}
+
+.ticket-table {
+  grid-template-columns: 0.9fr 2fr 1.4fr 1.1fr 1.1fr 1fr 1fr;
+}
+
+.ticket-items-table {
+  grid-template-columns: 2.5fr 0.8fr 1.2fr 1.2fr;
+}
+
+.status-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 4px 0;
+}
+
+.status-tab {
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  border-radius: 20px;
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.status-tab:hover { background: #f1f5f9; }
+.status-tab.active { background: #1e40af; border-color: #1e40af; color: #fff; }
+
+.ticket-events {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.ticket-event {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 0;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: 13px;
+}
+
+.ticket-event:last-child { border-bottom: 0; }
+
+.event-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #94a3b8;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+
+.event-dot.transition { background: #1e40af; }
+.event-dot.comment    { background: #64748b; }
+.event-dot.created    { background: #22c55e; }
+
+.ticket-detail-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 16px;
+  align-items: start;
 }
 
 .employee-cell {
