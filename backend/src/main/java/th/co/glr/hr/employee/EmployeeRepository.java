@@ -8,6 +8,7 @@ import java.time.Period;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -244,39 +245,50 @@ public class EmployeeRepository {
             sets.add("title_id = :titleId");
             params.addValue("titleId", references.ensureTitle(defaultText(request.titleTh(), "นาย")));
         }
+        boolean assignmentChanged = false;
         Long divisionId = null;
         if (request.divisionId() != null || request.divisionTh() != null) {
             divisionId = references.ensureDivision(request.divisionId(), defaultText(request.divisionTh(), request.divisionId()));
             sets.add("division_id = :divisionId");
             params.addValue("divisionId", divisionId);
+            assignmentChanged = true;
         }
         if (request.departmentTh() != null) {
             Long departmentDivisionId = divisionId == null ? references.currentDivisionId(id) : divisionId;
             sets.add("department_id = :departmentId");
             params.addValue("departmentId", references.ensureDepartment(request.departmentTh(), departmentDivisionId));
+            assignmentChanged = true;
         }
         if (request.positionTh() != null) {
             sets.add("position_id = :positionId");
             params.addValue("positionId", references.ensurePosition(request.positionTh()));
+            assignmentChanged = true;
         }
         if (request.level() != null) {
             sets.add("level_id = :levelId");
             params.addValue("levelId", references.ensureLevel(request.level()));
+            assignmentChanged = true;
         }
         if (request.locationTh() != null) {
             sets.add("location_id = :locationId");
             params.addValue("locationId", references.ensureLocation(request.locationTh()));
+            assignmentChanged = true;
         }
         if (request.statusId() != null) {
             sets.add("status_id = :statusId");
             sets.add("is_active = :active");
             params.addValue("statusId", references.ensureStatus(request.statusId()));
             params.addValue("active", EmployeeStatus.active(request.statusId()));
+            assignmentChanged = true;
         }
 
         if (!sets.isEmpty()) {
             sets.add("updated_at = now()");
             jdbc.update("UPDATE hr.employee SET " + String.join(", ", sets) + " WHERE employee_id = :id", params);
+        }
+
+        if (assignmentChanged) {
+            syncCurrentAssignment(id);
         }
 
         if (request.address() != null || request.phone() != null) {
@@ -516,6 +528,62 @@ public class EmployeeRepository {
             .addValue("locationId", locationId)
             .addValue("statusId", statusId)
             .addValue("from", from));
+    }
+
+    /**
+     * Keeps the assignment timeline consistent with the employee's current org snapshot.
+     * When the snapshot moved, the open assignment is closed and a fresh current row is opened
+     * so {@code is_current} always reflects the live division/department/position/level/location/status.
+     */
+    private void syncCurrentAssignment(long employeeId) {
+        Map<String, Object> snapshot = jdbc.queryForMap("""
+            SELECT division_id, department_id, position_id, level_id, location_id, status_id
+              FROM hr.employee
+             WHERE employee_id = :id
+            """, Map.of("id", employeeId));
+
+        List<Map<String, Object>> current = jdbc.queryForList("""
+            SELECT division_id, department_id, position_id, level_id, location_id, status_id
+              FROM hr.employee_assignment
+             WHERE employee_id = :id AND is_current
+             ORDER BY effective_from DESC NULLS LAST, assignment_id DESC
+             LIMIT 1
+            """, Map.of("id", employeeId));
+
+        if (!current.isEmpty() && sameAssignment(snapshot, current.getFirst())) {
+            return;
+        }
+
+        LocalDate today = LocalDate.now();
+        jdbc.update("""
+            UPDATE hr.employee_assignment
+               SET is_current = FALSE,
+                   effective_to = COALESCE(effective_to, :today)
+             WHERE employee_id = :id AND is_current
+            """, new MapSqlParameterSource().addValue("id", employeeId).addValue("today", today));
+
+        insertCurrentAssignment(
+            employeeId,
+            toLong(snapshot.get("division_id")),
+            toLong(snapshot.get("department_id")),
+            toLong(snapshot.get("position_id")),
+            toLong(snapshot.get("level_id")),
+            toLong(snapshot.get("location_id")),
+            toLong(snapshot.get("status_id")),
+            today);
+    }
+
+    private static boolean sameAssignment(Map<String, Object> snapshot, Map<String, Object> assignment) {
+        for (String column : new String[] {"division_id", "department_id", "position_id", "level_id", "location_id", "status_id"}) {
+            if (!Objects.equals(toLong(snapshot.get(column)), toLong(assignment.get(column)))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static Long toLong(Object value) {
+        return value instanceof Number number ? number.longValue() : null;
     }
 
     private void insertInitialSalary(long employeeId, LocalDate date, BigDecimal salary) {
