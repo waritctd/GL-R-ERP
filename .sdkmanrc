@@ -1,0 +1,2 @@
+# Run `sdk env install` then `sdk env` to use the project JDK (matches pom.xml java.version=25)
+java=25.0.3-tem
