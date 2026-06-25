@@ -15,6 +15,7 @@ const EVENT_KIND_LABEL = {
   QUOTATION_ISSUED: 'ออกใบเสนอราคา',
   CLOSED:           'ปิดเรื่อง',
   CANCELLED:        'ยกเลิก',
+  EDITED:           'แก้ไขรายการสินค้า',
   COMMENTED:        'ความคิดเห็น',
   COMMENT:          'ความคิดเห็น',
 };
@@ -46,6 +47,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const [draftPrices, setDraftPrices] = useState({});
   const [proposeNote, setProposeNote] = useState('');
 
+  // Edit-items mode
+  const [editMode, setEditMode] = useState(false);
+  const [editDraft, setEditDraft] = useState([]);
+  const [editNote, setEditNote] = useState('');
+
   // Reject form
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
@@ -74,6 +80,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       setTicket(response.ticket);
       showToast('success', successMsg);
       setProposeMode(false);
+      setEditMode(false);
+      setEditDraft([]);
+      setEditNote('');
       setShowRejectForm(false);
       setRejectReason('');
       setCommentText('');
@@ -111,8 +120,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const role = user.role;
   const isOwner = user.id === summary.createdById;
 
+  const EDITABLE_STATUSES = ['submitted', 'in_review', 'price_proposed'];
   const can = {
-    submit:    st === 'draft'            && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     pickup:    st === 'submitted'        && ROLE_PERMISSIONS.canPickupTickets.includes(role),
     propose:   st === 'in_review'        && ROLE_PERMISSIONS.canProposePrices.includes(role),
     approve:   st === 'price_proposed'   && ROLE_PERMISSIONS.canApproveReject.includes(role),
@@ -121,12 +130,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     close:     st === 'quotation_issued' && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
     cancel:    !TERMINAL.includes(st)    && (isOwner || role === 'admin'),
     comment:   !TERMINAL.includes(st),
+    editItems: EDITABLE_STATUSES.includes(st) && (
+      (ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner) ||
+      (ROLE_PERMISSIONS.canPickupTickets.includes(role))
+    ),
   };
 
   const hasActions = Object.values(can).some(Boolean);
 
   const status = ticketStatusLabel(st);
-  const priority = ticketPriorityLabel(summary.priority);
 
   function initPropose() {
     const map = {};
@@ -138,12 +150,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   async function handleProposePrice() {
     const payload = {
       items: items.map((item) => ({
-        productCode: item.productCode ?? null,
-        productName: item.productName,
-        size: item.size ?? null,
-        color: item.color ?? null,
+        brand: item.brand,
+        model: item.model,
+        color: item.color,
+        texture: item.texture,
+        size: item.size,
         qty: item.qty,
-        unit: item.unit ?? null,
         proposedPrice: draftPrices[item.id] !== '' ? Number(draftPrices[item.id]) : null,
         currency: item.currency ?? 'THB',
       })),
@@ -170,11 +182,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             <Icon name="chevronLeft" size={14} />
             กลับ
           </button>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#0f172a' }}>{summary.title}</h1>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#0f172a' }}>{summary.customerName || summary.title}</h1>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
             <code style={{ fontSize: 13, background: '#f1f5f9', padding: '2px 8px', borderRadius: 4 }}>{summary.code}</code>
             <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-            <StatusBadge tone={priority.tone}>{priority.label}</StatusBadge>
+            {summary.hasEdits && (
+              <StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge>
+            )}
           </div>
         </div>
         <button type="button" className="icon-button" onClick={loadTicket} title="รีเฟรช">
@@ -188,14 +202,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             <h2>การดำเนินการ</h2>
           </div>
           <div style={{ padding: '12px 18px', display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-            {can.submit && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.submit(ticketId), 'ส่งใบขอราคาเข้าระบบแล้ว')}>
-                <Icon name="chevronRight" size={14} />
-                ส่งเรื่อง
-              </button>
-            )}
-
             {can.pickup && (
               <button type="button" className="primary-button" disabled={actionLoading}
                 onClick={() => doAction(() => api.tickets.pickup(ticketId), 'รับมอบหมายแล้ว')}>
@@ -240,6 +246,18 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 onClick={() => doAction(() => api.tickets.close(ticketId), 'ปิดใบขอราคาแล้ว')}>
                 <Icon name="check" size={14} />
                 ปิดเรื่อง
+              </button>
+            )}
+
+            {can.editItems && !editMode && (
+              <button type="button" className="secondary-button" disabled={actionLoading}
+                onClick={() => {
+                  setEditDraft(items.map((item) => ({ ...item })));
+                  setEditNote('');
+                  setEditMode(true);
+                }}>
+                <Icon name="pencil" size={14} />
+                แก้ไขรายการสินค้า
               </button>
             )}
 
@@ -296,62 +314,136 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
           <section className="table-panel">
             <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid #e6eaf0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2>รายการสินค้า ({items.length} รายการ)</h2>
+              <h2>รายการสินค้า ({editMode ? editDraft.length : items.length} รายการ)</h2>
             </div>
-            <div className="ticket-items-table table-head">
-              <span>สินค้า</span>
-              <span>จำนวน</span>
-              <span>ราคาที่เสนอ {proposeMode ? '(แก้ไข)' : ''}</span>
-              <span>ราคาที่อนุมัติ</span>
-            </div>
-            {items.length === 0 ? (
-              <EmptyState title="ไม่มีรายการสินค้า" />
-            ) : items.map((item, i) => (
-              <div key={item.id ?? i} className="ticket-items-table table-row">
-                <span>
-                  <strong>{item.productName}</strong>
-                  {(item.size || item.color) && (
-                    <small style={{ color: '#64748b' }}>{[item.size, item.color].filter(Boolean).join(' / ')}</small>
-                  )}
-                </span>
-                <span>{item.qty} {item.unit || ''}</span>
-                {proposeMode ? (
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={draftPrices[item.id] ?? ''}
-                    onChange={(e) => setDraftPrices((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                    placeholder="ราคา"
-                    style={{ width: 120, padding: '4px 8px', border: '1px solid #cbd5e1', borderRadius: 4, fontSize: 13 }}
-                  />
-                ) : (
-                  <code>{formatMoney(item.proposedPrice)}</code>
-                )}
-                <code>{formatMoney(item.approvedPrice)}</code>
-              </div>
-            ))}
 
-            {proposeMode && (
-              <div style={{ padding: '12px 18px', display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid #e6eaf0' }}>
-                <label style={{ fontSize: 13 }}>
-                  หมายเหตุราคา
-                  <input
-                    value={proposeNote}
-                    onChange={(e) => setProposeNote(e.target.value)}
-                    placeholder="ข้อมูลเพิ่มเติมเกี่ยวกับราคา (ถ้ามี)"
-                    style={{ marginTop: 4 }}
-                  />
+            {editMode ? (
+              <div style={{ padding: '14px 18px' }}>
+                {editDraft.map((item, index) => (
+                  <div key={index} style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: '12px 14px', marginBottom: 10, background: '#f8fafc' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: '#64748b' }}>รายการที่ {index + 1}</span>
+                      {editDraft.length > 1 && (
+                        <button type="button" className="icon-button" style={{ color: '#ef4444' }}
+                          onClick={() => setEditDraft((d) => d.filter((_, i) => i !== index))}>
+                          <Icon name="close" size={14} />
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                      {[
+                        { key: 'brand', label: 'ชื่อยี่ห้อ', placeholder: 'เช่น SCG, Cotto' },
+                        { key: 'model', label: 'ชื่อรุ่น', placeholder: 'ชื่อรุ่น' },
+                        { key: 'color', label: 'สี', placeholder: 'เช่น ขาว, เทา' },
+                        { key: 'texture', label: 'เนื้อผิว', placeholder: 'เช่น ด้าน, มัน' },
+                        { key: 'size', label: 'ขนาด', placeholder: 'เช่น 60x60 ซม.' },
+                      ].map(({ key, label, placeholder }) => (
+                        <label key={key} style={{ margin: 0 }}>
+                          <span style={{ fontSize: 12 }}>{label}</span>
+                          <input value={item[key] || ''} placeholder={placeholder}
+                            onChange={(e) => setEditDraft((d) => d.map((r, i) => i === index ? { ...r, [key]: e.target.value } : r))} />
+                        </label>
+                      ))}
+                      <label style={{ margin: 0 }}>
+                        <span style={{ fontSize: 12 }}>จำนวน</span>
+                        <input type="number" min="1" value={item.qty || 1}
+                          onChange={(e) => setEditDraft((d) => d.map((r, i) => i === index ? { ...r, qty: e.target.value } : r))} />
+                      </label>
+                      {ROLE_PERMISSIONS.canProposePrices.includes(role) && (
+                        <label style={{ margin: 0, gridColumn: '1 / -1' }}>
+                          <span style={{ fontSize: 12 }}>ราคาที่เสนอ (บาท)</span>
+                          <input type="number" min="0" step="0.01"
+                            value={item.proposedPrice ?? ''}
+                            placeholder="ราคา/หน่วย"
+                            onChange={(e) => setEditDraft((d) => d.map((r, i) => i === index ? { ...r, proposedPrice: e.target.value === '' ? null : Number(e.target.value) } : r))} />
+                        </label>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                <button type="button" className="secondary-button"
+                  onClick={() => setEditDraft((d) => [...d, { brand: '', model: '', color: '', texture: '', size: '', qty: 1, proposedPrice: null }])}
+                  style={{ marginBottom: 12 }}>
+                  <Icon name="plus" size={14} /> เพิ่มรายการ
+                </button>
+                <label style={{ fontSize: 13, display: 'block', marginBottom: 10 }}>
+                  หมายเหตุการแก้ไข
+                  <input value={editNote} onChange={(e) => setEditNote(e.target.value)} placeholder="ระบุสาเหตุที่แก้ไข (ถ้ามี)" style={{ marginTop: 4 }} />
                 </label>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <button type="button" className="primary-button" onClick={handleProposePrice} disabled={actionLoading}>
-                    ยืนยันราคาเสนอ
+                  <button type="button" className="primary-button" disabled={actionLoading}
+                    onClick={() => doAction(() => api.tickets.editItems(ticketId, {
+                      items: editDraft.map((item) => ({
+                        brand: item.brand, model: item.model, color: item.color,
+                        texture: item.texture, size: item.size, qty: Number(item.qty) || 1,
+                        proposedPrice: item.proposedPrice != null && item.proposedPrice !== '' ? Number(item.proposedPrice) : null,
+                        currency: item.currency ?? 'THB',
+                      })),
+                      note: editNote.trim() || null,
+                    }), 'บันทึกการแก้ไขแล้ว')}>
+                    บันทึกการแก้ไข
                   </button>
-                  <button type="button" className="secondary-button" onClick={() => { setProposeMode(false); setDraftPrices({}); setProposeNote(''); }} disabled={actionLoading}>
+                  <button type="button" className="secondary-button" disabled={actionLoading}
+                    onClick={() => { setEditMode(false); setEditDraft([]); setEditNote(''); }}>
                     ยกเลิก
                   </button>
                 </div>
               </div>
+            ) : (
+              <>
+                <div className="ticket-items-table table-head">
+                  <span>ยี่ห้อ / รุ่น</span>
+                  <span>สี / เนื้อผิว</span>
+                  <span>จำนวน</span>
+                  <span>ราคาที่เสนอ {proposeMode ? '(แก้ไข)' : ''}</span>
+                  <span>ราคาที่อนุมัติ</span>
+                </div>
+                {items.length === 0 ? (
+                  <EmptyState title="ไม่มีรายการสินค้า" />
+                ) : items.map((item, i) => (
+                  <div key={item.id ?? i} className="ticket-items-table table-row">
+                    <span>
+                      <strong>{item.brand}</strong>
+                      {item.model && <small style={{ color: '#64748b' }}>{item.model}</small>}
+                    </span>
+                    <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      {item.color && <span>{item.color}</span>}
+                      {item.texture && <small style={{ color: '#64748b' }}>{item.texture}</small>}
+                      {item.size && <small style={{ color: '#94a3b8' }}>{item.size}</small>}
+                    </span>
+                    <span>{item.qty}</span>
+                    {proposeMode ? (
+                      <input type="number" min="0" step="0.01"
+                        value={draftPrices[item.id] ?? ''}
+                        onChange={(e) => setDraftPrices((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                        placeholder="ราคา"
+                        style={{ width: 120, padding: '4px 8px', border: '1px solid #cbd5e1', borderRadius: 4, fontSize: 13 }} />
+                    ) : (
+                      <code>{formatMoney(item.proposedPrice)}</code>
+                    )}
+                    <code>{formatMoney(item.approvedPrice)}</code>
+                  </div>
+                ))}
+
+                {proposeMode && (
+                  <div style={{ padding: '12px 18px', display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid #e6eaf0' }}>
+                    <label style={{ fontSize: 13 }}>
+                      หมายเหตุราคา
+                      <input value={proposeNote} onChange={(e) => setProposeNote(e.target.value)}
+                        placeholder="ข้อมูลเพิ่มเติมเกี่ยวกับราคา (ถ้ามี)" style={{ marginTop: 4 }} />
+                    </label>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" className="primary-button" onClick={handleProposePrice} disabled={actionLoading}>
+                        ยืนยันราคาเสนอ
+                      </button>
+                      <button type="button" className="secondary-button"
+                        onClick={() => { setProposeMode(false); setDraftPrices({}); setProposeNote(''); }} disabled={actionLoading}>
+                        ยกเลิก
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </section>
 

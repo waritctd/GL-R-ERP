@@ -5,6 +5,7 @@ import { Toast } from './components/common/Toast.jsx';
 import { LoginPage } from './features/auth/LoginPage.jsx';
 import { HrDashboard } from './features/dashboard/HrDashboard.jsx';
 import { EmployeeDashboard } from './features/dashboard/EmployeeDashboard.jsx';
+import { TicketDashboard } from './features/dashboard/TicketDashboard.jsx';
 import { EmployeeListPage } from './features/employees/EmployeeListPage.jsx';
 import { EmployeeDetailPage } from './features/employees/EmployeeDetailPage.jsx';
 import { ProfileRequestsPage } from './features/profileRequests/ProfileRequestsPage.jsx';
@@ -102,10 +103,14 @@ export function App() {
     );
   }
 
+  const isTicketExperience = hasPermission(user?.role, 'canViewTickets') && !hasPermission(user?.role, 'canViewEmployees');
+
   const screen = route === 'dashboard'
-    ? isEmployeeExperience
-      ? <EmployeeDashboard employee={currentEmployee} profileRequests={ownRequests} onRoute={handleRoute} />
-      : <HrDashboard employee={currentEmployee} employees={employees} profileRequests={profileRequests} onRoute={handleRoute} />
+    ? isTicketExperience
+      ? <TicketDashboard user={user} employee={currentEmployee} onOpenTicket={openTicket} showToast={showToast} />
+      : isEmployeeExperience
+        ? <EmployeeDashboard employee={currentEmployee} profileRequests={ownRequests} onRoute={handleRoute} />
+        : <HrDashboard employee={currentEmployee} employees={employees} profileRequests={profileRequests} onRoute={handleRoute} />
     : route === 'employees'
       ? <EmployeeListPage user={user} employees={employees} onOpenEmployee={openEmployee} onCreateEmployee={createEmployee} />
       : route === 'detail'
@@ -129,6 +134,7 @@ export function App() {
         onRoute={handleRoute}
         onLogout={handleLogout}
         pendingRequestCount={pendingCount}
+        onOpenTicket={openTicket}
       >
         {screen}
       </AppShell>

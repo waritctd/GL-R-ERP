@@ -18,5 +18,6 @@ public record TicketSummaryDto(
     Instant createdAt,
     Instant updatedAt,
     Instant closedAt,
-    int itemCount
+    int itemCount,
+    boolean hasEdits
 ) {}

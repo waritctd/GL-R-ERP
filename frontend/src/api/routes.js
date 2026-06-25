@@ -19,6 +19,7 @@ export const API_ROUTES = {
     create: '/api/tickets',
     detail: (id) => `/api/tickets/${id}`,
     action: (id, action) => `/api/tickets/${id}/${action}`,
+    editItems: (id) => `/api/tickets/${id}/items`,
   },
   dashboard: {
     summary: '/api/dashboard/summary',

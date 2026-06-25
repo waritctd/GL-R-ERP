@@ -43,10 +43,11 @@ export function roleLabel(role) {
 export function ticketStatusLabel(status) {
   const map = {
     draft:            { label: 'แบบร่าง',          tone: 'neutral' },
-    submitted:        { label: 'รอรับเรื่อง',       tone: 'warning' },
+    submitted:        { label: 'รอรับเรื่องจากฝ่าย Import', tone: 'warning' },
     in_review:        { label: 'กำลังดำเนินการ',    tone: 'info' },
     price_proposed:   { label: 'รอการอนุมัติ',      tone: 'warning' },
     approved:         { label: 'อนุมัติแล้ว',       tone: 'success' },
+    rejected:         { label: 'ตีกลับ',            tone: 'danger' },
     quotation_issued: { label: 'ออกใบเสนอราคาแล้ว', tone: 'success' },
     closed:           { label: 'ปิดแล้ว',           tone: 'neutral' },
     cancelled:        { label: 'ยกเลิกแล้ว',        tone: 'danger' },
@@ -56,10 +57,9 @@ export function ticketStatusLabel(status) {
 
 export function ticketPriorityLabel(priority) {
   const map = {
-    low:    { label: 'ต่ำ',   tone: 'neutral' },
-    medium: { label: 'กลาง',  tone: 'warning' },
-    high:   { label: 'สูง',   tone: 'danger' },
-    urgent: { label: 'เร่งด่วน', tone: 'danger' },
+    LOW:    { label: 'ต่ำ',   tone: 'neutral' },
+    NORMAL: { label: 'กลาง',  tone: 'warning' },
+    HIGH:   { label: 'สูง',   tone: 'danger' },
   };
   return map[priority] ?? { label: priority, tone: 'neutral' };
 }

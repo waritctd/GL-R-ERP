@@ -42,6 +42,10 @@ public class TicketService {
         requireRole(actor, SALES_ROLES);
         String code = tickets.nextTicketCode();
         long id = tickets.create(request, code, actor.id(), actor.name());
+        notifications.notifyByRole("import", id, "SUBMITTED",
+            "Ticket " + code + " รอการรับเรื่อง");
+        notifications.notifyByRole("ceo", id, "SUBMITTED",
+            "Ticket " + code + " ส่งเข้าระบบแล้ว");
         return requireTicket(id);
     }
 
@@ -87,6 +91,7 @@ public class TicketService {
         requireRole(actor, CEO_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.PRICE_PROPOSED);
         tickets.approveItemPrices(ticketId);
+        tickets.setHasEdits(ticketId, false);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.APPROVED, TicketStatus.PRICE_PROPOSED, TicketStatus.APPROVED, null);
         notifications.notifyEmployee(s.createdById(), ticketId, "APPROVED",
@@ -149,6 +154,28 @@ public class TicketService {
         }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CANCELLED, currentStatus, TicketStatus.CANCELLED, null);
+        return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto editItems(long ticketId, EditItemsRequest request, UserPrincipal actor) {
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
+        String st = s.status();
+        boolean isOwner = actor.id() == s.createdById();
+
+        boolean salesCanEdit = SALES_ROLES.contains(actor.role()) && isOwner
+            && Set.of(TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED).contains(st);
+        boolean importCanEdit = IMPORT_ROLES.contains(actor.role())
+            && Set.of(TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED).contains(st);
+
+        if (!salesCanEdit && !importCanEdit) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้");
+        }
+        tickets.replaceItems(ticketId, request.items());
+        tickets.setHasEdits(ticketId, true);
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.EDITED, st, st, request.note());
         return requireTicket(ticketId);
     }
 

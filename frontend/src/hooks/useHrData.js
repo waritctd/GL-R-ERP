@@ -11,11 +11,12 @@ export function useHrData({ user, showToast }) {
 
   async function loadData(nextUser, preferredRoute = route) {
     const safeRoute = allowedRoute(preferredRoute, nextUser);
-    const currentEmployeePromise = api.employees.get(nextUser.employeeId)
-      .then((response) => response.employee);
+    const currentEmployeePromise = nextUser.employeeId
+      ? api.employees.get(nextUser.employeeId).then((response) => response.employee)
+      : Promise.resolve(null);
     const employeesPromise = hasPermission(nextUser.role, 'canViewEmployees')
       ? api.employees.list().then((response) => response.employees)
-      : currentEmployeePromise.then((employee) => [employee]);
+      : currentEmployeePromise.then((employee) => (employee ? [employee] : []));
     const requestsPromise = api.profileRequests.list()
       .then((response) => response.profileRequests)
       .catch(() => []);

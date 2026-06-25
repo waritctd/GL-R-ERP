@@ -12,7 +12,6 @@ export function defaultRouteFor(user) {
 export function allowedRoute(route, user) {
   if (!user) return 'dashboard';
   const fallback = defaultRouteFor(user);
-  if (route === 'dashboard' && fallback !== 'dashboard') return fallback;
   if (route === 'employees' && !hasPermission(user.role, 'canViewEmployees')) return fallback;
   if (route === 'detail' && !hasPermission(user.role, 'canViewEmployees')) return fallback;
   if (route === 'requests' && !hasPermission(user.role, 'canReviewProfileRequests')) return fallback;

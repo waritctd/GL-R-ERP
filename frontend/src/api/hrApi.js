@@ -39,6 +39,7 @@ export const api = {
     quotation: (id) => apiRequest(API_ROUTES.tickets.action(id, 'quotation'), { method: 'POST' }),
     close: (id) => apiRequest(API_ROUTES.tickets.action(id, 'close'), { method: 'POST' }),
     cancel: (id) => apiRequest(API_ROUTES.tickets.action(id, 'cancel'), { method: 'POST' }),
+    editItems: (id, payload) => apiRequest(API_ROUTES.tickets.editItems(id), { method: 'PATCH', body: payload }),
     comment: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'comments'), { method: 'POST', body: payload }),
   },
   dashboard: {

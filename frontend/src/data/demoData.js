@@ -224,7 +224,7 @@ export function createDemoDatabase() {
   const tickets = [
     {
       id: 1, code: 'PR-2026-0001', type: 'PRICE_REQUEST',
-      title: 'ขอราคาสินค้ากลุ่มเสื้อ Summer Collection',
+      title: 'ห้างสรรพสินค้า Central',
       status: 'approved', priority: 'HIGH',
       createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
       assignedToId: 7, assignedToName: 'คุณนำเข้า พานิช',
@@ -232,9 +232,9 @@ export function createDemoDatabase() {
       note: 'ต้องการราคาพิเศษ Summer 2026',
       createdAt: iso(2026, 6, 14), updatedAt: iso(2026, 6, 18), closedAt: null,
       items: [
-        { id: 1, ticketId: 1, productCode: null, productName: 'เสื้อยืดคอกลม', size: 'M', color: 'ขาว', qty: 200, unit: 'ตัว', proposedPrice: 185, approvedPrice: 185, currency: 'THB', sortOrder: 0 },
-        { id: 2, ticketId: 1, productCode: null, productName: 'เสื้อยืดคอกลม', size: 'L', color: 'ดำ', qty: 150, unit: 'ตัว', proposedPrice: 185, approvedPrice: 185, currency: 'THB', sortOrder: 1 },
-        { id: 3, ticketId: 1, productCode: null, productName: 'กางเกงขาสั้น', size: 'L', color: 'กากี', qty: 100, unit: 'ตัว', proposedPrice: 320, approvedPrice: 320, currency: 'THB', sortOrder: 2 },
+        { id: 1, ticketId: 1, brand: 'SCG', model: 'Premium Matte', color: 'ขาว', texture: 'ด้าน', size: '60x60 ซม.', qty: 200, proposedPrice: 185, approvedPrice: 185, currency: 'THB', sortOrder: 0 },
+        { id: 2, ticketId: 1, brand: 'SCG', model: 'Premium Matte', color: 'ดำ', texture: 'ด้าน', size: '60x60 ซม.', qty: 150, proposedPrice: 185, approvedPrice: 185, currency: 'THB', sortOrder: 1 },
+        { id: 3, ticketId: 1, brand: 'Cotto', model: 'Stone Series', color: 'กากี', texture: 'หยาบ', size: '30x60 ซม.', qty: 100, proposedPrice: 320, approvedPrice: 320, currency: 'THB', sortOrder: 2 },
       ],
       events: [
         { id: 1, ticketId: 1, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: iso(2026, 6, 14) + 'T09:00:00Z' },
@@ -247,14 +247,14 @@ export function createDemoDatabase() {
     },
     {
       id: 2, code: 'PR-2026-0002', type: 'PRICE_REQUEST',
-      title: 'ผ้าพิมพ์ลายสำหรับโปรเจกต์ ABC Corp',
+      title: 'ABC Corporation',
       status: 'price_proposed', priority: 'NORMAL',
       createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
       assignedToId: 7, assignedToName: 'คุณนำเข้า พานิช',
       customerName: 'ABC Corporation', note: null,
       createdAt: iso(2026, 6, 16), updatedAt: iso(2026, 6, 18), closedAt: null,
       items: [
-        { id: 4, ticketId: 2, productCode: null, productName: 'ผ้าพิมพ์ลายดอก', size: '2 เมตร', color: null, qty: 500, unit: 'หลา', proposedPrice: 95, approvedPrice: null, currency: 'THB', sortOrder: 0 },
+        { id: 4, ticketId: 2, brand: 'Cotto', model: 'Floral Gloss', color: 'ลายดอกไม้', texture: 'มัน', size: '30x30 ซม.', qty: 500, proposedPrice: 95, approvedPrice: null, currency: 'THB', sortOrder: 0 },
       ],
       events: [
         { id: 6, ticketId: 2, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: iso(2026, 6, 16) + 'T10:00:00Z' },
@@ -266,15 +266,15 @@ export function createDemoDatabase() {
     },
     {
       id: 3, code: 'PR-2026-0003', type: 'PRICE_REQUEST',
-      title: 'ชุดยูนิฟอร์มพนักงาน XYZ Co.',
+      title: 'XYZ Co., Ltd.',
       status: 'in_review', priority: 'HIGH',
       createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
       assignedToId: 7, assignedToName: 'คุณนำเข้า พานิช',
       customerName: 'XYZ Co., Ltd.', note: null,
       createdAt: iso(2026, 6, 17), updatedAt: iso(2026, 6, 18), closedAt: null,
       items: [
-        { id: 5, ticketId: 3, productCode: null, productName: 'เสื้อเชิ้ตยูนิฟอร์ม', size: 'M', color: 'ขาว', qty: 50, unit: 'ตัว', proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 0 },
-        { id: 6, ticketId: 3, productCode: null, productName: 'กางเกงสแลค', size: '32', color: 'กรมท่า', qty: 50, unit: 'ตัว', proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 1 },
+        { id: 5, ticketId: 3, brand: 'Duragres', model: 'Wood Texture', color: 'ขาว', texture: 'ลายไม้', size: '20x100 ซม.', qty: 50, proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 0 },
+        { id: 6, ticketId: 3, brand: 'Duragres', model: 'Cement Series', color: 'เทา', texture: 'ด้าน', size: '60x60 ซม.', qty: 50, proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 1 },
       ],
       events: [
         { id: 10, ticketId: 3, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: iso(2026, 6, 17) + 'T09:00:00Z' },
@@ -285,7 +285,7 @@ export function createDemoDatabase() {
     },
     {
       id: 4, code: 'PR-2026-0004', type: 'PRICE_REQUEST',
-      title: 'กระเป๋าผ้านำเข้าจากจีน',
+      title: 'ร้านค้าปลีก กรุงเทพ',
       status: 'submitted', priority: 'NORMAL',
       createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
       assignedToId: null, assignedToName: null,
@@ -293,7 +293,7 @@ export function createDemoDatabase() {
       note: 'ต้องการทราบราคานำเข้า MOQ',
       createdAt: iso(2026, 6, 18), updatedAt: iso(2026, 6, 18), closedAt: null,
       items: [
-        { id: 7, ticketId: 4, productCode: null, productName: 'กระเป๋าผ้า Tote Bag', size: null, color: null, qty: 1000, unit: 'ใบ', proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 0 },
+        { id: 7, ticketId: 4, brand: 'Cotto', model: 'Classic Gloss', color: 'ครีม', texture: 'มัน', size: '30x30 ซม.', qty: 1000, proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 0 },
       ],
       events: [
         { id: 13, ticketId: 4, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: iso(2026, 6, 18) + 'T07:00:00Z' },
@@ -303,30 +303,30 @@ export function createDemoDatabase() {
     },
     {
       id: 5, code: 'PR-2026-0005', type: 'PRICE_REQUEST',
-      title: 'หมวกโปโลสำหรับ Event',
-      status: 'draft', priority: 'LOW',
+      title: 'Event Organizer Co.',
+      status: 'submitted', priority: 'LOW',
       createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
       assignedToId: null, assignedToName: null,
       customerName: 'Event Organizer Co.', note: null,
       createdAt: iso(2026, 6, 19), updatedAt: iso(2026, 6, 19), closedAt: null,
       items: [
-        { id: 8, ticketId: 5, productCode: null, productName: 'หมวกโปโลปัก Logo', size: 'Free Size', color: null, qty: 300, unit: 'ใบ', proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 0 },
+        { id: 8, ticketId: 5, brand: 'SCG', model: 'Granite Black', color: 'ดำ', texture: 'หยาบ', size: '60x60 ซม.', qty: 300, proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 0 },
       ],
       events: [
-        { id: 15, ticketId: 5, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: iso(2026, 6, 19) + 'T06:00:00Z' },
+        { id: 15, ticketId: 5, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'SUBMITTED', fromStatus: null, toStatus: 'submitted', message: null, createdAt: iso(2026, 6, 19) + 'T06:00:00Z' },
       ],
       quotation: null,
     },
     {
       id: 6, code: 'PR-2026-0006', type: 'PRICE_REQUEST',
-      title: 'ผ้าไหมพรม Grade A สำหรับส่งออก EU',
+      title: 'EU Trading Co.',
       status: 'quotation_issued', priority: 'HIGH',
       createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
       assignedToId: 7, assignedToName: 'คุณนำเข้า พานิช',
       customerName: 'EU Trading Co.', note: null,
       createdAt: iso(2026, 6, 9), updatedAt: iso(2026, 6, 16), closedAt: null,
       items: [
-        { id: 9, ticketId: 6, productCode: null, productName: 'ผ้าไหมพรม Grade A', size: null, color: null, qty: 200, unit: 'หลา', proposedPrice: 1200, approvedPrice: 1200, currency: 'THB', sortOrder: 0 },
+        { id: 9, ticketId: 6, brand: 'Duragres', model: 'Gold Series', color: 'ทอง', texture: 'มัน', size: '60x120 ซม.', qty: 200, proposedPrice: 1200, approvedPrice: 1200, currency: 'THB', sortOrder: 0 },
       ],
       events: [
         { id: 16, ticketId: 6, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: iso(2026, 6, 9) + 'T09:00:00Z' },

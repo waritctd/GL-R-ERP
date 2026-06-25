@@ -55,7 +55,7 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
 }
 
 function buildTicketDetail(ticket) {
-  return { summary: { id: ticket.id, code: ticket.code, type: ticket.type, title: ticket.title, status: ticket.status, priority: ticket.priority, createdById: ticket.createdById, createdByName: ticket.createdByName, assignedToId: ticket.assignedToId, assignedToName: ticket.assignedToName, customerName: ticket.customerName, note: ticket.note, createdAt: ticket.createdAt, updatedAt: ticket.updatedAt, closedAt: ticket.closedAt, itemCount: ticket.items.length }, items: ticket.items, events: ticket.events, quotation: ticket.quotation };
+  return { summary: { id: ticket.id, code: ticket.code, type: ticket.type, title: ticket.title, status: ticket.status, priority: ticket.priority, createdById: ticket.createdById, createdByName: ticket.createdByName, assignedToId: ticket.assignedToId, assignedToName: ticket.assignedToName, customerName: ticket.customerName, note: ticket.note, createdAt: ticket.createdAt, updatedAt: ticket.updatedAt, closedAt: ticket.closedAt, itemCount: ticket.items.length, hasEdits: ticket.hasEdits ?? false }, items: ticket.items, events: ticket.events, quotation: ticket.quotation };
 }
 
 function doTransition(id, fromStatus, toStatus, kind, actor, message) {
@@ -325,7 +325,7 @@ export const api = {
       const now = new Date().toISOString();
       const ticket = {
         id: nextId, code, type: 'PRICE_REQUEST',
-        title: payload.title, status: 'draft',
+        title: payload.title, status: 'submitted',
         priority: payload.priority || 'NORMAL',
         createdById: user.id, createdByName: user.name,
         assignedToId: null, assignedToName: null,
@@ -334,13 +334,13 @@ export const api = {
         createdAt: now.slice(0, 10), updatedAt: now.slice(0, 10), closedAt: null,
         items: (payload.items || []).map((item, i) => ({
           id: nextId * 100 + i, ticketId: nextId,
-          productCode: item.productCode || null, productName: item.productName,
-          size: item.size || null, color: item.color || null,
-          qty: item.qty, unit: item.unit || null,
+          brand: item.brand, model: item.model,
+          color: item.color, texture: item.texture, size: item.size,
+          qty: item.qty,
           proposedPrice: null, approvedPrice: null,
           currency: item.currency || 'THB', sortOrder: i,
         })),
-        events: [{ id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: now }],
+        events: [{ id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'SUBMITTED', fromStatus: null, toStatus: 'submitted', message: null, createdAt: now }],
         quotation: null,
       };
       db.tickets.unshift(ticket);
@@ -380,11 +380,37 @@ export const api = {
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
+    async editItems(id, payload) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      const st = ticket.status;
+      const isOwner = user.id === ticket.createdById;
+      const salesCanEdit = ['sales', 'admin'].includes(user.role) && isOwner
+        && ['submitted', 'in_review', 'price_proposed'].includes(st);
+      const importCanEdit = ['import', 'admin'].includes(user.role)
+        && ['in_review', 'price_proposed'].includes(st);
+      if (!salesCanEdit && !importCanEdit) fail('ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้', 403);
+      ticket.items = (payload.items || []).map((item, i) => ({
+        ...ticket.items[i],
+        brand: item.brand, model: item.model,
+        color: item.color, texture: item.texture, size: item.size,
+        qty: item.qty,
+        proposedPrice: item.proposedPrice ?? ticket.items[i]?.proposedPrice ?? null,
+        id: ticket.items[i]?.id ?? ticket.id * 100 + i,
+        ticketId: ticket.id, sortOrder: i,
+      }));
+      ticket.hasEdits = true;
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'EDITED', st, st, payload.note || null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
     async approve(id) {
       const user = hasRole('ceo', 'admin');
       const ticket = findTicketRaw(Number(id));
       verifyStatus(ticket, 'price_proposed');
       ticket.items = ticket.items.map((item) => ({ ...item, approvedPrice: item.proposedPrice }));
+      ticket.hasEdits = false;
       ticket.status = 'approved';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'APPROVED', 'price_proposed', 'approved', null);

@@ -11,6 +11,7 @@ public final class TicketEventKind {
     public static final String COMMENTED        = "COMMENTED";
     public static final String CLOSED           = "CLOSED";
     public static final String CANCELLED        = "CANCELLED";
+    public static final String EDITED           = "EDITED";
 
     private TicketEventKind() {}
 }

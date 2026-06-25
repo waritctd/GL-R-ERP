@@ -26,7 +26,8 @@ public class TicketRepository {
                NULLIF(TRIM(CONCAT_WS(' ', ea.first_name_th, ea.last_name_th)), '') AS assigned_to_name,
                t.customer_name, t.note,
                t.created_at, t.updated_at, t.closed_at,
-               COUNT(ti.item_id) AS item_count
+               COUNT(ti.item_id) AS item_count,
+               t.has_edits
           FROM sales.ticket t
           JOIN hr.employee ec ON ec.employee_id = t.created_by
           LEFT JOIN hr.employee ea ON ea.employee_id = t.assigned_to
@@ -87,7 +88,7 @@ public class TicketRepository {
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO sales.ticket (code, title, status, priority, created_by, customer_name, note)
-            VALUES (:code, :title, 'draft', :priority, :createdBy, :customerName, :note)
+            VALUES (:code, :title, 'submitted', :priority, :createdBy, :customerName, :note)
             """,
             new MapSqlParameterSource()
                 .addValue("code", code)
@@ -99,7 +100,7 @@ public class TicketRepository {
             keyHolder, new String[]{"ticket_id"});
         long ticketId = keyHolder.getKey().longValue();
         insertItems(ticketId, request.items());
-        addEvent(ticketId, actorId, actorName, TicketEventKind.CREATED, null, TicketStatus.DRAFT, null);
+        addEvent(ticketId, actorId, actorName, TicketEventKind.SUBMITTED, null, TicketStatus.SUBMITTED, null);
         return ticketId;
     }
 
@@ -183,9 +184,8 @@ public class TicketRepository {
 
     private List<TicketItemDto> findItemsByTicketId(long ticketId) {
         return jdbc.query("""
-            SELECT item_id, ticket_id, product_code, product_name,
-                   size, color, qty, unit,
-                   proposed_price, approved_price, currency, sort_order
+            SELECT item_id, ticket_id, brand, model, color, texture, size,
+                   qty, proposed_price, approved_price, currency, sort_order
               FROM sales.ticket_item
              WHERE ticket_id = :id
              ORDER BY sort_order, item_id
@@ -194,12 +194,12 @@ public class TicketRepository {
             (rs, rowNum) -> new TicketItemDto(
                 rs.getLong("item_id"),
                 rs.getLong("ticket_id"),
-                rs.getString("product_code"),
-                rs.getString("product_name"),
-                rs.getString("size"),
+                rs.getString("brand"),
+                rs.getString("model"),
                 rs.getString("color"),
+                rs.getString("texture"),
+                rs.getString("size"),
                 rs.getBigDecimal("qty"),
-                rs.getString("unit"),
                 rs.getBigDecimal("proposed_price"),
                 rs.getBigDecimal("approved_price"),
                 rs.getString("currency"),
@@ -263,19 +263,19 @@ public class TicketRepository {
             String currency = (item.currency() != null && !item.currency().isBlank()) ? item.currency() : "THB";
             jdbc.update("""
                 INSERT INTO sales.ticket_item
-                    (ticket_id, product_code, product_name, size, color,
-                     qty, unit, proposed_price, currency, sort_order)
-                VALUES (:ticketId, :productCode, :productName, :size, :color,
-                        :qty, :unit, :proposedPrice, :currency, :sortOrder)
+                    (ticket_id, brand, model, color, texture, size,
+                     qty, proposed_price, currency, sort_order)
+                VALUES (:ticketId, :brand, :model, :color, :texture, :size,
+                        :qty, :proposedPrice, :currency, :sortOrder)
                 """,
                 new MapSqlParameterSource()
                     .addValue("ticketId", ticketId)
-                    .addValue("productCode", item.productCode())
-                    .addValue("productName", item.productName())
-                    .addValue("size", item.size())
+                    .addValue("brand", item.brand())
+                    .addValue("model", item.model())
                     .addValue("color", item.color())
+                    .addValue("texture", item.texture())
+                    .addValue("size", item.size())
                     .addValue("qty", item.qty())
-                    .addValue("unit", item.unit())
                     .addValue("proposedPrice", item.proposedPrice())
                     .addValue("currency", currency)
                     .addValue("sortOrder", i));
@@ -302,7 +302,14 @@ public class TicketRepository {
             rs.getTimestamp("created_at").toInstant(),
             rs.getTimestamp("updated_at").toInstant(),
             closedAt != null ? closedAt.toInstant() : null,
-            rs.getInt("item_count")
+            rs.getInt("item_count"),
+            rs.getBoolean("has_edits")
         );
+    }
+
+    public void setHasEdits(long ticketId, boolean value) {
+        jdbc.update(
+            "UPDATE sales.ticket SET has_edits = :v, updated_at = now() WHERE ticket_id = :id",
+            Map.of("id", ticketId, "v", value));
     }
 }

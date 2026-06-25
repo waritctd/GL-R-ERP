@@ -6,12 +6,12 @@ import jakarta.validation.constraints.Positive;
 import java.math.BigDecimal;
 
 public record TicketItemRequest(
-    String productCode,
-    @NotBlank String productName,
-    String size,
-    String color,
+    @NotBlank String brand,
+    @NotBlank String model,
+    @NotBlank String color,
+    @NotBlank String texture,
+    @NotBlank String size,
     @NotNull @Positive BigDecimal qty,
-    String unit,
     BigDecimal proposedPrice,
     String currency
 ) {}
