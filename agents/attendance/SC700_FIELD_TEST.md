@@ -34,27 +34,24 @@ Phase 2 proves:
 Connect the laptop or server to the same showroom HUB/LAN path that can reach:
 
 ```text
-Scanner IP from device menu: 192.168.201.1
+Scanner IP: 192.168.1.201
 Scanner port: 4370
 ```
-
-If IT later confirms the scanner is actually `192.168.1.201`, use that IP
-instead. The two addresses are different networks.
 
 ### 2. Check Network
 
 Mac:
 
 ```bash
-ping 192.168.201.1
-nc -vz 192.168.201.1 4370
+ping 192.168.1.201
+nc -vz 192.168.1.201 4370
 ```
 
 Windows PowerShell:
 
 ```powershell
-ping 192.168.201.1
-Test-NetConnection 192.168.201.1 -Port 4370
+ping 192.168.1.201
+Test-NetConnection 192.168.1.201 -Port 4370
 ```
 
 Success means the machine can reach the SC700 network path.
@@ -116,13 +113,13 @@ python agents\attendance\sc700_simple_test.py --pull --limit 20
 Optional: save records to a local JSONL file:
 
 ```bash
-python3 agents/attendance/sc700_local_test.py --pull --limit 50 --host 192.168.201.1 --format jsonl --out /tmp/sc700_pull_test.jsonl
+python3 agents/attendance/sc700_local_test.py --pull --limit 50 --host 192.168.1.201 --format jsonl --out /tmp/sc700_pull_test.jsonl
 ```
 
 Windows:
 
 ```powershell
-python agents\attendance\sc700_local_test.py --pull --limit 50 --host 192.168.201.1 --format jsonl --out C:\Temp\sc700_pull_test.jsonl
+python agents\attendance\sc700_local_test.py --pull --limit 50 --host 192.168.1.201 --format jsonl --out C:\Temp\sc700_pull_test.jsonl
 ```
 
 ### 6. Test Real-Time Card Tap

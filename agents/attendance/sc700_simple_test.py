@@ -118,7 +118,7 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument("--poll", action="store_true", help="poll get_attendance and print only new records")
     mode.add_argument("--live", action="store_true", help="use pyzk live_capture")
 
-    parser.add_argument("--host", default=os.getenv("ZK_HOST", "192.168.201.1"))
+    parser.add_argument("--host", default=os.getenv("ZK_HOST", "192.168.1.201"))
     parser.add_argument("--port", type=int, default=int(os.getenv("ZK_PORT", "4370")))
     parser.add_argument("--password", type=int, default=int(os.getenv("ZK_PASSWORD", "0")))
     parser.add_argument("--timeout", type=int, default=int(os.getenv("ZK_TIMEOUT_SECONDS", "10")))
