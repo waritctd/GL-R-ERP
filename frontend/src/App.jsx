@@ -104,14 +104,12 @@ export function App() {
     );
   }
 
-  const isTicketExperience = hasPermission(user?.role, 'canViewTickets') && !hasPermission(user?.role, 'canViewEmployees');
-
   const screen = route === 'dashboard'
-    ? isTicketExperience
+    ? <EmployeeDashboard employee={currentEmployee} profileRequests={ownRequests} onRoute={handleRoute} />
+    : route === 'hr-dashboard'
+      ? <HrDashboard employee={currentEmployee} employees={employees} profileRequests={profileRequests} onRoute={handleRoute} />
+    : route === 'ticket-dashboard'
       ? <TicketDashboard user={user} employee={currentEmployee} onOpenTicket={openTicket} showToast={showToast} />
-      : isEmployeeExperience
-        ? <EmployeeDashboard employee={currentEmployee} profileRequests={ownRequests} onRoute={handleRoute} />
-        : <HrDashboard employee={currentEmployee} employees={employees} profileRequests={profileRequests} onRoute={handleRoute} />
     : route === 'employees'
       ? <EmployeeListPage user={user} employees={employees} onOpenEmployee={openEmployee} onCreateEmployee={createEmployee} />
       : route === 'detail'

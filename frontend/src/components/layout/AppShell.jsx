@@ -6,10 +6,10 @@ import { NotificationBell } from '../common/NotificationBell.jsx';
 import { Sidebar } from './Sidebar.jsx';
 
 export function AppShell({ user, employee, route, onRoute, onLogout, pendingRequestCount, onOpenTicket, children }) {
-  const isSalesOnlyRole = hasPermission(user.role, 'canViewTickets') && !hasPermission(user.role, 'canViewEmployees');
-
   const navItems = [
     { route: 'dashboard', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
+    { route: 'hr-dashboard', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', show: hasPermission(user.role, 'canViewEmployees') },
+    { route: 'ticket-dashboard', label: 'ภาพรวมใบขอราคา', helper: 'Ticket overview', icon: 'home', show: hasPermission(user.role, 'canViewTickets') },
     { route: 'tickets', label: 'ใบขอราคา', helper: 'Price requests', icon: 'fileText', show: hasPermission(user.role, 'canViewTickets') },
     { route: 'employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', show: hasPermission(user.role, 'canViewEmployees') },
     { route: 'attendance', label: 'เวลาทำงาน', helper: 'Attendance', icon: 'calendar', show: true },
