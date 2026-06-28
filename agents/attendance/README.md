@@ -1,8 +1,18 @@
 # GL&R Attendance Agent
 
-Showroom-first Python agent for the ZKTeco SC700.
+Showroom-first Python scripts for the ZKTeco SC700.
 
 The agent connects to the SC700 over TCP port `4370`, reads attendance logs with `pyzk`, and posts normalized punch JSON to the Spring Boot backend. It is intended to run on the Dell T360 server as a Windows service after the backend attendance endpoint is implemented.
+
+For the scanner-only field test that does not touch the backend, use:
+
+```powershell
+python agents\attendance\sc700_local_test.py --check --with-counts
+python agents\attendance\sc700_local_test.py --pull --limit 20
+python agents\attendance\sc700_local_test.py --live
+```
+
+See `agents/attendance/SC700_FIELD_TEST.md` for the full 28 June test plan.
 
 ## Network Check From The Server
 
@@ -38,7 +48,7 @@ $env:ATTENDANCE_API_URL = "http://127.0.0.1:8080/api/attendance/punch"
 $env:ATTENDANCE_AGENT_DATA_DIR = "C:\glr-attendance-agent"
 ```
 
-After stage 3, set an agent token if the backend requires it:
+Set an agent token when posting to the backend:
 
 ```powershell
 $env:ATTENDANCE_AGENT_TOKEN = "replace-with-server-token"
@@ -94,4 +104,4 @@ The importer logs in through `/api/auth/login`, sends the `.dat` content to `POS
 - Avoid running ZKAccess, a laptop test script, and this agent against the SC700 at the same time. Some ZKTeco devices behave like they only tolerate one reliable active SDK/live session.
 - The agent keeps state in `showroom_agent_state.json`.
 - Failed backend posts are queued to `showroom_agent_queue.jsonl` and retried before sending new punches.
-- The backend endpoint does not exist yet; until stage 3 is done, use `--check` and `--dry-run`.
+- Use `sc700_local_test.py` first when you only want to test the scanner without backend/database writes.
