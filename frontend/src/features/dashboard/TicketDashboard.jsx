@@ -32,8 +32,9 @@ export function TicketDashboard({ user, employee, onOpenTicket, showToast }) {
           api.dashboard.summary(),
           api.tickets.list({}),
         ]);
-        setSummary(summaryRes.summary);
-        setRecent(ticketsRes.tickets.slice(0, 6));
+        setSummary(summaryRes?.summary ?? summaryRes ?? null);
+        const tickets = Array.isArray(ticketsRes) ? ticketsRes : (ticketsRes?.tickets ?? []);
+        setRecent(tickets.slice(0, 6));
       } catch (err) {
         showToast('error', err.message || 'โหลดข้อมูลไม่สำเร็จ');
       } finally {
