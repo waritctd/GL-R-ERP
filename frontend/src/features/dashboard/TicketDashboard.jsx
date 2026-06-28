@@ -17,6 +17,8 @@ function GreetingSubtitle({ role }) {
   return 'ภาพรวมใบขอราคา';
 }
 
+const SHOW_SALES_ROLES = ['import', 'ceo', 'admin'];
+
 export function TicketDashboard({ user, employee, onOpenTicket, showToast }) {
   const [summary, setSummary] = useState(null);
   const [recent, setRecent] = useState([]);
@@ -76,6 +78,20 @@ export function TicketDashboard({ user, employee, onOpenTicket, showToast }) {
               <div className="panel-header" style={{ padding: '14px 18px' }}>
                 <h2>ใบขอราคาล่าสุด</h2>
               </div>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(0,0.9fr) minmax(0,2.2fr) minmax(0,1.4fr) minmax(0,1.3fr) minmax(0,1fr)',
+                gap: 12, padding: '6px 18px 6px 22px',
+                borderBottom: '1px solid #e6eaf0',
+                background: '#f8fafc',
+                fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em',
+              }}>
+                <span>เลขที่</span>
+                <span>บริษัท / โครงการ</span>
+                <span>{SHOW_SALES_ROLES.includes(user.role) ? 'ผู้ขาย' : ''}</span>
+                <span>สถานะ</span>
+                <span>วันที่สร้าง</span>
+              </div>
               {recent.map((ticket) => {
                 const st = ticketStatusLabel(ticket.status);
                 return (
@@ -94,10 +110,10 @@ export function TicketDashboard({ user, employee, onOpenTicket, showToast }) {
                   >
                     <code style={{ fontSize: 12 }}>{ticket.code}</code>
                     <span style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                      <strong style={{ display: 'block', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{ticket.title}</strong>
+                      <strong style={{ display: 'block', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{ticket.customerName || ticket.title}</strong>
                     </span>
                     <span style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', fontSize: 13, color: '#64748b' }}>
-                      {ticket.customerName || '—'}
+                      {SHOW_SALES_ROLES.includes(user.role) ? (ticket.createdByName || '—') : ''}
                     </span>
                     <StatusBadge tone={st.tone}>{st.label}</StatusBadge>
                     <span style={{ fontSize: 13, color: '#94a3b8', whiteSpace: 'nowrap' }}>

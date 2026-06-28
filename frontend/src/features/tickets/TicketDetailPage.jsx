@@ -120,6 +120,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const role = user.role;
   const isOwner = user.id === summary.createdById;
 
+  const showProposed = ROLE_PERMISSIONS.canProposePrices.includes(role) || ROLE_PERMISSIONS.canApproveReject.includes(role);
+  const itemsGridCols = showProposed
+    ? 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr) minmax(0,1.1fr)'
+    : 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr)';
+
   const EDITABLE_STATUSES = ['submitted', 'in_review', 'price_proposed'];
   const can = {
     pickup:    st === 'submitted'        && ROLE_PERMISSIONS.canPickupTickets.includes(role),
@@ -227,9 +232,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
             {can.reject && !showRejectForm && (
               <button type="button" className="secondary-button" disabled={actionLoading}
-                onClick={() => setShowRejectForm(true)}>
+                onClick={() => setShowRejectForm(true)}
+                style={{ color: '#dc2626', borderColor: '#fca5a5' }}>
                 <Icon name="close" size={14} />
-                ตีกลับ
+                ไม่อนุมัติ
               </button>
             )}
 
@@ -287,8 +293,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 />
               </label>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button type="button" className="secondary-button" onClick={handleReject} disabled={actionLoading}>
-                  ยืนยันตีกลับ
+                <button type="button" className="secondary-button" onClick={handleReject} disabled={actionLoading}
+                  style={{ color: '#dc2626', borderColor: '#fca5a5' }}>
+                  ยืนยันไม่อนุมัติ
                 </button>
                 <button type="button" className="secondary-button" onClick={() => { setShowRejectForm(false); setRejectReason(''); }} disabled={actionLoading}>
                   ยกเลิก
@@ -308,7 +315,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             <InfoRow label="ลูกค้า" value={summary.customerName} />
             <InfoRow label="สร้างโดย" value={summary.createdByName} />
             <InfoRow label="วันที่สร้าง" value={formatThaiDate(summary.createdAt)} />
-            <InfoRow label="ผู้รับมอบหมาย" value={summary.assignedToName} />
+            <InfoRow label="เจ้าหน้าที่นำเข้า" value={summary.assignedToName} />
             <InfoRow label="อัปเดตล่าสุด" value={formatThaiDate(summary.updatedAt)} />
           </section>
 
@@ -391,17 +398,17 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               </div>
             ) : (
               <>
-                <div className="ticket-items-table table-head">
+                <div className="ticket-items-table table-head" style={{ gridTemplateColumns: itemsGridCols }}>
                   <span>ยี่ห้อ / รุ่น</span>
                   <span>สี / เนื้อผิว</span>
                   <span>จำนวน</span>
-                  <span>ราคาที่เสนอ {proposeMode ? '(แก้ไข)' : ''}</span>
+                  {showProposed && <span>ราคาที่เสนอ {proposeMode ? '(แก้ไข)' : ''}</span>}
                   <span>ราคาที่อนุมัติ</span>
                 </div>
                 {items.length === 0 ? (
                   <EmptyState title="ไม่มีรายการสินค้า" />
                 ) : items.map((item, i) => (
-                  <div key={item.id ?? i} className="ticket-items-table table-row">
+                  <div key={item.id ?? i} className="ticket-items-table table-row" style={{ gridTemplateColumns: itemsGridCols }}>
                     <span>
                       <strong>{item.brand}</strong>
                       {item.model && <small style={{ color: '#64748b' }}>{item.model}</small>}
@@ -412,14 +419,16 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                       {item.size && <small style={{ color: '#94a3b8' }}>{item.size}</small>}
                     </span>
                     <span>{item.qty}</span>
-                    {proposeMode ? (
-                      <input type="number" min="0" step="0.01"
-                        value={draftPrices[item.id] ?? ''}
-                        onChange={(e) => setDraftPrices((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                        placeholder="ราคา"
-                        style={{ width: 120, padding: '4px 8px', border: '1px solid #cbd5e1', borderRadius: 4, fontSize: 13 }} />
-                    ) : (
-                      <code>{formatMoney(item.proposedPrice)}</code>
+                    {showProposed && (
+                      proposeMode ? (
+                        <input type="number" min="0" step="0.01"
+                          value={draftPrices[item.id] ?? ''}
+                          onChange={(e) => setDraftPrices((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                          placeholder="ราคา"
+                          style={{ width: 120, padding: '4px 8px', border: '1px solid #cbd5e1', borderRadius: 4, fontSize: 13 }} />
+                      ) : (
+                        <code>{formatMoney(item.proposedPrice)}</code>
+                      )
                     )}
                     <code>{formatMoney(item.approvedPrice)}</code>
                   </div>
