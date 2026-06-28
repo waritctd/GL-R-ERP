@@ -41,6 +41,7 @@ public class CustomerRepository {
         }
     }
 
+
     public List<CustomerDto> search(String q) {
         String pattern = q == null || q.isBlank() ? "%" : "%" + q.trim() + "%";
         return jdbc.query(

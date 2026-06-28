@@ -25,12 +25,6 @@ const TONE_ACTIVE = {
   danger:  { bg: '#fee2e2', color: '#b91c1c', border: '#ef4444' },
 };
 
-const STATUS_ORDER = [
-  'draft', 'submitted', 'in_review', 'price_proposed',
-  'approved', 'rejected', 'quotation_issued', 'document_issued',
-  'closed', 'cancelled',
-];
-
 const STATUS_TABS = [
   { value: '', label: 'ทั้งหมด',              tone: 'primary' },
   { value: 'submitted',        label: 'รอรับเรื่อง',          tone: 'warning' },
@@ -40,6 +34,33 @@ const STATUS_TABS = [
   { value: 'document_issued',  label: 'ออกใบแจ้งยอดแล้ว',   tone: 'success' },
   { value: 'closed',           label: 'ปิดแล้ว',             tone: 'neutral' },
 ];
+
+const STATUS_ORDER = [
+  'draft', 'submitted', 'in_review', 'price_proposed',
+  'approved', 'quotation_issued', 'document_issued', 'closed', 'cancelled', 'rejected',
+];
+
+function SortHeader({ label, sortKey, active, dir, onSort }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(sortKey)}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+        fontWeight: 700, fontSize: 12, color: active ? '#1e40af' : 'inherit',
+        textTransform: 'uppercase', letterSpacing: '0.05em',
+      }}
+    >
+      {label}
+      <Icon
+        name={active ? (dir === 'asc' ? 'chevronUp' : 'chevronDown') : 'chevronDown'}
+        size={13}
+        style={{ opacity: active ? 1 : 0.3 }}
+      />
+    </button>
+  );
+}
 
 export function TicketListPage({ user, showToast }) {
   const navigate = useNavigate();

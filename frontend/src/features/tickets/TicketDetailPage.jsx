@@ -76,6 +76,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const [uploadingFile, setUploadingFile] = useState(false);
   const [deletingAttachment, setDeletingAttachment] = useState(false);
 
+
   // Revision form
   const [showReviseForm, setShowReviseForm] = useState(false);
   const [reviseScope, setReviseScope] = useState('QTY_OR_NOTE');
@@ -209,8 +210,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     approve:           st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
     reject:            st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
     generateQuotation: (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canGenerateQuotation.includes(role) && (isOwner || role === 'admin'),
-    generateDocument: (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
-    revise:           (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
+    generateDocument:  (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
+    revise:            (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
     close:            st === 'document_issued' && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
     cancel:           !TERMINAL.includes(st)   && (isOwner || role === 'admin'),
     comment:          !TERMINAL.includes(st),

@@ -57,6 +57,14 @@ export const API_ROUTES = {
     file: (id, fmt) => `/api/deposit-notices/${id}/file?format=${fmt}`,
     noteTemplates: '/api/document-note-templates',
   },
+  documents: {
+    get: (id) => `/api/documents/${id}`,
+    update: (id) => `/api/documents/${id}`,
+    preview: (id) => `/api/documents/${id}/preview`,
+    issue: (id) => `/api/documents/${id}/issue`,
+    file: (id, fmt) => `/api/documents/${id}/file?format=${fmt}`,
+    noteTemplates: '/api/document-note-templates',
+  },
   catalog: {
     search: (q) => `/api/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`,
   },

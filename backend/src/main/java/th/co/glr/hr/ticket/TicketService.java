@@ -212,7 +212,7 @@ public class TicketService {
     @Transactional
     public TicketDto close(long ticketId, UserPrincipal actor) {
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.DOCUMENT_ISSUED);
-        if (s.createdById() != actor.id()) {
+        if (s.createdById() != actor.id() && !isAdmin(actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
