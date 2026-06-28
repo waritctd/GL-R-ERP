@@ -66,6 +66,28 @@ python agents\attendance\showroom_agent.py --live
 
 If no mode is provided, the agent defaults to live capture.
 
+## Import A Past `.dat` Export
+
+After the backend is running and Flyway has created the attendance tables, an HR/MD/CEO user can import the old SC700 export without using the frontend:
+
+```powershell
+$env:GLR_API_BASE_URL = "http://127.0.0.1:8080"
+$env:GLR_IMPORT_EMAIL = "hr-user@glr.co.th"
+$env:GLR_IMPORT_PASSWORD = "employee-code-password"
+python agents\attendance\import_dat.py "C:\Users\ploy_warit\Downloads\1_attlog.dat"
+```
+
+On this Mac workspace, the same import path is:
+
+```bash
+GLR_API_BASE_URL=http://127.0.0.1:8080 \
+GLR_IMPORT_EMAIL=hr-user@glr.co.th \
+GLR_IMPORT_PASSWORD=employee-code-password \
+python3 agents/attendance/import_dat.py /Users/ploy_warit/Downloads/1_attlog.dat
+```
+
+The importer logs in through `/api/auth/login`, sends the `.dat` content to `POST /api/attendance/imports/dat`, and prints the import counts returned by the backend. Re-running the same file returns `duplicate_file` rather than importing it again.
+
 ## Notes
 
 - Keep the SC700, T360 server, and backend clock synced to Bangkok time.
