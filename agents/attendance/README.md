@@ -1,0 +1,75 @@
+# GL&R Attendance Agent
+
+Showroom-first Python agent for the ZKTeco SC700.
+
+The agent connects to the SC700 over TCP port `4370`, reads attendance logs with `pyzk`, and posts normalized punch JSON to the Spring Boot backend. It is intended to run on the Dell T360 server as a Windows service after the backend attendance endpoint is implemented.
+
+## Network Check From The Server
+
+Run this on the T360 server, not from a laptop:
+
+```powershell
+ping 192.168.1.201
+Test-NetConnection 192.168.1.201 -Port 4370
+```
+
+If both pass, the server can reach the SC700. If ping passes but port `4370` fails, check Windows Firewall, VLAN/subnet ACLs, the SC700 communication settings, or whether another app already has the device session open.
+
+## Install
+
+```powershell
+cd "C:\path\to\GL&R ERP"
+py -3 -m venv .venv-attendance
+.\.venv-attendance\Scripts\Activate.ps1
+pip install -r agents\attendance\requirements.txt
+```
+
+## Configure
+
+Defaults are showroom-safe:
+
+```powershell
+$env:ZK_HOST = "192.168.1.201"
+$env:ZK_PORT = "4370"
+$env:ZK_PASSWORD = "0"
+$env:ATTENDANCE_SITE_CODE = "SHOWROOM"
+$env:ATTENDANCE_DEVICE_CODE = "SHOWROOM_SC700"
+$env:ATTENDANCE_API_URL = "http://127.0.0.1:8080/api/attendance/punch"
+$env:ATTENDANCE_AGENT_DATA_DIR = "C:\glr-attendance-agent"
+```
+
+After stage 3, set an agent token if the backend requires it:
+
+```powershell
+$env:ATTENDANCE_AGENT_TOKEN = "replace-with-server-token"
+```
+
+## Run Checks
+
+Check raw network plus `pyzk` connectivity:
+
+```powershell
+python agents\attendance\showroom_agent.py --check
+```
+
+Pull existing device logs once without posting to the backend:
+
+```powershell
+python agents\attendance\showroom_agent.py --once-catchup --dry-run
+```
+
+Run live capture:
+
+```powershell
+python agents\attendance\showroom_agent.py --live
+```
+
+If no mode is provided, the agent defaults to live capture.
+
+## Notes
+
+- Keep the SC700, T360 server, and backend clock synced to Bangkok time.
+- Avoid running ZKAccess, a laptop test script, and this agent against the SC700 at the same time. Some ZKTeco devices behave like they only tolerate one reliable active SDK/live session.
+- The agent keeps state in `showroom_agent_state.json`.
+- Failed backend posts are queued to `showroom_agent_queue.jsonl` and retried before sending new punches.
+- The backend endpoint does not exist yet; until stage 3 is done, use `--check` and `--dry-run`.
