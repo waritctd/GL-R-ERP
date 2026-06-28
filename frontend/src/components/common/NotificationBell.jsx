@@ -29,9 +29,9 @@ export function NotificationBell({ onOpenTicket }) {
   async function load() {
     try {
       const res = await api.notifications.list();
-      setItems(res.notifications);
+      setItems(Array.isArray(res.notifications) ? res.notifications : []);
     } catch {
-      // silently ignore
+      setItems([]);
     }
   }
 

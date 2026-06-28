@@ -50,7 +50,12 @@ export const api = {
     summary: () => apiRequest(API_ROUTES.dashboard.summary),
   },
   notifications: {
-    list: () => apiRequest(API_ROUTES.notifications.list),
+    list: async () => {
+      const payload = await apiRequest(API_ROUTES.notifications.list);
+      return {
+        notifications: Array.isArray(payload) ? payload : (payload?.notifications ?? []),
+      };
+    },
     markRead: (id) => apiRequest(API_ROUTES.notifications.markRead(id), { method: 'PATCH' }),
   },
 };
