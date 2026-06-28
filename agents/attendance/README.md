@@ -22,6 +22,9 @@ python agents\attendance\sc700_local_test.py --live
 
 See `agents/attendance/SC700_FIELD_TEST.md` for the full 28 June test plan.
 
+For a computer that does not have Python or this repo yet, follow
+`agents/attendance/SC700_NEW_COMPUTER_SETUP.md`.
+
 ## Network Check From The Server
 
 Run this on the T360 server, not from a laptop:
