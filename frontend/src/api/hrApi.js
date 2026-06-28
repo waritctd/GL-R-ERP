@@ -27,4 +27,8 @@ export const api = {
     create: (payload) => apiRequest(API_ROUTES.profileRequests.create, { method: 'POST', body: payload }),
     update: (id, payload) => apiRequest(API_ROUTES.profileRequests.detail(id), { method: 'PATCH', body: payload }),
   },
+  attendance: {
+    list: (params) => apiRequest(withQuery(API_ROUTES.attendance.punches, params)),
+    importDat: (payload) => apiRequest(API_ROUTES.attendance.importDat, { method: 'POST', body: payload }),
+  },
 };

@@ -10,6 +10,7 @@ import { EmployeeDetailPage } from './features/employees/EmployeeDetailPage.jsx'
 import { ProfileRequestsPage } from './features/profileRequests/ProfileRequestsPage.jsx';
 import { ProfilePage } from './features/profile/ProfilePage.jsx';
 import { MyRequestsPage } from './features/profile/MyRequestsPage.jsx';
+import { AttendancePage } from './features/attendance/AttendancePage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
 import { hasPermission } from './app/permissions.js';
@@ -102,7 +103,9 @@ export function App() {
           ? <ProfileRequestsPage profileRequests={profileRequests} onReview={reviewProfileRequest} />
           : route === 'myrequests'
             ? <MyRequestsPage profileRequests={ownRequests} onNewRequest={() => routeTo('profile')} />
-            : <ProfilePage user={user} employee={currentEmployee} profileRequests={ownRequests} onCreateRequest={createProfileRequest} onRoute={routeTo} />;
+            : route === 'attendance'
+              ? <AttendancePage user={user} employees={employees} showToast={showToast} />
+              : <ProfilePage user={user} employee={currentEmployee} profileRequests={ownRequests} onCreateRequest={createProfileRequest} onRoute={routeTo} />;
 
   return (
     <>

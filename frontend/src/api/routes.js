@@ -14,6 +14,10 @@ export const API_ROUTES = {
     create: '/api/profile-requests',
     detail: (id) => `/api/profile-requests/${id}`,
   },
+  attendance: {
+    punches: '/api/attendance/punches',
+    importDat: '/api/attendance/imports/dat',
+  },
 };
 
 export const ROLE_PERMISSIONS = {
@@ -22,4 +26,6 @@ export const ROLE_PERMISSIONS = {
   canViewEmployees: ['hr'],
   canManageEmployees: ['hr'],
   canReviewProfileRequests: ['hr'],
+  canViewAllAttendance: ['hr'],
+  canImportAttendance: ['hr'],
 };
