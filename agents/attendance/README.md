@@ -7,6 +7,14 @@ The agent connects to the SC700 over TCP port `4370`, reads attendance logs with
 For the scanner-only field test that does not touch the backend, use:
 
 ```powershell
+python agents\attendance\sc700_simple_test.py --check --with-counts
+python agents\attendance\sc700_simple_test.py --pull --limit 20
+python agents\attendance\sc700_simple_test.py --poll
+```
+
+The fuller diagnostic script is:
+
+```powershell
 python agents\attendance\sc700_local_test.py --check --with-counts
 python agents\attendance\sc700_local_test.py --pull --limit 20
 python agents\attendance\sc700_local_test.py --live

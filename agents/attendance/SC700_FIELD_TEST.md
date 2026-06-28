@@ -7,7 +7,7 @@ ERP backend. After the scanner-only test passes, move to the backend agent test.
 
 Phase 1 proves:
 
-- The laptop/server can reach the scanner at `192.168.1.201:4370`.
+- The laptop/server can reach the scanner at its configured IP and port.
 - Python and `pyzk` can connect to the SC700.
 - Existing attendance logs can be read from the device.
 - A live card tap can be captured in real time.
@@ -20,7 +20,7 @@ Phase 2 proves:
 
 ## Important Safety Notes
 
-- Do not expose `192.168.1.201` or TCP `4370` to the public internet.
+- Do not expose the scanner IP or TCP `4370` to the public internet.
 - Do not run ZKAccess, another SDK tool, and the Python live test at the same
   time. Some ZKTeco devices are unreliable with multiple active sessions.
 - The scanner-only script never clears logs and never posts to the backend.
@@ -34,24 +34,27 @@ Phase 2 proves:
 Connect the laptop or server to the same showroom HUB/LAN path that can reach:
 
 ```text
-Scanner IP: 192.168.1.201
+Scanner IP from device menu: 192.168.201.1
 Scanner port: 4370
 ```
+
+If IT later confirms the scanner is actually `192.168.1.201`, use that IP
+instead. The two addresses are different networks.
 
 ### 2. Check Network
 
 Mac:
 
 ```bash
-ping 192.168.1.201
-nc -vz 192.168.1.201 4370
+ping 192.168.201.1
+nc -vz 192.168.201.1 4370
 ```
 
 Windows PowerShell:
 
 ```powershell
-ping 192.168.1.201
-Test-NetConnection 192.168.1.201 -Port 4370
+ping 192.168.201.1
+Test-NetConnection 192.168.201.1 -Port 4370
 ```
 
 Success means the machine can reach the SC700 network path.
@@ -81,13 +84,13 @@ pip install -r agents\attendance\requirements.txt
 Mac:
 
 ```bash
-python3 agents/attendance/sc700_local_test.py --check --with-counts
+python3 agents/attendance/sc700_simple_test.py --check --with-counts
 ```
 
 Windows PowerShell:
 
 ```powershell
-python agents\attendance\sc700_local_test.py --check --with-counts
+python agents\attendance\sc700_simple_test.py --check --with-counts
 ```
 
 Expected result:
@@ -101,25 +104,25 @@ Expected result:
 Mac:
 
 ```bash
-python3 agents/attendance/sc700_local_test.py --pull --limit 20
+python3 agents/attendance/sc700_simple_test.py --pull --limit 20
 ```
 
 Windows PowerShell:
 
 ```powershell
-python agents\attendance\sc700_local_test.py --pull --limit 20
+python agents\attendance\sc700_simple_test.py --pull --limit 20
 ```
 
 Optional: save records to a local JSONL file:
 
 ```bash
-python3 agents/attendance/sc700_local_test.py --pull --limit 50 --format jsonl --out /tmp/sc700_pull_test.jsonl
+python3 agents/attendance/sc700_local_test.py --pull --limit 50 --host 192.168.201.1 --format jsonl --out /tmp/sc700_pull_test.jsonl
 ```
 
 Windows:
 
 ```powershell
-python agents\attendance\sc700_local_test.py --pull --limit 50 --format jsonl --out C:\Temp\sc700_pull_test.jsonl
+python agents\attendance\sc700_local_test.py --pull --limit 50 --host 192.168.201.1 --format jsonl --out C:\Temp\sc700_pull_test.jsonl
 ```
 
 ### 6. Test Real-Time Card Tap
@@ -129,13 +132,13 @@ Run live mode, then tap a real card on the SC700.
 Mac:
 
 ```bash
-python3 agents/attendance/sc700_local_test.py --live --format jsonl --out /tmp/sc700_live_test.jsonl
+python3 agents/attendance/sc700_simple_test.py --poll
 ```
 
 Windows PowerShell:
 
 ```powershell
-python agents\attendance\sc700_local_test.py --live --format jsonl --out C:\Temp\sc700_live_test.jsonl
+python agents\attendance\sc700_simple_test.py --poll
 ```
 
 Expected result:
@@ -264,4 +267,3 @@ accept the request.
 - Render backend no longer returns `Invalid CSRF token` for `/api/attendance/punch`.
 - `showroom_agent.py --live` delivers a punch to backend.
 - Attendance appears in the ERP attendance page.
-
