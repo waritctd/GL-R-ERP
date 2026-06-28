@@ -64,6 +64,16 @@ The tests cover business rules, service behavior, validation, controller auth/pe
 APP_FLYWAY_ENABLED=true
 ```
 
+## Attendance Import And Reads
+
+The attendance module exposes:
+
+- `POST /api/attendance/punch` for the SC700 agent. Requires `X-GLR-Agent-Token`.
+- `POST /api/attendance/imports/dat` for HR-only `.dat` backfill imports.
+- `GET /api/attendance/punches?from=2020-11-01&to=2020-12-31` for attendance history. Employee users see only their own punches; HR/MD/CEO users see all punches and may filter with `employeeId`.
+
+The `.dat` import expects JSON with `site_code`, `device_code`, `file_name`, and `content`. It parses the six tab-separated SC700 columns, inserts unique punches into `hr.attendance_punch`, and writes import counts/errors into `hr.attendance_import_file` and `hr.attendance_import_error`.
+
 Recommended production hardening:
 
 - Use a dedicated app database role with least-privilege grants.
