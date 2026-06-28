@@ -17,11 +17,11 @@ public final class DivisionAccessPolicy {
         Map.entry(18L, "employee"), // QC&ISO
         Map.entry(9L,  "sales"),    // SA-ฝ่ายขาย → Sales role for creating tickets
         Map.entry(15L, "employee"), // SADS-ออกแบบ
-        Map.entry(13L, "employee"), // Sales Support 2
-        Map.entry(12L, "employee"), // Sales Support 1
-        Map.entry(6L,  "employee"), // Sales Support 1
-        Map.entry(8L,  "employee"), // Sales Support 2
-        Map.entry(4L,  "employee"), // SR-โชว์รูม
+        Map.entry(13L, "sales"),    // Sales Support 2 → Sales role
+        Map.entry(12L, "sales"),    // Sales Support 1 → Sales role
+        Map.entry(6L,  "sales"),    // Sales Support 1 → Sales role
+        Map.entry(8L,  "sales"),    // Sales Support 2 → Sales role
+        Map.entry(4L,  "sales"),    // SR-โชว์รูม → Sales role (showroom team)
         Map.entry(1L,  "employee"), // SV-ฝ่ายบริการ
         Map.entry(3L,  "employee")  // WH-ฝ่ายคลังสินค้า
     );
