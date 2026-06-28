@@ -23,7 +23,7 @@ spring:
         reWriteBatchedInserts: true
   flyway:
     enabled: ${APP_FLYWAY_ENABLED:true}
-    schemas: hr,hr_restricted
+    schemas: hr,hr_restricted,sales
     default-schema: hr
     baseline-on-migrate: true
     baseline-version: 1

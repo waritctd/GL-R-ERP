@@ -18,6 +18,20 @@ export const API_ROUTES = {
     punches: '/api/attendance/punches',
     importDat: '/api/attendance/imports/dat',
   },
+  tickets: {
+    list: '/api/tickets',
+    create: '/api/tickets',
+    detail: (id) => `/api/tickets/${id}`,
+    action: (id, action) => `/api/tickets/${id}/${action}`,
+    editItems: (id) => `/api/tickets/${id}/items`,
+  },
+  dashboard: {
+    summary: '/api/dashboard/summary',
+  },
+  notifications: {
+    list: '/api/notifications',
+    markRead: (id) => `/api/notifications/${id}/read`,
+  },
 };
 
 export const ROLE_PERMISSIONS = {
@@ -28,4 +42,11 @@ export const ROLE_PERMISSIONS = {
   canReviewProfileRequests: ['hr'],
   canViewAllAttendance: ['hr'],
   canImportAttendance: ['hr'],
+  // Sales module
+  canViewTickets: ['sales', 'import', 'ceo', 'admin'],
+  canCreateTickets: ['sales', 'admin'],
+  canPickupTickets: ['import', 'admin'],
+  canProposePrices: ['import', 'admin'],
+  canApproveReject: ['ceo', 'admin'],
+  canGenerateQuotation: ['sales', 'admin'],
 };

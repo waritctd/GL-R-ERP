@@ -33,8 +33,35 @@ export function roleLabel(role) {
   const labels = {
     hr: 'HR',
     employee: 'EMPLOYEE',
+    sales: 'SALES',
+    import: 'IMPORT',
+    ceo: 'CEO',
   };
   return labels[role] ?? role?.toUpperCase() ?? '-';
+}
+
+export function ticketStatusLabel(status) {
+  const map = {
+    draft:            { label: 'แบบร่าง',          tone: 'neutral' },
+    submitted:        { label: 'รอรับเรื่องจากฝ่าย Import', tone: 'warning' },
+    in_review:        { label: 'กำลังดำเนินการ',    tone: 'info' },
+    price_proposed:   { label: 'รอการอนุมัติ',      tone: 'warning' },
+    approved:         { label: 'อนุมัติแล้ว',       tone: 'success' },
+    rejected:         { label: 'ตีกลับ',            tone: 'danger' },
+    quotation_issued: { label: 'ออกใบเสนอราคาแล้ว', tone: 'success' },
+    closed:           { label: 'ปิดแล้ว',           tone: 'neutral' },
+    cancelled:        { label: 'ยกเลิกแล้ว',        tone: 'danger' },
+  };
+  return map[status] ?? { label: status, tone: 'neutral' };
+}
+
+export function ticketPriorityLabel(priority) {
+  const map = {
+    LOW:    { label: 'ต่ำ',   tone: 'neutral' },
+    NORMAL: { label: 'กลาง',  tone: 'warning' },
+    HIGH:   { label: 'สูง',   tone: 'danger' },
+  };
+  return map[priority] ?? { label: priority, tone: 'neutral' };
 }
 
 export function requestStatus(status) {
