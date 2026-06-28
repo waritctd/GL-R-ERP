@@ -38,6 +38,7 @@ class ScannerConfig:
     password: int
     timeout_seconds: int
     force_udp: bool
+    omit_ping: bool
     timezone: str
 
 
@@ -105,7 +106,7 @@ def build_zk(config: ScannerConfig) -> Any:
         timeout=config.timeout_seconds,
         password=config.password,
         force_udp=config.force_udp,
-        ommit_ping=False,
+        ommit_ping=config.omit_ping,
     )
 
 
@@ -348,6 +349,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--password", type=int, default=int(os.getenv("ZK_PASSWORD", "0")), help="SC700 comm password")
     parser.add_argument("--timeout", type=int, default=int(os.getenv("ZK_TIMEOUT_SECONDS", "10")), help="connection timeout seconds")
     parser.add_argument("--force-udp", action="store_true", default=os.getenv("ZK_FORCE_UDP", "").lower() in {"1", "true", "yes"})
+    parser.add_argument("--omit-ping", action="store_true", default=os.getenv("ZK_OMIT_PING", "").lower() in {"1", "true", "yes"}, help="skip pyzk's pre-connect ping check")
     parser.add_argument("--timezone", default=os.getenv("ATTENDANCE_TIMEZONE", "Asia/Bangkok"))
     parser.add_argument("--limit", type=int, default=20, help="record/user limit; use 0 for no limit")
     parser.add_argument("--since", help="pull records from YYYY-MM-DD or ISO datetime")
@@ -368,6 +370,7 @@ def main(argv: list[str] | None = None) -> int:
         password=args.password,
         timeout_seconds=args.timeout,
         force_udp=args.force_udp,
+        omit_ping=args.omit_ping,
         timezone=args.timezone.strip(),
     )
 
