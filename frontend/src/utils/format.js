@@ -46,10 +46,10 @@ export function ticketStatusLabel(status) {
     submitted:        { label: 'รอรับเรื่องจากฝ่าย Import', tone: 'warning' },
     in_review:        { label: 'กำลังดำเนินการ',    tone: 'info' },
     price_proposed:   { label: 'รอการอนุมัติ',      tone: 'warning' },
-    approved:         { label: 'อนุมัติแล้ว',       tone: 'success' },
-    rejected:         { label: 'ตีกลับ',            tone: 'danger' },
-    quotation_issued: { label: 'ออกใบเสนอราคาแล้ว', tone: 'success' },
-    closed:           { label: 'ปิดแล้ว',           tone: 'neutral' },
+    approved:         { label: 'อนุมัติแล้ว',        tone: 'success' },
+    rejected:         { label: 'ตีกลับ',             tone: 'danger' },
+    document_issued:  { label: 'ออกใบแจ้งยอดแล้ว',  tone: 'success' },
+    closed:           { label: 'ปิดแล้ว',            tone: 'neutral' },
     cancelled:        { label: 'ยกเลิกแล้ว',        tone: 'danger' },
   };
   return map[status] ?? { label: status, tone: 'neutral' };

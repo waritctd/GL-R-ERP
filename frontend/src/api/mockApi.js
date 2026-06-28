@@ -3,6 +3,59 @@ import { createDemoDatabase } from '../data/demoData.js';
 const db = createDemoDatabase();
 let sessionUser = null;
 
+// ── Mock in-memory document store ─────────────────────────────────────────────
+const mockCustomers = [
+  { id: 1, name: 'บริษัท ก้าวหน้า คอนสตรัคชั่น จำกัด',  taxId: '0105565012345', address: '123 ถนนสุขุมวิท แขวงคลองเตย กรุงเทพฯ 10110', branch: 'สำนักงานใหญ่', phone: '02-123-4567' },
+  { id: 2, name: 'บริษัท ไทยแลนด์ ดีเวลลอปเมนท์ จำกัด', taxId: '0105556789012', address: '456 ถนนรัชดาภิเษก แขวงลาดยาว กรุงเทพฯ 10900',  branch: 'สำนักงานใหญ่', phone: '02-234-5678' },
+  { id: 3, name: 'บริษัท พรีเมียม ดีไซน์ กรุ๊ป จำกัด',   taxId: '0105578901234', address: '789 ถนนพระราม 4 แขวงพระโขนง กรุงเทพฯ 10260',    branch: 'สำนักงานใหญ่', phone: '02-345-6789' },
+  { id: 4, name: 'บริษัท เรืองแสง พร็อพเพอร์ตี้ จำกัด',  taxId: '0105591234567', address: '321 ถนนนวมินทร์ แขวงคลองกุ่ม กรุงเทพฯ 10240',  branch: 'สำนักงานใหญ่', phone: '02-456-7890' },
+];
+
+const mockNoteTemplates = [
+  { id: 1, text: 'ราคารวมค่าขนส่งถึงชั้น 1 ของหน่วยงานในเขต กทม. แต่ไม่รวมค่าตัด/ติดตั้ง', defaultSelected: true, sortOrder: 1 },
+  { id: 2, text: 'จ่ายเช็คในนาม บจก. จี แอล แอนด์ อาร์ฯ / โอนเข้า กสิกรไทย 003-1-15914-8 (กระแสรายวัน สาขาสุขุมวิท 33)', defaultSelected: true, sortOrder: 2 },
+  { id: 3, text: 'กรณีโอนเงินส่ง Pay-in มาที่ e-mail : info@glr.co.th', defaultSelected: true, sortOrder: 3 },
+];
+
+const mockDocuments = []; // { id, ticketId, docType, version, docNumber, status, customerName, ... items:[], notes:[] }
+let mockDocSeq = 1;
+let mockDocNumberSeq = 1;
+
+function buildMockDoc(doc) {
+  const items = doc.items ?? [];
+  const depositPct = doc.depositPercent ?? 0.5;
+  const subtotal = items.reduce((s, it) => s + (Number(it.netUnitPrice) || 0) * (Number(it.qty) || 0), 0);
+  const deposit  = Math.round(subtotal * depositPct * 100) / 100;
+  const vat      = Math.round(deposit * 0.07 * 100) / 100;
+  const total    = Math.round((deposit + vat) * 100) / 100;
+  return { ...doc, subtotal, depositAmount: deposit, vatAmount: vat, totalPayable: total };
+}
+
+function mockPreviewHtml(doc) {
+  const money = (v) => v == null ? '—' : Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2 });
+  const depositPct = Math.round((doc.depositPercent ?? 0.5) * 100);
+  let rows = (doc.items ?? []).map((it, i) =>
+    `<tr><td>${i+1}</td><td>${it.description??''}</td><td style="text-align:right">${it.qty}</td><td>${it.unit??'แผ่น'}</td><td style="text-align:right">${money(it.unitPrice)}</td><td style="text-align:right">${money(it.netUnitPrice??it.unitPrice)}</td><td style="text-align:right">${money((it.netUnitPrice??it.unitPrice)*it.qty)}</td></tr>`
+  ).join('');
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:sans-serif;padding:20px;font-size:13px}table{width:100%;border-collapse:collapse;margin:12px 0}th{background:#1e3a5f;color:#fff;padding:6px 8px;text-align:left}td{padding:5px 8px;border-bottom:1px solid #eee}.sum{text-align:right;width:300px;float:right;margin-top:12px}.sum td{padding:4px 8px}</style></head><body>
+<div style="display:flex;justify-content:space-between;border-bottom:2px solid #1e3a5f;padding-bottom:12px;margin-bottom:16px">
+  <div><strong>บริษัท จี แอล แอนด์ อาร์ จำกัด</strong><br><small>เลขภาษี 0105542026329</small></div>
+  <div style="text-align:right"><strong style="font-size:16px">ใบแจ้งยอด / เงินรับมัดจำ</strong><br><code>${doc.docNumber??'DRAFT'}</code></div>
+</div>
+<div>เรียน: <strong>${doc.customerName??''}</strong></div>
+<div style="color:#666;font-size:12px">${doc.customerAddress??''}</div>
+${doc.projectName ? `<div>โครงการ: ${doc.projectName}</div>` : ''}
+<table><thead><tr><th>ลำดับ</th><th>รายละเอียด</th><th>จำนวน</th><th>หน่วย</th><th>ราคา/หน่วย</th><th>ราคาสุทธิ</th><th>เป็นเงิน</th></tr></thead><tbody>${rows}</tbody></table>
+<table class="sum"><tr><td>รวมเป็นเงิน</td><td style="text-align:right">${money(doc.subtotal)} บาท</td></tr>
+<tr><td>มัดจำ ${depositPct}%</td><td style="text-align:right">${money(doc.depositAmount)} บาท</td></tr>
+<tr><td>VAT 7% (จากมัดจำ)</td><td style="text-align:right">${money(doc.vatAmount)} บาท</td></tr>
+<tr style="font-weight:bold;border-top:2px solid #1e3a5f"><td>รวมต้องชำระ</td><td style="text-align:right">${money(doc.totalPayable)} บาท</td></tr></table>
+<div style="clear:both"></div>
+${doc.notes?.length ? `<div style="margin-top:20px;font-size:12px"><strong>หมายเหตุ:</strong><ol>${doc.notes.map(n=>`<li>${n}</li>`).join('')}</ol></div>` : ''}
+<div style="margin-top:30px;font-size:12px;color:#666">ผู้จัดทำ: จินตนา หาญมนตรี</div>
+</body></html>`;
+}
+
 function delay(value) {
   return new Promise((resolve) => {
     window.setTimeout(() => resolve(structuredClone(value)), 140);
@@ -466,6 +519,32 @@ export const api = {
       pushEvent(ticket, user, 'COMMENTED', null, null, payload.message);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
+
+    async createDocDraft(ticketId, payload) {
+      // delegate to documents.createDraft (defined below — works at call time)
+      return api.documents.createDraft(ticketId, payload);
+    },
+
+    async listDocs(ticketId) {
+      return api.documents.listByTicket(ticketId);
+    },
+
+    async revision(id, payload) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      if (!['approved', 'document_issued'].includes(ticket.status)) fail('ไม่สามารถขอแก้ไขในสถานะนี้', 409);
+
+      const toStatus = {
+        QTY_OR_NOTE:  'approved',
+        PRICE_CHANGE: 'price_proposed',
+        NEW_ITEM:     'in_review',
+      }[payload.scope] ?? ticket.status;
+
+      ticket.status = toStatus;
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'REVISION_REQUESTED', ticket.status, toStatus, `[${payload.scope}] ${payload.reason}`);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
   },
 
   dashboard: {
@@ -510,4 +589,128 @@ export const api = {
       return delay({ ok: true });
     },
   },
+
+  customers: {
+    async search(q) {
+      requireSession();
+      const lower = (q ?? '').toLowerCase();
+      const results = lower
+        ? mockCustomers.filter((c) => c.name.toLowerCase().includes(lower) || (c.taxId ?? '').includes(lower))
+        : mockCustomers;
+      return delay({ customers: results });
+    },
+  },
+
+  documents: {
+    async noteTemplates() {
+      requireSession();
+      return delay({ templates: mockNoteTemplates });
+    },
+
+    async createDraft(ticketId, payload) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(ticketId));
+      if (!['approved', 'document_issued'].includes(ticket.status)) fail('Ticket must be approved', 409);
+
+      // Auto-build items from approved ticket items
+      const items = payload.items?.length ? payload.items : ticket.items
+        .filter((it) => it.approvedPrice != null)
+        .map((it, idx) => {
+          const desc = [it.brand, it.model, it.color, it.texture, it.size].filter(Boolean).join(' ');
+          return { seq: idx + 1, description: desc, qty: Number(it.qty), unit: 'แผ่น', unitPrice: Number(it.approvedPrice), discountLabel: null, netUnitPrice: Number(it.approvedPrice) };
+        });
+
+      const notes = payload.notes ?? mockNoteTemplates.filter((t) => t.defaultSelected).map((t) => t.text);
+      const nextVer = mockDocuments.filter((d) => d.ticketId === Number(ticketId)).length + 1;
+
+      const doc = buildMockDoc({
+        id: mockDocSeq++, ticketId: Number(ticketId), docType: 'DEPOSIT_NOTICE',
+        version: nextVer, docNumber: null, issueDate: null, status: 'DRAFT',
+        customerName: payload.customerName ?? ticket.customerName ?? '',
+        customerTaxId: payload.customerTaxId ?? '', customerAddress: payload.customerAddress ?? '',
+        projectName: payload.projectName ?? '', reference: payload.reference ?? '',
+        depositPercent: payload.depositPercent ?? 0.5, vatPercent: 0.07,
+        notes, items, issuedByName: null, preparerName: 'จินตนา หาญมนตรี',
+        hasPdf: false, hasXlsx: false,
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      });
+      mockDocuments.push(doc);
+      return delay({ document: structuredClone(doc) });
+    },
+
+    async listByTicket(ticketId) {
+      requireSession();
+      return delay({ documents: structuredClone(mockDocuments.filter((d) => d.ticketId === Number(ticketId))) });
+    },
+
+    async get(docId) {
+      requireSession();
+      const doc = mockDocuments.find((d) => d.id === Number(docId));
+      if (!doc) fail('Document not found', 404);
+      return delay({ document: structuredClone(doc) });
+    },
+
+    async update(docId, payload) {
+      requireSession();
+      const doc = mockDocuments.find((d) => d.id === Number(docId));
+      if (!doc) fail('Document not found', 404);
+      if (doc.status !== 'DRAFT') fail('Document is not draft', 409);
+      Object.assign(doc, {
+        customerName:    payload.customerName    ?? doc.customerName,
+        customerTaxId:   payload.customerTaxId   ?? doc.customerTaxId,
+        customerAddress: payload.customerAddress ?? doc.customerAddress,
+        projectName:     payload.projectName     ?? doc.projectName,
+        reference:       payload.reference       ?? doc.reference,
+        depositPercent:  payload.depositPercent  ?? doc.depositPercent,
+        notes:           payload.notes           ?? doc.notes,
+        items:           payload.items?.length ? payload.items : doc.items,
+        updatedAt:       new Date().toISOString(),
+      });
+      const updated = buildMockDoc(doc);
+      Object.assign(doc, updated);
+      return delay({ document: structuredClone(doc) });
+    },
+
+    async preview(docId) {
+      requireSession();
+      const doc = mockDocuments.find((d) => d.id === Number(docId));
+      if (!doc) fail('Document not found', 404);
+      // Return HTML string directly (not wrapped in JSON)
+      return mockPreviewHtml(buildMockDoc(doc));
+    },
+
+    async issue(docId) {
+      const user = requireSession();
+      const doc = mockDocuments.find((d) => d.id === Number(docId));
+      if (!doc) fail('Document not found', 404);
+      if (doc.status !== 'DRAFT') fail('Not a draft', 409);
+      const ticket = findTicketRaw(doc.ticketId);
+
+      // Supersede previous issued docs
+      mockDocuments.forEach((d) => { if (d.ticketId === doc.ticketId && d.id !== doc.id && d.status === 'ISSUED') d.status = 'SUPERSEDED'; });
+
+      const thaiYear = new Date().getFullYear() + 543;
+      doc.docNumber = `GLRD${String(thaiYear).slice(-2)}${String(mockDocNumberSeq++).padStart(3,'0')}`;
+      doc.issueDate = new Date().toISOString().slice(0, 10);
+      doc.status = 'ISSUED';
+      doc.issuedByName = user.name;
+      doc.updatedAt = new Date().toISOString();
+
+      // Transition ticket to document_issued
+      ticket.status = 'document_issued';
+      ticket.updatedAt = doc.updatedAt;
+      pushEvent(ticket, user, 'DOCUMENT_ISSUED', 'approved', 'document_issued', `เอกสาร ${doc.docNumber} ออกแล้ว`);
+
+      return delay({ document: structuredClone(doc) });
+    },
+
+    async downloadXlsx(docId) {
+      requireSession();
+      const doc = mockDocuments.find((d) => d.id === Number(docId));
+      if (!doc) fail('Document not found', 404);
+      const html = mockPreviewHtml(buildMockDoc(doc));
+      return new Blob([html], { type: 'text/html' });
+    },
+  },
+
 };

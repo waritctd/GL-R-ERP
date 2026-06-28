@@ -20,6 +20,20 @@ export const API_ROUTES = {
     detail: (id) => `/api/tickets/${id}`,
     action: (id, action) => `/api/tickets/${id}/${action}`,
     editItems: (id) => `/api/tickets/${id}/items`,
+    createDocDraft: (id) => `/api/tickets/${id}/document/draft`,
+    listDocs: (id) => `/api/tickets/${id}/documents`,
+    revision: (id) => `/api/tickets/${id}/revision`,
+  },
+  documents: {
+    get: (id) => `/api/documents/${id}`,
+    update: (id) => `/api/documents/${id}`,
+    preview: (id) => `/api/documents/${id}/preview`,
+    issue: (id) => `/api/documents/${id}/issue`,
+    file: (id, fmt) => `/api/documents/${id}/file?format=${fmt}`,
+    noteTemplates: '/api/document-note-templates',
+  },
+  customers: {
+    search: (q) => `/api/customers${q ? `?search=${encodeURIComponent(q)}` : ''}`,
   },
   dashboard: {
     summary: '/api/dashboard/summary',
