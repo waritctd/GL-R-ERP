@@ -18,7 +18,7 @@ public class CorsConfig {
                 registry.addMapping("/api/**")
                     .allowedOrigins(allowedOrigins.toArray(String[]::new))
                     .allowedMethods("GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS")
-                    .allowedHeaders("Content-Type", "X-XSRF-TOKEN")
+                    .allowedHeaders("Content-Type", "X-XSRF-TOKEN", "X-GLR-Agent-Token")
                     .allowCredentials(true)
                     .maxAge(3600);
             }

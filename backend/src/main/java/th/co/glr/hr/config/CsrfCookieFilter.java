@@ -36,7 +36,10 @@ public class CsrfCookieFilter extends OncePerRequestFilter {
 
     private static final Set<String> SAFE_METHODS = Set.of("GET", "HEAD", "OPTIONS", "TRACE");
     // Login must succeed before the client has a token; CSRF on login itself is low impact.
-    private static final Set<String> EXEMPT_PATHS = Set.of("/api/auth/login");
+    private static final Set<String> EXEMPT_PATHS = Set.of(
+        "/api/auth/login",
+        "/api/attendance/punch"
+    );
 
     private final SecureRandom secureRandom = new SecureRandom();
     private final Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();

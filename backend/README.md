@@ -46,6 +46,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8080 npm run dev
 | `DB_MIN_IDLE` | No | `1` | Hikari minimum idle connections. Production override sets this to `0`. |
 | `APP_FLYWAY_ENABLED` | No | `true` | Runs schema migrations on startup. |
 | `APP_CORS_ALLOWED_ORIGINS` | No | local Vite origins | Comma-separated absolute `http` or `https` origins. Wildcards are rejected. |
+| `APP_ATTENDANCE_AGENT_TOKEN` | Yes for attendance agent | empty | Shared secret required by `POST /api/attendance/punch` in `X-GLR-Agent-Token`. |
 | `SERVER_SESSION_COOKIE_SECURE` | No | `true` | Set `false` only for local plain-HTTP backend runs. |
 
 ## Tests

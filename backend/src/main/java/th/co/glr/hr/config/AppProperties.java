@@ -7,9 +7,14 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "app")
 public class AppProperties {
     private final Cors cors = new Cors();
+    private final Attendance attendance = new Attendance();
 
     public Cors getCors() {
         return cors;
+    }
+
+    public Attendance getAttendance() {
+        return attendance;
     }
 
     public static class Cors {
@@ -23,6 +28,18 @@ public class AppProperties {
 
         public void setAllowedOrigins(List<String> allowedOrigins) {
             this.allowedOrigins = allowedOrigins;
+        }
+    }
+
+    public static class Attendance {
+        private String agentToken;
+
+        public String getAgentToken() {
+            return agentToken;
+        }
+
+        public void setAgentToken(String agentToken) {
+            this.agentToken = agentToken;
         }
     }
 
