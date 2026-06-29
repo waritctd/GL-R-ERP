@@ -73,7 +73,7 @@ class EmployeeControllerTest {
     private MockHttpSession sessionFor(String role) {
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionContext.SESSION_USER_KEY,
-            new UserPrincipal(1L, role + "@glr.co.th", role, role, 10L, true, LocalDate.now()));
+            new UserPrincipal(1L, role + "@glr.co.th", role, role, 10L, true, LocalDate.now(), false));
         return session;
     }
 
