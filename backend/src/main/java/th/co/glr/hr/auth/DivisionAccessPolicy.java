@@ -26,16 +26,31 @@ public final class DivisionAccessPolicy {
         Map.entry(3L,  "employee")  // WH-ฝ่ายคลังสินค้า
     );
     private static final Set<String> HR_DIVISION_CODES = Set.of("hr", "md", "mn");
+    private static final Set<String> SALES_MANAGER_POSITIONS = Set.of("ผู้ช่วยผู้จัดการฝ่ายขาย");
 
     private DivisionAccessPolicy() {
     }
 
     public static String roleFor(EmployeeLoginRecord employee) {
+        if (isSalesManagerPosition(employee)) {
+            return "sales_manager";
+        }
         String role = DIVISION_ROLES.get(employee.divisionId());
         if (role != null) {
             return role;
         }
         return HR_DIVISION_CODES.contains(divisionCode(employee)) ? "hr" : "employee";
+    }
+
+    private static boolean isSalesManagerPosition(EmployeeLoginRecord employee) {
+        String position = employee.positionName();
+        if (position == null || position.isBlank()) {
+            return false;
+        }
+        String normalized = position.trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+        return SALES_MANAGER_POSITIONS.stream()
+            .map(value -> value.trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", ""))
+            .anyMatch(normalized::equals);
     }
 
     private static String divisionCode(EmployeeLoginRecord employee) {

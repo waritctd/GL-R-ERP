@@ -1,6 +1,7 @@
 import { createDemoDatabase } from '../data/demoData.js';
 
 const db = createDemoDatabase();
+db.commissions = db.commissions || [];
 let sessionUser = null;
 
 function delay(value) {
@@ -56,6 +57,40 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
 
 function buildTicketDetail(ticket) {
   return { summary: { id: ticket.id, code: ticket.code, type: ticket.type, title: ticket.title, status: ticket.status, priority: ticket.priority, createdById: ticket.createdById, createdByName: ticket.createdByName, assignedToId: ticket.assignedToId, assignedToName: ticket.assignedToName, customerName: ticket.customerName, note: ticket.note, createdAt: ticket.createdAt, updatedAt: ticket.updatedAt, closedAt: ticket.closedAt, itemCount: ticket.items.length, hasEdits: ticket.hasEdits ?? false }, items: ticket.items, events: ticket.events, quotation: ticket.quotation };
+}
+
+function commissionMonth(value) {
+  return (value || new Date().toISOString()).slice(0, 7);
+}
+
+function invoiceCalculation(payload) {
+  const actualReceived = Number(payload.grossAmount || 0)
+    - Number(payload.bankFees || 0)
+    - Number(payload.suspenseVat || 0)
+    - Number(payload.transportFee || 0)
+    - Number(payload.cutFee || 0)
+    - Number(payload.shortfall || 0);
+  return {
+    actualReceived: Number(actualReceived.toFixed(2)),
+    commissionableBase: Number((actualReceived / 1.07).toFixed(2)),
+  };
+}
+
+function progressiveCommission(baseValue) {
+  const base = Math.max(0, Number(baseValue || 0));
+  let total = 0;
+  for (let tier = 1; tier <= 12; tier++) {
+    const lower = (tier - 1) * 250000;
+    const upper = tier * 250000;
+    const block = Math.max(0, Math.min(base, upper) - lower);
+    total += block * ((tier * 0.25) / 100);
+  }
+  if (base > 3000000) total += (base - 3000000) * 0.075;
+  return Number(total.toFixed(2));
+}
+
+function buildCommissionRecord(record) {
+  return structuredClone(record);
 }
 
 function doTransition(id, fromStatus, toStatus, kind, actor, message) {
@@ -465,6 +500,187 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       pushEvent(ticket, user, 'COMMENTED', null, null, payload.message);
       return delay({ ticket: buildTicketDetail(ticket) });
+    },
+  },
+
+  commissions: {
+    async list(params = {}) {
+      const user = requireSession();
+      if (!['sales', 'sales_manager', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
+      let list = db.commissions;
+      if (user.role === 'sales') list = list.filter((item) => item.salesRepId === user.id);
+      if (params.payrollMonth) list = list.filter((item) => commissionMonth(item.payrollMonth) === params.payrollMonth.slice(0, 7));
+      return delay({ commissions: list.map(buildCommissionRecord) });
+    },
+
+    async create(payload) {
+      const user = hasRole('sales', 'sales_manager', 'ceo', 'admin');
+      if (user.role === 'sales' && (Number(payload.transportFee || 0) > 0 || Number(payload.cutFee || 0) > 0 || Number(payload.shortfall || 0) > 0)) {
+        fail('Sales cannot edit deduction fields', 403);
+      }
+      if (db.commissions.some((item) => item.invoiceDetails.invoiceNumber === payload.invoiceNumber)) {
+        fail('Invoice number already exists', 409);
+      }
+      const id = Math.max(0, ...db.commissions.map((item) => item.id)) + 1;
+      const salesRepId = user.role === 'sales' ? user.id : Number(payload.salesRepId || user.id);
+      const calc = invoiceCalculation({
+        ...payload,
+        transportFee: user.role === 'sales' ? 0 : payload.transportFee,
+        cutFee: user.role === 'sales' ? 0 : payload.cutFee,
+        shortfall: user.role === 'sales' ? 0 : payload.shortfall,
+      });
+      const record = {
+        id,
+        sourceTicketId: payload.sourceTicketId ?? null,
+        salesRepId,
+        salesRepName: db.users.find((item) => item.id === salesRepId)?.name || user.name,
+        submittedById: user.id,
+        kind: 'SALE',
+        status: 'SUBMITTED',
+        payrollMonth: `${commissionMonth(payload.invoiceDate)}-01`,
+        actualReceived: calc.actualReceived,
+        commissionableBase: calc.commissionableBase,
+        approvedById: null,
+        approvedAt: null,
+        cancellationOfId: null,
+        cancellationReason: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        invoiceDetails: {
+          id,
+          invoiceNumber: payload.invoiceNumber,
+          invoiceDate: payload.invoiceDate,
+          grossAmount: Number(payload.grossAmount || 0),
+          bankFees: Number(payload.bankFees || 0),
+          suspenseVat: Number(payload.suspenseVat || 0),
+          transportFee: user.role === 'sales' ? 0 : Number(payload.transportFee || 0),
+          cutFee: user.role === 'sales' ? 0 : Number(payload.cutFee || 0),
+          shortfall: user.role === 'sales' ? 0 : Number(payload.shortfall || 0),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      };
+      db.commissions.unshift(record);
+      return delay({ commission: buildCommissionRecord(record) });
+    },
+
+    async updateDeductions(id, payload) {
+      hasRole('sales_manager', 'ceo', 'admin');
+      const record = db.commissions.find((item) => item.id === Number(id));
+      if (!record) fail('Commission record not found', 404);
+      Object.assign(record.invoiceDetails, {
+        transportFee: Number(payload.transportFee ?? record.invoiceDetails.transportFee),
+        cutFee: Number(payload.cutFee ?? record.invoiceDetails.cutFee),
+        shortfall: Number(payload.shortfall ?? record.invoiceDetails.shortfall),
+        updatedAt: new Date().toISOString(),
+      });
+      const calc = invoiceCalculation(record.invoiceDetails);
+      db.commissions
+        .filter((item) => item.invoiceDetails.id === record.invoiceDetails.id && item.status !== 'VOID')
+        .forEach((item) => {
+          item.actualReceived = item.kind === 'CLAWBACK' ? -Math.abs(calc.actualReceived) : calc.actualReceived;
+          item.commissionableBase = item.kind === 'CLAWBACK' ? -Math.abs(calc.commissionableBase) : calc.commissionableBase;
+          item.updatedAt = new Date().toISOString();
+        });
+      return delay({ commission: buildCommissionRecord(record) });
+    },
+
+    async approve(id) {
+      const user = hasRole('sales_manager', 'ceo', 'admin');
+      const record = db.commissions.find((item) => item.id === Number(id));
+      if (!record) fail('Commission record not found', 404);
+      if (record.status !== 'SUBMITTED') fail('Only submitted commission records can be approved', 409);
+      record.status = 'APPROVED';
+      record.approvedById = user.id;
+      record.approvedAt = new Date().toISOString();
+      record.updatedAt = record.approvedAt;
+      return delay({ commission: buildCommissionRecord(record) });
+    },
+
+    async clawback(id, payload) {
+      const user = hasRole('sales_manager', 'ceo', 'admin');
+      const original = db.commissions.find((item) => item.id === Number(id));
+      if (!original) fail('Commission record not found', 404);
+      if (original.kind !== 'SALE' || original.status !== 'APPROVED') fail('Only approved sale commissions can be clawed back', 409);
+      if (db.commissions.some((item) => item.cancellationOfId === original.id && item.status !== 'VOID')) fail('This commission already has an active clawback', 409);
+      const nextId = Math.max(0, ...db.commissions.map((item) => item.id)) + 1;
+      const record = {
+        ...structuredClone(original),
+        id: nextId,
+        kind: 'CLAWBACK',
+        status: 'APPROVED',
+        payrollMonth: `${commissionMonth(new Date().toISOString())}-01`,
+        actualReceived: -Math.abs(original.actualReceived),
+        commissionableBase: -Math.abs(original.commissionableBase),
+        submittedById: user.id,
+        approvedById: user.id,
+        approvedAt: new Date().toISOString(),
+        cancellationOfId: original.id,
+        cancellationReason: payload.reason,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      db.commissions.unshift(record);
+      return delay({ commission: buildCommissionRecord(record) });
+    },
+
+    async simulate(payload) {
+      const user = requireSession();
+      if (!['sales', 'sales_manager', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
+      if (user.role === 'sales' && (Number(payload.transportFee || 0) > 0 || Number(payload.cutFee || 0) > 0 || Number(payload.shortfall || 0) > 0)) {
+        fail('Sales cannot edit deduction fields', 403);
+      }
+      const salesRepId = user.role === 'sales' ? user.id : Number(payload.salesRepId || user.id);
+      const month = commissionMonth(payload.payrollMonth || new Date().toISOString());
+      const calc = invoiceCalculation({
+        ...payload,
+        transportFee: user.role === 'sales' ? 0 : payload.transportFee,
+        cutFee: user.role === 'sales' ? 0 : payload.cutFee,
+        shortfall: user.role === 'sales' ? 0 : payload.shortfall,
+      });
+      const existingMonthlyBase = db.commissions
+        .filter((item) => item.salesRepId === salesRepId && commissionMonth(item.payrollMonth) === month && item.status !== 'VOID')
+        .reduce((sum, item) => sum + Number(item.commissionableBase || 0), 0);
+      const projectedMonthlyBase = existingMonthlyBase + calc.commissionableBase;
+      const projectedMonthlyCommission = progressiveCommission(projectedMonthlyBase);
+      const incrementalCommission = projectedMonthlyCommission - progressiveCommission(existingMonthlyBase);
+      return delay({
+        simulation: {
+          payrollMonth: `${month}-01`,
+          actualReceived: calc.actualReceived,
+          commissionableBase: calc.commissionableBase,
+          existingMonthlyBase,
+          projectedMonthlyBase,
+          projectedMonthlyCommission,
+          incrementalCommission: Number(incrementalCommission.toFixed(2)),
+        },
+      });
+    },
+
+    async payrollReady(params = {}) {
+      hasRole('hr', 'admin');
+      const month = commissionMonth(params.payrollMonth || new Date().toISOString());
+      const approved = db.commissions.filter((item) => item.status === 'APPROVED' && commissionMonth(item.payrollMonth) === month);
+      const reps = new Map();
+      approved.forEach((item) => {
+        const current = reps.get(item.salesRepId) || { salesRepId: item.salesRepId, salesRepName: item.salesRepName, commissionableBase: 0 };
+        current.commissionableBase += Number(item.commissionableBase || 0);
+        reps.set(item.salesRepId, current);
+      });
+      const salesReps = [...reps.values()].map((rep) => ({
+        ...rep,
+        commissionableBase: Math.max(0, Number(rep.commissionableBase.toFixed(2))),
+        commissionAmount: progressiveCommission(rep.commissionableBase),
+      }));
+      return delay({
+        summary: {
+          payrollMonth: `${month}-01`,
+          status: 'PAYROLL_READY',
+          totalCommissionableBase: salesReps.reduce((sum, item) => sum + item.commissionableBase, 0),
+          totalCommissionAmount: salesReps.reduce((sum, item) => sum + item.commissionAmount, 0),
+          salesReps,
+        },
+      });
     },
   },
 
