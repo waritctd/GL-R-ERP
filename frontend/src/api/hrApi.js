@@ -15,6 +15,7 @@ export const api = {
     login: (payload) => apiRequest(API_ROUTES.auth.login, { method: 'POST', body: payload }),
     logout: () => apiRequest(API_ROUTES.auth.logout, { method: 'POST' }),
     me: () => apiRequest(API_ROUTES.auth.me),
+    changePassword: (payload) => apiRequest(API_ROUTES.auth.changePassword, { method: 'POST', body: payload }),
   },
   employees: {
     list: (params) => apiRequest(withQuery(API_ROUTES.employees.list, params)),

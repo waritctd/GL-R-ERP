@@ -3,6 +3,7 @@ import { api } from './api/index.js';
 import { AppShell } from './components/layout/AppShell.jsx';
 import { Toast } from './components/common/Toast.jsx';
 import { LoginPage } from './features/auth/LoginPage.jsx';
+import { ChangePasswordModal } from './features/auth/ChangePasswordModal.jsx';
 import { HrDashboard } from './features/dashboard/HrDashboard.jsx';
 import { EmployeeDashboard } from './features/dashboard/EmployeeDashboard.jsx';
 import { TicketDashboard } from './features/dashboard/TicketDashboard.jsx';
@@ -22,6 +23,7 @@ export function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
+  const [changingPassword, setChangingPassword] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState(null);
   const { toast, showToast, dismissToast } = useToast();
   const {
@@ -78,6 +80,17 @@ export function App() {
     }
   }
 
+  async function handleChangePassword(payload) {
+    setChangingPassword(true);
+    try {
+      const response = await api.auth.changePassword(payload);
+      setUser(response.user);
+      showToast('success', 'เปลี่ยนรหัสผ่านเรียบร้อย');
+    } finally {
+      setChangingPassword(false);
+    }
+  }
+
   async function handleLogout() {
     await api.auth.logout();
     setUser(null);
@@ -99,6 +112,20 @@ export function App() {
     return (
       <>
         <LoginPage onLogin={handleLogin} loading={loading} error={loginError} />
+        <Toast toast={toast} onDismiss={dismissToast} />
+      </>
+    );
+  }
+
+  if (user.mustChangePassword) {
+    return (
+      <>
+        <ChangePasswordModal
+          forced
+          loading={changingPassword}
+          onSubmit={handleChangePassword}
+          onLogout={handleLogout}
+        />
         <Toast toast={toast} onDismiss={dismissToast} />
       </>
     );
