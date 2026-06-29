@@ -18,7 +18,7 @@ class ProfileRequestServiceTest {
     private final ProfileRequestRepository profileRequests = mock(ProfileRequestRepository.class);
     private final EmployeeRepository employees = mock(EmployeeRepository.class);
     private final ProfileRequestService service = new ProfileRequestService(profileRequests, employees);
-    private final UserPrincipal reviewer = new UserPrincipal(7L, "hr@glr.co.th", "HR", "hr", 10L, true, LocalDate.now());
+    private final UserPrincipal reviewer = new UserPrincipal(7L, "hr@glr.co.th", "HR", "hr", 10L, true, LocalDate.now(), false);
 
     @Test
     void rejectsAlreadyReviewedRequestBeforeChangingStatus() {
@@ -61,7 +61,7 @@ class ProfileRequestServiceTest {
 
     @Test
     void rejectsUnsupportedProfileFieldOnCreate() {
-        UserPrincipal employee = new UserPrincipal(8L, "employee@glr.co.th", "Employee", "employee", 22L, true, LocalDate.now());
+        UserPrincipal employee = new UserPrincipal(8L, "employee@glr.co.th", "Employee", "employee", 22L, true, LocalDate.now(), false);
 
         assertThatThrownBy(() -> service.create(new CreateProfileRequestRequest("salary", "เงินเดือน", "1", "2"), employee))
             .isInstanceOfSatisfying(ApiException.class, exception ->

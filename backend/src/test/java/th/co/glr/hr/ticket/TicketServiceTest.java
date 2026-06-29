@@ -376,7 +376,7 @@ class TicketServiceTest {
     // ── helpers ───────────────────────────────────────────────────────────
 
     private static UserPrincipal actor(long id, String role) {
-        return new UserPrincipal(id, role + "@glr.co.th", role, role, id, true, LocalDate.now());
+        return new UserPrincipal(id, role + "@glr.co.th", role, role, id, true, LocalDate.now(), false);
     }
 
     private TicketDto stubTicket(long ticketId, long createdById, String status) {

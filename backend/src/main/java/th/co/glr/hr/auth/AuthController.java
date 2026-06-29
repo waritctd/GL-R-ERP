@@ -24,6 +24,11 @@ public class AuthController {
         return authService.login(request, httpRequest);
     }
 
+    @PostMapping("/change-password")
+    AuthResponse changePassword(@Valid @RequestBody ChangePasswordRequest request, HttpSession session) {
+        return authService.changePassword(request, session);
+    }
+
     @PostMapping("/logout")
     ResponseEntity<Void> logout(HttpSession session) {
         authService.logout(session);
