@@ -58,4 +58,13 @@ export const api = {
     },
     markRead: (id) => apiRequest(API_ROUTES.notifications.markRead(id), { method: 'PATCH' }),
   },
+  commissions: {
+    list: (params) => apiRequest(withQuery(API_ROUTES.commissions.list, params)),
+    create: (payload) => apiRequest(API_ROUTES.commissions.create, { method: 'POST', body: payload }),
+    updateDeductions: (id, payload) => apiRequest(API_ROUTES.commissions.deductions(id), { method: 'PATCH', body: payload }),
+    approve: (id) => apiRequest(API_ROUTES.commissions.approve(id), { method: 'POST' }),
+    clawback: (id, payload) => apiRequest(API_ROUTES.commissions.clawback(id), { method: 'POST', body: payload }),
+    simulate: (payload) => apiRequest(API_ROUTES.commissions.simulator, { method: 'POST', body: payload }),
+    payrollReady: (params) => apiRequest(withQuery(API_ROUTES.commissions.payrollReady, params)),
+  },
 };

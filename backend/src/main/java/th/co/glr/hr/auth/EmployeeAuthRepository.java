@@ -28,9 +28,11 @@ public class EmployeeAuthRepository {
                        d.division_id,
                        d.source_code AS division_code,
                        d.name_th AS division_name,
+                       p.name_th AS position_name,
                        COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), e.email) AS display_name
                   FROM hr.employee e
                   LEFT JOIN hr.division d ON d.division_id = e.division_id
+                  LEFT JOIN hr.position p ON p.position_id = e.position_id
                  WHERE e.email IS NOT NULL
                    AND btrim(e.email) <> ''
                    AND (
@@ -56,6 +58,7 @@ public class EmployeeAuthRepository {
             nullableLong(rs, "division_id"),
             rs.getString("division_code"),
             rs.getString("division_name"),
+            rs.getString("position_name"),
             rs.getObject("created_at", LocalDate.class)
         );
     }

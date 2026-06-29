@@ -6,6 +6,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.AuthenticationCredentialsNotFoundException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -43,6 +45,20 @@ public class ApiExceptionHandler {
         return ResponseEntity
             .status(HttpStatus.BAD_REQUEST)
             .body(new ErrorResponse("Invalid request", HttpStatus.BAD_REQUEST.value()));
+    }
+
+    @ExceptionHandler(AuthenticationCredentialsNotFoundException.class)
+    ResponseEntity<ErrorResponse> handleMissingAuthentication(AuthenticationCredentialsNotFoundException exception) {
+        return ResponseEntity
+            .status(HttpStatus.UNAUTHORIZED)
+            .body(new ErrorResponse("Not authenticated", HttpStatus.UNAUTHORIZED.value()));
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    ResponseEntity<ErrorResponse> handleAccessDenied(AccessDeniedException exception) {
+        return ResponseEntity
+            .status(HttpStatus.FORBIDDEN)
+            .body(new ErrorResponse("Forbidden", HttpStatus.FORBIDDEN.value()));
     }
 
     @ExceptionHandler(Exception.class)
