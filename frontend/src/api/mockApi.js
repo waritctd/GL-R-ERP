@@ -2,6 +2,69 @@ import { createDemoDatabase } from '../data/demoData.js';
 
 const db = createDemoDatabase();
 db.commissions = db.commissions || [];
+db.leaveTypes = db.leaveTypes || [
+  { code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal leave', annualQuotaDays: 3, requiresAttachment: false },
+  { code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick leave', annualQuotaDays: 30, requiresAttachment: true },
+  { code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation leave', annualQuotaDays: 6, requiresAttachment: false },
+];
+db.leaveRequests = db.leaveRequests || [];
+if (db.leaveRequests.length === 0) {
+  const now = new Date().toISOString();
+  db.leaveRequests = [
+    {
+      id: 1,
+      employeeId: db.employees[8].id,
+      leaveTypeCode: 'VACATION',
+      startDate: '2026-07-13',
+      endDate: '2026-07-14',
+      totalDays: 2,
+      quotaYear: 2026,
+      reason: 'Family trip',
+      attachmentName: null,
+      attachmentUrl: null,
+      status: 'SUBMITTED',
+      quotaRemainingBefore: 6,
+      quotaRemainingAfter: 4,
+      systemNote: null,
+      requestedById: db.employees[8].id,
+      requestedByName: db.employees[8].nameTh,
+      requestedAt: now,
+      reviewedById: null,
+      reviewedByName: null,
+      reviewedAt: null,
+      reviewerNote: null,
+      cancelledAt: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 2,
+      employeeId: db.employees[12].id,
+      leaveTypeCode: 'SICK',
+      startDate: '2026-06-18',
+      endDate: '2026-06-18',
+      totalDays: 1,
+      quotaYear: 2026,
+      reason: 'Medical appointment',
+      attachmentName: 'medical-certificate.pdf',
+      attachmentUrl: null,
+      status: 'APPROVED',
+      quotaRemainingBefore: 30,
+      quotaRemainingAfter: 29,
+      systemNote: null,
+      requestedById: db.employees[12].id,
+      requestedByName: db.employees[12].nameTh,
+      requestedAt: now,
+      reviewedById: db.employees[20].id,
+      reviewedByName: db.employees[20].nameTh,
+      reviewedAt: now,
+      reviewerNote: null,
+      cancelledAt: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+}
 let sessionUser = null;
 
 function delay(value) {
@@ -91,6 +154,79 @@ function progressiveCommission(baseValue) {
 
 function buildCommissionRecord(record) {
   return structuredClone(record);
+}
+
+function managerIdForEmployee(employee) {
+  if (!employee || employee.positionTh === 'ผู้จัดการฝ่าย') return null;
+  return db.employees.find((item) => item.divisionId === employee.divisionId && item.positionTh === 'ผู้จัดการฝ่าย')?.id ?? null;
+}
+
+function canReviewLeave(user, employeeId) {
+  if (['hr', 'admin'].includes(user.role)) return true;
+  const employee = findEmployee(employeeId);
+  return user.employeeId && managerIdForEmployee(employee) === user.employeeId;
+}
+
+function leaveTypeByCode(code) {
+  const type = db.leaveTypes.find((item) => item.code === String(code || '').toUpperCase());
+  if (!type) fail('Invalid leave type', 400);
+  return type;
+}
+
+function workingDaysBetween(startDate, endDate) {
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  if (end < start) fail('Leave end date must be on or after start date', 400);
+  if (startDate.slice(0, 4) !== endDate.slice(0, 4)) fail('Leave requests cannot span quota years', 400);
+  let days = 0;
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const day = cursor.getDay();
+    if (day !== 0 && day !== 6) days += 1;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  if (days <= 0) fail('Leave range must include at least one weekday', 400);
+  return days;
+}
+
+function leaveUsedDays(employeeId, leaveTypeCode, quotaYear, statuses) {
+  return db.leaveRequests
+    .filter((request) => request.employeeId === employeeId
+      && request.leaveTypeCode === leaveTypeCode
+      && request.quotaYear === quotaYear
+      && statuses.includes(request.status))
+    .reduce((sum, request) => sum + Number(request.totalDays || 0), 0);
+}
+
+function leaveBalance(employeeId, type, quotaYear) {
+  const approvedDays = leaveUsedDays(employeeId, type.code, quotaYear, ['APPROVED']);
+  const pendingDays = leaveUsedDays(employeeId, type.code, quotaYear, ['SUBMITTED']);
+  return {
+    leaveTypeCode: type.code,
+    leaveTypeNameTh: type.nameTh,
+    leaveTypeNameEn: type.nameEn,
+    annualQuotaDays: type.annualQuotaDays,
+    approvedDays,
+    pendingDays,
+    remainingDays: Math.max(0, Number(type.annualQuotaDays || 0) - approvedDays - pendingDays),
+    requiresAttachment: type.requiresAttachment,
+  };
+}
+
+function buildLeaveRecord(record) {
+  const employee = db.employees.find((item) => item.id === record.employeeId);
+  const managerEmployeeId = managerIdForEmployee(employee);
+  const manager = managerEmployeeId ? db.employees.find((item) => item.id === managerEmployeeId) : null;
+  const leaveType = leaveTypeByCode(record.leaveTypeCode);
+  return {
+    ...structuredClone(record),
+    employeeCode: employee?.code || null,
+    employeeName: employee?.nameTh || null,
+    managerEmployeeId,
+    managerName: manager?.nameTh || null,
+    leaveTypeNameTh: leaveType.nameTh,
+    leaveTypeNameEn: leaveType.nameEn,
+  };
 }
 
 function doTransition(id, fromStatus, toStatus, kind, actor, message) {
@@ -515,6 +651,148 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       pushEvent(ticket, user, 'COMMENTED', null, null, payload.message);
       return delay({ ticket: buildTicketDetail(ticket) });
+    },
+  },
+
+  leave: {
+    async employees() {
+      const user = requireSession();
+      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
+      const rows = db.employees
+        .filter((employee) => employee.active)
+        .filter((employee) => includeAll || employee.id === user.employeeId || managerIdForEmployee(employee) === user.employeeId)
+        .map((employee) => ({
+          employeeId: employee.id,
+          employeeCode: employee.code,
+          employeeName: employee.nameTh,
+          departmentName: employee.departmentTh,
+          self: employee.id === user.employeeId,
+          directReport: managerIdForEmployee(employee) === user.employeeId,
+        }));
+      return delay({ employees: rows });
+    },
+
+    async types() {
+      requireSession();
+      return delay({ leaveTypes: db.leaveTypes });
+    },
+
+    async balances(params = {}) {
+      const user = requireSession();
+      const employeeId = params.employeeId ? Number(params.employeeId) : user.employeeId;
+      if (!employeeId) fail('User is not linked to an employee', 400);
+      if (!['hr', 'ceo', 'admin'].includes(user.role) && employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
+      findEmployee(employeeId);
+      const year = Number(params.year || new Date().getFullYear());
+      return delay({ balances: db.leaveTypes.map((type) => leaveBalance(employeeId, type, year)) });
+    },
+
+    async list(params = {}) {
+      const user = requireSession();
+      let list = db.leaveRequests;
+      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
+      if (!includeAll) list = list.filter((item) => item.employeeId === user.employeeId || canReviewLeave(user, item.employeeId));
+      if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
+      if (params.status) list = list.filter((item) => item.status === params.status);
+      if (params.from) list = list.filter((item) => item.endDate >= params.from);
+      if (params.to) list = list.filter((item) => item.startDate <= params.to);
+      return delay({ requests: list.map(buildLeaveRecord) });
+    },
+
+    async create(payload) {
+      const user = requireSession();
+      const employeeId = payload.employeeId ? Number(payload.employeeId) : user.employeeId;
+      if (!employeeId) fail('User is not linked to an employee', 400);
+      if (employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
+      const employee = findEmployee(employeeId);
+      const leaveType = leaveTypeByCode(payload.leaveTypeCode);
+      const totalDays = workingDaysBetween(payload.startDate, payload.endDate);
+      const quotaYear = Number(payload.startDate.slice(0, 4));
+      const used = leaveUsedDays(employeeId, leaveType.code, quotaYear, ['SUBMITTED', 'APPROVED']);
+      const remainingBefore = Math.max(0, leaveType.annualQuotaDays - used);
+      const quotaAvailable = remainingBefore >= totalDays;
+      const status = quotaAvailable ? 'SUBMITTED' : 'AUTO_REJECTED';
+      const remainingAfter = quotaAvailable ? remainingBefore - totalDays : remainingBefore;
+      const id = Math.max(0, ...db.leaveRequests.map((item) => item.id)) + 1;
+      const now = new Date().toISOString();
+      const request = {
+        id,
+        employeeId,
+        leaveTypeCode: leaveType.code,
+        startDate: payload.startDate,
+        endDate: payload.endDate,
+        totalDays,
+        quotaYear,
+        reason: payload.reason,
+        attachmentName: payload.attachmentName || null,
+        attachmentUrl: payload.attachmentUrl || null,
+        status,
+        quotaRemainingBefore: remainingBefore,
+        quotaRemainingAfter: remainingAfter,
+        systemNote: quotaAvailable ? null : `โควตาคงเหลือ ${remainingBefore} วัน ไม่พอสำหรับคำขอ ${totalDays} วัน กรุณาติดต่อ HR เพื่อปรับโควตาหรือดำเนินการลาไม่รับค่าจ้าง`,
+        requestedById: user.employeeId,
+        requestedByName: user.name,
+        requestedAt: now,
+        reviewedById: null,
+        reviewedByName: null,
+        reviewedAt: null,
+        reviewerNote: null,
+        cancelledAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      request.employeeCode = employee.code;
+      request.employeeName = employee.nameTh;
+      db.leaveRequests.unshift(request);
+      return delay({ request: buildLeaveRecord(request) });
+    },
+
+    async approve(id, payload = {}) {
+      const user = requireSession();
+      const request = db.leaveRequests.find((item) => item.id === Number(id));
+      if (!request) fail('Leave request not found', 404);
+      if (!canReviewLeave(user, request.employeeId)) fail('Forbidden', 403);
+      if (request.status !== 'SUBMITTED') fail('Leave request has already been reviewed', 409);
+      const now = new Date().toISOString();
+      request.status = 'APPROVED';
+      request.reviewedById = user.employeeId;
+      request.reviewedByName = user.name;
+      request.reviewedAt = now;
+      request.reviewerNote = payload.reviewerNote || null;
+      request.updatedAt = now;
+      return delay({ request: buildLeaveRecord(request) });
+    },
+
+    async reject(id, payload = {}) {
+      const user = requireSession();
+      const request = db.leaveRequests.find((item) => item.id === Number(id));
+      if (!request) fail('Leave request not found', 404);
+      if (!canReviewLeave(user, request.employeeId)) fail('Forbidden', 403);
+      if (request.status !== 'SUBMITTED') fail('Leave request has already been reviewed', 409);
+      const now = new Date().toISOString();
+      request.status = 'REJECTED';
+      request.reviewedById = user.employeeId;
+      request.reviewedByName = user.name;
+      request.reviewedAt = now;
+      request.reviewerNote = payload.reviewerNote || null;
+      request.updatedAt = now;
+      return delay({ request: buildLeaveRecord(request) });
+    },
+
+    async cancel(id, payload = {}) {
+      const user = requireSession();
+      const request = db.leaveRequests.find((item) => item.id === Number(id));
+      if (!request) fail('Leave request not found', 404);
+      const approver = canReviewLeave(user, request.employeeId);
+      if (!approver && request.employeeId !== user.employeeId) fail('Forbidden', 403);
+      if (!approver && request.status !== 'SUBMITTED') fail('Only submitted leave requests can be cancelled by employees', 409);
+      if (!['SUBMITTED', 'APPROVED'].includes(request.status)) fail('Only active leave requests can be cancelled', 409);
+      const now = new Date().toISOString();
+      request.status = 'CANCELLED';
+      request.cancelledAt = now;
+      request.reviewerNote = payload.reviewerNote || request.reviewerNote;
+      request.updatedAt = now;
+      return delay({ request: buildLeaveRecord(request) });
     },
   },
 

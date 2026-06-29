@@ -19,6 +19,16 @@ export const API_ROUTES = {
     punches: '/api/attendance/punches',
     importDat: '/api/attendance/imports/dat',
   },
+  leave: {
+    list: '/api/leave',
+    create: '/api/leave',
+    employees: '/api/leave/employees',
+    types: '/api/leave/types',
+    balances: '/api/leave/balances',
+    approve: (id) => `/api/leave/${id}/approve`,
+    reject: (id) => `/api/leave/${id}/reject`,
+    cancel: (id) => `/api/leave/${id}/cancel`,
+  },
   tickets: {
     list: '/api/tickets',
     create: '/api/tickets',
@@ -52,6 +62,8 @@ export const ROLE_PERMISSIONS = {
   canReviewProfileRequests: ['hr'],
   canViewAllAttendance: ['hr'],
   canImportAttendance: ['hr'],
+  canViewAllLeave: ['hr', 'ceo', 'admin'],
+  canReviewLeave: ['hr', 'admin'],
   // Sales module
   canViewTickets: ['sales', 'import', 'ceo', 'admin'],
   canCreateTickets: ['sales', 'admin'],

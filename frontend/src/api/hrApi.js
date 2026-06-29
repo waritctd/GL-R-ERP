@@ -32,6 +32,16 @@ export const api = {
     list: (params) => apiRequest(withQuery(API_ROUTES.attendance.punches, params)),
     importDat: (payload) => apiRequest(API_ROUTES.attendance.importDat, { method: 'POST', body: payload }),
   },
+  leave: {
+    list: (params) => apiRequest(withQuery(API_ROUTES.leave.list, params)),
+    employees: () => apiRequest(API_ROUTES.leave.employees),
+    types: () => apiRequest(API_ROUTES.leave.types),
+    balances: (params) => apiRequest(withQuery(API_ROUTES.leave.balances, params)),
+    create: (payload) => apiRequest(API_ROUTES.leave.create, { method: 'POST', body: payload }),
+    approve: (id, payload = {}) => apiRequest(API_ROUTES.leave.approve(id), { method: 'POST', body: payload }),
+    reject: (id, payload = {}) => apiRequest(API_ROUTES.leave.reject(id), { method: 'POST', body: payload }),
+    cancel: (id, payload = {}) => apiRequest(API_ROUTES.leave.cancel(id), { method: 'POST', body: payload }),
+  },
   tickets: {
     list: (params) => apiRequest(withQuery(API_ROUTES.tickets.list, params)),
     create: (payload) => apiRequest(API_ROUTES.tickets.create, { method: 'POST', body: payload }),
