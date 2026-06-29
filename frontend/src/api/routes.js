@@ -3,6 +3,7 @@ export const API_ROUTES = {
     login: '/api/auth/login',
     logout: '/api/auth/logout',
     me: '/api/auth/me',
+    changePassword: '/api/auth/change-password',
   },
   employees: {
     list: '/api/employees',

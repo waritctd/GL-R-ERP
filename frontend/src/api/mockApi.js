@@ -172,6 +172,21 @@ export const api = {
     async me() {
       return delay({ user: publicUser(requireSession()) });
     },
+    async changePassword(payload) {
+      const user = requireSession();
+      if (!payload?.currentPassword || payload.currentPassword !== user.password) {
+        fail('Current password is incorrect', 401);
+      }
+      if (!payload?.newPassword || payload.newPassword.length < 8) {
+        fail('New password must be at least 8 characters', 400);
+      }
+      if (payload.newPassword === user.password) {
+        fail('New password must differ from the current password', 400);
+      }
+      user.password = payload.newPassword;
+      user.mustChangePassword = false;
+      return delay({ user: publicUser(user) });
+    },
   },
   employees: {
     async list(params = {}) {
