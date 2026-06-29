@@ -90,21 +90,22 @@ export function EmployeeListPage({ user, employees, onOpenEmployee, onCreateEmpl
             value={filters.search}
             onChange={(event) => updateFilter('search', event.target.value)}
             placeholder="ค้นหาชื่อ ชื่อเล่น หรือรหัสพนักงาน"
+            aria-label="ค้นหาพนักงาน"
           />
         </label>
-        <select value={filters.divisionId} onChange={(event) => updateFilter('divisionId', event.target.value)}>
+        <select aria-label="กรองตามฝ่าย" value={filters.divisionId} onChange={(event) => updateFilter('divisionId', event.target.value)}>
           <option value="">ทุกฝ่าย</option>
           {divisionOptions.map((division) => <option key={division.value} value={division.value}>{division.label}</option>)}
         </select>
-        <select value={filters.departmentTh} onChange={(event) => updateFilter('departmentTh', event.target.value)}>
+        <select aria-label="กรองตามแผนก" value={filters.departmentTh} onChange={(event) => updateFilter('departmentTh', event.target.value)}>
           <option value="">ทุกแผนก</option>
           {departmentOptions.map((department) => <option key={department.value} value={department.value}>{department.label}</option>)}
         </select>
-        <select value={filters.statusId} onChange={(event) => updateFilter('statusId', event.target.value)}>
+        <select aria-label="กรองตามสถานะ" value={filters.statusId} onChange={(event) => updateFilter('statusId', event.target.value)}>
           <option value="">ทุกสถานะ</option>
           {statuses.map((status) => <option key={status.id} value={status.id}>{status.th}</option>)}
         </select>
-        <select value={filters.active} onChange={(event) => updateFilter('active', event.target.value)}>
+        <select aria-label="กรองตามการใช้งาน" value={filters.active} onChange={(event) => updateFilter('active', event.target.value)}>
           <option value="all">ทั้งหมด</option>
           <option value="active">ใช้งานอยู่</option>
           <option value="inactive">พ้นสภาพ</option>
