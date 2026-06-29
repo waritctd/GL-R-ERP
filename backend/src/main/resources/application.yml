@@ -43,3 +43,5 @@ app:
 logging:
   level:
     th.co.glr.hr: INFO
+    # Dedicated channel for PII-access audit events; keep at INFO so they are always emitted.
+    th.co.glr.hr.audit: INFO

@@ -2,6 +2,8 @@ package th.co.glr.hr.employee;
 
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -11,6 +13,9 @@ import th.co.glr.hr.profile.ProfileRequestRepository;
 
 @Service
 public class EmployeeService {
+    // Dedicated audit channel so PII-access events can be shipped/retained separately (issue #21).
+    private static final Logger AUDIT = LoggerFactory.getLogger("th.co.glr.hr.audit");
+
     private final EmployeeRepository employees;
     private final ProfileRequestRepository profileRequests;
 
@@ -40,6 +45,11 @@ public class EmployeeService {
         boolean includeSensitive = user.role().equals("hr");
         EmployeeDto employee = employees.findEmployeeById(id, includeSensitive)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Employee not found"));
+        if (includeSensitive) {
+            // Records who read restricted PII (national id, tax id, SSO) and salary detail.
+            AUDIT.info("pii_access action=VIEW_EMPLOYEE_DETAIL actorId={} actorEmail=\"{}\" targetEmployeeId={}",
+                user.id(), user.email(), id);
+        }
         int pendingCount = profileRequests.pendingCountByEmployee(employee.id());
         return employee.withPendingRequestCount(pendingCount);
     }
