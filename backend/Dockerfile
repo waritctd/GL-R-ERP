@@ -21,6 +21,10 @@ WORKDIR /app
 # finalName defaults to ${artifactId}-${version} -> glr-hr-backend-0.1.0.jar
 COPY --from=build /app/target/glr-hr-backend-0.1.0.jar app.jar
 
+# Drop root: run as an unprivileged user (least privilege / container hardening, issue #27).
+RUN useradd -r -u 10001 appuser
+USER 10001
+
 # Render injects PORT; application.yml binds server.port to ${PORT:...}.
 ENV JAVA_OPTS=""
 EXPOSE 8080

@@ -126,7 +126,7 @@ def connect(config: ScannerConfig) -> Any:
         "Connecting with pyzk host=%s port=%s password=%s force_udp=%s",
         config.host,
         config.port,
-        config.password,
+        "***" if config.password else "<none>",
         config.force_udp,
     )
     return build_zk(config).connect()
