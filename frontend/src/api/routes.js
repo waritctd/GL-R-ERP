@@ -33,6 +33,15 @@ export const API_ROUTES = {
     list: '/api/notifications',
     markRead: (id) => `/api/notifications/${id}/read`,
   },
+  commissions: {
+    list: '/api/commissions',
+    create: '/api/commissions',
+    deductions: (id) => `/api/commissions/${id}/deductions`,
+    approve: (id) => `/api/commissions/${id}/approve`,
+    clawback: (id) => `/api/commissions/${id}/clawback`,
+    simulator: '/api/commissions/simulator',
+    payrollReady: '/api/commissions/payroll-ready',
+  },
 };
 
 export const ROLE_PERMISSIONS = {
@@ -50,4 +59,8 @@ export const ROLE_PERMISSIONS = {
   canProposePrices: ['import', 'admin'],
   canApproveReject: ['ceo', 'admin'],
   canGenerateQuotation: ['sales', 'admin'],
+  canViewCommissions: ['sales', 'sales_manager', 'ceo', 'hr', 'admin'],
+  canSubmitCommissions: ['sales', 'sales_manager', 'ceo', 'admin'],
+  canApproveCommissions: ['sales_manager', 'ceo', 'admin'],
+  canViewPayrollCommissions: ['hr', 'admin'],
 };

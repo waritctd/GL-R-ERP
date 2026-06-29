@@ -740,6 +740,22 @@ textarea:focus {
   grid-template-columns: minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr) minmax(0,1.1fr);
 }
 
+.commission-table {
+  grid-template-columns: minmax(0,1.2fr) minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr) minmax(0,0.9fr) minmax(0,1.1fr);
+}
+
+.commission-payroll-table {
+  grid-template-columns: minmax(0,1.8fr) minmax(0,1fr) minmax(0,1fr);
+}
+
+.commission-row-wrap {
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.commission-row-wrap .table-row {
+  border-bottom: 0;
+}
+
 .status-tabs {
   display: flex;
   gap: 4px;
@@ -1152,7 +1168,9 @@ textarea:focus {
   .attendance-table,
   .request-table,
   .request-table.mine,
-  .user-table {
+  .user-table,
+  .commission-table,
+  .commission-payroll-table {
     min-width: 900px;
   }
 

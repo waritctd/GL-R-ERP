@@ -15,6 +15,7 @@ import { MyRequestsPage } from './features/profile/MyRequestsPage.jsx';
 import { AttendancePage } from './features/attendance/AttendancePage.jsx';
 import { TicketListPage } from './features/tickets/TicketListPage.jsx';
 import { TicketDetailPage } from './features/tickets/TicketDetailPage.jsx';
+import { CommissionPage } from './features/commissions/CommissionPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
 import { hasPermission } from './app/permissions.js';
@@ -147,6 +148,8 @@ export function App() {
             ? <MyRequestsPage profileRequests={ownRequests} onNewRequest={() => handleRoute('profile')} />
             : route === 'attendance'
               ? <AttendancePage user={user} employees={employees} showToast={showToast} />
+              : route === 'commissions'
+                ? <CommissionPage user={user} showToast={showToast} />
               : route === 'tickets'
                 ? <TicketListPage user={user} onOpenTicket={openTicket} showToast={showToast} />
                 : route === 'ticket-detail'

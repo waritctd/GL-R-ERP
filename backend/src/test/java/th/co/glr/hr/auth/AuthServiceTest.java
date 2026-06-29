@@ -73,6 +73,24 @@ class AuthServiceTest {
     }
 
     @Test
+    void derivesSalesManagerRoleFromAssistantSalesManagerPosition() {
+        when(employees.findByEmail("manager@glr.co.th")).thenReturn(Optional.of(employee(9L, "ผู้ช่วยผู้จัดการฝ่ายขาย")));
+
+        AuthResponse response = service.login(new LoginRequest("manager@glr.co.th", "GLR-42", null), new MockHttpServletRequest());
+
+        assertThat(response.user().role()).isEqualTo("sales_manager");
+    }
+
+    @Test
+    void doesNotDeriveSalesManagerRoleFromManagementDivisionAlone() {
+        when(employees.findByEmail("mn@glr.co.th")).thenReturn(Optional.of(employee(16L)));
+
+        AuthResponse response = service.login(new LoginRequest("mn@glr.co.th", "GLR-42", null), new MockHttpServletRequest());
+
+        assertThat(response.user().role()).isEqualTo("hr");
+    }
+
+    @Test
     void rejectsRoleOnlyLogin() {
         assertThatThrownBy(() -> service.login(
             new LoginRequest(null, null, "hr"),
@@ -127,19 +145,21 @@ class AuthServiceTest {
                 assertThat(exception.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
+    private EmployeeLoginRecord employee(long divisionId) {
+        return employee(divisionId, null, false);
+    }
+
+    private EmployeeLoginRecord employee(long divisionId, String positionName) {
+        return new EmployeeLoginRecord(
+            42L, "GLR-42", "hr@glr.co.th", "HR", true,
+            divisionId, null, null, positionName, LocalDate.now(), null, false
+        );
+    }
+
     private EmployeeLoginRecord employee(long divisionId, String passwordHash, boolean mustChangePassword) {
         return new EmployeeLoginRecord(
-            42L,
-            "GLR-42",
-            "hr@glr.co.th",
-            "HR",
-            true,
-            divisionId,
-            null,
-            null,
-            LocalDate.now(),
-            passwordHash,
-            mustChangePassword
+            42L, "GLR-42", "hr@glr.co.th", "HR", true,
+            divisionId, null, null, null, LocalDate.now(), passwordHash, mustChangePassword
         );
     }
 }
