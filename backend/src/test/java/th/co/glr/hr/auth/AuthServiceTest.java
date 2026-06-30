@@ -150,16 +150,19 @@ class AuthServiceTest {
     }
 
     private EmployeeLoginRecord employee(long divisionId, String positionName) {
-        return new EmployeeLoginRecord(
-            42L, "GLR-42", "hr@glr.co.th", "HR", true,
-            divisionId, null, null, positionName, LocalDate.now(), null, false
-        );
+        // Role-derivation tests log in with "GLR-42"; give them a matching hash so
+        // Wave 1's BCrypt auth lets the login through to the role check.
+        return employee(divisionId, positionName, encoder.encode("GLR-42"), false);
     }
 
     private EmployeeLoginRecord employee(long divisionId, String passwordHash, boolean mustChangePassword) {
+        return employee(divisionId, null, passwordHash, mustChangePassword);
+    }
+
+    private EmployeeLoginRecord employee(long divisionId, String positionName, String passwordHash, boolean mustChangePassword) {
         return new EmployeeLoginRecord(
             42L, "GLR-42", "hr@glr.co.th", "HR", true,
-            divisionId, null, null, null, LocalDate.now(), passwordHash, mustChangePassword
+            divisionId, null, null, positionName, LocalDate.now(), passwordHash, mustChangePassword
         );
     }
 }
