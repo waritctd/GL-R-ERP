@@ -17,6 +17,22 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      # Real Postgres so FlywayMigrationTest applies every migration end-to-end
+      # (the Mockito unit tests never exercise Flyway).
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: glr_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -29,3 +45,7 @@ jobs:
 
       - name: Build and test
         run: ./mvnw -B clean verify
+        env:
+          TEST_DB_URL: jdbc:postgresql://localhost:5432/glr_test
+          TEST_DB_USERNAME: postgres
+          TEST_DB_PASSWORD: postgres
