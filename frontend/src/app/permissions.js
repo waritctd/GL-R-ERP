@@ -21,6 +21,8 @@ export function allowedRoute(route, user) {
   if (route === 'myrequests' && !hasPermission(user.role, 'canSubmitProfileRequests')) return fallback;
   if ((route === 'tickets' || route === 'ticket-detail') && !hasPermission(user.role, 'canViewTickets')) return fallback;
   if (route === 'commissions' && !hasPermission(user.role, 'canViewCommissions')) return fallback;
+  if (route === 'payroll' && !hasPermission(user.role, 'canManagePayroll')) return fallback;
+  if (route === 'overtime' && !user.employeeId && !hasPermission(user.role, 'canViewAllOvertime')) return fallback;
   if (route === 'leave' && !user.employeeId && !hasPermission(user.role, 'canViewAllLeave')) return fallback;
   if (route === 'profile' && !user.employeeId) return fallback;
   return route;

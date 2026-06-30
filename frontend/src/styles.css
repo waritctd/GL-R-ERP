@@ -748,6 +748,14 @@ textarea:focus {
   grid-template-columns: minmax(0,1.8fr) minmax(0,1fr) minmax(0,1fr);
 }
 
+.payroll-table {
+  grid-template-columns: minmax(0,1.6fr) minmax(0,0.9fr) minmax(0,0.8fr) minmax(0,1fr) minmax(0,0.9fr) minmax(0,0.9fr);
+}
+
+.overtime-table {
+  grid-template-columns: minmax(0,1.25fr) minmax(0,1.45fr) minmax(0,1.55fr) minmax(0,1fr) minmax(0,0.75fr) minmax(0,0.8fr);
+}
+
 .leave-table {
   grid-template-columns: minmax(0,1.35fr) minmax(0,1.1fr) minmax(0,1.65fr) minmax(0,0.75fr) minmax(0,1.35fr) minmax(0,0.8fr);
 }
@@ -774,6 +782,131 @@ textarea:focus {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.toolbar-actions,
+.payroll-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.toolbar-actions label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.toolbar-actions input {
+  width: 150px;
+}
+
+.payroll-actions {
+  justify-content: flex-end;
+}
+
+.payroll-actions > div:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  margin-right: auto;
+}
+
+.payroll-actions > div:first-child span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.payroll-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.65fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.payroll-row {
+  cursor: pointer;
+}
+
+.payroll-row.active {
+  background: #eff6ff;
+  box-shadow: inset 3px 0 0 #2563eb;
+}
+
+.payroll-detail-panel {
+  position: sticky;
+  top: 18px;
+}
+
+.payroll-detail-grid,
+.payroll-special-grid,
+.payroll-breakdown {
+  display: grid;
+  gap: 10px;
+}
+
+.payroll-detail-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.payroll-special-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.payroll-adjustment-group {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.payroll-adjustment-group h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.mini-metric {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e6eaf0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.mini-metric small {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.mini-metric strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.payroll-breakdown {
+  margin-top: 18px;
+}
+
+.payroll-breakdown span {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 9px 0;
+  border-bottom: 1px solid #f1f5f9;
+  color: #334155;
+  font-size: 13px;
 }
 
 .leave-balance-card strong {
@@ -1232,8 +1365,18 @@ textarea:focus {
   .user-table,
   .commission-table,
   .commission-payroll-table,
+  .payroll-table,
+  .overtime-table,
   .leave-table {
     min-width: 900px;
+  }
+
+  .payroll-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .payroll-detail-panel {
+    position: static;
   }
 
   .table-panel {
@@ -1249,7 +1392,9 @@ textarea:focus {
   .field-list,
   .field-list.three,
   .form-grid,
-  .leave-balance-grid {
+  .leave-balance-grid,
+  .payroll-detail-grid,
+  .payroll-special-grid {
     grid-template-columns: 1fr;
   }
 
