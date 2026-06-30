@@ -8,7 +8,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
-import tools.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import th.co.glr.hr.common.ApiException;
 
 @Repository
@@ -238,7 +238,7 @@ public class AttendanceRepository {
     private String toJson(Map<String, Object> rawPayload) {
         try {
             return objectMapper.writeValueAsString(rawPayload);
-        } catch (RuntimeException exception) {
+        } catch (com.fasterxml.jackson.core.JsonProcessingException | RuntimeException exception) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid attendance raw payload");
         }
     }
