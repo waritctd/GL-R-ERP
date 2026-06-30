@@ -2,6 +2,8 @@ import { createDemoDatabase } from '../data/demoData.js';
 
 const db = createDemoDatabase();
 db.commissions = db.commissions || [];
+db.overtimeRequests = db.overtimeRequests || [];
+db.payrollPeriods = db.payrollPeriods || [];
 db.leaveTypes = db.leaveTypes || [
   { code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal leave', annualQuotaDays: 3, requiresAttachment: false },
   { code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick leave', annualQuotaDays: 30, requiresAttachment: true },
@@ -156,9 +158,32 @@ function buildCommissionRecord(record) {
   return structuredClone(record);
 }
 
+function canApproveOvertime(user) {
+  return ['admin'].includes(user.role);
+}
+
 function managerIdForEmployee(employee) {
   if (!employee || employee.positionTh === 'ผู้จัดการฝ่าย') return null;
   return db.employees.find((item) => item.divisionId === employee.divisionId && item.positionTh === 'ผู้จัดการฝ่าย')?.id ?? null;
+}
+
+function canManageOvertime(user, employeeId) {
+  if (canApproveOvertime(user)) return true;
+  const employee = findEmployee(employeeId);
+  return user.employeeId && managerIdForEmployee(employee) === user.employeeId;
+}
+
+function buildOvertimeRecord(record) {
+  const employee = db.employees.find((item) => item.id === record.employeeId);
+  const managerEmployeeId = managerIdForEmployee(employee);
+  const manager = managerEmployeeId ? db.employees.find((item) => item.id === managerEmployeeId) : null;
+  return {
+    ...structuredClone(record),
+    employeeCode: employee?.code || null,
+    employeeName: employee?.nameTh || null,
+    managerEmployeeId,
+    managerName: manager?.nameTh || null,
+  };
 }
 
 function canReviewLeave(user, employeeId) {
@@ -226,6 +251,172 @@ function buildLeaveRecord(record) {
     managerName: manager?.nameTh || null,
     leaveTypeNameTh: leaveType.nameTh,
     leaveTypeNameEn: leaveType.nameEn,
+  };
+}
+
+function money(value) {
+  return Number(Number(value || 0).toFixed(2));
+}
+
+function monthKey(value) {
+  return (value || new Date().toISOString()).slice(0, 7);
+}
+
+function monthStart(value) {
+  return `${monthKey(value)}-01`;
+}
+
+function monthEnd(value) {
+  const [year, month] = monthKey(value).split('-').map(Number);
+  return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+}
+
+function personalTax(taxableIncome) {
+  const brackets = [
+    [150000, 300000, 0.05],
+    [300000, 500000, 0.10],
+    [500000, 750000, 0.15],
+    [750000, 1000000, 0.20],
+    [1000000, 2000000, 0.25],
+    [2000000, 5000000, 0.30],
+  ];
+  let tax = 0;
+  brackets.forEach(([lower, upper, rate]) => {
+    if (taxableIncome > lower) tax += (Math.min(taxableIncome, upper) - lower) * rate;
+  });
+  if (taxableIncome > 5000000) tax += (taxableIncome - 5000000) * 0.35;
+  return money(tax);
+}
+
+function approvedOvertimePay(employee, payrollMonth) {
+  return money(db.overtimeRequests
+    .filter((item) => item.employeeId === employee.id && item.status === 'APPROVED' && monthStart(item.payrollMonth || item.workDate) === payrollMonth)
+    .reduce((sum, item) => {
+      const hourly = Number(employee.salary || 0) / 30 / 8;
+      return sum + (Number(item.payableMinutes || 0) / 60) * hourly * Number(item.payRateMultiplier || 1.5);
+    }, 0));
+}
+
+function approvedCommissionPay(employeeId, payrollMonth) {
+  const base = db.commissions
+    .filter((item) => item.status === 'APPROVED' && item.salesRepId === employeeId && monthStart(item.payrollMonth) === payrollMonth)
+    .reduce((sum, item) => sum + Number(item.commissionableBase || 0), 0);
+  return progressiveCommission(base);
+}
+
+function buildPayrollLine(employee, adjustment, payrollMonth) {
+  const input = { ...blankPayrollInput(employee.id), ...(adjustment || {}) };
+  const baseSalary = money(employee.salary);
+  const specialPays = Array.from({ length: 8 }, (_, index) => ({
+    key: `specialPay${index + 1}`,
+    label: `เงินพิเศษ ${index + 1}`,
+    amount: money(input[`specialPay${index + 1}`]),
+  }));
+  const specialPayTotal = money(specialPays.reduce((sum, item) => sum + item.amount, 0));
+  const overtimePay = approvedOvertimePay(employee, payrollMonth);
+  const commissionPay = approvedCommissionPay(employee.id, payrollMonth);
+  const grossEarnings = money(baseSalary + specialPayTotal + overtimePay + commissionPay);
+  const dailyRate = money(baseSalary / 30);
+  const hourlyRate = money(dailyRate / 8);
+  const unpaidLeaveDays = money(input.unpaidLeaveDays);
+  const unpaidLeaveDeduction = money(dailyRate * unpaidLeaveDays);
+  const grossTaxableIncome = money(Math.max(0, grossEarnings - unpaidLeaveDeduction));
+  const ssoWageBase = grossTaxableIncome <= 0 ? 0 : money(Math.min(15000, Math.max(1650, baseSalary - unpaidLeaveDeduction)));
+  const socialSecurity = money(Math.min(750, ssoWageBase * 0.05));
+  const monthsRemaining = Math.max(1, 13 - Number(payrollMonth.slice(5, 7)));
+  const projectedAnnualIncome = money(grossTaxableIncome * monthsRemaining);
+  const taxExpenseDeduction = money(Math.min(projectedAnnualIncome * 0.5, 100000));
+  const taxAllowanceTotal = money(60000 + Math.min(9000, socialSecurity * monthsRemaining));
+  const taxableAnnualIncome = money(Math.max(0, projectedAnnualIncome - taxExpenseDeduction - taxAllowanceTotal));
+  const annualTax = personalTax(taxableAnnualIncome);
+  const withholdingTax = money(annualTax / monthsRemaining);
+  const studentLoanDeduction = money(input.studentLoanDeduction);
+  const otherPostTaxDeductions = money(input.otherPostTaxDeductions);
+  const legalRequested = money(input.legalExecutionDeduction);
+  const legalExecutionDeduction = money(Math.min(
+    legalRequested,
+    grossTaxableIncome * 0.3,
+    Math.max(0, grossTaxableIncome - socialSecurity - withholdingTax - studentLoanDeduction - otherPostTaxDeductions - 20000),
+  ));
+  const totalDeductions = money(unpaidLeaveDeduction + socialSecurity + withholdingTax + studentLoanDeduction + legalExecutionDeduction + otherPostTaxDeductions);
+  const netPay = money(Math.max(0, grossEarnings - totalDeductions));
+
+  return {
+    id: null,
+    employeeId: employee.id,
+    employeeCode: employee.code,
+    employeeName: employee.nameTh,
+    departmentName: employee.departmentTh,
+    bankName: employee.bank,
+    bankAccount: employee.bankAccount,
+    baseSalary,
+    dailyRate,
+    hourlyRate,
+    specialPays,
+    specialPayTotal,
+    overtimePay,
+    commissionPay,
+    grossEarnings,
+    unpaidLeaveDays,
+    unpaidLeaveDeduction,
+    grossTaxableIncome,
+    ssoWageBase,
+    socialSecurity,
+    projectedAnnualIncome,
+    taxExpenseDeduction,
+    taxAllowanceTotal,
+    taxableAnnualIncome,
+    annualTax,
+    withholdingTax,
+    studentLoanDeduction,
+    legalExecutionDeduction,
+    otherPostTaxDeductions,
+    totalDeductions,
+    netPay,
+    calculationNote: 'Demo payroll calculation mirrors the Thai payroll projection flow.',
+  };
+}
+
+function blankPayrollInput(employeeId) {
+  return {
+    employeeId,
+    specialPay1: 0,
+    specialPay2: 0,
+    specialPay3: 0,
+    specialPay4: 0,
+    specialPay5: 0,
+    specialPay6: 0,
+    specialPay7: 0,
+    specialPay8: 0,
+    unpaidLeaveDays: 0,
+    studentLoanDeduction: 0,
+    legalExecutionDeduction: 0,
+    otherPostTaxDeductions: 0,
+  };
+}
+
+function payrollPeriodFromInputs(payrollMonth, inputs = [], persisted = null) {
+  const month = monthStart(payrollMonth);
+  const inputByEmployee = new Map((inputs || []).map((item) => [Number(item.employeeId), item]));
+  const lines = db.employees
+    .filter((employee) => employee.active && Number(employee.salary || 0) > 0)
+    .map((employee, index) => ({ ...buildPayrollLine(employee, inputByEmployee.get(employee.id), month), id: persisted ? persisted.id * 1000 + index + 1 : null }));
+  return {
+    id: persisted?.id ?? null,
+    payrollMonth: month,
+    periodStart: month,
+    periodEnd: monthEnd(month),
+    payDate: monthEnd(month),
+    status: persisted ? 'PROCESSED' : 'PREVIEW',
+    processedAt: persisted?.processedAt ?? new Date().toISOString(),
+    processedById: sessionUser?.employeeId ?? null,
+    lineCount: lines.length,
+    totalGross: money(lines.reduce((sum, line) => sum + Number(line.grossEarnings || 0), 0)),
+    totalDeductions: money(lines.reduce((sum, line) => sum + Number(line.totalDeductions || 0), 0)),
+    totalNet: money(lines.reduce((sum, line) => sum + Number(line.netPay || 0), 0)),
+    totalSocialSecurity: money(lines.reduce((sum, line) => sum + Number(line.socialSecurity || 0), 0)),
+    totalWithholdingTax: money(lines.reduce((sum, line) => sum + Number(line.withholdingTax || 0), 0)),
+    lines,
   };
 }
 
@@ -639,6 +830,139 @@ export const api = {
     },
   },
 
+  overtime: {
+    async employees() {
+      const user = requireSession();
+      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
+      const rows = db.employees
+        .filter((employee) => employee.active)
+        .filter((employee) => includeAll || employee.id === user.employeeId || managerIdForEmployee(employee) === user.employeeId)
+        .map((employee) => ({
+          employeeId: employee.id,
+          employeeCode: employee.code,
+          employeeName: employee.nameTh,
+          departmentName: employee.departmentTh,
+          self: employee.id === user.employeeId,
+          directReport: managerIdForEmployee(employee) === user.employeeId,
+        }));
+      return delay({ employees: rows });
+    },
+
+    async list(params = {}) {
+      const user = requireSession();
+      let list = db.overtimeRequests;
+      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
+      if (!includeAll) list = list.filter((item) => item.employeeId === user.employeeId || canManageOvertime(user, item.employeeId));
+      if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
+      if (params.status) list = list.filter((item) => item.status === params.status);
+      if (params.from) list = list.filter((item) => item.workDate >= params.from);
+      if (params.to) list = list.filter((item) => item.workDate <= params.to);
+      return delay({ requests: list.map(buildOvertimeRecord) });
+    },
+
+    async create(payload) {
+      const user = requireSession();
+      const employeeId = payload.employeeId ? Number(payload.employeeId) : user.employeeId;
+      if (!employeeId) fail('User is not linked to an employee', 400);
+      if (employeeId !== user.employeeId && !canManageOvertime(user, employeeId)) fail('Forbidden', 403);
+      if (employeeId === user.employeeId && payload.workDate < new Date().toISOString().slice(0, 10) && !canApproveOvertime(user)) {
+        fail("Retroactive overtime must be submitted by the employee's direct manager", 403);
+      }
+      const employee = findEmployee(employeeId);
+      const start = new Date(payload.plannedStartAt);
+      const end = new Date(payload.plannedEndAt);
+      const plannedMinutes = Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000));
+      if (plannedMinutes <= 0) fail('Overtime end time must be after start time', 400);
+      const id = Math.max(0, ...db.overtimeRequests.map((item) => item.id)) + 1;
+      const now = new Date().toISOString();
+      const request = {
+        id,
+        employeeId,
+        employeeCode: employee.code,
+        employeeName: employee.nameTh,
+        workDate: payload.workDate,
+        plannedStartAt: payload.plannedStartAt,
+        plannedEndAt: payload.plannedEndAt,
+        plannedMinutes,
+        dayType: payload.dayType || 'WORKDAY',
+        payRateMultiplier: (payload.dayType || 'WORKDAY') === 'HOLIDAY' ? 3 : 1.5,
+        reason: payload.reason,
+        status: 'SUBMITTED',
+        actualStartAt: null,
+        actualEndAt: null,
+        actualMinutes: 0,
+        payableMinutes: 0,
+        calculationNote: null,
+        payrollMonth: `${payload.workDate.slice(0, 7)}-01`,
+        requestedById: user.employeeId,
+        requestedByName: user.name,
+        requestedAt: now,
+        reviewedById: null,
+        reviewedByName: null,
+        reviewedAt: null,
+        reviewerNote: null,
+        cancelledAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      db.overtimeRequests.unshift(request);
+      return delay({ request: buildOvertimeRecord(request) });
+    },
+
+    async approve(id, payload = {}) {
+      const user = requireSession();
+      const request = db.overtimeRequests.find((item) => item.id === Number(id));
+      if (!request) fail('Overtime request not found', 404);
+      if (!canManageOvertime(user, request.employeeId)) fail('Forbidden', 403);
+      if (request.status !== 'SUBMITTED') fail('Overtime request has already been reviewed', 409);
+      const now = new Date().toISOString();
+      request.status = 'APPROVED';
+      request.actualStartAt = request.plannedStartAt;
+      request.actualEndAt = request.plannedEndAt;
+      request.actualMinutes = request.plannedMinutes;
+      request.payableMinutes = request.plannedMinutes;
+      request.calculationNote = 'Demo mode uses planned OT time as payable time.';
+      request.reviewedById = user.employeeId;
+      request.reviewedByName = user.name;
+      request.reviewedAt = now;
+      request.reviewerNote = payload.reviewerNote || null;
+      request.updatedAt = now;
+      return delay({ request: buildOvertimeRecord(request) });
+    },
+
+    async reject(id, payload = {}) {
+      const user = requireSession();
+      const request = db.overtimeRequests.find((item) => item.id === Number(id));
+      if (!request) fail('Overtime request not found', 404);
+      if (!canManageOvertime(user, request.employeeId)) fail('Forbidden', 403);
+      if (request.status !== 'SUBMITTED') fail('Overtime request has already been reviewed', 409);
+      const now = new Date().toISOString();
+      request.status = 'REJECTED';
+      request.reviewedById = user.employeeId;
+      request.reviewedByName = user.name;
+      request.reviewedAt = now;
+      request.reviewerNote = payload.reviewerNote || null;
+      request.updatedAt = now;
+      return delay({ request: buildOvertimeRecord(request) });
+    },
+
+    async cancel(id, payload = {}) {
+      const user = requireSession();
+      const request = db.overtimeRequests.find((item) => item.id === Number(id));
+      if (!request) fail('Overtime request not found', 404);
+      const approver = canManageOvertime(user, request.employeeId);
+      if (!approver && request.employeeId !== user.employeeId) fail('Forbidden', 403);
+      if (!approver && request.status !== 'SUBMITTED') fail('Only submitted overtime requests can be cancelled by employees', 409);
+      if (!['SUBMITTED', 'APPROVED'].includes(request.status)) fail('Only active overtime requests can be cancelled', 409);
+      const now = new Date().toISOString();
+      request.status = 'CANCELLED';
+      request.cancelledAt = now;
+      request.reviewerNote = payload.reviewerNote || request.reviewerNote;
+      request.updatedAt = now;
+      return delay({ request: buildOvertimeRecord(request) });
+    },
+  },
+
   leave: {
     async employees() {
       const user = requireSession();
@@ -959,6 +1283,44 @@ export const api = {
           salesReps,
         },
       });
+    },
+  },
+
+  payroll: {
+    async current(params = {}) {
+      hasRole('hr', 'admin');
+      const month = monthStart(params.payrollMonth || new Date().toISOString());
+      const existing = db.payrollPeriods.find((item) => item.payrollMonth === month);
+      if (existing) return delay({ period: existing });
+      return delay({ period: payrollPeriodFromInputs(month, []) });
+    },
+
+    async preview(payload = {}) {
+      hasRole('hr', 'admin');
+      const month = monthStart(payload.payrollMonth || new Date().toISOString());
+      return delay({ period: payrollPeriodFromInputs(month, payload.inputs || []) });
+    },
+
+    async process(payload = {}) {
+      hasRole('hr', 'admin');
+      const month = monthStart(payload.payrollMonth || new Date().toISOString());
+      const existingIndex = db.payrollPeriods.findIndex((item) => item.payrollMonth === month);
+      const id = existingIndex >= 0 ? db.payrollPeriods[existingIndex].id : Math.max(0, ...db.payrollPeriods.map((item) => item.id)) + 1;
+      const period = payrollPeriodFromInputs(month, payload.inputs || [], { id, processedAt: new Date().toISOString() });
+      if (existingIndex >= 0) db.payrollPeriods[existingIndex] = period;
+      else db.payrollPeriods.unshift(period);
+      return delay({ period });
+    },
+
+    async bankExport(periodId) {
+      hasRole('hr', 'admin');
+      const period = db.payrollPeriods.find((item) => item.id === Number(periodId));
+      if (!period) fail('Payroll period not found', 404);
+      const lines = [
+        `GLR_PAYROLL|${period.payrollMonth}|${period.lineCount}|${period.totalNet}`,
+        ...period.lines.map((line) => `${line.bankAccount || ''}|${line.employeeCode}|${line.employeeName}|${line.netPay}`),
+      ];
+      return delay(lines.join('\n'));
     },
   },
 

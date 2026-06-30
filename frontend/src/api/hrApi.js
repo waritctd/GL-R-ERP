@@ -31,6 +31,14 @@ export const api = {
     list: (params) => apiRequest(withQuery(API_ROUTES.attendance.punches, params)),
     importDat: (payload) => apiRequest(API_ROUTES.attendance.importDat, { method: 'POST', body: payload }),
   },
+  overtime: {
+    list: (params) => apiRequest(withQuery(API_ROUTES.overtime.list, params)),
+    employees: () => apiRequest(API_ROUTES.overtime.employees),
+    create: (payload) => apiRequest(API_ROUTES.overtime.create, { method: 'POST', body: payload }),
+    approve: (id, payload = {}) => apiRequest(API_ROUTES.overtime.approve(id), { method: 'POST', body: payload }),
+    reject: (id, payload = {}) => apiRequest(API_ROUTES.overtime.reject(id), { method: 'POST', body: payload }),
+    cancel: (id, payload = {}) => apiRequest(API_ROUTES.overtime.cancel(id), { method: 'POST', body: payload }),
+  },
   leave: {
     list: (params) => apiRequest(withQuery(API_ROUTES.leave.list, params)),
     employees: () => apiRequest(API_ROUTES.leave.employees),
@@ -76,5 +84,11 @@ export const api = {
     clawback: (id, payload) => apiRequest(API_ROUTES.commissions.clawback(id), { method: 'POST', body: payload }),
     simulate: (payload) => apiRequest(API_ROUTES.commissions.simulator, { method: 'POST', body: payload }),
     payrollReady: (params) => apiRequest(withQuery(API_ROUTES.commissions.payrollReady, params)),
+  },
+  payroll: {
+    current: (params) => apiRequest(withQuery(API_ROUTES.payroll.current, params)),
+    preview: (payload) => apiRequest(API_ROUTES.payroll.preview, { method: 'POST', body: payload }),
+    process: (payload) => apiRequest(API_ROUTES.payroll.process, { method: 'POST', body: payload }),
+    bankExport: (periodId) => apiRequest(API_ROUTES.payroll.bankExport(periodId)),
   },
 };

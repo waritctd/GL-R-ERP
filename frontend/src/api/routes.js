@@ -18,6 +18,14 @@ export const API_ROUTES = {
     punches: '/api/attendance/punches',
     importDat: '/api/attendance/imports/dat',
   },
+  overtime: {
+    list: '/api/overtime',
+    create: '/api/overtime',
+    employees: '/api/overtime/employees',
+    approve: (id) => `/api/overtime/${id}/approve`,
+    reject: (id) => `/api/overtime/${id}/reject`,
+    cancel: (id) => `/api/overtime/${id}/cancel`,
+  },
   leave: {
     list: '/api/leave',
     create: '/api/leave',
@@ -51,6 +59,12 @@ export const API_ROUTES = {
     simulator: '/api/commissions/simulator',
     payrollReady: '/api/commissions/payroll-ready',
   },
+  payroll: {
+    current: '/api/payroll',
+    preview: '/api/payroll/preview',
+    process: '/api/payroll/process',
+    bankExport: (periodId) => `/api/payroll/${periodId}/bank-export`,
+  },
 };
 
 export const ROLE_PERMISSIONS = {
@@ -61,6 +75,7 @@ export const ROLE_PERMISSIONS = {
   canReviewProfileRequests: ['hr'],
   canViewAllAttendance: ['hr'],
   canImportAttendance: ['hr'],
+  canViewAllOvertime: ['hr', 'ceo', 'admin'],
   canViewAllLeave: ['hr', 'ceo', 'admin'],
   canReviewLeave: ['hr', 'admin'],
   // Sales module
@@ -74,4 +89,5 @@ export const ROLE_PERMISSIONS = {
   canSubmitCommissions: ['sales', 'sales_manager', 'ceo', 'admin'],
   canApproveCommissions: ['sales_manager', 'ceo', 'admin'],
   canViewPayrollCommissions: ['hr', 'admin'],
+  canManagePayroll: ['hr', 'admin'],
 };

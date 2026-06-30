@@ -1,0 +1,236 @@
+package th.co.glr.hr.payroll;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.commission.CommissionCalculator;
+import th.co.glr.hr.commission.CommissionRecord;
+import th.co.glr.hr.commission.CommissionRepository;
+import th.co.glr.hr.commission.TierConfig;
+import th.co.glr.hr.common.ApiException;
+
+@Service
+public class PayrollService {
+    private static final Set<String> PAYROLL_ROLES = Set.of("hr", "admin");
+
+    private final PayrollRepository payrollRepository;
+    private final PayrollCalculator payrollCalculator;
+    private final CommissionRepository commissionRepository;
+    private final CommissionCalculator commissionCalculator;
+
+    public PayrollService(
+        PayrollRepository payrollRepository,
+        PayrollCalculator payrollCalculator,
+        CommissionRepository commissionRepository,
+        CommissionCalculator commissionCalculator
+    ) {
+        this.payrollRepository = payrollRepository;
+        this.payrollCalculator = payrollCalculator;
+        this.commissionRepository = commissionRepository;
+        this.commissionCalculator = commissionCalculator;
+    }
+
+    public PayrollPeriodDto currentOrPreview(LocalDate payrollMonth, UserPrincipal actor) {
+        requirePayrollRole(actor);
+        LocalDate month = normalizeMonth(payrollMonth);
+        return payrollRepository.findPeriodByMonth(month)
+            .orElseGet(() -> preview(month, List.of(), actor));
+    }
+
+    public PayrollPeriodDto preview(ProcessPayrollRequest request, UserPrincipal actor) {
+        requirePayrollRole(actor);
+        return preview(normalizeMonth(request.payrollMonth()), safeInputs(request.inputs()), actor);
+    }
+
+    @Transactional
+    public PayrollPeriodDto process(ProcessPayrollRequest request, UserPrincipal actor) {
+        requirePayrollRole(actor);
+        LocalDate month = normalizeMonth(request.payrollMonth());
+        PayrollPeriodDto preview = preview(month, safeInputs(request.inputs()), actor);
+        long periodId = payrollRepository.saveProcessedPeriod(month, actor.employeeId(), preview.lines());
+        return payrollRepository.findPeriodById(periodId)
+            .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Payroll period was not saved"));
+    }
+
+    public String bankExport(long periodId, UserPrincipal actor) {
+        requirePayrollRole(actor);
+        PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
+        StringBuilder builder = new StringBuilder();
+        builder.append("GLR_PAYROLL|")
+            .append(period.payrollMonth())
+            .append('|')
+            .append(period.lineCount())
+            .append('|')
+            .append(period.totalNet())
+            .append('\n');
+        for (PayrollLineDto line : period.lines()) {
+            builder.append(nullToBlank(line.bankAccount())).append('|')
+                .append(line.employeeCode()).append('|')
+                .append(line.employeeName()).append('|')
+                .append(line.netPay()).append('\n');
+        }
+        return builder.toString();
+    }
+
+    private PayrollPeriodDto preview(LocalDate payrollMonth, List<PayrollEmployeeInputRequest> inputs, UserPrincipal actor) {
+        Map<Long, PayrollEmployeeInputRequest> inputByEmployee = inputs.stream()
+            .collect(Collectors.toMap(PayrollEmployeeInputRequest::employeeId, Function.identity(), (left, right) -> right));
+        List<PayrollEmployeeSnapshot> employees = payrollRepository.findActiveEmployees();
+        Map<Long, BigDecimal> overtimeByEmployee = payrollRepository.findApprovedOvertimePayByEmployee(payrollMonth);
+        Map<Long, BigDecimal> commissionByEmployee = commissionPayByEmployee(payrollMonth);
+        Map<Long, PayrollYearToDate> yearToDateByEmployee = payrollRepository.findYearToDateByEmployee(payrollMonth);
+
+        List<PayrollLineDto> lines = employees.stream()
+            .map(employee -> calculateLine(
+                employee,
+                inputByEmployee.get(employee.employeeId()),
+                overtimeByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
+                commissionByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
+                yearToDateByEmployee.getOrDefault(employee.employeeId(), PayrollYearToDate.empty()),
+                payrollMonth
+            ))
+            .sorted(Comparator.comparing(PayrollLineDto::employeeCode))
+            .toList();
+        return new PayrollPeriodDto(
+            null,
+            payrollMonth,
+            payrollMonth,
+            payrollMonth.withDayOfMonth(payrollMonth.lengthOfMonth()),
+            payrollMonth.withDayOfMonth(payrollMonth.lengthOfMonth()),
+            "PREVIEW",
+            OffsetDateTime.now(),
+            actor.employeeId(),
+            lines.size(),
+            sum(lines, PayrollLineDto::grossEarnings),
+            sum(lines, PayrollLineDto::totalDeductions),
+            sum(lines, PayrollLineDto::netPay),
+            sum(lines, PayrollLineDto::socialSecurity),
+            sum(lines, PayrollLineDto::withholdingTax),
+            lines
+        );
+    }
+
+    private PayrollLineDto calculateLine(
+        PayrollEmployeeSnapshot employee,
+        PayrollEmployeeInputRequest input,
+        BigDecimal overtimePay,
+        BigDecimal commissionPay,
+        PayrollYearToDate yearToDate,
+        LocalDate payrollMonth
+    ) {
+        PayrollCalculation calculation = payrollCalculator.calculate(new PayrollCalculationInput(
+            employee.baseSalary(),
+            input == null ? List.of() : input.specialPays(),
+            overtimePay,
+            commissionPay,
+            input == null ? BigDecimal.ZERO : input.unpaidLeaveDays(),
+            input == null ? BigDecimal.ZERO : input.studentLoanDeduction(),
+            input == null ? BigDecimal.ZERO : input.legalExecutionDeduction(),
+            input == null ? BigDecimal.ZERO : input.otherPostTaxDeductions(),
+            input == null ? PayrollTaxAllowanceInput.empty() : input.taxAllowances(),
+            yearToDate,
+            payrollMonth.getMonthValue()
+        ));
+        return new PayrollLineDto(
+            null,
+            employee.employeeId(),
+            employee.employeeCode(),
+            employee.employeeName(),
+            employee.departmentName(),
+            employee.bankName(),
+            employee.bankAccount(),
+            calculation.baseSalary(),
+            calculation.dailyRate(),
+            calculation.hourlyRate(),
+            specialPayDtos(calculation.specialPays()),
+            calculation.specialPayTotal(),
+            calculation.overtimePay(),
+            calculation.commissionPay(),
+            calculation.grossEarnings(),
+            calculation.unpaidLeaveDays(),
+            calculation.unpaidLeaveDeduction(),
+            calculation.grossTaxableIncome(),
+            calculation.ssoWageBase(),
+            calculation.socialSecurity(),
+            calculation.projectedAnnualIncome(),
+            calculation.taxExpenseDeduction(),
+            calculation.taxAllowanceTotal(),
+            calculation.taxableAnnualIncome(),
+            calculation.annualTax(),
+            calculation.withholdingTax(),
+            calculation.studentLoanDeduction(),
+            calculation.legalExecutionDeduction(),
+            calculation.otherPostTaxDeductions(),
+            calculation.totalDeductions(),
+            calculation.netPay(),
+            calculation.calculationNote()
+        );
+    }
+
+    private Map<Long, BigDecimal> commissionPayByEmployee(LocalDate payrollMonth) {
+        List<CommissionRecord> records = commissionRepository.findApprovedRecordsByMonth(payrollMonth);
+        List<TierConfig> tiers = commissionRepository.findTiers();
+        List<TierConfig> safeTiers = tiers.isEmpty() ? TierConfig.defaults() : tiers;
+        return records.stream()
+            .collect(Collectors.groupingBy(
+                CommissionRecord::salesRepId,
+                Collectors.mapping(CommissionRecord::commissionableBase, Collectors.reducing(BigDecimal.ZERO, BigDecimal::add))
+            ))
+            .entrySet()
+            .stream()
+            .collect(Collectors.toMap(Map.Entry::getKey, entry -> commissionCalculator.progressiveCommission(entry.getValue(), safeTiers)));
+    }
+
+    private List<PayrollSpecialPayDto> specialPayDtos(List<BigDecimal> specialPays) {
+        return List.of(
+            new PayrollSpecialPayDto("specialPay1", "เงินพิเศษ 1", specialPays.get(0)),
+            new PayrollSpecialPayDto("specialPay2", "เงินพิเศษ 2", specialPays.get(1)),
+            new PayrollSpecialPayDto("specialPay3", "เงินพิเศษ 3", specialPays.get(2)),
+            new PayrollSpecialPayDto("specialPay4", "เงินพิเศษ 4", specialPays.get(3)),
+            new PayrollSpecialPayDto("specialPay5", "เงินพิเศษ 5", specialPays.get(4)),
+            new PayrollSpecialPayDto("specialPay6", "เงินพิเศษ 6", specialPays.get(5)),
+            new PayrollSpecialPayDto("specialPay7", "เงินพิเศษ 7", specialPays.get(6)),
+            new PayrollSpecialPayDto("specialPay8", "เงินพิเศษ 8", specialPays.get(7))
+        );
+    }
+
+    private List<PayrollEmployeeInputRequest> safeInputs(List<PayrollEmployeeInputRequest> inputs) {
+        return inputs == null ? List.of() : inputs;
+    }
+
+    private LocalDate normalizeMonth(LocalDate payrollMonth) {
+        if (payrollMonth == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "payrollMonth is required");
+        }
+        return payrollMonth.withDayOfMonth(1);
+    }
+
+    private void requirePayrollRole(UserPrincipal actor) {
+        if (actor == null || !PAYROLL_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+    }
+
+    private BigDecimal sum(List<PayrollLineDto> lines, MoneyExtractor extractor) {
+        return lines.stream().map(extractor::value).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private String nullToBlank(String value) {
+        return value == null ? "" : value;
+    }
+
+    private interface MoneyExtractor {
+        BigDecimal value(PayrollLineDto line);
+    }
+}
