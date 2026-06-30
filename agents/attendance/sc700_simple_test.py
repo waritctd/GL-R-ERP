@@ -42,7 +42,7 @@ def connect(args: argparse.Namespace) -> Any:
     if ZK is None:
         raise RuntimeError("pyzk is not installed. Run: pip install -r agents/attendance/requirements.txt")
     print(f"Connecting to {args.host}:{args.port}")
-    print(f"password={args.password} force_udp={args.force_udp} omit_ping={args.omit_ping}")
+    print(f"password={'***' if args.password else '<none>'} force_udp={args.force_udp} omit_ping={args.omit_ping}")
     zk = ZK(
         args.host,
         port=args.port,
