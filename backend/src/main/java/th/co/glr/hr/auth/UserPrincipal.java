@@ -10,6 +10,7 @@ public record UserPrincipal(
     String role,
     Long employeeId,
     boolean active,
-    LocalDate createdAt
+    LocalDate createdAt,
+    boolean mustChangePassword
 ) implements Serializable {
 }
