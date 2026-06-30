@@ -1,4 +1,5 @@
 import Badge from 'lucide-react/dist/esm/icons/badge.js';
+import BadgeDollarSign from 'lucide-react/dist/esm/icons/badge-dollar-sign.js';
 import Bell from 'lucide-react/dist/esm/icons/bell.js';
 import FileText from 'lucide-react/dist/esm/icons/file-text.js';
 import BadgeCheck from 'lucide-react/dist/esm/icons/badge-check.js';
@@ -32,6 +33,7 @@ import X from 'lucide-react/dist/esm/icons/x.js';
 
 const icons = {
   badge: Badge,
+  badgeDollar: BadgeDollarSign,
   bell: Bell,
   fileText: FileText,
   badgeCheck: BadgeCheck,

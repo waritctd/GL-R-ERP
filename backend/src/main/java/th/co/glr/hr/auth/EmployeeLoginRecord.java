@@ -11,6 +11,7 @@ public record EmployeeLoginRecord(
     Long divisionId,
     String divisionCode,
     String divisionName,
+    String positionName,
     LocalDate createdAt,
     String passwordHash,
     boolean mustChangePassword

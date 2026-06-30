@@ -1,6 +1,70 @@
 import { createDemoDatabase } from '../data/demoData.js';
 
 const db = createDemoDatabase();
+db.commissions = db.commissions || [];
+db.leaveTypes = db.leaveTypes || [
+  { code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal leave', annualQuotaDays: 3, requiresAttachment: false },
+  { code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick leave', annualQuotaDays: 30, requiresAttachment: true },
+  { code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation leave', annualQuotaDays: 6, requiresAttachment: false },
+];
+db.leaveRequests = db.leaveRequests || [];
+if (db.leaveRequests.length === 0) {
+  const now = new Date().toISOString();
+  db.leaveRequests = [
+    {
+      id: 1,
+      employeeId: db.employees[8].id,
+      leaveTypeCode: 'VACATION',
+      startDate: '2026-07-13',
+      endDate: '2026-07-14',
+      totalDays: 2,
+      quotaYear: 2026,
+      reason: 'Family trip',
+      attachmentName: null,
+      attachmentUrl: null,
+      status: 'SUBMITTED',
+      quotaRemainingBefore: 6,
+      quotaRemainingAfter: 4,
+      systemNote: null,
+      requestedById: db.employees[8].id,
+      requestedByName: db.employees[8].nameTh,
+      requestedAt: now,
+      reviewedById: null,
+      reviewedByName: null,
+      reviewedAt: null,
+      reviewerNote: null,
+      cancelledAt: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 2,
+      employeeId: db.employees[12].id,
+      leaveTypeCode: 'SICK',
+      startDate: '2026-06-18',
+      endDate: '2026-06-18',
+      totalDays: 1,
+      quotaYear: 2026,
+      reason: 'Medical appointment',
+      attachmentName: 'medical-certificate.pdf',
+      attachmentUrl: null,
+      status: 'APPROVED',
+      quotaRemainingBefore: 30,
+      quotaRemainingAfter: 29,
+      systemNote: null,
+      requestedById: db.employees[12].id,
+      requestedByName: db.employees[12].nameTh,
+      requestedAt: now,
+      reviewedById: db.employees[20].id,
+      reviewedByName: db.employees[20].nameTh,
+      reviewedAt: now,
+      reviewerNote: null,
+      cancelledAt: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+}
 let sessionUser = null;
 
 function delay(value) {
@@ -56,6 +120,113 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
 
 function buildTicketDetail(ticket) {
   return { summary: { id: ticket.id, code: ticket.code, type: ticket.type, title: ticket.title, status: ticket.status, priority: ticket.priority, createdById: ticket.createdById, createdByName: ticket.createdByName, assignedToId: ticket.assignedToId, assignedToName: ticket.assignedToName, customerName: ticket.customerName, note: ticket.note, createdAt: ticket.createdAt, updatedAt: ticket.updatedAt, closedAt: ticket.closedAt, itemCount: ticket.items.length, hasEdits: ticket.hasEdits ?? false }, items: ticket.items, events: ticket.events, quotation: ticket.quotation };
+}
+
+function commissionMonth(value) {
+  return (value || new Date().toISOString()).slice(0, 7);
+}
+
+function invoiceCalculation(payload) {
+  const actualReceived = Number(payload.grossAmount || 0)
+    - Number(payload.bankFees || 0)
+    - Number(payload.suspenseVat || 0)
+    - Number(payload.transportFee || 0)
+    - Number(payload.cutFee || 0)
+    - Number(payload.shortfall || 0);
+  return {
+    actualReceived: Number(actualReceived.toFixed(2)),
+    commissionableBase: Number((actualReceived / 1.07).toFixed(2)),
+  };
+}
+
+function progressiveCommission(baseValue) {
+  const base = Math.max(0, Number(baseValue || 0));
+  let total = 0;
+  for (let tier = 1; tier <= 12; tier++) {
+    const lower = (tier - 1) * 250000;
+    const upper = tier * 250000;
+    const block = Math.max(0, Math.min(base, upper) - lower);
+    total += block * ((tier * 0.25) / 100);
+  }
+  if (base > 3000000) total += (base - 3000000) * 0.075;
+  return Number(total.toFixed(2));
+}
+
+function buildCommissionRecord(record) {
+  return structuredClone(record);
+}
+
+function managerIdForEmployee(employee) {
+  if (!employee || employee.positionTh === 'ผู้จัดการฝ่าย') return null;
+  return db.employees.find((item) => item.divisionId === employee.divisionId && item.positionTh === 'ผู้จัดการฝ่าย')?.id ?? null;
+}
+
+function canReviewLeave(user, employeeId) {
+  if (['hr', 'admin'].includes(user.role)) return true;
+  const employee = findEmployee(employeeId);
+  return user.employeeId && managerIdForEmployee(employee) === user.employeeId;
+}
+
+function leaveTypeByCode(code) {
+  const type = db.leaveTypes.find((item) => item.code === String(code || '').toUpperCase());
+  if (!type) fail('Invalid leave type', 400);
+  return type;
+}
+
+function workingDaysBetween(startDate, endDate) {
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  if (end < start) fail('Leave end date must be on or after start date', 400);
+  if (startDate.slice(0, 4) !== endDate.slice(0, 4)) fail('Leave requests cannot span quota years', 400);
+  let days = 0;
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const day = cursor.getDay();
+    if (day !== 0 && day !== 6) days += 1;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  if (days <= 0) fail('Leave range must include at least one weekday', 400);
+  return days;
+}
+
+function leaveUsedDays(employeeId, leaveTypeCode, quotaYear, statuses) {
+  return db.leaveRequests
+    .filter((request) => request.employeeId === employeeId
+      && request.leaveTypeCode === leaveTypeCode
+      && request.quotaYear === quotaYear
+      && statuses.includes(request.status))
+    .reduce((sum, request) => sum + Number(request.totalDays || 0), 0);
+}
+
+function leaveBalance(employeeId, type, quotaYear) {
+  const approvedDays = leaveUsedDays(employeeId, type.code, quotaYear, ['APPROVED']);
+  const pendingDays = leaveUsedDays(employeeId, type.code, quotaYear, ['SUBMITTED']);
+  return {
+    leaveTypeCode: type.code,
+    leaveTypeNameTh: type.nameTh,
+    leaveTypeNameEn: type.nameEn,
+    annualQuotaDays: type.annualQuotaDays,
+    approvedDays,
+    pendingDays,
+    remainingDays: Math.max(0, Number(type.annualQuotaDays || 0) - approvedDays - pendingDays),
+    requiresAttachment: type.requiresAttachment,
+  };
+}
+
+function buildLeaveRecord(record) {
+  const employee = db.employees.find((item) => item.id === record.employeeId);
+  const managerEmployeeId = managerIdForEmployee(employee);
+  const manager = managerEmployeeId ? db.employees.find((item) => item.id === managerEmployeeId) : null;
+  const leaveType = leaveTypeByCode(record.leaveTypeCode);
+  return {
+    ...structuredClone(record),
+    employeeCode: employee?.code || null,
+    employeeName: employee?.nameTh || null,
+    managerEmployeeId,
+    managerName: manager?.nameTh || null,
+    leaveTypeNameTh: leaveType.nameTh,
+    leaveTypeNameEn: leaveType.nameEn,
+  };
 }
 
 function doTransition(id, fromStatus, toStatus, kind, actor, message) {
@@ -480,6 +651,329 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       pushEvent(ticket, user, 'COMMENTED', null, null, payload.message);
       return delay({ ticket: buildTicketDetail(ticket) });
+    },
+  },
+
+  leave: {
+    async employees() {
+      const user = requireSession();
+      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
+      const rows = db.employees
+        .filter((employee) => employee.active)
+        .filter((employee) => includeAll || employee.id === user.employeeId || managerIdForEmployee(employee) === user.employeeId)
+        .map((employee) => ({
+          employeeId: employee.id,
+          employeeCode: employee.code,
+          employeeName: employee.nameTh,
+          departmentName: employee.departmentTh,
+          self: employee.id === user.employeeId,
+          directReport: managerIdForEmployee(employee) === user.employeeId,
+        }));
+      return delay({ employees: rows });
+    },
+
+    async types() {
+      requireSession();
+      return delay({ leaveTypes: db.leaveTypes });
+    },
+
+    async balances(params = {}) {
+      const user = requireSession();
+      const employeeId = params.employeeId ? Number(params.employeeId) : user.employeeId;
+      if (!employeeId) fail('User is not linked to an employee', 400);
+      if (!['hr', 'ceo', 'admin'].includes(user.role) && employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
+      findEmployee(employeeId);
+      const year = Number(params.year || new Date().getFullYear());
+      return delay({ balances: db.leaveTypes.map((type) => leaveBalance(employeeId, type, year)) });
+    },
+
+    async list(params = {}) {
+      const user = requireSession();
+      let list = db.leaveRequests;
+      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
+      if (!includeAll) list = list.filter((item) => item.employeeId === user.employeeId || canReviewLeave(user, item.employeeId));
+      if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
+      if (params.status) list = list.filter((item) => item.status === params.status);
+      if (params.from) list = list.filter((item) => item.endDate >= params.from);
+      if (params.to) list = list.filter((item) => item.startDate <= params.to);
+      return delay({ requests: list.map(buildLeaveRecord) });
+    },
+
+    async create(payload) {
+      const user = requireSession();
+      const employeeId = payload.employeeId ? Number(payload.employeeId) : user.employeeId;
+      if (!employeeId) fail('User is not linked to an employee', 400);
+      if (employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
+      const employee = findEmployee(employeeId);
+      const leaveType = leaveTypeByCode(payload.leaveTypeCode);
+      const totalDays = workingDaysBetween(payload.startDate, payload.endDate);
+      const quotaYear = Number(payload.startDate.slice(0, 4));
+      const used = leaveUsedDays(employeeId, leaveType.code, quotaYear, ['SUBMITTED', 'APPROVED']);
+      const remainingBefore = Math.max(0, leaveType.annualQuotaDays - used);
+      const quotaAvailable = remainingBefore >= totalDays;
+      const status = quotaAvailable ? 'SUBMITTED' : 'AUTO_REJECTED';
+      const remainingAfter = quotaAvailable ? remainingBefore - totalDays : remainingBefore;
+      const id = Math.max(0, ...db.leaveRequests.map((item) => item.id)) + 1;
+      const now = new Date().toISOString();
+      const request = {
+        id,
+        employeeId,
+        leaveTypeCode: leaveType.code,
+        startDate: payload.startDate,
+        endDate: payload.endDate,
+        totalDays,
+        quotaYear,
+        reason: payload.reason,
+        attachmentName: payload.attachmentName || null,
+        attachmentUrl: payload.attachmentUrl || null,
+        status,
+        quotaRemainingBefore: remainingBefore,
+        quotaRemainingAfter: remainingAfter,
+        systemNote: quotaAvailable ? null : `โควตาคงเหลือ ${remainingBefore} วัน ไม่พอสำหรับคำขอ ${totalDays} วัน กรุณาติดต่อ HR เพื่อปรับโควตาหรือดำเนินการลาไม่รับค่าจ้าง`,
+        requestedById: user.employeeId,
+        requestedByName: user.name,
+        requestedAt: now,
+        reviewedById: null,
+        reviewedByName: null,
+        reviewedAt: null,
+        reviewerNote: null,
+        cancelledAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      request.employeeCode = employee.code;
+      request.employeeName = employee.nameTh;
+      db.leaveRequests.unshift(request);
+      return delay({ request: buildLeaveRecord(request) });
+    },
+
+    async approve(id, payload = {}) {
+      const user = requireSession();
+      const request = db.leaveRequests.find((item) => item.id === Number(id));
+      if (!request) fail('Leave request not found', 404);
+      if (!canReviewLeave(user, request.employeeId)) fail('Forbidden', 403);
+      if (request.status !== 'SUBMITTED') fail('Leave request has already been reviewed', 409);
+      const now = new Date().toISOString();
+      request.status = 'APPROVED';
+      request.reviewedById = user.employeeId;
+      request.reviewedByName = user.name;
+      request.reviewedAt = now;
+      request.reviewerNote = payload.reviewerNote || null;
+      request.updatedAt = now;
+      return delay({ request: buildLeaveRecord(request) });
+    },
+
+    async reject(id, payload = {}) {
+      const user = requireSession();
+      const request = db.leaveRequests.find((item) => item.id === Number(id));
+      if (!request) fail('Leave request not found', 404);
+      if (!canReviewLeave(user, request.employeeId)) fail('Forbidden', 403);
+      if (request.status !== 'SUBMITTED') fail('Leave request has already been reviewed', 409);
+      const now = new Date().toISOString();
+      request.status = 'REJECTED';
+      request.reviewedById = user.employeeId;
+      request.reviewedByName = user.name;
+      request.reviewedAt = now;
+      request.reviewerNote = payload.reviewerNote || null;
+      request.updatedAt = now;
+      return delay({ request: buildLeaveRecord(request) });
+    },
+
+    async cancel(id, payload = {}) {
+      const user = requireSession();
+      const request = db.leaveRequests.find((item) => item.id === Number(id));
+      if (!request) fail('Leave request not found', 404);
+      const approver = canReviewLeave(user, request.employeeId);
+      if (!approver && request.employeeId !== user.employeeId) fail('Forbidden', 403);
+      if (!approver && request.status !== 'SUBMITTED') fail('Only submitted leave requests can be cancelled by employees', 409);
+      if (!['SUBMITTED', 'APPROVED'].includes(request.status)) fail('Only active leave requests can be cancelled', 409);
+      const now = new Date().toISOString();
+      request.status = 'CANCELLED';
+      request.cancelledAt = now;
+      request.reviewerNote = payload.reviewerNote || request.reviewerNote;
+      request.updatedAt = now;
+      return delay({ request: buildLeaveRecord(request) });
+    },
+  },
+
+  commissions: {
+    async list(params = {}) {
+      const user = requireSession();
+      if (!['sales', 'sales_manager', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
+      let list = db.commissions;
+      if (user.role === 'sales') list = list.filter((item) => item.salesRepId === user.id);
+      if (params.payrollMonth) list = list.filter((item) => commissionMonth(item.payrollMonth) === params.payrollMonth.slice(0, 7));
+      return delay({ commissions: list.map(buildCommissionRecord) });
+    },
+
+    async create(payload) {
+      const user = hasRole('sales', 'sales_manager', 'ceo', 'admin');
+      if (user.role === 'sales' && (Number(payload.transportFee || 0) > 0 || Number(payload.cutFee || 0) > 0 || Number(payload.shortfall || 0) > 0)) {
+        fail('Sales cannot edit deduction fields', 403);
+      }
+      if (db.commissions.some((item) => item.invoiceDetails.invoiceNumber === payload.invoiceNumber)) {
+        fail('Invoice number already exists', 409);
+      }
+      const id = Math.max(0, ...db.commissions.map((item) => item.id)) + 1;
+      const salesRepId = user.role === 'sales' ? user.id : Number(payload.salesRepId || user.id);
+      const calc = invoiceCalculation({
+        ...payload,
+        transportFee: user.role === 'sales' ? 0 : payload.transportFee,
+        cutFee: user.role === 'sales' ? 0 : payload.cutFee,
+        shortfall: user.role === 'sales' ? 0 : payload.shortfall,
+      });
+      const record = {
+        id,
+        sourceTicketId: payload.sourceTicketId ?? null,
+        salesRepId,
+        salesRepName: db.users.find((item) => item.id === salesRepId)?.name || user.name,
+        submittedById: user.id,
+        kind: 'SALE',
+        status: 'SUBMITTED',
+        payrollMonth: `${commissionMonth(payload.invoiceDate)}-01`,
+        actualReceived: calc.actualReceived,
+        commissionableBase: calc.commissionableBase,
+        approvedById: null,
+        approvedAt: null,
+        cancellationOfId: null,
+        cancellationReason: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        invoiceDetails: {
+          id,
+          invoiceNumber: payload.invoiceNumber,
+          invoiceDate: payload.invoiceDate,
+          grossAmount: Number(payload.grossAmount || 0),
+          bankFees: Number(payload.bankFees || 0),
+          suspenseVat: Number(payload.suspenseVat || 0),
+          transportFee: user.role === 'sales' ? 0 : Number(payload.transportFee || 0),
+          cutFee: user.role === 'sales' ? 0 : Number(payload.cutFee || 0),
+          shortfall: user.role === 'sales' ? 0 : Number(payload.shortfall || 0),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      };
+      db.commissions.unshift(record);
+      return delay({ commission: buildCommissionRecord(record) });
+    },
+
+    async updateDeductions(id, payload) {
+      hasRole('sales_manager', 'ceo', 'admin');
+      const record = db.commissions.find((item) => item.id === Number(id));
+      if (!record) fail('Commission record not found', 404);
+      Object.assign(record.invoiceDetails, {
+        transportFee: Number(payload.transportFee ?? record.invoiceDetails.transportFee),
+        cutFee: Number(payload.cutFee ?? record.invoiceDetails.cutFee),
+        shortfall: Number(payload.shortfall ?? record.invoiceDetails.shortfall),
+        updatedAt: new Date().toISOString(),
+      });
+      const calc = invoiceCalculation(record.invoiceDetails);
+      db.commissions
+        .filter((item) => item.invoiceDetails.id === record.invoiceDetails.id && item.status !== 'VOID')
+        .forEach((item) => {
+          item.actualReceived = item.kind === 'CLAWBACK' ? -Math.abs(calc.actualReceived) : calc.actualReceived;
+          item.commissionableBase = item.kind === 'CLAWBACK' ? -Math.abs(calc.commissionableBase) : calc.commissionableBase;
+          item.updatedAt = new Date().toISOString();
+        });
+      return delay({ commission: buildCommissionRecord(record) });
+    },
+
+    async approve(id) {
+      const user = hasRole('sales_manager', 'ceo', 'admin');
+      const record = db.commissions.find((item) => item.id === Number(id));
+      if (!record) fail('Commission record not found', 404);
+      if (record.status !== 'SUBMITTED') fail('Only submitted commission records can be approved', 409);
+      record.status = 'APPROVED';
+      record.approvedById = user.id;
+      record.approvedAt = new Date().toISOString();
+      record.updatedAt = record.approvedAt;
+      return delay({ commission: buildCommissionRecord(record) });
+    },
+
+    async clawback(id, payload) {
+      const user = hasRole('sales_manager', 'ceo', 'admin');
+      const original = db.commissions.find((item) => item.id === Number(id));
+      if (!original) fail('Commission record not found', 404);
+      if (original.kind !== 'SALE' || original.status !== 'APPROVED') fail('Only approved sale commissions can be clawed back', 409);
+      if (db.commissions.some((item) => item.cancellationOfId === original.id && item.status !== 'VOID')) fail('This commission already has an active clawback', 409);
+      const nextId = Math.max(0, ...db.commissions.map((item) => item.id)) + 1;
+      const record = {
+        ...structuredClone(original),
+        id: nextId,
+        kind: 'CLAWBACK',
+        status: 'APPROVED',
+        payrollMonth: `${commissionMonth(new Date().toISOString())}-01`,
+        actualReceived: -Math.abs(original.actualReceived),
+        commissionableBase: -Math.abs(original.commissionableBase),
+        submittedById: user.id,
+        approvedById: user.id,
+        approvedAt: new Date().toISOString(),
+        cancellationOfId: original.id,
+        cancellationReason: payload.reason,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      db.commissions.unshift(record);
+      return delay({ commission: buildCommissionRecord(record) });
+    },
+
+    async simulate(payload) {
+      const user = requireSession();
+      if (!['sales', 'sales_manager', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
+      if (user.role === 'sales' && (Number(payload.transportFee || 0) > 0 || Number(payload.cutFee || 0) > 0 || Number(payload.shortfall || 0) > 0)) {
+        fail('Sales cannot edit deduction fields', 403);
+      }
+      const salesRepId = user.role === 'sales' ? user.id : Number(payload.salesRepId || user.id);
+      const month = commissionMonth(payload.payrollMonth || new Date().toISOString());
+      const calc = invoiceCalculation({
+        ...payload,
+        transportFee: user.role === 'sales' ? 0 : payload.transportFee,
+        cutFee: user.role === 'sales' ? 0 : payload.cutFee,
+        shortfall: user.role === 'sales' ? 0 : payload.shortfall,
+      });
+      const existingMonthlyBase = db.commissions
+        .filter((item) => item.salesRepId === salesRepId && commissionMonth(item.payrollMonth) === month && item.status !== 'VOID')
+        .reduce((sum, item) => sum + Number(item.commissionableBase || 0), 0);
+      const projectedMonthlyBase = existingMonthlyBase + calc.commissionableBase;
+      const projectedMonthlyCommission = progressiveCommission(projectedMonthlyBase);
+      const incrementalCommission = projectedMonthlyCommission - progressiveCommission(existingMonthlyBase);
+      return delay({
+        simulation: {
+          payrollMonth: `${month}-01`,
+          actualReceived: calc.actualReceived,
+          commissionableBase: calc.commissionableBase,
+          existingMonthlyBase,
+          projectedMonthlyBase,
+          projectedMonthlyCommission,
+          incrementalCommission: Number(incrementalCommission.toFixed(2)),
+        },
+      });
+    },
+
+    async payrollReady(params = {}) {
+      hasRole('hr', 'admin');
+      const month = commissionMonth(params.payrollMonth || new Date().toISOString());
+      const approved = db.commissions.filter((item) => item.status === 'APPROVED' && commissionMonth(item.payrollMonth) === month);
+      const reps = new Map();
+      approved.forEach((item) => {
+        const current = reps.get(item.salesRepId) || { salesRepId: item.salesRepId, salesRepName: item.salesRepName, commissionableBase: 0 };
+        current.commissionableBase += Number(item.commissionableBase || 0);
+        reps.set(item.salesRepId, current);
+      });
+      const salesReps = [...reps.values()].map((rep) => ({
+        ...rep,
+        commissionableBase: Math.max(0, Number(rep.commissionableBase.toFixed(2))),
+        commissionAmount: progressiveCommission(rep.commissionableBase),
+      }));
+      return delay({
+        summary: {
+          payrollMonth: `${month}-01`,
+          status: 'PAYROLL_READY',
+          totalCommissionableBase: salesReps.reduce((sum, item) => sum + item.commissionableBase, 0),
+          totalCommissionAmount: salesReps.reduce((sum, item) => sum + item.commissionAmount, 0),
+          salesReps,
+        },
+      });
     },
   },
 

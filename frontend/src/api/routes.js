@@ -19,6 +19,16 @@ export const API_ROUTES = {
     punches: '/api/attendance/punches',
     importDat: '/api/attendance/imports/dat',
   },
+  leave: {
+    list: '/api/leave',
+    create: '/api/leave',
+    employees: '/api/leave/employees',
+    types: '/api/leave/types',
+    balances: '/api/leave/balances',
+    approve: (id) => `/api/leave/${id}/approve`,
+    reject: (id) => `/api/leave/${id}/reject`,
+    cancel: (id) => `/api/leave/${id}/cancel`,
+  },
   tickets: {
     list: '/api/tickets',
     create: '/api/tickets',
@@ -33,6 +43,15 @@ export const API_ROUTES = {
     list: '/api/notifications',
     markRead: (id) => `/api/notifications/${id}/read`,
   },
+  commissions: {
+    list: '/api/commissions',
+    create: '/api/commissions',
+    deductions: (id) => `/api/commissions/${id}/deductions`,
+    approve: (id) => `/api/commissions/${id}/approve`,
+    clawback: (id) => `/api/commissions/${id}/clawback`,
+    simulator: '/api/commissions/simulator',
+    payrollReady: '/api/commissions/payroll-ready',
+  },
 };
 
 export const ROLE_PERMISSIONS = {
@@ -43,6 +62,8 @@ export const ROLE_PERMISSIONS = {
   canReviewProfileRequests: ['hr'],
   canViewAllAttendance: ['hr'],
   canImportAttendance: ['hr'],
+  canViewAllLeave: ['hr', 'ceo', 'admin'],
+  canReviewLeave: ['hr', 'admin'],
   // Sales module
   canViewTickets: ['sales', 'import', 'ceo', 'admin'],
   canCreateTickets: ['sales', 'admin'],
@@ -50,4 +71,8 @@ export const ROLE_PERMISSIONS = {
   canProposePrices: ['import', 'admin'],
   canApproveReject: ['ceo', 'admin'],
   canGenerateQuotation: ['sales', 'admin'],
+  canViewCommissions: ['sales', 'sales_manager', 'ceo', 'hr', 'admin'],
+  canSubmitCommissions: ['sales', 'sales_manager', 'ceo', 'admin'],
+  canApproveCommissions: ['sales_manager', 'ceo', 'admin'],
+  canViewPayrollCommissions: ['hr', 'admin'],
 };

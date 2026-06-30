@@ -219,6 +219,7 @@ export function createDemoDatabase() {
     { id: 6, email: 'sales@glr.co.th', password: 'demo1234', name: 'คุณสมหมาย ขายดี', role: 'sales', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
     { id: 7, email: 'import@glr.co.th', password: 'demo1234', name: 'คุณนำเข้า พานิช', role: 'import', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
     { id: 8, email: 'ceo@glr.co.th', password: 'demo1234', name: 'คุณวิชัย ธนาคาร', role: 'ceo', employeeId: employees[0].id, active: true, createdAt: iso(2025, 6, 1) },
+    { id: 9, email: 'sales.manager@glr.co.th', password: 'demo1234', name: 'คุณมณี ผู้จัดการฝ่ายขาย', role: 'sales_manager', employeeId: employees[1].id, active: true, createdAt: iso(2025, 6, 1) },
   ];
 
   const tickets = [
