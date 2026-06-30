@@ -258,28 +258,34 @@ public class TicketRepository {
     }
 
     private void insertItems(long ticketId, List<TicketItemRequest> items) {
+        if (items.isEmpty()) {
+            return;
+        }
+        // Single batched round-trip instead of one INSERT per item; the datasource has
+        // reWriteBatchedInserts=true so this collapses into one multi-row statement (issue #29).
+        MapSqlParameterSource[] batch = new MapSqlParameterSource[items.size()];
         for (int i = 0; i < items.size(); i++) {
             TicketItemRequest item = items.get(i);
             String currency = (item.currency() != null && !item.currency().isBlank()) ? item.currency() : "THB";
-            jdbc.update("""
-                INSERT INTO sales.ticket_item
-                    (ticket_id, brand, model, color, texture, size,
-                     qty, proposed_price, currency, sort_order)
-                VALUES (:ticketId, :brand, :model, :color, :texture, :size,
-                        :qty, :proposedPrice, :currency, :sortOrder)
-                """,
-                new MapSqlParameterSource()
-                    .addValue("ticketId", ticketId)
-                    .addValue("brand", item.brand())
-                    .addValue("model", item.model())
-                    .addValue("color", item.color())
-                    .addValue("texture", item.texture())
-                    .addValue("size", item.size())
-                    .addValue("qty", item.qty())
-                    .addValue("proposedPrice", item.proposedPrice())
-                    .addValue("currency", currency)
-                    .addValue("sortOrder", i));
+            batch[i] = new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("brand", item.brand())
+                .addValue("model", item.model())
+                .addValue("color", item.color())
+                .addValue("texture", item.texture())
+                .addValue("size", item.size())
+                .addValue("qty", item.qty())
+                .addValue("proposedPrice", item.proposedPrice())
+                .addValue("currency", currency)
+                .addValue("sortOrder", i);
         }
+        jdbc.batchUpdate("""
+            INSERT INTO sales.ticket_item
+                (ticket_id, brand, model, color, texture, size,
+                 qty, proposed_price, currency, sort_order)
+            VALUES (:ticketId, :brand, :model, :color, :texture, :size,
+                    :qty, :proposedPrice, :currency, :sortOrder)
+            """, batch);
     }
 
     private TicketSummaryDto mapSummary(ResultSet rs) throws SQLException {
