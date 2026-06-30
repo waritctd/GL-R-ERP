@@ -4,6 +4,15 @@ SET search_path = hr, public;
 -- LEAVE: quota-backed employee leave requests and approvals
 -- ---------------------------------------------------------------------
 
+-- V1 created placeholder leave_type / leave_balance / leave_request stubs
+-- (leave_type_id-based) that no application code ever used. This feature replaces
+-- them with a leave_type_code-based design, so drop the unused stubs first to avoid
+-- "relation already exists" on a fresh database. Safe: the V1 tables carry no data
+-- and are referenced only by V1 itself. CASCADE clears the inter-stub FKs.
+DROP TABLE IF EXISTS hr.leave_request CASCADE;
+DROP TABLE IF EXISTS hr.leave_balance CASCADE;
+DROP TABLE IF EXISTS hr.leave_type CASCADE;
+
 CREATE TABLE hr.leave_type (
     leave_type_code   VARCHAR(30) PRIMARY KEY,
     name_th           VARCHAR(120) NOT NULL,
