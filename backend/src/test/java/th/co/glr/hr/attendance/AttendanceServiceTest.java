@@ -179,6 +179,6 @@ class AttendanceServiceTest {
     }
 
     private UserPrincipal user(String role, Long employeeId) {
-        return new UserPrincipal(1L, role + "@glr.co.th", role, role, employeeId, true, LocalDate.now());
+        return new UserPrincipal(1L, role + "@glr.co.th", role, role, employeeId, true, LocalDate.now(), false);
     }
 }

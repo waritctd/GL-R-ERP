@@ -7,11 +7,16 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
+import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.profile.ProfileRequestRepository;
 
 class EmployeeServiceTest {
@@ -39,6 +44,50 @@ class EmployeeServiceTest {
         assertThat(service.list(filter)).isEmpty();
 
         verify(profileRequests, never()).pendingCountsByEmployeeIds(anyList());
+    }
+
+    @Test
+    void logsAuditEventWhenHrViewsSensitiveDetail() {
+        when(employees.findEmployeeById(5L, true)).thenReturn(Optional.of(employee(5L)));
+        when(profileRequests.pendingCountByEmployee(5L)).thenReturn(0);
+        ListAppender<ILoggingEvent> appender = attachAuditAppender();
+
+        service.get(5L, new UserPrincipal(7L, "hr@glr.co.th", "HR", "hr", 10L, true, LocalDate.now(), false));
+
+        try {
+            assertThat(appender.list).anyMatch(event ->
+                event.getFormattedMessage().contains("VIEW_EMPLOYEE_DETAIL")
+                    && event.getFormattedMessage().contains("targetEmployeeId=5"));
+        } finally {
+            detachAuditAppender(appender);
+        }
+    }
+
+    @Test
+    void doesNotLogAuditEventForSelfServiceView() {
+        when(employees.findEmployeeById(5L, false)).thenReturn(Optional.of(employee(5L)));
+        when(profileRequests.pendingCountByEmployee(5L)).thenReturn(0);
+        ListAppender<ILoggingEvent> appender = attachAuditAppender();
+
+        service.get(5L, new UserPrincipal(8L, "e@glr.co.th", "E", "employee", 5L, true, LocalDate.now(), false));
+
+        try {
+            assertThat(appender.list).noneMatch(event ->
+                event.getFormattedMessage().contains("VIEW_EMPLOYEE_DETAIL"));
+        } finally {
+            detachAuditAppender(appender);
+        }
+    }
+
+    private ListAppender<ILoggingEvent> attachAuditAppender() {
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger("th.co.glr.hr.audit")).addAppender(appender);
+        return appender;
+    }
+
+    private void detachAuditAppender(ListAppender<ILoggingEvent> appender) {
+        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger("th.co.glr.hr.audit")).detachAppender(appender);
     }
 
     private EmployeeDto employee(long id) {

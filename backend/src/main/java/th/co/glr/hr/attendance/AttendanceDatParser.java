@@ -7,12 +7,16 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Map;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
+import th.co.glr.hr.common.ApiException;
 
 @Component
 public class AttendanceDatParser {
     private static final DateTimeFormatter DAT_TIMESTAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
+    // A single device's daily export is a few thousand rows at most; cap defensively.
+    private static final int MAX_ROWS = 100_000;
 
     public DatParseResult parse(AttendanceDatImportRequest request) {
         String siteCode = request.siteCode().trim().toUpperCase();
@@ -22,6 +26,10 @@ public class AttendanceDatParser {
         int rowCount = 0;
 
         String[] lines = request.content().split("\\R", -1);
+        if (lines.length > MAX_ROWS) {
+            throw new ApiException(HttpStatus.PAYLOAD_TOO_LARGE,
+                "DAT file exceeds the maximum of " + MAX_ROWS + " rows");
+        }
         for (int index = 0; index < lines.length; index++) {
             int lineNo = index + 1;
             String rawLine = lines[index];
