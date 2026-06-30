@@ -740,6 +740,83 @@ textarea:focus {
   grid-template-columns: minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr) minmax(0,1.1fr);
 }
 
+.commission-table {
+  grid-template-columns: minmax(0,1.2fr) minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr) minmax(0,0.9fr) minmax(0,1.1fr);
+}
+
+.commission-payroll-table {
+  grid-template-columns: minmax(0,1.8fr) minmax(0,1fr) minmax(0,1fr);
+}
+
+.leave-table {
+  grid-template-columns: minmax(0,1.35fr) minmax(0,1.1fr) minmax(0,1.65fr) minmax(0,0.75fr) minmax(0,1.35fr) minmax(0,0.8fr);
+}
+
+.leave-balance-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.leave-balance-card {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid #e6eaf0;
+  border-radius: 8px;
+  padding: 14px;
+  background: #f8fafc;
+}
+
+.leave-balance-card span,
+.leave-balance-card small {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.leave-balance-card strong {
+  color: #0f172a;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.leave-calendar-list {
+  display: grid;
+  gap: 10px;
+}
+
+.leave-calendar-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  border-bottom: 1px solid #f1f5f9;
+  padding: 10px 0;
+}
+
+.leave-calendar-item > span {
+  min-width: 0;
+}
+
+.leave-calendar-item strong,
+.leave-calendar-item small {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.commission-row-wrap {
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.commission-row-wrap .table-row {
+  border-bottom: 0;
+}
+
 .status-tabs {
   display: flex;
   gap: 4px;
@@ -1152,7 +1229,10 @@ textarea:focus {
   .attendance-table,
   .request-table,
   .request-table.mine,
-  .user-table {
+  .user-table,
+  .commission-table,
+  .commission-payroll-table,
+  .leave-table {
     min-width: 900px;
   }
 
@@ -1168,7 +1248,8 @@ textarea:focus {
   .info-grid.two,
   .field-list,
   .field-list.three,
-  .form-grid {
+  .form-grid,
+  .leave-balance-grid {
     grid-template-columns: 1fr;
   }
 
