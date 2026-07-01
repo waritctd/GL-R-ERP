@@ -3,7 +3,7 @@ import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatMoney, formatThaiDate, ticketPriorityLabel, ticketStatusLabel } from '../../utils/format.js';
+import { formatMoney, formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
 
 const EVENT_KIND_LABEL = {
   CREATED:            'สร้างใบขอราคา',
@@ -324,6 +324,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 { value: 'PRICE_CHANGE', label: 'แก้ราคา / ส่วนลดต่อหน่วย',       sub: 'CEO ต้องอนุมัติใหม่' },
                 { value: 'NEW_ITEM',     label: 'เพิ่มสินค้าใหม่',                sub: 'Import ตั้งราคา → CEO อนุมัติ' },
               ].map((opt) => (
+                // eslint-disable-next-line jsx-a11y/label-has-associated-control -- label nests the radio control; its text is the dynamic opt.label
                 <label key={opt.value} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer', fontSize: 13 }}>
                   <input type="radio" name="reviseScope" value={opt.value}
                     checked={reviseScope === opt.value}

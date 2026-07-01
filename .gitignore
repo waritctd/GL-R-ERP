@@ -8,3 +8,10 @@ backend/target/
 .env
 .env.local
 .env.*.local
+
+# Python (attendance agent tooling)
+.venv/
+.venv*/
+venv/
+__pycache__/
+*.pyc
