@@ -48,6 +48,47 @@ class AuthServiceTest {
     }
 
     @Test
+    void rejectsLoginForUnknownEmail() {
+        when(employees.findByEmail("missing@glr.co.th")).thenReturn(Optional.empty());
+        MockHttpServletRequest httpRequest = new MockHttpServletRequest();
+
+        assertThatThrownBy(() -> service.login(
+            new LoginRequest("missing@glr.co.th", "Str0ngPass!", null),
+            httpRequest))
+            .isInstanceOfSatisfying(ApiException.class, exception ->
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED));
+        assertThat(httpRequest.getSession(false)).isNull();
+    }
+
+    @Test
+    void rejectsLoginWithWrongPassword() {
+        when(employees.findByEmail("hr@glr.co.th"))
+            .thenReturn(Optional.of(employee(17L, encoder.encode("Str0ngPass!"), false)));
+        MockHttpServletRequest httpRequest = new MockHttpServletRequest();
+
+        assertThatThrownBy(() -> service.login(
+            new LoginRequest("hr@glr.co.th", "wrong-password", null),
+            httpRequest))
+            .isInstanceOfSatisfying(ApiException.class, exception ->
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED));
+        assertThat(httpRequest.getSession(false)).isNull();
+    }
+
+    @Test
+    void rejectsLoginForInactiveEmployee() {
+        when(employees.findByEmail("hr@glr.co.th"))
+            .thenReturn(Optional.of(employee(17L, null, encoder.encode("Str0ngPass!"), false, false)));
+        MockHttpServletRequest httpRequest = new MockHttpServletRequest();
+
+        assertThatThrownBy(() -> service.login(
+            new LoginRequest("hr@glr.co.th", "Str0ngPass!", null),
+            httpRequest))
+            .isInstanceOfSatisfying(ApiException.class, exception ->
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED));
+        assertThat(httpRequest.getSession(false)).isNull();
+    }
+
+    @Test
     void authenticatesWithCorrectPasswordAndDerivesHrRole() {
         when(employees.findByEmail("hr@glr.co.th"))
             .thenReturn(Optional.of(employee(17L, encoder.encode("Str0ngPass!"), false)));
@@ -161,12 +202,16 @@ class AuthServiceTest {
     }
 
     private EmployeeLoginRecord employee(long divisionId, String positionName, String passwordHash, boolean mustChangePassword) {
+        return employee(divisionId, positionName, passwordHash, mustChangePassword, true);
+    }
+
+    private EmployeeLoginRecord employee(long divisionId, String positionName, String passwordHash, boolean mustChangePassword, boolean active) {
         return new EmployeeLoginRecord(
             42L,
             "GLR-42",
             "hr@glr.co.th",
             "HR",
-            true,
+            active,
             divisionId,
             divisionCodeFor(divisionId),
             null,
