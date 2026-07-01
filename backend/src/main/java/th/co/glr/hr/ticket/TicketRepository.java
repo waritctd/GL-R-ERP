@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Optional;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import th.co.glr.hr.common.PageRequest;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
@@ -41,18 +42,39 @@ public class TicketRepository {
     }
 
     public List<TicketSummaryDto> findSummaries(String status, Long createdByFilter) {
-        return jdbc.query(
-            SUMMARY_SELECT + """
+        return findSummaries(status, createdByFilter, null);
+    }
+
+    public List<TicketSummaryDto> findSummaries(String status, Long createdByFilter, PageRequest page) {
+        StringBuilder sql = new StringBuilder(SUMMARY_SELECT).append("""
              WHERE (:status::varchar IS NULL OR t.status = :status)
                AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
              GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
                       ea.first_name_th, ea.last_name_th
              ORDER BY t.created_at DESC
+            """);
+        MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("status", status)
+            .addValue("createdBy", createdByFilter);
+        if (page != null) {
+            sql.append(" LIMIT :limit OFFSET :offset");
+            params.addValue("limit", page.size());
+            params.addValue("offset", page.offset());
+        }
+        return jdbc.query(sql.toString(), params, (rs, rowNum) -> mapSummary(rs));
+    }
+
+    public int countSummaries(String status, Long createdByFilter) {
+        Integer total = jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.ticket t
+             WHERE (:status::varchar IS NULL OR t.status = :status)
+               AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
             """,
             new MapSqlParameterSource()
                 .addValue("status", status)
                 .addValue("createdBy", createdByFilter),
-            (rs, rowNum) -> mapSummary(rs));
+            Integer.class);
+        return total == null ? 0 : total;
     }
 
     public Optional<TicketDto> findById(long id) {

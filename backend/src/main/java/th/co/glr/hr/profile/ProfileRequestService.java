@@ -6,6 +6,7 @@ import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeDto;
@@ -17,10 +18,13 @@ public class ProfileRequestService {
 
     private final ProfileRequestRepository profileRequests;
     private final EmployeeRepository employees;
+    private final AuditService auditService;
 
-    public ProfileRequestService(ProfileRequestRepository profileRequests, EmployeeRepository employees) {
+    public ProfileRequestService(ProfileRequestRepository profileRequests, EmployeeRepository employees,
+                                 AuditService auditService) {
         this.profileRequests = profileRequests;
         this.employees = employees;
+        this.auditService = auditService;
     }
 
     public List<ProfileRequestDto> list(UserPrincipal user) {
@@ -66,7 +70,12 @@ public class ProfileRequestService {
         if ("approved".equals(request.status()) && "pending".equals(existing.status())) {
             applyApprovedRequest(existing);
         }
-        return profileRequests.findById(id).map(this::toDto).orElseThrow();
+        ProfileRequestRecord reviewed = profileRequests.findById(id).orElseThrow();
+        String action = "approved".equals(request.status())
+            ? "APPROVE_PROFILE_REQUEST"
+            : "REJECT_PROFILE_REQUEST";
+        auditService.record(reviewer, action, "profile_request", id, existing, reviewed);
+        return toDto(reviewed);
     }
 
     private void applyApprovedRequest(ProfileRequestRecord request) {

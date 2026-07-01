@@ -19,14 +19,18 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.slf4j.LoggerFactory;
+import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.Page;
+import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.profile.ProfileRequestRepository;
 
 class EmployeeServiceTest {
     private final EmployeeRepository employees = mock(EmployeeRepository.class);
     private final ProfileRequestRepository profileRequests = mock(ProfileRequestRepository.class);
-    private final EmployeeService service = new EmployeeService(employees, profileRequests);
+    private final AuditService auditService = mock(AuditService.class);
+    private final EmployeeService service = new EmployeeService(employees, profileRequests, auditService);
 
     @Test
     void countsPendingRequestsOnlyForFilteredEmployees() {
@@ -57,6 +61,34 @@ class EmployeeServiceTest {
         assertThat(service.list(filter, hrUser())).isEmpty();
 
         verify(profileRequests, never()).pendingCountsByEmployeeIds(anyList());
+    }
+
+    @Test
+    void listPageSkipsCountQueryWhenResultFitsFirstPage() {
+        EmployeeFilter filter = new EmployeeFilter(null, null, null, null, null);
+        PageRequest page = PageRequest.resolve(0, 50);
+        when(employees.findEmployees(filter, false, page)).thenReturn(List.of(employee(1L), employee(2L)));
+        when(profileRequests.pendingCountsByEmployeeIds(List.of(1L, 2L))).thenReturn(Map.of());
+
+        Page<EmployeeDto> result = service.listPage(filter, hrUser(), page);
+
+        assertThat(result.items()).hasSize(2);
+        assertThat(result.total()).isEqualTo(2);
+        verify(employees, never()).countEmployees(filter);
+    }
+
+    @Test
+    void listPageRunsCountQueryWhenPageIsFull() {
+        EmployeeFilter filter = new EmployeeFilter(null, null, null, null, null);
+        PageRequest page = PageRequest.resolve(0, 2);
+        when(employees.findEmployees(filter, false, page)).thenReturn(List.of(employee(1L), employee(2L)));
+        when(profileRequests.pendingCountsByEmployeeIds(List.of(1L, 2L))).thenReturn(Map.of());
+        when(employees.countEmployees(filter)).thenReturn(137);
+
+        Page<EmployeeDto> result = service.listPage(filter, hrUser(), page);
+
+        assertThat(result.total()).isEqualTo(137);
+        verify(employees).countEmployees(filter);
     }
 
     @Test

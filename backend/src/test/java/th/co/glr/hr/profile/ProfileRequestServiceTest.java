@@ -10,6 +10,7 @@ import java.time.LocalDate;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
+import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -17,7 +18,8 @@ import th.co.glr.hr.employee.EmployeeRepository;
 class ProfileRequestServiceTest {
     private final ProfileRequestRepository profileRequests = mock(ProfileRequestRepository.class);
     private final EmployeeRepository employees = mock(EmployeeRepository.class);
-    private final ProfileRequestService service = new ProfileRequestService(profileRequests, employees);
+    private final AuditService auditService = mock(AuditService.class);
+    private final ProfileRequestService service = new ProfileRequestService(profileRequests, employees, auditService);
     private final UserPrincipal reviewer = new UserPrincipal(7L, "hr@glr.co.th", "HR", "hr", 10L, true, LocalDate.now(), false, null, false);
 
     @Test
@@ -57,6 +59,7 @@ class ProfileRequestServiceTest {
         service.update(101L, new UpdateProfileRequestRequest("approved", null), reviewer);
 
         verify(employees).updateEmail(existing.employeeId(), existing.newValue());
+        verify(auditService).record(reviewer, "APPROVE_PROFILE_REQUEST", "profile_request", 101L, existing, reviewed);
     }
 
     @Test
