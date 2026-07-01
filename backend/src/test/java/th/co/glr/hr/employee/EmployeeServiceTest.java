@@ -1,10 +1,12 @@
 package th.co.glr.hr.employee;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -15,8 +17,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.slf4j.LoggerFactory;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.profile.ProfileRequestRepository;
 
 class EmployeeServiceTest {
@@ -77,6 +81,18 @@ class EmployeeServiceTest {
         } finally {
             detachAuditAppender(appender);
         }
+    }
+
+    @Test
+    void deniesCrossUserEmployeeDetailBeforeRepositoryLookup() {
+        UserPrincipal user = new UserPrincipal(
+            8L, "e@glr.co.th", "E", "employee", 6L, true, LocalDate.now(), false, null, false);
+
+        assertThatThrownBy(() -> service.get(5L, user))
+            .isInstanceOfSatisfying(ApiException.class, exception ->
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        verifyNoInteractions(employees, profileRequests);
     }
 
     private ListAppender<ILoggingEvent> attachAuditAppender() {
