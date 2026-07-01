@@ -6,7 +6,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.LocalDate;
@@ -32,8 +31,8 @@ class AttendanceServiceTest {
     }
 
     @Test
-    void insertsPunchWhenAgentTokenMatches() {
-        properties.getAttendance().setAgentToken("secret");
+    void insertsPunchWhenPerDeviceTokenMatches() {
+        stubDevice(new AttendanceDeviceCredential("SHOWROOM", true, sha256Hex("secret")));
         when(attendanceRepository.upsertPunch(any(NormalizedAttendancePunch.class))).thenReturn(99L);
 
         AttendancePunchResponse response = attendanceService.receivePunch(validRequest(), "secret");
@@ -46,7 +45,7 @@ class AttendanceServiceTest {
 
     @Test
     void treatsNullRepositoryReturnAsDuplicate() {
-        properties.getAttendance().setAgentToken("secret");
+        stubDevice(new AttendanceDeviceCredential("SHOWROOM", true, sha256Hex("secret")));
         when(attendanceRepository.upsertPunch(any(NormalizedAttendancePunch.class))).thenReturn(null);
 
         AttendancePunchResponse response = attendanceService.receivePunch(validRequest(), "secret");
@@ -57,25 +56,118 @@ class AttendanceServiceTest {
     }
 
     @Test
-    void rejectsInvalidAgentTokenBeforeRepositoryCall() {
-        properties.getAttendance().setAgentToken("secret");
+    void rejectsInvalidPerDeviceTokenBeforeInsert() {
+        stubDevice(new AttendanceDeviceCredential("SHOWROOM", true, sha256Hex("secret")));
 
         assertThatThrownBy(() -> attendanceService.receivePunch(validRequest(), "wrong"))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.UNAUTHORIZED);
 
-        verifyNoInteractions(attendanceRepository);
+        verify(attendanceRepository, org.mockito.Mockito.never()).upsertPunch(any(NormalizedAttendancePunch.class));
     }
 
     @Test
-    void rejectsRequestsWhenAgentTokenIsNotConfigured() {
+    void rejectsPunchFromUnknownDevice() {
+        when(attendanceRepository.findDeviceCredential("SHOWROOM_SC700")).thenReturn(Optional.empty());
+
         assertThatThrownBy(() -> attendanceService.receivePunch(validRequest(), "secret"))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.UNAUTHORIZED);
+
+        verify(attendanceRepository, org.mockito.Mockito.never()).upsertPunch(any(NormalizedAttendancePunch.class));
+    }
+
+    @Test
+    void rejectsPunchFromInactiveDevice() {
+        stubDevice(new AttendanceDeviceCredential("SHOWROOM", false, sha256Hex("secret")));
+
+        assertThatThrownBy(() -> attendanceService.receivePunch(validRequest(), "secret"))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    void rejectsPunchWhenDeviceBelongsToAnotherSite() {
+        stubDevice(new AttendanceDeviceCredential("WAREHOUSE", true, sha256Hex("secret")));
+
+        assertThatThrownBy(() -> attendanceService.receivePunch(validRequest(), "secret"))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    void fallsBackToSharedTokenWhenDeviceHasNoTokenYet() {
+        stubDevice(new AttendanceDeviceCredential("SHOWROOM", true, null));
+        properties.getAttendance().setAgentToken("shared-secret");
+        when(attendanceRepository.upsertPunch(any(NormalizedAttendancePunch.class))).thenReturn(5L);
+
+        AttendancePunchResponse response = attendanceService.receivePunch(validRequest(), "shared-secret");
+
+        assertThat(response.inserted()).isTrue();
+    }
+
+    @Test
+    void rejectsPunchWhenDeviceUnprovisionedAndNoSharedToken() {
+        stubDevice(new AttendanceDeviceCredential("SHOWROOM", true, null));
+
+        assertThatThrownBy(() -> attendanceService.receivePunch(validRequest(), "anything"))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
 
-        verifyNoInteractions(attendanceRepository);
+        verify(attendanceRepository, org.mockito.Mockito.never()).upsertPunch(any(NormalizedAttendancePunch.class));
+    }
+
+    @Test
+    void rotateDeviceTokenReturnsPlaintextAndStoresOnlyItsHash() {
+        when(attendanceRepository.updateAgentTokenHash(
+                org.mockito.ArgumentMatchers.eq("SHOWROOM_SC700"),
+                org.mockito.ArgumentMatchers.anyString(),
+                any(java.time.OffsetDateTime.class))).thenReturn(1);
+
+        // lower-case input is normalized to the stored upper-case device_code
+        RotateAgentTokenResponse response = attendanceService.rotateDeviceToken("showroom_sc700");
+
+        assertThat(response.deviceCode()).isEqualTo("SHOWROOM_SC700");
+        assertThat(response.agentToken()).matches("^[0-9a-f]{64}$");
+        assertThat(response.rotatedAt()).isNotNull();
+
+        org.mockito.ArgumentCaptor<String> hash = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(attendanceRepository).updateAgentTokenHash(
+            org.mockito.ArgumentMatchers.eq("SHOWROOM_SC700"), hash.capture(), any(java.time.OffsetDateTime.class));
+        // The stored value is the hash of the returned token, never the token itself.
+        assertThat(hash.getValue()).isEqualTo(sha256Hex(response.agentToken()));
+        assertThat(hash.getValue()).isNotEqualTo(response.agentToken());
+    }
+
+    @Test
+    void rotateDeviceTokenRejectsUnknownDevice() {
+        when(attendanceRepository.updateAgentTokenHash(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                any(java.time.OffsetDateTime.class))).thenReturn(0);
+
+        assertThatThrownBy(() -> attendanceService.rotateDeviceToken("NOPE"))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    private void stubDevice(AttendanceDeviceCredential device) {
+        when(attendanceRepository.findDeviceCredential("SHOWROOM_SC700")).thenReturn(Optional.of(device));
+    }
+
+    private static String sha256Hex(String value) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Test
