@@ -5,6 +5,7 @@ import jakarta.servlet.http.HttpSession;
 import org.springframework.http.ResponseEntity;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -32,6 +33,15 @@ public class AttendanceController {
             @Valid @RequestBody AttendancePunchRequest request,
             @RequestHeader(value = AGENT_TOKEN_HEADER, required = false) String agentToken) {
         return ResponseEntity.ok(attendanceService.receivePunch(request, agentToken));
+    }
+
+    @PostMapping("/devices/{deviceCode}/agent-token")
+    ResponseEntity<RotateAgentTokenResponse> rotateAgentToken(
+            @PathVariable String deviceCode,
+            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, "hr");
+        return ResponseEntity.ok(attendanceService.rotateDeviceToken(deviceCode));
     }
 
     @PostMapping("/imports/dat")

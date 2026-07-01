@@ -21,6 +21,35 @@ public class AttendanceRepository {
         this.objectMapper = objectMapper;
     }
 
+    /** Credentials for authenticating an inbound punch — returns empty when the device_code is unknown. */
+    public Optional<AttendanceDeviceCredential> findDeviceCredential(String deviceCode) {
+        return jdbc.query("""
+            SELECT site_code, is_active, agent_token_hash
+              FROM hr.attendance_device
+             WHERE device_code = :deviceCode
+            """, Map.of("deviceCode", deviceCode),
+            (rs, rowNum) -> new AttendanceDeviceCredential(
+                rs.getString("site_code"),
+                rs.getBoolean("is_active"),
+                rs.getString("agent_token_hash")))
+            .stream()
+            .findFirst();
+    }
+
+    /** Stores a rotated per-device token hash; returns rows updated (0 = unknown device_code). */
+    public int updateAgentTokenHash(String deviceCode, String tokenHash, java.time.OffsetDateTime rotatedAt) {
+        return jdbc.update("""
+            UPDATE hr.attendance_device
+               SET agent_token_hash = :hash,
+                   agent_token_rotated_at = :rotatedAt,
+                   updated_at = now()
+             WHERE device_code = :deviceCode
+            """, new MapSqlParameterSource()
+                .addValue("deviceCode", deviceCode)
+                .addValue("hash", tokenHash)
+                .addValue("rotatedAt", rotatedAt));
+    }
+
     public Long upsertPunch(NormalizedAttendancePunch punch) {
         DeviceRecord device = findDevice(punch.deviceCode());
         return upsertPunch(punch, device);
