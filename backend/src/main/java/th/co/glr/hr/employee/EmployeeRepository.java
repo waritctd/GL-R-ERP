@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import th.co.glr.hr.common.PageRequest;
 import java.util.stream.Collectors;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
@@ -43,9 +44,35 @@ public class EmployeeRepository {
     }
 
     public List<EmployeeDto> findEmployees(EmployeeFilter filter, boolean includeSensitive) {
+        return findEmployees(filter, includeSensitive, null);
+    }
+
+    public List<EmployeeDto> findEmployees(EmployeeFilter filter, boolean includeSensitive, PageRequest page) {
         MapSqlParameterSource params = new MapSqlParameterSource();
         StringBuilder sql = new StringBuilder(baseSelect(includeSensitive)).append(" WHERE 1 = 1");
+        appendFilters(sql, params, filter);
 
+        sql.append(" ORDER BY e.employee_code");
+        if (page != null) {
+            sql.append(" LIMIT :limit OFFSET :offset");
+            params.addValue("limit", page.size());
+            params.addValue("offset", page.offset());
+        }
+
+        return jdbc.query(sql.toString(), params, (rs, rowNum) -> mapEmployeeSummary(rs, includeSensitive));
+    }
+
+    public int countEmployees(EmployeeFilter filter) {
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM (")
+            .append(baseSelect(false)).append(" WHERE 1 = 1");
+        appendFilters(sql, params, filter);
+        sql.append(") AS filtered_employees");
+        Integer total = jdbc.queryForObject(sql.toString(), params, Integer.class);
+        return total == null ? 0 : total;
+    }
+
+    private void appendFilters(StringBuilder sql, MapSqlParameterSource params, EmployeeFilter filter) {
         if (hasText(filter.search())) {
             sql.append("""
                  AND (
@@ -74,10 +101,6 @@ public class EmployeeRepository {
             sql.append(" AND e.is_active = :active");
             params.addValue("active", filter.active());
         }
-
-        sql.append(" ORDER BY e.employee_code");
-
-        return jdbc.query(sql.toString(), params, (rs, rowNum) -> mapEmployeeSummary(rs, includeSensitive));
     }
 
     public Optional<EmployeeDto> findEmployeeById(long id, boolean includeSensitive) {

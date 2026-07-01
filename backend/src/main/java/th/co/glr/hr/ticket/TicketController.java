@@ -12,6 +12,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.Page;
+import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.ticket.TicketResponses.TicketDetailResponse;
 import th.co.glr.hr.ticket.TicketResponses.TicketListResponse;
 
@@ -27,9 +29,15 @@ public class TicketController {
     }
 
     @GetMapping
-    TicketListResponse list(@RequestParam(required = false) String status, HttpSession session) {
+    TicketListResponse list(
+        @RequestParam(required = false) String status,
+        @RequestParam(required = false) Integer page,
+        @RequestParam(required = false) Integer size,
+        HttpSession session
+    ) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketListResponse(ticketService.list(status, user));
+        Page<TicketSummaryDto> result = ticketService.listPage(status, user, PageRequest.resolve(page, size));
+        return new TicketListResponse(result.items(), result.page(), result.size(), result.total());
     }
 
     @PostMapping
