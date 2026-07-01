@@ -120,6 +120,30 @@ class AttendanceControllerTest {
             .andExpect(status().isUnauthorized());
     }
 
+    @Test
+    void allowsHrToRotateDeviceAgentToken() throws Exception {
+        when(attendanceService.rotateDeviceToken(eq("SHOWROOM_SC700")))
+            .thenReturn(new RotateAgentTokenResponse("SHOWROOM_SC700", "a".repeat(64),
+                java.time.OffsetDateTime.parse("2026-07-01T10:00:00+07:00")));
+
+        mvc.perform(post("/api/attendance/devices/SHOWROOM_SC700/agent-token")
+                .session(sessionFor("hr")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.device_code").value("SHOWROOM_SC700"))
+            .andExpect(jsonPath("$.agent_token").value("a".repeat(64)));
+
+        verify(attendanceService).rotateDeviceToken(eq("SHOWROOM_SC700"));
+    }
+
+    @Test
+    void forbidsEmployeesFromRotatingDeviceAgentToken() throws Exception {
+        mvc.perform(post("/api/attendance/devices/SHOWROOM_SC700/agent-token")
+                .session(sessionFor("employee")))
+            .andExpect(status().isForbidden());
+
+        verifyNoInteractions(attendanceService);
+    }
+
     private MockHttpSession sessionFor(String role) {
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionContext.SESSION_USER_KEY,

@@ -3,7 +3,9 @@ package th.co.glr.hr.attendance;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.HexFormat;
 import java.util.List;
@@ -21,6 +23,8 @@ public class AttendanceService {
     // HR and executives (ceo) see all attendance company-wide; admin for support access.
     private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo", "admin");
 
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
     private final AttendanceRepository attendanceRepository;
     private final AttendanceDatParser datParser;
     private final AppProperties properties;
@@ -36,7 +40,9 @@ public class AttendanceService {
 
     @Transactional
     public AttendancePunchResponse receivePunch(AttendancePunchRequest request, String agentToken) {
-        requireAgentToken(agentToken);
+        String siteCode = request.siteCode().trim().toUpperCase();
+        String deviceCode = request.deviceCode().trim().toUpperCase();
+        authenticateDevice(siteCode, deviceCode, agentToken);
         NormalizedAttendancePunch punch = normalize(request);
         Long punchId = attendanceRepository.upsertPunch(punch);
         if (punchId == null) {
@@ -130,14 +136,60 @@ public class AttendanceService {
             new AttendancePunchFilter(employeeId, divisionId, effectiveFrom, effectiveTo, limit));
     }
 
-    private void requireAgentToken(String agentToken) {
-        String expected = properties.getAttendance().getAgentToken();
-        if (expected == null || expected.isBlank()) {
-            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "Attendance agent token is not configured");
+    /**
+     * Issues (or rotates) the agent token for one device. Returns the plaintext token once; only its
+     * SHA-256 hash is stored. HR-only mutation — authorization is enforced at the controller.
+     */
+    @Transactional
+    public RotateAgentTokenResponse rotateDeviceToken(String rawDeviceCode) {
+        if (rawDeviceCode == null || rawDeviceCode.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Device code is required");
         }
-        if (agentToken == null || agentToken.isBlank() || !constantTimeEquals(expected, agentToken.trim())) {
+        String deviceCode = rawDeviceCode.trim().toUpperCase();
+        String token = generateAgentToken();
+        OffsetDateTime rotatedAt = OffsetDateTime.now();
+        int updated = attendanceRepository.updateAgentTokenHash(deviceCode, sha256Hex(token), rotatedAt);
+        if (updated != 1) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "Attendance device is not registered");
+        }
+        return new RotateAgentTokenResponse(deviceCode, token, rotatedAt);
+    }
+
+    /**
+     * Authenticates an inbound punch against the presenting device's own token, scoping the accepted
+     * site/device to that credential. Devices not yet provisioned with a per-device token fall back to
+     * the legacy shared token during rollout; unset that shared token to enforce per-device-only.
+     */
+    private void authenticateDevice(String siteCode, String deviceCode, String agentToken) {
+        AttendanceDeviceCredential device = attendanceRepository.findDeviceCredential(deviceCode).orElse(null);
+        if (device == null || !device.active()) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "Unknown or inactive attendance device");
+        }
+        if (!device.siteCode().equals(siteCode)) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "Attendance device does not belong to requested site");
+        }
+        if (device.tokenHash() != null) {
+            if (agentToken == null || agentToken.isBlank()
+                || !constantTimeEquals(device.tokenHash(), sha256Hex(agentToken.trim()))) {
+                throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid attendance agent token");
+            }
+            return;
+        }
+        // Transitional fallback: no per-device token issued yet — accept the legacy shared token.
+        String shared = properties.getAttendance().getAgentToken();
+        if (shared == null || shared.isBlank()) {
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
+                "Attendance device has no agent token; rotate one to enable punches");
+        }
+        if (agentToken == null || agentToken.isBlank() || !constantTimeEquals(shared, agentToken.trim())) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid attendance agent token");
         }
+    }
+
+    private String generateAgentToken() {
+        byte[] bytes = new byte[32];
+        SECURE_RANDOM.nextBytes(bytes);
+        return HexFormat.of().formatHex(bytes);
     }
 
     private boolean constantTimeEquals(String expected, String actual) {
