@@ -31,14 +31,14 @@ const STATUS_TABS = [
   { value: 'submitted',        label: 'รอรับเรื่อง',          tone: 'warning' },
   { value: 'in_review',        label: 'กำลังดำเนินการ',       tone: 'info'    },
   { value: 'price_proposed',   label: 'รอการอนุมัติ',         tone: 'warning' },
-  { value: 'approved',         label: 'อนุมัติแล้ว',          tone: 'success' },
-  { value: 'quotation_issued', label: 'ออกใบเสนอราคาแล้ว',   tone: 'success' },
-  { value: 'closed',           label: 'ปิดแล้ว',              tone: 'neutral' },
+  { value: 'approved',         label: 'อนุมัติแล้ว',         tone: 'success' },
+  { value: 'document_issued',  label: 'ออกใบแจ้งยอดแล้ว',   tone: 'success' },
+  { value: 'closed',           label: 'ปิดแล้ว',             tone: 'neutral' },
 ];
 
 const STATUS_ORDER = [
   'draft', 'submitted', 'in_review', 'price_proposed',
-  'approved', 'quotation_issued', 'closed', 'cancelled', 'rejected',
+  'approved', 'document_issued', 'closed', 'cancelled', 'rejected',
 ];
 
 function SortHeader({ label, sortKey, active, dir, onSort }) {
