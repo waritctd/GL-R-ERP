@@ -77,7 +77,7 @@ The `.dat` import expects JSON with `site_code`, `device_code`, `file_name`, and
 
 Recommended production hardening:
 
-- Use a dedicated app database role with least-privilege grants.
+- Use a dedicated app database role with least-privilege grants. See [docs/least-privilege-db-role.md](../docs/least-privilege-db-role.md) for the `hr_app` script + rollout runbook (issue #25).
 - Grant `hr_restricted` access only if this API is allowed to serve PDPA-sensitive fields to HR.
 - Put TLS and secure cookie settings behind the production reverse proxy.
 - Replace the temporary password flow with your organization IAM or a password reset workflow.
