@@ -40,7 +40,7 @@ export function ProfileRequestsPage({ profileRequests, onReview }) {
               <span>{formatShortDate(request.requestedAt)}</span>
               {request.status === 'pending' ? (
                 <span className="row-actions">
-                  <button type="button" className="danger-button icon-only" onClick={() => onReview(request.id, 'rejected')} title="ปฏิเสธ">
+                  <button type="button" className="danger-button icon-only" onClick={() => onReview(request.id, 'rejected')} title="ปฏิเสธ" aria-label="ปฏิเสธ">
                     <Icon name="close" />
                   </button>
                   <button type="button" className="success-button" onClick={() => onReview(request.id, 'approved')}>

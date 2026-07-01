@@ -480,16 +480,16 @@ export function LeavePage({ user, currentEmployee, showToast }) {
               <span className="row-actions">
                 {reviewable ? (
                   <>
-                    <button type="button" className="icon-button" title="อนุมัติ" disabled={saving} onClick={() => approve(request.id)}>
+                    <button type="button" className="icon-button" title="อนุมัติ" aria-label="อนุมัติ" disabled={saving} onClick={() => approve(request.id)}>
                       <Icon name="check" size={14} />
                     </button>
-                    <button type="button" className="icon-button" title="ปฏิเสธ" disabled={saving} onClick={() => reject(request.id)}>
+                    <button type="button" className="icon-button" title="ปฏิเสธ" aria-label="ปฏิเสธ" disabled={saving} onClick={() => reject(request.id)}>
                       <Icon name="close" size={14} />
                     </button>
                   </>
                 ) : null}
                 {(canCancel || managerCancellable) ? (
-                  <button type="button" className="icon-button" title="ยกเลิก" disabled={saving} onClick={() => cancel(request.id)}>
+                  <button type="button" className="icon-button" title="ยกเลิก" aria-label="ยกเลิก" disabled={saving} onClick={() => cancel(request.id)}>
                     <Icon name="close" size={14} />
                   </button>
                 ) : null}

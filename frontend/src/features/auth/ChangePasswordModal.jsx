@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../../components/common/Icon.jsx';
+
+const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
 
 /**
  * Self-service password change. Used in two modes:
@@ -8,10 +10,51 @@ import { Icon } from '../../components/common/Icon.jsx';
  *  - optional: dismissable, launched voluntarily by the user.
  */
 export function ChangePasswordModal({ forced = false, loading = false, onSubmit, onClose, onLogout }) {
+  const panelRef = useRef(null);
+  const previouslyFocused = useRef(null);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    previouslyFocused.current = document.activeElement;
+    const panel = panelRef.current;
+    const focusables = () => Array.from(panel?.querySelectorAll(FOCUSABLE) ?? []);
+
+    const initial = focusables();
+    (initial[0] ?? panel)?.focus();
+
+    function onKeyDown(event) {
+      if (event.key === 'Escape') {
+        if (!forced && onClose) {
+          event.stopPropagation();
+          onClose();
+        }
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      if (previouslyFocused.current instanceof HTMLElement) {
+        previouslyFocused.current.focus();
+      }
+    };
+  }, [forced, onClose]);
 
   async function submit(event) {
     event.preventDefault();
@@ -39,10 +82,12 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
     <div className="modal-backdrop" role="presentation" onMouseDown={forced ? undefined : onClose}>
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- dialog only stops backdrop click-through; it is not an interactive control */}
       <section
+        ref={panelRef}
         className="modal-panel"
         role="dialog"
         aria-modal="true"
         aria-label="เปลี่ยนรหัสผ่าน"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="modal-header">
@@ -51,7 +96,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
             <p>{forced ? 'กรุณาตั้งรหัสผ่านใหม่เพื่อความปลอดภัยก่อนเริ่มใช้งาน' : 'อัปเดตรหัสผ่านของคุณ'}</p>
           </div>
           {!forced && onClose ? (
-            <button type="button" className="icon-button" onClick={onClose} title="ปิด">
+            <button type="button" className="icon-button" onClick={onClose} title="ปิด" aria-label="ปิด">
               <Icon name="close" />
             </button>
           ) : null}

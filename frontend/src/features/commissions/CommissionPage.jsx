@@ -302,16 +302,16 @@ export function CommissionPage({ user, showToast }) {
                     <span style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
                       {canApprove && (
                         <>
-                          <button type="button" className="icon-button" title="แก้ไขค่าหัก" onClick={() => beginEdit(record)}>
+                          <button type="button" className="icon-button" title="แก้ไขค่าหัก" aria-label="แก้ไขค่าหัก" onClick={() => beginEdit(record)}>
                             <Icon name="pencil" size={14} />
                           </button>
                           {record.status === 'SUBMITTED' && (
-                            <button type="button" className="icon-button" title="อนุมัติ" disabled={saving} onClick={() => approve(record.id)}>
+                            <button type="button" className="icon-button" title="อนุมัติ" aria-label="อนุมัติ" disabled={saving} onClick={() => approve(record.id)}>
                               <Icon name="check" size={14} />
                             </button>
                           )}
                           {record.kind === 'SALE' && record.status === 'APPROVED' && (
-                            <button type="button" className="icon-button" title="บันทึกหักคืน" disabled={saving} onClick={() => clawback(record.id)}>
+                            <button type="button" className="icon-button" title="บันทึกหักคืน" aria-label="บันทึกหักคืน" disabled={saving} onClick={() => clawback(record.id)}>
                               <Icon name="close" size={14} />
                             </button>
                           )}

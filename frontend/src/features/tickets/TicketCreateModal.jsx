@@ -105,6 +105,7 @@ export function TicketCreateModal({ onClose, onSubmit }) {
                     className="icon-button"
                     onClick={() => removeItem(index)}
                     title="ลบรายการ"
+                    aria-label={`ลบรายการที่ ${index + 1}`}
                     style={{ color: '#ef4444' }}
                   >
                     <Icon name="close" size={14} />

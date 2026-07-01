@@ -205,7 +205,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             )}
           </div>
         </div>
-        <button type="button" className="icon-button" onClick={loadTicket} title="รีเฟรช">
+        <button type="button" className="icon-button" onClick={loadTicket} title="รีเฟรช" aria-label="รีเฟรช">
           <Icon name="refresh" />
         </button>
       </header>
@@ -384,7 +384,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                       <span style={{ fontSize: 12, fontWeight: 700, color: '#64748b' }}>รายการที่ {index + 1}</span>
                       {editDraft.length > 1 && (
-                        <button type="button" className="icon-button" style={{ color: '#ef4444' }}
+                        <button type="button" className="icon-button" style={{ color: '#ef4444' }} aria-label={`ลบรายการที่ ${index + 1}`}
                           onClick={() => setEditDraft((d) => d.filter((_, i) => i !== index))}>
                           <Icon name="close" size={14} />
                         </button>
