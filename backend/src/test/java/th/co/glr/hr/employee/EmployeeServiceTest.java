@@ -33,11 +33,20 @@ class EmployeeServiceTest {
         EmployeeFilter filter = new EmployeeFilter("finance", null, null, null, true);
         when(employees.findEmployees(filter, false)).thenReturn(List.of(employee(1L), employee(2L)));
         when(profileRequests.pendingCountsByEmployeeIds(List.of(1L, 2L))).thenReturn(Map.of(2L, 3));
+        ListAppender<ILoggingEvent> appender = attachAuditAppender();
 
-        List<EmployeeDto> result = service.list(filter);
+        try {
+            List<EmployeeDto> result = service.list(filter, hrUser());
 
-        assertThat(result).extracting(EmployeeDto::pendingRequestCount).containsExactly(0, 3);
-        verify(profileRequests).pendingCountsByEmployeeIds(List.of(1L, 2L));
+            assertThat(result).extracting(EmployeeDto::pendingRequestCount).containsExactly(0, 3);
+            assertThat(appender.list).anyMatch(event ->
+                event.getFormattedMessage().contains("LIST_EMPLOYEE_SALARY_SUMMARY")
+                    && event.getFormattedMessage().contains("targetEmployeeIds=\"1,2\"")
+                    && event.getFormattedMessage().contains("fields=\"current_salary\""));
+            verify(profileRequests).pendingCountsByEmployeeIds(List.of(1L, 2L));
+        } finally {
+            detachAuditAppender(appender);
+        }
     }
 
     @Test
@@ -45,7 +54,7 @@ class EmployeeServiceTest {
         EmployeeFilter filter = new EmployeeFilter("missing", null, null, null, true);
         when(employees.findEmployees(filter, false)).thenReturn(List.of());
 
-        assertThat(service.list(filter)).isEmpty();
+        assertThat(service.list(filter, hrUser())).isEmpty();
 
         verify(profileRequests, never()).pendingCountsByEmployeeIds(anyList());
     }
@@ -61,7 +70,8 @@ class EmployeeServiceTest {
         try {
             assertThat(appender.list).anyMatch(event ->
                 event.getFormattedMessage().contains("VIEW_EMPLOYEE_DETAIL")
-                    && event.getFormattedMessage().contains("targetEmployeeId=5"));
+                    && event.getFormattedMessage().contains("targetEmployeeId=5")
+                    && event.getFormattedMessage().contains("fields=\"restricted_pii,current_salary,salary_history\""));
         } finally {
             detachAuditAppender(appender);
         }
@@ -104,6 +114,10 @@ class EmployeeServiceTest {
 
     private void detachAuditAppender(ListAppender<ILoggingEvent> appender) {
         ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger("th.co.glr.hr.audit")).detachAppender(appender);
+    }
+
+    private UserPrincipal hrUser() {
+        return new UserPrincipal(7L, "hr@glr.co.th", "HR", "hr", 10L, true, LocalDate.now(), false, null, false);
     }
 
     private EmployeeDto employee(long id) {

@@ -9,6 +9,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +24,7 @@ import th.co.glr.hr.common.ApiException;
 @Service
 public class PayrollService {
     private static final Set<String> PAYROLL_ROLES = Set.of("hr", "admin");
+    private static final Logger AUDIT = LoggerFactory.getLogger("th.co.glr.hr.audit");
 
     private final PayrollRepository payrollRepository;
     private final PayrollCalculator payrollCalculator;
@@ -44,6 +47,11 @@ public class PayrollService {
         requirePayrollRole(actor);
         LocalDate month = normalizeMonth(payrollMonth);
         return payrollRepository.findPeriodByMonth(month)
+            .map(period -> {
+                auditPayrollAccess("VIEW_PAYROLL_PERIOD", actor, period,
+                    "base_salary,gross_earnings,deductions,net_pay,bank_account");
+                return period;
+            })
             .orElseGet(() -> preview(month, List.of(), actor));
     }
 
@@ -58,8 +66,11 @@ public class PayrollService {
         LocalDate month = normalizeMonth(request.payrollMonth());
         PayrollPeriodDto preview = preview(month, safeInputs(request.inputs()), actor);
         long periodId = payrollRepository.saveProcessedPeriod(month, actor.employeeId(), preview.lines());
-        return payrollRepository.findPeriodById(periodId)
+        PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Payroll period was not saved"));
+        auditPayrollAccess("PROCESS_PAYROLL", actor, period,
+            "base_salary,gross_earnings,deductions,net_pay");
+        return period;
     }
 
     public String bankExport(long periodId, UserPrincipal actor) {
@@ -80,6 +91,7 @@ public class PayrollService {
                 .append(line.employeeName()).append('|')
                 .append(line.netPay()).append('\n');
         }
+        auditPayrollAccess("EXPORT_PAYROLL_BANK_FILE", actor, period, "bank_account,net_pay");
         return builder.toString();
     }
 
@@ -102,7 +114,7 @@ public class PayrollService {
             ))
             .sorted(Comparator.comparing(PayrollLineDto::employeeCode))
             .toList();
-        return new PayrollPeriodDto(
+        PayrollPeriodDto period = new PayrollPeriodDto(
             null,
             payrollMonth,
             payrollMonth,
@@ -119,6 +131,9 @@ public class PayrollService {
             sum(lines, PayrollLineDto::withholdingTax),
             lines
         );
+        auditPayrollAccess("PREVIEW_PAYROLL", actor, period,
+            "base_salary,gross_earnings,deductions,net_pay");
+        return period;
     }
 
     private PayrollLineDto calculateLine(
@@ -228,6 +243,23 @@ public class PayrollService {
 
     private String nullToBlank(String value) {
         return value == null ? "" : value;
+    }
+
+    private void auditPayrollAccess(String action, UserPrincipal actor, PayrollPeriodDto period, String fields) {
+        String targetEmployeeIds = period.lines().stream()
+            .map(PayrollLineDto::employeeId)
+            .map(String::valueOf)
+            .collect(Collectors.joining(","));
+        AUDIT.info(
+            "sensitive_data_access action={} actorId={} actorEmail=\"{}\" payrollPeriodId={} payrollMonth={} targetEmployeeIds=\"{}\" resultCount={} fields=\"{}\"",
+            action,
+            actor.id(),
+            actor.email(),
+            period.id(),
+            period.payrollMonth(),
+            targetEmployeeIds,
+            period.lines().size(),
+            fields);
     }
 
     private interface MoneyExtractor {

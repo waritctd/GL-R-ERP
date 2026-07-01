@@ -38,7 +38,7 @@ public class EmployeeController {
         UserPrincipal user = sessions.requireUser(session);
         sessions.requireAnyRole(user, "hr");
         Boolean activeFilter = "true".equalsIgnoreCase(active) ? Boolean.TRUE : "false".equalsIgnoreCase(active) ? Boolean.FALSE : null;
-        return new EmployeesResponse(employeeService.list(new EmployeeFilter(search, divisionId, departmentTh, statusId, activeFilter)));
+        return new EmployeesResponse(employeeService.list(new EmployeeFilter(search, divisionId, departmentTh, statusId, activeFilter), user));
     }
 
     @PostMapping
