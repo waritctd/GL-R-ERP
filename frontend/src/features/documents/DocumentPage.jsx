@@ -458,7 +458,7 @@ export function DocumentPage({ ticketId, onBack, showToast }) {
           <div style={{ position: 'sticky', top: 16, height: 'calc(100vh - 120px)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <strong style={{ fontSize: 13 }}>Preview</strong>
-              <button type="button" className="icon-button" onClick={() => setPreview('')}><Icon name="close" size={14} /></button>
+              <button type="button" className="icon-button" onClick={() => setPreview('')} title="ปิดตัวอย่าง" aria-label="ปิดตัวอย่าง"><Icon name="close" size={14} /></button>
             </div>
             <iframe
               ref={iframeRef}

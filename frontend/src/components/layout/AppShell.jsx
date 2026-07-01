@@ -38,7 +38,7 @@ export function AppShell({ user, employee, route, onRoute, onLogout, pendingRequ
             </div>
             <Avatar employee={employee} name={user.name} size="sm" />
             <NotificationBell onOpenTicket={onOpenTicket} />
-            <button className="icon-button" type="button" onClick={onLogout} title="ออกจากระบบ">
+            <button className="icon-button" type="button" onClick={onLogout} title="ออกจากระบบ" aria-label="ออกจากระบบ">
               <Icon name="logout" />
             </button>
           </div>

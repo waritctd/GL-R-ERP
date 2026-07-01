@@ -166,7 +166,7 @@ export function TicketListPage({ user, onOpenTicket, showToast }) {
             </button>
           );
         })}
-        <button type="button" className="icon-button" onClick={() => loadTickets(statusFilter)} title="รีเฟรช">
+        <button type="button" className="icon-button" onClick={() => loadTickets(statusFilter)} title="รีเฟรช" aria-label="รีเฟรช">
           <Icon name="refresh" />
         </button>
       </div>
@@ -213,6 +213,7 @@ export function TicketListPage({ user, onOpenTicket, showToast }) {
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={safePage === 1}
                 title="หน้าก่อนหน้า"
+                aria-label="หน้าก่อนหน้า"
               >
                 <Icon name="chevronLeft" size={16} />
               </button>
@@ -225,6 +226,7 @@ export function TicketListPage({ user, onOpenTicket, showToast }) {
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={safePage === totalPages}
                 title="หน้าถัดไป"
+                aria-label="หน้าถัดไป"
               >
                 <Icon name="chevronRight" size={16} />
               </button>

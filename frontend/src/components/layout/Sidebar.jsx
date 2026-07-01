@@ -42,7 +42,7 @@ export function Sidebar({ items, activeRoute, onRoute, user, employee, onLogout 
           <strong>{employee?.nameTh || user.name}</strong>
           <small>{roleLabel(user.role)}</small>
         </span>
-        <button className="icon-button dark" type="button" onClick={onLogout} title="ออกจากระบบ">
+        <button className="icon-button dark" type="button" onClick={onLogout} title="ออกจากระบบ" aria-label="ออกจากระบบ">
           <Icon name="logout" />
         </button>
       </div>

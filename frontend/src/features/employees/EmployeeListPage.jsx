@@ -157,11 +157,11 @@ export function EmployeeListPage({ user, employees, onOpenEmployee, onCreateEmpl
         <footer className="pagination">
           <span>แสดง {(safePage - 1) * pageSize + (rows.length ? 1 : 0)}-{Math.min(safePage * pageSize, filteredEmployees.length)} จาก {filteredEmployees.length}</span>
           <div>
-            <button type="button" className="icon-button" onClick={() => setPage(Math.max(1, safePage - 1))} disabled={safePage === 1}>
+            <button type="button" className="icon-button" onClick={() => setPage(Math.max(1, safePage - 1))} disabled={safePage === 1} aria-label="หน้าก่อนหน้า">
               <Icon name="chevronLeft" />
             </button>
             <strong>{safePage} / {pages}</strong>
-            <button type="button" className="icon-button" onClick={() => setPage(Math.min(pages, safePage + 1))} disabled={safePage === pages}>
+            <button type="button" className="icon-button" onClick={() => setPage(Math.min(pages, safePage + 1))} disabled={safePage === pages} aria-label="หน้าถัดไป">
               <Icon name="chevronRight" />
             </button>
           </div>

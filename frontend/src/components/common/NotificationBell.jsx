@@ -74,6 +74,7 @@ export function NotificationBell({ onOpenTicket }) {
         className="icon-button"
         onClick={() => setOpen((v) => !v)}
         title="การแจ้งเตือน"
+        aria-label="การแจ้งเตือน"
         style={{ position: 'relative' }}
       >
         <Icon name="bell" />
