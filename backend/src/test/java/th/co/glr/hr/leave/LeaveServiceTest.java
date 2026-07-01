@@ -199,6 +199,6 @@ class LeaveServiceTest {
     }
 
     private UserPrincipal user(String role, Long employeeId) {
-        return new UserPrincipal(employeeId == null ? 1L : employeeId, role + "@glr.co.th", role, role, employeeId, true, LocalDate.now(), false);
+        return new UserPrincipal(employeeId == null ? 1L : employeeId, role + "@glr.co.th", role, role, employeeId, true, LocalDate.now(), false, null, false);
     }
 }

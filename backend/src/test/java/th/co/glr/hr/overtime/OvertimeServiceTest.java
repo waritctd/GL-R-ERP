@@ -79,6 +79,7 @@ class OvertimeServiceTest {
         verify(overtimeRepository).findRequests(new OvertimeFilter(
             null,
             null,
+            null,
             LocalDate.parse("2026-06-01"),
             LocalDate.parse("2026-06-30"),
             OvertimeStatus.SUBMITTED
@@ -95,7 +96,7 @@ class OvertimeServiceTest {
             "HOLIDAY",
             "Urgent delivery"
         );
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, null, true)));
         when(overtimeRepository.employeeExists(10L)).thenReturn(true);
         when(overtimeRepository.create(eq(10L), eq(99L), eq(request), eq(120), eq(OvertimeDayType.HOLIDAY), eq(LocalDate.parse("2026-06-01"))))
             .thenReturn(56L);
@@ -132,7 +133,7 @@ class OvertimeServiceTest {
         when(overtimeRepository.findById(77L))
             .thenReturn(Optional.of(submitted))
             .thenReturn(Optional.of(approved));
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, null, true)));
         when(overtimeRepository.findAttendanceBounds(eq(10L), any(OffsetDateTime.class), any(OffsetDateTime.class)))
             .thenReturn(Optional.of(new OvertimeAttendanceBounds(
                 OffsetDateTime.parse("2026-07-15T08:05:00+07:00"),
@@ -155,9 +156,39 @@ class OvertimeServiceTest {
     @Test
     void employeesCannotApproveOvertime() {
         when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "SUBMITTED")));
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, null, true)));
 
         assertThatThrownBy(() -> overtimeService.approve(77L, new ReviewOvertimeRequest(null), user("employee", 10L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void divisionManagerCanApproveOvertimeForDivisionPeer() {
+        OvertimeRequestDto submitted = requestDto(77L, 10L, "SUBMITTED");
+        OvertimeRequestDto approved = requestDto(77L, 10L, "APPROVED");
+        when(overtimeRepository.findById(77L))
+            .thenReturn(Optional.of(submitted))
+            .thenReturn(Optional.of(approved));
+        // Employee 10 is in division 5 with no reports-to link; the actor is a division-5 manager.
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, null, 5L, true)));
+        when(overtimeRepository.findAttendanceBounds(eq(10L), any(OffsetDateTime.class), any(OffsetDateTime.class)))
+            .thenReturn(Optional.empty());
+        when(overtimeRepository.approve(eq(77L), eq(88L), any(OvertimeCalculation.class), eq("ok"))).thenReturn(1);
+
+        OvertimeRequestDto result = overtimeService.approve(77L, new ReviewOvertimeRequest("ok"), manager(88L, 5L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        verify(overtimeRepository).approve(eq(77L), eq(88L), any(OvertimeCalculation.class), eq("ok"));
+    }
+
+    @Test
+    void divisionManagerCannotApproveOvertimeForOtherDivision() {
+        when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "SUBMITTED")));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, null, 7L, true)));
+
+        assertThatThrownBy(() -> overtimeService.approve(77L, new ReviewOvertimeRequest(null), manager(88L, 5L)))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.FORBIDDEN);
@@ -212,6 +243,11 @@ class OvertimeServiceTest {
     }
 
     private UserPrincipal user(String role, Long employeeId) {
-        return new UserPrincipal(employeeId == null ? 1L : employeeId, role + "@glr.co.th", role, role, employeeId, true, LocalDate.now(), false);
+        return new UserPrincipal(employeeId == null ? 1L : employeeId, role + "@glr.co.th", role, role, employeeId, true, LocalDate.now(), false, null, false);
+    }
+
+    // A ฝ่าย manager: base employee role, manager flag set, scoped to a division.
+    private UserPrincipal manager(long employeeId, long divisionId) {
+        return new UserPrincipal(employeeId, "mgr@glr.co.th", "Manager", "employee", employeeId, true, LocalDate.now(), false, divisionId, true);
     }
 }

@@ -11,6 +11,8 @@ public record UserPrincipal(
     Long employeeId,
     boolean active,
     LocalDate createdAt,
-    boolean mustChangePassword
+    boolean mustChangePassword,
+    Long divisionId,
+    boolean manager
 ) implements Serializable {
 }

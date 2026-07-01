@@ -87,7 +87,8 @@ class AuthServiceTest {
 
         AuthResponse response = service.login(new LoginRequest("mn@glr.co.th", "GLR-42", null), new MockHttpServletRequest());
 
-        assertThat(response.user().role()).isEqualTo("hr");
+        // MN-บริหาร with no manager/executive title is a plain employee, not sales_manager.
+        assertThat(response.user().role()).isEqualTo("employee");
     }
 
     @Test
@@ -104,7 +105,7 @@ class AuthServiceTest {
         EmployeeLoginRecord record = employee(17L, encoder.encode("GLR-42"), true);
         MockHttpServletRequest httpRequest = new MockHttpServletRequest();
         httpRequest.getSession(true).setAttribute(SessionContext.SESSION_USER_KEY,
-            new UserPrincipal(42L, "hr@glr.co.th", "HR", "hr", 42L, true, LocalDate.now(), true));
+            new UserPrincipal(42L, "hr@glr.co.th", "HR", "hr", 42L, true, LocalDate.now(), true, null, false));
         when(employees.findByEmployeeId(42L)).thenReturn(Optional.of(record));
 
         AuthResponse response = service.changePassword(
@@ -120,7 +121,7 @@ class AuthServiceTest {
         EmployeeLoginRecord record = employee(17L, encoder.encode("GLR-42"), true);
         MockHttpServletRequest httpRequest = new MockHttpServletRequest();
         httpRequest.getSession(true).setAttribute(SessionContext.SESSION_USER_KEY,
-            new UserPrincipal(42L, "hr@glr.co.th", "HR", "hr", 42L, true, LocalDate.now(), true));
+            new UserPrincipal(42L, "hr@glr.co.th", "HR", "hr", 42L, true, LocalDate.now(), true, null, false));
         when(employees.findByEmployeeId(42L)).thenReturn(Optional.of(record));
 
         assertThatThrownBy(() -> service.changePassword(
@@ -136,7 +137,7 @@ class AuthServiceTest {
         EmployeeLoginRecord record = employee(17L, encoder.encode("GLR-42"), true);
         MockHttpServletRequest httpRequest = new MockHttpServletRequest();
         httpRequest.getSession(true).setAttribute(SessionContext.SESSION_USER_KEY,
-            new UserPrincipal(42L, "hr@glr.co.th", "HR", "hr", 42L, true, LocalDate.now(), true));
+            new UserPrincipal(42L, "hr@glr.co.th", "HR", "hr", 42L, true, LocalDate.now(), true, null, false));
         when(employees.findByEmployeeId(42L)).thenReturn(Optional.of(record));
 
         assertThatThrownBy(() -> service.changePassword(
@@ -161,8 +162,29 @@ class AuthServiceTest {
 
     private EmployeeLoginRecord employee(long divisionId, String positionName, String passwordHash, boolean mustChangePassword) {
         return new EmployeeLoginRecord(
-            42L, "GLR-42", "hr@glr.co.th", "HR", true,
-            divisionId, null, null, positionName, LocalDate.now(), passwordHash, mustChangePassword
+            42L,
+            "GLR-42",
+            "hr@glr.co.th",
+            "HR",
+            true,
+            divisionId,
+            divisionCodeFor(divisionId),
+            null,
+            positionName,
+            LocalDate.now(),
+            passwordHash,
+            mustChangePassword
         );
+    }
+
+    // Maps the legacy division ids used by these tests to the ฝ่าย source_code that the
+    // data-driven DivisionAccessPolicy now keys on (role no longer depends on division_id).
+    private static String divisionCodeFor(long divisionId) {
+        return switch ((int) divisionId) {
+            case 17 -> "HR";   // HR-บุคคล
+            case 9 -> "SA";    // SA-ฝ่ายขาย
+            case 16 -> "MN";   // MN-บริหาร (administration; not an elevated role on its own)
+            default -> null;
+        };
     }
 }
