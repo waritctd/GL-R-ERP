@@ -36,5 +36,8 @@ jobs:
       - name: Lint (ESLint + jsx-a11y)
         run: npm run lint
 
+      - name: Test (Vitest)
+        run: npm test
+
       - name: Build
         run: npm run build
