@@ -5,6 +5,7 @@ import java.time.LocalDate;
 public record OvertimeFilter(
     Long employeeId,
     Long managerEmployeeId,
+    Long managerDivisionId,
     LocalDate fromDate,
     LocalDate toDate,
     OvertimeStatus status

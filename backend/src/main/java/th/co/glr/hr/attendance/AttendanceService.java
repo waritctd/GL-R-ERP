@@ -7,6 +7,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,6 +18,8 @@ import th.co.glr.hr.config.AppProperties;
 @Service
 public class AttendanceService {
     private static final ZoneId DEFAULT_WORK_DATE_ZONE = ZoneId.of("Asia/Bangkok");
+    // HR and executives (ceo) see all attendance company-wide; admin for support access.
+    private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo", "admin");
 
     private final AttendanceRepository attendanceRepository;
     private final AttendanceDatParser datParser;
@@ -106,17 +109,25 @@ public class AttendanceService {
         int limit = requestedLimit == null ? 500 : Math.max(1, Math.min(requestedLimit, 2_000));
 
         Long employeeId = requestedEmployeeId;
-        if (!"hr".equals(user.role())) {
+        Long divisionId = null;
+        if (!VIEW_ALL_ROLES.contains(user.role())) {
             if (user.employeeId() == null) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "User is not linked to an employee");
             }
-            if (requestedEmployeeId != null && !requestedEmployeeId.equals(user.employeeId())) {
-                throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            if (user.manager() && user.divisionId() != null) {
+                // ฝ่าย managers see their whole division; a requested employeeId narrows within it
+                // (an out-of-division employeeId simply matches nothing, so no data leaks).
+                divisionId = user.divisionId();
+            } else {
+                if (requestedEmployeeId != null && !requestedEmployeeId.equals(user.employeeId())) {
+                    throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+                }
+                employeeId = user.employeeId();
             }
-            employeeId = user.employeeId();
         }
 
-        return attendanceRepository.findPunches(new AttendancePunchFilter(employeeId, effectiveFrom, effectiveTo, limit));
+        return attendanceRepository.findPunches(
+            new AttendancePunchFilter(employeeId, divisionId, effectiveFrom, effectiveTo, limit));
     }
 
     private void requireAgentToken(String agentToken) {

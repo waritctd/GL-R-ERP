@@ -184,6 +184,10 @@ public class AttendanceRepository {
             sql.append(" AND p.employee_id = :employeeId");
             params.addValue("employeeId", filter.employeeId());
         }
+        if (filter.divisionId() != null) {
+            sql.append(" AND e.division_id = :divisionId");
+            params.addValue("divisionId", filter.divisionId());
+        }
 
         sql.append(" ORDER BY p.punch_time DESC, p.punch_id DESC LIMIT :limit");
 

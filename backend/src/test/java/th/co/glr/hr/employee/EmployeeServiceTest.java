@@ -52,7 +52,7 @@ class EmployeeServiceTest {
         when(profileRequests.pendingCountByEmployee(5L)).thenReturn(0);
         ListAppender<ILoggingEvent> appender = attachAuditAppender();
 
-        service.get(5L, new UserPrincipal(7L, "hr@glr.co.th", "HR", "hr", 10L, true, LocalDate.now(), false));
+        service.get(5L, new UserPrincipal(7L, "hr@glr.co.th", "HR", "hr", 10L, true, LocalDate.now(), false, null, false));
 
         try {
             assertThat(appender.list).anyMatch(event ->
@@ -69,7 +69,7 @@ class EmployeeServiceTest {
         when(profileRequests.pendingCountByEmployee(5L)).thenReturn(0);
         ListAppender<ILoggingEvent> appender = attachAuditAppender();
 
-        service.get(5L, new UserPrincipal(8L, "e@glr.co.th", "E", "employee", 5L, true, LocalDate.now(), false));
+        service.get(5L, new UserPrincipal(8L, "e@glr.co.th", "E", "employee", 5L, true, LocalDate.now(), false, null, false));
 
         try {
             assertThat(appender.list).noneMatch(event ->

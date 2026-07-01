@@ -40,9 +40,11 @@ public class OvertimeService {
 
         Long employeeId = requestedEmployeeId;
         Long managerEmployeeId = null;
+        Long managerDivisionId = null;
         if (!canViewAll(user)) {
             managerEmployeeId = requireEmployeeId(user);
-            if (requestedEmployeeId != null && !canAccessEmployee(managerEmployeeId, requestedEmployeeId)) {
+            managerDivisionId = user.manager() ? user.divisionId() : null;
+            if (requestedEmployeeId != null && !canAccessEmployee(user, requestedEmployeeId)) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
             }
         }
@@ -50,6 +52,7 @@ public class OvertimeService {
         return overtimeRepository.findRequests(new OvertimeFilter(
             employeeId,
             managerEmployeeId,
+            managerDivisionId,
             effectiveFrom,
             effectiveTo,
             parseStatus(requestedStatus)
@@ -58,7 +61,8 @@ public class OvertimeService {
 
     public List<OvertimeEmployeeOption> employeeOptions(UserPrincipal user) {
         Long actorEmployeeId = requireEmployeeId(user);
-        return overtimeRepository.findEmployeeOptions(actorEmployeeId, canViewAll(user));
+        Long managerDivisionId = user.manager() ? user.divisionId() : null;
+        return overtimeRepository.findEmployeeOptions(actorEmployeeId, managerDivisionId, canViewAll(user));
     }
 
     @Transactional
@@ -80,7 +84,7 @@ public class OvertimeService {
     public OvertimeRequestDto approve(long id, ReviewOvertimeRequest request, UserPrincipal user) {
         Long actorEmployeeId = requireEmployeeId(user);
         OvertimeRequestDto existing = requireRequest(id);
-        requireDirectManager(existing.employeeId(), actorEmployeeId, user);
+        requireManager(existing.employeeId(), user);
         requireStatus(existing, OvertimeStatus.SUBMITTED);
 
         OvertimeCalculation calculation = calculate(existing);
@@ -95,7 +99,7 @@ public class OvertimeService {
     public OvertimeRequestDto reject(long id, ReviewOvertimeRequest request, UserPrincipal user) {
         Long actorEmployeeId = requireEmployeeId(user);
         OvertimeRequestDto existing = requireRequest(id);
-        requireDirectManager(existing.employeeId(), actorEmployeeId, user);
+        requireManager(existing.employeeId(), user);
         requireStatus(existing, OvertimeStatus.SUBMITTED);
         int updated = overtimeRepository.reject(id, actorEmployeeId, note(request));
         if (updated != 1) {
@@ -108,7 +112,7 @@ public class OvertimeService {
     public OvertimeRequestDto cancel(long id, ReviewOvertimeRequest request, UserPrincipal user) {
         OvertimeRequestDto existing = requireRequest(id);
         Long actorEmployeeId = requireEmployeeId(user);
-        boolean manager = isDirectManager(existing.employeeId(), actorEmployeeId) || canAdminOverride(user);
+        boolean manager = managesEmployee(existing.employeeId(), user) || canAdminOverride(user);
         if (!manager && existing.employeeId() != actorEmployeeId) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
@@ -167,7 +171,7 @@ public class OvertimeService {
     private long resolveTargetEmployee(Long requestedEmployeeId, UserPrincipal user) {
         Long actorEmployeeId = requireEmployeeId(user);
         long targetEmployeeId = requestedEmployeeId == null ? actorEmployeeId : requestedEmployeeId;
-        if (targetEmployeeId != actorEmployeeId && !isDirectManager(targetEmployeeId, actorEmployeeId) && !canAdminOverride(user)) {
+        if (targetEmployeeId != actorEmployeeId && !managesEmployee(targetEmployeeId, user) && !canAdminOverride(user)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Employees can only request their own overtime");
         }
         return targetEmployeeId;
@@ -200,26 +204,41 @@ public class OvertimeService {
             return;
         }
         if (employeeId == actorEmployeeId && !canAdminOverride(user)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Retroactive overtime must be submitted by the employee's direct manager");
+            throw new ApiException(HttpStatus.FORBIDDEN, "Retroactive overtime must be submitted by the employee's manager");
         }
-        if (!isDirectManager(employeeId, actorEmployeeId) && !canAdminOverride(user)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only the employee's direct manager can submit retroactive overtime");
-        }
-    }
-
-    private void requireDirectManager(long employeeId, long actorEmployeeId, UserPrincipal user) {
-        if (!isDirectManager(employeeId, actorEmployeeId) && !canAdminOverride(user)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only the employee's direct manager can review overtime");
+        if (!managesEmployee(employeeId, user) && !canAdminOverride(user)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Only the employee's manager can submit retroactive overtime");
         }
     }
 
-    private boolean canAccessEmployee(long actorEmployeeId, long employeeId) {
-        return actorEmployeeId == employeeId || isDirectManager(employeeId, actorEmployeeId);
+    private void requireManager(long employeeId, UserPrincipal user) {
+        if (!managesEmployee(employeeId, user) && !canAdminOverride(user)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Only the employee's manager can review overtime");
+        }
     }
 
-    private boolean isDirectManager(long employeeId, long actorEmployeeId) {
+    private boolean canAccessEmployee(UserPrincipal user, long employeeId) {
+        return (user.employeeId() != null && user.employeeId() == employeeId) || managesEmployee(employeeId, user);
+    }
+
+    /**
+     * True when {@code user} manages the given employee — either as the employee's direct
+     * reports-to manager, or as a ฝ่าย manager sharing the employee's division (excluding self).
+     */
+    private boolean managesEmployee(long employeeId, UserPrincipal user) {
+        if (user == null || user.employeeId() == null) {
+            return false;
+        }
         return overtimeRepository.findEmployeeAccess(employeeId)
-            .map(access -> access.managerEmployeeId() != null && access.managerEmployeeId() == actorEmployeeId)
+            .map(access -> {
+                boolean directReport = access.managerEmployeeId() != null
+                    && access.managerEmployeeId().equals(user.employeeId());
+                boolean divisionManager = user.manager()
+                    && user.divisionId() != null
+                    && user.divisionId().equals(access.divisionId())
+                    && employeeId != user.employeeId();
+                return directReport || divisionManager;
+            })
             .orElse(false);
     }
 
