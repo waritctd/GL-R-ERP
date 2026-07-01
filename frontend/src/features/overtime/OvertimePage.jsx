@@ -220,16 +220,22 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
     }
   }
 
-  function canReviewRequest(request) {
-    return request.status === 'SUBMITTED'
-      && request.managerEmployeeId
+  // A ฝ่าย manager's list is already scoped server-side to their division, so any request
+  // they see (other than their own) is one they may review; direct reports-to managers too.
+  function managesRequest(request) {
+    const directManager = request.managerEmployeeId
       && Number(request.managerEmployeeId) === Number(user.employeeId);
+    const divisionManager = user.manager
+      && Number(request.employeeId) !== Number(user.employeeId);
+    return Boolean(directManager || divisionManager);
+  }
+
+  function canReviewRequest(request) {
+    return request.status === 'SUBMITTED' && managesRequest(request);
   }
 
   function canManagerCancel(request) {
-    return ['SUBMITTED', 'APPROVED'].includes(request.status)
-      && request.managerEmployeeId
-      && Number(request.managerEmployeeId) === Number(user.employeeId);
+    return ['SUBMITTED', 'APPROVED'].includes(request.status) && managesRequest(request);
   }
 
   async function cancel(id) {

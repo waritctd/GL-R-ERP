@@ -93,7 +93,9 @@ public class AuthService {
             employee.employeeId(),
             employee.active(),
             employee.createdAt(),
-            mustChangePassword
+            mustChangePassword,
+            employee.divisionId(),
+            DivisionAccessPolicy.isManager(employee)
         );
     }
 

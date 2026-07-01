@@ -14,7 +14,9 @@ const monthStartIso = () => {
 };
 
 export function AttendancePage({ user, employees, showToast }) {
-  const canViewAll = hasPermission(user.role, 'canViewAllAttendance');
+  // HR/executives see everyone; ฝ่าย managers get the same view scoped to their division
+  // (the backend limits the results to the manager's division).
+  const canViewAll = hasPermission(user.role, 'canViewAllAttendance') || Boolean(user.manager);
   const canImport = hasPermission(user.role, 'canImportAttendance');
   const [filters, setFilters] = useState({
     from: monthStartIso(),

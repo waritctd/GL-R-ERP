@@ -136,7 +136,7 @@ class AttendanceServiceTest {
 
         attendanceService.listPunches(user("employee", 10L), LocalDate.parse("2020-11-01"), LocalDate.parse("2020-11-30"), null, 50);
 
-        verify(attendanceRepository).findPunches(new AttendancePunchFilter(10L, LocalDate.parse("2020-11-01"), LocalDate.parse("2020-11-30"), 50));
+        verify(attendanceRepository).findPunches(new AttendancePunchFilter(10L, null, LocalDate.parse("2020-11-01"), LocalDate.parse("2020-11-30"), 50));
     }
 
     @Test
@@ -158,7 +158,19 @@ class AttendanceServiceTest {
 
         attendanceService.listPunches(user("hr", 10L), LocalDate.parse("2020-11-01"), LocalDate.parse("2020-11-30"), null, 500);
 
-        verify(attendanceRepository).findPunches(new AttendancePunchFilter(null, LocalDate.parse("2020-11-01"), LocalDate.parse("2020-11-30"), 500));
+        verify(attendanceRepository).findPunches(new AttendancePunchFilter(null, null, LocalDate.parse("2020-11-01"), LocalDate.parse("2020-11-30"), 500));
+    }
+
+    @Test
+    void divisionManagersListTheirDivisionPunches() {
+        when(attendanceRepository.findPunches(any(AttendancePunchFilter.class))).thenReturn(List.of());
+
+        attendanceService.listPunches(
+            manager("employee", 10L, 5L), LocalDate.parse("2020-11-01"), LocalDate.parse("2020-11-30"), null, 500);
+
+        // Scoped to the manager's ฝ่าย (division 5), not just their own employee id.
+        verify(attendanceRepository).findPunches(
+            new AttendancePunchFilter(null, 5L, LocalDate.parse("2020-11-01"), LocalDate.parse("2020-11-30"), 500));
     }
 
     private AttendancePunchRequest validRequest() {
@@ -179,6 +191,10 @@ class AttendanceServiceTest {
     }
 
     private UserPrincipal user(String role, Long employeeId) {
-        return new UserPrincipal(1L, role + "@glr.co.th", role, role, employeeId, true, LocalDate.now(), false);
+        return new UserPrincipal(1L, role + "@glr.co.th", role, role, employeeId, true, LocalDate.now(), false, null, false);
+    }
+
+    private UserPrincipal manager(String role, Long employeeId, Long divisionId) {
+        return new UserPrincipal(1L, role + "@glr.co.th", role, role, employeeId, true, LocalDate.now(), false, divisionId, true);
     }
 }

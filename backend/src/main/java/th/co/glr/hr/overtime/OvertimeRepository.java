@@ -34,41 +34,51 @@ public class OvertimeRepository {
 
     public Optional<OvertimeEmployeeAccess> findEmployeeAccess(long employeeId) {
         return jdbc.query("""
-            SELECT employee_id, reports_to_employee_id, is_active
+            SELECT employee_id, reports_to_employee_id, division_id, is_active
               FROM hr.employee
              WHERE employee_id = :employeeId
             """, Map.of("employeeId", employeeId), (rs, rowNum) -> new OvertimeEmployeeAccess(
                 rs.getLong("employee_id"),
                 nullableLong(rs, "reports_to_employee_id"),
+                nullableLong(rs, "division_id"),
                 rs.getBoolean("is_active")
             ))
             .stream()
             .findFirst();
     }
 
-    public List<OvertimeEmployeeOption> findEmployeeOptions(Long managerEmployeeId, boolean includeAll) {
+    public List<OvertimeEmployeeOption> findEmployeeOptions(
+            Long managerEmployeeId, Long managerDivisionId, boolean includeAll) {
         StringBuilder sql = new StringBuilder("""
             SELECT e.employee_id,
                    e.employee_code,
                    concat_ws(' ', e.first_name_th, e.last_name_th) AS employee_name,
                    dep.name_th AS department_name,
-                   e.reports_to_employee_id
+                   e.reports_to_employee_id,
+                   e.division_id
               FROM hr.employee e
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
              WHERE e.is_active = TRUE
             """);
         MapSqlParameterSource params = new MapSqlParameterSource()
-            .addValue("managerEmployeeId", managerEmployeeId);
+            .addValue("managerEmployeeId", managerEmployeeId)
+            .addValue("managerDivisionId", managerDivisionId);
         if (!includeAll) {
-            sql.append(" AND (e.employee_id = :managerEmployeeId OR e.reports_to_employee_id = :managerEmployeeId)");
+            sql.append(" AND (e.employee_id = :managerEmployeeId OR e.reports_to_employee_id = :managerEmployeeId");
+            if (managerDivisionId != null) {
+                sql.append(" OR e.division_id = :managerDivisionId");
+            }
+            sql.append(")");
         }
         sql.append(" ORDER BY e.employee_code");
 
         return jdbc.query(sql.toString(), params, (rs, rowNum) -> {
             long employeeId = rs.getLong("employee_id");
             Long reportsTo = nullableLong(rs, "reports_to_employee_id");
+            Long divisionId = nullableLong(rs, "division_id");
             boolean self = managerEmployeeId != null && employeeId == managerEmployeeId;
-            boolean directReport = managerEmployeeId != null && managerEmployeeId.equals(reportsTo);
+            boolean directReport = (managerEmployeeId != null && managerEmployeeId.equals(reportsTo))
+                || (managerDivisionId != null && managerDivisionId.equals(divisionId) && !self);
             return new OvertimeEmployeeOption(
                 employeeId,
                 rs.getString("employee_code"),
@@ -132,8 +142,15 @@ public class OvertimeRepository {
             params.addValue("employeeId", filter.employeeId());
         }
         if (filter.managerEmployeeId() != null) {
-            sql.append(" AND (o.employee_id = :managerEmployeeId OR e.reports_to_employee_id = :managerEmployeeId)");
+            StringBuilder scope = new StringBuilder(
+                " AND (o.employee_id = :managerEmployeeId OR e.reports_to_employee_id = :managerEmployeeId");
             params.addValue("managerEmployeeId", filter.managerEmployeeId());
+            if (filter.managerDivisionId() != null) {
+                scope.append(" OR e.division_id = :managerDivisionId");
+                params.addValue("managerDivisionId", filter.managerDivisionId());
+            }
+            scope.append(")");
+            sql.append(scope);
         }
         if (filter.status() != null) {
             sql.append(" AND o.status = :status");

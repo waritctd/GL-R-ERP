@@ -1,59 +1,69 @@
 package th.co.glr.hr.auth;
 
 import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
 
+/**
+ * Derives a login role and manager capability from an employee's division (ฝ่าย) and position,
+ * entirely data-driven so it survives re-imports (no hard-coded division_id values).
+ *
+ * <p>Role precedence:
+ * <ol>
+ *   <li>Executives (division MD-ผู้บริหารระดับสูง, or a กรรมการ-family position) → {@code ceo}:
+ *       company-wide access.</li>
+ *   <li>HR-บุคคล division → {@code hr}.</li>
+ *   <li>PCIM-จัดซื้อต่างประเทศ division → {@code import} (foreign-purchasing price proposals).</li>
+ *   <li>SA-ฝ่ายขาย division → {@code sales_manager} if the person is a manager, else {@code sales}.</li>
+ *   <li>everything else (including null/blank — treated as inactive employees) → {@code employee}.</li>
+ * </ol>
+ *
+ * <p>Independently, {@link #isManager} flags anyone whose position contains "ผู้จัดการ"
+ * (including "ผู้ช่วยผู้จัดการ"). A manager oversees their whole ฝ่าย (division): they approve
+ * overtime for, and can view the attendance of, employees who share their {@code division_id}.
+ */
 public final class DivisionAccessPolicy {
-    private static final Map<Long, String> DIVISION_ROLES = Map.ofEntries(
-        Map.entry(10L, "employee"), // AC-ฝ่ายบัญชี
-        Map.entry(7L, "employee"),  // AM-ฝ่ายธุรการ
-        Map.entry(17L, "hr"),       // HR-ฝ่ายบุคคล
-        Map.entry(2L,  "ceo"),      // MD-ผู้บริหารระดับสูง → CEO role for ticket approval
-        Map.entry(16L, "hr"),       // MN-ผู้บริหาร
-        Map.entry(14L, "employee"), // PC-ฝ่ายจัดซื้อ
-        Map.entry(5L,  "import"),   // PCIM-จัดซื้อต่างประเทศ → Import role for price proposals
-        Map.entry(11L, "employee"), // PD-ฝ่ายผลิต
-        Map.entry(18L, "employee"), // QC&ISO
-        Map.entry(9L,  "sales"),    // SA-ฝ่ายขาย → Sales role for creating tickets
-        Map.entry(15L, "employee"), // SADS-ออกแบบ
-        Map.entry(13L, "sales"),    // Sales Support 2 → Sales role
-        Map.entry(12L, "sales"),    // Sales Support 1 → Sales role
-        Map.entry(6L,  "sales"),    // Sales Support 1 → Sales role
-        Map.entry(8L,  "sales"),    // Sales Support 2 → Sales role
-        Map.entry(4L,  "sales"),    // SR-โชว์รูม → Sales role (showroom team)
-        Map.entry(1L,  "employee"), // SV-ฝ่ายบริการ
-        Map.entry(3L,  "employee")  // WH-ฝ่ายคลังสินค้า
-    );
-    private static final Set<String> HR_DIVISION_CODES = Set.of("hr", "md", "mn");
-    private static final Set<String> SALES_MANAGER_POSITIONS = Set.of("ผู้ช่วยผู้จัดการฝ่ายขาย");
+    private static final String MANAGER_TITLE = "ผู้จัดการ";      // includes ผู้ช่วยผู้จัดการ
+    private static final String EXECUTIVE_TITLE = "กรรมการ";      // ประธานกรรมการ, กรรมการ, กรรมการผู้จัดการ
 
     private DivisionAccessPolicy() {
     }
 
     public static String roleFor(EmployeeLoginRecord employee) {
-        if (isSalesManagerPosition(employee)) {
-            return "sales_manager";
+        String code = divisionCode(employee);
+        if ("md".equals(code) || isExecutive(employee)) {
+            return "ceo";
         }
-        String role = DIVISION_ROLES.get(employee.divisionId());
-        if (role != null) {
-            return role;
+        if ("hr".equals(code)) {
+            return "hr";
         }
-        return HR_DIVISION_CODES.contains(divisionCode(employee)) ? "hr" : "employee";
+        if ("pcim".equals(code)) {
+            return "import";
+        }
+        if ("sa".equals(code)) {
+            return isManager(employee) ? "sales_manager" : "sales";
+        }
+        return "employee";
     }
 
-    private static boolean isSalesManagerPosition(EmployeeLoginRecord employee) {
-        String position = employee.positionName();
-        if (position == null || position.isBlank()) {
+    /** True when the position marks a ฝ่าย manager (contains "ผู้จัดการ", assistants included). */
+    public static boolean isManager(EmployeeLoginRecord employee) {
+        return employee != null && contains(employee.positionName(), MANAGER_TITLE);
+    }
+
+    private static boolean isExecutive(EmployeeLoginRecord employee) {
+        return employee != null && contains(employee.positionName(), EXECUTIVE_TITLE);
+    }
+
+    private static boolean contains(String position, String needle) {
+        if (position == null) {
             return false;
         }
-        String normalized = position.trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
-        return SALES_MANAGER_POSITIONS.stream()
-            .map(value -> value.trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", ""))
-            .anyMatch(normalized::equals);
+        return position.replaceAll("\\s+", "").contains(needle);
     }
 
     private static String divisionCode(EmployeeLoginRecord employee) {
+        if (employee == null) {
+            return "";
+        }
         String source = firstText(employee.divisionCode(), prefix(employee.divisionName()));
         return source == null ? "" : source.trim().toLowerCase(Locale.ROOT);
     }
