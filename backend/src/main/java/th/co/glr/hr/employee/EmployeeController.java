@@ -12,6 +12,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.Page;
+import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.employee.EmployeeResponses.EmployeeResponse;
 import th.co.glr.hr.employee.EmployeeResponses.EmployeesResponse;
 
@@ -33,12 +35,16 @@ public class EmployeeController {
         @RequestParam(required = false) String departmentTh,
         @RequestParam(required = false) String statusId,
         @RequestParam(required = false) String active,
+        @RequestParam(required = false) Integer page,
+        @RequestParam(required = false) Integer size,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
         sessions.requireAnyRole(user, "hr");
         Boolean activeFilter = "true".equalsIgnoreCase(active) ? Boolean.TRUE : "false".equalsIgnoreCase(active) ? Boolean.FALSE : null;
-        return new EmployeesResponse(employeeService.list(new EmployeeFilter(search, divisionId, departmentTh, statusId, activeFilter), user));
+        EmployeeFilter filter = new EmployeeFilter(search, divisionId, departmentTh, statusId, activeFilter);
+        Page<EmployeeDto> result = employeeService.listPage(filter, user, PageRequest.resolve(page, size));
+        return new EmployeesResponse(result.items(), result.page(), result.size(), result.total());
     }
 
     @PostMapping

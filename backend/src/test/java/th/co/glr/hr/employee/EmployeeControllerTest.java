@@ -22,6 +22,8 @@ import org.springframework.validation.beanvalidation.LocalValidatorFactoryBean;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
+import th.co.glr.hr.common.Page;
+import th.co.glr.hr.common.PageRequest;
 
 class EmployeeControllerTest {
     private final EmployeeService employeeService = mock(EmployeeService.class);
@@ -63,13 +65,15 @@ class EmployeeControllerTest {
     @Test
     void mapsActiveQueryParameterForAuthorizedListRequests() throws Exception {
         EmployeeFilter filter = new EmployeeFilter(null, null, null, null, Boolean.TRUE);
-        when(employeeService.list(eq(filter), any(UserPrincipal.class))).thenReturn(List.of());
+        when(employeeService.listPage(eq(filter), any(UserPrincipal.class), any(PageRequest.class)))
+            .thenReturn(new Page<>(List.of(), 0, PageRequest.DEFAULT_SIZE, 0));
 
         mvc.perform(get("/api/employees?active=true").session(sessionFor("hr")))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.employees").isArray());
+            .andExpect(jsonPath("$.employees").isArray())
+            .andExpect(jsonPath("$.total").value(0));
 
-        verify(employeeService).list(eq(filter), any(UserPrincipal.class));
+        verify(employeeService).listPage(eq(filter), any(UserPrincipal.class), any(PageRequest.class));
     }
 
     private MockHttpSession sessionFor(String role) {

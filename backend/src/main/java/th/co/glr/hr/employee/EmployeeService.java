@@ -8,8 +8,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.Page;
+import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.profile.ProfileRequestRepository;
 
 @Service
@@ -19,14 +22,29 @@ public class EmployeeService {
 
     private final EmployeeRepository employees;
     private final ProfileRequestRepository profileRequests;
+    private final AuditService auditService;
 
-    public EmployeeService(EmployeeRepository employees, ProfileRequestRepository profileRequests) {
+    public EmployeeService(EmployeeRepository employees, ProfileRequestRepository profileRequests,
+                           AuditService auditService) {
         this.employees = employees;
         this.profileRequests = profileRequests;
+        this.auditService = auditService;
     }
 
     public List<EmployeeDto> list(EmployeeFilter filter, UserPrincipal user) {
-        List<EmployeeDto> filteredEmployees = employees.findEmployees(filter, false);
+        return enrich(employees.findEmployees(filter, false), user);
+    }
+
+    public Page<EmployeeDto> listPage(EmployeeFilter filter, UserPrincipal user, PageRequest page) {
+        List<EmployeeDto> rows = enrich(employees.findEmployees(filter, false, page), user);
+        // Avoid the COUNT round-trip in the common case where the whole result set fits on page 0.
+        int total = (page.page() == 0 && rows.size() < page.size())
+            ? rows.size()
+            : employees.countEmployees(filter);
+        return new Page<>(rows, page.page(), page.size(), total);
+    }
+
+    private List<EmployeeDto> enrich(List<EmployeeDto> filteredEmployees, UserPrincipal user) {
         if (filteredEmployees.isEmpty()) {
             return List.of();
         }
@@ -59,13 +77,18 @@ public class EmployeeService {
     @Transactional
     public EmployeeDto create(UpsertEmployeeRequest request, UserPrincipal user) {
         long id = employees.create(request);
-        return get(id, user);
+        EmployeeDto created = get(id, user);
+        auditService.record(user, "CREATE_EMPLOYEE", "employee", id, null, created);
+        return created;
     }
 
     @Transactional
     public EmployeeDto update(long id, UpsertEmployeeRequest request, UserPrincipal user) {
+        EmployeeDto before = employees.findEmployeeById(id, true).orElse(null);
         employees.update(id, request);
-        return get(id, user);
+        EmployeeDto after = get(id, user);
+        auditService.record(user, "UPDATE_EMPLOYEE", "employee", id, before, after);
+        return after;
     }
 
     private void auditSalarySummaryAccess(UserPrincipal user, List<EmployeeDto> rows) {

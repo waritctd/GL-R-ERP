@@ -8,6 +8,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.Page;
+import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.notification.NotificationRepository;
 
 @Service
@@ -27,6 +29,16 @@ public class TicketService {
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
         Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
         return tickets.findSummaries(status, createdByFilter);
+    }
+
+    public Page<TicketSummaryDto> listPage(String status, UserPrincipal actor, PageRequest page) {
+        Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
+        List<TicketSummaryDto> rows = tickets.findSummaries(status, createdByFilter, page);
+        // Skip the COUNT round-trip when the whole result set fits on page 0.
+        int total = (page.page() == 0 && rows.size() < page.size())
+            ? rows.size()
+            : tickets.countSummaries(status, createdByFilter);
+        return new Page<>(rows, page.page(), page.size(), total);
     }
 
     public TicketDto get(long id, UserPrincipal actor) {
