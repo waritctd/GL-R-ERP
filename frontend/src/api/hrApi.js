@@ -64,6 +64,27 @@ export const api = {
     cancel: (id) => apiRequest(API_ROUTES.tickets.action(id, 'cancel'), { method: 'POST' }),
     editItems: (id, payload) => apiRequest(API_ROUTES.tickets.editItems(id), { method: 'PATCH', body: payload }),
     comment: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'comments'), { method: 'POST', body: payload }),
+    createDocDraft: (id, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(id), { method: 'POST', body: payload }),
+    listDocs: (id) => apiRequest(API_ROUTES.tickets.listDocs(id)),
+    revision: (id, payload) => apiRequest(API_ROUTES.tickets.revision(id), { method: 'POST', body: payload }),
+  },
+  documents: {
+    noteTemplates: () => apiRequest(API_ROUTES.documents.noteTemplates),
+    get: (id) => apiRequest(API_ROUTES.documents.get(id)),
+    update: (id, payload) => apiRequest(API_ROUTES.documents.update(id), { method: 'PUT', body: payload }),
+    // preview returns rendered HTML (text); apiRequest handles CSRF + non-JSON bodies
+    preview: (id) => apiRequest(API_ROUTES.documents.preview(id), { method: 'POST' }),
+    issue: (id) => apiRequest(API_ROUTES.documents.issue(id), { method: 'POST' }),
+    downloadXlsx: async (id) => {
+      const res = await fetch(API_ROUTES.documents.file(id, 'xlsx'), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    listByTicket: (ticketId) => apiRequest(API_ROUTES.tickets.listDocs(ticketId)),
+    createDraft: (ticketId, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(ticketId), { method: 'POST', body: payload }),
+  },
+  customers: {
+    search: (q) => apiRequest(API_ROUTES.customers.search(q ?? '')),
   },
   dashboard: {
     summary: () => apiRequest(API_ROUTES.dashboard.summary),

@@ -270,26 +270,26 @@ class TicketServiceTest {
     // ── close ─────────────────────────────────────────────────────────────
 
     @Test
-    void close_quotationIssuedByOwner_transitionsToClosed() {
-        stubTicket(10L, 1L, TicketStatus.QUOTATION_ISSUED);
+    void close_documentIssuedByOwner_transitionsToClosed() {
+        stubTicket(10L, 1L, TicketStatus.DOCUMENT_ISSUED);
 
         service.close(10L, salesActor);
 
         verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.CLOSED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.CLOSED), isNull());
+            eq(TicketEventKind.CLOSED), eq(TicketStatus.DOCUMENT_ISSUED), eq(TicketStatus.CLOSED), isNull());
     }
 
     @Test
     void close_adminCanCloseAnyTicket() {
-        stubTicket(10L, 99L, TicketStatus.QUOTATION_ISSUED);
+        stubTicket(10L, 99L, TicketStatus.DOCUMENT_ISSUED);
         service.close(10L, adminActor);
         verify(ticketRepo).addEvent(eq(10L), eq(5L), anyString(),
-            eq(TicketEventKind.CLOSED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.CLOSED), isNull());
+            eq(TicketEventKind.CLOSED), eq(TicketStatus.DOCUMENT_ISSUED), eq(TicketStatus.CLOSED), isNull());
     }
 
     @Test
     void close_rejectsNonOwner() {
-        stubTicket(10L, 1L, TicketStatus.QUOTATION_ISSUED);
+        stubTicket(10L, 1L, TicketStatus.DOCUMENT_ISSUED);
         assertForbidden(() -> service.close(10L, otherSales));
     }
 
