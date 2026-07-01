@@ -51,6 +51,7 @@ export function ticketStatusLabel(status) {
     approved:         { label: 'อนุมัติแล้ว',       tone: 'success' },
     rejected:         { label: 'ตีกลับ',            tone: 'danger' },
     quotation_issued: { label: 'ออกใบเสนอราคาแล้ว', tone: 'success' },
+    document_issued:  { label: 'ออกใบแจ้งยอดแล้ว',  tone: 'success' },
     closed:           { label: 'ปิดแล้ว',           tone: 'neutral' },
     cancelled:        { label: 'ยกเลิกแล้ว',        tone: 'danger' },
   };

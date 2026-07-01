@@ -6,18 +6,19 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, ticketPriorityLabel, ticketStatusLabel } from '../../utils/format.js';
 
 const EVENT_KIND_LABEL = {
-  CREATED:          'สร้างใบขอราคา',
-  SUBMITTED:        'ส่งเรื่องเข้าระบบ',
-  PICKED_UP:        'รับมอบหมาย',
-  PRICE_PROPOSED:   'เสนอราคาสินค้า',
-  APPROVED:         'อนุมัติ',
-  REJECTED:         'ปฏิเสธ',
-  QUOTATION_ISSUED: 'ออกใบเสนอราคา',
-  CLOSED:           'ปิดเรื่อง',
-  CANCELLED:        'ยกเลิก',
-  EDITED:           'แก้ไขรายการสินค้า',
-  COMMENTED:        'ความคิดเห็น',
-  COMMENT:          'ความคิดเห็น',
+  CREATED:            'สร้างใบขอราคา',
+  SUBMITTED:          'ส่งเรื่องเข้าระบบ',
+  PICKED_UP:          'รับมอบหมาย',
+  PRICE_PROPOSED:     'เสนอราคาสินค้า',
+  APPROVED:           'อนุมัติ',
+  REJECTED:           'ปฏิเสธ',
+  DOCUMENT_ISSUED:    'ออกใบแจ้งยอดมัดจำ',
+  REVISION_REQUESTED: 'ขอแก้ไข',
+  CLOSED:             'ปิดเรื่อง',
+  CANCELLED:          'ยกเลิก',
+  EDITED:             'แก้ไขรายการสินค้า',
+  COMMENTED:          'ความคิดเห็น',
+  COMMENT:            'ความคิดเห็น',
 };
 
 const TERMINAL = ['closed', 'cancelled'];
@@ -37,7 +38,7 @@ function InfoRow({ label, value }) {
   );
 }
 
-export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
+export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showToast }) {
   const [ticket, setTicket] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -55,6 +56,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // Reject form
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
+
+  // Revision form
+  const [showReviseForm, setShowReviseForm] = useState(false);
+  const [reviseScope, setReviseScope] = useState('QTY_OR_NOTE');
+  const [reviseReason, setReviseReason] = useState('');
 
   // Comment
   const [commentText, setCommentText] = useState('');
@@ -85,6 +91,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       setEditNote('');
       setShowRejectForm(false);
       setRejectReason('');
+      setShowReviseForm(false);
+      setReviseReason('');
       setCommentText('');
       setDraftPrices({});
       setProposeNote('');
@@ -127,14 +135,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   const EDITABLE_STATUSES = ['submitted', 'in_review', 'price_proposed'];
   const can = {
-    pickup:    st === 'submitted'        && ROLE_PERMISSIONS.canPickupTickets.includes(role),
-    propose:   st === 'in_review'        && ROLE_PERMISSIONS.canProposePrices.includes(role),
-    approve:   st === 'price_proposed'   && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    reject:    st === 'price_proposed'   && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    quotation: st === 'approved'         && ROLE_PERMISSIONS.canGenerateQuotation.includes(role) && (isOwner || role === 'admin'),
-    close:     st === 'quotation_issued' && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
-    cancel:    !TERMINAL.includes(st)    && (isOwner || role === 'admin'),
-    comment:   !TERMINAL.includes(st),
+    pickup:           st === 'submitted'       && ROLE_PERMISSIONS.canPickupTickets.includes(role),
+    propose:          st === 'in_review'       && ROLE_PERMISSIONS.canProposePrices.includes(role),
+    approve:          st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
+    reject:           st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
+    generateDocument: st === 'approved'        && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
+    revise:           (st === 'approved' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
+    close:            st === 'document_issued' && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
+    cancel:           !TERMINAL.includes(st)   && (isOwner || role === 'admin'),
+    comment:          !TERMINAL.includes(st),
     editItems: EDITABLE_STATUSES.includes(st) && (
       (ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner) ||
       (ROLE_PERMISSIONS.canPickupTickets.includes(role))
@@ -239,11 +248,19 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               </button>
             )}
 
-            {can.quotation && (
+            {can.generateDocument && (
               <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.quotation(ticketId), 'ออกใบเสนอราคาแล้ว')}>
+                onClick={() => onOpenDocument && onOpenDocument(ticketId)}>
                 <Icon name="fileText" size={14} />
-                ออกใบเสนอราคา
+                ออกใบแจ้งยอดมัดจำ
+              </button>
+            )}
+
+            {can.revise && !showReviseForm && (
+              <button type="button" className="secondary-button" disabled={actionLoading}
+                onClick={() => setShowReviseForm(true)}>
+                <Icon name="pencil" size={14} />
+                ขอแก้ไข (Revise)
               </button>
             )}
 
@@ -284,13 +301,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             <div style={{ padding: '0 18px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
               <label style={{ fontSize: 13, fontWeight: 600 }}>
                 เหตุผลในการตีกลับ *
-                <textarea
-                  rows={2}
-                  value={rejectReason}
-                  onChange={(e) => setRejectReason(e.target.value)}
-                  placeholder="ระบุเหตุผล..."
-                  style={{ marginTop: 4 }}
-                />
+                <textarea rows={2} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)}
+                  placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }} />
               </label>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button type="button" className="secondary-button" onClick={handleReject} disabled={actionLoading}
@@ -298,6 +310,46 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                   ยืนยันไม่อนุมัติ
                 </button>
                 <button type="button" className="secondary-button" onClick={() => { setShowRejectForm(false); setRejectReason(''); }} disabled={actionLoading}>
+                  ยกเลิก
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showReviseForm && (
+            <div style={{ padding: '0 18px 14px', display: 'flex', flexDirection: 'column', gap: 10, borderTop: '1px solid #e6eaf0' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, paddingTop: 12 }}>ประเภทการแก้ไข</div>
+              {[
+                { value: 'QTY_OR_NOTE',  label: 'แก้จำนวน / หมายเหตุ / % มัดจำ', sub: 'ไม่ต้องอนุมัติใหม่ — ออกเอกสาร Rev ใหม่ได้เลย' },
+                { value: 'PRICE_CHANGE', label: 'แก้ราคา / ส่วนลดต่อหน่วย',       sub: 'CEO ต้องอนุมัติใหม่' },
+                { value: 'NEW_ITEM',     label: 'เพิ่มสินค้าใหม่',                sub: 'Import ตั้งราคา → CEO อนุมัติ' },
+              ].map((opt) => (
+                <label key={opt.value} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer', fontSize: 13 }}>
+                  <input type="radio" name="reviseScope" value={opt.value}
+                    checked={reviseScope === opt.value}
+                    onChange={() => setReviseScope(opt.value)}
+                    style={{ marginTop: 3, flexShrink: 0 }} />
+                  <span>
+                    <strong>{opt.label}</strong>
+                    <span style={{ display: 'block', fontSize: 12, color: '#64748b' }}>{opt.sub}</span>
+                  </span>
+                </label>
+              ))}
+              <label style={{ fontSize: 13, fontWeight: 600 }}>
+                เหตุผลการแก้ไข *
+                <textarea rows={2} value={reviseReason} onChange={(e) => setReviseReason(e.target.value)}
+                  placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }} />
+              </label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" className="primary-button" disabled={actionLoading || !reviseReason.trim()}
+                  onClick={() => {
+                    if (!reviseReason.trim()) { showToast('error', 'กรุณาระบุเหตุผล'); return; }
+                    doAction(() => api.tickets.revision(ticketId, { scope: reviseScope, reason: reviseReason.trim() }), 'ส่งคำขอแก้ไขแล้ว');
+                  }}>
+                  ยืนยันขอแก้ไข
+                </button>
+                <button type="button" className="secondary-button" disabled={actionLoading}
+                  onClick={() => { setShowReviseForm(false); setReviseReason(''); }}>
                   ยกเลิก
                 </button>
               </div>

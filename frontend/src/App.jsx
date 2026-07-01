@@ -19,6 +19,7 @@ import { TicketListPage } from './features/tickets/TicketListPage.jsx';
 import { TicketDetailPage } from './features/tickets/TicketDetailPage.jsx';
 import { CommissionPage } from './features/commissions/CommissionPage.jsx';
 import { PayrollPage } from './features/payroll/PayrollPage.jsx';
+import { DocumentPage } from './features/documents/DocumentPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
 import { hasPermission } from './app/permissions.js';
@@ -29,6 +30,7 @@ export function App() {
   const [loginError, setLoginError] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState(null);
+  const [documentTicketId, setDocumentTicketId] = useState(null);
   const { toast, showToast, dismissToast } = useToast();
   const {
     currentEmployee,
@@ -104,12 +106,18 @@ export function App() {
 
   function handleRoute(nextRoute) {
     if (nextRoute !== 'ticket-detail') setSelectedTicket(null);
+    if (nextRoute !== 'document-create') setDocumentTicketId(null);
     routeTo(nextRoute);
   }
 
   function openTicket(id) {
     setSelectedTicket(id);
     routeTo('ticket-detail');
+  }
+
+  function openDocument(ticketId) {
+    setDocumentTicketId(ticketId);
+    routeTo('document-create');
   }
 
   if (!user) {
@@ -162,7 +170,9 @@ export function App() {
               : route === 'tickets'
                 ? <TicketListPage user={user} onOpenTicket={openTicket} showToast={showToast} />
                 : route === 'ticket-detail'
-                  ? <TicketDetailPage user={user} ticketId={selectedTicket} onBack={() => handleRoute('tickets')} showToast={showToast} />
+                  ? <TicketDetailPage user={user} ticketId={selectedTicket} onBack={() => handleRoute('tickets')} onOpenDocument={openDocument} showToast={showToast} />
+                : route === 'document-create'
+                  ? <DocumentPage user={user} ticketId={documentTicketId} onBack={() => { openTicket(documentTicketId); }} showToast={showToast} />
                   : <ProfilePage user={user} employee={currentEmployee} profileRequests={ownRequests} onCreateRequest={createProfileRequest} onRoute={handleRoute} />;
 
   return (
