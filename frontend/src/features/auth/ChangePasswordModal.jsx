@@ -37,6 +37,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={forced ? undefined : onClose}>
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- dialog only stops backdrop click-through; it is not an interactive control */}
       <section
         className="modal-panel"
         role="dialog"

@@ -55,7 +55,7 @@ function statusInfo(status) {
   return map[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
-export function PayrollPage({ user, showToast }) {
+export function PayrollPage({ showToast }) {
   const [month, setMonth] = useState(thisMonth);
   const [period, setPeriod] = useState(null);
   const [adjustments, setAdjustments] = useState({});

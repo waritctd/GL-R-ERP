@@ -47,6 +47,7 @@ export function Modal({ title, subtitle, children, footer, onClose }) {
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- dialog only stops backdrop click-through; it is not an interactive control */}
       <section
         ref={panelRef}
         className="modal-panel"
