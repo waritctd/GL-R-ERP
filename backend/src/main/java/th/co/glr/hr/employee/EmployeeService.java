@@ -2,6 +2,7 @@ package th.co.glr.hr.employee;
 
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -24,11 +25,12 @@ public class EmployeeService {
         this.profileRequests = profileRequests;
     }
 
-    public List<EmployeeDto> list(EmployeeFilter filter) {
+    public List<EmployeeDto> list(EmployeeFilter filter, UserPrincipal user) {
         List<EmployeeDto> filteredEmployees = employees.findEmployees(filter, false);
         if (filteredEmployees.isEmpty()) {
             return List.of();
         }
+        auditSalarySummaryAccess(user, filteredEmployees);
         List<Long> employeeIds = filteredEmployees.stream().map(EmployeeDto::id).toList();
         Map<Long, Integer> pendingCounts = profileRequests.pendingCountsByEmployeeIds(employeeIds);
         return filteredEmployees.stream()
@@ -46,9 +48,9 @@ public class EmployeeService {
         EmployeeDto employee = employees.findEmployeeById(id, includeSensitive)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Employee not found"));
         if (includeSensitive) {
-            // Records who read restricted PII (national id, tax id, SSO) and salary detail.
-            AUDIT.info("pii_access action=VIEW_EMPLOYEE_DETAIL actorId={} actorEmail=\"{}\" targetEmployeeId={}",
-                user.id(), user.email(), id);
+            AUDIT.info(
+                "sensitive_data_access action=VIEW_EMPLOYEE_DETAIL actorId={} actorEmail=\"{}\" targetEmployeeId={} fields=\"restricted_pii,current_salary,salary_history\" salaryHistoryCount={}",
+                user.id(), user.email(), id, employee.salaryHistory().size());
         }
         int pendingCount = profileRequests.pendingCountByEmployee(employee.id());
         return employee.withPendingRequestCount(pendingCount);
@@ -64,5 +66,18 @@ public class EmployeeService {
     public EmployeeDto update(long id, UpsertEmployeeRequest request, UserPrincipal user) {
         employees.update(id, request);
         return get(id, user);
+    }
+
+    private void auditSalarySummaryAccess(UserPrincipal user, List<EmployeeDto> rows) {
+        if (user == null || !"hr".equals(user.role()) || rows.isEmpty()) {
+            return;
+        }
+        String targetEmployeeIds = rows.stream()
+            .map(EmployeeDto::id)
+            .map(String::valueOf)
+            .collect(Collectors.joining(","));
+        AUDIT.info(
+            "sensitive_data_access action=LIST_EMPLOYEE_SALARY_SUMMARY actorId={} actorEmail=\"{}\" targetEmployeeIds=\"{}\" resultCount={} fields=\"current_salary\"",
+            user.id(), user.email(), targetEmployeeIds, rows.size());
     }
 }
