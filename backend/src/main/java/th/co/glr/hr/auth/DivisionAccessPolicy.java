@@ -8,6 +8,8 @@ import java.util.Locale;
  *
  * <p>Role precedence:
  * <ol>
+ *   <li>ADMIN-ผู้ดูแลระบบ division → {@code admin}: superset access, reserved for system/demo
+ *       accounts (no such division exists in the real org chart today).</li>
  *   <li>Executives (division MD-ผู้บริหารระดับสูง, or a กรรมการ-family position) → {@code ceo}:
  *       company-wide access.</li>
  *   <li>HR-บุคคล division → {@code hr}.</li>
@@ -29,6 +31,9 @@ public final class DivisionAccessPolicy {
 
     public static String roleFor(EmployeeLoginRecord employee) {
         String code = divisionCode(employee);
+        if ("admin".equals(code)) {
+            return "admin";
+        }
         if ("md".equals(code) || isExecutive(employee)) {
             return "ceo";
         }

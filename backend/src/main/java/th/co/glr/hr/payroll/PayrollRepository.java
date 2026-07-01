@@ -38,6 +38,7 @@ public class PayrollRepository {
               LEFT JOIN hr.bank bank ON bank.bank_id = ba.bank_id
              WHERE e.is_active = TRUE
                AND COALESCE(e.current_salary, 0) > 0
+               AND e.employee_code NOT LIKE 'DEMO-%'
              ORDER BY e.employee_code
             """, Map.of(), (rs, rowNum) -> new PayrollEmployeeSnapshot(
                 rs.getLong("employee_id"),

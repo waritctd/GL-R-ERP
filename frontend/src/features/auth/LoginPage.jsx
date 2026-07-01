@@ -10,9 +10,24 @@ const quickAccounts = [
   { role: 'ceo', label: 'CEO', helper: 'อนุมัติใบขอราคา · ภาพรวมทั้งหมด', icon: 'shield' },
 ];
 
+// Demo-branch only: real accounts seeded by V21__demo_seed_accounts.sql, all sharing
+// the same password. These buttons submit real email+password through the normal
+// /api/auth/login flow (full BCrypt check) — this is NOT the old role-bypass login.
+const DEMO_PASSWORD = 'Demo@2026';
+const demoAccounts = [
+  { email: 'demo.employee@demo.invalid', label: 'Employee', helper: 'โปรไฟล์ของฉัน · ส่งคำขอแก้ไข', icon: 'user' },
+  { email: 'demo.hr@demo.invalid', label: 'HR', helper: 'พนักงานทั้งหมด · อนุมัติคำขอ', icon: 'badgeCheck' },
+  { email: 'demo.sales@demo.invalid', label: 'Sales', helper: 'สร้างใบขอราคา · ออกใบเสนอราคา', icon: 'briefcase' },
+  { email: 'demo.salesmanager@demo.invalid', label: 'Sales Manager', helper: 'อนุมัติค่าคอม · แก้ไขค่าหัก', icon: 'badgeDollar' },
+  { email: 'demo.import@demo.invalid', label: 'Import', helper: 'รับเรื่อง · เสนอราคาสินค้า', icon: 'clipboard' },
+  { email: 'demo.ceo@demo.invalid', label: 'CEO', helper: 'อนุมัติใบขอราคา · ภาพรวมทั้งหมด', icon: 'shield' },
+  { email: 'demo.admin@demo.invalid', label: 'Admin', helper: 'สิทธิ์สูงสุดทุกโมดูล', icon: 'shield' },
+];
+
 export function LoginPage({ onLogin, loading, error }) {
   const [form, setForm] = useState({ email: '', password: '' });
   const isMock = import.meta.env.VITE_USE_MOCKS === 'true';
+  const isDemo = import.meta.env.VITE_DEMO_LOGIN === 'true';
 
   function updateField(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -92,6 +107,32 @@ export function LoginPage({ onLogin, loading, error }) {
                     style={{ justifyContent: 'flex-start', gap: 10, padding: '6px 12px' }}
                     disabled={loading}
                     onClick={() => onLogin({ role: account.role })}
+                  >
+                    <Icon name={account.icon} size={15} />
+                    <span>
+                      <strong style={{ fontSize: 13 }}>{account.label}</strong>
+                      <small style={{ display: 'block', color: '#94a3b8', fontSize: 11 }}>{account.helper}</small>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {isDemo && (
+            <div style={{ borderTop: '1px solid #e6eaf0', paddingTop: 14 }}>
+              <p style={{ margin: '0 0 10px', fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>
+                DEMO — ลองเข้าสู่ระบบทุกสิทธิ์ (รหัสผ่านเดียวกันทุกบัญชี: {DEMO_PASSWORD})
+              </p>
+              <div style={{ display: 'grid', gap: 6 }}>
+                {demoAccounts.map((account) => (
+                  <button
+                    key={account.email}
+                    type="button"
+                    className="secondary-button"
+                    style={{ justifyContent: 'flex-start', gap: 10, padding: '6px 12px' }}
+                    disabled={loading}
+                    onClick={() => onLogin({ email: account.email, password: DEMO_PASSWORD })}
                   >
                     <Icon name={account.icon} size={15} />
                     <span>

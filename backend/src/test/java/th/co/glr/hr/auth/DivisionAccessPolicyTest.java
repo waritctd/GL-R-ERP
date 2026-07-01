@@ -21,6 +21,11 @@ class DivisionAccessPolicyTest {
     }
 
     @Test
+    void adminDivisionDerivesAdmin() {
+        assertThat(DivisionAccessPolicy.roleFor(record("ADMIN", "ADMIN-ผู้ดูแลระบบ", "พนักงาน"))).isEqualTo("admin");
+    }
+
+    @Test
     void hrDivisionDerivesHr() {
         assertThat(DivisionAccessPolicy.roleFor(record("HR", "HR-บุคคล", "พนักงาน"))).isEqualTo("hr");
     }
