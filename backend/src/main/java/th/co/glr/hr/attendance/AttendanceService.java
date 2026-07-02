@@ -71,16 +71,8 @@ public class AttendanceService {
             user.employeeId()
         );
 
-        int insertedCount = 0;
-        int skippedCount = 0;
-        for (NormalizedAttendancePunch punch : parseResult.punches()) {
-            Long punchId = attendanceRepository.upsertPunch(punch);
-            if (punchId == null) {
-                skippedCount++;
-            } else {
-                insertedCount++;
-            }
-        }
+        int insertedCount = attendanceRepository.batchInsertPunches(parseResult.punches());
+        int skippedCount = parseResult.punches().size() - insertedCount;
         attendanceRepository.insertImportErrors(importId, parseResult.errors());
         attendanceRepository.updateImportCounts(
             importId,

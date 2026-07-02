@@ -181,9 +181,10 @@ class AttendanceServiceTest {
                 org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.any()))
             .thenReturn(7L);
-        when(attendanceRepository.upsertPunch(any(NormalizedAttendancePunch.class)))
-            .thenReturn(101L)
-            .thenReturn(null);
+        // Two valid rows parse; the batch insert reports 1 newly inserted (the
+        // other is a dedup skip). The broken row is an error, not a punch.
+        when(attendanceRepository.batchInsertPunches(org.mockito.ArgumentMatchers.anyList()))
+            .thenReturn(1);
 
         AttendanceImportResponse response = attendanceService.importDatFile(new AttendanceDatImportRequest(
             "SHOWROOM",
@@ -202,7 +203,7 @@ class AttendanceServiceTest {
         assertThat(response.insertedPunchCount()).isEqualTo(1);
         assertThat(response.skippedPunchCount()).isEqualTo(1);
         assertThat(response.errorCount()).isEqualTo(1);
-        verify(attendanceRepository, times(2)).upsertPunch(any(NormalizedAttendancePunch.class));
+        verify(attendanceRepository).batchInsertPunches(org.mockito.ArgumentMatchers.anyList());
         verify(attendanceRepository).updateImportCounts(7L, 3, 1, 1, 1);
     }
 
