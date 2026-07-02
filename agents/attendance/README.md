@@ -109,6 +109,24 @@ python3 agents/attendance/import_dat.py /Users/ploy_warit/Downloads/1_attlog.dat
 
 The importer logs in through `/api/auth/login`, sends the `.dat` content to `POST /api/attendance/imports/dat`, and prints the import counts returned by the backend. Re-running the same file returns `duplicate_file` rather than importing it again.
 
+## Using ZKAccess while the agent runs (maintenance)
+
+The SC700 tolerates only one Pull-SDK session, so the agent service and ZKAccess
+cannot use the device at the same time. To do maintenance in ZKAccess (enrolling
+users, pushing config, etc.), pause the agent first and resume it after:
+
+```powershell
+.\pause-for-zkaccess.ps1     # stops the service, frees the device
+# ...open ZKAccess, do the work, then close it from its own menu...
+.\resume-agent.ps1           # restarts the service; catch-up backfills the gap
+```
+
+This loses no data: punches accumulate on the device while the agent is paused,
+and on resume the agent's catch-up reads the device transaction table and
+delivers anything it missed (the backend dedups). Two rules while in ZKAccess:
+do **not** tick "Clear data in device", and always close ZKAccess from its own
+menu (a force-kill leaves a stuck session that needs a device reboot to clear).
+
 ## Notes
 
 - Keep the SC700, T360 server, and backend clock synced to Bangkok time.
