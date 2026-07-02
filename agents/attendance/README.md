@@ -129,12 +129,26 @@ py -3-32 import_dat.py "showroom_backfill_001.dat" --api-base-url https://gl-r-e
 
 The exporter keeps every row that carries an identifier (a PIN, or a card number
 for unregistered-card reads) within `--days`; rows with neither (door-open /
-system events) can't be stored and are skipped. Imported punches resolve to an
-employee when their PIN matches `hr.employee.badge_card_no`. Punches inserted
-earlier while unmatched are **not** re-linked automatically -- run this once
-after populating `badge_card_no`:
+system events) can't be stored and are skipped.
+
+Punches resolve to an employee when their PIN matches `hr.employee.badge_card_no`
+(the backend only matches on that column, not `employee_code`). If the PIN lives
+in `employee_code` instead, copy it across first so live capture and imports
+auto-resolve:
 
 ```sql
+-- 1. Populate the column the backend matches on (PIN = employee_code).
+UPDATE hr.employee
+   SET badge_card_no = employee_code
+ WHERE (badge_card_no IS NULL OR btrim(badge_card_no) = '')
+   AND employee_code ~ '^[0-9]+$';
+```
+
+Punches inserted earlier while unmatched are **not** re-linked automatically --
+run this once after `badge_card_no` is populated:
+
+```sql
+-- 2. Re-link punches already stored while unmatched.
 UPDATE hr.attendance_punch p
    SET employee_id = e.employee_id
   FROM hr.employee e
