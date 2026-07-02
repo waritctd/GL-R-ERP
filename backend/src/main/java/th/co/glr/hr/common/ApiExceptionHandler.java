@@ -14,6 +14,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -59,6 +60,16 @@ public class ApiExceptionHandler {
         return ResponseEntity
             .status(HttpStatus.FORBIDDEN)
             .body(new ErrorResponse("Forbidden", HttpStatus.FORBIDDEN.value()));
+    }
+
+    // Thrown for any request path with no matching controller or static resource (e.g. GET / on
+    // this API-only backend). Without this handler it falls into handleUnexpected below and gets
+    // misreported as a 500.
+    @ExceptionHandler(NoResourceFoundException.class)
+    ResponseEntity<ErrorResponse> handleNoResourceFound(NoResourceFoundException exception) {
+        return ResponseEntity
+            .status(HttpStatus.NOT_FOUND)
+            .body(new ErrorResponse("Not found", HttpStatus.NOT_FOUND.value()));
     }
 
     @ExceptionHandler(Exception.class)
