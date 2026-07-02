@@ -1,9 +1,14 @@
 # showroom_agent.py talks to the SC700 via the Pull SDK (plcommpro.dll) using
-# only the Python standard library (ctypes) -- no pyzk. The one third-party
-# dependency is requests, for posting punches to the ERP.
+# only the Python standard library (ctypes) -- no pyzk.
 #
 # Run it with 32-bit Python on Windows (plcommpro.dll is 32-bit).
+#
+# Dependencies:
+#   requests - posting punches to the ERP.
+#   tzdata   - IANA timezone database. Windows ships no system tz data, so
+#              zoneinfo.ZoneInfo("Asia/Bangkok") fails without this package.
 requests>=2.31.0
+tzdata>=2024.1
 
 # NOTE: the older sc700_*_test.py / sc700_local_test.py scripts use pyzk, which
 # cannot talk to the SC700 (a Pull-protocol device). They are kept only for
