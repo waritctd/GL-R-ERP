@@ -545,7 +545,9 @@ def post_payload(config: AgentConfig, payload: dict[str, Any], enqueue_on_failur
 def deliver_payload(config: AgentConfig, payload: dict[str, Any]) -> bool:
     flush_queue(config)
     delivered = post_payload(config, payload)
-    if delivered:
+    # Dry runs must be side-effect free: never advance the delivered watermark,
+    # or a later real run would skip everything the dry run "delivered".
+    if delivered and not config.dry_run:
         mark_delivered(config, payload)
     return delivered
 
