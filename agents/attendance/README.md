@@ -109,6 +109,39 @@ python3 agents/attendance/import_dat.py /Users/ploy_warit/Downloads/1_attlog.dat
 
 The importer logs in through `/api/auth/login`, sends the `.dat` content to `POST /api/attendance/imports/dat`, and prints the import counts returned by the backend. Re-running the same file returns `duplicate_file` rather than importing it again.
 
+## Historical backfill from the device
+
+To load the punches already stored on the device (not just the last few days the
+live agent covers), export the device transaction table to `.dat` and bulk-import
+it. This is much faster than posting one punch at a time, and the backend dedups
+against anything already captured live. Pause the service first (one Pull-SDK
+session at a time):
+
+```powershell
+cd C:\glr\agents\attendance
+.\pause-for-zkaccess.ps1
+py -3-32 export_transactions_dat.py --days 365      # writes showroom_backfill_00N.dat
+# import each file it lists (HR login required):
+$env:GLR_IMPORT_EMAIL = "hr-user@glr.co.th"; $env:GLR_IMPORT_PASSWORD = "..."
+py -3-32 import_dat.py "showroom_backfill_001.dat" --api-base-url https://gl-r-erp.onrender.com
+.\resume-agent.ps1
+```
+
+The exporter keeps every row that carries an identifier (a PIN, or a card number
+for unregistered-card reads) within `--days`; rows with neither (door-open /
+system events) can't be stored and are skipped. Imported punches resolve to an
+employee when their PIN matches `hr.employee.badge_card_no`. Punches inserted
+earlier while unmatched are **not** re-linked automatically -- run this once
+after populating `badge_card_no`:
+
+```sql
+UPDATE hr.attendance_punch p
+   SET employee_id = e.employee_id
+  FROM hr.employee e
+ WHERE p.employee_id IS NULL
+   AND e.badge_card_no = p.badge_code;
+```
+
 ## Using ZKAccess while the agent runs (maintenance)
 
 The SC700 tolerates only one Pull-SDK session, so the agent service and ZKAccess
