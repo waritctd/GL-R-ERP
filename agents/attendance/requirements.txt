@@ -1,2 +1,11 @@
-pyzk>=0.9
+# showroom_agent.py talks to the SC700 via the Pull SDK (plcommpro.dll) using
+# only the Python standard library (ctypes) -- no pyzk. The one third-party
+# dependency is requests, for posting punches to the ERP.
+#
+# Run it with 32-bit Python on Windows (plcommpro.dll is 32-bit).
 requests>=2.31.0
+
+# NOTE: the older sc700_*_test.py / sc700_local_test.py scripts use pyzk, which
+# cannot talk to the SC700 (a Pull-protocol device). They are kept only for
+# other ZKTeco (standalone-protocol) hardware. Install pyzk manually if needed:
+#   pip install "pyzk>=0.9"
