@@ -44,6 +44,14 @@ public class AttendanceController {
         return ResponseEntity.ok(attendanceService.rotateDeviceToken(deviceCode));
     }
 
+    @GetMapping("/devices")
+    AttendanceDevicesResponse listDevices(HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        // Only HR and C-level manage/attribute imports, so the scanner list is scoped to them too.
+        sessions.requireAnyRole(user, "hr", "ceo");
+        return new AttendanceDevicesResponse(attendanceService.listDevices());
+    }
+
     @PostMapping("/imports/dat")
     ResponseEntity<AttendanceImportResponse> importDatFile(
             @Valid @RequestBody AttendanceDatImportRequest request,

@@ -128,6 +128,11 @@ public class AttendanceService {
             new AttendancePunchFilter(employeeId, divisionId, effectiveFrom, effectiveTo, limit));
     }
 
+    /** Active scanners/locations available as an import source. */
+    public List<AttendanceDeviceDto> listDevices() {
+        return attendanceRepository.findActiveDevices();
+    }
+
     /**
      * Issues (or rotates) the agent token for one device. Returns the plaintext token once; only its
      * SHA-256 hash is stored. HR-only mutation — authorization is enforced at the controller.

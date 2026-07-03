@@ -119,6 +119,28 @@ class AttendanceControllerTest {
     }
 
     @Test
+    void listsDevicesForHr() throws Exception {
+        when(attendanceService.listDevices())
+            .thenReturn(java.util.List.of(
+                new AttendanceDeviceDto("SHOWROOM_SC700", "Showroom ZKTeco SC700", "SHOWROOM", "GL&R Office / Showroom")));
+
+        mvc.perform(get("/api/attendance/devices")
+                .session(sessionFor("hr")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.devices[0].device_code").value("SHOWROOM_SC700"))
+            .andExpect(jsonPath("$.devices[0].site_name").value("GL&R Office / Showroom"));
+    }
+
+    @Test
+    void forbidsEmployeesFromListingDevices() throws Exception {
+        mvc.perform(get("/api/attendance/devices")
+                .session(sessionFor("employee")))
+            .andExpect(status().isForbidden());
+
+        verifyNoInteractions(attendanceService);
+    }
+
+    @Test
     void forbidsEmployeesFromImportingDatFile() throws Exception {
         mvc.perform(post("/api/attendance/imports/dat")
                 .session(sessionFor("employee"))

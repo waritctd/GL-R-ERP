@@ -18,6 +18,7 @@ export const API_ROUTES = {
   attendance: {
     punches: '/api/attendance/punches',
     importDat: '/api/attendance/imports/dat',
+    devices: '/api/attendance/devices',
   },
   overtime: {
     list: '/api/overtime',
