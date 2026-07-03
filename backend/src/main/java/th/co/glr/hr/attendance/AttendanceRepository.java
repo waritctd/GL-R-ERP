@@ -257,6 +257,25 @@ public class AttendanceRepository {
         ));
     }
 
+    /** Active scanners with their site, for the import picker. Ordered site then device for a stable list. */
+    public List<AttendanceDeviceDto> findActiveDevices() {
+        return jdbc.query("""
+            SELECT d.device_code,
+                   d.device_name,
+                   d.site_code,
+                   s.name AS site_name
+              FROM hr.attendance_device d
+              JOIN hr.attendance_site s ON s.site_code = d.site_code
+             WHERE d.is_active = TRUE
+               AND s.is_active = TRUE
+             ORDER BY s.name, d.device_name
+            """, (rs, rowNum) -> new AttendanceDeviceDto(
+                rs.getString("device_code"),
+                rs.getString("device_name"),
+                rs.getString("site_code"),
+                rs.getString("site_name")));
+    }
+
     private DeviceRecord findDevice(String deviceCode) {
         try {
             return jdbc.queryForObject("""

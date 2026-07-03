@@ -28,6 +28,8 @@ export function AttendancePage({ user, employees, showToast }) {
   const [importing, setImporting] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [lastImport, setLastImport] = useState(null);
+  const [devices, setDevices] = useState([]);
+  const [importDeviceCode, setImportDeviceCode] = useState('');
 
   const sortedEmployees = useMemo(
     () => [...employees].sort((a, b) => (a.nameTh || '').localeCompare(b.nameTh || '', 'th')),
@@ -35,6 +37,13 @@ export function AttendancePage({ user, employees, showToast }) {
   );
   const uniqueEmployees = useMemo(() => new Set(punches.map((punch) => punch.employee_id).filter(Boolean)).size, [punches]);
   const unresolvedCount = punches.filter((punch) => !punch.employee_id).length;
+  // Multiple scanners/locations feed this table; summarise how many distinct sites appear in the results.
+  const sourceSummary = useMemo(() => {
+    const sites = new Set(punches.map((punch) => punch.site_code).filter(Boolean));
+    if (sites.size === 0) return { value: '-', helper: 'ยังไม่มีข้อมูล' };
+    if (sites.size === 1) return { value: [...sites][0], helper: 'สถานที่เดียว' };
+    return { value: `${sites.size} สถานที่`, helper: 'หลายเครื่องสแกน' };
+  }, [punches]);
 
   async function loadPunches(nextFilters = filters) {
     setLoading(true);
@@ -58,6 +67,25 @@ export function AttendancePage({ user, employees, showToast }) {
     loadPunches();
   }, []);
 
+  // Load the registered scanners so HR/C-level can attribute an import to the right location.
+  useEffect(() => {
+    if (!canImport) return;
+    let cancelled = false;
+    api.attendance.devices()
+      .then((response) => {
+        if (cancelled) return;
+        const list = response.devices || [];
+        setDevices(list);
+        setImportDeviceCode((current) => current || list[0]?.device_code || '');
+      })
+      .catch(() => {
+        if (!cancelled) setDevices([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canImport]);
+
   function updateFilter(field, value) {
     setFilters((current) => ({ ...current, [field]: value }));
   }
@@ -73,13 +101,18 @@ export function AttendancePage({ user, employees, showToast }) {
       showToast('error', 'เลือกไฟล์ .dat ก่อนนำเข้า');
       return;
     }
+    const device = devices.find((item) => item.device_code === importDeviceCode);
+    if (!device) {
+      showToast('error', 'เลือกเครื่องสแกน/สถานที่ก่อนนำเข้า');
+      return;
+    }
     setImporting(true);
     try {
       const content = await selectedFile.text();
       const detectedRange = dateRangeFromDatContent(content);
       const response = await api.attendance.importDat({
-        site_code: 'SHOWROOM',
-        device_code: 'SHOWROOM_SC700',
+        site_code: device.site_code,
+        device_code: device.device_code,
         file_name: selectedFile.name,
         content,
       });
@@ -115,7 +148,7 @@ export function AttendancePage({ user, employees, showToast }) {
         <StatCard label="รายการในช่วงที่เลือก" value={punches.length} helper="Punch records" icon="calendar" tone="indigo" />
         <StatCard label="พนักงานที่พบ" value={uniqueEmployees} helper={canViewAll ? 'จากผลลัพธ์ปัจจุบัน' : 'บัญชีของคุณ'} icon="users" tone="teal" />
         <StatCard label="ยังไม่แมปพนักงาน" value={unresolvedCount} helper="badge_card_no ไม่ตรง" icon="badge" tone="amber" />
-        <StatCard label="แหล่งข้อมูล" value="SC700" helper="SHOWROOM_SC700" icon="clock" tone="rose" />
+        <StatCard label="แหล่งข้อมูล" value={sourceSummary.value} helper={sourceSummary.helper} icon="clock" tone="rose" />
       </section>
 
       <form className="filter-bar" onSubmit={submitFilters}>
@@ -159,8 +192,22 @@ export function AttendancePage({ user, employees, showToast }) {
             <strong>นำเข้าไฟล์ Attendance (.dat)</strong>
             <small>เฉพาะ HR / ผู้บริหาร</small>
           </div>
+          <label className="attendance-import-device">
+            เครื่องสแกน / สถานที่
+            <select value={importDeviceCode} onChange={(event) => setImportDeviceCode(event.target.value)}>
+              {devices.length === 0 ? (
+                <option value="">ไม่พบเครื่องสแกน</option>
+              ) : (
+                devices.map((device) => (
+                  <option key={device.device_code} value={device.device_code}>
+                    {device.site_name} · {device.device_name}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
           <input type="file" accept=".dat,text/plain" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} />
-          <button type="submit" className="success-button" disabled={importing || !selectedFile}>
+          <button type="submit" className="success-button" disabled={importing || !selectedFile || !importDeviceCode}>
             <Icon name="plus" />
             {importing ? 'กำลังนำเข้า' : 'นำเข้า'}
           </button>
