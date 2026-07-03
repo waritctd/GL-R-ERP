@@ -1,8 +1,11 @@
 package th.co.glr.hr.attendance;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -94,6 +97,103 @@ public class AttendanceRepository {
             .stream()
             .findFirst()
             .orElse(null);
+    }
+
+    // Chunk size for the bulk import: keeps each multi-row INSERT well under
+    // PostgreSQL's 65535-parameter limit (13 params/row) and the statement a
+    // reasonable size.
+    private static final int IMPORT_INSERT_CHUNK = 500;
+
+    /**
+     * Bulk-inserts a whole .dat import's punches. Resolves the device once and
+     * every employee in a single query, then inserts in chunked multi-row
+     * statements instead of one round trip per punch — the per-row path is far
+     * too slow for tens of thousands of rows over a high-latency DB link.
+     *
+     * @return the number of newly inserted rows (conflicts / already-present
+     *         punches are skipped via ON CONFLICT DO NOTHING).
+     */
+    public int batchInsertPunches(List<NormalizedAttendancePunch> punches) {
+        if (punches.isEmpty()) {
+            return 0;
+        }
+        DeviceRecord device = findDevice(punches.get(0).deviceCode());
+        for (NormalizedAttendancePunch punch : punches) {
+            if (!device.siteCode().equals(punch.siteCode())) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "Attendance device does not belong to requested site");
+            }
+        }
+        Map<String, Long> employeeByBadge = findEmployeeIdsByBadges(
+            punches.stream().map(NormalizedAttendancePunch::badgeCode).collect(Collectors.toSet()));
+
+        int inserted = 0;
+        for (int start = 0; start < punches.size(); start += IMPORT_INSERT_CHUNK) {
+            List<NormalizedAttendancePunch> chunk =
+                punches.subList(start, Math.min(start + IMPORT_INSERT_CHUNK, punches.size()));
+            inserted += insertPunchChunk(chunk, device, employeeByBadge);
+        }
+        return inserted;
+    }
+
+    private int insertPunchChunk(
+            List<NormalizedAttendancePunch> chunk,
+            DeviceRecord device,
+            Map<String, Long> employeeByBadge) {
+        StringBuilder sql = new StringBuilder(
+            "INSERT INTO hr.attendance_punch ("
+            + "device_id, site_code, employee_id, badge_code, punch_time, work_date, "
+            + "device_status, punch_state, work_code, reserved_value, "
+            + "punch_source, ingest_method, raw_payload) VALUES ");
+        MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("deviceId", device.deviceId());
+        for (int i = 0; i < chunk.size(); i++) {
+            NormalizedAttendancePunch punch = chunk.get(i);
+            if (i > 0) {
+                sql.append(", ");
+            }
+            sql.append("(:deviceId, :siteCode").append(i)
+               .append(", :employeeId").append(i)
+               .append(", :badgeCode").append(i)
+               .append(", :punchTime").append(i)
+               .append(", :workDate").append(i)
+               .append(", :deviceStatus").append(i)
+               .append(", :punchState").append(i)
+               .append(", :workCode").append(i)
+               .append(", :reservedValue").append(i)
+               .append(", :punchSource").append(i)
+               .append(", :ingestMethod").append(i)
+               .append(", CAST(:rawPayload").append(i).append(" AS jsonb))");
+            params.addValue("siteCode" + i, punch.siteCode());
+            params.addValue("employeeId" + i, employeeByBadge.get(punch.badgeCode()));
+            params.addValue("badgeCode" + i, punch.badgeCode());
+            params.addValue("punchTime" + i, punch.punchTime());
+            params.addValue("workDate" + i, punch.workDate());
+            params.addValue("deviceStatus" + i, punch.deviceStatus());
+            params.addValue("punchState" + i, punch.punchState());
+            params.addValue("workCode" + i, punch.workCode());
+            params.addValue("reservedValue" + i, punch.reservedValue());
+            params.addValue("punchSource" + i, punch.punchSource());
+            params.addValue("ingestMethod" + i, punch.ingestMethod());
+            params.addValue("rawPayload" + i, toJson(punch.rawPayload()));
+        }
+        sql.append(" ON CONFLICT (device_id, badge_code, punch_time) WHERE device_id IS NOT NULL")
+           .append(" DO NOTHING RETURNING punch_id");
+        return jdbc.query(sql.toString(), params, (rs, rowNum) -> rs.getLong("punch_id")).size();
+    }
+
+    private Map<String, Long> findEmployeeIdsByBadges(Set<String> badges) {
+        if (badges.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Long> byBadge = new HashMap<>();
+        jdbc.query("""
+            SELECT DISTINCT ON (badge_card_no) badge_card_no, employee_id
+              FROM hr.employee
+             WHERE badge_card_no IN (:badges)
+             ORDER BY badge_card_no, is_active DESC, employee_id
+            """, Map.of("badges", badges),
+            rs -> { byBadge.put(rs.getString("badge_card_no"), rs.getLong("employee_id")); });
+        return byBadge;
     }
 
     public Optional<AttendanceImportResponse> findImportByHash(String fileHash) {
