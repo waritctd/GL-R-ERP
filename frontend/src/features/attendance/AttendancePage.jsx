@@ -225,7 +225,7 @@ export function AttendancePage({ user, employees, showToast }) {
           <span>พนักงาน</span>
           <span>ชื่อเล่น</span>
           <span>ตำแหน่ง</span>
-          <span>รหัสบัตร</span>
+          <span>รหัสพนักงาน</span>
           <span>ไซต์ / อุปกรณ์</span>
         </div>
         {loading ? (
@@ -240,11 +240,10 @@ export function AttendancePage({ user, employees, showToast }) {
             </span>
             <span>
               <strong>{punch.employee_name || 'ยังไม่แมปพนักงาน'}</strong>
-              <small>{punch.employee_code || '-'}</small>
             </span>
             <span>{punch.nick_name || '-'}</span>
             <span>{punch.position_th || '-'}</span>
-            <code>{cardNoLabel(punch)}</code>
+            <code>{punch.employee_code || '-'}</code>
             <span>
               <strong>{punch.site_code}</strong>
               <small>{punch.device_name || punch.device_code || '-'}</small>
@@ -254,20 +253,6 @@ export function AttendancePage({ user, employees, showToast }) {
       </section>
     </div>
   );
-}
-
-// The รหัสบัตร column is the card number. A PIN/fingerprint punch scans the employee code,
-// not a card, so never surface that here — show the employee's registered card instead.
-function cardNoLabel(punch) {
-  if (punch.badge_card_no && punch.badge_card_no !== punch.employee_code) {
-    return punch.badge_card_no;
-  }
-  // Unmapped rows have no employee on file — show the raw scanned serial so HR can
-  // still identify the unknown card. (The employee-code field stays blank for these.)
-  if (!punch.employee_id) {
-    return punch.badge_code || '-';
-  }
-  return '-';
 }
 
 function formatPunchDateTime(value) {
