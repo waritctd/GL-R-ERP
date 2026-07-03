@@ -156,8 +156,8 @@ export function AttendancePage({ user, employees, showToast }) {
       {canImport ? (
         <form className="attendance-import-panel" onSubmit={importFile}>
           <div>
-            <strong>นำเข้าไฟล์ SC700 .dat</strong>
-            <small>Showroom only · SHOWROOM_SC700</small>
+            <strong>นำเข้าไฟล์ Attendance (.dat)</strong>
+            <small>เฉพาะ HR / ผู้บริหาร</small>
           </div>
           <input type="file" accept=".dat,text/plain" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} />
           <button type="submit" className="success-button" disabled={importing || !selectedFile}>

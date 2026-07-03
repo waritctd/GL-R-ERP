@@ -99,6 +99,26 @@ class AttendanceControllerTest {
     }
 
     @Test
+    void allowsCeoToImportDatFile() throws Exception {
+        when(attendanceService.importDatFile(org.mockito.ArgumentMatchers.any(AttendanceDatImportRequest.class), org.mockito.ArgumentMatchers.any(UserPrincipal.class)))
+            .thenReturn(new AttendanceImportResponse(8L, "imported", 1, 1, 0, 0));
+
+        mvc.perform(post("/api/attendance/imports/dat")
+                .session(sessionFor("ceo"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "site_code": "SHOWROOM",
+                      "device_code": "SHOWROOM_SC700",
+                      "file_name": "1_attlog.dat",
+                      "content": "10012\\t2020-11-02 10:33:55\\t1\\t0\\t0\\t0\\r\\n"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.import_id").value(8));
+    }
+
+    @Test
     void forbidsEmployeesFromImportingDatFile() throws Exception {
         mvc.perform(post("/api/attendance/imports/dat")
                 .session(sessionFor("employee"))
