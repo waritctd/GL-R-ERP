@@ -18,6 +18,7 @@ export const API_ROUTES = {
   attendance: {
     punches: '/api/attendance/punches',
     importDat: '/api/attendance/imports/dat',
+    devices: '/api/attendance/devices',
   },
   overtime: {
     list: '/api/overtime',
@@ -88,8 +89,8 @@ export const ROLE_PERMISSIONS = {
   canViewEmployees: ['hr'],
   canManageEmployees: ['hr'],
   canReviewProfileRequests: ['hr'],
-  canViewAllAttendance: ['hr'],
-  canImportAttendance: ['hr'],
+  canViewAllAttendance: ['hr', 'ceo'],
+  canImportAttendance: ['hr', 'ceo'],
   canViewAllOvertime: ['hr', 'ceo', 'admin'],
   canViewAllLeave: ['hr', 'ceo', 'admin'],
   canReviewLeave: ['hr', 'admin'],

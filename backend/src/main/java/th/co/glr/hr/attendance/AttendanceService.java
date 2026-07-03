@@ -128,6 +128,38 @@ public class AttendanceService {
             new AttendancePunchFilter(employeeId, divisionId, effectiveFrom, effectiveTo, limit));
     }
 
+    /** Active scanners/locations available as an import source. */
+    public List<AttendanceDeviceDto> listDevices() {
+        return attendanceRepository.findActiveDevices();
+    }
+
+    /**
+     * Backfills hr.employee.badge_card_no from a device-user export so historical card punches
+     * resolve. Each row's device User ID (Pin) is matched to employee_code; rows without a card
+     * number (fingerprint/PIN-only users) are skipped, and cards whose Pin matches no employee are
+     * reported as unmatched. Once badge_card_no is set, the punch-history query resolves those rows.
+     */
+    @Transactional
+    public AttendanceCardBackfillResponse backfillCardNumbers(AttendanceCardBackfillRequest request) {
+        int updated = 0;
+        int skipped = 0;
+        int unmatched = 0;
+        for (AttendanceCardBackfillRequest.CardMapping mapping : request.mappings()) {
+            String employeeCode = mapping.employeeCode() == null ? "" : mapping.employeeCode().trim();
+            String cardNo = mapping.cardNo() == null ? "" : mapping.cardNo().trim();
+            if (employeeCode.isBlank() || cardNo.isBlank() || cardNo.equals("0")) {
+                skipped++;
+                continue;
+            }
+            if (attendanceRepository.updateEmployeeBadgeByCode(employeeCode, cardNo) > 0) {
+                updated++;
+            } else {
+                unmatched++;
+            }
+        }
+        return new AttendanceCardBackfillResponse(updated, skipped, unmatched);
+    }
+
     /**
      * Issues (or rotates) the agent token for one device. Returns the plaintext token once; only its
      * SHA-256 hash is stored. HR-only mutation — authorization is enforced at the controller.

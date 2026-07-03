@@ -172,6 +172,7 @@ class PullSDK:
 
     RTLOG_BUFFER = 256 * 1024
     TXN_BUFFER = 32 * 1024 * 1024  # ~32MB: the transaction table can hold 60k+ rows
+    USER_BUFFER = 8 * 1024 * 1024  # ~8MB: the enrolled-user table is far smaller than transactions
 
     def __init__(self, sdk_dir: str) -> None:
         if os.name != "nt":
@@ -251,6 +252,26 @@ class PullSDK:
         if rc < 0:
             raise RuntimeError(
                 f"GetDeviceData(transaction) failed rc={rc} "
+                f"PullLastError={self._dll.PullLastError()}"
+            )
+        lines = [ln for ln in buf.value.decode("ascii", "replace").splitlines() if ln.strip()]
+        if not lines:
+            return None, []
+        return lines[0], lines[1:]
+
+    def get_user_rows(self) -> tuple[str | None, list[str]]:
+        """Read the enrolled-user table (Pin, CardNo, Name, ...) via GetDeviceData.
+
+        Returns the header line (comma-separated field names) and the data rows so
+        callers can locate columns by name rather than by a fixed position.
+        """
+        buf = ctypes.create_string_buffer(self.USER_BUFFER)
+        rc = self._dll.GetDeviceData(
+            self._handle, buf, self.USER_BUFFER, b"user", b"*", b"", b""
+        )
+        if rc < 0:
+            raise RuntimeError(
+                f"GetDeviceData(user) failed rc={rc} "
                 f"PullLastError={self._dll.PullLastError()}"
             )
         lines = [ln for ln in buf.value.decode("ascii", "replace").splitlines() if ln.strip()]
