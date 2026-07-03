@@ -128,33 +128,35 @@ py -3-32 import_dat.py "showroom_backfill_001.dat" --api-base-url https://gl-r-e
 ```
 
 The exporter keeps every row that carries an identifier (a PIN, or a card number
-for unregistered-card reads) within `--days`; rows with neither (door-open /
-system events) can't be stored and are skipped.
+for card reads) within `--days`; rows with neither (door-open / system events)
+can't be stored and are skipped.
 
-Punches resolve to an employee when their PIN matches `hr.employee.badge_card_no`
-(the backend only matches on that column, not `employee_code`). If the PIN lives
-in `employee_code` instead, copy it across first so live capture and imports
-auto-resolve:
+### Resolving punches to employees
 
-```sql
--- 1. Populate the column the backend matches on (PIN = employee_code).
-UPDATE hr.employee
-   SET badge_card_no = employee_code
- WHERE (badge_card_no IS NULL OR btrim(badge_card_no) = '')
-   AND employee_code ~ '^[0-9]+$';
+The backend matches the device identifier against **either** `hr.employee.employee_code`
+**or** `hr.employee.badge_card_no`, and the attendance history view resolves rows by
+badge on the fly -- so once the right column holds the identifier, historical punches
+map without a re-import (no manual re-link step needed).
+
+- **PIN / fingerprint users** log their User ID (= `employee_code`), so they map with
+  no extra step.
+- **Card taps** log the raw *card serial* (e.g. `14187218`), which lives only in the
+  device's user table. Record each employee's serial in `badge_card_no` by syncing the
+  device user table (Pin -> CardNo) to the backend:
+
+```powershell
+cd C:\glr\agents\attendance
+.\pause-for-zkaccess.ps1
+$env:GLR_IMPORT_EMAIL = "hr-user@glr.co.th"; $env:GLR_IMPORT_PASSWORD = "..."
+py -3-32 sync_card_mapping.py --api-base-url https://gl-r-erp.onrender.com --dry-run   # review
+py -3-32 sync_card_mapping.py --api-base-url https://gl-r-erp.onrender.com             # apply
+.\resume-agent.ps1
 ```
 
-Punches inserted earlier while unmatched are **not** re-linked automatically --
-run this once after `badge_card_no` is populated:
-
-```sql
--- 2. Re-link punches already stored while unmatched.
-UPDATE hr.attendance_punch p
-   SET employee_id = e.employee_id
-  FROM hr.employee e
- WHERE p.employee_id IS NULL
-   AND e.badge_card_no = p.badge_code;
-```
+The response reports `updated` (badge_card_no set), `skipped` (users with no card),
+and `unmatched` (a device User ID with no matching `employee_code`). Card taps from
+**unregistered** cards -- serials not enrolled to any device user -- have no owner and
+can't be mapped; they stay unresolved in the history.
 
 ## Using ZKAccess while the agent runs (maintenance)
 

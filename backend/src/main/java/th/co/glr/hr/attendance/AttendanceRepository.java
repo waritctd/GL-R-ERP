@@ -257,6 +257,21 @@ public class AttendanceRepository {
         ));
     }
 
+    /**
+     * Points an employee's badge_card_no at the card number the device holds for them, matched by
+     * employee_code = device User ID (Pin). Returns rows updated (0 = no employee with that code).
+     */
+    public int updateEmployeeBadgeByCode(String employeeCode, String cardNo) {
+        return jdbc.update("""
+            UPDATE hr.employee
+               SET badge_card_no = :cardNo,
+                   updated_at = now()
+             WHERE employee_code = :employeeCode
+            """, new MapSqlParameterSource()
+            .addValue("employeeCode", employeeCode)
+            .addValue("cardNo", cardNo));
+    }
+
     /** Active scanners with their site, for the import picker. Ordered site then device for a stable list. */
     public List<AttendanceDeviceDto> findActiveDevices() {
         return jdbc.query("""
