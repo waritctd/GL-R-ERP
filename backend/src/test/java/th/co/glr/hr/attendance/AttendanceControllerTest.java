@@ -119,6 +119,49 @@ class AttendanceControllerTest {
     }
 
     @Test
+    void backfillsCardsForHr() throws Exception {
+        when(attendanceService.backfillCardNumbers(org.mockito.ArgumentMatchers.any(AttendanceCardBackfillRequest.class)))
+            .thenReturn(new AttendanceCardBackfillResponse(2, 1, 0));
+
+        mvc.perform(post("/api/attendance/cards/backfill")
+                .session(sessionFor("hr"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "mappings": [
+                        {"employee_code": "10063", "card_no": "14187218"},
+                        {"employee_code": "10064", "card_no": "0"}
+                      ]
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.updated").value(2))
+            .andExpect(jsonPath("$.skipped").value(1));
+    }
+
+    @Test
+    void rejectsEmptyCardBackfill() throws Exception {
+        mvc.perform(post("/api/attendance/cards/backfill")
+                .session(sessionFor("hr"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"mappings\": []}"))
+            .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(attendanceService);
+    }
+
+    @Test
+    void forbidsEmployeesFromBackfillingCards() throws Exception {
+        mvc.perform(post("/api/attendance/cards/backfill")
+                .session(sessionFor("employee"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"mappings\": [{\"employee_code\": \"10063\", \"card_no\": \"14187218\"}]}"))
+            .andExpect(status().isForbidden());
+
+        verifyNoInteractions(attendanceService);
+    }
+
+    @Test
     void listsDevicesForHr() throws Exception {
         when(attendanceService.listDevices())
             .thenReturn(java.util.List.of(
