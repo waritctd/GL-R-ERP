@@ -725,7 +725,7 @@ textarea:focus {
 }
 
 .attendance-table {
-  grid-template-columns: 1.35fr 1.55fr 0.75fr 1.1fr 0.7fr 0.7fr;
+  grid-template-columns: 1.35fr 1.5fr 0.8fr 1.2fr 0.8fr 1.15fr;
 }
 
 .user-table {
@@ -1054,13 +1054,25 @@ textarea:focus {
 
 .attendance-import-panel {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.2fr) auto;
+  grid-template-columns: minmax(180px, 1fr) minmax(200px, 1fr) minmax(220px, 1.2fr) auto;
   gap: 12px;
   align-items: center;
   background: #fff;
   border: 1px solid #e6eaf0;
   border-radius: 8px;
   padding: 14px;
+}
+
+.attendance-import-device {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+}
+
+.attendance-import-device select {
+  font-weight: 500;
 }
 
 .attendance-import-panel small,

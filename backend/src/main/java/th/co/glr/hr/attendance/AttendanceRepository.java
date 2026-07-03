@@ -290,6 +290,8 @@ public class AttendanceRepository {
                    COALESCE(p.employee_id, e.employee_id) AS employee_id,
                    e.employee_code,
                    concat_ws(' ', e.first_name_th, e.last_name_th) AS employee_name,
+                   e.nickname AS nick_name,
+                   pos.name_th AS position_th,
                    p.badge_code,
                    p.punch_time,
                    p.work_date,
@@ -312,6 +314,7 @@ public class AttendanceRepository {
                             OR em.employee_code = p.badge_code
                          ORDER BY em.is_active DESC, em.employee_id
                          LIMIT 1))
+              LEFT JOIN hr.position pos ON pos.position_id = e.position_id
               LEFT JOIN hr.attendance_device d ON d.device_id = p.device_id
              WHERE p.work_date BETWEEN :fromDate AND :toDate
             """);
@@ -336,6 +339,8 @@ public class AttendanceRepository {
             nullableLong(rs, "employee_id"),
             rs.getString("employee_code"),
             rs.getString("employee_name"),
+            rs.getString("nick_name"),
+            rs.getString("position_th"),
             rs.getString("badge_code"),
             rs.getObject("punch_time", java.time.OffsetDateTime.class),
             rs.getObject("work_date", java.time.LocalDate.class),
@@ -350,6 +355,40 @@ public class AttendanceRepository {
             rs.getString("ingest_method"),
             rs.getObject("created_at", java.time.OffsetDateTime.class)
         ));
+    }
+
+    /**
+     * Points an employee's badge_card_no at the card number the device holds for them, matched by
+     * employee_code = device User ID (Pin). Returns rows updated (0 = no employee with that code).
+     */
+    public int updateEmployeeBadgeByCode(String employeeCode, String cardNo) {
+        return jdbc.update("""
+            UPDATE hr.employee
+               SET badge_card_no = :cardNo,
+                   updated_at = now()
+             WHERE employee_code = :employeeCode
+            """, new MapSqlParameterSource()
+            .addValue("employeeCode", employeeCode)
+            .addValue("cardNo", cardNo));
+    }
+
+    /** Active scanners with their site, for the import picker. Ordered site then device for a stable list. */
+    public List<AttendanceDeviceDto> findActiveDevices() {
+        return jdbc.query("""
+            SELECT d.device_code,
+                   d.device_name,
+                   d.site_code,
+                   s.name AS site_name
+              FROM hr.attendance_device d
+              JOIN hr.attendance_site s ON s.site_code = d.site_code
+             WHERE d.is_active = TRUE
+               AND s.is_active = TRUE
+             ORDER BY s.name, d.device_name
+            """, (rs, rowNum) -> new AttendanceDeviceDto(
+                rs.getString("device_code"),
+                rs.getString("device_name"),
+                rs.getString("site_code"),
+                rs.getString("site_name")));
     }
 
     private DeviceRecord findDevice(String deviceCode) {

@@ -31,6 +31,7 @@ export const api = {
   attendance: {
     list: (params) => apiRequest(withQuery(API_ROUTES.attendance.punches, params)),
     importDat: (payload) => apiRequest(API_ROUTES.attendance.importDat, { method: 'POST', body: payload }),
+    devices: () => apiRequest(API_ROUTES.attendance.devices),
   },
   overtime: {
     list: (params) => apiRequest(withQuery(API_ROUTES.overtime.list, params)),
