@@ -5,7 +5,6 @@ import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
-import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const monthStartIso = () => {
@@ -177,10 +176,10 @@ export function AttendancePage({ user, employees, showToast }) {
         <div className="attendance-table table-head">
           <span>เวลา</span>
           <span>พนักงาน</span>
+          <span>ชื่อเล่น</span>
+          <span>ตำแหน่ง</span>
           <span>รหัสบัตร</span>
           <span>ไซต์ / อุปกรณ์</span>
-          <span>สถานะ</span>
-          <span>วิธีนำเข้า</span>
         </div>
         {loading ? (
           <EmptyState icon="clock" title="กำลังโหลดข้อมูล" />
@@ -196,16 +195,12 @@ export function AttendancePage({ user, employees, showToast }) {
               <strong>{punch.employee_name || 'ยังไม่แมปพนักงาน'}</strong>
               <small>{punch.employee_code || '-'}</small>
             </span>
+            <span>{punch.nick_name || '-'}</span>
+            <span>{punch.position_th || '-'}</span>
             <code>{punch.badge_code}</code>
             <span>
               <strong>{punch.site_code}</strong>
-              <small>{punch.device_code || punch.device_name || '-'}</small>
-            </span>
-            <span>
-              <StatusBadge tone="neutral">state {punch.punch_state}</StatusBadge>
-            </span>
-            <span>
-              <StatusBadge tone={punch.ingest_method === 'USB_DAT_IMPORT' ? 'indigo' : 'success'}>{methodLabel(punch.ingest_method)}</StatusBadge>
+              <small>{punch.device_name || punch.device_code || '-'}</small>
             </span>
           </div>
         ))}
@@ -223,17 +218,6 @@ function formatPunchDateTime(value) {
     timeStyle: 'medium',
     hour12: false,
   }).format(date);
-}
-
-function methodLabel(method) {
-  const labels = {
-    USB_DAT_IMPORT: 'DAT',
-    LIVE_CAPTURE: 'LIVE',
-    CATCHUP_PULL: 'PULL',
-    WEB_PORTAL: 'WEB',
-    MANUAL_ENTRY: 'MANUAL',
-  };
-  return labels[method] || method || '-';
 }
 
 function dateRangeFromDatContent(content) {
