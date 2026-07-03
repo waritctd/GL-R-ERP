@@ -190,6 +190,8 @@ public class AttendanceRepository {
                    COALESCE(p.employee_id, e.employee_id) AS employee_id,
                    e.employee_code,
                    concat_ws(' ', e.first_name_th, e.last_name_th) AS employee_name,
+                   e.nickname AS nick_name,
+                   pos.name_th AS position_th,
                    p.badge_code,
                    p.punch_time,
                    p.work_date,
@@ -212,6 +214,7 @@ public class AttendanceRepository {
                             OR em.employee_code = p.badge_code
                          ORDER BY em.is_active DESC, em.employee_id
                          LIMIT 1))
+              LEFT JOIN hr.position pos ON pos.position_id = e.position_id
               LEFT JOIN hr.attendance_device d ON d.device_id = p.device_id
              WHERE p.work_date BETWEEN :fromDate AND :toDate
             """);
@@ -236,6 +239,8 @@ public class AttendanceRepository {
             nullableLong(rs, "employee_id"),
             rs.getString("employee_code"),
             rs.getString("employee_name"),
+            rs.getString("nick_name"),
+            rs.getString("position_th"),
             rs.getString("badge_code"),
             rs.getObject("punch_time", java.time.OffsetDateTime.class),
             rs.getObject("work_date", java.time.LocalDate.class),
