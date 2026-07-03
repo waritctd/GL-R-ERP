@@ -281,9 +281,13 @@ public class AttendanceRepository {
     }
 
     public List<AttendancePunchDto> findPunches(AttendancePunchFilter filter) {
+        // Resolve the employee by the stored employee_id when present, otherwise fall back to matching
+        // the raw badge_code against either the card number OR the employee_code. Card readers report the
+        // card number while fingerprint/PIN punches report the employee_code, so a single-column match
+        // leaves half the punches unmapped — COALESCE here keeps historical rows resolving too.
         StringBuilder sql = new StringBuilder("""
             SELECT p.punch_id,
-                   p.employee_id,
+                   COALESCE(p.employee_id, e.employee_id) AS employee_id,
                    e.employee_code,
                    concat_ws(' ', e.first_name_th, e.last_name_th) AS employee_name,
                    p.badge_code,
@@ -300,7 +304,14 @@ public class AttendanceRepository {
                    p.ingest_method,
                    p.created_at
               FROM hr.attendance_punch p
-              LEFT JOIN hr.employee e ON e.employee_id = p.employee_id
+              LEFT JOIN hr.employee e ON e.employee_id = COALESCE(
+                       p.employee_id,
+                       (SELECT em.employee_id
+                          FROM hr.employee em
+                         WHERE em.badge_card_no = p.badge_code
+                            OR em.employee_code = p.badge_code
+                         ORDER BY em.is_active DESC, em.employee_id
+                         LIMIT 1))
               LEFT JOIN hr.attendance_device d ON d.device_id = p.device_id
              WHERE p.work_date BETWEEN :fromDate AND :toDate
             """);
@@ -310,7 +321,7 @@ public class AttendanceRepository {
             .addValue("limit", filter.limit());
 
         if (filter.employeeId() != null) {
-            sql.append(" AND p.employee_id = :employeeId");
+            sql.append(" AND COALESCE(p.employee_id, e.employee_id) = :employeeId");
             params.addValue("employeeId", filter.employeeId());
         }
         if (filter.divisionId() != null) {
@@ -356,10 +367,13 @@ public class AttendanceRepository {
     }
 
     private Long findEmployeeIdByBadge(String badgeCode) {
+        // The device reports the card number for card punches and the employee_code for fingerprint/PIN
+        // punches; match either so both resolve to the right employee.
         return jdbc.query("""
             SELECT employee_id
               FROM hr.employee
              WHERE badge_card_no = :badgeCode
+                OR employee_code = :badgeCode
              ORDER BY is_active DESC, employee_id
              LIMIT 1
             """, Map.of("badgeCode", badgeCode), (rs, rowNum) -> rs.getLong("employee_id"))
