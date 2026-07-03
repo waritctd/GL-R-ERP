@@ -49,7 +49,7 @@ public class AttendanceController {
             @Valid @RequestBody AttendanceDatImportRequest request,
             HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        sessions.requireAnyRole(user, "hr");
+        sessions.requireAnyRole(user, "hr", "ceo");
         return ResponseEntity.ok(attendanceService.importDatFile(request, user));
     }
 
