@@ -58,6 +58,7 @@ export const api = {
     submit: (id) => apiRequest(API_ROUTES.tickets.action(id, 'submit'), { method: 'POST' }),
     pickup: (id) => apiRequest(API_ROUTES.tickets.action(id, 'pickup'), { method: 'POST' }),
     proposePrice: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'propose-price'), { method: 'POST', body: payload }),
+    calculatePrices: (id) => apiRequest(API_ROUTES.tickets.action(id, 'calculate-prices'), { method: 'POST' }),
     approve: (id) => apiRequest(API_ROUTES.tickets.action(id, 'approve'), { method: 'POST' }),
     reject: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'reject'), { method: 'POST', body: payload }),
     quotation: (id) => apiRequest(API_ROUTES.tickets.action(id, 'quotation'), { method: 'POST' }),
@@ -84,8 +85,44 @@ export const api = {
     listByTicket: (ticketId) => apiRequest(API_ROUTES.tickets.listDocs(ticketId)),
     createDraft: (ticketId, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(ticketId), { method: 'POST', body: payload }),
   },
+  catalog: {
+    search: (q) => apiRequest(API_ROUTES.catalog.search(q ?? '')),
+  },
+  factoryConfigs: {
+    list: () => apiRequest(API_ROUTES.factoryConfigs.list),
+    sendEmail: (ticketId, payload) => apiRequest(API_ROUTES.factoryConfigs.sendEmail(ticketId), { method: 'POST', body: payload }),
+  },
   customers: {
+    create: (payload) => apiRequest(API_ROUTES.customers.create, { method: 'POST', body: payload }),
     search: (q) => apiRequest(API_ROUTES.customers.search(q ?? '')),
+    contacts: (customerId) => apiRequest(API_ROUTES.customers.contacts(customerId)),
+    createContact: (customerId, payload) => apiRequest(API_ROUTES.customers.createContact(customerId), { method: 'POST', body: payload }),
+    projects: (customerId) => apiRequest(API_ROUTES.customers.projects(customerId)),
+    createProject: (customerId, payload) => apiRequest(API_ROUTES.customers.createProject(customerId), { method: 'POST', body: payload }),
+  },
+  fxRates: {
+    list: () => apiRequest(API_ROUTES.fxRates.list),
+    upsert: (currency, payload) => apiRequest(API_ROUTES.fxRates.upsert(currency), { method: 'PUT', body: payload }),
+  },
+  priceCalcConfigs: {
+    list: () => apiRequest(API_ROUTES.priceCalcConfigs.list),
+    update: (payload) => apiRequest(API_ROUTES.priceCalcConfigs.update, { method: 'POST', body: payload }),
+  },
+  attachments: {
+    list: (ticketId) => apiRequest(API_ROUTES.attachments.list(ticketId)),
+    upload: async (ticketId, file, attachType, quotationId) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('attachType', attachType || 'OTHER');
+      if (quotationId) formData.append('quotationId', String(quotationId));
+      const res = await fetch(API_ROUTES.attachments.upload(ticketId), {
+        method: 'POST', credentials: 'include', body: formData,
+      });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || 'Upload failed'); }
+      return res.json();
+    },
+    fileUrl: (id) => API_ROUTES.attachments.file(id),
+    delete: (id) => apiRequest(API_ROUTES.attachments.delete(id), { method: 'DELETE' }),
   },
   dashboard: {
     summary: () => apiRequest(API_ROUTES.dashboard.summary),

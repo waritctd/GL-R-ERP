@@ -26,6 +26,10 @@ import Plus from 'lucide-react/dist/esm/icons/plus.js';
 import RefreshCcw from 'lucide-react/dist/esm/icons/refresh-ccw.js';
 import Search from 'lucide-react/dist/esm/icons/search.js';
 import ShieldCheck from 'lucide-react/dist/esm/icons/shield-check.js';
+import SlidersHorizontal from 'lucide-react/dist/esm/icons/sliders-horizontal.js';
+import Upload from 'lucide-react/dist/esm/icons/upload.js';
+import Paperclip from 'lucide-react/dist/esm/icons/paperclip.js';
+import Calculator from 'lucide-react/dist/esm/icons/calculator.js';
 import UserCog from 'lucide-react/dist/esm/icons/user-cog.js';
 import UserPlus from 'lucide-react/dist/esm/icons/user-plus.js';
 import Users from 'lucide-react/dist/esm/icons/users.js';
@@ -58,7 +62,11 @@ const icons = {
   plus: Plus,
   refresh: RefreshCcw,
   search: Search,
+  setting: SlidersHorizontal,
   shield: ShieldCheck,
+  upload: Upload,
+  paperclip: Paperclip,
+  calculator: Calculator,
   user: CircleUserRound,
   userCog: UserCog,
   userPlus: UserPlus,

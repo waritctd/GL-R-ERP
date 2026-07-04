@@ -20,6 +20,7 @@ import { TicketDetailPage } from './features/tickets/TicketDetailPage.jsx';
 import { CommissionPage } from './features/commissions/CommissionPage.jsx';
 import { PayrollPage } from './features/payroll/PayrollPage.jsx';
 import { DepositNoticePage } from './features/deposits/DepositNoticePage.jsx';
+import { CeoSettingsPage } from './features/ceoSettings/CeoSettingsPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
 import { hasPermission } from './app/permissions.js';
@@ -173,7 +174,9 @@ export function App() {
                   ? <TicketDetailPage user={user} ticketId={selectedTicket} onBack={() => handleRoute('tickets')} onOpenDocument={openDepositNotice} showToast={showToast} />
                 : route === 'deposit-create'
                   ? <DepositNoticePage user={user} ticketId={depositTicketId} onBack={() => { openTicket(depositTicketId); }} showToast={showToast} />
-                  : <ProfilePage user={user} employee={currentEmployee} profileRequests={ownRequests} onCreateRequest={createProfileRequest} onRoute={handleRoute} />;
+                  : route === 'ceo-settings'
+                    ? <CeoSettingsPage showToast={showToast} />
+                    : <ProfilePage user={user} employee={currentEmployee} profileRequests={ownRequests} onCreateRequest={createProfileRequest} onRoute={handleRoute} />;
 
   return (
     <>

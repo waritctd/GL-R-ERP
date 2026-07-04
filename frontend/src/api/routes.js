@@ -56,8 +56,20 @@ export const API_ROUTES = {
     file: (id, fmt) => `/api/deposit-notices/${id}/file?format=${fmt}`,
     noteTemplates: '/api/document-note-templates',
   },
+  catalog: {
+    search: (q) => `/api/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`,
+  },
+  factoryConfigs: {
+    list: '/api/factory-configs',
+    sendEmail: (ticketId) => `/api/tickets/${ticketId}/factory-emails/send`,
+  },
   customers: {
+    create: '/api/customers',
     search: (q) => `/api/customers${q ? `?search=${encodeURIComponent(q)}` : ''}`,
+    contacts: (customerId) => `/api/customers/${customerId}/contacts`,
+    createContact: (customerId) => `/api/customers/${customerId}/contacts`,
+    projects: (customerId) => `/api/customers/${customerId}/projects`,
+    createProject: (customerId) => `/api/customers/${customerId}/projects`,
   },
   dashboard: {
     summary: '/api/dashboard/summary',
@@ -65,6 +77,20 @@ export const API_ROUTES = {
   notifications: {
     list: '/api/notifications',
     markRead: (id) => `/api/notifications/${id}/read`,
+  },
+  fxRates: {
+    list: '/api/fx-rates',
+    upsert: (currency) => `/api/fx-rates/${currency}`,
+  },
+  priceCalcConfigs: {
+    list: '/api/price-calc-configs',
+    update: '/api/price-calc-configs',
+  },
+  attachments: {
+    list: (ticketId) => `/api/tickets/${ticketId}/attachments`,
+    upload: (ticketId) => `/api/tickets/${ticketId}/attachments`,
+    file: (id) => `/api/attachments/${id}/file`,
+    delete: (id) => `/api/attachments/${id}`,
   },
   commissions: {
     list: '/api/commissions',

@@ -233,9 +233,9 @@ export function createDemoDatabase() {
       note: 'ต้องการราคาพิเศษ Summer 2026',
       createdAt: iso(2026, 6, 14), updatedAt: iso(2026, 6, 18), closedAt: null,
       items: [
-        { id: 1, ticketId: 1, brand: 'SCG', model: 'Premium Matte', color: 'ขาว', texture: 'ด้าน', size: '60x60 ซม.', qty: 200, proposedPrice: 185, approvedPrice: 185, currency: 'THB', sortOrder: 0 },
-        { id: 2, ticketId: 1, brand: 'SCG', model: 'Premium Matte', color: 'ดำ', texture: 'ด้าน', size: '60x60 ซม.', qty: 150, proposedPrice: 185, approvedPrice: 185, currency: 'THB', sortOrder: 1 },
-        { id: 3, ticketId: 1, brand: 'Cotto', model: 'Stone Series', color: 'กากี', texture: 'หยาบ', size: '30x60 ซม.', qty: 100, proposedPrice: 320, approvedPrice: 320, currency: 'THB', sortOrder: 2 },
+        { id: 1, ticketId: 1, brand: 'SCG', model: 'Premium Matte', color: 'ขาว', texture: 'ด้าน', size: '60x60 ซม.', factory: 'SCG Ceramics', qty: 200, proposedPrice: 185, approvedPrice: 185, currency: 'THB', sortOrder: 0 },
+        { id: 2, ticketId: 1, brand: 'SCG', model: 'Premium Matte', color: 'ดำ', texture: 'ด้าน', size: '60x60 ซม.', factory: 'SCG Ceramics', qty: 150, proposedPrice: 185, approvedPrice: 185, currency: 'THB', sortOrder: 1 },
+        { id: 3, ticketId: 1, brand: 'Cotto', model: 'Stone Series', color: 'กากี', texture: 'หยาบ', size: '30x60 ซม.', factory: 'Cotto Industry', qty: 100, proposedPrice: 320, approvedPrice: 320, currency: 'THB', sortOrder: 2 },
       ],
       events: [
         { id: 1, ticketId: 1, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: iso(2026, 6, 14) + 'T09:00:00Z' },
@@ -255,7 +255,7 @@ export function createDemoDatabase() {
       customerName: 'ABC Corporation', note: null,
       createdAt: iso(2026, 6, 16), updatedAt: iso(2026, 6, 18), closedAt: null,
       items: [
-        { id: 4, ticketId: 2, brand: 'Cotto', model: 'Floral Gloss', color: 'ลายดอกไม้', texture: 'มัน', size: '30x30 ซม.', qty: 500, proposedPrice: 95, approvedPrice: null, currency: 'THB', sortOrder: 0 },
+        { id: 4, ticketId: 2, brand: 'Cotto', model: 'Floral Gloss', color: 'ลายดอกไม้', texture: 'มัน', size: '30x30 ซม.', factory: 'Cotto Industry', qty: 500, proposedPrice: 95, approvedPrice: null, currency: 'THB', sortOrder: 0 },
       ],
       events: [
         { id: 6, ticketId: 2, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: iso(2026, 6, 16) + 'T10:00:00Z' },
@@ -274,8 +274,8 @@ export function createDemoDatabase() {
       customerName: 'XYZ Co., Ltd.', note: null,
       createdAt: iso(2026, 6, 17), updatedAt: iso(2026, 6, 18), closedAt: null,
       items: [
-        { id: 5, ticketId: 3, brand: 'Duragres', model: 'Wood Texture', color: 'ขาว', texture: 'ลายไม้', size: '20x100 ซม.', qty: 50, proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 0 },
-        { id: 6, ticketId: 3, brand: 'Duragres', model: 'Cement Series', color: 'เทา', texture: 'ด้าน', size: '60x60 ซม.', qty: 50, proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 1 },
+        { id: 5, ticketId: 3, brand: 'Duragres', model: 'Wood Texture', color: 'ขาว', texture: 'ลายไม้', size: '20x100 ซม.', factory: 'Duragres Thailand', qty: 50, proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 0 },
+        { id: 6, ticketId: 3, brand: 'Duragres', model: 'Cement Series', color: 'เทา', texture: 'ด้าน', size: '60x60 ซม.', factory: 'Duragres Thailand', qty: 50, proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 1 },
       ],
       events: [
         { id: 10, ticketId: 3, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: iso(2026, 6, 17) + 'T09:00:00Z' },
@@ -294,7 +294,7 @@ export function createDemoDatabase() {
       note: 'ต้องการทราบราคานำเข้า MOQ',
       createdAt: iso(2026, 6, 18), updatedAt: iso(2026, 6, 18), closedAt: null,
       items: [
-        { id: 7, ticketId: 4, brand: 'Cotto', model: 'Classic Gloss', color: 'ครีม', texture: 'มัน', size: '30x30 ซม.', qty: 1000, proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 0 },
+        { id: 7, ticketId: 4, brand: 'Cotto', model: 'Classic Gloss', color: 'ครีม', texture: 'มัน', size: '30x30 ซม.', factory: 'Cotto Industry', qty: 1000, proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 0 },
       ],
       events: [
         { id: 13, ticketId: 4, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: iso(2026, 6, 18) + 'T07:00:00Z' },
@@ -311,7 +311,7 @@ export function createDemoDatabase() {
       customerName: 'Event Organizer Co.', note: null,
       createdAt: iso(2026, 6, 19), updatedAt: iso(2026, 6, 19), closedAt: null,
       items: [
-        { id: 8, ticketId: 5, brand: 'SCG', model: 'Granite Black', color: 'ดำ', texture: 'หยาบ', size: '60x60 ซม.', qty: 300, proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 0 },
+        { id: 8, ticketId: 5, brand: 'SCG', model: 'Granite Black', color: 'ดำ', texture: 'หยาบ', size: '60x60 ซม.', factory: 'SCG Ceramics', qty: 300, proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 0 },
       ],
       events: [
         { id: 15, ticketId: 5, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'SUBMITTED', fromStatus: null, toStatus: 'submitted', message: null, createdAt: iso(2026, 6, 19) + 'T06:00:00Z' },
@@ -327,7 +327,7 @@ export function createDemoDatabase() {
       customerName: 'EU Trading Co.', note: null,
       createdAt: iso(2026, 6, 9), updatedAt: iso(2026, 6, 16), closedAt: null,
       items: [
-        { id: 9, ticketId: 6, brand: 'Duragres', model: 'Gold Series', color: 'ทอง', texture: 'มัน', size: '60x120 ซม.', qty: 200, proposedPrice: 1200, approvedPrice: 1200, currency: 'THB', sortOrder: 0 },
+        { id: 9, ticketId: 6, brand: 'Duragres', model: 'Gold Series', color: 'ทอง', texture: 'มัน', size: '60x120 ซม.', factory: 'Duragres Thailand', qty: 200, proposedPrice: 1200, approvedPrice: 1200, currency: 'THB', sortOrder: 0 },
       ],
       events: [
         { id: 16, ticketId: 6, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: iso(2026, 6, 9) + 'T09:00:00Z' },
