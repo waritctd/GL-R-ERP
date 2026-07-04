@@ -356,6 +356,39 @@ class TicketServiceTest {
             eq(TicketEventKind.CANCELLED), eq(TicketStatus.IN_REVIEW), eq(TicketStatus.CANCELLED), isNull());
     }
 
+    // ── calculatePrices ──────────────────────────────────────────────────
+
+    @Test
+    void calculatePrices_priceProposedByCeoDelegatesToPricingEngine() {
+        TicketDto calculated = stubTicket(10L, 1L, TicketStatus.PRICE_PROPOSED);
+        when(priceCalcService.calculateForTicket(10L)).thenReturn(calculated);
+
+        TicketDto result = service.calculatePrices(10L, ceoActor);
+
+        assertThat(result).isEqualTo(calculated);
+        verify(priceCalcService).calculateForTicket(10L);
+    }
+
+    @Test
+    void calculatePrices_adminCanCalculate() {
+        TicketDto calculated = stubTicket(10L, 1L, TicketStatus.PRICE_PROPOSED);
+        when(priceCalcService.calculateForTicket(10L)).thenReturn(calculated);
+
+        assertThat(service.calculatePrices(10L, adminActor)).isEqualTo(calculated);
+    }
+
+    @Test
+    void calculatePrices_rejectsSalesRole() {
+        assertForbidden(() -> service.calculatePrices(10L, salesActor));
+    }
+
+    @Test
+    void calculatePrices_rejectsWrongStatus() {
+        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
+
+        assertConflict(() -> service.calculatePrices(10L, ceoActor));
+    }
+
     // ── comment ───────────────────────────────────────────────────────────
 
     @Test
