@@ -82,8 +82,9 @@ public class TicketRepository {
         if (summary.isEmpty()) return Optional.empty();
         List<TicketItemDto> items = findItemsByTicketId(id);
         List<TicketEventDto> events = findEventsByTicketId(id);
-        QuotationDto quotation = findQuotationByTicketId(id).orElse(null);
-        return Optional.of(new TicketDto(summary.get(), items, events, quotation));
+        List<QuotationDto> quotations = findQuotationsByTicketId(id);
+        QuotationDto quotation = quotations.isEmpty() ? null : quotations.get(0);
+        return Optional.of(new TicketDto(summary.get(), items, events, quotation, quotations));
     }
 
     public boolean existsById(long ticketId) {
@@ -174,17 +175,41 @@ public class TicketRepository {
             """, Map.of("id", ticketId));
     }
 
+    @Transactional
     public QuotationDto createQuotation(long ticketId, String number, long issuedById, BigDecimal totalAmount) {
+        // supersede all current (non-superseded) quotations for this ticket
         jdbc.update("""
-            INSERT INTO sales.quotation (ticket_id, number, issued_by, total_amount, currency)
-            VALUES (:ticketId, :number, :issuedBy, :totalAmount, 'THB')
+            UPDATE sales.quotation
+               SET doc_status = 'SUPERSEDED'
+             WHERE ticket_id = :ticketId AND doc_status <> 'SUPERSEDED'
+            """, Map.of("ticketId", ticketId));
+
+        Integer maxVersion = jdbc.queryForObject("""
+            SELECT COALESCE(MAX(quotation_version), 0)
+              FROM sales.quotation
+             WHERE ticket_id = :ticketId
+            """, Map.of("ticketId", ticketId), Integer.class);
+        int nextVersion = (maxVersion == null ? 0 : maxVersion) + 1;
+
+        // generateQuotation() issues and transitions the ticket to QUOTATION_ISSUED in one
+        // step (no separate draft phase like deposit notices), so the row starts ISSUED.
+        jdbc.update("""
+            INSERT INTO sales.quotation
+                (ticket_id, number, issued_by, total_amount, currency, quotation_version, doc_status)
+            VALUES (:ticketId, :number, :issuedBy, :totalAmount, 'THB', :version, 'ISSUED')
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId)
                 .addValue("number", number)
                 .addValue("issuedBy", issuedById)
-                .addValue("totalAmount", totalAmount));
-        return findQuotationByTicketId(ticketId).orElseThrow();
+                .addValue("totalAmount", totalAmount)
+                .addValue("version", nextVersion));
+
+        int versionToFind = nextVersion;
+        return findQuotationsByTicketId(ticketId).stream()
+            .filter(q -> q.quotationVersion() == versionToFind)
+            .findFirst()
+            .orElseThrow();
     }
 
     // --- private helpers ---
@@ -284,32 +309,31 @@ public class TicketRepository {
             ));
     }
 
-    private Optional<QuotationDto> findQuotationByTicketId(long ticketId) {
-        try {
-            QuotationDto q = jdbc.queryForObject("""
-                SELECT q.quotation_id, q.ticket_id, q.number, q.issued_by,
-                       NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS issued_by_name,
-                       q.issued_at, q.pdf_path, q.total_amount, q.currency
-                  FROM sales.quotation q
-                  JOIN hr.employee e ON e.employee_id = q.issued_by
-                 WHERE q.ticket_id = :id
-                """,
-                Map.of("id", ticketId),
-                (rs, rowNum) -> new QuotationDto(
-                    rs.getLong("quotation_id"),
-                    rs.getLong("ticket_id"),
-                    rs.getString("number"),
-                    rs.getLong("issued_by"),
-                    rs.getString("issued_by_name"),
-                    rs.getTimestamp("issued_at").toInstant(),
-                    rs.getString("pdf_path"),
-                    rs.getBigDecimal("total_amount"),
-                    rs.getString("currency")
-                ));
-            return Optional.ofNullable(q);
-        } catch (EmptyResultDataAccessException e) {
-            return Optional.empty();
-        }
+    private List<QuotationDto> findQuotationsByTicketId(long ticketId) {
+        return jdbc.query("""
+            SELECT q.quotation_id, q.ticket_id, q.number, q.issued_by,
+                   NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS issued_by_name,
+                   q.issued_at, q.pdf_path, q.total_amount, q.currency,
+                   q.quotation_version, q.doc_status
+              FROM sales.quotation q
+              JOIN hr.employee e ON e.employee_id = q.issued_by
+             WHERE q.ticket_id = :id
+             ORDER BY q.quotation_version DESC
+            """,
+            Map.of("id", ticketId),
+            (rs, rowNum) -> new QuotationDto(
+                rs.getLong("quotation_id"),
+                rs.getLong("ticket_id"),
+                rs.getString("number"),
+                rs.getLong("issued_by"),
+                rs.getString("issued_by_name"),
+                rs.getTimestamp("issued_at").toInstant(),
+                rs.getString("pdf_path"),
+                rs.getBigDecimal("total_amount"),
+                rs.getString("currency"),
+                rs.getInt("quotation_version"),
+                rs.getString("doc_status")
+            ));
     }
 
     private void insertItems(long ticketId, List<TicketItemRequest> items) {

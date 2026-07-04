@@ -389,7 +389,7 @@ class TicketServiceTest {
             ticketId, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", status, "NORMAL",
             createdById, "Sales User", null, null, "Test Customer", null,
             Instant.now(), Instant.now(), null, items.size(), false);
-        TicketDto ticket = new TicketDto(summary, items, List.of(), null);
+        TicketDto ticket = new TicketDto(summary, items, List.of(), null, List.of());
         when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
         return ticket;
     }

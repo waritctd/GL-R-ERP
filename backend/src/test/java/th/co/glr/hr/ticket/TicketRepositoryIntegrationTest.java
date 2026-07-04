@@ -65,6 +65,29 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(firstPage.get(0).itemCount()).isEqualTo(1);
     }
 
+    @Test
+    void createQuotation_reissue_supersedesPreviousAndBumpsVersion() {
+        long ticketId = tickets.create(sampleTicket(
+            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        QuotationDto v1 = tickets.createQuotation(ticketId, "QT-2026-0001", actorId, new BigDecimal("1000"));
+        QuotationDto v2 = tickets.createQuotation(ticketId, "QT-2026-0002", actorId, new BigDecimal("1200"));
+
+        assertThat(v1.quotationVersion()).isEqualTo(1);
+        assertThat(v2.quotationVersion()).isEqualTo(2);
+        assertThat(v2.docStatus()).isEqualTo("ISSUED");
+
+        List<QuotationDto> all = tickets.findById(ticketId).orElseThrow().quotations();
+        assertThat(all).hasSize(2);
+        assertThat(all.get(0).quotationVersion()).isEqualTo(2);
+        assertThat(all.get(0).docStatus()).isEqualTo("ISSUED");
+        assertThat(all.get(1).quotationVersion()).isEqualTo(1);
+        assertThat(all.get(1).docStatus()).isEqualTo("SUPERSEDED");
+
+        // the DTO's single `quotation` field mirrors the newest version (backward compat)
+        assertThat(tickets.findById(ticketId).orElseThrow().quotation().quotationVersion()).isEqualTo(2);
+    }
+
     private CreateTicketRequest sampleTicket(TicketItemRequest... items) {
         return new CreateTicketRequest("ใบเสนอราคา", "NORMAL", "ลูกค้าทดสอบ", null, List.of(items));
     }
