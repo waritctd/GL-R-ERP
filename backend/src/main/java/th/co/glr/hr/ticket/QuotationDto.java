@@ -12,5 +12,7 @@ public record QuotationDto(
     Instant issuedAt,
     String pdfPath,
     BigDecimal totalAmount,
-    String currency
+    String currency,
+    int quotationVersion,
+    String docStatus
 ) {}

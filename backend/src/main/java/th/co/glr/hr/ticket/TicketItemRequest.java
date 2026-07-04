@@ -11,7 +11,12 @@ public record TicketItemRequest(
     @NotBlank String color,
     @NotBlank String texture,
     @NotBlank String size,
+    String factory,
     @NotNull @Positive BigDecimal qty,
+    BigDecimal qtySqm,
+    BigDecimal rawPrice,
+    String rawCurrency,
+    String rawUnit,
     BigDecimal proposedPrice,
     String currency
 ) {}

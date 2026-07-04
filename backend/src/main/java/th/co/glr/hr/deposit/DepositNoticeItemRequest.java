@@ -1,15 +1,13 @@
-package th.co.glr.hr.document;
+package th.co.glr.hr.deposit;
 
 import java.math.BigDecimal;
 
-public record DocumentItemDto(
-    long       id,
+public record DepositNoticeItemRequest(
     int        seq,
     String     description,
     BigDecimal qty,
     String     unit,
     BigDecimal unitPrice,
     String     discountLabel,
-    BigDecimal netUnitPrice,
-    BigDecimal amount
+    BigDecimal netUnitPrice
 ) {}

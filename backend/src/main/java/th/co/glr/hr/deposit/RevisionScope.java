@@ -1,4 +1,4 @@
-package th.co.glr.hr.document;
+package th.co.glr.hr.deposit;
 
 public enum RevisionScope {
     QTY_OR_NOTE,   // qty/note/customer/deposit% change only — no re-approval needed

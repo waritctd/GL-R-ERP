@@ -1,4 +1,4 @@
-package th.co.glr.hr.document;
+package th.co.glr.hr.deposit;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -20,10 +20,10 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 @Repository
-public class DocumentRepository {
+public class DepositNoticeRepository {
     private final NamedParameterJdbcTemplate jdbc;
 
-    public DocumentRepository(NamedParameterJdbcTemplate jdbc) {
+    public DepositNoticeRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }
 
@@ -42,12 +42,12 @@ public class DocumentRepository {
         );
     }
 
-    // ── Document CRUD ─────────────────────────────────────────────────────────
+    // ── Deposit notice CRUD ─────────────────────────────────────────────────────────
 
-    public Optional<DocumentDto> findById(long docId) {
-        List<DocumentDto> docs = jdbc.query(
+    public Optional<DepositNoticeDto> findById(long docId) {
+        List<DepositNoticeDto> docs = jdbc.query(
             """
-            SELECT d.document_id, d.ticket_id, d.doc_type, d.version, d.doc_number,
+            SELECT d.deposit_notice_id, d.ticket_id, d.doc_type, d.version, d.doc_number,
                    d.issue_date, d.status,
                    d.customer_name, d.customer_tax_id, d.customer_address,
                    d.project_name, d.reference, d.currency,
@@ -56,22 +56,22 @@ public class DocumentRepository {
                    d.notes, d.pdf_path, d.xlsx_path,
                    d.issued_by_name, d.preparer_name,
                    d.created_at, d.updated_at
-              FROM sales.document d
-             WHERE d.document_id = :id
+              FROM sales.deposit_notice d
+             WHERE d.deposit_notice_id = :id
             """,
             Map.of("id", docId),
             (rs, i) -> mapDoc(rs)
         );
         if (docs.isEmpty()) return Optional.empty();
-        DocumentDto doc = docs.get(0);
-        List<DocumentItemDto> items = findItems(docId);
+        DepositNoticeDto doc = docs.get(0);
+        List<DepositNoticeItemDto> items = findItems(docId);
         return Optional.of(withItems(doc, items));
     }
 
-    public List<DocumentDto> findByTicket(long ticketId) {
+    public List<DepositNoticeDto> findByTicket(long ticketId) {
         return jdbc.query(
             """
-            SELECT d.document_id, d.ticket_id, d.doc_type, d.version, d.doc_number,
+            SELECT d.deposit_notice_id, d.ticket_id, d.doc_type, d.version, d.doc_number,
                    d.issue_date, d.status,
                    d.customer_name, d.customer_tax_id, d.customer_address,
                    d.project_name, d.reference, d.currency,
@@ -80,17 +80,17 @@ public class DocumentRepository {
                    d.notes, d.pdf_path, d.xlsx_path,
                    d.issued_by_name, d.preparer_name,
                    d.created_at, d.updated_at
-              FROM sales.document d
+              FROM sales.deposit_notice d
              WHERE d.ticket_id = :ticketId
              ORDER BY d.version DESC
             """,
             Map.of("ticketId", ticketId),
-            (rs, i) -> withItems(mapDoc(rs), findItems(rs.getLong("document_id")))
+            (rs, i) -> withItems(mapDoc(rs), findItems(rs.getLong("deposit_notice_id")))
         );
     }
 
     @Transactional
-    public long createDraft(long ticketId, DocumentDraftRequest req, List<DocumentItemRequest> items) {
+    public long createDraft(long ticketId, DepositNoticeDraftRequest req, List<DepositNoticeItemRequest> items) {
         BigDecimal depositPct = req.depositPercent() != null ? req.depositPercent() : new BigDecimal("0.50");
         BigDecimal vatPct = new BigDecimal("0.07");
 
@@ -123,7 +123,7 @@ public class DocumentRepository {
 
         var keys = new GeneratedKeyHolder();
         jdbc.update("""
-            INSERT INTO sales.document
+            INSERT INTO sales.deposit_notice
                 (ticket_id, version, customer_name, customer_tax_id, customer_address,
                  project_name, reference, deposit_percent, subtotal, deposit_amount,
                  vat_percent, vat_amount, total_payable, notes)
@@ -131,7 +131,7 @@ public class DocumentRepository {
                 (:ticketId, :version, :customerName, :customerTaxId, :customerAddress,
                  :projectName, :reference, :depositPercent, :subtotal, :depositAmount,
                  :vatPercent, :vatAmount, :totalPayable, :notes)
-            """, params, keys, new String[]{"document_id"});
+            """, params, keys, new String[]{"deposit_notice_id"});
 
         long docId = keys.getKey().longValue();
         insertItems(docId, items);
@@ -139,10 +139,10 @@ public class DocumentRepository {
     }
 
     @Transactional
-    public void update(long docId, DocumentDraftRequest req) {
+    public void update(long docId, DepositNoticeDraftRequest req) {
         BigDecimal depositPct = req.depositPercent() != null ? req.depositPercent() : new BigDecimal("0.50");
         BigDecimal vatPct = new BigDecimal("0.07");
-        List<DocumentItemRequest> items = req.items() != null ? req.items() : List.of();
+        List<DepositNoticeItemRequest> items = req.items() != null ? req.items() : List.of();
 
         BigDecimal subtotal = items.stream()
             .map(it -> it.netUnitPrice().multiply(it.qty()))
@@ -155,7 +155,7 @@ public class DocumentRepository {
         String[] notesArr = req.notes() != null ? req.notes().toArray(String[]::new) : new String[0];
 
         jdbc.update("""
-            UPDATE sales.document SET
+            UPDATE sales.deposit_notice SET
                 customer_name    = :customerName,
                 customer_tax_id  = :customerTaxId,
                 customer_address = :customerAddress,
@@ -168,7 +168,7 @@ public class DocumentRepository {
                 total_payable    = :totalPayable,
                 notes            = :notes,
                 updated_at       = now()
-             WHERE document_id = :id AND status = 'DRAFT'
+             WHERE deposit_notice_id = :id AND status = 'DRAFT'
             """,
             new MapSqlParameterSource()
                 .addValue("id",              docId)
@@ -185,7 +185,7 @@ public class DocumentRepository {
                 .addValue("notes",           notesArr)
         );
         if (!items.isEmpty()) {
-            jdbc.update("DELETE FROM sales.document_item WHERE document_id = :id", Map.of("id", docId));
+            jdbc.update("DELETE FROM sales.deposit_notice_item WHERE deposit_notice_id = :id", Map.of("id", docId));
             insertItems(docId, items);
         }
     }
@@ -196,22 +196,22 @@ public class DocumentRepository {
         String docNumber = nextDocNumber("DEPOSIT_NOTICE", thaiYear);
 
         jdbc.update("""
-            UPDATE sales.document SET
+            UPDATE sales.deposit_notice SET
                 doc_number     = :num,
                 issue_date     = CURRENT_DATE,
                 status         = 'ISSUED',
                 issued_by_id   = :actorId,
                 issued_by_name = :actorName,
                 updated_at     = now()
-             WHERE document_id = :id
+             WHERE deposit_notice_id = :id
             """,
             Map.of("num", docNumber, "actorId", actorId, "actorName", actorName, "id", docId));
 
         // Supersede all older versions for same ticket
         jdbc.update("""
-            UPDATE sales.document SET status = 'SUPERSEDED', updated_at = now()
-             WHERE ticket_id = (SELECT ticket_id FROM sales.document WHERE document_id = :id)
-               AND document_id <> :id
+            UPDATE sales.deposit_notice SET status = 'SUPERSEDED', updated_at = now()
+             WHERE ticket_id = (SELECT ticket_id FROM sales.deposit_notice WHERE deposit_notice_id = :id)
+               AND deposit_notice_id <> :id
                AND status = 'ISSUED'
             """, Map.of("id", docId));
 
@@ -220,8 +220,8 @@ public class DocumentRepository {
 
     public void setFilePaths(long docId, String pdfPath, String xlsxPath) {
         jdbc.update("""
-            UPDATE sales.document SET pdf_path = :pdf, xlsx_path = :xlsx, updated_at = now()
-             WHERE document_id = :id
+            UPDATE sales.deposit_notice SET pdf_path = :pdf, xlsx_path = :xlsx, updated_at = now()
+             WHERE deposit_notice_id = :id
             """, Map.of("id", docId, "pdf", pdfPath, "xlsx", xlsxPath));
     }
 
@@ -229,7 +229,7 @@ public class DocumentRepository {
 
     private int nextVersion(long ticketId) {
         Integer max = jdbc.queryForObject(
-            "SELECT COALESCE(MAX(version), 0) FROM sales.document WHERE ticket_id = :t",
+            "SELECT COALESCE(MAX(version), 0) FROM sales.deposit_notice WHERE ticket_id = :t",
             Map.of("t", ticketId), Integer.class);
         return (max == null ? 0 : max) + 1;
     }
@@ -251,12 +251,12 @@ public class DocumentRepository {
         return String.format("GLRD%02d%03d", yearTh % 100, seq);
     }
 
-    private void insertItems(long docId, List<DocumentItemRequest> items) {
+    private void insertItems(long docId, List<DepositNoticeItemRequest> items) {
         for (var it : items) {
             BigDecimal amount = it.netUnitPrice().multiply(it.qty()).setScale(2, RoundingMode.HALF_UP);
             jdbc.update("""
-                INSERT INTO sales.document_item
-                    (document_id, seq, description, qty, unit, unit_price,
+                INSERT INTO sales.deposit_notice_item
+                    (deposit_notice_id, seq, description, qty, unit, unit_price,
                      discount_label, net_unit_price, amount)
                 VALUES
                     (:docId, :seq, :desc, :qty, :unit, :unitPrice,
@@ -276,11 +276,11 @@ public class DocumentRepository {
         }
     }
 
-    private List<DocumentItemDto> findItems(long docId) {
+    private List<DepositNoticeItemDto> findItems(long docId) {
         return jdbc.query(
-            "SELECT * FROM sales.document_item WHERE document_id = :id ORDER BY seq",
+            "SELECT * FROM sales.deposit_notice_item WHERE deposit_notice_id = :id ORDER BY seq",
             Map.of("id", docId),
-            (rs, i) -> new DocumentItemDto(
+            (rs, i) -> new DepositNoticeItemDto(
                 rs.getLong("item_id"),
                 rs.getInt("seq"),
                 rs.getString("description"),
@@ -294,14 +294,14 @@ public class DocumentRepository {
         );
     }
 
-    private DocumentDto mapDoc(ResultSet rs) throws SQLException {
+    private DepositNoticeDto mapDoc(ResultSet rs) throws SQLException {
         Array notesArr = rs.getArray("notes");
         List<String> notes = notesArr != null
             ? Arrays.asList((String[]) notesArr.getArray())
             : Collections.emptyList();
 
-        return new DocumentDto(
-            rs.getLong("document_id"),
+        return new DepositNoticeDto(
+            rs.getLong("deposit_notice_id"),
             rs.getLong("ticket_id"),
             rs.getString("doc_type"),
             rs.getInt("version"),
@@ -331,8 +331,8 @@ public class DocumentRepository {
         );
     }
 
-    private DocumentDto withItems(DocumentDto doc, List<DocumentItemDto> items) {
-        return new DocumentDto(
+    private DepositNoticeDto withItems(DepositNoticeDto doc, List<DepositNoticeItemDto> items) {
+        return new DepositNoticeDto(
             doc.id(), doc.ticketId(), doc.docType(), doc.version(), doc.docNumber(),
             doc.issueDate(), doc.status(), doc.customerName(), doc.customerTaxId(),
             doc.customerAddress(), doc.projectName(), doc.reference(), doc.currency(),
