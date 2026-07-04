@@ -37,6 +37,7 @@ export function App() {
     currentEmployee,
     employees,
     profileRequests,
+    dashboardSummary,
     route,
     selectedEmployee,
     loadData,
@@ -55,6 +56,7 @@ export function App() {
   );
   const isEmployeeExperience = hasPermission(user?.role, 'canUseEmployeeExperience');
   const pendingCount = (isEmployeeExperience ? ownRequests : profileRequests).filter((request) => request.status === 'pending').length;
+  const dashboardRequests = isEmployeeExperience && !user?.manager ? ownRequests : profileRequests;
 
   useEffect(() => {
     let alive = true;
@@ -145,9 +147,9 @@ export function App() {
   }
 
   const screen = route === 'dashboard'
-    ? <EmployeeDashboard employee={currentEmployee} profileRequests={ownRequests} onRoute={handleRoute} />
+    ? <EmployeeDashboard user={user} employee={currentEmployee} profileRequests={dashboardRequests} dashboardSummary={dashboardSummary} onRoute={handleRoute} />
     : route === 'hr-dashboard'
-      ? <HrDashboard employee={currentEmployee} employees={employees} profileRequests={profileRequests} onRoute={handleRoute} />
+      ? <HrDashboard employee={currentEmployee} employees={employees} profileRequests={profileRequests} dashboardSummary={dashboardSummary} onRoute={handleRoute} />
     : route === 'ticket-dashboard'
       ? <TicketDashboard user={user} employee={currentEmployee} onOpenTicket={openTicket} showToast={showToast} />
     : route === 'employees'

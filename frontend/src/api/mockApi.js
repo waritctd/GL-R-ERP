@@ -210,7 +210,12 @@ function fail(message, status = 400) {
 function publicUser(user) {
   if (!user) return null;
   const { password, ...safe } = user;
-  return safe;
+  const employee = employeeForUser(user);
+  return {
+    ...safe,
+    divisionId: safe.divisionId ?? employee?.divisionId ?? null,
+    manager: safe.manager ?? dashboardManager(user),
+  };
 }
 
 function requireSession() {
@@ -303,6 +308,154 @@ function progressiveCommission(baseValue) {
 
 function buildCommissionRecord(record) {
   return structuredClone(record);
+}
+
+function employeeForUser(user) {
+  return user?.employeeId ? db.employees.find((employee) => employee.id === user.employeeId) : null;
+}
+
+function dashboardManager(user) {
+  const employee = employeeForUser(user);
+  return Boolean(
+    user?.manager
+    || user?.role === 'supervisor'
+    || user?.role === 'sales_manager'
+    || employee?.positionTh === 'ผู้จัดการฝ่าย'
+  );
+}
+
+function dashboardDivisionId(user) {
+  return user?.divisionId ?? employeeForUser(user)?.divisionId ?? null;
+}
+
+function dashboardEmployeeScope(user) {
+  const employee = employeeForUser(user);
+  if (['hr', 'admin', 'ceo'].includes(user.role)) return { label: 'all', employees: db.employees };
+  if (dashboardManager(user) && dashboardDivisionId(user)) {
+    return {
+      label: 'division',
+      employees: db.employees.filter((item) => item.divisionId === dashboardDivisionId(user)),
+    };
+  }
+  return { label: employee ? 'self' : 'none', employees: employee ? [employee] : [] };
+}
+
+function dashboardHeadcount(user) {
+  const company = ['hr', 'ceo', 'admin'].includes(user.role);
+  const manager = dashboardManager(user);
+  const divisionId = dashboardDivisionId(user);
+  const employees = company
+    ? db.employees
+    : manager && divisionId
+      ? db.employees.filter((employee) => employee.divisionId === divisionId)
+      : [];
+  if (employees.length === 0) return { scope: 'none', active: null, inactive: null, total: null, byDivision: [] };
+
+  const byDivision = [...employees.reduce((groups, employee) => {
+    const key = employee.divisionId || 'unknown';
+    const current = groups.get(key) || {
+      divisionId: employee.divisionId ?? null,
+      divisionCode: employee.divisionId ?? null,
+      divisionName: employee.divisionTh || 'ไม่ระบุฝ่าย',
+      active: 0,
+      inactive: 0,
+      total: 0,
+    };
+    if (employee.active) current.active += 1;
+    else current.inactive += 1;
+    current.total += 1;
+    groups.set(key, current);
+    return groups;
+  }, new Map()).values()];
+
+  return {
+    scope: company ? 'all' : 'division',
+    active: employees.filter((employee) => employee.active).length,
+    inactive: employees.filter((employee) => !employee.active).length,
+    total: employees.length,
+    byDivision,
+  };
+}
+
+function dashboardTickets(user) {
+  const allVisible = ['import', 'ceo', 'admin'].includes(user.role);
+  const ownVisible = user.role === 'sales';
+  const list = allVisible
+    ? db.tickets
+    : ownVisible
+      ? db.tickets.filter((ticket) => ticket.createdById === user.id || (user.employeeId && ticket.createdById === user.employeeId))
+      : [];
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+  const threeDaysAgo = new Date(now - 3 * 86400000).toISOString().slice(0, 10);
+  return {
+    scope: allVisible ? 'all' : ownVisible ? 'self' : 'none',
+    draft: list.filter((ticket) => ticket.status === 'draft').length,
+    submitted: list.filter((ticket) => ticket.status === 'submitted').length,
+    inReview: list.filter((ticket) => ticket.status === 'in_review').length,
+    priceProposed: list.filter((ticket) => ticket.status === 'price_proposed').length,
+    approved: list.filter((ticket) => ticket.status === 'approved').length,
+    quotationIssued: list.filter((ticket) => ticket.status === 'quotation_issued').length,
+    documentIssued: list.filter((ticket) => ticket.status === 'document_issued').length,
+    closed: list.filter((ticket) => ticket.status === 'closed').length,
+    cancelled: list.filter((ticket) => ticket.status === 'cancelled').length,
+    total: list.length,
+    totalOpen: list.filter((ticket) => !['closed', 'cancelled'].includes(ticket.status)).length,
+    closedThisMonth: list.filter((ticket) => ticket.status === 'closed' && ticket.closedAt >= monthStart).length,
+    cancelledThisMonth: list.filter((ticket) => ticket.status === 'cancelled' && ticket.updatedAt >= monthStart).length,
+    overdueOver3Days: list.filter((ticket) => !['closed', 'cancelled', 'draft'].includes(ticket.status) && ticket.createdAt < threeDaysAgo).length,
+  };
+}
+
+function dashboardPending(user, ticketSummary) {
+  const employeeScope = dashboardEmployeeScope(user);
+  const employeeIds = new Set(employeeScope.employees.map((employee) => employee.id));
+  const employeeSelf = employeeScope.label === 'self';
+  const manager = employeeScope.label === 'division';
+  const hrOrAdmin = ['hr', 'admin'].includes(user.role);
+  const profileRequests = hrOrAdmin || employeeSelf
+    ? db.profileRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'pending').length
+    : 0;
+  const leave = hrOrAdmin || manager || employeeSelf
+    ? db.leaveRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'SUBMITTED').length
+    : 0;
+  const commissions = ['sales_manager', 'ceo', 'admin'].includes(user.role)
+    ? db.commissions.filter((record) => record.status === 'SUBMITTED').length
+    : user.role === 'sales'
+      ? db.commissions.filter((record) => record.salesRepId === user.id && record.status === 'SUBMITTED').length
+      : 0;
+  const tickets = ['sales', 'import', 'ceo', 'admin'].includes(user.role)
+    ? ticketSummary.submitted + ticketSummary.inReview + ticketSummary.priceProposed
+    : 0;
+  return {
+    scope: employeeScope.label,
+    profileRequests,
+    overtime: 0,
+    leave,
+    commissions,
+    tickets,
+    total: profileRequests + leave + commissions + tickets,
+  };
+}
+
+function dashboardAttendance(user) {
+  if (['hr', 'ceo', 'admin'].includes(user.role)) {
+    return { scope: 'all', todayPresent: 0, lateToday: 0, missingCheckout: 0, punchCountToday: 0, monthlyAttendanceDays: 0 };
+  }
+  if (dashboardManager(user) && dashboardDivisionId(user)) {
+    return { scope: 'division', todayPresent: 0, lateToday: 0, missingCheckout: 0, punchCountToday: 0, monthlyAttendanceDays: 0 };
+  }
+  return { scope: 'self', monthlyAttendanceDays: 0, todayStatus: 'NO_RECORD', firstIn: null, lastOut: null, lateMinutesToday: 0 };
+}
+
+function dashboardNotifications(user) {
+  const ids = new Set([user.id, user.employeeId].filter(Boolean));
+  const list = db.notifications.filter((notification) => ids.has(notification.userId));
+  return {
+    unread: list.filter((notification) => !notification.read).length,
+    read: list.filter((notification) => notification.read).length,
+    total: list.length,
+  };
 }
 
 function managerIdForEmployee(employee) {
@@ -1227,24 +1380,30 @@ export const api = {
   dashboard: {
     async summary() {
       const user = requireSession();
-      if (!['sales', 'import', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
-      const list = user.role === 'sales'
-        ? db.tickets.filter((t) => t.createdById === user.id)
-        : db.tickets;
-      const now = new Date();
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-      const threeDaysAgo = new Date(now - 3 * 86400000).toISOString().slice(0, 10);
+      const tickets = dashboardTickets(user);
+      const pendingApprovals = dashboardPending(user, tickets);
+      const notifications = dashboardNotifications(user);
       return delay({
         summary: {
-          totalOpen: list.filter((t) => !['closed', 'cancelled'].includes(t.status)).length,
-          submitted: list.filter((t) => t.status === 'submitted').length,
-          inReview: list.filter((t) => t.status === 'in_review').length,
-          priceProposed: list.filter((t) => t.status === 'price_proposed').length,
-          approved: list.filter((t) => t.status === 'approved').length,
-          quotationIssued: list.filter((t) => t.status === 'quotation_issued').length,
-          closedThisMonth: list.filter((t) => t.status === 'closed' && t.closedAt >= monthStart).length,
-          cancelledThisMonth: list.filter((t) => t.status === 'cancelled' && t.updatedAt >= monthStart).length,
-          overdueOver3Days: list.filter((t) => !['closed', 'cancelled', 'draft'].includes(t.status) && t.createdAt < threeDaysAgo).length,
+          role: user.role,
+          employeeId: user.employeeId ?? null,
+          divisionId: dashboardDivisionId(user),
+          manager: dashboardManager(user),
+          generatedAt: new Date().toISOString(),
+          headcount: dashboardHeadcount(user),
+          pendingApprovals,
+          attendance: dashboardAttendance(user),
+          tickets,
+          notifications,
+          totalOpen: tickets.totalOpen,
+          submitted: tickets.submitted,
+          inReview: tickets.inReview,
+          priceProposed: tickets.priceProposed,
+          approved: tickets.approved,
+          quotationIssued: tickets.quotationIssued,
+          closedThisMonth: tickets.closedThisMonth,
+          cancelledThisMonth: tickets.cancelledThisMonth,
+          overdueOver3Days: tickets.overdueOver3Days,
         },
       });
     },
