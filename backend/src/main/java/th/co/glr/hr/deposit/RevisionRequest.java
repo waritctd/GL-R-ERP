@@ -1,4 +1,4 @@
-package th.co.glr.hr.document;
+package th.co.glr.hr.deposit;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;

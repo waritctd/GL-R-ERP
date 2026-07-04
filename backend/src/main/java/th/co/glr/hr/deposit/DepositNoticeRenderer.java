@@ -1,4 +1,4 @@
-package th.co.glr.hr.document;
+package th.co.glr.hr.deposit;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -29,7 +29,7 @@ public class DepositNoticeRenderer {
     };
 
     // Render to Excel bytes using Apache POI
-    public byte[] toXlsx(DocumentDto doc) throws Exception {
+    public byte[] toXlsx(DepositNoticeDto doc) throws Exception {
         try (InputStream tpl = new ClassPathResource(TEMPLATE).getInputStream();
              Workbook wb = new XSSFWorkbook(tpl);
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
@@ -50,7 +50,7 @@ public class DepositNoticeRenderer {
             // Item rows starting at row 12 (A13 in 1-based)
             int dataStartRow = 12;
             for (int i = 0; i < doc.items().size(); i++) {
-                DocumentItemDto item = doc.items().get(i);
+                DepositNoticeItemDto item = doc.items().get(i);
                 Row row = getOrCreateRow(sh, dataStartRow + i);
                 setCell(row, 0, (double) item.seq());
                 setCell(row, 1, item.description());
@@ -85,7 +85,7 @@ public class DepositNoticeRenderer {
     }
 
     // HTML preview — used until LibreOffice is available for PDF conversion
-    public String toPreviewHtml(DocumentDto doc) {
+    public String toPreviewHtml(DepositNoticeDto doc) {
         var sb = new StringBuilder();
         String fmt = "font-family:'Sarabun',sans-serif;font-size:13px;color:#1e293b;";
         sb.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>")

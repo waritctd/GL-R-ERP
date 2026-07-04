@@ -1,4 +1,4 @@
-package th.co.glr.hr.document;
+package th.co.glr.hr.deposit;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -16,18 +16,18 @@ import th.co.glr.hr.ticket.TicketStatus;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
 @Service
-public class DocumentService {
+public class DepositNoticeService {
     private static final String PREPARER = "จินตนา หาญมนตรี";
     private static final java.util.Set<String> SALES_ROLES  = java.util.Set.of("sales","admin");
     private static final java.util.Set<String> CEO_ROLES    = java.util.Set.of("ceo","admin");
     private static final java.util.Set<String> IMPORT_ROLES = java.util.Set.of("import","admin");
 
-    private final DocumentRepository docs;
+    private final DepositNoticeRepository docs;
     private final TicketRepository   tickets;
     private final NotificationRepository notifications;
     private final DepositNoticeRenderer renderer;
 
-    public DocumentService(DocumentRepository docs, TicketRepository tickets,
+    public DepositNoticeService(DepositNoticeRepository docs, TicketRepository tickets,
                            NotificationRepository notifications, DepositNoticeRenderer renderer) {
         this.docs          = docs;
         this.tickets       = tickets;
@@ -39,30 +39,30 @@ public class DocumentService {
         return docs.findNoteTemplates();
     }
 
-    public List<DocumentDto> listByTicket(long ticketId) {
+    public List<DepositNoticeDto> listByTicket(long ticketId) {
         return docs.findByTicket(ticketId);
     }
 
-    public DocumentDto getById(long docId) {
+    public DepositNoticeDto getById(long docId) {
         return docs.findById(docId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Document not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found"));
     }
 
     // Create a DRAFT from approved ticket items
     @Transactional
-    public DocumentDto createDraft(long ticketId, DocumentDraftRequest req, UserPrincipal actor) {
+    public DepositNoticeDto createDraft(long ticketId, DepositNoticeDraftRequest req, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
 
         // Auto-populate items from approved ticket items if not provided
-        List<DocumentItemRequest> items = buildItemsFromRequest(req, ticketId);
+        List<DepositNoticeItemRequest> items = buildItemsFromRequest(req, ticketId);
         List<String> notes = req.notes() != null ? req.notes()
             : docs.findNoteTemplates().stream()
                 .filter(DocumentNoteTemplateDto::defaultSelected)
                 .map(DocumentNoteTemplateDto::text)
                 .toList();
 
-        var effective = new DocumentDraftRequest(
+        var effective = new DepositNoticeDraftRequest(
             req.customerName() != null ? req.customerName() : s.customerName(),
             req.customerTaxId(), req.customerAddress(),
             req.projectName(), req.reference(),
@@ -75,8 +75,8 @@ public class DocumentService {
     }
 
     @Transactional
-    public DocumentDto update(long docId, DocumentDraftRequest req, UserPrincipal actor) {
-        DocumentDto doc = requireDraft(docId);
+    public DepositNoticeDto update(long docId, DepositNoticeDraftRequest req, UserPrincipal actor) {
+        DepositNoticeDto doc = requireDraft(docId);
         requireTicketOwnerOrAdmin(doc.ticketId(), actor);
         docs.update(docId, req);
         return docs.findById(docId).orElseThrow();
@@ -84,7 +84,7 @@ public class DocumentService {
 
     // Returns HTML preview (PDF requires LibreOffice — mock for now)
     public String preview(long docId, UserPrincipal actor) {
-        DocumentDto doc = docs.findById(docId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Document not found"));
+        DepositNoticeDto doc = docs.findById(docId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found"));
         try {
             return renderer.toPreviewHtml(doc);
         } catch (Exception e) {
@@ -94,8 +94,8 @@ public class DocumentService {
 
     // Issue: assign doc number, freeze document, transition ticket to document_issued
     @Transactional
-    public DocumentDto issue(long docId, UserPrincipal actor) {
-        DocumentDto doc = requireDraft(docId);
+    public DepositNoticeDto issue(long docId, UserPrincipal actor) {
+        DepositNoticeDto doc = requireDraft(docId);
         requireRole(actor, SALES_ROLES);
         requireTicketOwnerOrAdmin(doc.ticketId(), actor);
 
@@ -122,8 +122,8 @@ public class DocumentService {
 
     // Download Excel bytes
     public byte[] getXlsx(long docId, UserPrincipal actor) {
-        DocumentDto doc = docs.findById(docId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Document not found"));
+        DepositNoticeDto doc = docs.findById(docId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found"));
         try {
             return renderer.toXlsx(doc);
         } catch (Exception e) {
@@ -175,16 +175,16 @@ public class DocumentService {
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
         String st = t.summary().status();
         if (!TicketStatus.APPROVED.equals(st) && !TicketStatus.DOCUMENT_ISSUED.equals(st)) {
-            throw new ApiException(HttpStatus.CONFLICT, "Document can only be created for approved tickets");
+            throw new ApiException(HttpStatus.CONFLICT, "Deposit notice can only be created for approved tickets");
         }
         return t.summary();
     }
 
-    private DocumentDto requireDraft(long docId) {
-        DocumentDto doc = docs.findById(docId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Document not found"));
+    private DepositNoticeDto requireDraft(long docId) {
+        DepositNoticeDto doc = docs.findById(docId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found"));
         if (!"DRAFT".equals(doc.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Document is not in DRAFT status");
+            throw new ApiException(HttpStatus.CONFLICT, "Deposit notice is not in DRAFT status");
         }
         return doc;
     }
@@ -203,7 +203,7 @@ public class DocumentService {
         }
     }
 
-    private List<DocumentItemRequest> buildItemsFromRequest(DocumentDraftRequest req, long ticketId) {
+    private List<DepositNoticeItemRequest> buildItemsFromRequest(DepositNoticeDraftRequest req, long ticketId) {
         if (req.items() != null && !req.items().isEmpty()) return req.items();
         // Auto-build from approved ticket items
         return tickets.findById(ticketId)
@@ -217,7 +217,7 @@ public class DocumentService {
                         ).stream().filter(v -> v != null && !v.isBlank())
                             .reduce((a, b) -> a + " " + b).orElse(it.brand());
                         BigDecimal price = it.approvedPrice();
-                        return new DocumentItemRequest(
+                        return new DepositNoticeItemRequest(
                             seq[0]++, desc, it.qty(), "แผ่น", price, null, price
                         );
                     })

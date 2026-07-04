@@ -1,4 +1,4 @@
-package th.co.glr.hr.document;
+package th.co.glr.hr.deposit;
 
 import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
@@ -20,11 +20,11 @@ import th.co.glr.hr.auth.UserPrincipal;
 
 @RestController
 @RequestMapping("/api")
-public class DocumentController {
-    private final DocumentService service;
+public class DepositNoticeController {
+    private final DepositNoticeService service;
     private final SessionContext  sessions;
 
-    public DocumentController(DocumentService service, SessionContext sessions) {
+    public DepositNoticeController(DepositNoticeService service, SessionContext sessions) {
         this.service  = service;
         this.sessions = sessions;
     }
@@ -36,41 +36,41 @@ public class DocumentController {
     }
 
     // Draft creation from ticket
-    @PostMapping("/tickets/{ticketId}/document/draft")
-    Map<String, DocumentDto> createDraft(
+    @PostMapping("/tickets/{ticketId}/deposit-notice/draft")
+    Map<String, DepositNoticeDto> createDraft(
         @PathVariable long ticketId,
-        @RequestBody DocumentDraftRequest req,
+        @RequestBody DepositNoticeDraftRequest req,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("document", service.createDraft(ticketId, req, user));
+        return Map.of("depositNotice", service.createDraft(ticketId, req, user));
     }
 
     // List documents for a ticket
-    @GetMapping("/tickets/{ticketId}/documents")
-    Map<String, List<DocumentDto>> listByTicket(@PathVariable long ticketId) {
-        return Map.of("documents", service.listByTicket(ticketId));
+    @GetMapping("/tickets/{ticketId}/deposit-notices")
+    Map<String, List<DepositNoticeDto>> listByTicket(@PathVariable long ticketId) {
+        return Map.of("depositNotices", service.listByTicket(ticketId));
     }
 
     // Get single document
-    @GetMapping("/documents/{docId}")
-    Map<String, DocumentDto> getDoc(@PathVariable long docId) {
-        return Map.of("document", service.getById(docId));
+    @GetMapping("/deposit-notices/{docId}")
+    Map<String, DepositNoticeDto> getDoc(@PathVariable long docId) {
+        return Map.of("depositNotice", service.getById(docId));
     }
 
     // Update draft
-    @PutMapping("/documents/{docId}")
-    Map<String, DocumentDto> update(
+    @PutMapping("/deposit-notices/{docId}")
+    Map<String, DepositNoticeDto> update(
         @PathVariable long docId,
-        @RequestBody DocumentDraftRequest req,
+        @RequestBody DepositNoticeDraftRequest req,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("document", service.update(docId, req, user));
+        return Map.of("depositNotice", service.update(docId, req, user));
     }
 
     // HTML preview (iframe src)
-    @PostMapping("/documents/{docId}/preview")
+    @PostMapping("/deposit-notices/{docId}/preview")
     ResponseEntity<byte[]> preview(@PathVariable long docId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         String html = service.preview(docId, user);
@@ -80,14 +80,14 @@ public class DocumentController {
     }
 
     // Issue (assign doc number + transition ticket)
-    @PostMapping("/documents/{docId}/issue")
-    Map<String, DocumentDto> issue(@PathVariable long docId, HttpSession session) {
+    @PostMapping("/deposit-notices/{docId}/issue")
+    Map<String, DepositNoticeDto> issue(@PathVariable long docId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("document", service.issue(docId, user));
+        return Map.of("depositNotice", service.issue(docId, user));
     }
 
     // File download
-    @GetMapping("/documents/{docId}/file")
+    @GetMapping("/deposit-notices/{docId}/file")
     ResponseEntity<byte[]> file(
         @PathVariable long docId,
         @RequestParam(defaultValue = "xlsx") String format,
@@ -95,7 +95,7 @@ public class DocumentController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         byte[] bytes = service.getXlsx(docId, user);
-        DocumentDto doc = service.getById(docId);
+        DepositNoticeDto doc = service.getById(docId);
         String filename = (doc.docNumber() != null ? doc.docNumber() : "draft") + ".xlsx";
         return ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")

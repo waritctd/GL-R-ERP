@@ -1,11 +1,11 @@
-package th.co.glr.hr.document;
+package th.co.glr.hr.deposit;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 
-public record DocumentDto(
+public record DepositNoticeDto(
     long              id,
     long              ticketId,
     String            docType,
@@ -32,5 +32,5 @@ public record DocumentDto(
     String            preparerName,
     OffsetDateTime    createdAt,
     OffsetDateTime    updatedAt,
-    List<DocumentItemDto> items
+    List<DepositNoticeItemDto> items
 ) {}

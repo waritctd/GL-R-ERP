@@ -69,15 +69,15 @@ export const api = {
     listDocs: (id) => apiRequest(API_ROUTES.tickets.listDocs(id)),
     revision: (id, payload) => apiRequest(API_ROUTES.tickets.revision(id), { method: 'POST', body: payload }),
   },
-  documents: {
-    noteTemplates: () => apiRequest(API_ROUTES.documents.noteTemplates),
-    get: (id) => apiRequest(API_ROUTES.documents.get(id)),
-    update: (id, payload) => apiRequest(API_ROUTES.documents.update(id), { method: 'PUT', body: payload }),
+  depositNotices: {
+    noteTemplates: () => apiRequest(API_ROUTES.depositNotices.noteTemplates),
+    get: (id) => apiRequest(API_ROUTES.depositNotices.get(id)),
+    update: (id, payload) => apiRequest(API_ROUTES.depositNotices.update(id), { method: 'PUT', body: payload }),
     // preview returns rendered HTML (text); apiRequest handles CSRF + non-JSON bodies
-    preview: (id) => apiRequest(API_ROUTES.documents.preview(id), { method: 'POST' }),
-    issue: (id) => apiRequest(API_ROUTES.documents.issue(id), { method: 'POST' }),
+    preview: (id) => apiRequest(API_ROUTES.depositNotices.preview(id), { method: 'POST' }),
+    issue: (id) => apiRequest(API_ROUTES.depositNotices.issue(id), { method: 'POST' }),
     downloadXlsx: async (id) => {
-      const res = await fetch(API_ROUTES.documents.file(id, 'xlsx'), { credentials: 'include' });
+      const res = await fetch(API_ROUTES.depositNotices.file(id, 'xlsx'), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');
       return res.blob();
     },
