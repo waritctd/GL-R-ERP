@@ -15,7 +15,7 @@ public class FactoryEmailService {
     private final String fromAddress;
 
     public FactoryEmailService(JavaMailSender mailer,
-                               @Value("${mail.username:noreply@glr.co.th}") String fromAddress) {
+                               @Value("${spring.mail.username:noreply@glr.co.th}") String fromAddress) {
         this.mailer      = mailer;
         this.fromAddress = fromAddress;
     }

@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../api/index.js';
 
-const PCT_FIELDS = ['importDutyPct', 'marginPct'];
-
 function pctDisplay(val) {
   return val != null ? `${(Number(val) * 100).toFixed(2)}%` : '-';
 }
