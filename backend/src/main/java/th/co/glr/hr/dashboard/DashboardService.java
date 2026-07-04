@@ -5,6 +5,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import th.co.glr.hr.auth.UserPrincipal;
 
@@ -20,6 +21,7 @@ public class DashboardService {
     private final DashboardRepository dashboardRepository;
     private final Clock clock;
 
+    @Autowired
     public DashboardService(DashboardRepository dashboardRepository) {
         this(dashboardRepository, Clock.system(BUSINESS_ZONE));
     }
