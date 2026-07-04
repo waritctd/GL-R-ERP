@@ -89,6 +89,11 @@
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
+        <!-- Email sending for factory Import Requests -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
         <!-- Apache POI — Excel (xlsx) generation for deposit notices -->
         <dependency>
             <groupId>org.apache.poi</groupId>
