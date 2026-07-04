@@ -40,3 +40,6 @@ ERP Documentation/00_ALL_DOCS_BUNDLE.md
 
 # Automation tooling leftovers (e.g. Java-upgrade agent run artifacts)
 .github/modernize/
+
+# Vercel deploy artifacts
+.vercel/
