@@ -25,7 +25,10 @@ public class TicketRepository {
                NULLIF(TRIM(CONCAT_WS(' ', ec.first_name_th, ec.last_name_th)), '') AS created_by_name,
                t.assigned_to,
                NULLIF(TRIM(CONCAT_WS(' ', ea.first_name_th, ea.last_name_th)), '') AS assigned_to_name,
-               t.customer_name, t.note,
+               t.customer_name, t.customer_id, t.project_id, t.contact_id,
+               p.name AS project_name,
+               NULLIF(TRIM(CONCAT_WS(' ', ct.first_name, ct.last_name)), '') AS contact_name,
+               t.note,
                t.created_at, t.updated_at, t.closed_at,
                COUNT(ti.item_id) AS item_count,
                t.has_edits
@@ -33,6 +36,8 @@ public class TicketRepository {
           JOIN hr.employee ec ON ec.employee_id = t.created_by
           LEFT JOIN hr.employee ea ON ea.employee_id = t.assigned_to
           LEFT JOIN sales.ticket_item ti ON ti.ticket_id = t.ticket_id
+          LEFT JOIN sales.project p ON p.project_id = t.project_id
+          LEFT JOIN sales.contact ct ON ct.contact_id = t.contact_id
         """;
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -50,7 +55,8 @@ public class TicketRepository {
              WHERE (:status::varchar IS NULL OR t.status = :status)
                AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
              GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
-                      ea.first_name_th, ea.last_name_th
+                      ea.first_name_th, ea.last_name_th,
+                      p.name, ct.first_name, ct.last_name
              ORDER BY t.created_at DESC
             """);
         MapSqlParameterSource params = new MapSqlParameterSource()
@@ -110,8 +116,10 @@ public class TicketRepository {
             ? request.priority() : "NORMAL";
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
-            INSERT INTO sales.ticket (code, title, status, priority, created_by, customer_name, note)
-            VALUES (:code, :title, 'submitted', :priority, :createdBy, :customerName, :note)
+            INSERT INTO sales.ticket
+                (code, title, status, priority, created_by, customer_name, customer_id, project_id, contact_id, note)
+            VALUES
+                (:code, :title, 'submitted', :priority, :createdBy, :customerName, :customerId, :projectId, :contactId, :note)
             """,
             new MapSqlParameterSource()
                 .addValue("code", code)
@@ -119,6 +127,9 @@ public class TicketRepository {
                 .addValue("priority", priority)
                 .addValue("createdBy", actorId)
                 .addValue("customerName", request.customerName())
+                .addValue("customerId", request.customerId())
+                .addValue("projectId", request.projectId())
+                .addValue("contactId", request.contactId())
                 .addValue("note", request.note()),
             keyHolder, new String[]{"ticket_id"});
         long ticketId = keyHolder.getKey().longValue();
@@ -220,7 +231,8 @@ public class TicketRepository {
                 SUMMARY_SELECT + """
                  WHERE t.ticket_id = :id
                  GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
-                          ea.first_name_th, ea.last_name_th
+                          ea.first_name_th, ea.last_name_th,
+                          p.name, ct.first_name, ct.last_name
                 """,
                 Map.of("id", id), (rs, rowNum) -> mapSummary(rs));
             return Optional.ofNullable(summary);
@@ -377,6 +389,12 @@ public class TicketRepository {
     private TicketSummaryDto mapSummary(ResultSet rs) throws SQLException {
         long assignedToRaw = rs.getLong("assigned_to");
         Long assignedToId = rs.wasNull() ? null : assignedToRaw;
+        long customerIdRaw = rs.getLong("customer_id");
+        Long customerId = rs.wasNull() ? null : customerIdRaw;
+        long projectIdRaw = rs.getLong("project_id");
+        Long projectId = rs.wasNull() ? null : projectIdRaw;
+        long contactIdRaw = rs.getLong("contact_id");
+        Long contactId = rs.wasNull() ? null : contactIdRaw;
         Timestamp closedAt = rs.getTimestamp("closed_at");
         return new TicketSummaryDto(
             rs.getLong("ticket_id"),
@@ -390,6 +408,11 @@ public class TicketRepository {
             assignedToId,
             rs.getString("assigned_to_name"),
             rs.getString("customer_name"),
+            customerId,
+            projectId,
+            rs.getString("project_name"),
+            contactId,
+            rs.getString("contact_name"),
             rs.getString("note"),
             rs.getTimestamp("created_at").toInstant(),
             rs.getTimestamp("updated_at").toInstant(),

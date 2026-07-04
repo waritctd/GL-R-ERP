@@ -2,7 +2,9 @@ package th.co.glr.hr.customer;
 
 import java.util.List;
 import java.util.Map;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 
 @Repository
@@ -33,5 +35,22 @@ public class CustomerRepository {
                 rs.getString("phone")
             )
         );
+    }
+
+    public CustomerDto create(String name, String taxId, String address, String branch, String phone) {
+        GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbc.update("""
+            INSERT INTO sales.customer (name, tax_id, address, branch, phone)
+            VALUES (:name, :taxId, :address, :branch, :phone)
+            """,
+            new MapSqlParameterSource()
+                .addValue("name", name)
+                .addValue("taxId", taxId)
+                .addValue("address", address)
+                .addValue("branch", branch)
+                .addValue("phone", phone),
+            keyHolder, new String[]{"customer_id"});
+        long id = keyHolder.getKey().longValue();
+        return new CustomerDto(id, name, taxId, address, branch, phone);
     }
 }

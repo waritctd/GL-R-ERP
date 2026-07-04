@@ -9,6 +9,9 @@ public record CreateTicketRequest(
     @NotBlank String title,
     String priority,
     String customerName,
+    Long customerId,
+    Long projectId,
+    Long contactId,
     String note,
     @NotEmpty @Valid List<TicketItemRequest> items
 ) {}

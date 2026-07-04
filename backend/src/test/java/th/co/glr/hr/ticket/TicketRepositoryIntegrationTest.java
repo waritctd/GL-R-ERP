@@ -8,6 +8,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import th.co.glr.hr.common.PageRequest;
+import th.co.glr.hr.customer.ContactDto;
+import th.co.glr.hr.customer.ContactRepository;
+import th.co.glr.hr.customer.CustomerDto;
+import th.co.glr.hr.customer.CustomerRepository;
+import th.co.glr.hr.customer.ProjectDto;
+import th.co.glr.hr.customer.ProjectRepository;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -88,8 +94,32 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(tickets.findById(ticketId).orElseThrow().quotation().quotationVersion()).isEqualTo(2);
     }
 
+    @Test
+    void createTicket_withCustomerProjectContact_surfacesInSummary() {
+        CustomerRepository customers = new CustomerRepository(jdbc);
+        ProjectRepository projects = new ProjectRepository(jdbc);
+        ContactRepository contacts = new ContactRepository(jdbc);
+
+        CustomerDto customer = customers.create("บริษัท ทดสอบ จำกัด", "0100000000000", "123 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0000");
+        ProjectDto project = projects.create(customer.id(), "โครงการทดสอบ");
+        ContactDto contact = contacts.create(customer.id(), "สมชาย", "ใจดี", "ผู้จัดการ", "somchai@test.co.th", "080-000-0000");
+
+        long ticketId = tickets.create(
+            new CreateTicketRequest("ใบเสนอราคา", "NORMAL", customer.name(),
+                customer.id(), project.id(), contact.id(), null, List.of(item("Toyota", "Hilux", "White", "Matte", "L"))),
+            tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        TicketSummaryDto summary = tickets.findById(ticketId).orElseThrow().summary();
+
+        assertThat(summary.customerId()).isEqualTo(customer.id());
+        assertThat(summary.projectId()).isEqualTo(project.id());
+        assertThat(summary.projectName()).isEqualTo("โครงการทดสอบ");
+        assertThat(summary.contactId()).isEqualTo(contact.id());
+        assertThat(summary.contactName()).isEqualTo("สมชาย ใจดี");
+    }
+
     private CreateTicketRequest sampleTicket(TicketItemRequest... items) {
-        return new CreateTicketRequest("ใบเสนอราคา", "NORMAL", "ลูกค้าทดสอบ", null, List.of(items));
+        return new CreateTicketRequest("ใบเสนอราคา", "NORMAL", "ลูกค้าทดสอบ", null, null, null, null, List.of(items));
     }
 
     private TicketItemRequest item(String brand, String model, String color, String texture, String size) {
