@@ -4,28 +4,124 @@ import { Avatar } from '../../components/common/Avatar.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
 
-export function EmployeeDashboard({ employee, profileRequests, onRoute }) {
+const COMPANY_ROLES = ['hr', 'admin', 'ceo'];
+
+function numberValue(value) {
+  return value ?? 0;
+}
+
+function attendanceStatus(value) {
+  if (value === 'PRESENT') return 'มาทำงาน';
+  if (value === 'ABSENT') return 'ขาดงาน';
+  if (value === 'NO_RECORD') return 'ไม่มีข้อมูล';
+  return value || 'ไม่มีข้อมูล';
+}
+
+function dashboardMode(user, summary) {
+  if (summary?.headcount?.scope === 'all' || COMPANY_ROLES.includes(user?.role)) return 'company';
+  if (summary?.headcount?.scope === 'division' || user?.manager) return 'manager';
+  return 'employee';
+}
+
+function dashboardCards(mode, summary, pendingCount) {
+  const headcount = summary?.headcount ?? {};
+  const pending = summary?.pendingApprovals ?? {};
+  const attendance = summary?.attendance ?? {};
+  const notifications = summary?.notifications ?? {};
+  const tickets = summary?.tickets ?? {};
+
+  if (mode === 'company') {
+    return [
+      { icon: 'users', label: 'พนักงาน Active', value: numberValue(headcount.active), helper: 'Headcount', tone: 'indigo' },
+      { icon: 'clipboard', label: 'รออนุมัติทั้งหมด', value: numberValue(pending.total), helper: 'Approvals', tone: 'rose' },
+      { icon: 'userCog', label: 'แก้ไขข้อมูล', value: numberValue(pending.profileRequests), helper: 'Profile requests', tone: 'amber' },
+      { icon: 'clock', label: 'OT รออนุมัติ', value: numberValue(pending.overtime), helper: 'Overtime', tone: 'blue' },
+      { icon: 'calendar', label: 'ลารออนุมัติ', value: numberValue(pending.leave), helper: 'Leave', tone: 'teal' },
+      { icon: 'badgeCheck', label: 'มาวันนี้', value: numberValue(attendance.todayPresent), helper: 'Attendance', tone: 'teal' },
+      { icon: 'clock', label: 'มาสายวันนี้', value: numberValue(attendance.lateToday), helper: 'Late today', tone: numberValue(attendance.lateToday) > 0 ? 'amber' : 'indigo' },
+      { icon: 'bell', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread), helper: 'Unread', tone: 'indigo' },
+      ...(tickets.total > 0 ? [
+        { icon: 'fileText', label: 'ใบขอราคาเปิดอยู่', value: numberValue(tickets.totalOpen), helper: 'Tickets', tone: 'blue' },
+      ] : []),
+    ];
+  }
+
+  if (mode === 'manager') {
+    return [
+      { icon: 'users', label: 'พนักงานในฝ่าย', value: numberValue(headcount.active), helper: 'Active', tone: 'indigo' },
+      { icon: 'clock', label: 'OT รออนุมัติ', value: numberValue(pending.overtime), helper: 'Division', tone: 'amber' },
+      { icon: 'calendar', label: 'ลารออนุมัติ', value: numberValue(pending.leave), helper: 'Division', tone: 'teal' },
+      { icon: 'badgeCheck', label: 'มาวันนี้', value: numberValue(attendance.todayPresent), helper: 'Attendance', tone: 'teal' },
+      { icon: 'clock', label: 'มาสายวันนี้', value: numberValue(attendance.lateToday), helper: 'Late today', tone: numberValue(attendance.lateToday) > 0 ? 'amber' : 'indigo' },
+      { icon: 'bell', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread), helper: 'Unread', tone: 'indigo' },
+      ...(tickets.total > 0 ? [
+        { icon: 'fileText', label: 'ใบขอราคาเปิดอยู่', value: numberValue(tickets.totalOpen), helper: 'Tickets', tone: 'blue' },
+      ] : []),
+    ];
+  }
+
+  return [
+    { icon: 'badgeCheck', label: 'สถานะวันนี้', value: attendanceStatus(attendance.todayStatus), helper: 'Attendance', tone: attendance.todayStatus === 'PRESENT' ? 'teal' : 'amber' },
+    { icon: 'clock', label: 'OT ของฉัน', value: numberValue(pending.overtime), helper: 'Pending', tone: 'amber' },
+    { icon: 'calendar', label: 'ลาของฉัน', value: numberValue(pending.leave), helper: 'Pending', tone: 'teal' },
+    { icon: 'clipboard', label: 'คำขอแก้ไขข้อมูล', value: numberValue(pending.profileRequests ?? pendingCount), helper: 'Pending', tone: 'rose' },
+    { icon: 'bell', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread), helper: 'Unread', tone: 'indigo' },
+  ];
+}
+
+export function EmployeeDashboard({ user, employee, profileRequests = [], dashboardSummary, onRoute }) {
   const pendingCount = profileRequests.filter((request) => request.status === 'pending').length;
   const years = employee?.hireDate ? new Date().getFullYear() - new Date(employee.hireDate).getFullYear() : 0;
+  const mode = dashboardMode(user, dashboardSummary);
+  const cards = dashboardCards(mode, dashboardSummary, pendingCount);
+  const title = mode === 'company'
+    ? `สวัสดี, คุณ${employee?.nickName || employee?.nameTh || user?.name || ''}`
+    : `สวัสดี, คุณ${employee?.nickName || employee?.nameTh || user?.name || ''}`;
+  const subtitle = mode === 'company'
+    ? 'ภาพรวมระบบทรัพยากรบุคคล'
+    : mode === 'manager'
+      ? `${employee?.positionTh || 'Manager'} · ${employee?.divisionTh || ''}`
+      : `${employee?.positionTh || ''} · ${employee?.divisionTh || ''}`;
+  const quickActions = mode === 'company'
+    ? [
+      ['hr-dashboard', 'ภาพรวม HR'],
+      ['employees', 'รายชื่อพนักงาน'],
+      ['requests', 'คำขอแก้ไขข้อมูล'],
+      ['attendance', 'ข้อมูลเวลาเข้างาน'],
+    ]
+    : [
+      ['profile', 'ดูข้อมูลของฉัน'],
+      ['myrequests', 'ติดตามคำขอแก้ไข'],
+      ['overtime', 'รายการ OT'],
+      ['leave', 'รายการลา'],
+    ];
 
   return (
     <div className="page-stack">
-      <PageHeader title={`สวัสดี, คุณ${employee?.nickName || employee?.nameTh || ''}`} subtitle={`${employee?.positionTh || ''} · ${employee?.divisionTh || ''}`} />
+      <PageHeader title={title} subtitle={subtitle} />
 
-      <section className="profile-strip">
-        <Avatar employee={employee} size="lg" />
-        <div>
-          <h2>{employee?.nameTh}</h2>
-          <p>{employee?.positionTh} · {employee?.departmentTh} · <code>{employee?.code}</code></p>
-        </div>
-        <StatusBadge tone={employee?.statusTone}>{employee?.statusTh}</StatusBadge>
-      </section>
+      {employee ? (
+        <section className="profile-strip">
+          <Avatar employee={employee} size="lg" />
+          <div>
+            <h2>{employee?.nameTh}</h2>
+            <p>{employee?.positionTh} · {employee?.departmentTh} · <code>{employee?.code}</code></p>
+          </div>
+          <StatusBadge tone={employee?.statusTone}>{employee?.statusTh}</StatusBadge>
+        </section>
+      ) : null}
 
       <div className="stat-grid">
-        <StatCard icon="briefcase" label="ตำแหน่ง" value={employee?.positionTh} tone="indigo" />
-        <StatCard icon="building" label="สังกัด" value={employee?.divisionTh} tone="teal" />
-        <StatCard icon="calendar" label="อายุงาน" value={`${years} ปี`} tone="amber" />
-        <StatCard icon="clipboard" label="คำขอรออนุมัติ" value={pendingCount} tone="rose" />
+        {cards.map((card) => (
+          <StatCard key={`${card.label}-${card.helper}`} {...card} />
+        ))}
+        {mode === 'employee' ? (
+          <>
+            <StatCard icon="briefcase" label="ตำแหน่ง" value={employee?.positionTh || '-'} tone="indigo" />
+            <StatCard icon="building" label="สังกัด" value={employee?.divisionTh || '-'} tone="teal" />
+            <StatCard icon="calendar" label="อายุงาน" value={`${years} ปี`} tone="amber" />
+          </>
+        ) : null}
       </div>
 
       <div className="dashboard-grid">
@@ -34,18 +130,21 @@ export function EmployeeDashboard({ employee, profileRequests, onRoute }) {
             <h2>การดำเนินการด่วน</h2>
           </div>
           <div className="action-list">
-            <button type="button" onClick={() => onRoute('profile')}>ดูข้อมูลของฉัน</button>
-            <button type="button" onClick={() => onRoute('myrequests')}>ติดตามคำขอแก้ไข</button>
+            {quickActions.map(([route, label]) => (
+              <button type="button" key={route} onClick={() => onRoute(route)}>{label}</button>
+            ))}
           </div>
         </section>
 
         <section className="panel">
           <div className="panel-header">
-            <h2>คำขอล่าสุดของฉัน</h2>
-            <button type="button" className="text-button" onClick={() => onRoute('myrequests')}>ดูทั้งหมด</button>
+            <h2>{mode === 'company' ? 'คำขอล่าสุด' : 'คำขอล่าสุดของฉัน'}</h2>
+            <button type="button" className="text-button" onClick={() => onRoute(mode === 'company' ? 'requests' : 'myrequests')}>ดูทั้งหมด</button>
           </div>
           <div className="request-feed">
-            {profileRequests.slice(0, 5).map((request) => {
+            {profileRequests.length === 0 ? (
+              <div className="empty-state">ยังไม่มีคำขอล่าสุด</div>
+            ) : profileRequests.slice(0, 5).map((request) => {
               const status = requestStatus(request.status);
               return (
                 <div className="request-feed-item compact" key={request.id}>

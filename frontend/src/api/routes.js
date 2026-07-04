@@ -112,9 +112,9 @@ export const API_ROUTES = {
 export const ROLE_PERMISSIONS = {
   canUseEmployeeExperience: ['employee'],
   canSubmitProfileRequests: ['employee'],
-  canViewEmployees: ['hr'],
-  canManageEmployees: ['hr'],
-  canReviewProfileRequests: ['hr'],
+  canViewEmployees: ['hr', 'admin'],
+  canManageEmployees: ['hr', 'admin'],
+  canReviewProfileRequests: ['hr', 'admin'],
   canViewAllAttendance: ['hr', 'ceo'],
   canImportAttendance: ['hr', 'ceo'],
   canViewAllOvertime: ['hr', 'ceo', 'admin'],

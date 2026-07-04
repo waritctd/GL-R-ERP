@@ -6,7 +6,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
 import { divisions, findDivision } from '../../data/referenceData.js';
 
-export function HrDashboard({ employee, employees, profileRequests, onRoute }) {
+export function HrDashboard({ employee, employees, profileRequests, dashboardSummary, onRoute }) {
   const dashboardStats = useMemo(() => {
     const headcountByDivision = new Map(divisions.map((division) => [division.id, { division, count: 0 }]));
     const extraDivisions = new Map();
@@ -30,16 +30,35 @@ export function HrDashboard({ employee, employees, profileRequests, onRoute }) {
       }
     });
 
-    const divisionRows = [...headcountByDivision.values(), ...extraDivisions.values()];
+    const fallbackDivisionRows = [...headcountByDivision.values(), ...extraDivisions.values()];
+    const summaryRows = dashboardSummary?.headcount?.byDivision?.map((item) => ({
+      division: {
+        id: item.divisionId ?? item.divisionCode ?? item.divisionName,
+        th: item.divisionName || 'ไม่ระบุฝ่าย',
+        en: item.divisionCode || '',
+      },
+      count: item.total ?? item.active ?? 0,
+    })) ?? [];
+    const divisionRows = summaryRows.length > 0 ? summaryRows : fallbackDivisionRows;
+    const pending = dashboardSummary?.pendingApprovals ?? {};
+    const attendance = dashboardSummary?.attendance ?? {};
+    const notifications = dashboardSummary?.notifications ?? {};
 
     return {
-      activeCount,
+      totalCount: dashboardSummary?.headcount?.total ?? employees.length,
+      activeCount: dashboardSummary?.headcount?.active ?? activeCount,
       probationCount,
-      pendingCount: profileRequests.reduce((count, item) => count + (item.status === 'pending' ? 1 : 0), 0),
+      pendingCount: pending.total ?? profileRequests.reduce((count, item) => count + (item.status === 'pending' ? 1 : 0), 0),
+      pendingProfileRequests: pending.profileRequests ?? 0,
+      pendingOvertime: pending.overtime ?? 0,
+      pendingLeave: pending.leave ?? 0,
+      todayPresent: attendance.todayPresent ?? 0,
+      lateToday: attendance.lateToday ?? 0,
+      unreadNotifications: notifications.unread ?? 0,
       divisionRows,
       maxHeadcount: Math.max(...divisionRows.map((item) => item.count), 1),
     };
-  }, [employees, profileRequests]);
+  }, [employees, profileRequests, dashboardSummary]);
 
   return (
     <div className="page-stack">
@@ -49,10 +68,17 @@ export function HrDashboard({ employee, employees, profileRequests, onRoute }) {
       />
 
       <div className="stat-grid">
-        <StatCard icon="users" label="พนักงานทั้งหมด" value={employees.length} helper="Total employees" tone="indigo" />
+        <StatCard icon="users" label="พนักงานทั้งหมด" value={dashboardStats.totalCount} helper="Total employees" tone="indigo" />
         <StatCard icon="badgeCheck" label="ทำงานปกติ" value={dashboardStats.activeCount} helper="Active" tone="teal" />
-        <StatCard icon="clock" label="ทดลองงาน" value={dashboardStats.probationCount} helper="Probation" tone="amber" />
-        <StatCard icon="clipboard" label="รออนุมัติ" value={dashboardStats.pendingCount} helper="Profile requests" tone="rose" />
+        <StatCard icon="clipboard" label="รออนุมัติทั้งหมด" value={dashboardStats.pendingCount} helper="Approvals" tone="rose" />
+        <StatCard icon="badgeCheck" label="มาวันนี้" value={dashboardStats.todayPresent} helper="Attendance" tone="teal" />
+      </div>
+
+      <div className="stat-grid">
+        <StatCard icon="userCog" label="แก้ไขข้อมูล" value={dashboardStats.pendingProfileRequests} helper="Profile requests" tone="amber" />
+        <StatCard icon="clock" label="OT รออนุมัติ" value={dashboardStats.pendingOvertime} helper="Overtime" tone="blue" />
+        <StatCard icon="calendar" label="ลารออนุมัติ" value={dashboardStats.pendingLeave} helper="Leave" tone="teal" />
+        <StatCard icon="bell" label="แจ้งเตือนยังไม่อ่าน" value={dashboardStats.unreadNotifications} helper="Unread" tone="indigo" />
       </div>
 
       <div className="dashboard-grid">
