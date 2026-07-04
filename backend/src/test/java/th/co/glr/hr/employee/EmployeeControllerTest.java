@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -76,6 +77,37 @@ class EmployeeControllerTest {
         verify(employeeService).listPage(eq(filter), any(UserPrincipal.class), any(PageRequest.class));
     }
 
+    @Test
+    void selfDetailResponseOmitsPayrollAndSensitiveFields() throws Exception {
+        when(employeeService.get(eq(10L), any(UserPrincipal.class)))
+            .thenReturn(employee(10L).withoutSensitiveSelfServiceFields());
+
+        mvc.perform(get("/api/employees/10").session(sessionFor("employee")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.employee.id").value(10))
+            .andExpect(jsonPath("$.employee.email").value("employee10@glr.co.th"))
+            .andExpect(jsonPath("$.employee.salary").doesNotExist())
+            .andExpect(jsonPath("$.employee.salaryHistory").doesNotExist())
+            .andExpect(jsonPath("$.employee.bank").doesNotExist())
+            .andExpect(jsonPath("$.employee.bankAccount").doesNotExist())
+            .andExpect(jsonPath("$.employee.payType").doesNotExist())
+            .andExpect(jsonPath("$.employee.sensitive").doesNotExist());
+    }
+
+    @Test
+    void hrDetailResponseIncludesHrFields() throws Exception {
+        when(employeeService.get(eq(10L), any(UserPrincipal.class))).thenReturn(employee(10L));
+
+        mvc.perform(get("/api/employees/10").session(sessionFor("hr")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.employee.salary").value(25000.0))
+            .andExpect(jsonPath("$.employee.salaryHistory[0].newSalary").value(25000.0))
+            .andExpect(jsonPath("$.employee.bank").value("ธนาคารทดสอบ"))
+            .andExpect(jsonPath("$.employee.bankAccount").value("123-4-56789-0"))
+            .andExpect(jsonPath("$.employee.payType").value("รายเดือน"))
+            .andExpect(jsonPath("$.employee.sensitive.nationalId").value("1101700000010"));
+    }
+
     private MockHttpSession sessionFor(String role) {
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionContext.SESSION_USER_KEY,
@@ -87,5 +119,52 @@ class EmployeeControllerTest {
         LocalValidatorFactoryBean validator = new LocalValidatorFactoryBean();
         validator.afterPropertiesSet();
         return validator;
+    }
+
+    private EmployeeDto employee(long id) {
+        return new EmployeeDto(
+            id,
+            "GLR-" + id,
+            "BC-" + id,
+            "Employee " + id,
+            "Employee " + id,
+            "Emp",
+            "E",
+            "#e0e7ff",
+            "#4338ca",
+            "นาย",
+            "ไม่ระบุ",
+            null,
+            null,
+            "ไทย",
+            "โสด",
+            "employee" + id + "@glr.co.th",
+            "0800000000",
+            "SAL",
+            "ฝ่ายขาย",
+            "Sales",
+            "ขายปลีก",
+            "เจ้าหน้าที่",
+            "Officer",
+            "O2",
+            "สำนักงานใหญ่ กรุงเทพฯ",
+            "ACT",
+            "ทำงานปกติ",
+            "success",
+            true,
+            "รายเดือน",
+            new BigDecimal("25000.00"),
+            LocalDate.of(2024, 1, 1),
+            null,
+            "-",
+            "ธนาคารทดสอบ",
+            "123-4-56789-0",
+            new AddressDto("", "", "", ""),
+            new EmergencyContactDto("", "", ""),
+            List.of(),
+            List.of(new SalaryHistoryDto(LocalDate.of(2024, 1, 1), null, new BigDecimal("25000.00"), "Initial salary")),
+            new SensitiveDto("1101700000010", "TAX-10", "SSO-10", "โรงพยาบาลทดสอบ", "PF-10"),
+            0
+        );
     }
 }
