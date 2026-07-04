@@ -3,6 +3,7 @@ package th.co.glr.hr.notification;
 import jakarta.servlet.http.HttpSession;
 import java.util.List;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
 
 @RestController
 @RequestMapping("/api/notifications")
@@ -31,7 +33,10 @@ public class NotificationController {
     @PatchMapping("/{id}/read")
     ResponseEntity<Void> markRead(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        notifications.markRead(id, user.id());
+        int updated = notifications.markRead(id, user.id());
+        if (updated == 0) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "Notification not found");
+        }
         return ResponseEntity.noContent().build();
     }
 }

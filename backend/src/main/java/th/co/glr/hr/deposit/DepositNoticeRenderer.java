@@ -4,9 +4,11 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import org.apache.poi.ss.usermodel.Cell;
@@ -22,6 +24,7 @@ import org.springframework.stereotype.Component;
 public class DepositNoticeRenderer {
 
     private static final String TEMPLATE = "templates/deposit_notice_template.xlsx";
+    private static final Charset PDF_CHARSET = StandardCharsets.ISO_8859_1;
     // Thai month names for date display
     private static final String[] THAI_MONTHS = {
         "มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน",
@@ -82,6 +85,50 @@ public class DepositNoticeRenderer {
             wb.write(out);
             return out.toByteArray();
         }
+    }
+
+    public byte[] toPdf(DepositNoticeDto doc) {
+        List<String> lines = new ArrayList<>();
+        lines.add("Deposit Notice / Payment Request");
+        lines.add("Document: " + nullSafe(doc.docNumber(), "DRAFT"));
+        lines.add("Issue date: " + (doc.issueDate() != null
+            ? doc.issueDate().format(DateTimeFormatter.ISO_LOCAL_DATE)
+            : LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)));
+        lines.add("Customer: " + nullSafe(doc.customerName()));
+        lines.add("Tax ID: " + nullSafe(doc.customerTaxId()));
+        lines.add("Project: " + nullSafe(doc.projectName()));
+        lines.add("Reference: " + nullSafe(doc.reference()));
+        lines.add("");
+        lines.add("Items");
+        for (var item : doc.items()) {
+            lines.add(item.seq() + ". " + item.description()
+                + " | qty " + fmt2(item.qty())
+                + " " + nullSafe(item.unit())
+                + " | amount " + fmt2(item.amount()));
+        }
+        lines.add("");
+        lines.add("Subtotal: " + fmt2(doc.subtotal()) + " " + nullSafe(doc.currency(), "THB"));
+        lines.add("Deposit: " + fmt2(doc.depositAmount()) + " " + nullSafe(doc.currency(), "THB"));
+        lines.add("VAT: " + fmt2(doc.vatAmount()) + " " + nullSafe(doc.currency(), "THB"));
+        lines.add("Total payable: " + fmt2(doc.totalPayable()) + " " + nullSafe(doc.currency(), "THB"));
+        lines.add("");
+        lines.add("Prepared by: " + nullSafe(doc.preparerName()));
+
+        StringBuilder content = new StringBuilder();
+        content.append("BT\n/F1 16 Tf\n50 790 Td\n");
+        int rendered = 0;
+        for (String line : lines) {
+            if (rendered > 0) {
+                content.append("0 -22 Td\n");
+            }
+            content.append("(").append(pdfText(line)).append(") Tj\n");
+            rendered += 1;
+            if (rendered >= 30) {
+                break;
+            }
+        }
+        content.append("ET\n");
+        return simplePdf(content.toString());
     }
 
     // HTML preview — used until LibreOffice is available for PDF conversion
@@ -204,5 +251,54 @@ public class DepositNoticeRenderer {
     private String escHtml(String s) {
         if (s == null) return "";
         return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;");
+    }
+
+    private byte[] simplePdf(String content) {
+        byte[] stream = content.getBytes(PDF_CHARSET);
+        List<String> objects = List.of(
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+                + "/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Length " + stream.length + " >>\nstream\n" + content + "endstream"
+        );
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        write(out, "%PDF-1.4\n");
+        List<Integer> offsets = new ArrayList<>();
+        for (int i = 0; i < objects.size(); i++) {
+            offsets.add(out.size());
+            write(out, (i + 1) + " 0 obj\n");
+            write(out, objects.get(i));
+            write(out, "\nendobj\n");
+        }
+        int xrefOffset = out.size();
+        write(out, "xref\n0 " + (objects.size() + 1) + "\n");
+        write(out, "0000000000 65535 f \n");
+        for (int offset : offsets) {
+            write(out, String.format(Locale.US, "%010d 00000 n \n", offset));
+        }
+        write(out, "trailer\n<< /Size " + (objects.size() + 1) + " /Root 1 0 R >>\n");
+        write(out, "startxref\n" + xrefOffset + "\n%%EOF\n");
+        return out.toByteArray();
+    }
+
+    private void write(ByteArrayOutputStream out, String value) {
+        out.writeBytes(value.getBytes(PDF_CHARSET));
+    }
+
+    private String pdfText(String value) {
+        if (value == null) {
+            return "";
+        }
+        StringBuilder safe = new StringBuilder();
+        for (char ch : value.toCharArray()) {
+            char printable = ch <= 0x7f ? ch : '?';
+            if (printable == '\\' || printable == '(' || printable == ')') {
+                safe.append('\\');
+            }
+            safe.append(printable);
+        }
+        return safe.toString();
     }
 }
