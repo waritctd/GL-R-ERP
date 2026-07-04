@@ -115,6 +115,9 @@ export function TicketCreateModal({ onClose, onSubmit }) {
     ]).then(([pr, cr]) => {
       setProjectOptions(pr.projects ?? []);
       setContactOptions(cr.contacts ?? []);
+    }).catch(() => {
+      // load failed — leave the pickers empty rather than a dangling unhandled rejection
+      setProjectOptions([]); setContactOptions([]);
     });
   }, [selectedCustomer]);
 
