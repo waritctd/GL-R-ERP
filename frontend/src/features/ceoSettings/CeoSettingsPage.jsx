@@ -136,7 +136,6 @@ export function CeoSettingsPage({ showToast }) {
                           value={editFx[fx.currency]}
                           onChange={(e) => setEditFx((p) => ({ ...p, [fx.currency]: e.target.value }))}
                           style={{ width: 100, padding: '4px 8px', border: '1px solid #93c5fd', borderRadius: 4, fontSize: 13 }}
-                          autoFocus
                         />
                         <button type="button" className="primary-button"
                           style={{ fontSize: 12, padding: '4px 10px' }}
