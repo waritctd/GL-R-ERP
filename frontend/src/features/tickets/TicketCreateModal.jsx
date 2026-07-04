@@ -1,34 +1,216 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { api } from '../../api/index.js';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 
-const emptyItem = () => ({ brand: '', model: '', color: '', texture: '', size: '', qty: 1 });
+const emptyItem = () => ({ brand: '', model: '', color: '', texture: '', size: '', factory: '', qty: 1, qtySqm: '', sqmPerPiece: null });
+
+let _catalogTimer = null;
+function debouncedCatalogSearch(q, cb) {
+  clearTimeout(_catalogTimer);
+  _catalogTimer = setTimeout(() => cb(q), 280);
+}
+
+// ── small sub-components ──────────────────────────────────────────────────────
+
+function SearchSelect({ label, value, onSelect, placeholder, options, onSearch, searchValue, onSearchChange, loading, renderOption, renderValue, createNewLabel, onCreateNew }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: 'relative' }}>
+      <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>{label}</span>
+      {value ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#f8fafc', fontSize: 13 }}>
+          <span style={{ flex: 1 }}>{renderValue(value)}</span>
+          <button type="button" onClick={() => { onSelect(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 0 }}>
+            <Icon name="close" size={14} />
+          </button>
+        </div>
+      ) : (
+        <div style={{ position: 'relative' }}>
+          <input
+            value={searchValue}
+            onChange={(e) => { onSearchChange(e.target.value); onSearch(e.target.value); setOpen(true); }}
+            onFocus={() => { onSearch(searchValue); setOpen(true); }}
+            onBlur={() => setTimeout(() => setOpen(false), 150)}
+            placeholder={placeholder}
+            style={{ width: '100%', boxSizing: 'border-box' }}
+          />
+          {open && (
+            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.1)', maxHeight: 220, overflowY: 'auto' }}>
+              {loading && <div style={{ padding: '10px 12px', fontSize: 12, color: '#94a3b8' }}>กำลังโหลด...</div>}
+              {!loading && options.length === 0 && <div style={{ padding: '10px 12px', fontSize: 12, color: '#94a3b8' }}>ไม่พบข้อมูล</div>}
+              {options.map((opt) => (
+                // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- dropdown option row; onMouseDown (not click) preserves input focus for typeahead
+                <div key={opt.id} onMouseDown={() => { onSelect(opt); setOpen(false); }}
+                  style={{ padding: '8px 12px', fontSize: 13, cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = ''}
+                >
+                  {renderOption(opt)}
+                </div>
+              ))}
+              {onCreateNew && (
+                // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- dropdown action row; onMouseDown (not click) preserves input focus
+                <div onMouseDown={() => { setOpen(false); onCreateNew(); }}
+                  style={{ padding: '8px 12px', fontSize: 12, cursor: 'pointer', color: '#2563eb', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, borderTop: options.length > 0 ? '1px solid #e2e8f0' : 'none', background: '#f8fafc' }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = '#eff6ff'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = '#f8fafc'}
+                >
+                  <Icon name="plus" size={13} />
+                  {createNewLabel || 'สร้างรายการใหม่'}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── main modal ────────────────────────────────────────────────────────────────
 
 export function TicketCreateModal({ onClose, onSubmit }) {
-  const [form, setForm] = useState({ customerName: '', note: '' });
+  const [form, setForm] = useState({ note: '' });
   const [items, setItems] = useState([emptyItem()]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  function updateForm(field, value) {
-    setForm((current) => ({ ...current, [field]: value }));
+  // customer / project / contact state
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [customerOptions, setCustomerOptions] = useState([]);
+  const [customerLoading, setCustomerLoading] = useState(false);
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+
+  const [projectOptions, setProjectOptions] = useState([]);
+  const [selectedProject, setSelectedProject] = useState(null);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [showNewProject, setShowNewProject] = useState(false);
+
+  const [contactOptions, setContactOptions] = useState([]);
+  const [selectedContact, setSelectedContact] = useState(null);
+  const [showNewContact, setShowNewContact] = useState(false);
+  const [newContact, setNewContact] = useState({ firstName: '', lastName: '', position: '', email: '', phone: '' });
+
+  // catalog autocomplete
+  const [catalogResults, setCatalogResults] = useState([]);
+  const [catalogFocusIdx, setCatalogFocusIdx] = useState(null);
+
+  // new customer form
+  const [showNewCustomer, setShowNewCustomer] = useState(false);
+  const [newCustomer, setNewCustomer] = useState({ name: '', taxId: '', branch: 'สำนักงานใหญ่', address: '', phone: '' });
+  const [customerSaving, setCustomerSaving] = useState(false);
+
+  // load projects + contacts when customer is picked
+  useEffect(() => {
+    if (!selectedCustomer) {
+      setProjectOptions([]); setContactOptions([]);
+      setSelectedProject(null); setSelectedContact(null);
+      setShowNewProject(false); setShowNewContact(false);
+      return;
+    }
+    Promise.all([
+      api.customers.projects(selectedCustomer.id),
+      api.customers.contacts(selectedCustomer.id),
+    ]).then(([pr, cr]) => {
+      setProjectOptions(pr.projects ?? []);
+      setContactOptions(cr.contacts ?? []);
+    }).catch(() => {
+      // load failed — leave the pickers empty rather than a dangling unhandled rejection
+      setProjectOptions([]); setContactOptions([]);
+    });
+  }, [selectedCustomer]);
+
+  async function searchCustomers(q) {
+    setCustomerLoading(true);
+    try {
+      const res = await api.customers.search(q);
+      setCustomerOptions(res.customers ?? []);
+    } finally {
+      setCustomerLoading(false);
+    }
   }
 
   function updateItem(index, field, value) {
-    setItems((current) => current.map((item, i) => (i === index ? { ...item, [field]: value } : item)));
+    setItems((cur) => cur.map((item, i) => {
+      if (i !== index) return item;
+      const updated = { ...item, [field]: value };
+      // auto-calc the other qty field when sqmPerPiece is known
+      if (field === 'qty' && item.sqmPerPiece) {
+        updated.qtySqm = value ? (Number(value) * item.sqmPerPiece).toFixed(3) : '';
+      }
+      if (field === 'qtySqm' && item.sqmPerPiece) {
+        updated.qty = value ? Math.ceil(Number(value) / item.sqmPerPiece) : '';
+      }
+      return updated;
+    }));
   }
 
-  function addItem() {
-    setItems((current) => [...current, emptyItem()]);
+  function applyCatalogItem(index, cat) {
+    setItems((cur) => cur.map((item, i) => {
+      if (i !== index) return item;
+      const newQtySqm = item.qty && cat.sqmPerPiece ? (Number(item.qty) * cat.sqmPerPiece).toFixed(3) : '';
+      return {
+        ...item,
+        brand: cat.brand, model: cat.collection || '', color: cat.color || '',
+        texture: cat.surface || '', size: cat.size || '', factory: cat.factory || '',
+        sqmPerPiece: cat.sqmPerPiece || null, qtySqm: newQtySqm,
+      };
+    }));
+    setCatalogResults([]);
+    setCatalogFocusIdx(null);
   }
 
-  function removeItem(index) {
-    if (items.length === 1) return;
-    setItems((current) => current.filter((_, i) => i !== index));
+  function onBrandInput(index, value) {
+    updateItem(index, 'brand', value);
+    setCatalogFocusIdx(index);
+    debouncedCatalogSearch(value, async (q) => {
+      if (!q.trim()) { setCatalogResults([]); return; }
+      try {
+        const res = await api.catalog.search(q);
+        setCatalogResults(res.items ?? []);
+      } catch { /* ignore */ }
+    });
+  }
+
+  async function handleCreateProject() {
+    if (!newProjectName.trim()) return;
+    const res = await api.customers.createProject(selectedCustomer.id, { name: newProjectName.trim() });
+    const proj = res.project;
+    setProjectOptions((prev) => [...prev, proj]);
+    setSelectedProject(proj);
+    setNewProjectName('');
+    setShowNewProject(false);
+  }
+
+  async function handleCreateCustomer() {
+    if (!newCustomer.name.trim()) return;
+    setCustomerSaving(true);
+    try {
+      const res = await api.customers.create(newCustomer);
+      const cust = res.customer;
+      setCustomerOptions((prev) => [...prev, cust]);
+      setSelectedCustomer(cust);
+      setShowNewCustomer(false);
+      setNewCustomer({ name: '', taxId: '', branch: 'สำนักงานใหญ่', address: '', phone: '' });
+    } finally {
+      setCustomerSaving(false);
+    }
+  }
+
+  async function handleCreateContact() {
+    if (!newContact.firstName.trim()) return;
+    const res = await api.customers.createContact(selectedCustomer.id, newContact);
+    const ct = res.contact;
+    setContactOptions((prev) => [...prev, ct]);
+    setSelectedContact(ct);
+    setShowNewContact(false);
+    setNewContact({ firstName: '', lastName: '', position: '', email: '', phone: '' });
   }
 
   async function submit(event) {
     event.preventDefault();
+    if (!selectedCustomer) { setError('กรุณาเลือกบริษัท/ลูกค้า'); return; }
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       if (!item.brand.trim() || !item.model.trim() || !item.color.trim() || !item.texture.trim() || !item.size.trim() || !item.qty) {
@@ -40,8 +222,11 @@ export function TicketCreateModal({ onClose, onSubmit }) {
     setLoading(true);
     try {
       await onSubmit({
-        title: form.customerName.trim(),
-        customerName: form.customerName.trim(),
+        title: selectedCustomer.name,
+        customerName: selectedCustomer.name,
+        customerId: selectedCustomer.id,
+        projectId: selectedProject?.id ?? null,
+        contactId: selectedContact?.id ?? null,
         note: form.note.trim() || null,
         items: items.map((item) => ({
           brand: item.brand.trim(),
@@ -49,7 +234,9 @@ export function TicketCreateModal({ onClose, onSubmit }) {
           color: item.color.trim(),
           texture: item.texture.trim(),
           size: item.size.trim(),
+          factory: item.factory.trim() || null,
           qty: Number(item.qty) || 1,
+          qtySqm: item.qtySqm !== '' && item.qtySqm != null ? Number(item.qtySqm) : null,
         })),
       });
     } catch (err) {
@@ -73,37 +260,193 @@ export function TicketCreateModal({ onClose, onSubmit }) {
       )}
     >
       <form id="ticket-create-form" className="form-grid" onSubmit={submit}>
-        <label className="span-2">
-          บริษัท / โครงการ *
-          <input
-            value={form.customerName}
-            onChange={(e) => updateForm('customerName', e.target.value)}
-            placeholder="ชื่อลูกค้า บริษัท หรือโครงการ"
-            required
-          />
-        </label>
 
+        {/* ── Section 1: Customer / Project / Contact ── */}
+        <div className="span-2" style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: 8, background: '#f8fafc' }}>
+          <p style={{ margin: 0, fontWeight: 700, fontSize: 13, color: '#1e3a5f' }}>ข้อมูลลูกค้า</p>
+
+          {/* Customer picker */}
+          <SearchSelect
+            label="บริษัท / ลูกค้า *"
+            value={selectedCustomer}
+            onSelect={(c) => { setSelectedCustomer(c); if (c) setShowNewCustomer(false); }}
+            placeholder="พิมพ์ค้นหาชื่อบริษัท..."
+            options={customerOptions}
+            onSearch={searchCustomers}
+            searchValue={customerSearch}
+            onSearchChange={setCustomerSearch}
+            loading={customerLoading}
+            renderOption={(c) => (
+              <div>
+                <div style={{ fontWeight: 600 }}>{c.name}</div>
+                {c.taxId && <div style={{ fontSize: 11, color: '#64748b' }}>เลขภาษี {c.taxId}</div>}
+              </div>
+            )}
+            renderValue={(c) => <span><strong>{c.name}</strong>{c.taxId ? <span style={{ color: '#64748b', fontSize: 12, marginLeft: 6 }}>({c.taxId})</span> : null}</span>}
+            createNewLabel="สร้างบริษัท / ลูกค้าใหม่"
+            onCreateNew={() => setShowNewCustomer(true)}
+          />
+
+          {/* Inline new-customer form */}
+          {showNewCustomer && !selectedCustomer && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px', border: '1px solid #bfdbfe', borderRadius: 8, background: '#eff6ff' }}>
+              <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: '#1d4ed8' }}>เพิ่มบริษัท / ลูกค้าใหม่</p>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <label style={{ margin: 0, gridColumn: '1 / -1' }}>
+                  <span style={{ fontSize: 11 }}>ชื่อบริษัท *</span>
+                  <input value={newCustomer.name} onChange={(e) => setNewCustomer((p) => ({ ...p, name: e.target.value }))} placeholder="บริษัท ... จำกัด" />
+                </label>
+                <label style={{ margin: 0 }}>
+                  <span style={{ fontSize: 11 }}>เลขประจำตัวผู้เสียภาษี</span>
+                  <input value={newCustomer.taxId} onChange={(e) => setNewCustomer((p) => ({ ...p, taxId: e.target.value }))} placeholder="0105xxxxxxxxx" />
+                </label>
+                <label style={{ margin: 0 }}>
+                  <span style={{ fontSize: 11 }}>สาขา</span>
+                  <input value={newCustomer.branch} onChange={(e) => setNewCustomer((p) => ({ ...p, branch: e.target.value }))} placeholder="สำนักงานใหญ่" />
+                </label>
+                <label style={{ margin: 0 }}>
+                  <span style={{ fontSize: 11 }}>โทรศัพท์</span>
+                  <input value={newCustomer.phone} onChange={(e) => setNewCustomer((p) => ({ ...p, phone: e.target.value }))} placeholder="02-xxx-xxxx" />
+                </label>
+                <label style={{ margin: 0 }}>
+                  <span style={{ fontSize: 11 }}>ที่อยู่</span>
+                  <input value={newCustomer.address} onChange={(e) => setNewCustomer((p) => ({ ...p, address: e.target.value }))} placeholder="ที่อยู่บริษัท" />
+                </label>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <button type="button" className="primary-button" disabled={!newCustomer.name.trim() || customerSaving} onClick={handleCreateCustomer} style={{ fontSize: 12 }}>
+                  {customerSaving ? 'กำลังบันทึก...' : 'บันทึกบริษัทใหม่'}
+                </button>
+                <button type="button" className="secondary-button" onClick={() => { setShowNewCustomer(false); setNewCustomer({ name: '', taxId: '', branch: 'สำนักงานใหญ่', address: '', phone: '' }); }} style={{ fontSize: 12 }}>
+                  ยกเลิก
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Project selector */}
+          {selectedCustomer && (
+            <div>
+              <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>โครงการ</span>
+              {selectedProject ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', fontSize: 13 }}>
+                  <Icon name="building" size={13} style={{ color: '#64748b' }} />
+                  <span style={{ flex: 1 }}>{selectedProject.name}</span>
+                  <button type="button" onClick={() => setSelectedProject(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 0 }}>
+                    <Icon name="close" size={14} />
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {projectOptions.map((p) => (
+                      <button key={p.id} type="button"
+                        style={{ padding: '4px 10px', border: '1px solid #cbd5e1', borderRadius: 20, fontSize: 12, background: '#fff', cursor: 'pointer' }}
+                        onClick={() => setSelectedProject(p)}>
+                        {p.name}
+                      </button>
+                    ))}
+                    <button type="button"
+                      style={{ padding: '4px 10px', border: '1px dashed #94a3b8', borderRadius: 20, fontSize: 12, background: 'none', cursor: 'pointer', color: '#64748b' }}
+                      onClick={() => setShowNewProject((v) => !v)}>
+                      <Icon name="plus" size={12} /> สร้างโครงการใหม่
+                    </button>
+                  </div>
+                  {showNewProject && (
+                    <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                      <input value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)}
+                        placeholder="ชื่อโครงการ" style={{ flex: 1 }} />
+                      <button type="button" className="primary-button" onClick={handleCreateProject} style={{ padding: '4px 12px', fontSize: 12 }}>
+                        เพิ่ม
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Contact selector */}
+          {selectedCustomer && (
+            <div>
+              <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>ผู้ติดต่อ</span>
+              {selectedContact ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', fontSize: 13 }}>
+                  <div style={{ flex: 1 }}>
+                    <strong>{selectedContact.firstName} {selectedContact.lastName}</strong>
+                    {selectedContact.position && <span style={{ color: '#64748b', fontSize: 12, marginLeft: 6 }}>{selectedContact.position}</span>}
+                    {(selectedContact.email || selectedContact.phone) && (
+                      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+                        {selectedContact.email}{selectedContact.email && selectedContact.phone ? ' · ' : ''}{selectedContact.phone}
+                      </div>
+                    )}
+                  </div>
+                  <button type="button" onClick={() => setSelectedContact(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 0 }}>
+                    <Icon name="close" size={14} />
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {contactOptions.map((c) => (
+                      <button key={c.id} type="button"
+                        style={{ padding: '4px 10px', border: '1px solid #cbd5e1', borderRadius: 20, fontSize: 12, background: '#fff', cursor: 'pointer', textAlign: 'left' }}
+                        onClick={() => setSelectedContact(c)}>
+                        {c.firstName} {c.lastName}
+                        {c.position ? <span style={{ color: '#64748b', marginLeft: 4 }}>({c.position})</span> : null}
+                      </button>
+                    ))}
+                    <button type="button"
+                      style={{ padding: '4px 10px', border: '1px dashed #94a3b8', borderRadius: 20, fontSize: 12, background: 'none', cursor: 'pointer', color: '#64748b' }}
+                      onClick={() => setShowNewContact((v) => !v)}>
+                      <Icon name="plus" size={12} /> เพิ่มผู้ติดต่อ
+                    </button>
+                  </div>
+                  {showNewContact && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 4, padding: '10px', border: '1px solid #e2e8f0', borderRadius: 6, background: '#fff' }}>
+                      <label style={{ margin: 0 }}>
+                        <span style={{ fontSize: 11 }}>ชื่อ *</span>
+                        <input value={newContact.firstName} onChange={(e) => setNewContact((p) => ({ ...p, firstName: e.target.value }))} placeholder="ชื่อ" />
+                      </label>
+                      <label style={{ margin: 0 }}>
+                        <span style={{ fontSize: 11 }}>นามสกุล</span>
+                        <input value={newContact.lastName} onChange={(e) => setNewContact((p) => ({ ...p, lastName: e.target.value }))} placeholder="นามสกุล" />
+                      </label>
+                      <label style={{ margin: 0 }}>
+                        <span style={{ fontSize: 11 }}>ตำแหน่ง</span>
+                        <input value={newContact.position} onChange={(e) => setNewContact((p) => ({ ...p, position: e.target.value }))} placeholder="เช่น ผู้จัดการ" />
+                      </label>
+                      <label style={{ margin: 0 }}>
+                        <span style={{ fontSize: 11 }}>โทร</span>
+                        <input value={newContact.phone} onChange={(e) => setNewContact((p) => ({ ...p, phone: e.target.value }))} placeholder="08x-xxx-xxxx" />
+                      </label>
+                      <label style={{ margin: 0, gridColumn: '1 / -1' }}>
+                        <span style={{ fontSize: 11 }}>อีเมล</span>
+                        <input value={newContact.email} onChange={(e) => setNewContact((p) => ({ ...p, email: e.target.value }))} placeholder="email@company.com" />
+                      </label>
+                      <button type="button" className="primary-button" onClick={handleCreateContact} style={{ gridColumn: '1 / -1', fontSize: 12 }}>
+                        เพิ่มผู้ติดต่อ
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── Section 2: Items ── */}
         <div className="span-2">
           <p style={{ margin: '0 0 10px', fontWeight: 700, fontSize: 13 }}>รายการสินค้า *</p>
           {items.map((item, index) => (
-            <div
-              key={index}
-              style={{
-                border: '1px solid #e2e8f0',
-                borderRadius: 8,
-                padding: '12px 14px',
-                marginBottom: 10,
-                background: '#f8fafc',
-                position: 'relative',
-              }}
-            >
+            <div key={index} style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: '12px 14px', marginBottom: 10, background: '#f8fafc', position: 'relative' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: '#64748b' }}>รายการที่ {index + 1}</span>
                 {items.length > 1 && (
                   <button
                     type="button"
                     className="icon-button"
-                    onClick={() => removeItem(index)}
+                    onClick={() => setItems((cur) => cur.filter((_, i) => i !== index))}
                     title="ลบรายการ"
                     aria-label={`ลบรายการที่ ${index + 1}`}
                     style={{ color: '#ef4444' }}
@@ -113,80 +456,87 @@ export function TicketCreateModal({ onClose, onSubmit }) {
                 )}
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                <label style={{ margin: 0 }}>
-                  <span style={{ fontSize: 12 }}>ชื่อยี่ห้อ *</span>
+
+                {/* Brand with catalog autocomplete */}
+                <div style={{ position: 'relative', margin: 0 }}>
+                  <span style={{ fontSize: 12, display: 'block', marginBottom: 3 }}>ชื่อยี่ห้อ *</span>
                   <input
                     value={item.brand}
-                    onChange={(e) => updateItem(index, 'brand', e.target.value)}
-                    placeholder="เช่น SCG, Cotto"
+                    onChange={(e) => onBrandInput(index, e.target.value)}
+                    onFocus={() => { setCatalogFocusIdx(index); if (item.brand) onBrandInput(index, item.brand); }}
+                    onBlur={() => setTimeout(() => setCatalogFocusIdx(null), 180)}
+                    placeholder="เช่น SCG, Cotto, Panaria"
                     required
                   />
-                </label>
+                  {catalogFocusIdx === index && catalogResults.length > 0 && (
+                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 60, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.12)', maxHeight: 200, overflowY: 'auto' }}>
+                      {catalogResults.map((cat) => (
+                        // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- autocomplete option row; onMouseDown (not click) preserves input focus for typeahead
+                        <div key={cat.id} onMouseDown={() => applyCatalogItem(index, cat)}
+                          style={{ padding: '7px 10px', fontSize: 12, cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = '#f0f9ff'}
+                          onMouseLeave={(e) => e.currentTarget.style.background = ''}
+                        >
+                          <strong>{cat.brand}</strong> — {cat.collection}
+                          <span style={{ color: '#64748b', marginLeft: 4 }}>{cat.color} · {cat.size}</span>
+                          {cat.factory && <span style={{ color: '#94a3b8', fontSize: 11, marginLeft: 4 }}>({cat.factory})</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 <label style={{ margin: 0 }}>
                   <span style={{ fontSize: 12 }}>ชื่อรุ่น *</span>
-                  <input
-                    value={item.model}
-                    onChange={(e) => updateItem(index, 'model', e.target.value)}
-                    placeholder="เช่น รุ่น Premium Series"
-                    required
-                  />
+                  <input value={item.model} onChange={(e) => updateItem(index, 'model', e.target.value)} placeholder="เช่น Elegance Series" required />
                 </label>
                 <label style={{ margin: 0 }}>
                   <span style={{ fontSize: 12 }}>สี *</span>
-                  <input
-                    value={item.color}
-                    onChange={(e) => updateItem(index, 'color', e.target.value)}
-                    placeholder="เช่น ขาว, เทา, ครีม"
-                    required
-                  />
+                  <input value={item.color} onChange={(e) => updateItem(index, 'color', e.target.value)} placeholder="เช่น ขาว, เทา, ครีม" required />
                 </label>
                 <label style={{ margin: 0 }}>
                   <span style={{ fontSize: 12 }}>เนื้อผิว *</span>
-                  <input
-                    value={item.texture}
-                    onChange={(e) => updateItem(index, 'texture', e.target.value)}
-                    placeholder="เช่น ด้าน, มัน, หยาบ"
-                    required
-                  />
+                  <input value={item.texture} onChange={(e) => updateItem(index, 'texture', e.target.value)} placeholder="เช่น ด้าน, มัน, หยาบ" required />
                 </label>
                 <label style={{ margin: 0 }}>
                   <span style={{ fontSize: 12 }}>ขนาด *</span>
-                  <input
-                    value={item.size}
-                    onChange={(e) => updateItem(index, 'size', e.target.value)}
-                    placeholder="เช่น 60x60, 30x60 ซม."
-                    required
-                  />
+                  <input value={item.size} onChange={(e) => updateItem(index, 'size', e.target.value)} placeholder="เช่น 60x60, 30x60 ซม." required />
                 </label>
                 <label style={{ margin: 0 }}>
-                  <span style={{ fontSize: 12 }}>จำนวน *</span>
-                  <input
-                    type="number"
-                    value={item.qty}
-                    min="1"
-                    step="1"
-                    onChange={(e) => updateItem(index, 'qty', e.target.value)}
-                    placeholder="ระบุจำนวน"
-                    required
-                  />
+                  <span style={{ fontSize: 12 }}>โรงงาน</span>
+                  <input value={item.factory} onChange={(e) => updateItem(index, 'factory', e.target.value)} placeholder="เช่น SCG Ceramics" />
                 </label>
+
+                {/* Dual qty */}
+                <label style={{ margin: 0 }}>
+                  <span style={{ fontSize: 12 }}>จำนวน (แผ่น) *</span>
+                  <input type="number" value={item.qty} min="1" step="1"
+                    onChange={(e) => updateItem(index, 'qty', e.target.value)}
+                    placeholder="จำนวนแผ่น" required />
+                </label>
+                <label style={{ margin: 0 }}>
+                  <span style={{ fontSize: 12 }}>
+                    พื้นที่ (ตร.ม.)
+                    {item.sqmPerPiece && <span style={{ color: '#94a3b8', fontSize: 10, marginLeft: 4 }}>{item.sqmPerPiece} ตร.ม./แผ่น</span>}
+                  </span>
+                  <input type="number" value={item.qtySqm} min="0" step="0.001"
+                    onChange={(e) => updateItem(index, 'qtySqm', e.target.value)}
+                    placeholder="ตร.ม. (คำนวณอัตโนมัติ)" />
+                </label>
+
               </div>
             </div>
           ))}
-          <button type="button" className="secondary-button" onClick={addItem} style={{ marginTop: 2 }}>
+          <button type="button" className="secondary-button" onClick={() => setItems((cur) => [...cur, emptyItem()])} style={{ marginTop: 2 }}>
             <Icon name="plus" size={14} />
             เพิ่มรายการสินค้า
           </button>
         </div>
 
+        {/* ── Section 3: Note ── */}
         <label className="span-2">
           หมายเหตุ
-          <textarea
-            value={form.note}
-            onChange={(e) => updateForm('note', e.target.value)}
-            rows={2}
-            placeholder="ข้อมูลเพิ่มเติม (ถ้ามี)"
-          />
+          <textarea value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} rows={2} placeholder="ข้อมูลเพิ่มเติม (ถ้ามี)" />
         </label>
 
         {error ? <div className="form-error span-2">{error}</div> : null}

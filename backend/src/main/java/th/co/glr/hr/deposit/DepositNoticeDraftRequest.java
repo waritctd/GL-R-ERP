@@ -1,9 +1,9 @@
-package th.co.glr.hr.document;
+package th.co.glr.hr.deposit;
 
 import java.math.BigDecimal;
 import java.util.List;
 
-public record DocumentDraftRequest(
+public record DepositNoticeDraftRequest(
     String       customerName,
     String       customerTaxId,
     String       customerAddress,
@@ -11,5 +11,5 @@ public record DocumentDraftRequest(
     String       reference,
     BigDecimal   depositPercent,
     List<String> notes,
-    List<DocumentItemRequest> items
+    List<DepositNoticeItemRequest> items
 ) {}

@@ -15,7 +15,7 @@ function money(v) {
   return Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export function DocumentPage({ ticketId, onBack, showToast }) {
+export function DepositNoticePage({ ticketId, onBack, showToast }) {
   const [doc, setDoc]               = useState(null);
   const [noteTemplates, setTemplates] = useState([]);
   const [customers, setCustomers]   = useState([]);
@@ -40,14 +40,14 @@ export function DocumentPage({ ticketId, onBack, showToast }) {
       setLoading(true);
       try {
         const [templatesRes, customersRes] = await Promise.all([
-          api.documents.noteTemplates(),
+          api.depositNotices.noteTemplates(),
           api.customers.search(''),
         ]);
         setTemplates(templatesRes.templates ?? []);
         setCustomers(customersRes.customers ?? []);
 
-        const docsRes = await api.documents.listByTicket(ticketId);
-        const draft = (docsRes.documents ?? []).find((d) => d.status === 'DRAFT');
+        const docsRes = await api.depositNotices.listByTicket(ticketId);
+        const draft = (docsRes.depositNotices ?? []).find((d) => d.status === 'DRAFT');
 
         let docData;
         if (draft) {
@@ -56,11 +56,11 @@ export function DocumentPage({ ticketId, onBack, showToast }) {
           const defaultNotes = (templatesRes.templates ?? [])
             .filter((t) => t.defaultSelected)
             .map((t) => t.text);
-          const created = await api.documents.createDraft(ticketId, {
+          const created = await api.depositNotices.createDraft(ticketId, {
             notes: defaultNotes,
             depositPercent: 0.5,
           });
-          docData = created.document;
+          docData = created.depositNotice;
         }
 
         setDoc(docData);
@@ -142,9 +142,9 @@ export function DocumentPage({ ticketId, onBack, showToast }) {
     if (!doc) return;
     setSaving(true);
     try {
-      const res = await api.documents.update(doc.id, buildPayload());
-      setDoc(res.document);
-      populateForm(res.document);
+      const res = await api.depositNotices.update(doc.id, buildPayload());
+      setDoc(res.depositNotice);
+      populateForm(res.depositNotice);
       showToast('success', 'บันทึกแล้ว');
     } catch (err) {
       showToast('error', err.message || 'บันทึกไม่สำเร็จ');
@@ -158,10 +158,10 @@ export function DocumentPage({ ticketId, onBack, showToast }) {
     // Save first, then preview
     setSaving(true);
     try {
-      const res = await api.documents.update(doc.id, buildPayload());
-      setDoc(res.document);
+      const res = await api.depositNotices.update(doc.id, buildPayload());
+      setDoc(res.depositNotice);
       setPreviewLoading(true);
-      const html = await api.documents.preview(doc.id);
+      const html = await api.depositNotices.preview(doc.id);
       setPreview(html);
     } catch (err) {
       showToast('error', err.message || 'Preview ไม่สำเร็จ');
@@ -177,10 +177,10 @@ export function DocumentPage({ ticketId, onBack, showToast }) {
     setSaving(true);
     try {
       // Save first
-      await api.documents.update(doc.id, buildPayload());
-      const res = await api.documents.issue(doc.id);
-      setDoc(res.document);
-      showToast('success', `ออกเอกสาร ${res.document.docNumber} เรียบร้อย`);
+      await api.depositNotices.update(doc.id, buildPayload());
+      const res = await api.depositNotices.issue(doc.id);
+      setDoc(res.depositNotice);
+      showToast('success', `ออกเอกสาร ${res.depositNotice.docNumber} เรียบร้อย`);
     } catch (err) {
       showToast('error', err.message || 'ออกเอกสารไม่สำเร็จ');
     } finally {
@@ -191,7 +191,7 @@ export function DocumentPage({ ticketId, onBack, showToast }) {
   async function handleDownloadXlsx() {
     if (!doc) return;
     try {
-      const blob = await api.documents.downloadXlsx(doc.id);
+      const blob = await api.depositNotices.downloadXlsx(doc.id);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -464,7 +464,7 @@ export function DocumentPage({ ticketId, onBack, showToast }) {
               ref={iframeRef}
               srcDoc={previewHtml}
               style={{ width: '100%', height: 'calc(100% - 32px)', border: '1px solid #e2e8f0', borderRadius: 8 }}
-              title="Document preview"
+              title="Deposit notice preview"
             />
             {previewLoading && (
               <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.8)' }}>

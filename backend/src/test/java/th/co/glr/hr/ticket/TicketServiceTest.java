@@ -10,6 +10,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -21,12 +22,14 @@ import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.pricing.PriceCalcService;
 
 class TicketServiceTest {
 
     private final TicketRepository ticketRepo = mock(TicketRepository.class);
     private final NotificationRepository notifRepo = mock(NotificationRepository.class);
-    private final TicketService service = new TicketService(ticketRepo, notifRepo);
+    private final PriceCalcService priceCalcService = mock(PriceCalcService.class);
+    private final TicketService service = new TicketService(ticketRepo, notifRepo, priceCalcService, new ObjectMapper());
 
     private final UserPrincipal salesActor  = actor(1L, "sales");
     private final UserPrincipal otherSales  = actor(2L, "sales");
@@ -144,8 +147,9 @@ class TicketServiceTest {
 
         service.proposePrice(10L, req, importActor);
 
-        verify(ticketRepo).addEvent(eq(10L), eq(3L), anyString(),
-            eq(TicketEventKind.PRICE_PROPOSED), eq(TicketStatus.IN_REVIEW), eq(TicketStatus.PRICE_PROPOSED), eq("ราคาจาก supplier"));
+        verify(ticketRepo).addEventWithSnapshot(eq(10L), eq(3L), anyString(),
+            eq(TicketEventKind.PRICE_PROPOSED), eq(TicketStatus.IN_REVIEW), eq(TicketStatus.PRICE_PROPOSED),
+            eq("ราคาจาก supplier"), anyString());
         verify(notifRepo).notifyByRole(eq("ceo"), eq(10L), anyString(), anyString());
     }
 
@@ -229,7 +233,8 @@ class TicketServiceTest {
     @Test
     void generateQuotation_approvedByOwner_createsQuotationAndTransitions() {
         TicketItemDto item = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
-            "pcs", new BigDecimal("2"), null, new BigDecimal("100.00"), "THB", 0);
+            "pcs", null, new BigDecimal("2"), null, null, null, null, null,
+            new BigDecimal("100.00"), "THB", 0, null, null, null);
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(item));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0001");
 
@@ -386,9 +391,9 @@ class TicketServiceTest {
     private TicketDto stubTicketWithItems(long ticketId, long createdById, String status, List<TicketItemDto> items) {
         TicketSummaryDto summary = new TicketSummaryDto(
             ticketId, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", status, "NORMAL",
-            createdById, "Sales User", null, null, "Test Customer", null,
+            createdById, "Sales User", null, null, "Test Customer", null, null, null, null, null, null,
             Instant.now(), Instant.now(), null, items.size(), false);
-        TicketDto ticket = new TicketDto(summary, items, List.of(), null);
+        TicketDto ticket = new TicketDto(summary, items, List.of(), null, List.of());
         when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
         return ticket;
     }

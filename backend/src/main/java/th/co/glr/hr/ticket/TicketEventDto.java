@@ -11,5 +11,6 @@ public record TicketEventDto(
     String fromStatus,
     String toStatus,
     String message,
-    Instant createdAt
+    Instant createdAt,
+    String itemSnapshot
 ) {}
