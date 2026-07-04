@@ -140,6 +140,18 @@ public class TicketRepository {
 
     public void addEvent(long ticketId, long actorId, String actorName,
                          String kind, String fromStatus, String toStatus, String message) {
+        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message, null);
+    }
+
+    public void addEventWithSnapshot(long ticketId, long actorId, String actorName,
+                                     String kind, String fromStatus, String toStatus,
+                                     String message, String itemSnapshotJson) {
+        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message, itemSnapshotJson);
+    }
+
+    private void addEventInternal(long ticketId, long actorId, String actorName,
+                                   String kind, String fromStatus, String toStatus,
+                                   String message, String itemSnapshotJson) {
         if (toStatus != null) {
             boolean closing = TicketStatus.CLOSED.equals(toStatus) || TicketStatus.CANCELLED.equals(toStatus);
             boolean isPickup = TicketEventKind.PICKED_UP.equals(kind);
@@ -158,19 +170,31 @@ public class TicketRepository {
                     .addValue("actorId", actorId)
                     .addValue("id", ticketId));
         }
+
+        MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("ticketId", ticketId)
+            .addValue("actorId", actorId)
+            .addValue("actorName", actorName)
+            .addValue("kind", kind)
+            .addValue("fromStatus", fromStatus)
+            .addValue("toStatus", toStatus)
+            .addValue("message", message);
+
+        if (itemSnapshotJson == null) {
+            jdbc.update("""
+                INSERT INTO sales.ticket_event
+                    (ticket_id, actor_id, actor_name, kind, from_status, to_status, message)
+                VALUES (:ticketId, :actorId, :actorName, :kind, :fromStatus, :toStatus, :message)
+                """, params);
+            return;
+        }
+
+        params.addValue("itemSnapshot", itemSnapshotJson);
         jdbc.update("""
             INSERT INTO sales.ticket_event
-                (ticket_id, actor_id, actor_name, kind, from_status, to_status, message)
-            VALUES (:ticketId, :actorId, :actorName, :kind, :fromStatus, :toStatus, :message)
-            """,
-            new MapSqlParameterSource()
-                .addValue("ticketId", ticketId)
-                .addValue("actorId", actorId)
-                .addValue("actorName", actorName)
-                .addValue("kind", kind)
-                .addValue("fromStatus", fromStatus)
-                .addValue("toStatus", toStatus)
-                .addValue("message", message));
+                (ticket_id, actor_id, actor_name, kind, from_status, to_status, message, item_snapshot)
+            VALUES (:ticketId, :actorId, :actorName, :kind, :fromStatus, :toStatus, :message, :itemSnapshot::jsonb)
+            """, params);
     }
 
     public void replaceItems(long ticketId, List<TicketItemRequest> items) {
@@ -302,7 +326,8 @@ public class TicketRepository {
     private List<TicketEventDto> findEventsByTicketId(long ticketId) {
         return jdbc.query("""
             SELECT event_id, ticket_id, actor_id, actor_name, kind,
-                   from_status, to_status, message, created_at
+                   from_status, to_status, message, created_at,
+                   item_snapshot::text AS item_snapshot
               FROM sales.ticket_event
              WHERE ticket_id = :id
              ORDER BY created_at ASC, event_id ASC
@@ -317,7 +342,8 @@ public class TicketRepository {
                 rs.getString("from_status"),
                 rs.getString("to_status"),
                 rs.getString("message"),
-                rs.getTimestamp("created_at").toInstant()
+                rs.getTimestamp("created_at").toInstant(),
+                rs.getString("item_snapshot")
             ));
     }
 

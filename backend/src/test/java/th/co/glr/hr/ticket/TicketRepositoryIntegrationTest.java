@@ -118,6 +118,30 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(summary.contactName()).isEqualTo("สมชาย ใจดี");
     }
 
+    @Test
+    void addEventWithSnapshot_persistsAndReadsBackAsJsonText() {
+        long ticketId = tickets.create(sampleTicket(
+            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        tickets.addEventWithSnapshot(ticketId, actorId, "พนักงานขาย",
+            TicketEventKind.PRICE_PROPOSED, TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED,
+            "note", "[{\"brand\":\"Toyota\",\"qty\":1}]");
+
+        List<TicketEventDto> events = tickets.findById(ticketId).orElseThrow().events();
+        TicketEventDto priceProposed = events.stream()
+            .filter(e -> TicketEventKind.PRICE_PROPOSED.equals(e.kind()))
+            .findFirst().orElseThrow();
+
+        assertThat(priceProposed.itemSnapshot()).contains("brand").contains("Toyota");
+
+        // plain addEvent (no snapshot) must still work and leave item_snapshot null
+        tickets.addEvent(ticketId, actorId, "พนักงานขาย", TicketEventKind.COMMENTED, null, null, "no snapshot here");
+        TicketEventDto commented = tickets.findById(ticketId).orElseThrow().events().stream()
+            .filter(e -> TicketEventKind.COMMENTED.equals(e.kind()))
+            .findFirst().orElseThrow();
+        assertThat(commented.itemSnapshot()).isNull();
+    }
+
     private CreateTicketRequest sampleTicket(TicketItemRequest... items) {
         return new CreateTicketRequest("ใบเสนอราคา", "NORMAL", "ลูกค้าทดสอบ", null, null, null, null, List.of(items));
     }

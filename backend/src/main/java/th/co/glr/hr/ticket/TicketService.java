@@ -1,5 +1,6 @@
 package th.co.glr.hr.ticket;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Set;
@@ -11,6 +12,7 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.Page;
 import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.pricing.PriceCalcService;
 
 @Service
 public class TicketService {
@@ -20,10 +22,15 @@ public class TicketService {
 
     private final TicketRepository tickets;
     private final NotificationRepository notifications;
+    private final PriceCalcService priceCalcService;
+    private final ObjectMapper objectMapper;
 
-    public TicketService(TicketRepository tickets, NotificationRepository notifications) {
-        this.tickets = tickets;
-        this.notifications = notifications;
+    public TicketService(TicketRepository tickets, NotificationRepository notifications,
+                         PriceCalcService priceCalcService, ObjectMapper objectMapper) {
+        this.tickets          = tickets;
+        this.notifications    = notifications;
+        this.priceCalcService = priceCalcService;
+        this.objectMapper     = objectMapper;
     }
 
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
@@ -91,11 +98,27 @@ public class TicketService {
         requireRole(actor, IMPORT_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.IN_REVIEW);
         tickets.replaceItems(ticketId, request.items());
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.PRICE_PROPOSED, TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED, request.note());
+        String snapshot = buildItemSnapshot(request.items());
+        tickets.addEventWithSnapshot(ticketId, actor.id(), actor.name(),
+            TicketEventKind.PRICE_PROPOSED, TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED,
+            request.note(), snapshot);
         notifications.notifyByRole("ceo", ticketId, "PRICE_PROPOSED",
             "Ticket " + s.code() + " มีราคาเสนอรอการอนุมัติ");
         return requireTicket(ticketId);
+    }
+
+    private String buildItemSnapshot(List<TicketItemRequest> items) {
+        try {
+            record ItemSnap(String brand, String model, BigDecimal qty,
+                            BigDecimal rawPrice, String rawCurrency, String rawUnit) {}
+            var snaps = items.stream()
+                .map(it -> new ItemSnap(it.brand(), it.model(), it.qty(),
+                                        it.rawPrice(), it.rawCurrency(), it.rawUnit()))
+                .toList();
+            return objectMapper.writeValueAsString(snaps);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     @Transactional
@@ -199,6 +222,17 @@ public class TicketService {
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.COMMENTED, null, null, request.message());
         return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto calculatePrices(long ticketId, UserPrincipal actor) {
+        requireRole(actor, CEO_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (!TicketStatus.PRICE_PROPOSED.equals(s.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "คำนวณราคาได้เฉพาะ ticket ที่มีสถานะ price_proposed");
+        }
+        return priceCalcService.calculateForTicket(ticketId);
     }
 
     // --- helpers ---
