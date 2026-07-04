@@ -101,16 +101,18 @@ public class DepositNoticeService {
 
         TicketSummaryDto s = requireApprovedTicket(doc.ticketId(), actor);
 
-        // Render Excel at issue time
-        try {
-            byte[] xlsx = renderer.toXlsx(doc);
-            // In production: save to file storage and set path. For now store as flag.
-            docs.setFilePaths(docId, null, "rendered");
-        } catch (Exception e) {
-            // Non-fatal: file can be regenerated
-        }
-
         String docNumber = docs.issue(docId, actor.id(), actor.name());
+
+        // Render downloadable files at issue time. For now the DB stores render flags; bytes
+        // remain regenerable from the persisted document snapshot.
+        try {
+            DepositNoticeDto issued = docs.findById(docId).orElseThrow();
+            renderer.toPdf(issued);
+            renderer.toXlsx(issued);
+            docs.setFilePaths(docId, "rendered", "rendered");
+        } catch (Exception e) {
+            // Non-fatal: files can be regenerated on download.
+        }
 
         tickets.addEvent(doc.ticketId(), actor.id(), actor.name(),
             TicketEventKind.DOCUMENT_ISSUED,
@@ -128,6 +130,16 @@ public class DepositNoticeService {
             return renderer.toXlsx(doc);
         } catch (Exception e) {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Excel render failed: " + e.getMessage());
+        }
+    }
+
+    public byte[] getPdf(long docId, UserPrincipal actor) {
+        DepositNoticeDto doc = docs.findById(docId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found"));
+        try {
+            return renderer.toPdf(doc);
+        } catch (Exception e) {
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "PDF render failed: " + e.getMessage());
         }
     }
 

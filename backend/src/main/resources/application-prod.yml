@@ -13,6 +13,9 @@ spring:
     # run before the app serves any traffic.
     lazy-initialization: true
   datasource:
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
     hikari:
       # Don't pre-open idle connections during startup; each one round-trips to the Supabase
       # DB in Tokyo (~70-90ms). Connections are created on demand instead.

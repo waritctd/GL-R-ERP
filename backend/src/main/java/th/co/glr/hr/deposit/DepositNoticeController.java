@@ -90,17 +90,26 @@ public class DepositNoticeController {
     @GetMapping("/deposit-notices/{docId}/file")
     ResponseEntity<byte[]> file(
         @PathVariable long docId,
-        @RequestParam(defaultValue = "xlsx") String format,
+        @RequestParam(defaultValue = "pdf") String format,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        byte[] bytes = service.getXlsx(docId, user);
         DepositNoticeDto doc = service.getById(docId);
-        String filename = (doc.docNumber() != null ? doc.docNumber() : "draft") + ".xlsx";
+        String normalized = format == null ? "pdf" : format.trim().toLowerCase();
+        if ("xlsx".equals(normalized)) {
+            byte[] bytes = service.getXlsx(docId, user);
+            String filename = (doc.docNumber() != null ? doc.docNumber() : "draft") + ".xlsx";
+            return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .contentType(MediaType.parseMediaType(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(bytes);
+        }
+        byte[] bytes = service.getPdf(docId, user);
+        String filename = (doc.docNumber() != null ? doc.docNumber() : "draft") + ".pdf";
         return ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
-            .contentType(MediaType.parseMediaType(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+            .contentType(MediaType.APPLICATION_PDF)
             .body(bytes);
     }
 
