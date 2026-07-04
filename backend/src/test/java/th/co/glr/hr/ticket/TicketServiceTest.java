@@ -229,7 +229,8 @@ class TicketServiceTest {
     @Test
     void generateQuotation_approvedByOwner_createsQuotationAndTransitions() {
         TicketItemDto item = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
-            "pcs", new BigDecimal("2"), null, new BigDecimal("100.00"), "THB", 0);
+            "pcs", null, new BigDecimal("2"), null, null, null, null, null,
+            new BigDecimal("100.00"), "THB", 0, null, null, null);
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(item));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0001");
 

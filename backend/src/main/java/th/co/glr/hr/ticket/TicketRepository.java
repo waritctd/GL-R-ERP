@@ -206,27 +206,60 @@ public class TicketRepository {
 
     private List<TicketItemDto> findItemsByTicketId(long ticketId) {
         return jdbc.query("""
-            SELECT item_id, ticket_id, brand, model, color, texture, size,
-                   qty, proposed_price, approved_price, currency, sort_order
+            SELECT item_id, ticket_id, brand, model, color, texture, size, factory,
+                   qty, qty_sqm, raw_price, raw_currency, raw_unit,
+                   proposed_price, approved_price, currency, sort_order,
+                   calced_cost, calced_price, calc_config_version
               FROM sales.ticket_item
              WHERE ticket_id = :id
              ORDER BY sort_order, item_id
             """,
             Map.of("id", ticketId),
-            (rs, rowNum) -> new TicketItemDto(
-                rs.getLong("item_id"),
-                rs.getLong("ticket_id"),
-                rs.getString("brand"),
-                rs.getString("model"),
-                rs.getString("color"),
-                rs.getString("texture"),
-                rs.getString("size"),
-                rs.getBigDecimal("qty"),
-                rs.getBigDecimal("proposed_price"),
-                rs.getBigDecimal("approved_price"),
-                rs.getString("currency"),
-                rs.getInt("sort_order")
-            ));
+            (rs, rowNum) -> {
+                int calcConfigVersionRaw = rs.getInt("calc_config_version");
+                Integer calcConfigVersion = rs.wasNull() ? null : calcConfigVersionRaw;
+                return new TicketItemDto(
+                    rs.getLong("item_id"),
+                    rs.getLong("ticket_id"),
+                    rs.getString("brand"),
+                    rs.getString("model"),
+                    rs.getString("color"),
+                    rs.getString("texture"),
+                    rs.getString("size"),
+                    rs.getString("factory"),
+                    rs.getBigDecimal("qty"),
+                    rs.getBigDecimal("qty_sqm"),
+                    rs.getBigDecimal("raw_price"),
+                    rs.getString("raw_currency"),
+                    rs.getString("raw_unit"),
+                    rs.getBigDecimal("proposed_price"),
+                    rs.getBigDecimal("approved_price"),
+                    rs.getString("currency"),
+                    rs.getInt("sort_order"),
+                    rs.getBigDecimal("calced_cost"),
+                    rs.getBigDecimal("calced_price"),
+                    calcConfigVersion
+                );
+            });
+    }
+
+    public void updateItemCalcResults(long itemId, BigDecimal calcedCost,
+                                      BigDecimal calcedPrice, int configVersion,
+                                      BigDecimal proposedPrice) {
+        jdbc.update("""
+            UPDATE sales.ticket_item
+               SET calced_cost         = :calcedCost,
+                   calced_price        = :calcedPrice,
+                   calc_config_version = :version,
+                   proposed_price      = :proposedPrice
+             WHERE item_id = :id
+            """,
+            new MapSqlParameterSource()
+                .addValue("calcedCost", calcedCost)
+                .addValue("calcedPrice", calcedPrice)
+                .addValue("version", configVersion)
+                .addValue("proposedPrice", proposedPrice)
+                .addValue("id", itemId));
     }
 
     private List<TicketEventDto> findEventsByTicketId(long ticketId) {
@@ -296,17 +329,24 @@ public class TicketRepository {
                 .addValue("color", item.color())
                 .addValue("texture", item.texture())
                 .addValue("size", item.size())
+                .addValue("factory", item.factory())
                 .addValue("qty", item.qty())
+                .addValue("qtySqm", item.qtySqm())
+                .addValue("rawPrice", item.rawPrice())
+                .addValue("rawCurrency", item.rawCurrency())
+                .addValue("rawUnit", item.rawUnit())
                 .addValue("proposedPrice", item.proposedPrice())
                 .addValue("currency", currency)
                 .addValue("sortOrder", i);
         }
         jdbc.batchUpdate("""
             INSERT INTO sales.ticket_item
-                (ticket_id, brand, model, color, texture, size,
-                 qty, proposed_price, currency, sort_order)
-            VALUES (:ticketId, :brand, :model, :color, :texture, :size,
-                    :qty, :proposedPrice, :currency, :sortOrder)
+                (ticket_id, brand, model, color, texture, size, factory,
+                 qty, qty_sqm, raw_price, raw_currency, raw_unit,
+                 proposed_price, currency, sort_order)
+            VALUES (:ticketId, :brand, :model, :color, :texture, :size, :factory,
+                    :qty, :qtySqm, :rawPrice, :rawCurrency, :rawUnit,
+                    :proposedPrice, :currency, :sortOrder)
             """, batch);
     }
 
