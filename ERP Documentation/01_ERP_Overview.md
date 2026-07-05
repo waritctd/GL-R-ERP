@@ -6,7 +6,7 @@
 | **Document** | 01 — ERP Overview |
 | **Version** | 1.0 |
 | **Date** | 2 July 2026 |
-| **Status** | Current — reflects the system as built (database schema V21) |
+| **Status** | Current — reflects the system as built (database schema head V30) |
 | **Repository** | `GL-R-ERP` (frontend: React + Vite · backend: Spring Boot · agents: Python) |
 
 ---
@@ -94,7 +94,7 @@ flowchart TB
 | Overtime | Pre-approval OT requests, 1.5×/3.0× rates, division-manager approval | `overtime` |
 | Leave | Sick/vacation/personal leave with quota enforcement and attachments flag | `leave` |
 | Sales Tickets | Ticket lifecycle: submit → pickup → propose price → approve → quotation → close | `ticket` |
-| Customers & Documents | Customer directory; quotation / deposit-notice document generation with revisions | `customer`, `document` |
+| Customers & Deposit Notices | Customer directory; quotation / deposit-notice generation (XLSX) with revisions | `customer`, `deposit_notice` (renamed from `document` in V29) |
 | Commission | Tiered commission on invoices, approval, clawback, payroll feed | `commission` |
 | Payroll | Preview/process monthly payroll; bank-transfer text export | `payroll` |
 | Notifications | In-app notification feed | `notification` |
@@ -122,7 +122,7 @@ Additionally, any employee whose position contains **ผู้จัดการ
 |---|---|---|
 | Frontend | React 18 + Vite | SPA, ESLint + jsx-a11y, Vitest + React Testing Library |
 | Backend | Spring Boot 3.5.x LTS on Java 21 LTS | REST API, Spring Security, Spring Session JDBC |
-| Database | PostgreSQL 16 | Flyway migrations **V1–V21**; schemas `hr`, `hr_restricted`, `sales` |
+| Database | PostgreSQL 16 | Flyway migrations head **V30** (V1–V20, V22–V30; V21 demo-only); schemas `hr`, `hr_restricted`, `sales` |
 | Device agent | Python 3 | ZKTeco **Pull SDK** (`plcommpro.dll`) on Windows (Dell T360) |
 | Cloud (demo) | Render (backend, Docker, Singapore) · Vercel (frontend + `/api` proxy) · Supabase (Postgres) | Blueprint in `render.yaml`, proxy in `vercel.json` |
 | CI/CD | GitHub Actions | Backend tests, frontend lint/tests, Flyway-against-real-Postgres check, Dependabot + dependency-review SCA gate |

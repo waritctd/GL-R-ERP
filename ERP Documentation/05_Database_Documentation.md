@@ -5,7 +5,7 @@
 | **Document** | 05 — Database Documentation |
 | **Version** | 1.0 · 2 July 2026 |
 | **Engine** | PostgreSQL 16 |
-| **Migrations** | Flyway `backend/src/main/resources/db/migration/` — **V1 → V21** (forward-fix policy) |
+| **Migrations** | Flyway `backend/src/main/resources/db/migration/` — head **V30** (V1–V20 + V22–V30; forward-fix policy). V21 lives in `db/migration-demo/` and is applied under the `prod` profile only |
 
 ---
 
@@ -26,7 +26,7 @@
 |---|---|---|
 | `hr` | Employee master, attendance, OT, leave, payroll, sessions, audit | Application role |
 | `hr_restricted` | High-sensitivity PII (`employee_pii`) | Restricted; HR reads are audit-logged |
-| `sales` | Tickets, quotations, documents, customers, commissions | Application role |
+| `sales` | Tickets, quotations, deposit notices, customers, commissions | Application role |
 
 ## 2. Entity-Relationship Diagram
 
@@ -51,8 +51,7 @@ erDiagram
     EMPLOYEE ||--o{ OVERTIME_REQUEST : requests
     EMPLOYEE ||--o{ LEAVE_REQUEST : requests
     LEAVE_TYPE ||--o{ LEAVE_REQUEST : classifies
-    LEAVE_TYPE ||--o{ LEAVE_BALANCE : quotas
-    EMPLOYEE ||--o{ LEAVE_BALANCE : holds
+    %% Leave balances are computed from leave_type quotas minus approved leave_request days; there is no leave_balance table.
 
     PAYROLL_PERIOD ||--o{ PAYROLL_LINE : contains
     EMPLOYEE ||--o{ PAYROLL_LINE : "paid via"
@@ -61,8 +60,8 @@ erDiagram
     TICKET ||--o{ TICKET_ITEM : contains
     TICKET ||--o{ TICKET_EVENT : "audit trail"
     TICKET ||--o{ QUOTATION : produces
-    TICKET ||--o{ DOCUMENT : produces
-    DOCUMENT ||--o{ DOCUMENT_ITEM : contains
+    TICKET ||--o{ DEPOSIT_NOTICE : produces
+    DEPOSIT_NOTICE ||--o{ DEPOSIT_NOTICE_ITEM : contains
 
     EMPLOYEE ||--o{ COMMISSION_RECORD : earns
     INVOICE_DETAILS ||--o{ COMMISSION_RECORD : "basis of"
@@ -110,10 +109,11 @@ erDiagram
 
 | Table | Purpose / key constraints |
 |---|---|
-| `hr.leave_type` | Seeded: SICK 30 d (attachment ✅), VACATION 6 d, PERSONAL 3 d |
-| `hr.leave_balance` | Remaining quota per employee/type/year |
+| `hr.leave_type` | Seeded: SICK 30 d (attachment ✅), VACATION 6 d, PERSONAL 3 d; the seeded per-type quota is the balance basis |
 | `hr.leave_request` | Status workflow; FK cascade on employee |
 | `hr.overtime_request` | `day_type ∈ (WORKDAY, HOLIDAY)`; `pay_rate_multiplier ∈ (1.50, 3.00)`; `status ∈ (SUBMITTED, APPROVED, REJECTED, CANCELLED)`; planned/actual minute integrity checks; `payroll_month` link |
+
+> **No `hr.leave_balance` table.** V1 created a placeholder stub; V13 drops it and never recreates it. Remaining balances are **computed** at read time from the `leave_type` quota minus approved `leave_request` days — do not query a stored balance table.
 
 ### 3.4 Payroll (V1 base, V15)
 
@@ -141,15 +141,17 @@ erDiagram
 | `sales.quotation` | Issued quotations |
 | `sales.notification` | In-app notification feed |
 
-### 4.2 Documents & customers (V16, V17)
+### 4.2 Deposit notices & customers (V16, V17, renamed V29)
 
 | Table | Purpose |
 |---|---|
 | `sales.customer` (V16) | Customer directory |
-| `sales.document_note_template` (V16) | Reusable clauses |
-| `sales.document_sequence` (V17) | Running document numbers per type |
-| `sales.document` (V17) | Quotation / deposit-notice header, status (draft→issued), file |
-| `sales.document_item` (V17) | Document line items |
+| `sales.document_note_template` (V16) | Reusable clauses (kept generic — not renamed) |
+| `sales.document_sequence` (V17) | Running document numbers per type (kept generic — not renamed) |
+| `sales.deposit_notice` (V17, renamed from `sales.document` in V29) | Deposit-notice header, status (draft→issued), file; PK `deposit_notice_id` |
+| `sales.deposit_notice_item` (V17, renamed from `sales.document_item` in V29) | Deposit-notice line items |
+
+> **V29 rename.** `sales.document`/`document_item` were deposit-notice-specific in everything but name, so V29 renamed them to `deposit_notice`/`deposit_notice_item` (behavior-preserving; data, FKs, and identity sequences intact). Quotation and invoice get their own tables. The shared `document_sequence` and `document_note_template` are intentionally left generic.
 
 ### 4.3 Commission (V12)
 
@@ -183,7 +185,18 @@ erDiagram
 | V18 | `audit_log` | Audit trail table |
 | V19 | `spring_session_jdbc` | Session persistence |
 | V20 | `attendance_device_agent_token` | Per-device token hash + rotation timestamp |
-| V21 | `demo_seed_accounts` | Demo-branch seed accounts (Demo@2026, one per role) — demo environments only |
+| V21 | `demo_seed_accounts` | Demo seed accounts (Demo@2026, one per role) — **not in the default path**; lives in `db/migration-demo/` and runs under the `prod` profile only (Render demo). A clean on-prem/UAT deploy skips V21 by design |
+| V22 | `ticket_item_factory` | `factory` column on `ticket_item` (brand→factory mapping) |
+| V23 | `contacts_projects_ticket_fk` | `sales.contact` + `sales.project` tables; ticket FK links |
+| V24 | `catalog_and_qty_sqm` | `sales.catalog` product master + `qty_sqm` on `ticket_item` (pcs↔sqm) |
+| V25 | `factory_config_and_raw_price` | `sales.factory_config` (email/currency/unit) + raw-price fields on `ticket_item` |
+| V26 | `price_calc_engine` | CEO price-calc engine: `sales.fx_rates` + versioned `sales.price_calc_config` |
+| V27 | `quotation_fields_and_attachments` | Quotation issuance fields + `sales.attachment` (PO / signed-back files) |
+| V28 | `revision_versioning` | Item snapshot in `ticket_event` + quotation versioning (Rev 1, 2, …) |
+| V29 | `rename_document_to_deposit_notice` | Rename `sales.document`→`deposit_notice` and `document_item`→`deposit_notice_item` (behavior-preserving) |
+| V30 | `normalize_manager_positions` | Collapse ฝ่าย-baked manager titles (e.g. `ผู้จัดการฝ่ายขาย`) to canonical `ผู้จัดการ`; `ผู้ช่วยผู้จัดการ` kept distinct; `กรรมการผู้จัดการ` (MD) untouched |
+
+> **Head is V30.** The default migration path applies V1–V20 then V22–V30 (29 files); V21 is absent by design (demo-only, see above).
 
 ## 6. Conventions & Integrity Rules
 

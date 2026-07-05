@@ -52,7 +52,7 @@ flowchart LR
 | Attendance `.dat` export | Weekly / on demand | Keep per pay cycle |
 | Config/secrets snapshot | On change | Current + previous |
 
-> On **Supabase** (demo), managed automated backups are available on the platform; treat the demo DB as reproducible (it is seeded to V21) rather than a source of record.
+> On **Supabase** (demo), managed automated backups are available on the platform; treat the demo DB as reproducible (head schema **V30** plus the demo-only V21 seed accounts, applied under the `prod` profile) rather than a source of record.
 
 ## 3. Database Backup Procedures
 
@@ -81,7 +81,7 @@ Store dated dumps on the NAS (same LAN as the T360 per the network diagram), and
 flowchart TB
     A[Stop backend] --> B[Create empty target DB]
     B --> C[pg_restore dump]
-    C --> D[Verify Flyway schema_history at V21]
+    C --> D[Verify Flyway schema_history at V30]
     D --> E[Smoke test: login, dashboard, payroll list]
     E --> F[Start backend]
 ```
@@ -101,15 +101,15 @@ psql --dbname=hris_restore -c \
   "SELECT MAX(version) FROM flyway_schema_history WHERE success;"
 ```
 
-Expected max version: **21**.
+Expected max version: **29** (the demo/`prod` profile also has V21 applied, but 29 is still the max).
 
 ## 5. Schema Recovery via Flyway
 
 If the **data** is intact but the **schema** is in doubt, Flyway is the source of truth:
 
-- On startup with `APP_FLYWAY_ENABLED=true`, Flyway applies any missing migrations up to V21.
+- On startup with `APP_FLYWAY_ENABLED=true`, Flyway applies any missing migrations up to the head (**V30**; the default path is V1–V20, V22–V30 — V21 is demo/prod-only).
 - Migrations are **forward-only** (no down scripts). To recover a bad state, restore from a dump, then let Flyway re-apply.
-- CI proves the full `V1→V21` chain against a clean Postgres on every PR, so a fresh rebuild from migrations is a supported recovery path.
+- CI proves the full `V1–V20, V22–V30` chain against a clean Postgres on every PR, so a fresh rebuild from migrations is a supported recovery path.
 
 ## 6. Session & Application Recovery
 
@@ -122,7 +122,7 @@ If the **data** is intact but the **schema** is in doubt, Flyway is the source o
 | Scenario | Action | Target time |
 |---|---|---|
 | Backend down (Render/T360) | Redeploy from `main`/image; sessions and data intact | Minutes |
-| Database corruption | Restore latest nightly dump → verify V21 → smoke test | < 1 hour |
+| Database corruption | Restore latest nightly dump → verify V30 → smoke test | < 1 hour |
 | Full environment loss | Provision Postgres → restore dump (or rebuild schema via Flyway + import) → redeploy backend + frontend | Hours |
 | Attendance data gap | Re-import device `.dat` for the affected window (`import_dat.py`) | Minutes–hours |
 | Lost device token | Re-mint via portal; update agent env | Minutes |

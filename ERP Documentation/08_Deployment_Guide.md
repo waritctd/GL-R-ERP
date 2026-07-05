@@ -27,7 +27,7 @@
 |---|---|---|---|---|
 | Local | Vite dev server (`:5173/5174`) | `mvn spring-boot:run` (`:8080`) | Local Postgres or Docker | Development |
 | Docker | — | `docker-compose` backend (`:8080`) | `docker-compose` Postgres 16 (`:5432`) | Integrated local run |
-| Cloud demo | Vercel | Render (Docker, Singapore) | Supabase Postgres (ap-northeast-1) | Showcase — `gl-r-erp.onrender.com`, DB at V21 with demo accounts |
+| Cloud demo | Vercel | Render (Docker, Singapore) | Supabase Postgres (ap-northeast-1) | Showcase — `gl-r-erp.onrender.com`; schema at head **V30** plus the demo-only **V21** seed accounts (applied only under the `prod` profile) |
 | Production (target) | LAN / domain | Dell T360 | T360 Postgres | On-premise go-live (pending) |
 
 ## 2. Prerequisites
@@ -111,7 +111,7 @@ flowchart LR
 - **Rewrites:** `/api/:path* → https://gl-r-erp.onrender.com/api/:path*` (same-origin calls, no CORS/third-party cookies); SPA fallback `/(.*) → /index.html`.
 - **Security headers on every response:** CSP (`default-src 'self'`, no inline scripts), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Strict-Transport-Security` (1 year, includeSubDomains).
 
-> **Demo branch:** the `demo` branch deploys to `gl-r-erp.onrender.com` with the database at V21 (`Demo@2026` accounts, one per role). It is an intentional showcase, not real production data.
+> **Demo environment:** `main` deploys to `gl-r-erp.onrender.com` under the `prod` profile. The `prod` profile adds `db/migration-demo/` (`V21__demo_seed_accounts`, `Demo@2026` accounts, one per role) on top of the head schema (**V30**). It is an intentional showcase, not real production data.
 
 ## 6. Configuration Reference
 
@@ -129,7 +129,8 @@ Local secrets belong in `backend/.env.local` (git-ignored); commit only `backend
 
 ## 7. Database Migrations
 
-- Flyway runs automatically when `APP_FLYWAY_ENABLED=true`, applying `V1..V21` in order.
+- Flyway runs automatically when `APP_FLYWAY_ENABLED=true`. The default location `classpath:db/migration` applies **V1–V20 + V22–V30** in order (head **V30**); **V21 is not in this path**.
+- **V21 is demo-only.** `V21__demo_seed_accounts` lives in `classpath:db/migration-demo` and is applied **only under the `prod` profile** (Render demo), which sets `spring.flyway.locations=classpath:db/migration,classpath:db/migration-demo` (see `application-prod.yml`). A clean on-prem/UAT deploy skips V21 by design, so its absence from `flyway_schema_history` is expected — not a failed migration.
 - **Never edit an applied migration** — add a new version (forward-fix). The V13 fresh-DB collision was fixed this way (PR #52).
 - CI runs the full migration chain against a real Postgres on every PR (PR #53) to catch ordering/collision issues before merge.
 
