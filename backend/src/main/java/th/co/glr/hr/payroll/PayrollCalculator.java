@@ -16,8 +16,11 @@ public class PayrollCalculator {
     private static final BigDecimal EIGHT = new BigDecimal("8");
     private static final BigDecimal SSO_RATE = new BigDecimal("0.05");
     private static final BigDecimal SSO_MIN_BASE = new BigDecimal("1650.00");
-    private static final BigDecimal SSO_MAX_BASE = new BigDecimal("15000.00");
-    private static final BigDecimal SSO_YEAR_CAP = new BigDecimal("9000.00");
+    // SSO wage ceiling raised by Royal Gazette effective 1 Jan 2026 (2569):
+    // max wage base 17,500 -> max 875/month -> 10,500/year (17,500 x 5% x 12).
+    // Schedule: 2026-2028 = 17,500; 2029-2031 = 20,000; 2032+ = 23,000.
+    private static final BigDecimal SSO_MAX_BASE = new BigDecimal("17500.00");
+    private static final BigDecimal SSO_YEAR_CAP = new BigDecimal("10500.00");
     private static final BigDecimal PERSONAL_ALLOWANCE = new BigDecimal("60000.00");
     private static final BigDecimal EXPENSE_DEDUCTION_CAP = new BigDecimal("100000.00");
     private static final BigDecimal MIN_NET_AFTER_LEGAL_EXECUTION = new BigDecimal("20000.00");
@@ -34,7 +37,10 @@ public class PayrollCalculator {
         BigDecimal specialPayTotal = specialPays.stream().reduce(ZERO, BigDecimal::add);
         BigDecimal overtimePay = money(input.overtimePay());
         BigDecimal commissionPay = money(input.commissionPay());
+        // Taxable earnings only (sheet column A). Non-taxable income (sheet column D)
+        // is excluded from tax and SSO and added back to net pay at the end.
         BigDecimal grossEarnings = money(baseSalary.add(specialPayTotal).add(overtimePay).add(commissionPay));
+        BigDecimal nonTaxableIncome = money(input.nonTaxableIncome());
 
         BigDecimal dailyRate = baseSalary.divide(THIRTY, RATE_SCALE, RoundingMode.HALF_UP);
         BigDecimal hourlyRate = dailyRate.divide(EIGHT, RATE_SCALE, RoundingMode.HALF_UP);
@@ -83,7 +89,7 @@ public class PayrollCalculator {
             .add(studentLoanDeduction)
             .add(legalExecutionDeduction)
             .add(otherPostTaxDeductions));
-        BigDecimal netPay = money(grossEarnings.subtract(totalDeductions).max(ZERO));
+        BigDecimal netPay = money(grossEarnings.subtract(totalDeductions).add(nonTaxableIncome).max(ZERO));
 
         return new PayrollCalculation(
             baseSalary,
@@ -94,6 +100,7 @@ public class PayrollCalculator {
             overtimePay,
             commissionPay,
             grossEarnings,
+            nonTaxableIncome,
             unpaidLeaveDays,
             unpaidLeaveDeduction,
             grossTaxableIncome,
