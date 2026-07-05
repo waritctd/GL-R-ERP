@@ -152,8 +152,9 @@ timeline
 | V27 | quotation_fields_and_attachments | Quotation Workflow |
 | V28 | revision_versioning | Quotation Workflow |
 | V29 | rename_document_to_deposit_notice | Quotation Workflow |
+| V30 | normalize_manager_positions | Position Data Cleanup |
 
-> **Head is V29.** The default path is V1–V20 then V22–V29; V21 is demo-only and absent from a clean deploy.
+> **Head is V30.** The default path is V1–V20 then V22–V30; V21 is demo-only and absent from a clean deploy.
 
 ---
 

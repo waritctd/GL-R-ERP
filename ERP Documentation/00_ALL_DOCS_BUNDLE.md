@@ -1,7 +1,7 @@
 # GL&R ERP — Complete Documentation Bundle
 
 This file concatenates all 12 documentation files for the GL&R HR & Sales ERP,
-generated from the actual codebase (database schema head V29). Hand this whole file to
+generated from the actual codebase (database schema head V30). Hand this whole file to
 Claude together with the report-generation prompt to produce a consolidated report.
 
 ---
@@ -20,7 +20,7 @@ Claude together with the report-generation prompt to produce a consolidated repo
 | **Document** | 01 — ERP Overview |
 | **Version** | 1.0 |
 | **Date** | 2 July 2026 |
-| **Status** | Current — reflects the system as built (database schema head V29) |
+| **Status** | Current — reflects the system as built (database schema head V30) |
 | **Repository** | `GL-R-ERP` (frontend: React + Vite · backend: Spring Boot · agents: Python) |
 
 ---
@@ -136,7 +136,7 @@ Additionally, any employee whose position contains **ผู้จัดการ
 |---|---|---|
 | Frontend | React 18 + Vite | SPA, ESLint + jsx-a11y, Vitest + React Testing Library |
 | Backend | Spring Boot 3.5.x LTS on Java 21 LTS | REST API, Spring Security, Spring Session JDBC |
-| Database | PostgreSQL 16 | Flyway migrations head **V29** (V1–V20, V22–V29; V21 demo-only); schemas `hr`, `hr_restricted`, `sales` |
+| Database | PostgreSQL 16 | Flyway migrations head **V30** (V1–V20, V22–V30; V21 demo-only); schemas `hr`, `hr_restricted`, `sales` |
 | Device agent | Python 3 | ZKTeco **Pull SDK** (`plcommpro.dll`) on Windows (Dell T360) |
 | Cloud (demo) | Render (backend, Docker, Singapore) · Vercel (frontend + `/api` proxy) · Supabase (Postgres) | Blueprint in `render.yaml`, proxy in `vercel.json` |
 | CI/CD | GitHub Actions | Backend tests, frontend lint/tests, Flyway-against-real-Postgres check, Dependabot + dependency-review SCA gate |
@@ -732,7 +732,7 @@ GL-R-ERP/
 │       ├── audit/        audit log writes
 │       ├── common/       ApiException + handler
 │       └── config/       CORS, properties, seeding
-│   └── src/main/resources/db/migration/   Flyway V1–V20, V22–V29 (head V29; V21 in db/migration-demo, prod-only)
+│   └── src/main/resources/db/migration/   Flyway V1–V20, V22–V30 (head V30; V21 in db/migration-demo, prod-only)
 ├── agents/attendance/  Python SC700 agent + ops scripts (Windows)
 ├── docker-compose.yml  local Postgres 16 + backend
 ├── render.yaml         Render blueprint (backend)
@@ -798,7 +798,7 @@ sequenceDiagram
 
 Details in [05_Database_Documentation](05_Database_Documentation.md). Principles:
 
-- **Flyway-only schema changes** — head V29 (V1–V20, V22–V29 in the default path; V21 is demo-only, prod profile), forward-fix policy (no down-migrations).
+- **Flyway-only schema changes** — head V30 (V1–V20, V22–V30 in the default path; V21 is demo-only, prod profile), forward-fix policy (no down-migrations).
 - **Constraint-enforced business rules** — OT multipliers, ticket statuses, leave quotas are CHECK-constrained/seeded in the DB, not just app code.
 - **Separation of sensitive data** — `hr_restricted` schema isolates PII from routine queries.
 - **Event sourcing (light)** — `sales.ticket_event` records every ticket transition for traceability.
@@ -809,7 +809,7 @@ Details in [05_Database_Documentation](05_Database_Documentation.md). Principles
 flowchart LR
     PR[Pull request] --> BE[Backend CI<br/>mvn test · JDK 21]
     PR --> FE[Frontend CI<br/>ESLint + a11y · Vitest · build]
-    PR --> MIG[Migration check<br/>Flyway V1–V20, V22–V29 vs real Postgres]
+    PR --> MIG[Migration check<br/>Flyway V1–V20, V22–V30 vs real Postgres]
     PR --> SCA[Dependency review<br/>SCA gate]
     BE & FE & MIG & SCA --> M{main<br/>protected}
     M -->|autoDeploy| REN[Render backend]
@@ -857,7 +857,7 @@ flowchart LR
 | **Document** | 05 — Database Documentation |
 | **Version** | 1.0 · 2 July 2026 |
 | **Engine** | PostgreSQL 16 |
-| **Migrations** | Flyway `backend/src/main/resources/db/migration/` — head **V29** (V1–V20 + V22–V29; forward-fix policy). V21 lives in `db/migration-demo/` and is applied under the `prod` profile only |
+| **Migrations** | Flyway `backend/src/main/resources/db/migration/` — head **V30** (V1–V20 + V22–V30; forward-fix policy). V21 lives in `db/migration-demo/` and is applied under the `prod` profile only |
 
 ---
 
@@ -1046,8 +1046,9 @@ erDiagram
 | V27 | `quotation_fields_and_attachments` | Quotation issuance fields + `sales.attachment` (PO / signed-back files) |
 | V28 | `revision_versioning` | Item snapshot in `ticket_event` + quotation versioning (Rev 1, 2, …) |
 | V29 | `rename_document_to_deposit_notice` | Rename `sales.document`→`deposit_notice` and `document_item`→`deposit_notice_item` (behavior-preserving) |
+| V30 | `normalize_manager_positions` | Collapse ฝ่าย-baked manager titles (e.g. `ผู้จัดการฝ่ายขาย`) to canonical `ผู้จัดการ`; `ผู้ช่วยผู้จัดการ` kept distinct; `กรรมการผู้จัดการ` (MD) untouched |
 
-> **Head is V29.** The default migration path applies V1–V20 then V22–V29 (28 files); V21 is absent by design (demo-only, see above).
+> **Head is V30.** The default migration path applies V1–V20 then V22–V30 (29 files); V21 is absent by design (demo-only, see above).
 
 ## 6. Conventions & Integrity Rules
 
@@ -1434,7 +1435,7 @@ See [10 Troubleshooting](10_Troubleshooting_Guide.md) for the full matrix.
 |---|---|---|---|---|
 | Local | Vite dev server (`:5173/5174`) | `mvn spring-boot:run` (`:8080`) | Local Postgres or Docker | Development |
 | Docker | — | `docker-compose` backend (`:8080`) | `docker-compose` Postgres 16 (`:5432`) | Integrated local run |
-| Cloud demo | Vercel | Render (Docker, Singapore) | Supabase Postgres (ap-northeast-1) | Showcase — `gl-r-erp.onrender.com`; schema at head **V29** plus the demo-only **V21** seed accounts (applied only under the `prod` profile) |
+| Cloud demo | Vercel | Render (Docker, Singapore) | Supabase Postgres (ap-northeast-1) | Showcase — `gl-r-erp.onrender.com`; schema at head **V30** plus the demo-only **V21** seed accounts (applied only under the `prod` profile) |
 | Production (target) | LAN / domain | Dell T360 | T360 Postgres | On-premise go-live (pending) |
 
 ## 2. Prerequisites
@@ -1518,7 +1519,7 @@ flowchart LR
 - **Rewrites:** `/api/:path* → https://gl-r-erp.onrender.com/api/:path*` (same-origin calls, no CORS/third-party cookies); SPA fallback `/(.*) → /index.html`.
 - **Security headers on every response:** CSP (`default-src 'self'`, no inline scripts), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Strict-Transport-Security` (1 year, includeSubDomains).
 
-> **Demo environment:** `main` deploys to `gl-r-erp.onrender.com` under the `prod` profile. The `prod` profile adds `db/migration-demo/` (`V21__demo_seed_accounts`, `Demo@2026` accounts, one per role) on top of the head schema (**V29**). It is an intentional showcase, not real production data.
+> **Demo environment:** `main` deploys to `gl-r-erp.onrender.com` under the `prod` profile. The `prod` profile adds `db/migration-demo/` (`V21__demo_seed_accounts`, `Demo@2026` accounts, one per role) on top of the head schema (**V30**). It is an intentional showcase, not real production data.
 
 ## 6. Configuration Reference
 
@@ -1536,7 +1537,7 @@ Local secrets belong in `backend/.env.local` (git-ignored); commit only `backend
 
 ## 7. Database Migrations
 
-- Flyway runs automatically when `APP_FLYWAY_ENABLED=true`. The default location `classpath:db/migration` applies **V1–V20 + V22–V29** in order (head **V29**); **V21 is not in this path**.
+- Flyway runs automatically when `APP_FLYWAY_ENABLED=true`. The default location `classpath:db/migration` applies **V1–V20 + V22–V30** in order (head **V30**); **V21 is not in this path**.
 - **V21 is demo-only.** `V21__demo_seed_accounts` lives in `classpath:db/migration-demo` and is applied **only under the `prod` profile** (Render demo), which sets `spring.flyway.locations=classpath:db/migration,classpath:db/migration-demo` (see `application-prod.yml`). A clean on-prem/UAT deploy skips V21 by design, so its absence from `flyway_schema_history` is expected — not a failed migration.
 - **Never edit an applied migration** — add a new version (forward-fix). The V13 fresh-DB collision was fixed this way (PR #52).
 - CI runs the full migration chain against a real Postgres on every PR (PR #53) to catch ordering/collision issues before merge.
@@ -1614,7 +1615,7 @@ flowchart LR
 | Attendance `.dat` export | Weekly / on demand | Keep per pay cycle |
 | Config/secrets snapshot | On change | Current + previous |
 
-> On **Supabase** (demo), managed automated backups are available on the platform; treat the demo DB as reproducible (head schema **V29** plus the demo-only V21 seed accounts, applied under the `prod` profile) rather than a source of record.
+> On **Supabase** (demo), managed automated backups are available on the platform; treat the demo DB as reproducible (head schema **V30** plus the demo-only V21 seed accounts, applied under the `prod` profile) rather than a source of record.
 
 ## 3. Database Backup Procedures
 
@@ -1643,7 +1644,7 @@ Store dated dumps on the NAS (same LAN as the T360 per the network diagram), and
 flowchart TB
     A[Stop backend] --> B[Create empty target DB]
     B --> C[pg_restore dump]
-    C --> D[Verify Flyway schema_history at V29]
+    C --> D[Verify Flyway schema_history at V30]
     D --> E[Smoke test: login, dashboard, payroll list]
     E --> F[Start backend]
 ```
@@ -1669,9 +1670,9 @@ Expected max version: **29** (the demo/`prod` profile also has V21 applied, but 
 
 If the **data** is intact but the **schema** is in doubt, Flyway is the source of truth:
 
-- On startup with `APP_FLYWAY_ENABLED=true`, Flyway applies any missing migrations up to the head (**V29**; the default path is V1–V20, V22–V29 — V21 is demo/prod-only).
+- On startup with `APP_FLYWAY_ENABLED=true`, Flyway applies any missing migrations up to the head (**V30**; the default path is V1–V20, V22–V30 — V21 is demo/prod-only).
 - Migrations are **forward-only** (no down scripts). To recover a bad state, restore from a dump, then let Flyway re-apply.
-- CI proves the full `V1–V20, V22–V29` chain against a clean Postgres on every PR, so a fresh rebuild from migrations is a supported recovery path.
+- CI proves the full `V1–V20, V22–V30` chain against a clean Postgres on every PR, so a fresh rebuild from migrations is a supported recovery path.
 
 ## 6. Session & Application Recovery
 
@@ -1684,7 +1685,7 @@ If the **data** is intact but the **schema** is in doubt, Flyway is the source o
 | Scenario | Action | Target time |
 |---|---|---|
 | Backend down (Render/T360) | Redeploy from `main`/image; sessions and data intact | Minutes |
-| Database corruption | Restore latest nightly dump → verify V29 → smoke test | < 1 hour |
+| Database corruption | Restore latest nightly dump → verify V30 → smoke test | < 1 hour |
 | Full environment loss | Provision Postgres → restore dump (or rebuild schema via Flyway + import) → redeploy backend + frontend | Hours |
 | Attendance data gap | Re-import device `.dat` for the affected window (`import_dat.py`) | Minutes–hours |
 | Lost device token | Re-mint via portal; update agent env | Minutes |
@@ -2142,8 +2143,9 @@ timeline
 | V27 | quotation_fields_and_attachments | Quotation Workflow |
 | V28 | revision_versioning | Quotation Workflow |
 | V29 | rename_document_to_deposit_notice | Quotation Workflow |
+| V30 | normalize_manager_positions | Position Data Cleanup |
 
-> **Head is V29.** The default path is V1–V20 then V22–V29; V21 is demo-only and absent from a clean deploy.
+> **Head is V30.** The default path is V1–V20 then V22–V30; V21 is demo-only and absent from a clean deploy.
 
 ---
 

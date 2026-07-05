@@ -5,7 +5,7 @@
 | **Document** | 05 — Database Documentation |
 | **Version** | 1.0 · 2 July 2026 |
 | **Engine** | PostgreSQL 16 |
-| **Migrations** | Flyway `backend/src/main/resources/db/migration/` — head **V29** (V1–V20 + V22–V29; forward-fix policy). V21 lives in `db/migration-demo/` and is applied under the `prod` profile only |
+| **Migrations** | Flyway `backend/src/main/resources/db/migration/` — head **V30** (V1–V20 + V22–V30; forward-fix policy). V21 lives in `db/migration-demo/` and is applied under the `prod` profile only |
 
 ---
 
@@ -194,8 +194,9 @@ erDiagram
 | V27 | `quotation_fields_and_attachments` | Quotation issuance fields + `sales.attachment` (PO / signed-back files) |
 | V28 | `revision_versioning` | Item snapshot in `ticket_event` + quotation versioning (Rev 1, 2, …) |
 | V29 | `rename_document_to_deposit_notice` | Rename `sales.document`→`deposit_notice` and `document_item`→`deposit_notice_item` (behavior-preserving) |
+| V30 | `normalize_manager_positions` | Collapse ฝ่าย-baked manager titles (e.g. `ผู้จัดการฝ่ายขาย`) to canonical `ผู้จัดการ`; `ผู้ช่วยผู้จัดการ` kept distinct; `กรรมการผู้จัดการ` (MD) untouched |
 
-> **Head is V29.** The default migration path applies V1–V20 then V22–V29 (28 files); V21 is absent by design (demo-only, see above).
+> **Head is V30.** The default migration path applies V1–V20 then V22–V30 (29 files); V21 is absent by design (demo-only, see above).
 
 ## 6. Conventions & Integrity Rules
 

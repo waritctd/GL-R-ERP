@@ -6,7 +6,7 @@
 | **Document** | 01 — ERP Overview |
 | **Version** | 1.0 |
 | **Date** | 2 July 2026 |
-| **Status** | Current — reflects the system as built (database schema head V29) |
+| **Status** | Current — reflects the system as built (database schema head V30) |
 | **Repository** | `GL-R-ERP` (frontend: React + Vite · backend: Spring Boot · agents: Python) |
 
 ---
@@ -122,7 +122,7 @@ Additionally, any employee whose position contains **ผู้จัดการ
 |---|---|---|
 | Frontend | React 18 + Vite | SPA, ESLint + jsx-a11y, Vitest + React Testing Library |
 | Backend | Spring Boot 3.5.x LTS on Java 21 LTS | REST API, Spring Security, Spring Session JDBC |
-| Database | PostgreSQL 16 | Flyway migrations head **V29** (V1–V20, V22–V29; V21 demo-only); schemas `hr`, `hr_restricted`, `sales` |
+| Database | PostgreSQL 16 | Flyway migrations head **V30** (V1–V20, V22–V30; V21 demo-only); schemas `hr`, `hr_restricted`, `sales` |
 | Device agent | Python 3 | ZKTeco **Pull SDK** (`plcommpro.dll`) on Windows (Dell T360) |
 | Cloud (demo) | Render (backend, Docker, Singapore) · Vercel (frontend + `/api` proxy) · Supabase (Postgres) | Blueprint in `render.yaml`, proxy in `vercel.json` |
 | CI/CD | GitHub Actions | Backend tests, frontend lint/tests, Flyway-against-real-Postgres check, Dependabot + dependency-review SCA gate |
