@@ -36,9 +36,12 @@ SELECT 'AMGR', 'ผู้ช่วยผู้จัดการ', 'Assistant Ma
 WHERE NOT EXISTS (SELECT 1 FROM hr.position WHERE name_th = 'ผู้ช่วยผู้จัดการ');
 
 -- 2. Re-point full ฝ่าย managers (e.g. ผู้จัดการฝ่ายขาย, ผู้จัดการฝ่ายผลิต) to canonical "ผู้จัดการ".
+--    The imported catalog can carry more than one row already named exactly 'ผู้จัดการ' (duplicate
+--    ETL batches), so "the" canonical row is picked deterministically (lowest position_id) instead of
+--    assuming uniqueness — otherwise the subqueries below would fail with "more than one row returned".
 --    Current employment snapshot:
 UPDATE hr.employee e
-SET position_id = (SELECT position_id FROM hr.position WHERE name_th = 'ผู้จัดการ')
+SET position_id = (SELECT MIN(position_id) FROM hr.position WHERE name_th = 'ผู้จัดการ')
 WHERE e.position_id IN (
     SELECT position_id FROM hr.position
     WHERE regexp_replace(name_th, '\s', '', 'g') LIKE 'ผู้จัดการ%'
@@ -46,7 +49,7 @@ WHERE e.position_id IN (
 );
 --    Dated assignment history (keeps effective_from/effective_to/is_current):
 UPDATE hr.employee_assignment a
-SET position_id = (SELECT position_id FROM hr.position WHERE name_th = 'ผู้จัดการ')
+SET position_id = (SELECT MIN(position_id) FROM hr.position WHERE name_th = 'ผู้จัดการ')
 WHERE a.position_id IN (
     SELECT position_id FROM hr.position
     WHERE regexp_replace(name_th, '\s', '', 'g') LIKE 'ผู้จัดการ%'
@@ -55,23 +58,44 @@ WHERE a.position_id IN (
 
 -- 3. Re-point assistant managers (e.g. ผู้ช่วยผู้จัดการฝ่ายผลิต) to canonical "ผู้ช่วยผู้จัดการ".
 UPDATE hr.employee e
-SET position_id = (SELECT position_id FROM hr.position WHERE name_th = 'ผู้ช่วยผู้จัดการ')
+SET position_id = (SELECT MIN(position_id) FROM hr.position WHERE name_th = 'ผู้ช่วยผู้จัดการ')
 WHERE e.position_id IN (
     SELECT position_id FROM hr.position
     WHERE regexp_replace(name_th, '\s', '', 'g') LIKE 'ผู้ช่วยผู้จัดการ%'
       AND name_th <> 'ผู้ช่วยผู้จัดการ'
 );
 UPDATE hr.employee_assignment a
-SET position_id = (SELECT position_id FROM hr.position WHERE name_th = 'ผู้ช่วยผู้จัดการ')
+SET position_id = (SELECT MIN(position_id) FROM hr.position WHERE name_th = 'ผู้ช่วยผู้จัดการ')
 WHERE a.position_id IN (
     SELECT position_id FROM hr.position
     WHERE regexp_replace(name_th, '\s', '', 'g') LIKE 'ผู้ช่วยผู้จัดการ%'
       AND name_th <> 'ผู้ช่วยผู้จัดการ'
 );
 
--- 4. Retire the now-orphaned baked catalog rows (non-destructive; keeps source_code provenance).
---    Nothing references them after steps 2-3 (hr.employee and hr.employee_assignment are the only FKs).
+-- 3b. If duplicate exact-'ผู้จัดการ'/'ผู้ช่วยผู้จัดการ' rows exist, re-point anything still referencing
+--     a non-canonical duplicate (i.e. not the MIN(position_id) row) onto the canonical row too.
+UPDATE hr.employee e
+SET position_id = (SELECT MIN(position_id) FROM hr.position WHERE name_th = 'ผู้จัดการ')
+WHERE e.position_id IN (SELECT position_id FROM hr.position WHERE name_th = 'ผู้จัดการ')
+  AND e.position_id <> (SELECT MIN(position_id) FROM hr.position WHERE name_th = 'ผู้จัดการ');
+UPDATE hr.employee_assignment a
+SET position_id = (SELECT MIN(position_id) FROM hr.position WHERE name_th = 'ผู้จัดการ')
+WHERE a.position_id IN (SELECT position_id FROM hr.position WHERE name_th = 'ผู้จัดการ')
+  AND a.position_id <> (SELECT MIN(position_id) FROM hr.position WHERE name_th = 'ผู้จัดการ');
+UPDATE hr.employee e
+SET position_id = (SELECT MIN(position_id) FROM hr.position WHERE name_th = 'ผู้ช่วยผู้จัดการ')
+WHERE e.position_id IN (SELECT position_id FROM hr.position WHERE name_th = 'ผู้ช่วยผู้จัดการ')
+  AND e.position_id <> (SELECT MIN(position_id) FROM hr.position WHERE name_th = 'ผู้ช่วยผู้จัดการ');
+UPDATE hr.employee_assignment a
+SET position_id = (SELECT MIN(position_id) FROM hr.position WHERE name_th = 'ผู้ช่วยผู้จัดการ')
+WHERE a.position_id IN (SELECT position_id FROM hr.position WHERE name_th = 'ผู้ช่วยผู้จัดการ')
+  AND a.position_id <> (SELECT MIN(position_id) FROM hr.position WHERE name_th = 'ผู้ช่วยผู้จัดการ');
+
+-- 4. Retire the now-orphaned baked catalog rows (non-destructive; keeps source_code provenance),
+--    plus any duplicate exact-canonical rows left empty by step 3b.
 UPDATE hr.position
 SET is_active = FALSE
 WHERE (regexp_replace(name_th, '\s', '', 'g') LIKE 'ผู้จัดการ%'      AND name_th <> 'ผู้จัดการ')
-   OR (regexp_replace(name_th, '\s', '', 'g') LIKE 'ผู้ช่วยผู้จัดการ%' AND name_th <> 'ผู้ช่วยผู้จัดการ');
+   OR (regexp_replace(name_th, '\s', '', 'g') LIKE 'ผู้ช่วยผู้จัดการ%' AND name_th <> 'ผู้ช่วยผู้จัดการ')
+   OR (name_th = 'ผู้จัดการ'        AND position_id <> (SELECT MIN(position_id) FROM hr.position WHERE name_th = 'ผู้จัดการ'))
+   OR (name_th = 'ผู้ช่วยผู้จัดการ'  AND position_id <> (SELECT MIN(position_id) FROM hr.position WHERE name_th = 'ผู้ช่วยผู้จัดการ'));
