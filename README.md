@@ -49,6 +49,8 @@ cd backend
 mvn test
 ```
 
+15 integration tests are skipped unless `TEST_DB_URL`, `TEST_DB_USERNAME`, and `TEST_DB_PASSWORD` point at a real Postgres. `mvn test` passes without them but only runs the Mockito unit tests; set them to also exercise the Flyway/repository integration suite (`AbstractPostgresIntegrationTest`).
+
 Build the backend package:
 
 ```bash
@@ -63,7 +65,15 @@ cd frontend
 npm run build
 ```
 
-The frontend currently has no `lint` or `test` npm scripts; use `npm run lint --if-present` and `npm test --if-present` in automation until those scripts are added.
+Run the frontend lint and test scripts:
+
+```bash
+cd frontend
+npm run lint
+npm test
+```
+
+`npm test` runs the Vitest suite.
 
 ## Vercel Frontend Deployment
 

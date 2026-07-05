@@ -15,3 +15,21 @@ backend/target/
 venv/
 __pycache__/
 *.pyc
+
+# Dev-local Claude config (keep launch.json shared with the team)
+.claude/*
+!.claude/launch.json
+
+# Local docker override (dev-only port/profile changes)
+docker-compose.override.yml
+
+# Generated PDFs (source of truth is the .md)
+*.pdf
+
+# UAT/SIT operational deliverables — kept out of git (store externally)
+ERP Documentation/SIT Deliverables/
+ERP Documentation/UAT Deliverables/
+ERP Documentation/13_SIT_Plan.md
+ERP Documentation/14_UAT_Plan.md
+ERP Documentation/15_GoLive_Transition_Plan.md
+ERP Documentation/16_Post_UAT_Next_Steps.md
