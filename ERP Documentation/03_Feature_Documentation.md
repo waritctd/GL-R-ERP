@@ -16,7 +16,7 @@
 3. [Attendance](#3-attendance)
 4. [Overtime & Leave](#4-overtime--leave)
 5. [Sales Tickets](#5-sales-tickets)
-6. [Customers & Documents](#6-customers--documents)
+6. [Customers & Deposit Notices](#6-customers--deposit-notices)
 7. [Commission](#7-commission)
 8. [Payroll](#8-payroll)
 9. [Dashboards, Notifications & Audit](#9-dashboards-notifications--audit)
@@ -102,7 +102,7 @@ sequenceDiagram
 | ลากิจ (Personal) | 3.00 days | — |
 
 - Balance check is automatic at submission; insufficient quota ⇒ immediate rejection with reason.
-- Balances tracked per employee per type (`hr.leave_balance`).
+- Balances are **computed**, not stored: remaining = the `hr.leave_type` quota minus approved `hr.leave_request` days for the year. V13 drops the old `hr.leave_balance` stub — there is no live balance table to query.
 - Approve/reject/cancel mirror the OT workflow.
 - V13's duplicate `leave_type` creation vs. V1 was fixed for fresh databases (PR #52); CI now runs all migrations against real Postgres to prevent regressions (PR #53).
 
@@ -119,7 +119,7 @@ stateDiagram-v2
     price_proposed --> approved : approve (sales_manager/ceo)
     price_proposed --> in_review : reject (back for re-pricing)
     approved --> quotation_issued : issue quotation
-    quotation_issued --> document_issued : issue document
+    quotation_issued --> document_issued : issue deposit notice
     document_issued --> closed : close
     quotation_issued --> closed : close
     draft --> cancelled : cancel
@@ -131,15 +131,17 @@ stateDiagram-v2
 - Every transition writes a `ticket_event` (kind, from→to status, actor) — a complete audit trail per ticket. Comments are events too.
 - Item edits after submission flag the ticket (`has_edits`, V10) so approvers see it changed.
 - Item inserts are batched into a single round-trip (perf commit `888c645`).
-- **Revisions:** correcting an issued document increments `ticket.revision_no` (V17) and keeps prior documents on file.
+- **Revisions:** correcting an issued deposit notice increments `ticket.revision_no` (V17) and keeps prior notices on file.
 
-## 6. Customers & Documents
+## 6. Customers & Deposit Notices
 
-**Code:** `customer/`, `document/` · **Schema:** V16, V17
+**Code:** `customer/`, `deposit/` · **Schema:** V16, V17 (tables renamed in V29)
 
-- **Customer directory** (`sales.customer`): searchable read-only list feeding tickets/documents (PR #56).
-- **Note templates** (`sales.document_note_template`): reusable standard clauses for documents.
-- **Documents** (quotations, deposit notices): drafted from a ticket → line items copied/edited (`sales.document_item`) → previewed → **issued** with a number from `sales.document_sequence` → file downloadable via `GET /api/documents/{id}/file`.
+- **Customer directory** (`sales.customer`): searchable read-only list feeding tickets/deposit notices (PR #56).
+- **Note templates** (`sales.document_note_template`): reusable standard clauses (table name kept generic — not renamed in V29).
+- **Deposit notices:** drafted from a ticket → line items copied/edited (`sales.deposit_notice_item`) → previewed → **issued** with a number from `sales.document_sequence` → file downloadable via `GET /api/deposit-notices/{id}/file`.
+- **Issued as XLSX**, rendered from the `deposit_notice_template.xlsx` workbook (`?format=xlsx`). A `?format=pdf` branch exists but is a placeholder text stub — real PDF output is on the roadmap, not shipped.
+- V29 renamed `sales.document`→`sales.deposit_notice` and `document_item`→`deposit_notice_item` (behavior-preserving); the deposit-notice API paths moved to `/api/deposit-notices/...` and `/api/tickets/{id}/deposit-notice/draft`. Quotation and invoice get their own tables.
 - Document types/plans originate from `docs/QUOTATION_AND_REVISION_PLAN` and the quotation template workbook (`docs/quotation_template_source.xlsx`).
 
 ## 7. Commission

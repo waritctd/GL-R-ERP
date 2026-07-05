@@ -118,18 +118,20 @@
 |---|---|---|---|
 | GET | `/api/customers` | sales+ | Searchable customer directory. |
 
-## 10. Documents — `/api/...`
+## 10. Deposit Notices — `/api/...`
+
+Tables and paths were renamed in V29 (`document` → `deposit_notice`). The note-templates path stays generic.
 
 | Method | Path | Role | Description |
 |---|---|---|---|
-| GET | `/api/document-note-templates` | sales+ | List reusable note templates. |
-| POST | `/api/tickets/{ticketId}/document/draft` | sales+ | Create a document draft from a ticket. |
-| GET | `/api/tickets/{ticketId}/documents` | sales+ | List a ticket's documents. |
-| GET | `/api/documents/{docId}` | sales+ | Fetch a document. |
-| PUT | `/api/documents/{docId}` | sales+ | Edit a draft document. |
-| POST | `/api/documents/{docId}/preview` | sales+ | Render a preview. |
-| POST | `/api/documents/{docId}/issue` | sales+ | Issue with a running number. |
-| GET | `/api/documents/{docId}/file` | sales+ | Download the generated file. |
+| GET | `/api/document-note-templates` | sales+ | List reusable note templates (path kept generic). |
+| POST | `/api/tickets/{ticketId}/deposit-notice/draft` | sales+ | Create a deposit-notice draft from a ticket. |
+| GET | `/api/tickets/{ticketId}/deposit-notices` | sales+ | List a ticket's deposit notices. |
+| GET | `/api/deposit-notices/{docId}` | sales+ | Fetch a deposit notice. |
+| PUT | `/api/deposit-notices/{docId}` | sales+ | Edit a draft deposit notice. |
+| POST | `/api/deposit-notices/{docId}/preview` | sales+ | Render an HTML preview. |
+| POST | `/api/deposit-notices/{docId}/issue` | sales+ | Issue with a running number. |
+| GET | `/api/deposit-notices/{docId}/file?format=xlsx` | sales+ | Download the generated **XLSX** file. `format=pdf` is a placeholder stub (roadmap). |
 | POST | `/api/tickets/{ticketId}/revision` | sales+ | Open a revision (bumps `revision_no`). |
 
 ## 11. Commissions — `/api/commissions`
