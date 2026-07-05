@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -14,6 +15,7 @@ import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -57,6 +59,54 @@ class DepositNoticeControllerTest {
     void fileRequiresAuthentication() throws Exception {
         mvc.perform(get("/api/deposit-notices/99/file"))
             .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void noteTemplatesRequiresAuthentication() throws Exception {
+        mvc.perform(get("/api/document-note-templates"))
+            .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void listByTicketRequiresAuthentication() throws Exception {
+        mvc.perform(get("/api/tickets/10/deposit-notices"))
+            .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void getDocRequiresAuthentication() throws Exception {
+        mvc.perform(get("/api/deposit-notices/99"))
+            .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void createDraftRejectsInvalidDepositPercent() throws Exception {
+        String body = """
+            {"depositPercent": -1}
+            """;
+
+        mvc.perform(post("/api/tickets/10/deposit-notice/draft")
+                .session(session())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void createDraftRejectsNegativeItemUnitPrice() throws Exception {
+        String body = """
+            {
+              "items": [
+                {"seq": 1, "description": "Widget", "qty": 1, "unitPrice": -100, "netUnitPrice": -100}
+              ]
+            }
+            """;
+
+        mvc.perform(post("/api/tickets/10/deposit-notice/draft")
+                .session(session())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+            .andExpect(status().isBadRequest());
     }
 
     private DepositNoticeDto document() {
