@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/index.js';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -8,40 +8,74 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney } from '../../utils/format.js';
 
 const thisMonth = new Date().toISOString().slice(0, 7);
-const specialPayKeys = Array.from({ length: 8 }, (_, index) => `specialPay${index + 1}`);
+const specialPayFields = [
+  { key: 'specialPay1', label: 'พิเศษ 1 (ค่าครองชีพ)', defaultValue: '500' },
+  { key: 'specialPay2', label: 'พิเศษ 2 (เบี้ยเลี้ยงประจำ)' },
+  { key: 'specialPay3', label: 'พิเศษ 3 (ค่าตำแหน่ง)' },
+  { key: 'specialPay4', label: 'พิเศษ 4 (เบี้ยขยันประจำ)' },
+  { key: 'specialPay5', label: 'พิเศษ 5 (ค่า GPRS)', defaultValue: '500' },
+  { key: 'specialPay6', label: 'พิเศษ 6 (คอมมิชชั่น)' },
+  { key: 'specialPay7', label: 'พิเศษ 7 (ทำได้ตาม KPI)' },
+  { key: 'specialPay8', label: 'พิเศษ 8 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)' },
+];
+const specialPayKeys = specialPayFields.map((field) => field.key);
+const deductionInputKeys = [
+  'unpaidLeaveDays',
+  'studentLoanDeduction',
+  'legalExecutionDeduction',
+  'otherPostTaxDeductions',
+];
+const payrollInputKeys = [...specialPayKeys, ...deductionInputKeys];
 
-function blankAdjustment(employeeId) {
+function defaultSpecialPayValue(key, applyDefaults) {
+  if (!applyDefaults) return '';
+  return specialPayFields.find((field) => field.key === key)?.defaultValue ?? '';
+}
+
+function draftValue(value, fallback = '') {
+  const amount = Number(value || 0);
+  return amount > 0 ? String(amount) : fallback;
+}
+
+function parsePayrollNumber(value) {
+  if (value === '' || value === null || value === undefined) return 0;
+  const amount = Number(value);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function blankAdjustment(employeeId, { applyDefaults = false } = {}) {
   return {
     employeeId,
-    specialPay1: 0,
-    specialPay2: 0,
-    specialPay3: 0,
-    specialPay4: 0,
-    specialPay5: 0,
-    specialPay6: 0,
-    specialPay7: 0,
-    specialPay8: 0,
-    unpaidLeaveDays: 0,
-    studentLoanDeduction: 0,
-    legalExecutionDeduction: 0,
-    otherPostTaxDeductions: 0,
+    ...Object.fromEntries(specialPayKeys.map((key) => [key, defaultSpecialPayValue(key, applyDefaults)])),
+    unpaidLeaveDays: '',
+    studentLoanDeduction: '',
+    legalExecutionDeduction: '',
+    otherPostTaxDeductions: '',
   };
 }
 
-function adjustmentFromLine(line) {
-  const adjustment = blankAdjustment(line.employeeId);
+function adjustmentFromLine(line, { applyDefaults = false } = {}) {
+  const adjustment = blankAdjustment(line.employeeId, { applyDefaults });
   (line.specialPays || []).forEach((item, index) => {
-    adjustment[`specialPay${index + 1}`] = Number(item.amount || 0);
+    const key = `specialPay${index + 1}`;
+    adjustment[key] = draftValue(item.amount, defaultSpecialPayValue(key, applyDefaults));
   });
-  adjustment.unpaidLeaveDays = Number(line.unpaidLeaveDays || 0);
-  adjustment.studentLoanDeduction = Number(line.studentLoanDeduction || 0);
-  adjustment.legalExecutionDeduction = Number(line.legalExecutionDeduction || 0);
-  adjustment.otherPostTaxDeductions = Number(line.otherPostTaxDeductions || 0);
+  adjustment.unpaidLeaveDays = draftValue(line.unpaidLeaveDays);
+  adjustment.studentLoanDeduction = draftValue(line.studentLoanDeduction);
+  adjustment.legalExecutionDeduction = draftValue(line.legalExecutionDeduction);
+  adjustment.otherPostTaxDeductions = draftValue(line.otherPostTaxDeductions);
   return adjustment;
 }
 
+function normalizedAdjustment(input) {
+  return {
+    employeeId: input.employeeId,
+    ...Object.fromEntries(payrollInputKeys.map((key) => [key, parsePayrollNumber(input[key])])),
+  };
+}
+
 function hasPayrollInput(input) {
-  return Object.entries(input).some(([key, value]) => key !== 'employeeId' && Number(value || 0) > 0);
+  return payrollInputKeys.some((key) => parsePayrollNumber(input[key]) > 0);
 }
 
 function statusInfo(status) {
@@ -76,7 +110,7 @@ export function PayrollPage({ showToast }) {
     setLoading(true);
     try {
       const response = await api.payroll.current({ payrollMonth: month });
-      applyPeriod(response.period);
+      applyPeriod(response.period, { applyUatDefaults: true });
     } catch (error) {
       showToast('error', error.message || 'โหลดเงินเดือนไม่สำเร็จ');
     } finally {
@@ -84,11 +118,12 @@ export function PayrollPage({ showToast }) {
     }
   }
 
-  function applyPeriod(nextPeriod) {
+  function applyPeriod(nextPeriod, { applyUatDefaults = false } = {}) {
     setPeriod(nextPeriod);
     const nextAdjustments = {};
+    const applyDefaults = applyUatDefaults && nextPeriod?.status === 'PREVIEW';
     (nextPeriod?.lines || []).forEach((line) => {
-      nextAdjustments[line.employeeId] = adjustmentFromLine(line);
+      nextAdjustments[line.employeeId] = adjustmentFromLine(line, { applyDefaults });
     });
     setAdjustments(nextAdjustments);
     setSelectedEmployeeId((current) => current || nextPeriod?.lines?.[0]?.employeeId || null);
@@ -102,7 +137,7 @@ export function PayrollPage({ showToast }) {
   function payload() {
     return {
       payrollMonth: `${month}-01`,
-      inputs: Object.values(adjustments).filter(hasPayrollInput),
+      inputs: Object.values(adjustments).map(normalizedAdjustment).filter(hasPayrollInput),
     };
   }
 
@@ -159,7 +194,7 @@ export function PayrollPage({ showToast }) {
       ...current,
       [selectedLine.employeeId]: {
         ...(current[selectedLine.employeeId] || blankAdjustment(selectedLine.employeeId)),
-        [field]: Number(value || 0),
+        [field]: value,
       },
     }));
   }
@@ -262,39 +297,36 @@ export function PayrollPage({ showToast }) {
               <div className="payroll-adjustment-group">
                 <h3>เงินพิเศษบริษัท</h3>
                 <div className="payroll-special-grid">
-                  {specialPayKeys.map((key, index) => (
-                    <label key={key}>
-                      เงินพิเศษ {index + 1}
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={selectedAdjustment[key]}
-                        onChange={(event) => updateAdjustment(key, event.target.value)}
-                      />
-                    </label>
-                  ))}
+                  {specialPayFields.map((field) => {
+                    const inputId = `payroll-${field.key}`;
+                    return (
+                      <label key={field.key} htmlFor={inputId}>
+                        {field.label}
+                        <MoneyInput id={inputId} value={selectedAdjustment[field.key]} onChange={(value) => updateAdjustment(field.key, value)} />
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
 
               <div className="payroll-adjustment-group">
                 <h3>รายการหักรายบุคคล</h3>
                 <div className="form-grid">
-                  <label>
+                  <label htmlFor="payroll-unpaid-leave-days">
                     วันลาไม่รับค่าจ้าง
-                    <input type="number" min="0" step="0.25" value={selectedAdjustment.unpaidLeaveDays} onChange={(event) => updateAdjustment('unpaidLeaveDays', event.target.value)} />
+                    <input id="payroll-unpaid-leave-days" type="number" min="0" step="0.25" placeholder="0" value={selectedAdjustment.unpaidLeaveDays} onChange={(event) => updateAdjustment('unpaidLeaveDays', event.target.value)} />
                   </label>
-                  <label>
+                  <label htmlFor="payroll-student-loan-deduction">
                     หัก กยศ.
-                    <input type="number" min="0" step="0.01" value={selectedAdjustment.studentLoanDeduction} onChange={(event) => updateAdjustment('studentLoanDeduction', event.target.value)} />
+                    <MoneyInput id="payroll-student-loan-deduction" value={selectedAdjustment.studentLoanDeduction} onChange={(value) => updateAdjustment('studentLoanDeduction', value)} />
                   </label>
-                  <label>
+                  <label htmlFor="payroll-legal-execution-deduction">
                     หักอายัดกรมบังคับคดี
-                    <input type="number" min="0" step="0.01" value={selectedAdjustment.legalExecutionDeduction} onChange={(event) => updateAdjustment('legalExecutionDeduction', event.target.value)} />
+                    <MoneyInput id="payroll-legal-execution-deduction" value={selectedAdjustment.legalExecutionDeduction} onChange={(value) => updateAdjustment('legalExecutionDeduction', value)} />
                   </label>
-                  <label>
+                  <label htmlFor="payroll-other-post-tax-deductions">
                     หักอื่น ๆ หลังภาษี
-                    <input type="number" min="0" step="0.01" value={selectedAdjustment.otherPostTaxDeductions} onChange={(event) => updateAdjustment('otherPostTaxDeductions', event.target.value)} />
+                    <MoneyInput id="payroll-other-post-tax-deductions" value={selectedAdjustment.otherPostTaxDeductions} onChange={(value) => updateAdjustment('otherPostTaxDeductions', value)} />
                   </label>
                 </div>
               </div>
@@ -321,5 +353,23 @@ function MiniMetric({ label, value }) {
       <small>{label}</small>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+function MoneyInput({ id, value, onChange }) {
+  return (
+    <span className="currency-input">
+      <span className="currency-input-symbol" aria-hidden="true">฿</span>
+      <input
+        id={id}
+        type="number"
+        inputMode="decimal"
+        min="0"
+        step="0.01"
+        placeholder="0.00"
+        value={value ?? ''}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </span>
   );
 }
