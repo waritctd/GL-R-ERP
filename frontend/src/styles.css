@@ -179,6 +179,27 @@ textarea:focus {
   padding-left: 40px;
 }
 
+.currency-input {
+  position: relative;
+  display: block;
+}
+
+.currency-input-symbol {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  z-index: 1;
+  color: #64748b;
+  font-weight: 900;
+  line-height: 1;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.currency-input input {
+  padding-left: 34px;
+}
+
 .form-error {
   padding: 10px 12px;
   border-radius: 8px;
