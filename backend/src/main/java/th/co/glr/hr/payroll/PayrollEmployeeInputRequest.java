@@ -15,6 +15,7 @@ public record PayrollEmployeeInputRequest(
     @PositiveOrZero BigDecimal specialPay6,
     @PositiveOrZero BigDecimal specialPay7,
     @PositiveOrZero BigDecimal specialPay8,
+    @PositiveOrZero BigDecimal nonTaxableIncome,
     @PositiveOrZero BigDecimal unpaidLeaveDays,
     @PositiveOrZero BigDecimal studentLoanDeduction,
     @PositiveOrZero BigDecimal legalExecutionDeduction,

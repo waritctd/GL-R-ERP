@@ -19,13 +19,14 @@ const specialPayFields = [
   { key: 'specialPay8', label: 'พิเศษ 8 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)' },
 ];
 const specialPayKeys = specialPayFields.map((field) => field.key);
+const incomeInputKeys = ['nonTaxableIncome'];
 const deductionInputKeys = [
   'unpaidLeaveDays',
   'studentLoanDeduction',
   'legalExecutionDeduction',
   'otherPostTaxDeductions',
 ];
-const payrollInputKeys = [...specialPayKeys, ...deductionInputKeys];
+const payrollInputKeys = [...specialPayKeys, ...incomeInputKeys, ...deductionInputKeys];
 
 function defaultSpecialPayValue(key, applyDefaults) {
   if (!applyDefaults) return '';
@@ -47,6 +48,7 @@ function blankAdjustment(employeeId, { applyDefaults = false } = {}) {
   return {
     employeeId,
     ...Object.fromEntries(specialPayKeys.map((key) => [key, defaultSpecialPayValue(key, applyDefaults)])),
+    nonTaxableIncome: '',
     unpaidLeaveDays: '',
     studentLoanDeduction: '',
     legalExecutionDeduction: '',
@@ -60,6 +62,7 @@ function adjustmentFromLine(line, { applyDefaults = false } = {}) {
     const key = `specialPay${index + 1}`;
     adjustment[key] = draftValue(item.amount, defaultSpecialPayValue(key, applyDefaults));
   });
+  adjustment.nonTaxableIncome = draftValue(line.nonTaxableIncome);
   adjustment.unpaidLeaveDays = draftValue(line.unpaidLeaveDays);
   adjustment.studentLoanDeduction = draftValue(line.studentLoanDeduction);
   adjustment.legalExecutionDeduction = draftValue(line.legalExecutionDeduction);
@@ -310,6 +313,16 @@ export function PayrollPage({ showToast }) {
               </div>
 
               <div className="payroll-adjustment-group">
+                <h3>รายได้ไม่คิดภาษี</h3>
+                <div className="form-grid">
+                  <label htmlFor="payroll-non-taxable-income">
+                    รายได้อื่นๆ (ไม่คิดภาษี)
+                    <MoneyInput id="payroll-non-taxable-income" value={selectedAdjustment.nonTaxableIncome} onChange={(value) => updateAdjustment('nonTaxableIncome', value)} />
+                  </label>
+                </div>
+              </div>
+
+              <div className="payroll-adjustment-group">
                 <h3>รายการหักรายบุคคล</h3>
                 <div className="form-grid">
                   <label htmlFor="payroll-unpaid-leave-days">
@@ -336,6 +349,7 @@ export function PayrollPage({ showToast }) {
                 <span><b>ฐาน ปกส.</b>{formatMoney(selectedLine.ssoWageBase)}</span>
                 <span><b>รายได้ทั้งปีประมาณการ</b>{formatMoney(selectedLine.projectedAnnualIncome)}</span>
                 <span><b>ค่าลดหย่อนรวม</b>{formatMoney(selectedLine.taxAllowanceTotal)}</span>
+                <span><b>รายได้ไม่คิดภาษี</b>{formatMoney(selectedLine.nonTaxableIncome)}</span>
               </div>
             </>
           ) : (
