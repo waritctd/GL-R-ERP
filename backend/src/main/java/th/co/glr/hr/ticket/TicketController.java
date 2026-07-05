@@ -3,6 +3,9 @@ package th.co.glr.hr.ticket;
 import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import java.util.Map;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -98,6 +101,21 @@ public class TicketController {
     TicketDetailResponse quotation(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new TicketDetailResponse(ticketService.generateQuotation(id, user));
+    }
+
+    @GetMapping("/{id}/quotations/{quotationId}/file")
+    ResponseEntity<byte[]> quotationFile(
+        @PathVariable long id,
+        @PathVariable long quotationId,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        byte[] bytes = ticketService.getQuotationXlsx(id, quotationId, user);
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"quotation-" + quotationId + ".xlsx\"")
+            .contentType(MediaType.parseMediaType(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+            .body(bytes);
     }
 
     @PostMapping("/{id}/close")

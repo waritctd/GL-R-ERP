@@ -974,7 +974,10 @@ export const api = {
     async quotation(id) {
       const user = hasRole('sales', 'admin');
       const ticket = findTicketRaw(Number(id));
-      verifyStatus(ticket, 'approved');
+      if (ticket.status !== 'approved' && ticket.status !== 'quotation_issued') {
+        fail(`Expected status 'approved' or 'quotation_issued' but ticket is '${ticket.status}'`, 409);
+      }
+      const fromStatus = ticket.status;
       if (ticket.createdById !== user.id && user.role !== 'admin') fail('Forbidden', 403);
       const total = ticket.items.reduce((sum, item) => sum + (item.approvedPrice || 0) * item.qty, 0);
 
@@ -999,8 +1002,28 @@ export const api = {
 
       ticket.status = 'quotation_issued';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'QUOTATION_ISSUED', 'approved', 'quotation_issued', null);
+      pushEvent(ticket, user, 'QUOTATION_ISSUED', fromStatus, 'quotation_issued', null);
       return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async downloadQuotationXlsx(ticketId, quotationId) {
+      const ticket = findTicketRaw(Number(ticketId));
+      const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
+      if (!quotation) fail('Quotation not found', 404);
+      const rows = [
+        ['ใบเสนอราคา', quotation.number],
+        ['ลูกค้า', ticket.customerName ?? ''],
+        ['วันที่', quotation.issuedAt],
+        [],
+        ['รายละเอียด', 'จำนวน', 'ราคา/หน่วย', 'เป็นเงิน'],
+        ...ticket.items
+          .filter((it) => it.approvedPrice != null)
+          .map((it) => [`${it.brand ?? ''} ${it.model ?? ''}`.trim(), it.qty, it.approvedPrice, it.approvedPrice * it.qty]),
+        [],
+        ['รวมเป็นเงิน', '', '', quotation.totalAmount],
+      ];
+      const csv = rows.map((r) => r.join(',')).join('\n');
+      return new Blob([csv], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     },
 
     async close(id) {
@@ -1581,7 +1604,7 @@ export const api = {
     async createDraft(ticketId, payload) {
       requireSession();
       const ticket = findTicketRaw(Number(ticketId));
-      if (!['approved', 'document_issued'].includes(ticket.status)) fail('Ticket must be approved', 409);
+      if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('Ticket must be approved', 409);
 
       // Auto-build items from approved ticket items
       const items = payload.items?.length ? payload.items : ticket.items

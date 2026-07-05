@@ -11,6 +11,8 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.Page;
 import th.co.glr.hr.common.PageRequest;
+import th.co.glr.hr.customer.CustomerDto;
+import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
 
@@ -19,18 +21,25 @@ public class TicketService {
     private static final Set<String> SALES_ROLES  = Set.of("sales", "admin");
     private static final Set<String> IMPORT_ROLES = Set.of("import", "admin");
     private static final Set<String> CEO_ROLES    = Set.of("ceo", "admin");
+    private static final Set<String> QUOTATION_ALLOWED_STATUSES =
+        Set.of(TicketStatus.APPROVED, TicketStatus.QUOTATION_ISSUED);
 
     private final TicketRepository tickets;
     private final NotificationRepository notifications;
     private final PriceCalcService priceCalcService;
     private final ObjectMapper objectMapper;
+    private final CustomerRepository customers;
+    private final QuotationRenderer quotationRenderer;
 
     public TicketService(TicketRepository tickets, NotificationRepository notifications,
-                         PriceCalcService priceCalcService, ObjectMapper objectMapper) {
-        this.tickets          = tickets;
-        this.notifications    = notifications;
-        this.priceCalcService = priceCalcService;
-        this.objectMapper     = objectMapper;
+                         PriceCalcService priceCalcService, ObjectMapper objectMapper,
+                         CustomerRepository customers, QuotationRenderer quotationRenderer) {
+        this.tickets           = tickets;
+        this.notifications     = notifications;
+        this.priceCalcService  = priceCalcService;
+        this.objectMapper      = objectMapper;
+        this.customers         = customers;
+        this.quotationRenderer = quotationRenderer;
     }
 
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
@@ -148,7 +157,12 @@ public class TicketService {
     @Transactional
     public TicketDto generateQuotation(long ticketId, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
-        TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.APPROVED);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        String fromStatus = s.status();
+        if (!QUOTATION_ALLOWED_STATUSES.contains(fromStatus)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Expected status 'approved' or 'quotation_issued' but ticket is '" + fromStatus + "'");
+        }
         if (s.createdById() != actor.id() && !isAdmin(actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Only the ticket owner can generate a quotation");
         }
@@ -162,8 +176,25 @@ public class TicketService {
         String number = tickets.nextQuotationCode();
         tickets.createQuotation(ticketId, number, actor.id(), total);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.QUOTATION_ISSUED, TicketStatus.APPROVED, TicketStatus.QUOTATION_ISSUED, null);
+            TicketEventKind.QUOTATION_ISSUED, fromStatus, TicketStatus.QUOTATION_ISSUED, null);
         return requireTicket(ticketId);
+    }
+
+    // Renders the quotation straight from the current ticket + quotation record — there is no
+    // separate draft/edit phase, so "regenerating" just means re-rendering from live data.
+    public byte[] getQuotationXlsx(long ticketId, long quotationId, UserPrincipal actor) {
+        TicketDto ticket = requireTicket(ticketId);
+        if ("sales".equals(actor.role()) && ticket.summary().createdById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        QuotationDto quotation = ticket.quotations().stream()
+            .filter(q -> q.id() == quotationId)
+            .findFirst()
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Quotation not found"));
+        CustomerDto customer = ticket.summary().customerId() != null
+            ? customers.findById(ticket.summary().customerId()).orElse(null)
+            : null;
+        return quotationRenderer.toXlsx(ticket, quotation, customer);
     }
 
     @Transactional
