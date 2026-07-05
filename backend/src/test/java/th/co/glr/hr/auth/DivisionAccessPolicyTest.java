@@ -67,6 +67,32 @@ class DivisionAccessPolicyTest {
     }
 
     @Test
+    void canonicalManagerTitleDerivesSameRolesAsBakedFormAfterV30() {
+        // V30 collapses ฝ่าย-baked titles (ผู้จัดการฝ่ายขาย/ผู้จัดการฝ่ายผลิต) to canonical "ผู้จัดการ".
+        // Scope/role must stay division-driven and unchanged for every affected employee.
+        // Sales manager: was ผู้จัดการฝ่ายขาย → now ผู้จัดการ, still sales_manager.
+        assertThat(DivisionAccessPolicy.roleFor(record("SA", "SA-ฝ่ายขาย", "ผู้จัดการ"))).isEqualTo("sales_manager");
+        assertThat(DivisionAccessPolicy.isManager(record("SA", "SA-ฝ่ายขาย", "ผู้จัดการ"))).isTrue();
+        // Production manager: was ผู้จัดการฝ่ายผลิต → now ผู้จัดการ, base role employee but still a manager.
+        assertThat(DivisionAccessPolicy.roleFor(record("PROD", "PROD-ฝ่ายผลิต", "ผู้จัดการ"))).isEqualTo("employee");
+        assertThat(DivisionAccessPolicy.isManager(record("PROD", "PROD-ฝ่ายผลิต", "ผู้จัดการ"))).isTrue();
+    }
+
+    @Test
+    void canonicalAssistantManagerStaysManagerButDistinctFromExecutive() {
+        // V30 keeps assistant managers distinct as canonical "ผู้ช่วยผู้จัดการ": still a manager, never ceo.
+        assertThat(DivisionAccessPolicy.isManager(record("PROD", "PROD-ฝ่ายผลิต", "ผู้ช่วยผู้จัดการ"))).isTrue();
+        assertThat(DivisionAccessPolicy.roleFor(record("PROD", "PROD-ฝ่ายผลิต", "ผู้ช่วยผู้จัดการ"))).isEqualTo("employee");
+    }
+
+    @Test
+    void managingDirectorTitleUntouchedByNormalizationStillCeo() {
+        // V30 must NOT rewrite กรรมการผู้จัดการ (it starts with กรรมการ, not ผู้จัดการ); it stays an executive.
+        assertThat(DivisionAccessPolicy.roleFor(record("MD", "MD-ผู้บริหารระดับสูง", "กรรมการผู้จัดการ"))).isEqualTo("ceo");
+        assertThat(DivisionAccessPolicy.isManager(record("MD", "MD-ผู้บริหารระดับสูง", "กรรมการผู้จัดการ"))).isTrue();
+    }
+
+    @Test
     void isManagerFalseForNonManagers() {
         assertThat(DivisionAccessPolicy.isManager(record("AC", "AC-บัญชี", "พนักงาน"))).isFalse();
         assertThat(DivisionAccessPolicy.isManager(record(null, null, null))).isFalse();
