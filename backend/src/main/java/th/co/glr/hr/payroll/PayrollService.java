@@ -209,14 +209,14 @@ public class PayrollService {
 
     private List<PayrollSpecialPayDto> specialPayDtos(List<BigDecimal> specialPays) {
         return List.of(
-            new PayrollSpecialPayDto("specialPay1", "เงินพิเศษ 1", specialPays.get(0)),
-            new PayrollSpecialPayDto("specialPay2", "เงินพิเศษ 2", specialPays.get(1)),
-            new PayrollSpecialPayDto("specialPay3", "เงินพิเศษ 3", specialPays.get(2)),
-            new PayrollSpecialPayDto("specialPay4", "เงินพิเศษ 4", specialPays.get(3)),
-            new PayrollSpecialPayDto("specialPay5", "เงินพิเศษ 5", specialPays.get(4)),
-            new PayrollSpecialPayDto("specialPay6", "เงินพิเศษ 6", specialPays.get(5)),
-            new PayrollSpecialPayDto("specialPay7", "เงินพิเศษ 7", specialPays.get(6)),
-            new PayrollSpecialPayDto("specialPay8", "เงินพิเศษ 8", specialPays.get(7))
+            new PayrollSpecialPayDto("specialPay1", "พิเศษ 1 (ค่าครองชีพ)", specialPays.get(0)),
+            new PayrollSpecialPayDto("specialPay2", "พิเศษ 2 (เบี้ยเลี้ยงประจำ)", specialPays.get(1)),
+            new PayrollSpecialPayDto("specialPay3", "พิเศษ 3 (ค่าตำแหน่ง)", specialPays.get(2)),
+            new PayrollSpecialPayDto("specialPay4", "พิเศษ 4 (เบี้ยขยันประจำ)", specialPays.get(3)),
+            new PayrollSpecialPayDto("specialPay5", "พิเศษ 5 (ค่า GPRS)", specialPays.get(4)),
+            new PayrollSpecialPayDto("specialPay6", "พิเศษ 6 (คอมมิชชั่น)", specialPays.get(5)),
+            new PayrollSpecialPayDto("specialPay7", "พิเศษ 7 (ทำได้ตาม KPI)", specialPays.get(6)),
+            new PayrollSpecialPayDto("specialPay8", "พิเศษ 8 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)", specialPays.get(7))
         );
     }
 

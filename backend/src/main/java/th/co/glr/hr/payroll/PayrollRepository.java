@@ -333,14 +333,14 @@ public class PayrollRepository {
 
     private List<PayrollSpecialPayDto> specialPays(ResultSet rs) throws SQLException {
         return List.of(
-            specialPay("specialPay1", "เงินพิเศษ 1", rs.getBigDecimal("special_pay_1")),
-            specialPay("specialPay2", "เงินพิเศษ 2", rs.getBigDecimal("special_pay_2")),
-            specialPay("specialPay3", "เงินพิเศษ 3", rs.getBigDecimal("special_pay_3")),
-            specialPay("specialPay4", "เงินพิเศษ 4", rs.getBigDecimal("special_pay_4")),
-            specialPay("specialPay5", "เงินพิเศษ 5", rs.getBigDecimal("special_pay_5")),
-            specialPay("specialPay6", "เงินพิเศษ 6", rs.getBigDecimal("special_pay_6")),
-            specialPay("specialPay7", "เงินพิเศษ 7", rs.getBigDecimal("special_pay_7")),
-            specialPay("specialPay8", "เงินพิเศษ 8", rs.getBigDecimal("special_pay_8"))
+            specialPay("specialPay1", "พิเศษ 1 (ค่าครองชีพ)", rs.getBigDecimal("special_pay_1")),
+            specialPay("specialPay2", "พิเศษ 2 (เบี้ยเลี้ยงประจำ)", rs.getBigDecimal("special_pay_2")),
+            specialPay("specialPay3", "พิเศษ 3 (ค่าตำแหน่ง)", rs.getBigDecimal("special_pay_3")),
+            specialPay("specialPay4", "พิเศษ 4 (เบี้ยขยันประจำ)", rs.getBigDecimal("special_pay_4")),
+            specialPay("specialPay5", "พิเศษ 5 (ค่า GPRS)", rs.getBigDecimal("special_pay_5")),
+            specialPay("specialPay6", "พิเศษ 6 (คอมมิชชั่น)", rs.getBigDecimal("special_pay_6")),
+            specialPay("specialPay7", "พิเศษ 7 (ทำได้ตาม KPI)", rs.getBigDecimal("special_pay_7")),
+            specialPay("specialPay8", "พิเศษ 8 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)", rs.getBigDecimal("special_pay_8"))
         );
     }
 
