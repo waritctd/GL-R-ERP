@@ -174,8 +174,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     calculatePrices:   st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
     approve:           st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
     reject:            st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    generateDocument: st === 'approved'        && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
-    revise:           (st === 'approved' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
+    generateQuotation: (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canGenerateQuotation.includes(role) && (isOwner || role === 'admin'),
+    generateDocument: (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
+    revise:           (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
     close:            st === 'document_issued' && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
     cancel:           !TERMINAL.includes(st)   && (isOwner || role === 'admin'),
     comment:          !TERMINAL.includes(st),
@@ -328,6 +329,20 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     }
   }
 
+  async function handleDownloadQuotation(quotationId, number) {
+    try {
+      const blob = await api.tickets.downloadQuotationXlsx(ticketId, quotationId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (number ?? 'quotation') + '.xlsx';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      showToast('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
+    }
+  }
+
   async function handleReject() {
     if (!rejectReason.trim()) { showToast('error', 'กรุณาระบุเหตุผลในการตีกลับ'); return; }
     await doAction(() => api.tickets.reject(ticketId, { reason: rejectReason.trim() }), 'ตีกลับใบขอราคาแล้ว');
@@ -404,6 +419,14 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 style={{ color: '#dc2626', borderColor: '#fca5a5' }}>
                 <Icon name="close" size={14} />
                 ไม่อนุมัติ
+              </button>
+            )}
+
+            {can.generateQuotation && (
+              <button type="button" className="secondary-button" disabled={actionLoading}
+                onClick={() => doAction(() => api.tickets.quotation(ticketId), 'ออกใบเสนอราคาแล้ว')}>
+                <Icon name="fileText" size={14} />
+                {ticket.quotations && ticket.quotations.length > 0 ? 'ออกใบเสนอราคาใหม่ (Rev)' : 'ออกใบเสนอราคา'}
               </button>
             )}
 
@@ -866,6 +889,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                       ยอดรวม {formatMoney(q.totalAmount)} · ออกโดย {q.issuedByName} · {formatThaiDate(q.issuedAt)}
                     </div>
                   </div>
+                  <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px', flexShrink: 0 }}
+                    onClick={() => handleDownloadQuotation(q.id, q.number)}>
+                    <Icon name="fileText" size={12} /> ดาวน์โหลด
+                  </button>
                 </div>
               ))}
             </section>

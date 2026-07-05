@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
 
@@ -29,7 +30,10 @@ class TicketServiceTest {
     private final TicketRepository ticketRepo = mock(TicketRepository.class);
     private final NotificationRepository notifRepo = mock(NotificationRepository.class);
     private final PriceCalcService priceCalcService = mock(PriceCalcService.class);
-    private final TicketService service = new TicketService(ticketRepo, notifRepo, priceCalcService, new ObjectMapper());
+    private final CustomerRepository customerRepo = mock(CustomerRepository.class);
+    private final QuotationRenderer quotationRenderer = new QuotationRenderer();
+    private final TicketService service = new TicketService(
+        ticketRepo, notifRepo, priceCalcService, new ObjectMapper(), customerRepo, quotationRenderer);
 
     private final UserPrincipal salesActor  = actor(1L, "sales");
     private final UserPrincipal otherSales  = actor(2L, "sales");
@@ -270,6 +274,18 @@ class TicketServiceTest {
     void generateQuotation_rejectsWrongStatus() {
         stubTicket(10L, 1L, TicketStatus.PRICE_PROPOSED);
         assertConflict(() -> service.generateQuotation(10L, salesActor));
+    }
+
+    @Test
+    void generateQuotation_allowsReissueFromQuotationIssued() {
+        stubTicketWithItems(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of());
+        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0003");
+
+        service.generateQuotation(10L, salesActor);
+
+        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0003"), eq(1L), any(BigDecimal.class));
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), isNull());
     }
 
     // ── close ─────────────────────────────────────────────────────────────

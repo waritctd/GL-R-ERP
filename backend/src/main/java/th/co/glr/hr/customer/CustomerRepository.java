@@ -2,6 +2,8 @@ package th.co.glr.hr.customer;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -13,6 +15,30 @@ public class CustomerRepository {
 
     public CustomerRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
+    }
+
+    public Optional<CustomerDto> findById(long id) {
+        try {
+            CustomerDto customer = jdbc.queryForObject(
+                """
+                SELECT customer_id, name, tax_id, address, branch, phone
+                  FROM sales.customer
+                 WHERE customer_id = :id
+                """,
+                Map.of("id", id),
+                (rs, i) -> new CustomerDto(
+                    rs.getLong("customer_id"),
+                    rs.getString("name"),
+                    rs.getString("tax_id"),
+                    rs.getString("address"),
+                    rs.getString("branch"),
+                    rs.getString("phone")
+                )
+            );
+            return Optional.ofNullable(customer);
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
     }
 
     public List<CustomerDto> search(String q) {
