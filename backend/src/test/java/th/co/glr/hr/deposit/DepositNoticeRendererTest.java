@@ -2,20 +2,40 @@ package th.co.glr.hr.deposit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Test;
 
 class DepositNoticeRendererTest {
     private final DepositNoticeRenderer renderer = new DepositNoticeRenderer();
 
     @Test
-    void rendersPdfBytesWithPdfHeader() {
+    void rendersValidPdfBytes() {
         byte[] pdf = renderer.toPdf(document());
 
-        assertThat(new String(pdf, 0, 8)).startsWith("%PDF-1.4");
+        assertThat(new String(pdf, 0, 5)).isEqualTo("%PDF-");
         assertThat(pdf).containsSequence("%%EOF".getBytes());
+    }
+
+    @Test
+    void rendersThaiTextCorrectly() throws Exception {
+        byte[] pdf = renderer.toPdf(document());
+
+        String text;
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            text = new PDFTextStripper().getText(doc);
+        }
+
+        // The previous ASCII-only renderer turned every Thai character into "?" — this
+        // asserts the actual Thai customer name and project come through unmangled.
+        assertThat(text).contains("บริษัท เอซีเอ็มอี จำกัด");
+        assertThat(text).contains("โครงการโชว์รูม");
+        assertThat(text).doesNotContain("?????");
     }
 
     private DepositNoticeDto document() {
@@ -27,10 +47,10 @@ class DepositNoticeRendererTest {
             "GLRD69001",
             LocalDate.of(2026, 7, 5),
             "ISSUED",
-            "ACME Co., Ltd.",
+            "บริษัท เอซีเอ็มอี จำกัด",
             "0100000000000",
             "Bangkok",
-            "Showroom",
+            "โครงการโชว์รูม",
             "REF-1",
             "THB",
             new BigDecimal("0.50"),

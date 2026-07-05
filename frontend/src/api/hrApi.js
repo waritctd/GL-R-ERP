@@ -70,7 +70,12 @@ export const api = {
     listDocs: (id) => apiRequest(API_ROUTES.tickets.listDocs(id)),
     revision: (id, payload) => apiRequest(API_ROUTES.tickets.revision(id), { method: 'POST', body: payload }),
     downloadQuotationXlsx: async (id, quotationId) => {
-      const res = await fetch(API_ROUTES.tickets.quotationFile(id, quotationId), { credentials: 'include' });
+      const res = await fetch(API_ROUTES.tickets.quotationFile(id, quotationId, 'xlsx'), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    downloadQuotationPdf: async (id, quotationId) => {
+      const res = await fetch(API_ROUTES.tickets.quotationFile(id, quotationId, 'pdf'), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');
       return res.blob();
     },
@@ -84,6 +89,11 @@ export const api = {
     issue: (id) => apiRequest(API_ROUTES.depositNotices.issue(id), { method: 'POST' }),
     downloadXlsx: async (id) => {
       const res = await fetch(API_ROUTES.depositNotices.file(id, 'xlsx'), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    downloadPdf: async (id) => {
+      const res = await fetch(API_ROUTES.depositNotices.file(id, 'pdf'), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');
       return res.blob();
     },

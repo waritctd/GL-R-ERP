@@ -183,6 +183,18 @@ public class TicketService {
     // Renders the quotation straight from the current ticket + quotation record — there is no
     // separate draft/edit phase, so "regenerating" just means re-rendering from live data.
     public byte[] getQuotationXlsx(long ticketId, long quotationId, UserPrincipal actor) {
+        var ctx = loadQuotationContext(ticketId, quotationId, actor);
+        return quotationRenderer.toXlsx(ctx.ticket(), ctx.quotation(), ctx.customer());
+    }
+
+    public byte[] getQuotationPdf(long ticketId, long quotationId, UserPrincipal actor) {
+        var ctx = loadQuotationContext(ticketId, quotationId, actor);
+        return quotationRenderer.toPdf(ctx.ticket(), ctx.quotation(), ctx.customer());
+    }
+
+    private record QuotationRenderContext(TicketDto ticket, QuotationDto quotation, CustomerDto customer) {}
+
+    private QuotationRenderContext loadQuotationContext(long ticketId, long quotationId, UserPrincipal actor) {
         TicketDto ticket = requireTicket(ticketId);
         if ("sales".equals(actor.role()) && ticket.summary().createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
@@ -194,7 +206,7 @@ public class TicketService {
         CustomerDto customer = ticket.summary().customerId() != null
             ? customers.findById(ticket.summary().customerId()).orElse(null)
             : null;
-        return quotationRenderer.toXlsx(ticket, quotation, customer);
+        return new QuotationRenderContext(ticket, quotation, customer);
     }
 
     @Transactional

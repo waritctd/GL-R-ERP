@@ -241,6 +241,25 @@ function verifyStatus(ticket, expected) {
   if (ticket.status !== expected) fail(`Expected status '${expected}' but ticket is '${ticket.status}'`, 409);
 }
 
+function buildMockQuotationCsv(ticketId, quotationId) {
+  const ticket = findTicketRaw(Number(ticketId));
+  const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
+  if (!quotation) fail('Quotation not found', 404);
+  const rows = [
+    ['ใบเสนอราคา', quotation.number],
+    ['ลูกค้า', ticket.customerName ?? ''],
+    ['วันที่', quotation.issuedAt],
+    [],
+    ['รายละเอียด', 'จำนวน', 'ราคา/หน่วย', 'เป็นเงิน'],
+    ...ticket.items
+      .filter((it) => it.approvedPrice != null)
+      .map((it) => [`${it.brand ?? ''} ${it.model ?? ''}`.trim(), it.qty, it.approvedPrice, it.approvedPrice * it.qty]),
+    [],
+    ['รวมเป็นเงิน', '', '', quotation.totalAmount],
+  ];
+  return rows.map((r) => r.join(',')).join('\n');
+}
+
 function pushEvent(ticket, actor, kind, fromStatus, toStatus, message, itemSnapshot = null) {
   const nextId = Math.max(...db.tickets.flatMap((t) => t.events.map((e) => e.id)), 0) + 1;
   ticket.events.push({ id: nextId, ticketId: ticket.id, actorId: actor.id, actorName: actor.name, kind, fromStatus, toStatus, message, createdAt: new Date().toISOString(), itemSnapshot });
@@ -1007,23 +1026,13 @@ export const api = {
     },
 
     async downloadQuotationXlsx(ticketId, quotationId) {
-      const ticket = findTicketRaw(Number(ticketId));
-      const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
-      if (!quotation) fail('Quotation not found', 404);
-      const rows = [
-        ['ใบเสนอราคา', quotation.number],
-        ['ลูกค้า', ticket.customerName ?? ''],
-        ['วันที่', quotation.issuedAt],
-        [],
-        ['รายละเอียด', 'จำนวน', 'ราคา/หน่วย', 'เป็นเงิน'],
-        ...ticket.items
-          .filter((it) => it.approvedPrice != null)
-          .map((it) => [`${it.brand ?? ''} ${it.model ?? ''}`.trim(), it.qty, it.approvedPrice, it.approvedPrice * it.qty]),
-        [],
-        ['รวมเป็นเงิน', '', '', quotation.totalAmount],
-      ];
-      const csv = rows.map((r) => r.join(',')).join('\n');
+      const csv = buildMockQuotationCsv(ticketId, quotationId);
       return new Blob([csv], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    },
+
+    async downloadQuotationPdf(ticketId, quotationId) {
+      const csv = buildMockQuotationCsv(ticketId, quotationId);
+      return new Blob([csv], { type: 'application/pdf' });
     },
 
     async close(id) {
@@ -1704,6 +1713,14 @@ export const api = {
       if (!doc) fail('Deposit notice not found', 404);
       const html = mockPreviewHtml(buildMockDoc(doc));
       return new Blob([html], { type: 'text/html' });
+    },
+
+    async downloadPdf(docId) {
+      requireSession();
+      const doc = mockDepositNotices.find((d) => d.id === Number(docId));
+      if (!doc) fail('Deposit notice not found', 404);
+      const html = mockPreviewHtml(buildMockDoc(doc));
+      return new Blob([html], { type: 'application/pdf' });
     },
   },
 

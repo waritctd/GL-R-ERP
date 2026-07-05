@@ -107,9 +107,18 @@ public class TicketController {
     ResponseEntity<byte[]> quotationFile(
         @PathVariable long id,
         @PathVariable long quotationId,
+        @RequestParam(defaultValue = "xlsx") String format,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
+        String normalized = format == null ? "xlsx" : format.trim().toLowerCase();
+        if ("pdf".equals(normalized)) {
+            byte[] bytes = ticketService.getQuotationPdf(id, quotationId, user);
+            return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"quotation-" + quotationId + ".pdf\"")
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(bytes);
+        }
         byte[] bytes = ticketService.getQuotationXlsx(id, quotationId, user);
         return ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"quotation-" + quotationId + ".xlsx\"")
