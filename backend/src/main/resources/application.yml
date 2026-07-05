@@ -60,6 +60,13 @@ app:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174}
   attendance:
     agent-token: ${APP_ATTENDANCE_AGENT_TOKEN:}
+    # Standard shift (Asia/Bangkok) used to compute late/early-leave minutes and detect absences.
+    # Late/early minutes are informational only — never deducted (Labour Protection Act §76).
+    standard-start-time: ${APP_ATTENDANCE_STANDARD_START:08:30}
+    standard-end-time: ${APP_ATTENDANCE_STANDARD_END:17:30}
+    late-grace-minutes: ${APP_ATTENDANCE_LATE_GRACE_MINUTES:0}
+    # Scheduled workdays; a workday with no punch and no approved leave is an unpaid absence.
+    workdays: ${APP_ATTENDANCE_WORKDAYS:MONDAY,TUESDAY,WEDNESDAY,THURSDAY,FRIDAY}
   uploads-dir: ${APP_UPLOADS_DIR:./uploads}
   login-rate-limit:
     enabled: ${APP_LOGIN_RATE_LIMIT_ENABLED:true}

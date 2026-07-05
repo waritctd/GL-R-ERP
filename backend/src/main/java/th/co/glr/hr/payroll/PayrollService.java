@@ -1,8 +1,10 @@
 package th.co.glr.hr.payroll;
 
 import java.math.BigDecimal;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -20,27 +22,32 @@ import th.co.glr.hr.commission.CommissionRecord;
 import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.TierConfig;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.config.AppProperties;
 
 @Service
 public class PayrollService {
     private static final Set<String> PAYROLL_ROLES = Set.of("hr", "admin");
     private static final Logger AUDIT = LoggerFactory.getLogger("th.co.glr.hr.audit");
+    private static final ZoneId PAYROLL_ZONE = ZoneId.of("Asia/Bangkok");
 
     private final PayrollRepository payrollRepository;
     private final PayrollCalculator payrollCalculator;
     private final CommissionRepository commissionRepository;
     private final CommissionCalculator commissionCalculator;
+    private final AppProperties properties;
 
     public PayrollService(
         PayrollRepository payrollRepository,
         PayrollCalculator payrollCalculator,
         CommissionRepository commissionRepository,
-        CommissionCalculator commissionCalculator
+        CommissionCalculator commissionCalculator,
+        AppProperties properties
     ) {
         this.payrollRepository = payrollRepository;
         this.payrollCalculator = payrollCalculator;
         this.commissionRepository = commissionRepository;
         this.commissionCalculator = commissionCalculator;
+        this.properties = properties;
     }
 
     public PayrollPeriodDto currentOrPreview(LocalDate payrollMonth, UserPrincipal actor) {
@@ -102,6 +109,8 @@ public class PayrollService {
         Map<Long, BigDecimal> overtimeByEmployee = payrollRepository.findApprovedOvertimePayByEmployee(payrollMonth);
         Map<Long, BigDecimal> commissionByEmployee = commissionPayByEmployee(payrollMonth);
         Map<Long, PayrollYearToDate> yearToDateByEmployee = payrollRepository.findYearToDateByEmployee(payrollMonth);
+        Map<Long, BigDecimal> autoUnpaidLeaveByEmployee = payrollRepository.findAutoUnpaidLeaveDaysByEmployee(
+            payrollMonth, LocalDate.now(PAYROLL_ZONE), workdayNumbers());
 
         List<PayrollLineDto> lines = employees.stream()
             .map(employee -> calculateLine(
@@ -110,6 +119,7 @@ public class PayrollService {
                 overtimeByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
                 commissionByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
                 yearToDateByEmployee.getOrDefault(employee.employeeId(), PayrollYearToDate.empty()),
+                autoUnpaidLeaveByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
                 payrollMonth
             ))
             .sorted(Comparator.comparing(PayrollLineDto::employeeCode))
@@ -142,15 +152,18 @@ public class PayrollService {
         BigDecimal overtimePay,
         BigDecimal commissionPay,
         PayrollYearToDate yearToDate,
+        BigDecimal autoUnpaidLeaveDays,
         LocalDate payrollMonth
     ) {
+        // Prefill unpaid-leave days from attendance/leave when HR hasn't entered an override for this
+        // employee; an explicit input (any manual adjustment row) takes precedence so HR stays in control.
         PayrollCalculation calculation = payrollCalculator.calculate(new PayrollCalculationInput(
             employee.baseSalary(),
             input == null ? List.of() : input.specialPays(),
             overtimePay,
             commissionPay,
             input == null ? BigDecimal.ZERO : input.nonTaxableIncome(),
-            input == null ? BigDecimal.ZERO : input.unpaidLeaveDays(),
+            input == null ? autoUnpaidLeaveDays : input.unpaidLeaveDays(),
             input == null ? BigDecimal.ZERO : input.studentLoanDeduction(),
             input == null ? BigDecimal.ZERO : input.legalExecutionDeduction(),
             input == null ? BigDecimal.ZERO : input.otherPostTaxDeductions(),
@@ -224,6 +237,14 @@ public class PayrollService {
 
     private List<PayrollEmployeeInputRequest> safeInputs(List<PayrollEmployeeInputRequest> inputs) {
         return inputs == null ? List.of() : inputs;
+    }
+
+    /** Configured workdays as ISO day-of-week numbers (Mon=1 … Sun=7) for absence detection. */
+    private List<Integer> workdayNumbers() {
+        return properties.getAttendance().getWorkdays().stream()
+            .map(day -> DayOfWeek.valueOf(day.trim().toUpperCase()).getValue())
+            .distinct()
+            .toList();
     }
 
     private LocalDate normalizeMonth(LocalDate payrollMonth) {

@@ -67,6 +67,93 @@ public class PayrollRepository {
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
+    /**
+     * Auto-derived unpaid-leave days per employee for the month, used to prefill the payroll
+     * deduction (HR reviews/overrides before processing). Two disjoint sources, both compliant with
+     * the no-work-no-pay principle:
+     *   1. approved leave whose type is unpaid (leave_type.is_paid = FALSE), and
+     *   2. unauthorized full-day absences: a scheduled workday with no punch and no approved leave.
+     * Absence detection only applies to employees with at least one punch in the month, so someone
+     * not yet on the attendance system is never flagged absent for every workday. Only elapsed days
+     * are counted (series capped at asOf) and lateness is never included (§76).
+     *
+     * @param workdayDows ISO day-of-week numbers that count as workdays (Mon=1 … Sun=7).
+     */
+    public Map<Long, BigDecimal> findAutoUnpaidLeaveDaysByEmployee(
+            LocalDate payrollMonth, LocalDate asOf, List<Integer> workdayDows) {
+        if (workdayDows == null || workdayDows.isEmpty()) {
+            return Map.of();
+        }
+        return jdbc.query("""
+            WITH params AS (
+                SELECT date_trunc('month', :payrollMonth::date)::date AS month_start,
+                       LEAST((date_trunc('month', :payrollMonth::date) + INTERVAL '1 month - 1 day')::date,
+                             :asOf::date) AS month_end
+            ),
+            workdays AS (
+                SELECT gs::date AS work_date
+                  FROM params,
+                       generate_series((SELECT month_start FROM params), (SELECT month_end FROM params),
+                                       INTERVAL '1 day') gs
+                 WHERE EXTRACT(ISODOW FROM gs) IN (:workdayDows)
+            ),
+            punch_days AS (
+                SELECT p.employee_id, p.work_date
+                  FROM hr.attendance_punch p, params
+                 WHERE p.employee_id IS NOT NULL
+                   AND p.work_date BETWEEN (SELECT month_start FROM params) AND (SELECT month_end FROM params)
+                 GROUP BY p.employee_id, p.work_date
+            ),
+            tracked AS (
+                SELECT DISTINCT employee_id FROM punch_days
+            ),
+            approved_leave_days AS (
+                SELECT lr.employee_id, ld::date AS leave_date, lt.is_paid
+                  FROM hr.leave_request lr
+                  JOIN hr.leave_type lt ON lt.leave_type_code = lr.leave_type_code,
+                       params,
+                       generate_series(
+                           GREATEST(lr.start_date, (SELECT month_start FROM params)),
+                           LEAST(lr.end_date, (SELECT month_end FROM params)),
+                           INTERVAL '1 day') ld
+                 WHERE lr.status = 'APPROVED'
+                   AND lr.start_date <= (SELECT month_end FROM params)
+                   AND lr.end_date >= (SELECT month_start FROM params)
+            ),
+            absences AS (
+                SELECT t.employee_id, w.work_date
+                  FROM tracked t
+                 CROSS JOIN workdays w
+                 WHERE NOT EXISTS (
+                           SELECT 1 FROM punch_days pd
+                            WHERE pd.employee_id = t.employee_id AND pd.work_date = w.work_date)
+                   AND NOT EXISTS (
+                           SELECT 1 FROM approved_leave_days al
+                            WHERE al.employee_id = t.employee_id AND al.leave_date = w.work_date)
+            ),
+            unpaid_leave AS (
+                SELECT al.employee_id, al.leave_date AS work_date
+                  FROM approved_leave_days al
+                  JOIN workdays w ON w.work_date = al.leave_date
+                 WHERE al.is_paid = FALSE
+            )
+            SELECT employee_id, COUNT(*) AS unpaid_days
+              FROM (
+                  SELECT employee_id, work_date FROM absences
+                  UNION
+                  SELECT employee_id, work_date FROM unpaid_leave
+              ) combined
+             GROUP BY employee_id
+            """,
+            new MapSqlParameterSource()
+                .addValue("payrollMonth", payrollMonth)
+                .addValue("asOf", asOf)
+                .addValue("workdayDows", workdayDows),
+            (rs, rowNum) -> Map.entry(rs.getLong("employee_id"), new BigDecimal(rs.getInt("unpaid_days"))))
+            .stream()
+            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
     public Map<Long, PayrollYearToDate> findYearToDateByEmployee(LocalDate payrollMonth) {
         return jdbc.query("""
             SELECT pl.employee_id,

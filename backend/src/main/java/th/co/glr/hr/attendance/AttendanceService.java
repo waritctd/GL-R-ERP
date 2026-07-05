@@ -5,10 +5,15 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -48,6 +53,8 @@ public class AttendanceService {
         if (punchId == null) {
             return new AttendancePunchResponse(null, false, "duplicate");
         }
+        // Keep the day's derived record (late/early/absent vs the standard shift) fresh on each punch.
+        recalculateDaily(punch.workDate(), punch.workDate());
         return new AttendancePunchResponse(punchId, true, "inserted");
     }
 
@@ -81,6 +88,13 @@ public class AttendanceService {
             skippedCount,
             parseResult.errors().size()
         );
+
+        // Recompute daily records across the imported span so late/early/absent metrics reflect the batch.
+        parseResult.punches().stream().map(NormalizedAttendancePunch::workDate).filter(d -> d != null)
+            .min(Comparator.naturalOrder())
+            .ifPresent(from -> parseResult.punches().stream().map(NormalizedAttendancePunch::workDate)
+                .filter(d -> d != null).max(Comparator.naturalOrder())
+                .ifPresent(to -> recalculateDaily(from, to)));
 
         return new AttendanceImportResponse(
             importId,
@@ -126,6 +140,55 @@ public class AttendanceService {
 
         return attendanceRepository.findPunches(
             new AttendancePunchFilter(employeeId, divisionId, effectiveFrom, effectiveTo, limit));
+    }
+
+    /**
+     * Aggregates raw punches into daily attendance records (check-in/out, late/early-leave minutes vs
+     * the standard shift) for the given date range. Late/early minutes are for reporting/discipline
+     * only and never feed a wage deduction (§76). Skips employees whose punches don't resolve.
+     */
+    @Transactional
+    public int recalculateDaily(LocalDate from, LocalDate to) {
+        if (from == null || to == null || to.isBefore(from)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid date range");
+        }
+        AttendanceDailyCalculator calculator = dailyCalculator();
+        List<AttendanceRepository.DailyPunch> punches = attendanceRepository.findPunchesForDailyRecompute(from, to);
+
+        Map<String, List<AttendanceRepository.DailyPunch>> byEmployeeDay = new LinkedHashMap<>();
+        for (AttendanceRepository.DailyPunch punch : punches) {
+            if (punch.employeeId() == null || punch.workDate() == null) {
+                continue;
+            }
+            byEmployeeDay
+                .computeIfAbsent(punch.employeeId() + "|" + punch.workDate(), key -> new ArrayList<>())
+                .add(punch);
+        }
+
+        int recalculated = 0;
+        for (List<AttendanceRepository.DailyPunch> dayPunches : byEmployeeDay.values()) {
+            dayPunches.sort(Comparator.comparing(AttendanceRepository.DailyPunch::punchTime));
+            AttendanceRepository.DailyPunch first = dayPunches.get(0);
+            AttendanceRepository.DailyPunch last = dayPunches.get(dayPunches.size() - 1);
+            AttendanceDailyCalculator.Result result = calculator.compute(
+                dayPunches.stream().map(AttendanceRepository.DailyPunch::punchTime).toList());
+            attendanceRepository.upsertAttendanceDaily(new AttendanceRepository.DailyRecord(
+                first.employeeId(), first.workDate(), first.siteCode(),
+                first.punchId(), last.punchId(),
+                result.checkIn(), result.checkOut(), result.totalMinutes(),
+                result.lateMinutes(), result.earlyLeaveMinutes(), result.punchCount(), result.absent()));
+            recalculated++;
+        }
+        return recalculated;
+    }
+
+    private AttendanceDailyCalculator dailyCalculator() {
+        AppProperties.Attendance attendance = properties.getAttendance();
+        return new AttendanceDailyCalculator(
+            DEFAULT_WORK_DATE_ZONE,
+            LocalTime.parse(attendance.getStandardStartTime()),
+            LocalTime.parse(attendance.getStandardEndTime()),
+            attendance.getLateGraceMinutes());
     }
 
     /** Active scanners/locations available as an import source. */

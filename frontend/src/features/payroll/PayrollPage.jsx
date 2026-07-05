@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -99,6 +99,20 @@ export function PayrollPage({ showToast }) {
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [hasFreshUpdate, setHasFreshUpdate] = useState(false);
+
+  const dirtyRef = useRef(false);
+  const savingRef = useRef(false);
+  const loadingRef = useRef(true);
+  const monthRef = useRef(month);
+  const periodRef = useRef(null);
+  const selectedEmployeeIdRef = useRef(null);
+
+  useEffect(() => { savingRef.current = saving; }, [saving]);
+  useEffect(() => { loadingRef.current = loading; }, [loading]);
+  useEffect(() => { monthRef.current = month; }, [month]);
+  useEffect(() => { periodRef.current = period; }, [period]);
+  useEffect(() => { selectedEmployeeIdRef.current = selectedEmployeeId; }, [selectedEmployeeId]);
 
   const selectedLine = useMemo(
     () => (period?.lines || []).find((line) => Number(line.employeeId) === Number(selectedEmployeeId)) || period?.lines?.[0] || null,
@@ -114,6 +128,8 @@ export function PayrollPage({ showToast }) {
     try {
       const response = await api.payroll.current({ payrollMonth: month });
       applyPeriod(response.period, { applyUatDefaults: true });
+      dirtyRef.current = false;
+      setHasFreshUpdate(false);
     } catch (error) {
       showToast('error', error.message || 'โหลดเงินเดือนไม่สำเร็จ');
     } finally {
@@ -121,7 +137,7 @@ export function PayrollPage({ showToast }) {
     }
   }
 
-  function applyPeriod(nextPeriod, { applyUatDefaults = false } = {}) {
+  function applyPeriod(nextPeriod, { applyUatDefaults = false, keepSelection = false } = {}) {
     setPeriod(nextPeriod);
     const nextAdjustments = {};
     const applyDefaults = applyUatDefaults && nextPeriod?.status === 'PREVIEW';
@@ -129,12 +145,54 @@ export function PayrollPage({ showToast }) {
       nextAdjustments[line.employeeId] = adjustmentFromLine(line, { applyDefaults });
     });
     setAdjustments(nextAdjustments);
-    setSelectedEmployeeId((current) => current || nextPeriod?.lines?.[0]?.employeeId || null);
+    if (keepSelection) {
+      setSelectedEmployeeId((current) => current ?? nextPeriod?.lines?.[0]?.employeeId ?? null);
+    } else {
+      setSelectedEmployeeId((current) => current || nextPeriod?.lines?.[0]?.employeeId || null);
+    }
   }
 
   useEffect(() => {
     setSelectedEmployeeId(null);
     load();
+  }, [month]);
+
+  // Silently poll for freshly-approved OT/leave/commission so the page doesn't
+  // stay stale until the user clicks "รีเฟรช". Skips while loading or once the
+  // period is PROCESSED (immutable). Never clobbers in-progress HR edits.
+  useEffect(() => {
+    async function poll() {
+      const currentMonth = monthRef.current;
+      const currentPeriod = periodRef.current;
+      if (loadingRef.current) return;
+      if (currentPeriod?.status === 'PROCESSED') return;
+
+      try {
+        const response = await api.payroll.current({ payrollMonth: currentMonth });
+        const nextPeriod = response.period;
+
+        if (savingRef.current || dirtyRef.current) {
+          // Don't overwrite adjustments/inputs while the user is mid-edit or saving.
+          // Just surface a hint if the fetched period actually differs.
+          const changed = JSON.stringify(nextPeriod) !== JSON.stringify(currentPeriod);
+          if (changed) setHasFreshUpdate(true);
+          return;
+        }
+
+        applyPeriod(nextPeriod, { applyUatDefaults: true, keepSelection: true });
+        setHasFreshUpdate(false);
+      } catch (error) {
+        // Swallow transient poll errors — never disrupt the user with a toast.
+        console.error('Payroll background refresh failed', error);
+      }
+    }
+
+    const interval = setInterval(poll, 30000);
+    window.addEventListener('focus', poll);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', poll);
+    };
   }, [month]);
 
   function payload() {
@@ -149,6 +207,8 @@ export function PayrollPage({ showToast }) {
     try {
       const response = await api.payroll.preview(payload());
       applyPeriod(response.period);
+      dirtyRef.current = false;
+      setHasFreshUpdate(false);
       showToast('success', 'คำนวณตัวอย่างเงินเดือนแล้ว');
     } catch (error) {
       showToast('error', error.message || 'คำนวณเงินเดือนไม่สำเร็จ');
@@ -163,6 +223,8 @@ export function PayrollPage({ showToast }) {
     try {
       const response = await api.payroll.process(payload());
       applyPeriod(response.period);
+      dirtyRef.current = false;
+      setHasFreshUpdate(false);
       showToast('success', 'ประมวลผลเงินเดือนเรียบร้อย');
     } catch (error) {
       showToast('error', error.message || 'ประมวลผลเงินเดือนไม่สำเร็จ');
@@ -193,6 +255,7 @@ export function PayrollPage({ showToast }) {
 
   function updateAdjustment(field, value) {
     if (!selectedLine) return;
+    dirtyRef.current = true;
     setAdjustments((current) => ({
       ...current,
       [selectedLine.employeeId]: {
@@ -217,6 +280,16 @@ export function PayrollPage({ showToast }) {
               <Icon name="refresh" />
               รีเฟรช
             </button>
+            {hasFreshUpdate && (
+              <button
+                type="button"
+                className="link-button"
+                onClick={load}
+                style={{ fontSize: 12, color: '#1d4ed8', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+              >
+                มีข้อมูลอนุมัติใหม่ กดรีเฟรชเพื่ออัปเดต
+              </button>
+            )}
           </div>
         )}
       />
@@ -328,6 +401,7 @@ export function PayrollPage({ showToast }) {
                   <label htmlFor="payroll-unpaid-leave-days">
                     วันลาไม่รับค่าจ้าง
                     <input id="payroll-unpaid-leave-days" type="number" min="0" step="0.25" placeholder="0" value={selectedAdjustment.unpaidLeaveDays} onChange={(event) => updateAdjustment('unpaidLeaveDays', event.target.value)} />
+                    <small>เติมจากระบบลงเวลา/การลา แก้ไขได้</small>
                   </label>
                   <label htmlFor="payroll-student-loan-deduction">
                     หัก กยศ.

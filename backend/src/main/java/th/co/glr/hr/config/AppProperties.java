@@ -38,6 +38,19 @@ public class AppProperties {
 
     public static class Attendance {
         private String agentToken;
+        /** Standard shift start (Asia/Bangkok). Arrivals after start+grace accrue late minutes. */
+        private String standardStartTime = "08:30";
+        /** Standard shift end (Asia/Bangkok). Departures before this accrue early-leave minutes. */
+        private String standardEndTime = "17:30";
+        /** Grace window after start before lateness is counted. Informational only; never deducted. */
+        private int lateGraceMinutes = 0;
+        /**
+         * Scheduled workdays. A workday with no punch and no approved leave is an unpaid absence
+         * (no-work-no-pay). Public holidays are not modelled yet — handle via approved leave for now.
+         */
+        private List<String> workdays = new ArrayList<>(
+            List.of("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY")
+        );
 
         public String getAgentToken() {
             return agentToken;
@@ -45,6 +58,38 @@ public class AppProperties {
 
         public void setAgentToken(String agentToken) {
             this.agentToken = agentToken;
+        }
+
+        public String getStandardStartTime() {
+            return standardStartTime;
+        }
+
+        public void setStandardStartTime(String standardStartTime) {
+            this.standardStartTime = standardStartTime;
+        }
+
+        public String getStandardEndTime() {
+            return standardEndTime;
+        }
+
+        public void setStandardEndTime(String standardEndTime) {
+            this.standardEndTime = standardEndTime;
+        }
+
+        public int getLateGraceMinutes() {
+            return lateGraceMinutes;
+        }
+
+        public void setLateGraceMinutes(int lateGraceMinutes) {
+            this.lateGraceMinutes = lateGraceMinutes;
+        }
+
+        public List<String> getWorkdays() {
+            return workdays;
+        }
+
+        public void setWorkdays(List<String> workdays) {
+            this.workdays = workdays;
         }
     }
 

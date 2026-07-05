@@ -61,6 +61,16 @@ public class AttendanceController {
         return ResponseEntity.ok(attendanceService.importDatFile(request, user));
     }
 
+    @PostMapping("/daily/recalculate")
+    ResponseEntity<AttendanceDailyRecalcResponse> recalculateDaily(
+            @RequestParam("from") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) java.time.LocalDate from,
+            @RequestParam("to") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) java.time.LocalDate to,
+            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, "hr", "ceo");
+        return ResponseEntity.ok(new AttendanceDailyRecalcResponse(attendanceService.recalculateDaily(from, to)));
+    }
+
     @PostMapping("/cards/backfill")
     AttendanceCardBackfillResponse backfillCards(
             @Valid @RequestBody AttendanceCardBackfillRequest request,

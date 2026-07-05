@@ -1,5 +1,7 @@
 package th.co.glr.hr.attendance;
 
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.List;
@@ -422,6 +424,75 @@ public class AttendanceRepository {
             .findFirst()
             .orElse(null);
     }
+
+    /** Resolved punches in a date range, for aggregating into daily attendance records. */
+    public List<DailyPunch> findPunchesForDailyRecompute(LocalDate from, LocalDate to) {
+        return jdbc.query("""
+            SELECT COALESCE(p.employee_id, (
+                       SELECT em.employee_id FROM hr.employee em
+                        WHERE em.badge_card_no = p.badge_code OR em.employee_code = p.badge_code
+                        ORDER BY em.is_active DESC, em.employee_id LIMIT 1)) AS employee_id,
+                   p.work_date, p.site_code, p.punch_id, p.punch_time
+              FROM hr.attendance_punch p
+             WHERE p.work_date BETWEEN :from AND :to
+             ORDER BY 1, p.work_date, p.punch_time
+            """,
+            new MapSqlParameterSource().addValue("from", from).addValue("to", to),
+            (rs, rowNum) -> new DailyPunch(
+                nullableLong(rs, "employee_id"),
+                rs.getObject("work_date", LocalDate.class),
+                rs.getString("site_code"),
+                rs.getLong("punch_id"),
+                rs.getObject("punch_time", OffsetDateTime.class)));
+    }
+
+    /** Upserts a computed daily record, but never overwrites an HR manual override. */
+    public void upsertAttendanceDaily(DailyRecord record) {
+        jdbc.update("""
+            INSERT INTO hr.attendance_daily (
+                employee_id, work_date, site_code, check_in_punch_id, check_out_punch_id,
+                check_in, check_out, total_minutes, late_minutes, early_leave_minutes,
+                punch_count, is_absent, calculated_at, updated_at)
+            VALUES (:employeeId, :workDate, :siteCode, :checkInPunchId, :checkOutPunchId,
+                :checkIn, :checkOut, :totalMinutes, :lateMinutes, :earlyLeaveMinutes,
+                :punchCount, :isAbsent, now(), now())
+            ON CONFLICT (employee_id, work_date) DO UPDATE SET
+                site_code = EXCLUDED.site_code,
+                check_in_punch_id = EXCLUDED.check_in_punch_id,
+                check_out_punch_id = EXCLUDED.check_out_punch_id,
+                check_in = EXCLUDED.check_in,
+                check_out = EXCLUDED.check_out,
+                total_minutes = EXCLUDED.total_minutes,
+                late_minutes = EXCLUDED.late_minutes,
+                early_leave_minutes = EXCLUDED.early_leave_minutes,
+                punch_count = EXCLUDED.punch_count,
+                is_absent = EXCLUDED.is_absent,
+                calculated_at = now(),
+                updated_at = now()
+              WHERE hr.attendance_daily.is_manual_override = FALSE
+            """,
+            new MapSqlParameterSource()
+                .addValue("employeeId", record.employeeId())
+                .addValue("workDate", record.workDate())
+                .addValue("siteCode", record.siteCode())
+                .addValue("checkInPunchId", record.checkInPunchId())
+                .addValue("checkOutPunchId", record.checkOutPunchId())
+                .addValue("checkIn", record.checkIn())
+                .addValue("checkOut", record.checkOut())
+                .addValue("totalMinutes", record.totalMinutes())
+                .addValue("lateMinutes", record.lateMinutes())
+                .addValue("earlyLeaveMinutes", record.earlyLeaveMinutes())
+                .addValue("punchCount", record.punchCount())
+                .addValue("isAbsent", record.isAbsent()));
+    }
+
+    public record DailyPunch(
+        Long employeeId, LocalDate workDate, String siteCode, long punchId, OffsetDateTime punchTime) {}
+
+    public record DailyRecord(
+        long employeeId, LocalDate workDate, String siteCode, Long checkInPunchId, Long checkOutPunchId,
+        OffsetDateTime checkIn, OffsetDateTime checkOut, int totalMinutes, int lateMinutes,
+        int earlyLeaveMinutes, int punchCount, boolean isAbsent) {}
 
     private String toJson(Map<String, Object> rawPayload) {
         try {
