@@ -329,13 +329,15 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     }
   }
 
-  async function handleDownloadQuotation(quotationId, number) {
+  async function handleDownloadQuotation(quotationId, number, format) {
     try {
-      const blob = await api.tickets.downloadQuotationXlsx(ticketId, quotationId);
+      const blob = format === 'pdf'
+        ? await api.tickets.downloadQuotationPdf(ticketId, quotationId)
+        : await api.tickets.downloadQuotationXlsx(ticketId, quotationId);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = (number ?? 'quotation') + '.xlsx';
+      a.download = (number ?? 'quotation') + '.' + format;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -889,10 +891,16 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                       ยอดรวม {formatMoney(q.totalAmount)} · ออกโดย {q.issuedByName} · {formatThaiDate(q.issuedAt)}
                     </div>
                   </div>
-                  <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px', flexShrink: 0 }}
-                    onClick={() => handleDownloadQuotation(q.id, q.number)}>
-                    <Icon name="fileText" size={12} /> ดาวน์โหลด
-                  </button>
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                      onClick={() => handleDownloadQuotation(q.id, q.number, 'xlsx')}>
+                      <Icon name="fileText" size={12} /> Excel
+                    </button>
+                    <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                      onClick={() => handleDownloadQuotation(q.id, q.number, 'pdf')}>
+                      <Icon name="fileText" size={12} /> PDF
+                    </button>
+                  </div>
                 </div>
               ))}
             </section>
