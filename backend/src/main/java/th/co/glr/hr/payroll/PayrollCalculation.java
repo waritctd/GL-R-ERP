@@ -12,6 +12,7 @@ public record PayrollCalculation(
     BigDecimal overtimePay,
     BigDecimal commissionPay,
     BigDecimal grossEarnings,
+    BigDecimal nonTaxableIncome,
     BigDecimal unpaidLeaveDays,
     BigDecimal unpaidLeaveDeduction,
     BigDecimal grossTaxableIncome,
