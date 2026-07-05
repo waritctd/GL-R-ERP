@@ -189,13 +189,21 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   }
 
   async function handleDownloadXlsx() {
+    await download(() => api.depositNotices.downloadXlsx(doc.id), 'xlsx');
+  }
+
+  async function handleDownloadPdf() {
+    await download(() => api.depositNotices.downloadPdf(doc.id), 'pdf');
+  }
+
+  async function download(fetchBlob, extension) {
     if (!doc) return;
     try {
-      const blob = await api.depositNotices.downloadXlsx(doc.id);
+      const blob = await fetchBlob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = (doc.docNumber ?? 'draft') + '.xlsx';
+      a.download = (doc.docNumber ?? 'draft') + '.' + extension;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -281,9 +289,14 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
           </div>
         )}
         {isIssued && (
-          <button type="button" className="secondary-button" onClick={handleDownloadXlsx}>
-            <Icon name="fileText" size={14} /> ดาวน์โหลด Excel
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" className="secondary-button" onClick={handleDownloadXlsx}>
+              <Icon name="fileText" size={14} /> ดาวน์โหลด Excel
+            </button>
+            <button type="button" className="secondary-button" onClick={handleDownloadPdf}>
+              <Icon name="fileText" size={14} /> ดาวน์โหลด PDF
+            </button>
+          </div>
         )}
       </header>
 
