@@ -65,7 +65,7 @@ GL-R-ERP/
 │       ├── leave/        leave workflow
 │       ├── ticket/       sales ticket lifecycle
 │       ├── customer/     customer directory
-│       ├── document/     quotation / deposit-notice generation
+│       ├── deposit/      deposit-notice generation (XLSX; table renamed in V29)
 │       ├── commission/   tier calc, approval, clawback
 │       ├── payroll/      calculation, processing, bank export
 │       ├── dashboard/    role-aware summary
@@ -73,7 +73,7 @@ GL-R-ERP/
 │       ├── audit/        audit log writes
 │       ├── common/       ApiException + handler
 │       └── config/       CORS, properties, seeding
-│   └── src/main/resources/db/migration/   Flyway V1–V21
+│   └── src/main/resources/db/migration/   Flyway V1–V20, V22–V29 (head V29; V21 in db/migration-demo, prod-only)
 ├── agents/attendance/  Python SC700 agent + ops scripts (Windows)
 ├── docker-compose.yml  local Postgres 16 + backend
 ├── render.yaml         Render blueprint (backend)
@@ -139,7 +139,7 @@ sequenceDiagram
 
 Details in [05_Database_Documentation](05_Database_Documentation.md). Principles:
 
-- **Flyway-only schema changes** — V1..V21, forward-fix policy (no down-migrations).
+- **Flyway-only schema changes** — head V29 (V1–V20, V22–V29 in the default path; V21 is demo-only, prod profile), forward-fix policy (no down-migrations).
 - **Constraint-enforced business rules** — OT multipliers, ticket statuses, leave quotas are CHECK-constrained/seeded in the DB, not just app code.
 - **Separation of sensitive data** — `hr_restricted` schema isolates PII from routine queries.
 - **Event sourcing (light)** — `sales.ticket_event` records every ticket transition for traceability.
@@ -150,12 +150,12 @@ Details in [05_Database_Documentation](05_Database_Documentation.md). Principles
 flowchart LR
     PR[Pull request] --> BE[Backend CI<br/>mvn test · JDK 21]
     PR --> FE[Frontend CI<br/>ESLint + a11y · Vitest · build]
-    PR --> MIG[Migration check<br/>Flyway V1→V21 vs real Postgres]
+    PR --> MIG[Migration check<br/>Flyway V1–V20, V22–V29 vs real Postgres]
     PR --> SCA[Dependency review<br/>SCA gate]
     BE & FE & MIG & SCA --> M{main<br/>protected}
     M -->|autoDeploy| REN[Render backend]
     M --> VER[Vercel frontend]
-    DEMO[demo branch] --> REN2[Render demo<br/>gl-r-erp.onrender.com · V21 seed]
+    M -->|prod profile| REN2[Render demo<br/>gl-r-erp.onrender.com · +V21 demo seed]
 ```
 
 - `main` is protected; work lands via feature branch + PR (one issue per PR).

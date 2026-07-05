@@ -1,7 +1,7 @@
 # GL&R ERP — Complete Documentation Bundle
 
 This file concatenates all 12 documentation files for the GL&R HR & Sales ERP,
-generated from the actual codebase (database schema V21). Hand this whole file to
+generated from the actual codebase (database schema head V29). Hand this whole file to
 Claude together with the report-generation prompt to produce a consolidated report.
 
 ---
@@ -20,7 +20,7 @@ Claude together with the report-generation prompt to produce a consolidated repo
 | **Document** | 01 — ERP Overview |
 | **Version** | 1.0 |
 | **Date** | 2 July 2026 |
-| **Status** | Current — reflects the system as built (database schema V21) |
+| **Status** | Current — reflects the system as built (database schema head V29) |
 | **Repository** | `GL-R-ERP` (frontend: React + Vite · backend: Spring Boot · agents: Python) |
 
 ---
@@ -108,7 +108,7 @@ flowchart TB
 | Overtime | Pre-approval OT requests, 1.5×/3.0× rates, division-manager approval | `overtime` |
 | Leave | Sick/vacation/personal leave with quota enforcement and attachments flag | `leave` |
 | Sales Tickets | Ticket lifecycle: submit → pickup → propose price → approve → quotation → close | `ticket` |
-| Customers & Documents | Customer directory; quotation / deposit-notice document generation with revisions | `customer`, `document` |
+| Customers & Deposit Notices | Customer directory; quotation / deposit-notice generation (XLSX) with revisions | `customer`, `deposit_notice` (renamed from `document` in V29) |
 | Commission | Tiered commission on invoices, approval, clawback, payroll feed | `commission` |
 | Payroll | Preview/process monthly payroll; bank-transfer text export | `payroll` |
 | Notifications | In-app notification feed | `notification` |
@@ -136,7 +136,7 @@ Additionally, any employee whose position contains **ผู้จัดการ
 |---|---|---|
 | Frontend | React 18 + Vite | SPA, ESLint + jsx-a11y, Vitest + React Testing Library |
 | Backend | Spring Boot 3.5.x LTS on Java 21 LTS | REST API, Spring Security, Spring Session JDBC |
-| Database | PostgreSQL 16 | Flyway migrations **V1–V21**; schemas `hr`, `hr_restricted`, `sales` |
+| Database | PostgreSQL 16 | Flyway migrations head **V29** (V1–V20, V22–V29; V21 demo-only); schemas `hr`, `hr_restricted`, `sales` |
 | Device agent | Python 3 | ZKTeco **Pull SDK** (`plcommpro.dll`) on Windows (Dell T360) |
 | Cloud (demo) | Render (backend, Docker, Singapore) · Vercel (frontend + `/api` proxy) · Supabase (Postgres) | Blueprint in `render.yaml`, proxy in `vercel.json` |
 | CI/CD | GitHub Actions | Backend tests, frontend lint/tests, Flyway-against-real-Postgres check, Dependabot + dependency-review SCA gate |
@@ -401,7 +401,7 @@ See the full state machine in [03_Feature_Documentation §5](03_Feature_Document
 
 ### 5.3 Documents (quotation / deposit notice)
 
-From a ticket: **Create document draft** → pick a note template → edit line items and notes → **Preview** → **Issue**. Issued documents get a running document number and a downloadable file. Corrections after issue go through a **revision** (the ticket's revision number increments; the old document stays on file).
+From a ticket: **Create deposit-notice draft** → pick a note template → edit line items and notes → **Preview** → **Issue**. Issued deposit notices get a running document number and a downloadable **XLSX** file. Corrections after issue go through a **revision** (the ticket's revision number increments; the old deposit notice stays on file).
 
 ### 5.4 Commissions
 
@@ -468,7 +468,7 @@ The bell icon shows in-app notifications (e.g., a ticket assigned to you, a requ
 3. [Attendance](#3-attendance)
 4. [Overtime & Leave](#4-overtime--leave)
 5. [Sales Tickets](#5-sales-tickets)
-6. [Customers & Documents](#6-customers--documents)
+6. [Customers & Deposit Notices](#6-customers--deposit-notices)
 7. [Commission](#7-commission)
 8. [Payroll](#8-payroll)
 9. [Dashboards, Notifications & Audit](#9-dashboards-notifications--audit)
@@ -554,7 +554,7 @@ sequenceDiagram
 | ลากิจ (Personal) | 3.00 days | — |
 
 - Balance check is automatic at submission; insufficient quota ⇒ immediate rejection with reason.
-- Balances tracked per employee per type (`hr.leave_balance`).
+- Balances are **computed**, not stored: remaining = the `hr.leave_type` quota minus approved `hr.leave_request` days for the year. V13 drops the old `hr.leave_balance` stub — there is no live balance table to query.
 - Approve/reject/cancel mirror the OT workflow.
 - V13's duplicate `leave_type` creation vs. V1 was fixed for fresh databases (PR #52); CI now runs all migrations against real Postgres to prevent regressions (PR #53).
 
@@ -571,7 +571,7 @@ stateDiagram-v2
     price_proposed --> approved : approve (sales_manager/ceo)
     price_proposed --> in_review : reject (back for re-pricing)
     approved --> quotation_issued : issue quotation
-    quotation_issued --> document_issued : issue document
+    quotation_issued --> document_issued : issue deposit notice
     document_issued --> closed : close
     quotation_issued --> closed : close
     draft --> cancelled : cancel
@@ -583,15 +583,17 @@ stateDiagram-v2
 - Every transition writes a `ticket_event` (kind, from→to status, actor) — a complete audit trail per ticket. Comments are events too.
 - Item edits after submission flag the ticket (`has_edits`, V10) so approvers see it changed.
 - Item inserts are batched into a single round-trip (perf commit `888c645`).
-- **Revisions:** correcting an issued document increments `ticket.revision_no` (V17) and keeps prior documents on file.
+- **Revisions:** correcting an issued deposit notice increments `ticket.revision_no` (V17) and keeps prior notices on file.
 
-## 6. Customers & Documents
+## 6. Customers & Deposit Notices
 
-**Code:** `customer/`, `document/` · **Schema:** V16, V17
+**Code:** `customer/`, `deposit/` · **Schema:** V16, V17 (tables renamed in V29)
 
-- **Customer directory** (`sales.customer`): searchable read-only list feeding tickets/documents (PR #56).
-- **Note templates** (`sales.document_note_template`): reusable standard clauses for documents.
-- **Documents** (quotations, deposit notices): drafted from a ticket → line items copied/edited (`sales.document_item`) → previewed → **issued** with a number from `sales.document_sequence` → file downloadable via `GET /api/documents/{id}/file`.
+- **Customer directory** (`sales.customer`): searchable read-only list feeding tickets/deposit notices (PR #56).
+- **Note templates** (`sales.document_note_template`): reusable standard clauses (table name kept generic — not renamed in V29).
+- **Deposit notices:** drafted from a ticket → line items copied/edited (`sales.deposit_notice_item`) → previewed → **issued** with a number from `sales.document_sequence` → file downloadable via `GET /api/deposit-notices/{id}/file`.
+- **Issued as XLSX**, rendered from the `deposit_notice_template.xlsx` workbook (`?format=xlsx`). A `?format=pdf` branch exists but is a placeholder text stub — real PDF output is on the roadmap, not shipped.
+- V29 renamed `sales.document`→`sales.deposit_notice` and `document_item`→`deposit_notice_item` (behavior-preserving); the deposit-notice API paths moved to `/api/deposit-notices/...` and `/api/tickets/{id}/deposit-notice/draft`. Quotation and invoice get their own tables.
 - Document types/plans originate from `docs/QUOTATION_AND_REVISION_PLAN` and the quotation template workbook (`docs/quotation_template_source.xlsx`).
 
 ## 7. Commission
@@ -722,7 +724,7 @@ GL-R-ERP/
 │       ├── leave/        leave workflow
 │       ├── ticket/       sales ticket lifecycle
 │       ├── customer/     customer directory
-│       ├── document/     quotation / deposit-notice generation
+│       ├── deposit/      deposit-notice generation (XLSX; table renamed in V29)
 │       ├── commission/   tier calc, approval, clawback
 │       ├── payroll/      calculation, processing, bank export
 │       ├── dashboard/    role-aware summary
@@ -730,7 +732,7 @@ GL-R-ERP/
 │       ├── audit/        audit log writes
 │       ├── common/       ApiException + handler
 │       └── config/       CORS, properties, seeding
-│   └── src/main/resources/db/migration/   Flyway V1–V21
+│   └── src/main/resources/db/migration/   Flyway V1–V20, V22–V29 (head V29; V21 in db/migration-demo, prod-only)
 ├── agents/attendance/  Python SC700 agent + ops scripts (Windows)
 ├── docker-compose.yml  local Postgres 16 + backend
 ├── render.yaml         Render blueprint (backend)
@@ -796,7 +798,7 @@ sequenceDiagram
 
 Details in [05_Database_Documentation](05_Database_Documentation.md). Principles:
 
-- **Flyway-only schema changes** — V1..V21, forward-fix policy (no down-migrations).
+- **Flyway-only schema changes** — head V29 (V1–V20, V22–V29 in the default path; V21 is demo-only, prod profile), forward-fix policy (no down-migrations).
 - **Constraint-enforced business rules** — OT multipliers, ticket statuses, leave quotas are CHECK-constrained/seeded in the DB, not just app code.
 - **Separation of sensitive data** — `hr_restricted` schema isolates PII from routine queries.
 - **Event sourcing (light)** — `sales.ticket_event` records every ticket transition for traceability.
@@ -807,12 +809,12 @@ Details in [05_Database_Documentation](05_Database_Documentation.md). Principles
 flowchart LR
     PR[Pull request] --> BE[Backend CI<br/>mvn test · JDK 21]
     PR --> FE[Frontend CI<br/>ESLint + a11y · Vitest · build]
-    PR --> MIG[Migration check<br/>Flyway V1→V21 vs real Postgres]
+    PR --> MIG[Migration check<br/>Flyway V1–V20, V22–V29 vs real Postgres]
     PR --> SCA[Dependency review<br/>SCA gate]
     BE & FE & MIG & SCA --> M{main<br/>protected}
     M -->|autoDeploy| REN[Render backend]
     M --> VER[Vercel frontend]
-    DEMO[demo branch] --> REN2[Render demo<br/>gl-r-erp.onrender.com · V21 seed]
+    M -->|prod profile| REN2[Render demo<br/>gl-r-erp.onrender.com · +V21 demo seed]
 ```
 
 - `main` is protected; work lands via feature branch + PR (one issue per PR).
@@ -855,7 +857,7 @@ flowchart LR
 | **Document** | 05 — Database Documentation |
 | **Version** | 1.0 · 2 July 2026 |
 | **Engine** | PostgreSQL 16 |
-| **Migrations** | Flyway `backend/src/main/resources/db/migration/` — **V1 → V21** (forward-fix policy) |
+| **Migrations** | Flyway `backend/src/main/resources/db/migration/` — head **V29** (V1–V20 + V22–V29; forward-fix policy). V21 lives in `db/migration-demo/` and is applied under the `prod` profile only |
 
 ---
 
@@ -901,8 +903,7 @@ erDiagram
     EMPLOYEE ||--o{ OVERTIME_REQUEST : requests
     EMPLOYEE ||--o{ LEAVE_REQUEST : requests
     LEAVE_TYPE ||--o{ LEAVE_REQUEST : classifies
-    LEAVE_TYPE ||--o{ LEAVE_BALANCE : quotas
-    EMPLOYEE ||--o{ LEAVE_BALANCE : holds
+    %% Leave balances are computed from leave_type quotas minus approved leave_request days; there is no leave_balance table.
 
     PAYROLL_PERIOD ||--o{ PAYROLL_LINE : contains
     EMPLOYEE ||--o{ PAYROLL_LINE : "paid via"
@@ -911,8 +912,8 @@ erDiagram
     TICKET ||--o{ TICKET_ITEM : contains
     TICKET ||--o{ TICKET_EVENT : "audit trail"
     TICKET ||--o{ QUOTATION : produces
-    TICKET ||--o{ DOCUMENT : produces
-    DOCUMENT ||--o{ DOCUMENT_ITEM : contains
+    TICKET ||--o{ DEPOSIT_NOTICE : produces
+    DEPOSIT_NOTICE ||--o{ DEPOSIT_NOTICE_ITEM : contains
 
     EMPLOYEE ||--o{ COMMISSION_RECORD : earns
     INVOICE_DETAILS ||--o{ COMMISSION_RECORD : "basis of"
@@ -960,10 +961,11 @@ erDiagram
 
 | Table | Purpose / key constraints |
 |---|---|
-| `hr.leave_type` | Seeded: SICK 30 d (attachment ✅), VACATION 6 d, PERSONAL 3 d |
-| `hr.leave_balance` | Remaining quota per employee/type/year |
+| `hr.leave_type` | Seeded: SICK 30 d (attachment ✅), VACATION 6 d, PERSONAL 3 d; the seeded per-type quota is the balance basis |
 | `hr.leave_request` | Status workflow; FK cascade on employee |
 | `hr.overtime_request` | `day_type ∈ (WORKDAY, HOLIDAY)`; `pay_rate_multiplier ∈ (1.50, 3.00)`; `status ∈ (SUBMITTED, APPROVED, REJECTED, CANCELLED)`; planned/actual minute integrity checks; `payroll_month` link |
+
+> **No `hr.leave_balance` table.** V1 created a placeholder stub; V13 drops it and never recreates it. Remaining balances are **computed** at read time from the `leave_type` quota minus approved `leave_request` days — do not query a stored balance table.
 
 ### 3.4 Payroll (V1 base, V15)
 
@@ -991,15 +993,17 @@ erDiagram
 | `sales.quotation` | Issued quotations |
 | `sales.notification` | In-app notification feed |
 
-### 4.2 Documents & customers (V16, V17)
+### 4.2 Deposit notices & customers (V16, V17, renamed V29)
 
 | Table | Purpose |
 |---|---|
 | `sales.customer` (V16) | Customer directory |
-| `sales.document_note_template` (V16) | Reusable clauses |
-| `sales.document_sequence` (V17) | Running document numbers per type |
-| `sales.document` (V17) | Quotation / deposit-notice header, status (draft→issued), file |
-| `sales.document_item` (V17) | Document line items |
+| `sales.document_note_template` (V16) | Reusable clauses (kept generic — not renamed) |
+| `sales.document_sequence` (V17) | Running document numbers per type (kept generic — not renamed) |
+| `sales.deposit_notice` (V17, renamed from `sales.document` in V29) | Deposit-notice header, status (draft→issued), file; PK `deposit_notice_id` |
+| `sales.deposit_notice_item` (V17, renamed from `sales.document_item` in V29) | Deposit-notice line items |
+
+> **V29 rename.** `sales.document`/`document_item` were deposit-notice-specific in everything but name, so V29 renamed them to `deposit_notice`/`deposit_notice_item` (behavior-preserving; data, FKs, and identity sequences intact). Quotation and invoice get their own tables. The shared `document_sequence` and `document_note_template` are intentionally left generic.
 
 ### 4.3 Commission (V12)
 
@@ -1033,7 +1037,17 @@ erDiagram
 | V18 | `audit_log` | Audit trail table |
 | V19 | `spring_session_jdbc` | Session persistence |
 | V20 | `attendance_device_agent_token` | Per-device token hash + rotation timestamp |
-| V21 | `demo_seed_accounts` | Demo-branch seed accounts (Demo@2026, one per role) — demo environments only |
+| V21 | `demo_seed_accounts` | Demo seed accounts (Demo@2026, one per role) — **not in the default path**; lives in `db/migration-demo/` and runs under the `prod` profile only (Render demo). A clean on-prem/UAT deploy skips V21 by design |
+| V22 | `ticket_item_factory` | `factory` column on `ticket_item` (brand→factory mapping) |
+| V23 | `contacts_projects_ticket_fk` | `sales.contact` + `sales.project` tables; ticket FK links |
+| V24 | `catalog_and_qty_sqm` | `sales.catalog` product master + `qty_sqm` on `ticket_item` (pcs↔sqm) |
+| V25 | `factory_config_and_raw_price` | `sales.factory_config` (email/currency/unit) + raw-price fields on `ticket_item` |
+| V26 | `price_calc_engine` | CEO price-calc engine: `sales.fx_rates` + versioned `sales.price_calc_config` |
+| V27 | `quotation_fields_and_attachments` | Quotation issuance fields + `sales.attachment` (PO / signed-back files) |
+| V28 | `revision_versioning` | Item snapshot in `ticket_event` + quotation versioning (Rev 1, 2, …) |
+| V29 | `rename_document_to_deposit_notice` | Rename `sales.document`→`deposit_notice` and `document_item`→`deposit_notice_item` (behavior-preserving) |
+
+> **Head is V29.** The default migration path applies V1–V20 then V22–V29 (28 files); V21 is absent by design (demo-only, see above).
 
 ## 6. Conventions & Integrity Rules
 
@@ -1173,18 +1187,20 @@ erDiagram
 |---|---|---|---|
 | GET | `/api/customers` | sales+ | Searchable customer directory. |
 
-## 10. Documents — `/api/...`
+## 10. Deposit Notices — `/api/...`
+
+Tables and paths were renamed in V29 (`document` → `deposit_notice`). The note-templates path stays generic.
 
 | Method | Path | Role | Description |
 |---|---|---|---|
-| GET | `/api/document-note-templates` | sales+ | List reusable note templates. |
-| POST | `/api/tickets/{ticketId}/document/draft` | sales+ | Create a document draft from a ticket. |
-| GET | `/api/tickets/{ticketId}/documents` | sales+ | List a ticket's documents. |
-| GET | `/api/documents/{docId}` | sales+ | Fetch a document. |
-| PUT | `/api/documents/{docId}` | sales+ | Edit a draft document. |
-| POST | `/api/documents/{docId}/preview` | sales+ | Render a preview. |
-| POST | `/api/documents/{docId}/issue` | sales+ | Issue with a running number. |
-| GET | `/api/documents/{docId}/file` | sales+ | Download the generated file. |
+| GET | `/api/document-note-templates` | sales+ | List reusable note templates (path kept generic). |
+| POST | `/api/tickets/{ticketId}/deposit-notice/draft` | sales+ | Create a deposit-notice draft from a ticket. |
+| GET | `/api/tickets/{ticketId}/deposit-notices` | sales+ | List a ticket's deposit notices. |
+| GET | `/api/deposit-notices/{docId}` | sales+ | Fetch a deposit notice. |
+| PUT | `/api/deposit-notices/{docId}` | sales+ | Edit a draft deposit notice. |
+| POST | `/api/deposit-notices/{docId}/preview` | sales+ | Render an HTML preview. |
+| POST | `/api/deposit-notices/{docId}/issue` | sales+ | Issue with a running number. |
+| GET | `/api/deposit-notices/{docId}/file?format=xlsx` | sales+ | Download the generated **XLSX** file. `format=pdf` is a placeholder stub (roadmap). |
 | POST | `/api/tickets/{ticketId}/revision` | sales+ | Open a revision (bumps `revision_no`). |
 
 ## 11. Commissions — `/api/commissions`
@@ -1418,7 +1434,7 @@ See [10 Troubleshooting](10_Troubleshooting_Guide.md) for the full matrix.
 |---|---|---|---|---|
 | Local | Vite dev server (`:5173/5174`) | `mvn spring-boot:run` (`:8080`) | Local Postgres or Docker | Development |
 | Docker | — | `docker-compose` backend (`:8080`) | `docker-compose` Postgres 16 (`:5432`) | Integrated local run |
-| Cloud demo | Vercel | Render (Docker, Singapore) | Supabase Postgres (ap-northeast-1) | Showcase — `gl-r-erp.onrender.com`, DB at V21 with demo accounts |
+| Cloud demo | Vercel | Render (Docker, Singapore) | Supabase Postgres (ap-northeast-1) | Showcase — `gl-r-erp.onrender.com`; schema at head **V29** plus the demo-only **V21** seed accounts (applied only under the `prod` profile) |
 | Production (target) | LAN / domain | Dell T360 | T360 Postgres | On-premise go-live (pending) |
 
 ## 2. Prerequisites
@@ -1502,7 +1518,7 @@ flowchart LR
 - **Rewrites:** `/api/:path* → https://gl-r-erp.onrender.com/api/:path*` (same-origin calls, no CORS/third-party cookies); SPA fallback `/(.*) → /index.html`.
 - **Security headers on every response:** CSP (`default-src 'self'`, no inline scripts), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Strict-Transport-Security` (1 year, includeSubDomains).
 
-> **Demo branch:** the `demo` branch deploys to `gl-r-erp.onrender.com` with the database at V21 (`Demo@2026` accounts, one per role). It is an intentional showcase, not real production data.
+> **Demo environment:** `main` deploys to `gl-r-erp.onrender.com` under the `prod` profile. The `prod` profile adds `db/migration-demo/` (`V21__demo_seed_accounts`, `Demo@2026` accounts, one per role) on top of the head schema (**V29**). It is an intentional showcase, not real production data.
 
 ## 6. Configuration Reference
 
@@ -1520,7 +1536,8 @@ Local secrets belong in `backend/.env.local` (git-ignored); commit only `backend
 
 ## 7. Database Migrations
 
-- Flyway runs automatically when `APP_FLYWAY_ENABLED=true`, applying `V1..V21` in order.
+- Flyway runs automatically when `APP_FLYWAY_ENABLED=true`. The default location `classpath:db/migration` applies **V1–V20 + V22–V29** in order (head **V29**); **V21 is not in this path**.
+- **V21 is demo-only.** `V21__demo_seed_accounts` lives in `classpath:db/migration-demo` and is applied **only under the `prod` profile** (Render demo), which sets `spring.flyway.locations=classpath:db/migration,classpath:db/migration-demo` (see `application-prod.yml`). A clean on-prem/UAT deploy skips V21 by design, so its absence from `flyway_schema_history` is expected — not a failed migration.
 - **Never edit an applied migration** — add a new version (forward-fix). The V13 fresh-DB collision was fixed this way (PR #52).
 - CI runs the full migration chain against a real Postgres on every PR (PR #53) to catch ordering/collision issues before merge.
 
@@ -1597,7 +1614,7 @@ flowchart LR
 | Attendance `.dat` export | Weekly / on demand | Keep per pay cycle |
 | Config/secrets snapshot | On change | Current + previous |
 
-> On **Supabase** (demo), managed automated backups are available on the platform; treat the demo DB as reproducible (it is seeded to V21) rather than a source of record.
+> On **Supabase** (demo), managed automated backups are available on the platform; treat the demo DB as reproducible (head schema **V29** plus the demo-only V21 seed accounts, applied under the `prod` profile) rather than a source of record.
 
 ## 3. Database Backup Procedures
 
@@ -1626,7 +1643,7 @@ Store dated dumps on the NAS (same LAN as the T360 per the network diagram), and
 flowchart TB
     A[Stop backend] --> B[Create empty target DB]
     B --> C[pg_restore dump]
-    C --> D[Verify Flyway schema_history at V21]
+    C --> D[Verify Flyway schema_history at V29]
     D --> E[Smoke test: login, dashboard, payroll list]
     E --> F[Start backend]
 ```
@@ -1646,15 +1663,15 @@ psql --dbname=hris_restore -c \
   "SELECT MAX(version) FROM flyway_schema_history WHERE success;"
 ```
 
-Expected max version: **21**.
+Expected max version: **29** (the demo/`prod` profile also has V21 applied, but 29 is still the max).
 
 ## 5. Schema Recovery via Flyway
 
 If the **data** is intact but the **schema** is in doubt, Flyway is the source of truth:
 
-- On startup with `APP_FLYWAY_ENABLED=true`, Flyway applies any missing migrations up to V21.
+- On startup with `APP_FLYWAY_ENABLED=true`, Flyway applies any missing migrations up to the head (**V29**; the default path is V1–V20, V22–V29 — V21 is demo/prod-only).
 - Migrations are **forward-only** (no down scripts). To recover a bad state, restore from a dump, then let Flyway re-apply.
-- CI proves the full `V1→V21` chain against a clean Postgres on every PR, so a fresh rebuild from migrations is a supported recovery path.
+- CI proves the full `V1–V20, V22–V29` chain against a clean Postgres on every PR, so a fresh rebuild from migrations is a supported recovery path.
 
 ## 6. Session & Application Recovery
 
@@ -1667,7 +1684,7 @@ If the **data** is intact but the **schema** is in doubt, Flyway is the source o
 | Scenario | Action | Target time |
 |---|---|---|
 | Backend down (Render/T360) | Redeploy from `main`/image; sessions and data intact | Minutes |
-| Database corruption | Restore latest nightly dump → verify V21 → smoke test | < 1 hour |
+| Database corruption | Restore latest nightly dump → verify V29 → smoke test | < 1 hour |
 | Full environment loss | Provision Postgres → restore dump (or rebuild schema via Flyway + import) → redeploy backend + frontend | Hours |
 | Attendance data gap | Re-import device `.dat` for the affected window (`import_dat.py`) | Minutes–hours |
 | Lost device token | Re-mint via portal; update agent env | Minutes |
@@ -2116,7 +2133,17 @@ timeline
 | V18 | audit_log | Wave 3 |
 | V19 | spring_session_jdbc | Wave 3 |
 | V20 | attendance_device_agent_token | Wave 3 |
-| V21 | demo_seed_accounts | Demo env |
+| V21 | demo_seed_accounts | Demo env — **not in default path** (`db/migration-demo/`, `prod` profile only) |
+| V22 | ticket_item_factory | Quotation Workflow |
+| V23 | contacts_projects_ticket_fk | Quotation Workflow |
+| V24 | catalog_and_qty_sqm | Quotation Workflow |
+| V25 | factory_config_and_raw_price | Quotation Workflow |
+| V26 | price_calc_engine | Quotation Workflow |
+| V27 | quotation_fields_and_attachments | Quotation Workflow |
+| V28 | revision_versioning | Quotation Workflow |
+| V29 | rename_document_to_deposit_notice | Quotation Workflow |
+
+> **Head is V29.** The default path is V1–V20 then V22–V29; V21 is demo-only and absent from a clean deploy.
 
 ---
 

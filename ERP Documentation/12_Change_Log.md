@@ -143,7 +143,17 @@ timeline
 | V18 | audit_log | Wave 3 |
 | V19 | spring_session_jdbc | Wave 3 |
 | V20 | attendance_device_agent_token | Wave 3 |
-| V21 | demo_seed_accounts | Demo env |
+| V21 | demo_seed_accounts | Demo env — **not in default path** (`db/migration-demo/`, `prod` profile only) |
+| V22 | ticket_item_factory | Quotation Workflow |
+| V23 | contacts_projects_ticket_fk | Quotation Workflow |
+| V24 | catalog_and_qty_sqm | Quotation Workflow |
+| V25 | factory_config_and_raw_price | Quotation Workflow |
+| V26 | price_calc_engine | Quotation Workflow |
+| V27 | quotation_fields_and_attachments | Quotation Workflow |
+| V28 | revision_versioning | Quotation Workflow |
+| V29 | rename_document_to_deposit_notice | Quotation Workflow |
+
+> **Head is V29.** The default path is V1–V20 then V22–V29; V21 is demo-only and absent from a clean deploy.
 
 ---
 

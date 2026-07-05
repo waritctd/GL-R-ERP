@@ -172,7 +172,7 @@ See the full state machine in [03_Feature_Documentation §5](03_Feature_Document
 
 ### 5.3 Documents (quotation / deposit notice)
 
-From a ticket: **Create document draft** → pick a note template → edit line items and notes → **Preview** → **Issue**. Issued documents get a running document number and a downloadable file. Corrections after issue go through a **revision** (the ticket's revision number increments; the old document stays on file).
+From a ticket: **Create deposit-notice draft** → pick a note template → edit line items and notes → **Preview** → **Issue**. Issued deposit notices get a running document number and a downloadable **XLSX** file. Corrections after issue go through a **revision** (the ticket's revision number increments; the old deposit notice stays on file).
 
 ### 5.4 Commissions
 
