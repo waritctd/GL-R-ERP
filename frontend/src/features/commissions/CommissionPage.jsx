@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { Skeleton, SkeletonCard } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate } from '../../utils/format.js';
@@ -50,6 +52,7 @@ export function CommissionPage({ user, showToast }) {
   const [deductionDraft, setDeductionDraft] = useState({ transportFee: 0, cutFee: 0, shortfall: 0 });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [clawbackId, setClawbackId] = useState(null); // record id pending clawback reason, or null
 
   const canSubmit = ROLE_PERMISSIONS.canSubmitCommissions.includes(user.role);
   const canApprove = ROLE_PERMISSIONS.canApproveCommissions.includes(user.role);
@@ -166,18 +169,21 @@ export function CommissionPage({ user, showToast }) {
     }
   }
 
-  async function clawback(id) {
-    const reason = window.prompt('เหตุผลการยกเลิก/คืนเงิน');
-    if (!reason?.trim()) return;
+  function clawback(id) {
+    setClawbackId(id);
+  }
+
+  async function confirmClawback(reason) {
     setSaving(true);
     try {
-      await api.commissions.clawback(id, { reason: reason.trim() });
+      await api.commissions.clawback(clawbackId, { reason });
       showToast('success', 'บันทึกรายการหักคืนแล้ว');
       await load();
     } catch (error) {
       showToast('error', error.message || 'บันทึกหักคืนไม่สำเร็จ');
     } finally {
       setSaving(false);
+      setClawbackId(null);
     }
   }
 
@@ -282,7 +288,18 @@ export function CommissionPage({ user, showToast }) {
               <span />
             </div>
             {loading ? (
-              <div className="table-row" style={{ justifyContent: 'center', color: '#94a3b8' }}>กำลังโหลด...</div>
+              <div aria-busy="true" aria-label="กำลังโหลดรายการค่าคอมมิชชัน">
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className="commission-table table-row">
+                    <span><Skeleton width="70%" height={13} /></span>
+                    <span><Skeleton width="50%" height={13} /></span>
+                    <span><Skeleton width="60%" height={13} /></span>
+                    <span><Skeleton width="60%" height={13} /></span>
+                    <span><Skeleton width={70} height={18} radius="var(--radius-pill)" /></span>
+                    <span />
+                  </div>
+                ))}
+              </div>
             ) : records.length === 0 ? (
               <EmptyState icon="badge" title="ยังไม่มีรายการค่าคอม" description="เลือกรอบเดือนอื่นหรือบันทึกใบเสร็จใหม่" />
             ) : records.map((record) => {
@@ -350,6 +367,18 @@ export function CommissionPage({ user, showToast }) {
           </section>
         </>
       )}
+
+      <ConfirmDialog
+        open={clawbackId != null}
+        tone="danger"
+        title="บันทึกหักคืน"
+        message="ยืนยันการยกเลิก/คืนเงินค่าคอมมิชชันรายการนี้?"
+        requireReason
+        reasonLabel="เหตุผลการยกเลิก/คืนเงิน"
+        busy={saving}
+        onCancel={() => setClawbackId(null)}
+        onConfirm={confirmClawback}
+      />
     </div>
   );
 }
@@ -365,7 +394,13 @@ function MiniMetric({ label, value }) {
 
 function PayrollSummary({ summary, loading }) {
   if (loading) {
-    return <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>กำลังโหลด...</div>;
+    return (
+      <div className="stat-grid" aria-busy="true" aria-label="กำลังโหลดสรุปค่าคอมมิชชัน Payroll">
+        <SkeletonCard lines={2} />
+        <SkeletonCard lines={2} />
+        <SkeletonCard lines={2} />
+      </div>
+    );
   }
   if (!summary) {
     return <EmptyState icon="badge" title="ยังไม่มีข้อมูลค่าคอม" description="เลือกรอบเดือนอื่นเพื่อตรวจสอบ" />;
