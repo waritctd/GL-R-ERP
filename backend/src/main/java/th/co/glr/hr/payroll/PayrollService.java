@@ -23,7 +23,8 @@ import th.co.glr.hr.common.ApiException;
 
 @Service
 public class PayrollService {
-    private static final Set<String> PAYROLL_ROLES = Set.of("hr", "admin");
+    private static final Set<String> PAYROLL_VIEW_ROLES = Set.of("hr", "ceo");
+    private static final Set<String> PAYROLL_EDIT_ROLES = Set.of("hr");
     private static final Logger AUDIT = LoggerFactory.getLogger("th.co.glr.hr.audit");
 
     private final PayrollRepository payrollRepository;
@@ -44,7 +45,7 @@ public class PayrollService {
     }
 
     public PayrollPeriodDto currentOrPreview(LocalDate payrollMonth, UserPrincipal actor) {
-        requirePayrollRole(actor);
+        requireRole(actor, PAYROLL_VIEW_ROLES);
         LocalDate month = normalizeMonth(payrollMonth);
         return payrollRepository.findPeriodByMonth(month)
             .map(period -> {
@@ -56,13 +57,13 @@ public class PayrollService {
     }
 
     public PayrollPeriodDto preview(ProcessPayrollRequest request, UserPrincipal actor) {
-        requirePayrollRole(actor);
+        requireRole(actor, PAYROLL_VIEW_ROLES);
         return preview(normalizeMonth(request.payrollMonth()), safeInputs(request.inputs()), actor);
     }
 
     @Transactional
     public PayrollPeriodDto process(ProcessPayrollRequest request, UserPrincipal actor) {
-        requirePayrollRole(actor);
+        requireRole(actor, PAYROLL_EDIT_ROLES);
         LocalDate month = normalizeMonth(request.payrollMonth());
         PayrollPeriodDto preview = preview(month, safeInputs(request.inputs()), actor);
         long periodId = payrollRepository.saveProcessedPeriod(month, actor.employeeId(), preview.lines());
@@ -74,7 +75,7 @@ public class PayrollService {
     }
 
     public String bankExport(long periodId, UserPrincipal actor) {
-        requirePayrollRole(actor);
+        requireRole(actor, PAYROLL_VIEW_ROLES);
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
         StringBuilder builder = new StringBuilder();
@@ -233,8 +234,8 @@ public class PayrollService {
         return payrollMonth.withDayOfMonth(1);
     }
 
-    private void requirePayrollRole(UserPrincipal actor) {
-        if (actor == null || !PAYROLL_ROLES.contains(actor.role())) {
+    private void requireRole(UserPrincipal actor, Set<String> allowed) {
+        if (actor == null || !allowed.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
     }

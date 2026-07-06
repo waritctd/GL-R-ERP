@@ -35,28 +35,28 @@ public class PayrollController {
     }
 
     @GetMapping
-    @PreAuthorize("hasAnyRole('HR','ADMIN')")
+    @PreAuthorize("hasAnyRole('HR','CEO')")
     public PayrollPeriodResponse currentOrPreview(@RequestParam String payrollMonth, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new PayrollPeriodResponse(payrollService.currentOrPreview(parseMonth(payrollMonth), user));
     }
 
     @PostMapping("/preview")
-    @PreAuthorize("hasAnyRole('HR','ADMIN')")
+    @PreAuthorize("hasAnyRole('HR','CEO')")
     public PayrollPeriodResponse preview(@Valid @RequestBody ProcessPayrollRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new PayrollPeriodResponse(payrollService.preview(normalizedRequest(request), user));
     }
 
     @PostMapping("/process")
-    @PreAuthorize("hasAnyRole('HR','ADMIN')")
+    @PreAuthorize("hasAnyRole('HR')")
     public PayrollPeriodResponse process(@Valid @RequestBody ProcessPayrollRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new PayrollPeriodResponse(payrollService.process(normalizedRequest(request), user));
     }
 
     @GetMapping("/{periodId}/bank-export")
-    @PreAuthorize("hasAnyRole('HR','ADMIN')")
+    @PreAuthorize("hasAnyRole('HR','CEO')")
     public ResponseEntity<String> bankExport(@PathVariable long periodId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         String body = payrollService.bankExport(periodId, user);

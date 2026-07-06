@@ -1,6 +1,7 @@
 package th.co.glr.hr.payroll;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -13,9 +14,11 @@ import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.commission.CommissionCalculator;
 import th.co.glr.hr.commission.CommissionRepository;
+import th.co.glr.hr.common.ApiException;
 
 class PayrollServiceTest {
     private final PayrollRepository payrollRepository = mock(PayrollRepository.class);
@@ -49,6 +52,40 @@ class PayrollServiceTest {
         }
     }
 
+    @Test
+    void ceoCanViewCurrentOrPreview() {
+        when(payrollRepository.findPeriodByMonth(LocalDate.of(2026, 6, 1))).thenReturn(Optional.of(period()));
+
+        PayrollPeriodDto result = service.currentOrPreview(LocalDate.of(2026, 6, 1), ceoUser());
+
+        assertThat(result.id()).isEqualTo(99L);
+    }
+
+    @Test
+    void ceoCanBankExport() {
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
+
+        String body = service.bankExport(99L, ceoUser());
+
+        assertThat(body).contains("GLR_PAYROLL|2026-06-01|1|30000.00");
+    }
+
+    @Test
+    void ceoCannotProcessPayroll() {
+        ProcessPayrollRequest request = new ProcessPayrollRequest(LocalDate.of(2026, 6, 1), List.of());
+
+        assertThatThrownBy(() -> service.process(request, ceoUser()))
+            .isInstanceOfSatisfying(ApiException.class, exception ->
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    @Test
+    void roleWithNoPayrollAccessIsForbiddenOnCurrentOrPreview() {
+        assertThatThrownBy(() -> service.currentOrPreview(LocalDate.of(2026, 6, 1), salesUser()))
+            .isInstanceOfSatisfying(ApiException.class, exception ->
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
     private ListAppender<ILoggingEvent> attachAuditAppender() {
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
         appender.start();
@@ -62,6 +99,14 @@ class PayrollServiceTest {
 
     private UserPrincipal hrUser() {
         return new UserPrincipal(7L, "hr@glr.co.th", "HR", "hr", 42L, true, LocalDate.now(), false, null, false);
+    }
+
+    private UserPrincipal ceoUser() {
+        return new UserPrincipal(20L, "ceo@glr.co.th", "CEO", "ceo", 20L, true, LocalDate.now(), false, null, false);
+    }
+
+    private UserPrincipal salesUser() {
+        return new UserPrincipal(30L, "sales@glr.co.th", "Sales", "sales", 30L, true, LocalDate.now(), false, null, false);
     }
 
     private PayrollPeriodDto period() {

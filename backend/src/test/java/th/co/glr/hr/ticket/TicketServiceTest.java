@@ -39,7 +39,6 @@ class TicketServiceTest {
     private final UserPrincipal otherSales  = actor(2L, "sales");
     private final UserPrincipal importActor = actor(3L, "import");
     private final UserPrincipal ceoActor    = actor(4L, "ceo");
-    private final UserPrincipal adminActor  = actor(5L, "admin");
 
     // ── list ──────────────────────────────────────────────────────────────
 
@@ -87,14 +86,6 @@ class TicketServiceTest {
             eq(TicketEventKind.SUBMITTED), eq(TicketStatus.DRAFT), eq(TicketStatus.SUBMITTED), isNull());
         verify(notifRepo).notifyByRole(eq("import"), eq(10L), anyString(), anyString());
         verify(notifRepo).notifyByRole(eq("ceo"),    eq(10L), anyString(), anyString());
-    }
-
-    @Test
-    void submit_adminCanSubmitAnyTicket() {
-        stubTicket(10L, 99L, TicketStatus.DRAFT);
-        service.submit(10L, adminActor);
-        verify(ticketRepo).addEvent(eq(10L), eq(5L), anyString(),
-            eq(TicketEventKind.SUBMITTED), eq(TicketStatus.DRAFT), eq(TicketStatus.SUBMITTED), isNull());
     }
 
     @Test
@@ -250,16 +241,6 @@ class TicketServiceTest {
     }
 
     @Test
-    void generateQuotation_adminCanGenerateForAnyTicket() {
-        stubTicketWithItems(10L, 99L, TicketStatus.APPROVED, List.of());
-        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0002");
-
-        service.generateQuotation(10L, adminActor);
-
-        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0002"), eq(5L), any(BigDecimal.class));
-    }
-
-    @Test
     void generateQuotation_rejectsNonOwnerSales() {
         stubTicket(10L, 1L, TicketStatus.APPROVED);
         assertForbidden(() -> service.generateQuotation(10L, otherSales));
@@ -297,14 +278,6 @@ class TicketServiceTest {
         service.close(10L, salesActor);
 
         verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.CLOSED), eq(TicketStatus.DOCUMENT_ISSUED), eq(TicketStatus.CLOSED), isNull());
-    }
-
-    @Test
-    void close_adminCanCloseAnyTicket() {
-        stubTicket(10L, 99L, TicketStatus.DOCUMENT_ISSUED);
-        service.close(10L, adminActor);
-        verify(ticketRepo).addEvent(eq(10L), eq(5L), anyString(),
             eq(TicketEventKind.CLOSED), eq(TicketStatus.DOCUMENT_ISSUED), eq(TicketStatus.CLOSED), isNull());
     }
 
@@ -364,14 +337,6 @@ class TicketServiceTest {
         assertForbidden(() -> service.cancel(10L, otherSales));
     }
 
-    @Test
-    void cancel_adminCanCancelAnyTicket() {
-        stubTicket(10L, 99L, TicketStatus.IN_REVIEW);
-        service.cancel(10L, adminActor);
-        verify(ticketRepo).addEvent(eq(10L), eq(5L), anyString(),
-            eq(TicketEventKind.CANCELLED), eq(TicketStatus.IN_REVIEW), eq(TicketStatus.CANCELLED), isNull());
-    }
-
     // ── calculatePrices ──────────────────────────────────────────────────
 
     @Test
@@ -383,14 +348,6 @@ class TicketServiceTest {
 
         assertThat(result).isEqualTo(calculated);
         verify(priceCalcService).calculateForTicket(10L);
-    }
-
-    @Test
-    void calculatePrices_adminCanCalculate() {
-        TicketDto calculated = stubTicket(10L, 1L, TicketStatus.PRICE_PROPOSED);
-        when(priceCalcService.calculateForTicket(10L)).thenReturn(calculated);
-
-        assertThat(service.calculatePrices(10L, adminActor)).isEqualTo(calculated);
     }
 
     @Test

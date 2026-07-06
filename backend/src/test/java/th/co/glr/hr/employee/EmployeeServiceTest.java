@@ -158,12 +158,12 @@ class EmployeeServiceTest {
     }
 
     @Test
-    void adminCanFetchFullEmployeeDetail() {
+    void hrCanFetchFullEmployeeDetail() {
         when(employees.findEmployeeById(5L, true)).thenReturn(Optional.of(employee(5L)));
         when(profileRequests.pendingCountByEmployee(5L)).thenReturn(0);
 
         EmployeeDto result = service.get(5L,
-            new UserPrincipal(9L, "admin@glr.co.th", "Admin", "admin", 9L, true, LocalDate.now(), false, null, false));
+            new UserPrincipal(9L, "hr2@glr.co.th", "HR2", "hr", 9L, true, LocalDate.now(), false, null, false));
 
         assertThat(result.salary()).isEqualByComparingTo("25000.00");
         assertThat(result.salaryHistory()).hasSize(1);

@@ -18,9 +18,9 @@ import th.co.glr.hr.pricing.PriceCalcService;
 
 @Service
 public class TicketService {
-    private static final Set<String> SALES_ROLES  = Set.of("sales", "admin");
-    private static final Set<String> IMPORT_ROLES = Set.of("import", "admin");
-    private static final Set<String> CEO_ROLES    = Set.of("ceo", "admin");
+    private static final Set<String> SALES_ROLES  = Set.of("sales");
+    private static final Set<String> IMPORT_ROLES = Set.of("import");
+    private static final Set<String> CEO_ROLES    = Set.of("ceo");
     private static final Set<String> QUOTATION_ALLOWED_STATUSES =
         Set.of(TicketStatus.APPROVED, TicketStatus.QUOTATION_ISSUED);
 
@@ -81,7 +81,7 @@ public class TicketService {
     public TicketDto submit(long ticketId, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.DRAFT);
-        if (s.createdById() != actor.id() && !isAdmin(actor)) {
+        if (s.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Only the ticket owner can submit");
         }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -163,7 +163,7 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "Expected status 'approved' or 'quotation_issued' but ticket is '" + fromStatus + "'");
         }
-        if (s.createdById() != actor.id() && !isAdmin(actor)) {
+        if (s.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Only the ticket owner can generate a quotation");
         }
         TicketDto full = requireTicket(ticketId);
@@ -212,7 +212,7 @@ public class TicketService {
     @Transactional
     public TicketDto close(long ticketId, UserPrincipal actor) {
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.DOCUMENT_ISSUED);
-        if (s.createdById() != actor.id() && !isAdmin(actor)) {
+        if (s.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -227,7 +227,7 @@ public class TicketService {
         if (TicketStatus.CLOSED.equals(currentStatus) || TicketStatus.CANCELLED.equals(currentStatus)) {
             throw new ApiException(HttpStatus.CONFLICT, "Cannot cancel a closed or already cancelled ticket");
         }
-        if (ticket.summary().createdById() != actor.id() && !isAdmin(actor)) {
+        if (ticket.summary().createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -298,9 +298,5 @@ public class TicketService {
         if (!allowed.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
-    }
-
-    private boolean isAdmin(UserPrincipal actor) {
-        return "admin".equals(actor.role());
     }
 }

@@ -6,7 +6,7 @@ import java.util.Set;
 
 public final class ApplicationRoles {
     private static final List<String> PRIORITY = List.of(
-        "admin", "ceo", "sales_manager", "hr", "sales", "import", "employee"
+        "ceo", "sales_manager", "hr", "sales", "import", "employee"
     );
     private static final Set<String> ALLOWED = Set.copyOf(PRIORITY);
 
