@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/index.js';
 import { hasPermission } from '../../app/permissions.js';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
+import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
@@ -95,6 +97,9 @@ export function LeavePage({ user, currentEmployee, showToast }) {
   const [balances, setBalances] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [confirmState, setConfirmState] = useState(null);
+
+  const startDateInPast = Boolean(form.startDate && form.startDate < todayIso());
 
   const canReviewAll = hasPermission(user.role, 'canReviewLeave');
   const submitEmployeeOptions = useMemo(
@@ -203,6 +208,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
 
   async function submitLeave(event) {
     event.preventDefault();
+    if (startDateInPast) return;
     setSaving(true);
     try {
       const response = await api.leave.create({
@@ -243,13 +249,17 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     }
   }
 
-  async function reject(id) {
-    const reviewerNote = window.prompt('เหตุผลการปฏิเสธ');
+  function reject(id) {
+    setConfirmState({ kind: 'reject', id });
+  }
+
+  async function confirmReject(reviewerNote) {
     if (!reviewerNote?.trim()) return;
     setSaving(true);
     try {
-      await api.leave.reject(id, { reviewerNote: reviewerNote.trim() });
+      await api.leave.reject(confirmState.id, { reviewerNote: reviewerNote.trim() });
       showToast('success', 'ปฏิเสธคำขอลาแล้ว');
+      setConfirmState(null);
       await Promise.all([loadRequests(filters), loadBalances(form.employeeId)]);
     } catch (error) {
       showToast('error', error.message || 'ปฏิเสธวันลาไม่สำเร็จ');
@@ -258,14 +268,21 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     }
   }
 
-  async function cancel(id) {
+  function cancel(id) {
     const request = requests.find((item) => item.id === id);
-    const reviewerNote = request && canManagerCancel(request) ? window.prompt('หมายเหตุการยกเลิก (ถ้ามี)') : '';
-    if (reviewerNote === null) return;
+    if (request && canManagerCancel(request)) {
+      setConfirmState({ kind: 'cancel', id });
+      return;
+    }
+    doCancel(id, '');
+  }
+
+  async function doCancel(id, reviewerNote) {
     setSaving(true);
     try {
       await api.leave.cancel(id, { reviewerNote: reviewerNote?.trim() || null });
       showToast('success', 'ยกเลิกคำขอลาแล้ว');
+      setConfirmState(null);
       await Promise.all([loadRequests(filters), loadBalances(form.employeeId)]);
     } catch (error) {
       showToast('error', error.message || 'ยกเลิกวันลาไม่สำเร็จ');
@@ -389,10 +406,22 @@ export function LeavePage({ user, currentEmployee, showToast }) {
               ))}
             </select>
           </label>
-          <label>
-            วันที่เริ่ม
-            <input type="date" value={form.startDate} onChange={(event) => updateForm('startDate', event.target.value)} required />
-          </label>
+          <FormField
+            label="วันที่เริ่ม"
+            htmlFor="leave-start-date"
+            error={startDateInPast ? 'วันที่เริ่มลาต้องไม่ก่อนวันนี้' : undefined}
+          >
+            <input
+              id="leave-start-date"
+              type="date"
+              value={form.startDate}
+              onChange={(event) => updateForm('startDate', event.target.value)}
+              className={startDateInPast ? 'is-invalid' : ''}
+              aria-invalid={startDateInPast}
+              aria-describedby={startDateInPast ? fieldErrorId('leave-start-date') : undefined}
+              required
+            />
+          </FormField>
           <label>
             วันที่สิ้นสุด
             <input type="date" value={form.endDate} onChange={(event) => updateForm('endDate', event.target.value)} min={form.startDate} required />
@@ -410,7 +439,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
             <textarea rows={3} value={form.reason} onChange={(event) => updateForm('reason', event.target.value)} required />
           </label>
           <div className="span-2 row-actions">
-            <button type="submit" className="primary-button" disabled={saving}>
+            <button type="submit" className="primary-button" disabled={saving || startDateInPast}>
               <Icon name="plus" />
               ส่งคำขอ
             </button>
@@ -498,6 +527,32 @@ export function LeavePage({ user, currentEmployee, showToast }) {
           );
         })}
       </section>
+
+      <ConfirmDialog
+        open={confirmState?.kind === 'reject'}
+        title="ปฏิเสธคำขอลา"
+        message="ยืนยันการปฏิเสธคำขอลานี้?"
+        confirmLabel="ปฏิเสธคำขอ"
+        tone="danger"
+        busy={saving}
+        requireReason
+        reasonLabel="เหตุผลการปฏิเสธ"
+        onConfirm={confirmReject}
+        onCancel={() => setConfirmState(null)}
+      />
+      <ConfirmDialog
+        open={confirmState?.kind === 'cancel'}
+        title="ยกเลิกคำขอลา"
+        message="ยืนยันการยกเลิกคำขอลานี้?"
+        confirmLabel="ยกเลิกคำขอ"
+        tone="danger"
+        busy={saving}
+        requireReason
+        optionalReason
+        reasonLabel="หมายเหตุการยกเลิก (ถ้ามี)"
+        onConfirm={(reason) => doCancel(confirmState.id, reason)}
+        onCancel={() => setConfirmState(null)}
+      />
     </div>
   );
 }

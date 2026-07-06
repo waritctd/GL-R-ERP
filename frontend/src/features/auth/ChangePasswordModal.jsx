@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
@@ -16,6 +17,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
+  const [newPasswordError, setNewPasswordError] = useState('');
 
   useEffect(() => {
     previouslyFocused.current = document.activeElement;
@@ -59,8 +61,9 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
   async function submit(event) {
     event.preventDefault();
     setError('');
+    setNewPasswordError('');
     if (newPassword.length < 8) {
-      setError('รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร');
+      setNewPasswordError('รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร');
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -113,17 +116,25 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
                 required
               />
             </label>
-            <label>
-              รหัสผ่านใหม่
+            <FormField
+              label="รหัสผ่านใหม่"
+              htmlFor="change-password-new"
+              error={newPasswordError}
+              hint={!newPasswordError ? 'อย่างน้อย 8 ตัวอักษร' : undefined}
+            >
               <input
+                id="change-password-new"
                 type="password"
                 value={newPassword}
                 onChange={(event) => setNewPassword(event.target.value)}
                 autoComplete="new-password"
                 minLength={8}
+                className={newPasswordError ? 'is-invalid' : ''}
+                aria-invalid={Boolean(newPasswordError)}
+                aria-describedby={newPasswordError ? fieldErrorId('change-password-new') : undefined}
                 required
               />
-            </label>
+            </FormField>
             <label>
               ยืนยันรหัสผ่านใหม่
               <input

@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/index.js';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney } from '../../utils/format.js';
@@ -99,6 +101,7 @@ export function PayrollPage({ showToast }) {
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [confirmProcess, setConfirmProcess] = useState(false);
 
   const selectedLine = useMemo(
     () => (period?.lines || []).find((line) => Number(line.employeeId) === Number(selectedEmployeeId)) || period?.lines?.[0] || null,
@@ -157,13 +160,17 @@ export function PayrollPage({ showToast }) {
     }
   }
 
-  async function process() {
-    if (!window.confirm(`ยืนยันประมวลผลเงินเดือนรอบ ${month}?`)) return;
+  function process() {
+    setConfirmProcess(true);
+  }
+
+  async function confirmProcessPayroll() {
     setSaving(true);
     try {
       const response = await api.payroll.process(payload());
       applyPeriod(response.period);
       showToast('success', 'ประมวลผลเงินเดือนเรียบร้อย');
+      setConfirmProcess(false);
     } catch (error) {
       showToast('error', error.message || 'ประมวลผลเงินเดือนไม่สำเร็จ');
     } finally {
@@ -259,7 +266,21 @@ export function PayrollPage({ showToast }) {
             <span>สุทธิ</span>
           </div>
           {loading ? (
-            <div className="table-row" style={{ justifyContent: 'center', color: '#94a3b8' }}>กำลังโหลด...</div>
+            <div aria-busy="true" aria-label="กำลังโหลดข้อมูลเงินเดือน">
+              {Array.from({ length: 5 }, (_, index) => (
+                <div className="payroll-table table-row" key={index}>
+                  <span>
+                    <Skeleton width="70%" height={14} />
+                    <Skeleton width="50%" height={12} />
+                  </span>
+                  <Skeleton width="60%" height={14} />
+                  <Skeleton width="60%" height={14} />
+                  <Skeleton width="60%" height={14} />
+                  <Skeleton width="60%" height={14} />
+                  <Skeleton width="60%" height={14} />
+                </div>
+              ))}
+            </div>
           ) : !period?.lines?.length ? (
             <EmptyState icon="badgeDollar" title="ยังไม่มีข้อมูลเงินเดือน" description="เลือกรอบเดือนหรือกดรีเฟรชเพื่อคำนวณตัวอย่าง" />
           ) : period.lines.map((line) => (
@@ -357,6 +378,26 @@ export function PayrollPage({ showToast }) {
           )}
         </aside>
       </section>
+
+      <ConfirmDialog
+        open={confirmProcess}
+        title="ประมวลผลเงินเดือน"
+        message={(
+          <div>
+            <p className="confirm-dialog-message">
+              ยืนยันประมวลผลเงินเดือนรอบ {month}? การดำเนินการนี้ไม่สามารถย้อนกลับได้
+            </p>
+            <p className="confirm-dialog-message">
+              รายได้รวม {formatMoney(period?.totalGross)} · เงินหักรวม {formatMoney(period?.totalDeductions)} · ยอดโอนสุทธิ {formatMoney(period?.totalNet)}
+            </p>
+          </div>
+        )}
+        confirmLabel="ยืนยันประมวลผล"
+        tone="danger"
+        busy={saving}
+        onConfirm={confirmProcessPayroll}
+        onCancel={() => setConfirmProcess(false)}
+      />
     </div>
   );
 }
@@ -371,6 +412,15 @@ function MiniMetric({ label, value }) {
 }
 
 function MoneyInput({ id, value, onChange }) {
+  function handleChange(event) {
+    const { value: nextValue } = event.target;
+    if (nextValue !== '' && Number(nextValue) < 0) {
+      onChange('0');
+      return;
+    }
+    onChange(nextValue);
+  }
+
   return (
     <span className="currency-input">
       <span className="currency-input-symbol" aria-hidden="true">฿</span>
@@ -382,7 +432,7 @@ function MoneyInput({ id, value, onChange }) {
         step="0.01"
         placeholder="0.00"
         value={value ?? ''}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={handleChange}
       />
     </span>
   );
