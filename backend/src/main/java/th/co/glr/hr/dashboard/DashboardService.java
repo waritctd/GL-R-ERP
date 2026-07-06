@@ -12,10 +12,10 @@ import th.co.glr.hr.auth.UserPrincipal;
 @Service
 public class DashboardService {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
-    private static final Set<String> COMPANY_VIEW_ROLES = Set.of("hr", "ceo", "admin");
-    private static final Set<String> HR_APPROVAL_ROLES = Set.of("hr", "admin");
-    private static final Set<String> COMMISSION_APPROVER_ROLES = Set.of("sales_manager", "ceo", "admin");
-    private static final Set<String> TICKET_VIEW_ALL_ROLES = Set.of("import", "ceo", "admin");
+    private static final Set<String> COMPANY_VIEW_ROLES = Set.of("hr", "ceo");
+    private static final Set<String> HR_APPROVAL_ROLES = Set.of("hr");
+    private static final Set<String> COMMISSION_APPROVER_ROLES = Set.of("sales_manager", "ceo");
+    private static final Set<String> TICKET_VIEW_ALL_ROLES = Set.of("import", "ceo");
     private static final Set<String> TICKET_OWN_ROLES = Set.of("sales");
 
     private final DashboardRepository dashboardRepository;
@@ -94,13 +94,13 @@ public class DashboardService {
     }
 
     private DashboardPendingVisibility pendingVisibility(UserPrincipal user) {
-        boolean hrOrAdmin = HR_APPROVAL_ROLES.contains(user.role());
+        boolean isHr = HR_APPROVAL_ROLES.contains(user.role());
         boolean employeeSelf = user.employeeId() != null && !canViewCompany(user) && !isDivisionManager(user);
         boolean manager = isDivisionManager(user);
         return new DashboardPendingVisibility(
-            hrOrAdmin || employeeSelf,
-            hrOrAdmin || manager || employeeSelf,
-            hrOrAdmin || manager || employeeSelf,
+            isHr || employeeSelf,
+            isHr || manager || employeeSelf,
+            isHr || manager || employeeSelf,
             COMMISSION_APPROVER_ROLES.contains(user.role()) || "sales".equals(user.role()),
             canViewTickets(user)
         );
