@@ -41,7 +41,7 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
 @RestController
 @RequestMapping("/api")
 public class AttachmentController {
-    private static final Set<String> MANAGER_ROLES = Set.of("hr", "sales_manager", "ceo", "admin");
+    private static final Set<String> MANAGER_ROLES = Set.of("hr", "sales_manager", "ceo");
 
     private final AttachmentRepository attachments;
     private final SessionContext sessions;

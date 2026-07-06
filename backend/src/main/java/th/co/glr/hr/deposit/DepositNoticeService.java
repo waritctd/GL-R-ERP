@@ -18,9 +18,9 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
 @Service
 public class DepositNoticeService {
     private static final String PREPARER = "จินตนา หาญมนตรี";
-    private static final java.util.Set<String> SALES_ROLES  = java.util.Set.of("sales","admin");
-    private static final java.util.Set<String> CEO_ROLES    = java.util.Set.of("ceo","admin");
-    private static final java.util.Set<String> IMPORT_ROLES = java.util.Set.of("import","admin");
+    private static final java.util.Set<String> SALES_ROLES  = java.util.Set.of("sales");
+    private static final java.util.Set<String> CEO_ROLES    = java.util.Set.of("ceo");
+    private static final java.util.Set<String> IMPORT_ROLES = java.util.Set.of("import");
 
     private final DepositNoticeRepository docs;
     private final TicketRepository   tickets;
@@ -77,7 +77,7 @@ public class DepositNoticeService {
     @Transactional
     public DepositNoticeDto update(long docId, DepositNoticeDraftRequest req, UserPrincipal actor) {
         DepositNoticeDto doc = requireDraft(docId);
-        requireTicketOwnerOrAdmin(doc.ticketId(), actor);
+        requireTicketOwner(doc.ticketId(), actor);
         docs.update(docId, req);
         return docs.findById(docId).orElseThrow();
     }
@@ -97,7 +97,7 @@ public class DepositNoticeService {
     public DepositNoticeDto issue(long docId, UserPrincipal actor) {
         DepositNoticeDto doc = requireDraft(docId);
         requireRole(actor, SALES_ROLES);
-        requireTicketOwnerOrAdmin(doc.ticketId(), actor);
+        requireTicketOwner(doc.ticketId(), actor);
 
         TicketSummaryDto s = requireApprovedTicket(doc.ticketId(), actor);
 
@@ -155,7 +155,7 @@ public class DepositNoticeService {
         if (!TicketStatus.APPROVED.equals(st) && !TicketStatus.DOCUMENT_ISSUED.equals(st)) {
             throw new ApiException(HttpStatus.CONFLICT, "Revision only allowed from approved or document_issued");
         }
-        if (s.createdById() != actor.id() && !"admin".equals(actor.role())) {
+        if (s.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Only ticket owner can request revision");
         }
 
@@ -202,10 +202,10 @@ public class DepositNoticeService {
         return doc;
     }
 
-    private void requireTicketOwnerOrAdmin(long ticketId, UserPrincipal actor) {
+    private void requireTicketOwner(long ticketId, UserPrincipal actor) {
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
-        if (t.summary().createdById() != actor.id() && !"admin".equals(actor.role())) {
+        if (t.summary().createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
     }

@@ -19,7 +19,7 @@ import th.co.glr.hr.common.ApiException;
 @RestController
 @RequestMapping("/api/fx-rates")
 public class FxRateController {
-    private static final Set<String> CEO_ROLES = Set.of("ceo", "admin");
+    private static final Set<String> CEO_ROLES = Set.of("ceo");
 
     private final FxRateRepository fxRates;
     private final SessionContext sessions;
@@ -53,7 +53,7 @@ public class FxRateController {
 
     private void requireCeoRole(UserPrincipal user) {
         if (!CEO_ROLES.contains(user.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะ CEO/Admin เท่านั้น");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะ CEO เท่านั้น");
         }
     }
 }

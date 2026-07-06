@@ -19,9 +19,9 @@ import th.co.glr.hr.common.ApiException;
 @Service
 public class CommissionService {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
-    private static final Set<String> SALES_ROLES = Set.of("sales", "admin");
-    private static final Set<String> APPROVER_ROLES = Set.of("sales_manager", "ceo", "admin");
-    private static final Set<String> PAYROLL_ROLES = Set.of("hr", "admin");
+    private static final Set<String> SALES_ROLES = Set.of("sales");
+    private static final Set<String> APPROVER_ROLES = Set.of("sales_manager", "ceo");
+    private static final Set<String> PAYROLL_ROLES = Set.of("hr");
 
     private final CommissionRepository commissions;
     private final CommissionCalculator calculator;

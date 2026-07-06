@@ -15,8 +15,7 @@ import th.co.glr.hr.common.ApiException;
 @Service
 public class OvertimeService {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
-    private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo", "admin");
-    private static final Set<String> ADMIN_OVERRIDE_ROLES = Set.of("admin");
+    private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo");
     private static final int ATTENDANCE_LOOKAROUND_HOURS = 16;
 
     private final OvertimeRepository overtimeRepository;
@@ -112,7 +111,7 @@ public class OvertimeService {
     public OvertimeRequestDto cancel(long id, ReviewOvertimeRequest request, UserPrincipal user) {
         OvertimeRequestDto existing = requireRequest(id);
         Long actorEmployeeId = requireEmployeeId(user);
-        boolean manager = managesEmployee(existing.employeeId(), user) || canAdminOverride(user);
+        boolean manager = managesEmployee(existing.employeeId(), user);
         if (!manager && existing.employeeId() != actorEmployeeId) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
@@ -171,7 +170,7 @@ public class OvertimeService {
     private long resolveTargetEmployee(Long requestedEmployeeId, UserPrincipal user) {
         Long actorEmployeeId = requireEmployeeId(user);
         long targetEmployeeId = requestedEmployeeId == null ? actorEmployeeId : requestedEmployeeId;
-        if (targetEmployeeId != actorEmployeeId && !managesEmployee(targetEmployeeId, user) && !canAdminOverride(user)) {
+        if (targetEmployeeId != actorEmployeeId && !managesEmployee(targetEmployeeId, user)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Employees can only request their own overtime");
         }
         return targetEmployeeId;
@@ -203,16 +202,16 @@ public class OvertimeService {
         if (!request.workDate().isBefore(today)) {
             return;
         }
-        if (employeeId == actorEmployeeId && !canAdminOverride(user)) {
+        if (employeeId == actorEmployeeId) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Retroactive overtime must be submitted by the employee's manager");
         }
-        if (!managesEmployee(employeeId, user) && !canAdminOverride(user)) {
+        if (!managesEmployee(employeeId, user)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Only the employee's manager can submit retroactive overtime");
         }
     }
 
     private void requireManager(long employeeId, UserPrincipal user) {
-        if (!managesEmployee(employeeId, user) && !canAdminOverride(user)) {
+        if (!managesEmployee(employeeId, user)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Only the employee's manager can review overtime");
         }
     }
@@ -255,10 +254,6 @@ public class OvertimeService {
 
     private boolean canViewAll(UserPrincipal user) {
         return user != null && VIEW_ALL_ROLES.contains(user.role());
-    }
-
-    private boolean canAdminOverride(UserPrincipal user) {
-        return user != null && ADMIN_OVERRIDE_ROLES.contains(user.role());
     }
 
     private Long requireEmployeeId(UserPrincipal user) {

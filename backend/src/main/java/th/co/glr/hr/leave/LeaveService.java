@@ -15,8 +15,8 @@ import th.co.glr.hr.common.ApiException;
 @Service
 public class LeaveService {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
-    private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo", "admin");
-    private static final Set<String> REVIEW_ALL_ROLES = Set.of("hr", "admin");
+    private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo");
+    private static final Set<String> REVIEW_ALL_ROLES = Set.of("hr");
     private static final Set<LeaveStatus> ACTIVE_QUOTA_STATUSES = Set.of(LeaveStatus.SUBMITTED, LeaveStatus.APPROVED);
 
     private final LeaveRepository leaveRepository;
