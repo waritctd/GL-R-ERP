@@ -35,7 +35,7 @@ cd backend
 set -a
 source .env.local
 set +a
-mvn spring-boot:run
+./mvnw spring-boot:run
 ```
 
 See [backend/README.md](backend/README.md).
@@ -46,16 +46,16 @@ Run the backend unit/controller tests:
 
 ```bash
 cd backend
-mvn test
+./mvnw test
 ```
 
-15 integration tests are skipped unless `TEST_DB_URL`, `TEST_DB_USERNAME`, and `TEST_DB_PASSWORD` point at a real Postgres. `mvn test` passes without them but only runs the Mockito unit tests; set them to also exercise the Flyway/repository integration suite (`AbstractPostgresIntegrationTest`).
+15 integration tests are skipped unless `TEST_DB_URL`, `TEST_DB_USERNAME`, and `TEST_DB_PASSWORD` point at a real Postgres. `./mvnw test` passes without them but only runs the Mockito unit tests; set them to also exercise the Flyway/repository integration suite (`AbstractPostgresIntegrationTest`).
 
 Build the backend package:
 
 ```bash
 cd backend
-mvn -DskipTests package
+./mvnw -DskipTests package
 ```
 
 Build the frontend:
