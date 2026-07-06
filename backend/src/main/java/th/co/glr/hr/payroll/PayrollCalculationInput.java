@@ -15,5 +15,8 @@ public record PayrollCalculationInput(
     BigDecimal otherPostTaxDeductions,
     PayrollTaxAllowanceInput taxAllowances,
     PayrollYearToDate yearToDate,
-    int payrollMonthValue
+    int payrollMonthValue,
+    // Director's remuneration (ค่าตอบแทนกรรมการ): excluded from SSO (not wages under the
+    // Social Security Act), but still fully taxed exactly like a regular salary.
+    boolean exemptFromSocialSecurity
 ) {}

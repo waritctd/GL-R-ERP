@@ -40,7 +40,8 @@ class PayrollCalculatorTest {
                 BigDecimal.ZERO
             ),
             PayrollYearToDate.empty(),
-            1
+            1,
+            false
         ));
 
         assertThat(result.grossEarnings()).isEqualByComparingTo(new BigDecimal("42500.00"));
@@ -78,7 +79,8 @@ class PayrollCalculatorTest {
             BigDecimal.ZERO,
             PayrollTaxAllowanceInput.empty(),
             PayrollYearToDate.empty(),
-            6
+            6,
+            false
         ));
 
         assertThat(result.specialPayTotal()).isEqualByComparingTo(new BigDecimal("3600.00"));
@@ -100,7 +102,8 @@ class PayrollCalculatorTest {
             BigDecimal.ZERO,
             PayrollTaxAllowanceInput.empty(),
             PayrollYearToDate.empty(),
-            1
+            1,
+            false
         ));
 
         assertThat(result.legalExecutionDeduction()).isEqualByComparingTo(new BigDecimal("4125.00"));
@@ -121,7 +124,8 @@ class PayrollCalculatorTest {
             BigDecimal.ZERO,
             PayrollTaxAllowanceInput.empty(),
             PayrollYearToDate.empty(),
-            1
+            1,
+            false
         ));
 
         // Non-taxable income (sheet column D) stays out of taxable earnings, tax base, and SSO.
@@ -132,5 +136,31 @@ class PayrollCalculatorTest {
         assertThat(result.withholdingTax()).isEqualByComparingTo(new BigDecimal("164.58"));
         // Net = 30,000 taxable - (875 SSO + 164.58 tax) + 5,000 non-taxable
         assertThat(result.netPay()).isEqualByComparingTo(new BigDecimal("33960.42"));
+    }
+
+    @Test
+    void directorCompensationIsExemptFromSocialSecurityButStillTaxed() {
+        PayrollCalculation result = calculator.calculate(new PayrollCalculationInput(
+            new BigDecimal("150000.00"),
+            List.of(),
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(),
+            PayrollYearToDate.empty(),
+            1,
+            true
+        ));
+
+        // Director's remuneration (ค่าตอบแทนกรรมการ) is not wages under the Social Security Act.
+        assertThat(result.ssoWageBase()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(result.socialSecurity()).isEqualByComparingTo(BigDecimal.ZERO);
+        // But it is still fully subject to normal progressive income tax, same as a salary.
+        assertThat(result.withholdingTax()).isGreaterThan(BigDecimal.ZERO);
+        assertThat(result.netPay()).isEqualByComparingTo(result.grossEarnings().subtract(result.withholdingTax()));
     }
 }

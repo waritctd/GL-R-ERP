@@ -41,7 +41,7 @@ class PayrollServiceTest {
             mock(CommissionCalculator.class), new AppProperties());
         long employeeId = 55L;
         when(payrollRepository.findActiveEmployees()).thenReturn(List.of(new PayrollEmployeeSnapshot(
-            employeeId, "GLR-55", "ทดสอบ ขาดงาน", "คลัง", "ธนาคาร", "111-222", money("30000.00"))));
+            employeeId, "GLR-55", "ทดสอบ ขาดงาน", "คลัง", "ธนาคาร", "111-222", money("30000.00"), false)));
         when(payrollRepository.findApprovedOvertimePayByEmployee(any())).thenReturn(Map.of());
         when(payrollRepository.findYearToDateByEmployee(any())).thenReturn(Map.of());
         when(payrollRepository.findAutoUnpaidLeaveDaysByEmployee(any(), any(), anyList()))

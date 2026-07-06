@@ -31,13 +31,18 @@ public class PayrollRepository {
                    dep.name_th AS department_name,
                    bank.name_th AS bank_name,
                    ba.account_no AS bank_account,
-                   COALESCE(e.current_salary, 0) AS base_salary
+                   CASE WHEN e.compensation_type = 'DIRECTOR' THEN e.director_compensation
+                        ELSE COALESCE(e.current_salary, 0) END AS base_salary,
+                   (e.compensation_type = 'DIRECTOR') AS director_compensation
               FROM hr.employee e
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
               LEFT JOIN hr.employee_bank_account ba ON ba.employee_id = e.employee_id
               LEFT JOIN hr.bank bank ON bank.bank_id = ba.bank_id
              WHERE e.is_active = TRUE
-               AND COALESCE(e.current_salary, 0) > 0
+               AND (
+                   (e.compensation_type = 'DIRECTOR' AND e.director_compensation > 0)
+                   OR (e.compensation_type <> 'DIRECTOR' AND COALESCE(e.current_salary, 0) > 0)
+               )
              ORDER BY e.employee_code
             """, Map.of(), (rs, rowNum) -> new PayrollEmployeeSnapshot(
                 rs.getLong("employee_id"),
@@ -46,7 +51,8 @@ public class PayrollRepository {
                 rs.getString("department_name"),
                 rs.getString("bank_name"),
                 rs.getString("bank_account"),
-                rs.getBigDecimal("base_salary")
+                rs.getBigDecimal("base_salary"),
+                rs.getBoolean("director_compensation")
             ));
     }
 

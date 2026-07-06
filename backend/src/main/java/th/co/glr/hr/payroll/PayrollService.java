@@ -169,7 +169,8 @@ public class PayrollService {
             input == null ? BigDecimal.ZERO : input.otherPostTaxDeductions(),
             input == null ? PayrollTaxAllowanceInput.empty() : input.taxAllowances(),
             yearToDate,
-            payrollMonth.getMonthValue()
+            payrollMonth.getMonthValue(),
+            employee.directorCompensation()
         ));
         return new PayrollLineDto(
             null,

@@ -48,10 +48,14 @@ public class PayrollCalculator {
         BigDecimal unpaidLeaveDeduction = money(dailyRate.multiply(unpaidLeaveDays));
         BigDecimal grossTaxableIncome = money(grossEarnings.subtract(unpaidLeaveDeduction).max(ZERO));
 
-        BigDecimal ssoWageBase = ssoWageBase(baseSalary.subtract(unpaidLeaveDeduction));
+        BigDecimal ssoWageBase = input.exemptFromSocialSecurity()
+            ? ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP)
+            : ssoWageBase(baseSalary.subtract(unpaidLeaveDeduction));
         BigDecimal monthlySso = money(ssoWageBase.multiply(SSO_RATE));
         BigDecimal remainingSsoCap = SSO_YEAR_CAP.subtract(money(yearToDate.socialSecurity())).max(ZERO);
-        BigDecimal socialSecurity = min(monthlySso, remainingSsoCap);
+        BigDecimal socialSecurity = input.exemptFromSocialSecurity()
+            ? ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP)
+            : min(monthlySso, remainingSsoCap);
 
         int monthsRemaining = Math.max(1, 13 - input.payrollMonthValue());
         BigDecimal projectedAnnualIncome = money(money(yearToDate.taxableIncome())
