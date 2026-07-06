@@ -42,12 +42,6 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
         <dependency>
-            <!-- BCrypt password hashing only; avoids reshaping the manual session/CORS/CSRF
-                 layer that the full spring-boot-starter-security would impose. -->
-            <groupId>org.springframework.security</groupId>
-            <artifactId>spring-security-crypto</artifactId>
-        </dependency>
-        <dependency>
             <!-- Used directly by LoginRateLimitFilter to read the login email from the request
                  body; present transitively at runtime but declared explicitly since we compile
                  against it. -->
@@ -55,6 +49,8 @@
             <artifactId>jackson-databind</artifactId>
         </dependency>
         <dependency>
+            <!-- Provides BCrypt (spring-security-crypto, transitive) and the @PreAuthorize
+                 method-security used throughout the controllers. -->
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
