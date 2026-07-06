@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Optional;
 import org.assertj.core.api.ThrowableAssert;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -267,6 +268,49 @@ class TicketServiceTest {
         verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0003"), eq(1L), any(BigDecimal.class));
         verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), isNull());
+    }
+
+    @Test
+    void generateQuotation_sumsMultipleItemsIncludingFractionalQuantities() {
+        TicketItemDto item1 = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
+            "pcs", null, new BigDecimal("2"), null, null, null, null, null,
+            new BigDecimal("100.00"), "THB", 0, null, null, null);
+        TicketItemDto item2 = new TicketItemDto(2L, 10L, "PC002", "Product B", null, null,
+            "pcs", null, new BigDecimal("3"), null, null, null, null, null,
+            new BigDecimal("50.00"), "THB", 1, null, null, null);
+        TicketItemDto item3 = new TicketItemDto(3L, 10L, "PC003", "Product C", null, null,
+            "sqm", null, new BigDecimal("1.5"), null, null, null, null, null,
+            new BigDecimal("10.00"), "THB", 2, null, null, null);
+        stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(item1, item2, item3));
+        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0004");
+
+        service.generateQuotation(10L, salesActor);
+
+        // (2 x 100.00) + (3 x 50.00) + (1.5 x 10.00) = 200.00 + 150.00 + 15.00 = 365.00
+        // (BigDecimal.equals() is scale-sensitive, so use isEqualByComparingTo rather than eq().)
+        ArgumentCaptor<BigDecimal> total = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0004"), eq(1L), total.capture());
+        assertThat(total.getValue()).isEqualByComparingTo(new BigDecimal("365.00"));
+    }
+
+    @Test
+    void generateQuotation_treatsUnpricedItemAsZeroNotError() {
+        TicketItemDto priced = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
+            "pcs", null, new BigDecimal("2"), null, null, null, null, null,
+            new BigDecimal("100.00"), "THB", 0, null, null, null);
+        TicketItemDto unpriced = new TicketItemDto(2L, 10L, "PC002", "Product B", null, null,
+            "pcs", null, new BigDecimal("5"), null, null, null, null, null,
+            null, "THB", 1, null, null, null);
+        stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(priced, unpriced));
+        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0005");
+
+        service.generateQuotation(10L, salesActor);
+
+        // The unpriced item (approvedPrice = null) contributes 0 regardless of its quantity, rather
+        // than throwing or being skipped from the total silently in a way that hides its qty.
+        ArgumentCaptor<BigDecimal> total = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0005"), eq(1L), total.capture());
+        assertThat(total.getValue()).isEqualByComparingTo(new BigDecimal("200.00"));
     }
 
     // ── close ─────────────────────────────────────────────────────────────
