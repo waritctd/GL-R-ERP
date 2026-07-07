@@ -5,6 +5,8 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
 
+const MY_REQUESTS_TABLE_GRID = 'grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_minmax(0,2fr)_minmax(0,0.9fr)_minmax(0,1fr)] max-[1040px]:min-w-[900px] reflow-cards';
+
 export function MyRequestsPage({ profileRequests }) {
   const navigate = useNavigate();
   const pendingCount = profileRequests.filter((request) => request.status === 'pending').length;
@@ -18,7 +20,7 @@ export function MyRequestsPage({ profileRequests }) {
       />
 
       <section className="table-panel">
-        <div className="request-table mine table-head">
+        <div className={`${MY_REQUESTS_TABLE_GRID} table-head`}>
           <span>ข้อมูลที่ขอแก้</span>
           <span>ค่าเดิม</span>
           <span>ค่าใหม่</span>
@@ -30,7 +32,7 @@ export function MyRequestsPage({ profileRequests }) {
         ) : profileRequests.map((request) => {
           const status = requestStatus(request.status);
           return (
-            <div className="request-table mine table-row" key={request.id}>
+            <div className={`${MY_REQUESTS_TABLE_GRID} table-row`} key={request.id}>
               <StatusBadge tone="indigo">{request.fieldLabel}</StatusBadge>
               <span className="old-value">{request.oldValue}</span>
               <strong>{request.newValue}</strong>

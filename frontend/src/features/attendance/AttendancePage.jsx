@@ -228,7 +228,7 @@ export function AttendancePage({ user, employees, showToast }) {
         columns={attendanceColumns}
         rows={punches}
         getRowKey={(punch) => punch.punch_id}
-        gridClassName="attendance-table"
+        gridClassName="grid-cols-[1.35fr_1.5fr_0.8fr_1.2fr_0.8fr_1.15fr] max-[1040px]:min-w-[900px] reflow-cards"
         pageSize={50}
         searchable
         searchPlaceholder="ค้นหาพนักงาน / รหัส / ชื่อเล่น"
