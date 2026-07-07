@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
+import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
@@ -17,7 +18,7 @@ function money(v) {
   return Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export function DepositNoticePage({ ticketId, onBack, showToast }) {
+export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToast }) {
   const [doc, setDoc]               = useState(null);
   const [noteTemplates, setTemplates] = useState([]);
   const [customers, setCustomers]   = useState([]);
@@ -277,6 +278,13 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
 
   return (
     <div className="page-stack">
+      <Breadcrumbs
+        items={[
+          { label: 'ใบขอราคา', onClick: onNavigateTickets },
+          { label: form.customerName || 'รายละเอียดใบขอราคา', onClick: onBack },
+          { label: 'ใบแจ้งยอดเงินรับมัดจำ' },
+        ]}
+      />
       <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
         <button type="button" className="secondary-button" onClick={onBack}>
           <Icon name="chevronLeft" size={14} /> กลับ
