@@ -1,6 +1,7 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import { roleLabel } from '../../utils/format.js';
 import { Avatar } from '../common/Avatar.jsx';
+import { Button } from '../common/Button.jsx';
 import { Icon } from '../common/Icon.jsx';
 
 export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, user, employee, onLogout }) {
@@ -49,9 +50,16 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, user, empl
           <strong>{employee?.nameTh || user.name}</strong>
           <small>{roleLabel(user.role)}</small>
         </span>
-        <button className="icon-button dark" type="button" onClick={onLogout} title="ออกจากระบบ" aria-label="ออกจากระบบ">
+        <Button
+          variant="icon"
+          className="bg-transparent text-text-faint border-transparent"
+          type="button"
+          onClick={onLogout}
+          title="ออกจากระบบ"
+          aria-label="ออกจากระบบ"
+        >
           <Icon name="logout" />
-        </button>
+        </Button>
       </div>
     </aside>
   );

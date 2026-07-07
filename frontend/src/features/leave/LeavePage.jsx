@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { hasPermission } from '../../app/permissions.js';
+import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
@@ -327,10 +328,10 @@ export function LeavePage({ user, currentEmployee, showToast }) {
         title="จัดการการลา"
         subtitle={canSubmitForTeam ? 'ยื่นคำขอแทนทีม ตรวจโควตา และอนุมัติวันลา' : 'ยื่นคำขอลาและดูโควตาของคุณ'}
         actions={(
-          <button type="button" className="secondary-button" onClick={() => requestsQuery.refetch()} disabled={loading}>
+          <Button type="button" variant="secondary" onClick={() => requestsQuery.refetch()} disabled={loading}>
             <Icon name="refresh" />
             รีเฟรช
-          </button>
+          </Button>
         )}
       />
 
@@ -389,10 +390,10 @@ export function LeavePage({ user, currentEmployee, showToast }) {
             </select>
           </label>
         ) : null}
-        <button type="submit" className="primary-button" disabled={loading}>
+        <Button type="submit" disabled={loading}>
           <Icon name="search" />
           ค้นหา
-        </button>
+        </Button>
       </form>
 
       <section className="panel">
@@ -459,10 +460,10 @@ export function LeavePage({ user, currentEmployee, showToast }) {
             <textarea rows={3} value={form.reason} onChange={(event) => updateForm('reason', event.target.value)} required />
           </label>
           <div className="span-2 row-actions">
-            <button type="submit" className="primary-button" disabled={saving || startDateInPast}>
+            <Button type="submit" disabled={saving || startDateInPast}>
               <Icon name="plus" />
               ส่งคำขอ
-            </button>
+            </Button>
           </div>
         </form>
       </section>
@@ -529,18 +530,18 @@ export function LeavePage({ user, currentEmployee, showToast }) {
               <span className="row-actions">
                 {reviewable ? (
                   <>
-                    <button type="button" className="icon-button" title="อนุมัติ" aria-label="อนุมัติ" disabled={saving} onClick={() => approve(request.id)}>
+                    <Button type="button" variant="icon" title="อนุมัติ" aria-label="อนุมัติ" disabled={saving} onClick={() => approve(request.id)}>
                       <Icon name="check" size={14} />
-                    </button>
-                    <button type="button" className="icon-button" title="ปฏิเสธ" aria-label="ปฏิเสธ" disabled={saving} onClick={() => reject(request.id)}>
+                    </Button>
+                    <Button type="button" variant="icon" title="ปฏิเสธ" aria-label="ปฏิเสธ" disabled={saving} onClick={() => reject(request.id)}>
                       <Icon name="close" size={14} />
-                    </button>
+                    </Button>
                   </>
                 ) : null}
                 {(canCancel || managerCancellable) ? (
-                  <button type="button" className="icon-button" title="ยกเลิก" aria-label="ยกเลิก" disabled={saving} onClick={() => cancel(request.id)}>
+                  <Button type="button" variant="icon" title="ยกเลิก" aria-label="ยกเลิก" disabled={saving} onClick={() => cancel(request.id)}>
                     <Icon name="close" size={14} />
-                  </button>
+                  </Button>
                 ) : null}
               </span>
             </div>

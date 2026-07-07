@@ -1,4 +1,5 @@
 import { Avatar } from '../../components/common/Avatar.jsx';
+import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -40,13 +41,20 @@ export function ProfileRequestsPage({ profileRequests, onReview }) {
               <span data-label="วันที่">{formatShortDate(request.requestedAt)}</span>
               {request.status === 'pending' ? (
                 <span className="row-actions">
-                  <button type="button" className="danger-button icon-only" onClick={() => onReview(request.id, 'rejected')} title="ปฏิเสธ" aria-label="ปฏิเสธ">
+                  <Button
+                    type="button"
+                    variant="danger"
+                    className="w-9 p-0"
+                    onClick={() => onReview(request.id, 'rejected')}
+                    title="ปฏิเสธ"
+                    aria-label="ปฏิเสธ"
+                  >
                     <Icon name="close" />
-                  </button>
-                  <button type="button" className="success-button" onClick={() => onReview(request.id, 'approved')}>
+                  </Button>
+                  <Button type="button" variant="success" onClick={() => onReview(request.id, 'approved')}>
                     <Icon name="check" />
                     อนุมัติ
-                  </button>
+                  </Button>
                 </span>
               ) : <StatusBadge tone={status.tone}>{status.label}</StatusBadge>}
             </div>
