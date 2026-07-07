@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useForm, useWatch } from 'react-hook-form';
+import { z } from 'zod';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
@@ -33,13 +36,41 @@ const monthStartIso = () => {
 function defaultForm(employeeId = '') {
   const date = todayIso();
   return {
-    employeeId: employeeId || '',
+    employeeId: employeeId ? String(employeeId) : '',
     workDate: date,
     plannedStartAt: `${date}T18:00`,
     plannedEndAt: `${date}T20:00`,
     dayType: 'WORKDAY',
     reason: '',
   };
+}
+
+const OT_TIME_RANGE_MESSAGE = 'เวลาสิ้นสุดต้องอยู่หลังเวลาเริ่ม';
+
+function createOvertimeFormSchema({ requireEmployeeId }) {
+  return z.object({
+    employeeId: z.string(),
+    workDate: z.string().min(1, 'กรุณาเลือกวันที่ทำ OT'),
+    plannedStartAt: z.string().min(1, 'กรุณาเลือกเวลาเริ่ม'),
+    plannedEndAt: z.string().min(1, 'กรุณาเลือกเวลาสิ้นสุด'),
+    dayType: z.enum(['WORKDAY', 'HOLIDAY']),
+    reason: z.string().min(1, 'กรุณาระบุเหตุผลความจำเป็น'),
+  }).superRefine((data, context) => {
+    if (requireEmployeeId && !data.employeeId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['employeeId'],
+        message: 'กรุณาเลือกพนักงาน',
+      });
+    }
+    if (data.plannedStartAt && data.plannedEndAt && data.plannedEndAt <= data.plannedStartAt) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['plannedEndAt'],
+        message: OT_TIME_RANGE_MESSAGE,
+      });
+    }
+  });
 }
 
 function statusInfo(status) {
@@ -97,7 +128,6 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
   };
   const [filters, setFilters] = useState(initialFilters);
   const [appliedFilters, setAppliedFilters] = useState(initialFilters);
-  const [form, setForm] = useState(() => defaultForm(currentEmployee?.id || user.employeeId || ''));
   const [confirmState, setConfirmState] = useState(null);
 
   // --- Reads (TanStack Query) ---
@@ -127,10 +157,6 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
     if (requestsQuery.error) showToast('error', requestsQuery.error.message || 'โหลดข้อมูล OT ไม่สำเร็จ');
   }, [requestsQuery.error, showToast]);
 
-  const otTimeRangeInvalid = Boolean(
-    form.plannedStartAt && form.plannedEndAt && form.plannedEndAt <= form.plannedStartAt,
-  );
-
   const submitEmployeeOptions = useMemo(
     () => employeeOptions.filter((employee) => employee.self || employee.directReport || user.role === 'admin'),
     [employeeOptions, user.role],
@@ -138,6 +164,32 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
   const canSubmitForTeam = submitEmployeeOptions.some((employee) => employee.directReport);
   const hasMultipleEmployeeOptions = employeeOptions.length > 1;
   const hasMultipleSubmitOptions = submitEmployeeOptions.length > 1;
+  const overtimeFormSchema = useMemo(
+    () => createOvertimeFormSchema({ requireEmployeeId: hasMultipleSubmitOptions }),
+    [hasMultipleSubmitOptions],
+  );
+  const {
+    register,
+    handleSubmit,
+    reset,
+    setValue,
+    getValues,
+    control,
+    formState: { errors },
+  } = useForm({
+    resolver: zodResolver(overtimeFormSchema),
+    defaultValues: defaultForm(currentEmployee?.id || user.employeeId || ''),
+    mode: 'onChange',
+    reValidateMode: 'onChange',
+  });
+  const [plannedStartAt, plannedEndAt] = useWatch({
+    control,
+    name: ['plannedStartAt', 'plannedEndAt'],
+  });
+  const hasTimeRangeError = Boolean(
+    plannedStartAt && plannedEndAt && plannedEndAt <= plannedStartAt,
+  );
+  const plannedEndError = hasTimeRangeError ? OT_TIME_RANGE_MESSAGE : errors.plannedEndAt?.message;
 
   const totals = useMemo(() => {
     const submitted = requests.filter((request) => request.status === 'SUBMITTED').length;
@@ -149,14 +201,13 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
   // Seed the acting employee once the option list lands (preserves pre-Query behavior).
   useEffect(() => {
     if (!employeesQuery.data) return;
-    setForm((current) => {
-      const nextEmployeeId = current.employeeId
-        || submitEmployeeOptions.find((employee) => employee.self)?.employeeId
-        || submitEmployeeOptions[0]?.employeeId
-        || '';
-      if (nextEmployeeId === current.employeeId) return current;
-      return { ...current, employeeId: nextEmployeeId };
-    });
+    const currentEmployeeId = getValues('employeeId');
+    const nextEmployeeId = currentEmployeeId
+      || submitEmployeeOptions.find((employee) => employee.self)?.employeeId
+      || submitEmployeeOptions[0]?.employeeId
+      || '';
+    if (nextEmployeeId === currentEmployeeId) return;
+    setValue('employeeId', String(nextEmployeeId), { shouldValidate: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employeesQuery.data]);
 
@@ -168,20 +219,6 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
     setFilters((current) => ({ ...current, [field]: value }));
   }
 
-  function updateForm(field, value) {
-    setForm((current) => {
-      if (field !== 'workDate') return { ...current, [field]: value };
-      const startTime = current.plannedStartAt.slice(11) || '18:00';
-      const endTime = current.plannedEndAt.slice(11) || '20:00';
-      return {
-        ...current,
-        workDate: value,
-        plannedStartAt: `${value}T${startTime}`,
-        plannedEndAt: `${value}T${endTime}`,
-      };
-    });
-  }
-
   function submitFilters(event) {
     event.preventDefault();
     setAppliedFilters(filters);
@@ -190,7 +227,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
   const createMutation = useMutation({
     mutationFn: (payload) => api.overtime.create(payload).then((response) => response.request),
     onSuccess: () => {
-      setForm(defaultForm(currentEmployee?.id || user.employeeId || ''));
+      reset(defaultForm(currentEmployee?.id || user.employeeId || ''));
       showToast('success', 'ส่งคำขอ OT แล้ว');
       invalidateOvertime();
     },
@@ -229,16 +266,22 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
   const saving = createMutation.isPending || approveMutation.isPending
     || rejectMutation.isPending || cancelMutation.isPending;
 
-  function submitOvertime(event) {
-    event.preventDefault();
-    if (otTimeRangeInvalid) return;
+  function handleWorkDateChange(event) {
+    const value = event.target.value;
+    const startTime = getValues('plannedStartAt').slice(11) || '18:00';
+    const endTime = getValues('plannedEndAt').slice(11) || '20:00';
+    setValue('plannedStartAt', `${value}T${startTime}`, { shouldDirty: true, shouldValidate: true });
+    setValue('plannedEndAt', `${value}T${endTime}`, { shouldDirty: true, shouldValidate: true });
+  }
+
+  function submitOvertime(values) {
     createMutation.mutate({
-      employeeId: form.employeeId ? Number(form.employeeId) : null,
-      workDate: form.workDate,
-      plannedStartAt: apiDateTime(form.plannedStartAt),
-      plannedEndAt: apiDateTime(form.plannedEndAt),
-      dayType: form.dayType,
-      reason: form.reason.trim(),
+      employeeId: values.employeeId ? Number(values.employeeId) : null,
+      workDate: values.workDate,
+      plannedStartAt: apiDateTime(values.plannedStartAt),
+      plannedEndAt: apiDateTime(values.plannedEndAt),
+      dayType: values.dayType,
+      reason: values.reason.trim(),
     });
   }
 
@@ -346,11 +389,16 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
         <div className="panel-header">
           <h2>ยื่นคำขอ OT</h2>
         </div>
-        <form className="form-grid" onSubmit={submitOvertime}>
+        <form className="form-grid" onSubmit={handleSubmit(submitOvertime)} noValidate>
           {hasMultipleSubmitOptions ? (
-            <label>
-              พนักงาน
-              <select value={form.employeeId} onChange={(event) => updateForm('employeeId', event.target.value)} required>
+            <FormField label="พนักงาน" htmlFor="ot-employee" error={errors.employeeId?.message}>
+              <select
+                id="ot-employee"
+                {...register('employeeId')}
+                aria-invalid={Boolean(errors.employeeId)}
+                aria-describedby={errors.employeeId ? fieldErrorId('ot-employee') : undefined}
+                required
+              >
                 <option value="">เลือกพนักงาน</option>
                 {submitEmployeeOptions.map((employee) => (
                   <option key={employee.employeeId} value={employee.employeeId}>
@@ -358,55 +406,74 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
                   </option>
                 ))}
               </select>
-            </label>
+            </FormField>
           ) : (
-            <label>
-              พนักงาน
-              <input value={currentEmployee?.nameTh || user.name || '-'} disabled />
-            </label>
+            <FormField label="พนักงาน" htmlFor="ot-employee-display">
+              <input id="ot-employee-display" value={currentEmployee?.nameTh || user.name || '-'} disabled />
+            </FormField>
           )}
-          <label>
-            วันที่ทำ OT
-            <input type="date" value={form.workDate} onChange={(event) => updateForm('workDate', event.target.value)} required />
-          </label>
-          <label>
-            ประเภท OT
-            <select value={form.dayType} onChange={(event) => updateForm('dayType', event.target.value)}>
+          <FormField label="วันที่ทำ OT" htmlFor="ot-work-date" error={errors.workDate?.message}>
+            <input
+              id="ot-work-date"
+              type="date"
+              {...register('workDate', { onChange: handleWorkDateChange })}
+              aria-invalid={Boolean(errors.workDate)}
+              aria-describedby={errors.workDate ? fieldErrorId('ot-work-date') : undefined}
+              required
+            />
+          </FormField>
+          <FormField label="ประเภท OT" htmlFor="ot-day-type" error={errors.dayType?.message}>
+            <select
+              id="ot-day-type"
+              {...register('dayType')}
+              aria-invalid={Boolean(errors.dayType)}
+              aria-describedby={errors.dayType ? fieldErrorId('ot-day-type') : undefined}
+            >
               <option value="WORKDAY">วันทำงานปกติ · 1.5x</option>
               <option value="HOLIDAY">วันหยุด/วันหยุดนักขัตฤกษ์ · 3x</option>
             </select>
-          </label>
-          <FormField label="เริ่ม" htmlFor="ot-planned-start">
+          </FormField>
+          <FormField label="เริ่ม" htmlFor="ot-planned-start" error={errors.plannedStartAt?.message}>
             <input
               id="ot-planned-start"
               type="datetime-local"
-              value={form.plannedStartAt}
-              onChange={(event) => updateForm('plannedStartAt', event.target.value)}
+              {...register('plannedStartAt')}
+              className={errors.plannedStartAt ? 'is-invalid' : ''}
+              aria-invalid={Boolean(errors.plannedStartAt)}
+              aria-describedby={errors.plannedStartAt ? fieldErrorId('ot-planned-start') : undefined}
               required
             />
           </FormField>
           <FormField
             label="สิ้นสุด"
             htmlFor="ot-planned-end"
-            error={otTimeRangeInvalid ? 'เวลาสิ้นสุดต้องอยู่หลังเวลาเริ่ม' : undefined}
+            error={plannedEndError}
           >
             <input
               id="ot-planned-end"
               type="datetime-local"
-              value={form.plannedEndAt}
-              onChange={(event) => updateForm('plannedEndAt', event.target.value)}
-              className={otTimeRangeInvalid ? 'is-invalid' : ''}
-              aria-invalid={otTimeRangeInvalid}
-              aria-describedby={otTimeRangeInvalid ? fieldErrorId('ot-planned-end') : undefined}
+              {...register('plannedEndAt')}
+              className={plannedEndError ? 'is-invalid' : ''}
+              aria-invalid={Boolean(plannedEndError)}
+              aria-describedby={plannedEndError ? fieldErrorId('ot-planned-end') : undefined}
               required
             />
           </FormField>
-          <label className="span-2">
-            เหตุผลความจำเป็น
-            <textarea rows={3} value={form.reason} onChange={(event) => updateForm('reason', event.target.value)} required />
-          </label>
+          <div className="span-2">
+            <FormField label="เหตุผลความจำเป็น" htmlFor="ot-reason" error={errors.reason?.message}>
+              <textarea
+                id="ot-reason"
+                className={errors.reason ? 'is-invalid' : ''}
+                rows={3}
+                {...register('reason')}
+                aria-invalid={Boolean(errors.reason)}
+                aria-describedby={errors.reason ? fieldErrorId('ot-reason') : undefined}
+                required
+              />
+            </FormField>
+          </div>
           <div className="span-2 row-actions">
-            <Button type="submit" disabled={saving || otTimeRangeInvalid}>
+            <Button type="submit" disabled={saving || hasTimeRangeError}>
               <Icon name="plus" />
               ส่งคำขอ
             </Button>
