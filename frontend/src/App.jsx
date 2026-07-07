@@ -1,32 +1,39 @@
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { api } from './api/index.js';
 import { AppShell } from './components/layout/AppShell.jsx';
 import { Toast } from './components/common/Toast.jsx';
+import { RouteFallback } from './components/common/RouteFallback.jsx';
 import { LoginPage } from './features/auth/LoginPage.jsx';
-import { ChangePasswordModal } from './features/auth/ChangePasswordModal.jsx';
-import { HrDashboard } from './features/dashboard/HrDashboard.jsx';
-import { EmployeeDashboard } from './features/dashboard/EmployeeDashboard.jsx';
-import { TicketDashboard } from './features/dashboard/TicketDashboard.jsx';
-import { EmployeeListPage } from './features/employees/EmployeeListPage.jsx';
-import { EmployeeDetailPage } from './features/employees/EmployeeDetailPage.jsx';
-import { ProfileRequestsPage } from './features/profileRequests/ProfileRequestsPage.jsx';
-import { ProfilePage } from './features/profile/ProfilePage.jsx';
-import { MyRequestsPage } from './features/profile/MyRequestsPage.jsx';
-import { AttendancePage } from './features/attendance/AttendancePage.jsx';
-import { OvertimePage } from './features/overtime/OvertimePage.jsx';
-import { LeavePage } from './features/leave/LeavePage.jsx';
-import { TicketListPage } from './features/tickets/TicketListPage.jsx';
-import { TicketDetailPage } from './features/tickets/TicketDetailPage.jsx';
-import { CommissionPage } from './features/commissions/CommissionPage.jsx';
-import { PayrollPage } from './features/payroll/PayrollPage.jsx';
-import { DepositNoticePage } from './features/deposits/DepositNoticePage.jsx';
-import { CeoSettingsPage } from './features/ceoSettings/CeoSettingsPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
 import { SALES_ENABLED } from './app/features.js';
 import { hasPermission } from './app/permissions.js';
 import { RequireAccess } from './app/RequireAccess.jsx';
+
+// Route pages are code-split: each import() becomes its own chunk, loaded on
+// navigation. This keeps the entry bundle lean (heavy deps like zod, react-hook-form,
+// and @tanstack/react-table travel with the pages that use them, not the initial load).
+// LoginPage stays eager — it is the first paint for logged-out users.
+const toDefault = (name) => (module) => ({ default: module[name] });
+const ChangePasswordModal = lazy(() => import('./features/auth/ChangePasswordModal.jsx').then(toDefault('ChangePasswordModal')));
+const HrDashboard = lazy(() => import('./features/dashboard/HrDashboard.jsx').then(toDefault('HrDashboard')));
+const EmployeeDashboard = lazy(() => import('./features/dashboard/EmployeeDashboard.jsx').then(toDefault('EmployeeDashboard')));
+const TicketDashboard = lazy(() => import('./features/dashboard/TicketDashboard.jsx').then(toDefault('TicketDashboard')));
+const EmployeeListPage = lazy(() => import('./features/employees/EmployeeListPage.jsx').then(toDefault('EmployeeListPage')));
+const EmployeeDetailPage = lazy(() => import('./features/employees/EmployeeDetailPage.jsx').then(toDefault('EmployeeDetailPage')));
+const ProfileRequestsPage = lazy(() => import('./features/profileRequests/ProfileRequestsPage.jsx').then(toDefault('ProfileRequestsPage')));
+const ProfilePage = lazy(() => import('./features/profile/ProfilePage.jsx').then(toDefault('ProfilePage')));
+const MyRequestsPage = lazy(() => import('./features/profile/MyRequestsPage.jsx').then(toDefault('MyRequestsPage')));
+const AttendancePage = lazy(() => import('./features/attendance/AttendancePage.jsx').then(toDefault('AttendancePage')));
+const OvertimePage = lazy(() => import('./features/overtime/OvertimePage.jsx').then(toDefault('OvertimePage')));
+const LeavePage = lazy(() => import('./features/leave/LeavePage.jsx').then(toDefault('LeavePage')));
+const TicketListPage = lazy(() => import('./features/tickets/TicketListPage.jsx').then(toDefault('TicketListPage')));
+const TicketDetailPage = lazy(() => import('./features/tickets/TicketDetailPage.jsx').then(toDefault('TicketDetailPage')));
+const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.jsx').then(toDefault('CommissionPage')));
+const PayrollPage = lazy(() => import('./features/payroll/PayrollPage.jsx').then(toDefault('PayrollPage')));
+const DepositNoticePage = lazy(() => import('./features/deposits/DepositNoticePage.jsx').then(toDefault('DepositNoticePage')));
+const CeoSettingsPage = lazy(() => import('./features/ceoSettings/CeoSettingsPage.jsx').then(toDefault('CeoSettingsPage')));
 
 // Thin wrappers that source the ticket id from the URL for the frozen sales
 // pages (they already fetch by id internally — branch 5 only rewires how the
@@ -145,12 +152,14 @@ export function App() {
   if (user.mustChangePassword) {
     return (
       <>
-        <ChangePasswordModal
-          forced
-          loading={changingPassword}
-          onSubmit={handleChangePassword}
-          onLogout={handleLogout}
-        />
+        <Suspense fallback={<RouteFallback />}>
+          <ChangePasswordModal
+            forced
+            loading={changingPassword}
+            onSubmit={handleChangePassword}
+            onLogout={handleLogout}
+          />
+        </Suspense>
         <Toast toast={toast} onDismiss={dismissToast} />
       </>
     );
