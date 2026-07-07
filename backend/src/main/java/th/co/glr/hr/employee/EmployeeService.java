@@ -6,9 +6,12 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.audit.AuditService;
+import th.co.glr.hr.auth.EmployeeAuthRepository;
+import th.co.glr.hr.auth.TemporaryPasswordGenerator;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.Page;
@@ -24,12 +27,20 @@ public class EmployeeService {
     private final EmployeeRepository employees;
     private final ProfileRequestRepository profileRequests;
     private final AuditService auditService;
+    private final EmployeeAuthRepository employeeAuth;
+    private final TemporaryPasswordGenerator temporaryPasswordGenerator;
+    private final PasswordEncoder passwordEncoder;
 
     public EmployeeService(EmployeeRepository employees, ProfileRequestRepository profileRequests,
-                           AuditService auditService) {
+                           AuditService auditService, EmployeeAuthRepository employeeAuth,
+                           TemporaryPasswordGenerator temporaryPasswordGenerator,
+                           PasswordEncoder passwordEncoder) {
         this.employees = employees;
         this.profileRequests = profileRequests;
         this.auditService = auditService;
+        this.employeeAuth = employeeAuth;
+        this.temporaryPasswordGenerator = temporaryPasswordGenerator;
+        this.passwordEncoder = passwordEncoder;
     }
 
     public List<EmployeeDto> list(EmployeeFilter filter, UserPrincipal user) {
@@ -91,6 +102,22 @@ public class EmployeeService {
         EmployeeDto after = get(id, user);
         auditService.record(user, "UPDATE_EMPLOYEE", "employee", id, before, after);
         return after;
+    }
+
+    /**
+     * HR-only: issues a fresh random temporary password for the target employee, forcing a change
+     * on next login. Returns the plaintext ONCE for the HR caller to hand over; the plaintext is
+     * never logged or persisted (only its BCrypt hash is stored).
+     */
+    @Transactional
+    public PasswordResetResult resetPassword(long employeeId, UserPrincipal actingUser) {
+        if (!employees.exists(employeeId)) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "Employee not found");
+        }
+        String plaintext = temporaryPasswordGenerator.generate();
+        employeeAuth.setTemporaryPassword(employeeId, passwordEncoder.encode(plaintext));
+        auditService.record(actingUser, "RESET_EMPLOYEE_PASSWORD", "employee", employeeId, null, null);
+        return new PasswordResetResult(plaintext);
     }
 
     private void auditSalarySummaryAccess(UserPrincipal user, List<EmployeeDto> rows) {

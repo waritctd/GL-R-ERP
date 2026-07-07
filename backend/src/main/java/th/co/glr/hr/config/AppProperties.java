@@ -9,6 +9,7 @@ public class AppProperties {
     private final Cors cors = new Cors();
     private final Attendance attendance = new Attendance();
     private final LoginRateLimit loginRateLimit = new LoginRateLimit();
+    private final Auth auth = new Auth();
 
     public Cors getCors() {
         return cors;
@@ -20,6 +21,10 @@ public class AppProperties {
 
     public LoginRateLimit getLoginRateLimit() {
         return loginRateLimit;
+    }
+
+    public Auth getAuth() {
+        return auth;
     }
 
     public static class Cors {
@@ -45,6 +50,24 @@ public class AppProperties {
 
         public void setAgentToken(String agentToken) {
             this.agentToken = agentToken;
+        }
+    }
+
+    /** Authentication/onboarding toggles. */
+    public static class Auth {
+        /**
+         * When true, {@code PasswordBackfillRunner} seeds each password-less active employee's
+         * {@code employee_code} as a temporary login password on startup. OFF by default because
+         * the low-entropy code is guessable before first login; opt in for local dev only.
+         */
+        private boolean seedEmployeeCodePasswords = false;
+
+        public boolean isSeedEmployeeCodePasswords() {
+            return seedEmployeeCodePasswords;
+        }
+
+        public void setSeedEmployeeCodePasswords(boolean seedEmployeeCodePasswords) {
+            this.seedEmployeeCodePasswords = seedEmployeeCodePasswords;
         }
     }
 

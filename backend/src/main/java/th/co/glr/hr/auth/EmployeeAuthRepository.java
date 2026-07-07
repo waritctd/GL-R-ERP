@@ -79,6 +79,21 @@ public class EmployeeAuthRepository {
     }
 
     /**
+     * Admin reset: overwrites the password with a freshly issued temporary hash and forces a
+     * change on next login. Unlike {@link #backfillTemporaryPassword} there is NO {@code IS NULL}
+     * guard — an HR reset is an intentional overwrite of whatever password the row currently has.
+     */
+    public void setTemporaryPassword(long employeeId, String passwordHash) {
+        jdbc.update("""
+            UPDATE hr.employee
+               SET password_hash = :hash,
+                   must_change_password = TRUE,
+                   updated_at = now()
+             WHERE employee_id = :id
+            """, Map.of("id", employeeId, "hash", passwordHash));
+    }
+
+    /**
      * Seeds a temporary password hash for a row that has none, leaving
      * must_change_password = TRUE. The {@code IS NULL} guard makes it idempotent and
      * race-safe so it never overwrites a password a user has already set.
