@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useForm, useWatch } from 'react-hook-form';
+import { z } from 'zod';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { hasPermission } from '../../app/permissions.js';
@@ -38,7 +41,7 @@ function yearFrom(dateString) {
 function defaultForm(employeeId = '', leaveTypeCode = 'VACATION') {
   const date = todayIso();
   return {
-    employeeId: employeeId || '',
+    employeeId: employeeId ? String(employeeId) : '',
     leaveTypeCode,
     startDate: date,
     endDate: date,
@@ -46,6 +49,35 @@ function defaultForm(employeeId = '', leaveTypeCode = 'VACATION') {
     attachmentName: '',
     attachmentUrl: '',
   };
+}
+
+const LEAVE_START_PAST_MESSAGE = 'วันที่เริ่มลาต้องไม่ก่อนวันนี้';
+
+function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
+  return z.object({
+    employeeId: z.string(),
+    leaveTypeCode: z.string().min(1, 'กรุณาเลือกประเภทการลา'),
+    startDate: z.string().min(1, 'กรุณาเลือกวันที่เริ่ม'),
+    endDate: z.string().min(1, 'กรุณาเลือกวันที่สิ้นสุด'),
+    reason: z.string().min(1, 'กรุณาระบุเหตุผลการลา'),
+    attachmentName: z.string(),
+    attachmentUrl: z.string(),
+  }).superRefine((data, context) => {
+    if (requireEmployeeId && !data.employeeId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['employeeId'],
+        message: 'กรุณาเลือกพนักงาน',
+      });
+    }
+    if (data.startDate && data.startDate < minStartDate) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['startDate'],
+        message: LEAVE_START_PAST_MESSAGE,
+      });
+    }
+  });
 }
 
 function statusInfo(status) {
@@ -100,7 +132,6 @@ export function LeavePage({ user, currentEmployee, showToast }) {
   };
   const [filters, setFilters] = useState(initialFilters);
   const [appliedFilters, setAppliedFilters] = useState(initialFilters);
-  const [form, setForm] = useState(() => defaultForm(currentEmployee?.id || user.employeeId || ''));
   const [confirmState, setConfirmState] = useState(null);
 
   const canReviewAll = hasPermission(user.role, 'canReviewLeave');
@@ -130,14 +161,44 @@ export function LeavePage({ user, currentEmployee, showToast }) {
   const requests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
   const loading = requestsQuery.isLoading || requestsQuery.isFetching;
 
-  const balancesYear = yearFrom(form.startDate);
+  const submitEmployeeOptions = useMemo(
+    () => employeeOptions.filter((employee) => employee.self || employee.directReport || canReviewAll),
+    [employeeOptions, canReviewAll],
+  );
+  const hasMultipleSubmitOptions = submitEmployeeOptions.length > 1;
+  const leaveFormSchema = useMemo(
+    () => createLeaveFormSchema({ requireEmployeeId: hasMultipleSubmitOptions, minStartDate: todayIso() }),
+    [hasMultipleSubmitOptions],
+  );
+  const {
+    register,
+    handleSubmit,
+    reset,
+    setValue,
+    getValues,
+    control,
+    formState: { errors },
+  } = useForm({
+    resolver: zodResolver(leaveFormSchema),
+    defaultValues: defaultForm(currentEmployee?.id || user.employeeId || ''),
+    mode: 'onChange',
+    reValidateMode: 'onChange',
+  });
+  const [formEmployeeId, formStartDate, formLeaveTypeCode] = useWatch({
+    control,
+    name: ['employeeId', 'startDate', 'leaveTypeCode'],
+  });
+  const startDateInPast = Boolean(formStartDate && formStartDate < todayIso());
+  const startDateError = startDateInPast ? LEAVE_START_PAST_MESSAGE : errors.startDate?.message;
+
+  const balancesYear = yearFrom(formStartDate);
   const balancesQuery = useQuery({
-    queryKey: queryKeys.leaveBalances(form.employeeId, balancesYear),
+    queryKey: queryKeys.leaveBalances(formEmployeeId, balancesYear),
     queryFn: () => api.leave.balances({
-      ...(form.employeeId ? { employeeId: form.employeeId } : {}),
+      ...(formEmployeeId ? { employeeId: formEmployeeId } : {}),
       year: balancesYear,
     }).then((response) => response.balances || []),
-    enabled: !!form.employeeId,
+    enabled: !!formEmployeeId,
   });
   const balances = useMemo(() => balancesQuery.data ?? [], [balancesQuery.data]);
 
@@ -155,15 +216,8 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     if (balancesQuery.error) showToast('error', balancesQuery.error.message || 'โหลดโควตาวันลาไม่สำเร็จ');
   }, [balancesQuery.error, showToast]);
 
-  const startDateInPast = Boolean(form.startDate && form.startDate < todayIso());
-
-  const submitEmployeeOptions = useMemo(
-    () => employeeOptions.filter((employee) => employee.self || employee.directReport || canReviewAll),
-    [employeeOptions, canReviewAll],
-  );
   const canSubmitForTeam = submitEmployeeOptions.some((employee) => employee.directReport) || canReviewAll;
   const hasMultipleEmployeeOptions = employeeOptions.length > 1;
-  const hasMultipleSubmitOptions = submitEmployeeOptions.length > 1;
 
   const totals = useMemo(() => {
     const submitted = requests.filter((request) => request.status === 'SUBMITTED').length;
@@ -186,22 +240,23 @@ export function LeavePage({ user, currentEmployee, showToast }) {
   // default the acting employee and leave type from whatever the queries return).
   useEffect(() => {
     if (!employeesQuery.data && !leaveTypesQuery.data) return;
-    setForm((current) => {
-      const nextEmployeeId = current.employeeId
-        || submitEmployeeOptions.find((employee) => employee.self)?.employeeId
-        || submitEmployeeOptions[0]?.employeeId
-        || '';
-      const nextLeaveTypeCode = current.leaveTypeCode || leaveTypes[0]?.code || 'VACATION';
-      if (nextEmployeeId === current.employeeId && nextLeaveTypeCode === current.leaveTypeCode) return current;
-      return { ...current, employeeId: nextEmployeeId, leaveTypeCode: nextLeaveTypeCode };
-    });
+    const currentEmployeeId = getValues('employeeId');
+    const currentLeaveTypeCode = getValues('leaveTypeCode');
+    const nextEmployeeId = currentEmployeeId
+      || submitEmployeeOptions.find((employee) => employee.self)?.employeeId
+      || submitEmployeeOptions[0]?.employeeId
+      || '';
+    const nextLeaveTypeCode = currentLeaveTypeCode || leaveTypes[0]?.code || 'VACATION';
+    if (String(nextEmployeeId) === String(currentEmployeeId) && nextLeaveTypeCode === currentLeaveTypeCode) return;
+    setValue('employeeId', String(nextEmployeeId), { shouldValidate: true });
+    setValue('leaveTypeCode', nextLeaveTypeCode, { shouldValidate: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employeesQuery.data, leaveTypesQuery.data]);
 
   function invalidateLeave() {
     return Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.leaveRequests(appliedFilters) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.leaveBalances(form.employeeId, balancesYear) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.leaveBalances(formEmployeeId, balancesYear) }),
     ]);
   }
 
@@ -209,15 +264,11 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     setFilters((current) => ({ ...current, [field]: value }));
   }
 
-  function updateForm(field, value) {
-    setForm((current) => {
-      if (field !== 'startDate') return { ...current, [field]: value };
-      return {
-        ...current,
-        startDate: value,
-        endDate: current.endDate < value ? value : current.endDate,
-      };
-    });
+  function handleStartDateChange(event) {
+    const value = event.target.value;
+    if (getValues('endDate') < value) {
+      setValue('endDate', value, { shouldDirty: true, shouldValidate: true });
+    }
   }
 
   function submitFilters(event) {
@@ -228,8 +279,8 @@ export function LeavePage({ user, currentEmployee, showToast }) {
   const createMutation = useMutation({
     mutationFn: (payload) => api.leave.create(payload).then((response) => response.request),
     onSuccess: (created) => {
-      const nextEmployeeId = form.employeeId || currentEmployee?.id || user.employeeId || '';
-      setForm(defaultForm(nextEmployeeId, form.leaveTypeCode));
+      const nextEmployeeId = formEmployeeId || currentEmployee?.id || user.employeeId || '';
+      reset(defaultForm(nextEmployeeId, formLeaveTypeCode));
       if (created?.status === 'AUTO_REJECTED') {
         showToast('error', created.systemNote || 'โควตาวันลาไม่เพียงพอ');
       } else {
@@ -272,17 +323,15 @@ export function LeavePage({ user, currentEmployee, showToast }) {
   const saving = createMutation.isPending || approveMutation.isPending
     || rejectMutation.isPending || cancelMutation.isPending;
 
-  function submitLeave(event) {
-    event.preventDefault();
-    if (startDateInPast) return;
+  function submitLeave(values) {
     createMutation.mutate({
-      employeeId: form.employeeId ? Number(form.employeeId) : null,
-      leaveTypeCode: form.leaveTypeCode,
-      startDate: form.startDate,
-      endDate: form.endDate,
-      reason: form.reason.trim(),
-      attachmentName: form.attachmentName.trim() || null,
-      attachmentUrl: form.attachmentUrl.trim() || null,
+      employeeId: values.employeeId ? Number(values.employeeId) : null,
+      leaveTypeCode: values.leaveTypeCode,
+      startDate: values.startDate,
+      endDate: values.endDate,
+      reason: values.reason.trim(),
+      attachmentName: values.attachmentName.trim() || null,
+      attachmentUrl: values.attachmentUrl.trim() || null,
     });
   }
 
@@ -400,11 +449,16 @@ export function LeavePage({ user, currentEmployee, showToast }) {
         <div className="panel-header">
           <h2>ยื่นคำขอลา</h2>
         </div>
-        <form className="form-grid" onSubmit={submitLeave}>
+        <form className="form-grid" onSubmit={handleSubmit(submitLeave)} noValidate>
           {hasMultipleSubmitOptions ? (
-            <label>
-              พนักงาน
-              <select value={form.employeeId} onChange={(event) => updateForm('employeeId', event.target.value)} required>
+            <FormField label="พนักงาน" htmlFor="leave-employee" error={errors.employeeId?.message}>
+              <select
+                id="leave-employee"
+                {...register('employeeId')}
+                aria-invalid={Boolean(errors.employeeId)}
+                aria-describedby={errors.employeeId ? fieldErrorId('leave-employee') : undefined}
+                required
+              >
                 <option value="">เลือกพนักงาน</option>
                 {submitEmployeeOptions.map((employee) => (
                   <option key={employee.employeeId} value={employee.employeeId}>
@@ -412,53 +466,78 @@ export function LeavePage({ user, currentEmployee, showToast }) {
                   </option>
                 ))}
               </select>
-            </label>
+            </FormField>
           ) : (
-            <label>
-              พนักงาน
-              <input value={currentEmployee?.nameTh || user.name || '-'} disabled />
-            </label>
+            <FormField label="พนักงาน" htmlFor="leave-employee-display">
+              <input id="leave-employee-display" value={currentEmployee?.nameTh || user.name || '-'} disabled />
+            </FormField>
           )}
-          <label>
-            ประเภทการลา
-            <select value={form.leaveTypeCode} onChange={(event) => updateForm('leaveTypeCode', event.target.value)} required>
+          <FormField label="ประเภทการลา" htmlFor="leave-type-code" error={errors.leaveTypeCode?.message}>
+            <select
+              id="leave-type-code"
+              {...register('leaveTypeCode')}
+              aria-invalid={Boolean(errors.leaveTypeCode)}
+              aria-describedby={errors.leaveTypeCode ? fieldErrorId('leave-type-code') : undefined}
+              required
+            >
               {leaveTypes.map((type) => (
                 <option key={type.code} value={type.code}>{type.nameTh || type.nameEn}</option>
               ))}
             </select>
-          </label>
+          </FormField>
           <FormField
             label="วันที่เริ่ม"
             htmlFor="leave-start-date"
-            error={startDateInPast ? 'วันที่เริ่มลาต้องไม่ก่อนวันนี้' : undefined}
+            error={startDateError}
           >
             <input
               id="leave-start-date"
               type="date"
-              value={form.startDate}
-              onChange={(event) => updateForm('startDate', event.target.value)}
-              className={startDateInPast ? 'is-invalid' : ''}
-              aria-invalid={startDateInPast}
-              aria-describedby={startDateInPast ? fieldErrorId('leave-start-date') : undefined}
+              {...register('startDate', { onChange: handleStartDateChange })}
+              className={startDateError ? 'is-invalid' : ''}
+              aria-invalid={Boolean(startDateError)}
+              aria-describedby={startDateError ? fieldErrorId('leave-start-date') : undefined}
               required
             />
           </FormField>
-          <label>
-            วันที่สิ้นสุด
-            <input type="date" value={form.endDate} onChange={(event) => updateForm('endDate', event.target.value)} min={form.startDate} required />
-          </label>
-          <label>
-            ชื่อเอกสาร
-            <input value={form.attachmentName} onChange={(event) => updateForm('attachmentName', event.target.value)} placeholder="Medical certificate.pdf" />
-          </label>
-          <label>
-            ลิงก์เอกสาร
-            <input value={form.attachmentUrl} onChange={(event) => updateForm('attachmentUrl', event.target.value)} placeholder="https://..." />
-          </label>
-          <label className="span-2">
-            เหตุผลการลา
-            <textarea rows={3} value={form.reason} onChange={(event) => updateForm('reason', event.target.value)} required />
-          </label>
+          <FormField label="วันที่สิ้นสุด" htmlFor="leave-end-date" error={errors.endDate?.message}>
+            <input
+              id="leave-end-date"
+              type="date"
+              {...register('endDate')}
+              min={formStartDate}
+              aria-invalid={Boolean(errors.endDate)}
+              aria-describedby={errors.endDate ? fieldErrorId('leave-end-date') : undefined}
+              required
+            />
+          </FormField>
+          <FormField label="ชื่อเอกสาร" htmlFor="leave-attachment-name">
+            <input
+              id="leave-attachment-name"
+              {...register('attachmentName')}
+              placeholder="Medical certificate.pdf"
+            />
+          </FormField>
+          <FormField label="ลิงก์เอกสาร" htmlFor="leave-attachment-url">
+            <input
+              id="leave-attachment-url"
+              {...register('attachmentUrl')}
+              placeholder="https://..."
+            />
+          </FormField>
+          <div className="span-2">
+            <FormField label="เหตุผลการลา" htmlFor="leave-reason" error={errors.reason?.message}>
+              <textarea
+                id="leave-reason"
+                className={errors.reason ? 'is-invalid' : ''}
+                rows={3}
+                {...register('reason')}
+                aria-invalid={Boolean(errors.reason)}
+                aria-describedby={errors.reason ? fieldErrorId('leave-reason') : undefined}
+                required
+              />
+            </FormField>
+          </div>
           <div className="span-2 row-actions">
             <Button type="submit" disabled={saving || startDateInPast}>
               <Icon name="plus" />
