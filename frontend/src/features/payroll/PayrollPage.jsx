@@ -8,11 +8,19 @@ import { DesktopOnlyNotice } from '../../components/common/DesktopOnlyNotice.jsx
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { InfoTip } from '../../components/common/InfoTip.jsx';
+import { FilterBar, FormGrid, PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
+import { cn } from '../../utils/cn.js';
 import { formatMoney } from '../../utils/format.js';
+
+// Reproduces `.panel` for the detail sidebar, which must stay a real <aside>
+// element (semantic landmark) — Layout.jsx's Panel always renders a <section>
+// and has no `as` prop, so the exact utility string is duplicated here rather
+// than wrapping a <section> inside an <aside> or changing the shared primitive.
+const PANEL_CLASS = 'bg-surface border border-border rounded-md shadow-sm p-5';
 
 const payrollColumns = [
   {
@@ -267,7 +275,7 @@ export function PayrollPage({ showToast }) {
   }
 
   return (
-    <div className="page-stack">
+    <PageStack>
       {isMobile && <DesktopOnlyNotice />}
       <PageHeader
         title="ประมวลผลเงินเดือน"
@@ -286,14 +294,14 @@ export function PayrollPage({ showToast }) {
         )}
       />
 
-      <section className="stat-grid">
+      <StatGrid>
         <StatCard icon="badgeDollar" label="รายได้รวม" value={formatMoney(period?.totalGross)} helper="Gross earnings" tone="indigo" />
         <StatCard icon="clipboard" label="เงินหักรวม" value={formatMoney(period?.totalDeductions)} helper="Deductions" tone="amber" />
         <StatCard icon="check" label="ยอดโอนสุทธิ" value={formatMoney(period?.totalNet)} helper="Net transfer" tone="teal" />
         <StatCard icon="shield" label="ภาษี/ปกส." value={formatMoney(Number(period?.totalWithholdingTax || 0) + Number(period?.totalSocialSecurity || 0))} helper="Tax + SSO" tone="blue" />
-      </section>
+      </StatGrid>
 
-      <section className="filter-bar payroll-actions">
+      <FilterBar className="payroll-actions">
         <div>
           <strong>{period?.lineCount || 0} employees</strong>
           <span>สถานะรอบเงินเดือน</span>
@@ -311,7 +319,7 @@ export function PayrollPage({ showToast }) {
           <Icon name="fileText" />
           Bank file
         </Button>
-      </section>
+      </FilterBar>
 
       <section className="payroll-workspace">
         <DataTable
@@ -332,13 +340,13 @@ export function PayrollPage({ showToast }) {
           }}
         />
 
-        <aside className="panel payroll-detail-panel">
+        <aside className={cn(PANEL_CLASS, 'payroll-detail-panel')}>
           {selectedLine && selectedAdjustment ? (
             <>
-              <div className="panel-header">
-                <h2>{selectedLine.employeeName}</h2>
+              <Panel.Header>
+                <h2 className="m-0 text-lg">{selectedLine.employeeName}</h2>
                 <StatusBadge tone="info">{selectedLine.employeeCode}</StatusBadge>
-              </div>
+              </Panel.Header>
 
               <div className="payroll-detail-grid">
                 <MiniMetric label="ฐานเงินเดือน" value={formatMoney(selectedLine.baseSalary)} />
@@ -366,17 +374,17 @@ export function PayrollPage({ showToast }) {
               </CollapsibleSection>
 
               <CollapsibleSection title="รายได้ไม่คิดภาษี" defaultOpen={false}>
-                <div className="form-grid">
+                <FormGrid>
                   <label htmlFor="payroll-non-taxable-income">
                     รายได้อื่นๆ (ไม่คิดภาษี)
                     <InfoTip label="รายได้อื่นๆ (ไม่คิดภาษี)" text="รายได้ส่วนนี้จะไม่ถูกนำไปรวมในฐานคำนวณภาษีเงินได้ของพนักงาน" />
                     <MoneyInput id="payroll-non-taxable-income" value={selectedAdjustment.nonTaxableIncome} onChange={(value) => updateAdjustment('nonTaxableIncome', value)} />
                   </label>
-                </div>
+                </FormGrid>
               </CollapsibleSection>
 
               <CollapsibleSection title="รายการหักรายบุคคล" defaultOpen={false}>
-                <div className="form-grid">
+                <FormGrid>
                   <label htmlFor="payroll-unpaid-leave-days">
                     วันลาไม่รับค่าจ้าง
                     <input id="payroll-unpaid-leave-days" type="number" min="0" step="0.25" placeholder="0" value={selectedAdjustment.unpaidLeaveDays} onChange={(event) => updateAdjustment('unpaidLeaveDays', event.target.value)} />
@@ -395,7 +403,7 @@ export function PayrollPage({ showToast }) {
                     หักอื่น ๆ หลังภาษี
                     <MoneyInput id="payroll-other-post-tax-deductions" value={selectedAdjustment.otherPostTaxDeductions} onChange={(value) => updateAdjustment('otherPostTaxDeductions', value)} />
                   </label>
-                </div>
+                </FormGrid>
               </CollapsibleSection>
 
               <div className="payroll-breakdown">
@@ -431,7 +439,7 @@ export function PayrollPage({ showToast }) {
         onConfirm={confirmProcessPayroll}
         onCancel={() => setConfirmProcess(false)}
       />
-    </div>
+    </PageStack>
   );
 }
 
