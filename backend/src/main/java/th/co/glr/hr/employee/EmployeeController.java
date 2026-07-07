@@ -66,4 +66,14 @@ public class EmployeeController {
         sessions.requireAnyRole(user, "hr");
         return new EmployeeResponse(employeeService.update(id, request, user));
     }
+
+    @PostMapping("/{id}/reset-password")
+    ResetPasswordResponse resetPassword(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, "hr");
+        return new ResetPasswordResponse(employeeService.resetPassword(id, user).temporaryPassword());
+    }
+
+    record ResetPasswordResponse(String temporaryPassword) {
+    }
 }

@@ -19,7 +19,10 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.slf4j.LoggerFactory;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import th.co.glr.hr.audit.AuditService;
+import th.co.glr.hr.auth.EmployeeAuthRepository;
+import th.co.glr.hr.auth.TemporaryPasswordGenerator;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.Page;
@@ -30,7 +33,8 @@ class EmployeeServiceTest {
     private final EmployeeRepository employees = mock(EmployeeRepository.class);
     private final ProfileRequestRepository profileRequests = mock(ProfileRequestRepository.class);
     private final AuditService auditService = mock(AuditService.class);
-    private final EmployeeService service = new EmployeeService(employees, profileRequests, auditService);
+    private final EmployeeService service = new EmployeeService(employees, profileRequests, auditService,
+        mock(EmployeeAuthRepository.class), new TemporaryPasswordGenerator(), mock(PasswordEncoder.class));
 
     @Test
     void countsPendingRequestsOnlyForFilteredEmployees() {
