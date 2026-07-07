@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../api/index.js';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { Skeleton, SkeletonCard } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
@@ -52,7 +53,35 @@ export function TicketDashboard({ user, employee, onOpenTicket, showToast }) {
       <PageHeader title={greeting} subtitle={<GreetingSubtitle role={user.role} />} />
 
       {loading ? (
-        <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>กำลังโหลด...</div>
+        <div aria-busy="true" aria-label="กำลังโหลดข้อมูลแดชบอร์ด">
+          <div className="stat-grid">
+            <SkeletonCard lines={1} />
+            <SkeletonCard lines={1} />
+            <SkeletonCard lines={1} />
+            <SkeletonCard lines={1} />
+          </div>
+          <div className="stat-grid" style={{ marginTop: 14 }}>
+            <SkeletonCard lines={1} />
+            <SkeletonCard lines={1} />
+            <SkeletonCard lines={1} />
+            <SkeletonCard lines={1} />
+          </div>
+          <section className="panel" style={{ padding: 0, overflow: 'hidden', marginTop: 14 }}>
+            <div className="panel-header" style={{ padding: '14px 18px' }}>
+              <Skeleton width="30%" height={16} />
+            </div>
+            <div style={{ padding: '12px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                  <Skeleton width={60} height={14} />
+                  <Skeleton width="40%" height={14} />
+                  <Skeleton width={70} height={18} radius="var(--radius-pill)" />
+                  <Skeleton width={80} height={14} />
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
       ) : summary && (
         <>
           <div className="stat-grid">

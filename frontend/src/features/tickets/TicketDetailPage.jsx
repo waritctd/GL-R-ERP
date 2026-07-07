@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
 
@@ -70,6 +72,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const [attachments, setAttachments] = useState([]);
   const [attachLoading, setAttachLoading] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [deletingAttachment, setDeletingAttachment] = useState(false);
 
   // Revision form
   const [showReviseForm, setShowReviseForm] = useState(false);
@@ -78,6 +81,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   // Comment
   const [commentText, setCommentText] = useState('');
+
+  // Confirmation dialogs (state-driven, replaces native browser confirm)
+  const [confirm, setConfirm] = useState(null); // { kind: 'deleteAttachment', id, name } | { kind: 'cancelTicket' } | null
 
   async function loadTicket() {
     setLoading(true);
@@ -136,8 +142,34 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   if (loading) {
     return (
-      <div className="page-stack">
-        <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>กำลังโหลด...</div>
+      <div className="page-stack" aria-busy="true" aria-label="กำลังโหลดข้อมูลใบขอราคา">
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between' }}>
+          <div style={{ flex: 1 }}>
+            <Skeleton width={80} height={28} radius="var(--radius-md)" className="skeleton" />
+            <div style={{ marginTop: 12 }}>
+              <Skeleton width="40%" height={22} />
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <Skeleton width={220} height={16} />
+            </div>
+          </div>
+        </div>
+        <section className="panel">
+          <div className="panel-header">
+            <Skeleton width="30%" height={16} />
+          </div>
+          <div style={{ padding: '14px 18px' }}>
+            <SkeletonText lines={4} />
+          </div>
+        </section>
+        <section className="table-panel">
+          <div className="panel-header">
+            <Skeleton width="30%" height={16} />
+          </div>
+          <div style={{ padding: '14px 18px' }}>
+            <SkeletonText lines={5} />
+          </div>
+        </section>
       </div>
     );
   }
@@ -318,14 +350,21 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     }
   }
 
-  async function handleDeleteAttachment(id, name) {
-    if (!window.confirm(`ลบไฟล์ "${name}" ออก?`)) return;
+  function handleDeleteAttachment(id, name) {
+    setConfirm({ kind: 'deleteAttachment', id, name });
+  }
+
+  async function confirmDeleteAttachment(id) {
+    setDeletingAttachment(true);
     try {
       await api.attachments.delete(id);
       setAttachments((prev) => prev.filter((a) => a.id !== id));
       showToast('success', 'ลบไฟล์แล้ว');
     } catch (err) {
       showToast('error', err.message || 'ลบไม่สำเร็จ');
+    } finally {
+      setDeletingAttachment(false);
+      setConfirm(null);
     }
   }
 
@@ -471,11 +510,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             {can.cancel && (
               <button type="button" className="secondary-button" disabled={actionLoading}
                 style={{ marginLeft: 'auto', color: '#dc2626', borderColor: '#fca5a5' }}
-                onClick={() => {
-                  if (window.confirm('ยืนยันการยกเลิกใบขอราคานี้?')) {
-                    doAction(() => api.tickets.cancel(ticketId), 'ยกเลิกใบขอราคาแล้ว');
-                  }
-                }}>
+                onClick={() => setConfirm({ kind: 'cancelTicket' })}>
                 ยกเลิก
               </button>
             )}
@@ -835,7 +870,19 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               )}
             </div>
             {attachLoading ? (
-              <p style={{ padding: '12px 18px', color: '#94a3b8', fontSize: 13 }}>กำลังโหลด...</p>
+              <div
+                style={{ padding: '8px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}
+                aria-busy="true"
+                aria-label="กำลังโหลดไฟล์แนบ"
+              >
+                {[0, 1, 2].map((i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#f8fafc', borderRadius: 6, border: '1px solid #e2e8f0' }}>
+                    <Skeleton width={13} height={13} radius="var(--radius-sm)" />
+                    <Skeleton width="50%" height={13} />
+                    <Skeleton width={40} height={16} radius="var(--radius-pill)" />
+                  </div>
+                ))}
+              </div>
             ) : attachments.length === 0 ? (
               <p style={{ padding: '12px 18px', color: '#94a3b8', fontSize: 13 }}>ยังไม่มีไฟล์แนบ</p>
             ) : (
@@ -971,6 +1018,29 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           )}
         </section>
       </div>
+
+      <ConfirmDialog
+        open={confirm?.kind === 'deleteAttachment'}
+        tone="danger"
+        title="ลบไฟล์"
+        message={`ลบไฟล์ "${confirm?.name}" ออก?`}
+        busy={deletingAttachment}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => confirmDeleteAttachment(confirm?.id)}
+      />
+
+      <ConfirmDialog
+        open={confirm?.kind === 'cancelTicket'}
+        tone="danger"
+        title="ยกเลิกใบขอราคา"
+        message="ยืนยันการยกเลิกใบขอราคานี้?"
+        busy={actionLoading}
+        onCancel={() => setConfirm(null)}
+        onConfirm={async () => {
+          await doAction(() => api.tickets.cancel(ticketId), 'ยกเลิกใบขอราคาแล้ว');
+          setConfirm(null);
+        }}
+      />
     </div>
   );
 }
