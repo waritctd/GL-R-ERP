@@ -13,6 +13,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
@@ -25,10 +26,12 @@ public class CommissionService {
 
     private final CommissionRepository commissions;
     private final CommissionCalculator calculator;
+    private final AuditService auditService;
 
-    public CommissionService(CommissionRepository commissions, CommissionCalculator calculator) {
+    public CommissionService(CommissionRepository commissions, CommissionCalculator calculator, AuditService auditService) {
         this.commissions = commissions;
         this.calculator = calculator;
+        this.auditService = auditService;
     }
 
     public List<CommissionRecord> list(LocalDate payrollMonth, UserPrincipal actor) {
@@ -66,7 +69,9 @@ public class CommissionService {
                 payrollMonth(safeRequest.invoiceDate()),
                 calculation
             );
-            return requireRecord(commissionId);
+            CommissionRecord created = requireRecord(commissionId);
+            auditService.record(actor, "SUBMIT_COMMISSION", "commission_record", commissionId, null, created);
+            return created;
         } catch (DuplicateKeyException e) {
             throw new ApiException(HttpStatus.CONFLICT, "Invoice number already exists");
         }
@@ -95,7 +100,9 @@ public class CommissionService {
             invoice.shortfall()
         );
         commissions.updateCommissionAmountsForInvoice(invoice.id(), calculation);
-        return requireRecord(id);
+        CommissionRecord after = requireRecord(id);
+        auditService.record(actor, "UPDATE_COMMISSION_DEDUCTIONS", "commission_record", id, existing, after);
+        return after;
     }
 
     @Transactional
@@ -106,7 +113,9 @@ public class CommissionService {
             throw new ApiException(HttpStatus.CONFLICT, "Only submitted commission records can be approved");
         }
         commissions.approve(id, actor.id());
-        return requireRecord(id);
+        CommissionRecord after = requireRecord(id);
+        auditService.record(actor, "APPROVE_COMMISSION", "commission_record", id, existing, after);
+        return after;
     }
 
     @Transactional
@@ -125,7 +134,9 @@ public class CommissionService {
             currentPayrollMonth(),
             request.reason().trim()
         );
-        return requireRecord(clawbackId);
+        CommissionRecord clawback = requireRecord(clawbackId);
+        auditService.record(actor, "CREATE_CLAWBACK", "commission_record", clawbackId, null, clawback);
+        return clawback;
     }
 
     public CommissionSimulationDto simulate(CommissionSimulatorRequest request, UserPrincipal actor) {

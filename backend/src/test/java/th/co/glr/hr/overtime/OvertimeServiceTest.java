@@ -16,25 +16,30 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
+import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
 class OvertimeServiceTest {
     private final OvertimeRepository overtimeRepository = mock(OvertimeRepository.class);
-    private final OvertimeService overtimeService = new OvertimeService(overtimeRepository);
+    private final AuditService auditService = mock(AuditService.class);
+    private final OvertimeService overtimeService = new OvertimeService(overtimeRepository, auditService);
 
     @Test
     void employeesCanSubmitOwnOvertime() {
         SubmitOvertimeRequest request = validSubmit(null);
+        OvertimeRequestDto created = requestDto(55L, 10L, "SUBMITTED");
         when(overtimeRepository.employeeExists(10L)).thenReturn(true);
         when(overtimeRepository.create(eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY), eq(LocalDate.parse("2026-07-01"))))
             .thenReturn(55L);
-        when(overtimeRepository.findById(55L)).thenReturn(Optional.of(requestDto(55L, 10L, "SUBMITTED")));
+        when(overtimeRepository.findById(55L)).thenReturn(Optional.of(created));
+        UserPrincipal employee = user("employee", 10L);
 
-        OvertimeRequestDto result = overtimeService.submit(request, user("employee", 10L));
+        OvertimeRequestDto result = overtimeService.submit(request, employee);
 
         assertThat(result.id()).isEqualTo(55L);
         verify(overtimeRepository).create(eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY), eq(LocalDate.parse("2026-07-01")));
+        verify(auditService).record(employee, "SUBMIT_OVERTIME_REQUEST", "overtime_request", 55L, null, created);
     }
 
     @Test
@@ -141,8 +146,9 @@ class OvertimeServiceTest {
             )));
         when(overtimeRepository.approve(eq(77L), eq(99L), any(OvertimeCalculation.class), eq("ok")))
             .thenReturn(1);
+        UserPrincipal actor = user("employee", 99L);
 
-        overtimeService.approve(77L, new ReviewOvertimeRequest("ok"), user("employee", 99L));
+        overtimeService.approve(77L, new ReviewOvertimeRequest("ok"), actor);
 
         ArgumentCaptor<OvertimeCalculation> captor = ArgumentCaptor.forClass(OvertimeCalculation.class);
         verify(overtimeRepository).approve(eq(77L), eq(99L), captor.capture(), eq("ok"));
@@ -151,6 +157,7 @@ class OvertimeServiceTest {
         assertThat(calculation.actualEndAt()).isEqualTo(OffsetDateTime.parse("2026-07-15T19:40:00+07:00"));
         assertThat(calculation.actualMinutes()).isEqualTo(100);
         assertThat(calculation.payableMinutes()).isEqualTo(100);
+        verify(auditService).record(eq(actor), eq("APPROVE_OVERTIME_REQUEST"), eq("overtime_request"), eq(77L), eq(submitted), any(OvertimeRequestDto.class));
     }
 
     @Test

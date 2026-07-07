@@ -9,6 +9,7 @@ import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
@@ -19,9 +20,11 @@ public class OvertimeService {
     private static final int ATTENDANCE_LOOKAROUND_HOURS = 16;
 
     private final OvertimeRepository overtimeRepository;
+    private final AuditService auditService;
 
-    public OvertimeService(OvertimeRepository overtimeRepository) {
+    public OvertimeService(OvertimeRepository overtimeRepository, AuditService auditService) {
         this.overtimeRepository = overtimeRepository;
+        this.auditService = auditService;
     }
 
     public List<OvertimeRequestDto> list(
@@ -76,7 +79,9 @@ public class OvertimeService {
         LocalDate payrollMonth = request.workDate().withDayOfMonth(1);
         OvertimeDayType dayType = parseDayType(request.dayType());
         long id = overtimeRepository.create(employeeId, actorEmployeeId, request, plannedMinutes, dayType, payrollMonth);
-        return requireRequest(id);
+        OvertimeRequestDto created = requireRequest(id);
+        auditService.record(user, "SUBMIT_OVERTIME_REQUEST", "overtime_request", id, null, created);
+        return created;
     }
 
     @Transactional
@@ -91,7 +96,9 @@ public class OvertimeService {
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "Overtime request has already been reviewed");
         }
-        return requireRequest(id);
+        OvertimeRequestDto after = requireRequest(id);
+        auditService.record(user, "APPROVE_OVERTIME_REQUEST", "overtime_request", id, existing, after);
+        return after;
     }
 
     @Transactional
@@ -104,7 +111,9 @@ public class OvertimeService {
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "Overtime request has already been reviewed");
         }
-        return requireRequest(id);
+        OvertimeRequestDto after = requireRequest(id);
+        auditService.record(user, "REJECT_OVERTIME_REQUEST", "overtime_request", id, existing, after);
+        return after;
     }
 
     @Transactional
@@ -126,7 +135,9 @@ public class OvertimeService {
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "Overtime request can no longer be cancelled");
         }
-        return requireRequest(id);
+        OvertimeRequestDto after = requireRequest(id);
+        auditService.record(user, "CANCEL_OVERTIME_REQUEST", "overtime_request", id, existing, after);
+        return after;
     }
 
     OvertimeCalculation calculate(OvertimeRequestDto request) {
