@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { PageStack } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
 
@@ -12,7 +13,7 @@ export function MyRequestsPage({ profileRequests }) {
   const pendingCount = profileRequests.filter((request) => request.status === 'pending').length;
 
   return (
-    <div className="page-stack">
+    <PageStack>
       <PageHeader
         title="คำขอของฉัน"
         subtitle={`${pendingCount} คำขอรออนุมัติ`}
@@ -42,6 +43,6 @@ export function MyRequestsPage({ profileRequests }) {
           );
         })}
       </section>
-    </div>
+    </PageStack>
   );
 }

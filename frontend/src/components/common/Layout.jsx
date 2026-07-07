@@ -64,10 +64,12 @@ Panel.Header = PanelHeader;
  *   ≤720px: grid-template-columns: 1fr (both variants)
  * `span-2` children should pass `className="span-2-item"` via the exported
  * `formGridSpan2` class name, reproducing `.span-2` (span 2 / span 1 ≤720px).
+ * Renders a `<div>` by default; pass `as="form"` for callers that need real
+ * `<form>` semantics (e.g. a footer submit button using `form="<id>"`).
  */
-export function FormGrid({ single = false, className, children, ...props }) {
+export function FormGrid({ as: Component = 'div', single = false, className, children, ...props }) {
   return (
-    <div
+    <Component
       className={cn(
         'grid gap-[14px] max-[720px]:grid-cols-1',
         single ? 'grid-cols-1' : 'grid-cols-2',
@@ -76,7 +78,7 @@ export function FormGrid({ single = false, className, children, ...props }) {
       {...props}
     >
       {children}
-    </div>
+    </Component>
   );
 }
 
