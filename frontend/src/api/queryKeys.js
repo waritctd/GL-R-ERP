@@ -5,4 +5,10 @@ export const queryKeys = {
   employees: () => ['employees'],
   profileRequests: () => ['profileRequests'],
   dashboardSummary: () => ['dashboardSummary'],
+  leaveRequests: (filters = {}) => ['leave', 'list', filters.from, filters.to, filters.status, filters.employeeId],
+  leaveBalances: (employeeId, year) => ['leave', 'balances', employeeId, year],
+  leaveEmployees: () => ['leave', 'employees'],
+  leaveTypes: () => ['leave', 'types'],
+  overtimeRequests: (filters = {}) => ['overtime', 'list', filters.from, filters.to, filters.status, filters.employeeId],
+  overtimeEmployees: () => ['overtime', 'employees'],
 };
