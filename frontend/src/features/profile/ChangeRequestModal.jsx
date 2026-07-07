@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 
@@ -17,11 +18,11 @@ export function ChangeRequestModal({ requestField, onClose, onSubmit }) {
       onClose={onClose}
       footer={(
         <>
-          <button type="button" className="secondary-button" onClick={onClose}>ยกเลิก</button>
-          <button type="submit" form="change-request-form" className="primary-button">
+          <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
+          <Button type="submit" form="change-request-form">
             <Icon name="check" />
             ส่งคำขอ
-          </button>
+          </Button>
         </>
       )}
     >

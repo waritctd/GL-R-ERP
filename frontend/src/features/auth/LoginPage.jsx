@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 
 const quickAccounts = [
@@ -75,20 +76,20 @@ export function LoginPage({ onLogin, loading, error }) {
 
           {error ? <div className="form-error">{error}</div> : null}
 
-          <button className="primary-button" type="submit" disabled={loading}>
+          <Button type="submit" disabled={loading}>
             <Icon name="check" />
             เข้าสู่ระบบ
-          </button>
+          </Button>
 
           {isMock && (
             <div style={{ borderTop: '1px solid #e6eaf0', paddingTop: 14 }}>
               <p style={{ margin: '0 0 10px', fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>DEMO — เข้าสู่ระบบด่วน</p>
               <div style={{ display: 'grid', gap: 6 }}>
                 {quickAccounts.map((account) => (
-                  <button
+                  <Button
                     key={account.role}
                     type="button"
-                    className="secondary-button"
+                    variant="secondary"
                     style={{ justifyContent: 'flex-start', gap: 10, padding: '6px 12px' }}
                     disabled={loading}
                     onClick={() => onLogin({ role: account.role })}
@@ -98,7 +99,7 @@ export function LoginPage({ onLogin, loading, error }) {
                       <strong style={{ fontSize: 13 }}>{account.label}</strong>
                       <small style={{ display: 'block', color: '#94a3b8', fontSize: 11 }}>{account.helper}</small>
                     </span>
-                  </button>
+                  </Button>
                 ))}
               </div>
             </div>

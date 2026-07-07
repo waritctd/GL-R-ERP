@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/index.js';
+import { Button } from '../../components/common/Button.jsx';
 import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
@@ -277,10 +278,10 @@ export function PayrollPage({ showToast }) {
               รอบเดือน
               <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
             </label>
-            <button type="button" className="secondary-button" onClick={load} disabled={loading || saving}>
+            <Button type="button" variant="secondary" onClick={load} disabled={loading || saving}>
               <Icon name="refresh" />
               รีเฟรช
-            </button>
+            </Button>
           </div>
         )}
       />
@@ -298,18 +299,18 @@ export function PayrollPage({ showToast }) {
           <span>สถานะรอบเงินเดือน</span>
         </div>
         <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-        <button type="button" className="secondary-button" onClick={preview} disabled={loading || saving}>
+        <Button type="button" variant="secondary" onClick={preview} disabled={loading || saving}>
           <Icon name="search" />
           Preview
-        </button>
-        <button type="button" className="primary-button" onClick={process} disabled={loading || saving}>
+        </Button>
+        <Button type="button" onClick={process} disabled={loading || saving}>
           <Icon name="check" />
           Process Payroll
-        </button>
-        <button type="button" className="secondary-button" onClick={exportBankFile} disabled={!period?.id || saving}>
+        </Button>
+        <Button type="button" variant="secondary" onClick={exportBankFile} disabled={!period?.id || saving}>
           <Icon name="fileText" />
           Bank file
-        </button>
+        </Button>
       </section>
 
       <section className="payroll-workspace">

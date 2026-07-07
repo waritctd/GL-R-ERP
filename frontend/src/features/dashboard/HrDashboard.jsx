@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Button } from '../../components/common/Button.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { Avatar } from '../../components/common/Avatar.jsx';
@@ -87,7 +88,7 @@ export function HrDashboard({ employee, employees, profileRequests, dashboardSum
         <section className="panel">
           <div className="panel-header">
             <h2>จำนวนพนักงานตามฝ่าย</h2>
-            <button type="button" className="text-button" onClick={() => navigate('/employees')}>ดูรายชื่อ</button>
+            <Button type="button" variant="text" onClick={() => navigate('/employees')}>ดูรายชื่อ</Button>
           </div>
           <div className="bar-list">
             {dashboardStats.divisionRows.map(({ division, count }) => {
@@ -110,7 +111,7 @@ export function HrDashboard({ employee, employees, profileRequests, dashboardSum
         <section className="panel">
           <div className="panel-header">
             <h2>คำขอล่าสุด</h2>
-            <button type="button" className="text-button" onClick={() => navigate('/requests')}>ดูทั้งหมด</button>
+            <Button type="button" variant="text" onClick={() => navigate('/requests')}>ดูทั้งหมด</Button>
           </div>
           <div className="request-feed">
             {profileRequests.slice(0, 5).map((request) => {

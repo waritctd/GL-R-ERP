@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Avatar } from '../../components/common/Avatar.jsx';
+import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -53,14 +54,14 @@ export function ProfilePage({ user, employee, profileRequests, onCreateRequest }
                   <small>{field.oldValue}</small>
                 </span>
                 {isEmployee ? (
-                  <button
+                  <Button
                     type="button"
-                    className="secondary-button"
+                    variant="secondary"
                     onClick={() => setRequestField(field)}
                     disabled={pendingKeys.has(field.fieldKey)}
                   >
                     {pendingKeys.has(field.fieldKey) ? 'รออนุมัติ' : 'ขอแก้ไข'}
-                  </button>
+                  </Button>
                 ) : null}
               </div>
             ))}
@@ -70,7 +71,7 @@ export function ProfilePage({ user, employee, profileRequests, onCreateRequest }
         <section className="panel">
           <div className="panel-header">
             <h2>คำขอแก้ไขของฉัน</h2>
-            {isEmployee ? <button type="button" className="text-button" onClick={() => navigate('/my-requests')}>ดูทั้งหมด</button> : null}
+            {isEmployee ? <Button type="button" variant="text" onClick={() => navigate('/my-requests')}>ดูทั้งหมด</Button> : null}
           </div>
           <div className="request-feed">
             {profileRequests.slice(0, 5).map((request) => {

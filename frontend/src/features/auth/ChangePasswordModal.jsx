@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Button } from '../../components/common/Button.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 
@@ -96,9 +97,9 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
             <p>{forced ? 'กรุณาตั้งรหัสผ่านใหม่เพื่อความปลอดภัยก่อนเริ่มใช้งาน' : 'อัปเดตรหัสผ่านของคุณ'}</p>
           </div>
           {!forced && onClose ? (
-            <button type="button" className="icon-button" onClick={onClose} title="ปิด" aria-label="ปิด">
+            <Button type="button" variant="icon" onClick={onClose} title="ปิด" aria-label="ปิด">
               <Icon name="close" />
-            </button>
+            </Button>
           ) : null}
         </header>
         <div className="modal-body">
@@ -147,14 +148,14 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
         </div>
         <footer className="modal-footer">
           {forced ? (
-            <button type="button" className="secondary-button" onClick={onLogout}>ออกจากระบบ</button>
+            <Button type="button" variant="secondary" onClick={onLogout}>ออกจากระบบ</Button>
           ) : (
-            <button type="button" className="secondary-button" onClick={onClose}>ยกเลิก</button>
+            <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
           )}
-          <button type="submit" form="change-password-form" className="primary-button" disabled={loading || hasValidationError}>
+          <Button type="submit" form="change-password-form" disabled={loading || hasValidationError}>
             <Icon name="check" />
             {loading ? 'กำลังบันทึก...' : 'บันทึกรหัสผ่าน'}
-          </button>
+          </Button>
         </footer>
       </section>
     </div>

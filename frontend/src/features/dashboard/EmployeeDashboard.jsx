@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { Button } from '../../components/common/Button.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { Avatar } from '../../components/common/Avatar.jsx';
@@ -141,7 +142,7 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
         <section className="panel">
           <div className="panel-header">
             <h2>{mode === 'company' ? 'คำขอล่าสุด' : 'คำขอล่าสุดของฉัน'}</h2>
-            <button type="button" className="text-button" onClick={() => navigate(mode === 'company' ? '/requests' : '/my-requests')}>ดูทั้งหมด</button>
+            <Button type="button" variant="text" onClick={() => navigate(mode === 'company' ? '/requests' : '/my-requests')}>ดูทั้งหมด</Button>
           </div>
           <div className="request-feed">
             {profileRequests.length === 0 ? (
