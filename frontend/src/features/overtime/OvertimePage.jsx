@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
@@ -85,18 +87,44 @@ function formatMinutes(value) {
 }
 
 export function OvertimePage({ user, currentEmployee, showToast }) {
-  const [filters, setFilters] = useState({
+  const queryClient = useQueryClient();
+  const initialFilters = {
     from: monthStartIso(),
     to: todayIso(),
     employeeId: '',
     status: '',
-  });
+  };
+  const [filters, setFilters] = useState(initialFilters);
+  const [appliedFilters, setAppliedFilters] = useState(initialFilters);
   const [form, setForm] = useState(() => defaultForm(currentEmployee?.id || user.employeeId || ''));
-  const [requests, setRequests] = useState([]);
-  const [employeeOptions, setEmployeeOptions] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [confirmState, setConfirmState] = useState(null);
+
+  // --- Reads (TanStack Query) ---
+  const employeesQuery = useQuery({
+    queryKey: queryKeys.overtimeEmployees(),
+    queryFn: () => api.overtime.employees().then((response) => response.employees || []),
+  });
+  const employeeOptions = useMemo(() => employeesQuery.data ?? [], [employeesQuery.data]);
+
+  const requestsQuery = useQuery({
+    queryKey: queryKeys.overtimeRequests(appliedFilters),
+    queryFn: () => api.overtime.list({
+      from: appliedFilters.from,
+      to: appliedFilters.to,
+      status: appliedFilters.status,
+      ...(appliedFilters.employeeId ? { employeeId: appliedFilters.employeeId } : {}),
+    }).then((response) => response.requests || []),
+  });
+  const requests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
+  const loading = requestsQuery.isLoading || requestsQuery.isFetching;
+
+  // Preserve the original error-toast behavior of the imperative loaders.
+  useEffect(() => {
+    if (employeesQuery.error) showToast('error', employeesQuery.error.message || 'โหลดรายชื่อพนักงานสำหรับ OT ไม่สำเร็จ');
+  }, [employeesQuery.error, showToast]);
+  useEffect(() => {
+    if (requestsQuery.error) showToast('error', requestsQuery.error.message || 'โหลดข้อมูล OT ไม่สำเร็จ');
+  }, [requestsQuery.error, showToast]);
 
   const otTimeRangeInvalid = Boolean(
     form.plannedStartAt && form.plannedEndAt && form.plannedEndAt <= form.plannedStartAt,
@@ -117,42 +145,23 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
     return { submitted, approved: approved.length, payableMinutes };
   }, [requests]);
 
-  async function loadRequests(nextFilters = filters) {
-    setLoading(true);
-    try {
-      const response = await api.overtime.list({
-        from: nextFilters.from,
-        to: nextFilters.to,
-        status: nextFilters.status,
-        ...(nextFilters.employeeId ? { employeeId: nextFilters.employeeId } : {}),
-      });
-      setRequests(response.requests || []);
-    } catch (error) {
-      showToast('error', error.message || 'โหลดข้อมูล OT ไม่สำเร็จ');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loadEmployeeOptions() {
-    try {
-      const response = await api.overtime.employees();
-      const options = response.employees || [];
-      const submitOptions = options.filter((employee) => employee.self || employee.directReport || user.role === 'admin');
-      setEmployeeOptions(options);
-      setForm((current) => ({
-        ...current,
-        employeeId: current.employeeId || submitOptions.find((employee) => employee.self)?.employeeId || submitOptions[0]?.employeeId || '',
-      }));
-    } catch (error) {
-      showToast('error', error.message || 'โหลดรายชื่อพนักงานสำหรับ OT ไม่สำเร็จ');
-    }
-  }
-
+  // Seed the acting employee once the option list lands (preserves pre-Query behavior).
   useEffect(() => {
-    loadEmployeeOptions();
-    loadRequests();
-  }, []);
+    if (!employeesQuery.data) return;
+    setForm((current) => {
+      const nextEmployeeId = current.employeeId
+        || submitEmployeeOptions.find((employee) => employee.self)?.employeeId
+        || submitEmployeeOptions[0]?.employeeId
+        || '';
+      if (nextEmployeeId === current.employeeId) return current;
+      return { ...current, employeeId: nextEmployeeId };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employeesQuery.data]);
+
+  function invalidateOvertime() {
+    return queryClient.invalidateQueries({ queryKey: queryKeys.overtimeRequests(appliedFilters) });
+  }
 
   function updateFilter(field, value) {
     setFilters((current) => ({ ...current, [field]: value }));
@@ -172,64 +181,77 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
     });
   }
 
-  async function submitFilters(event) {
+  function submitFilters(event) {
     event.preventDefault();
-    await loadRequests(filters);
+    setAppliedFilters(filters);
   }
 
-  async function submitOvertime(event) {
-    event.preventDefault();
-    if (otTimeRangeInvalid) return;
-    setSaving(true);
-    try {
-      await api.overtime.create({
-        employeeId: form.employeeId ? Number(form.employeeId) : null,
-        workDate: form.workDate,
-        plannedStartAt: apiDateTime(form.plannedStartAt),
-        plannedEndAt: apiDateTime(form.plannedEndAt),
-        dayType: form.dayType,
-        reason: form.reason.trim(),
-      });
+  const createMutation = useMutation({
+    mutationFn: (payload) => api.overtime.create(payload).then((response) => response.request),
+    onSuccess: () => {
       setForm(defaultForm(currentEmployee?.id || user.employeeId || ''));
       showToast('success', 'ส่งคำขอ OT แล้ว');
-      await loadRequests(filters);
-    } catch (error) {
-      showToast('error', error.message || 'ส่งคำขอ OT ไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-    }
+      invalidateOvertime();
+    },
+    onError: (error) => showToast('error', error.message || 'ส่งคำขอ OT ไม่สำเร็จ'),
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: (id) => api.overtime.approve(id, {}).then((response) => response.request),
+    onSuccess: () => {
+      showToast('success', 'อนุมัติ OT แล้ว');
+      invalidateOvertime();
+    },
+    onError: (error) => showToast('error', error.message || 'อนุมัติ OT ไม่สำเร็จ'),
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: ({ id, reviewerNote }) => api.overtime.reject(id, { reviewerNote }).then((response) => response.request),
+    onSuccess: () => {
+      showToast('success', 'ปฏิเสธคำขอ OT แล้ว');
+      setConfirmState(null);
+      invalidateOvertime();
+    },
+    onError: (error) => showToast('error', error.message || 'ปฏิเสธ OT ไม่สำเร็จ'),
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: ({ id, reviewerNote }) => api.overtime.cancel(id, { reviewerNote: reviewerNote?.trim() || null }).then((response) => response.request),
+    onSuccess: () => {
+      showToast('success', 'ยกเลิกคำขอ OT แล้ว');
+      setConfirmState(null);
+      invalidateOvertime();
+    },
+    onError: (error) => showToast('error', error.message || 'ยกเลิก OT ไม่สำเร็จ'),
+  });
+
+  const saving = createMutation.isPending || approveMutation.isPending
+    || rejectMutation.isPending || cancelMutation.isPending;
+
+  function submitOvertime(event) {
+    event.preventDefault();
+    if (otTimeRangeInvalid) return;
+    createMutation.mutate({
+      employeeId: form.employeeId ? Number(form.employeeId) : null,
+      workDate: form.workDate,
+      plannedStartAt: apiDateTime(form.plannedStartAt),
+      plannedEndAt: apiDateTime(form.plannedEndAt),
+      dayType: form.dayType,
+      reason: form.reason.trim(),
+    });
   }
 
-  async function approve(id) {
-    setSaving(true);
-    try {
-      await api.overtime.approve(id, {});
-      showToast('success', 'อนุมัติ OT แล้ว');
-      await loadRequests(filters);
-    } catch (error) {
-      showToast('error', error.message || 'อนุมัติ OT ไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-    }
+  function approve(id) {
+    approveMutation.mutate(id);
   }
 
   function reject(id) {
     setConfirmState({ kind: 'reject', id });
   }
 
-  async function confirmReject(reviewerNote) {
+  function confirmReject(reviewerNote) {
     if (!reviewerNote?.trim()) return;
-    setSaving(true);
-    try {
-      await api.overtime.reject(confirmState.id, { reviewerNote: reviewerNote.trim() });
-      showToast('success', 'ปฏิเสธคำขอ OT แล้ว');
-      setConfirmState(null);
-      await loadRequests(filters);
-    } catch (error) {
-      showToast('error', error.message || 'ปฏิเสธ OT ไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-    }
+    rejectMutation.mutate({ id: confirmState.id, reviewerNote: reviewerNote.trim() });
   }
 
   // A ฝ่าย manager's list is already scoped server-side to their division, so any request
@@ -259,18 +281,8 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
     doCancel(id, '');
   }
 
-  async function doCancel(id, reviewerNote) {
-    setSaving(true);
-    try {
-      await api.overtime.cancel(id, { reviewerNote: reviewerNote?.trim() || null });
-      showToast('success', 'ยกเลิกคำขอ OT แล้ว');
-      setConfirmState(null);
-      await loadRequests(filters);
-    } catch (error) {
-      showToast('error', error.message || 'ยกเลิก OT ไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-    }
+  function doCancel(id, reviewerNote) {
+    cancelMutation.mutate({ id, reviewerNote });
   }
 
   return (
@@ -279,7 +291,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
         title="จัดการล่วงเวลา"
         subtitle={canSubmitForTeam ? 'ยื่นคำขอแทนทีมและอนุมัติจากเวลาสแกนจริง' : 'ยื่นคำขอ OT และดูประวัติของคุณ'}
         actions={(
-          <button type="button" className="secondary-button" onClick={() => loadRequests(filters)} disabled={loading}>
+          <button type="button" className="secondary-button" onClick={() => requestsQuery.refetch()} disabled={loading}>
             <Icon name="refresh" />
             รีเฟรช
           </button>
