@@ -11,11 +11,22 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { formGridSpan2, Panel, PageStack, RowActions, StatGrid } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 
 const LEAVE_TABLE_GRID = 'grid-cols-[minmax(0,1.35fr)_minmax(0,1.1fr)_minmax(0,1.65fr)_minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,0.8fr)] max-[1040px]:min-w-[900px] reflow-cards';
+// FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
+// (Enter-to-submit on the search button), so its exact utility string is reproduced
+// here rather than wrapping a <form> inside a non-form primitive.
+const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-center bg-surface border border-border rounded-md p-[14px]';
+// FormGrid (Layout.jsx) renders a <div>; the submit form needs to be a native <form>
+// for onSubmit/noValidate, so its exact (2-column) utility string is reproduced here.
+const FORM_GRID_CLASS = 'grid gap-[14px] max-[720px]:grid-cols-1 grid-cols-2';
+// No primitive reproduces `.leave-balance-grid` (3-col, no ≤1040px override, 1-col ≤720px;
+// styles.css:922 + :1871). StatGrid is 4→2→1 col, a different ratio, so it doesn't fit.
+const LEAVE_BALANCE_GRID = 'grid grid-cols-3 gap-3 max-[720px]:grid-cols-1';
 
 function bangkokDateParts(date = new Date()) {
   return Object.fromEntries(new Intl.DateTimeFormat('en-US', {
@@ -374,7 +385,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
   }
 
   return (
-    <div className="page-stack">
+    <PageStack>
       <PageHeader
         title="จัดการการลา"
         subtitle={canSubmitForTeam ? 'ยื่นคำขอแทนทีม ตรวจโควตา และอนุมัติวันลา' : 'ยื่นคำขอลาและดูโควตาของคุณ'}
@@ -386,18 +397,15 @@ export function LeavePage({ user, currentEmployee, showToast }) {
         )}
       />
 
-      <section className="stat-grid">
+      <StatGrid>
         <StatCard label="คำขอทั้งหมด" value={requests.length} helper="ในช่วงที่เลือก" icon="clipboard" tone="indigo" />
         <StatCard label="รออนุมัติ" value={totals.submitted} helper="Submitted" icon="clock" tone="amber" />
         <StatCard label="อนุมัติแล้ว" value={totals.approved} helper={formatDays(totals.approvedDays)} icon="check" tone="teal" />
         <StatCard label="โควตาคงเหลือ" value={formatDays(totals.remainingDays)} helper="รวมประเภทที่เลือกได้" icon="calendar" tone="blue" />
-      </section>
+      </StatGrid>
 
-      <section className="panel">
-        <div className="panel-header">
-          <h2>โควตาวันลา</h2>
-        </div>
-        <div className="leave-balance-grid">
+      <Panel title="โควตาวันลา">
+        <div className={LEAVE_BALANCE_GRID}>
           {balances.length === 0 ? (
             <EmptyState icon="calendar" title="ยังไม่มีข้อมูลโควตา" />
           ) : balances.map((balance) => (
@@ -408,9 +416,9 @@ export function LeavePage({ user, currentEmployee, showToast }) {
             </div>
           ))}
         </div>
-      </section>
+      </Panel>
 
-      <form className="filter-bar" onSubmit={submitFilters}>
+      <form className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
         <label>
           จากวันที่
           <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
@@ -447,11 +455,8 @@ export function LeavePage({ user, currentEmployee, showToast }) {
         </Button>
       </form>
 
-      <section className="panel">
-        <div className="panel-header">
-          <h2>ยื่นคำขอลา</h2>
-        </div>
-        <form className="form-grid" onSubmit={handleSubmit(submitLeave)} noValidate>
+      <Panel title="ยื่นคำขอลา">
+        <form className={FORM_GRID_CLASS} onSubmit={handleSubmit(submitLeave)} noValidate>
           {hasMultipleSubmitOptions ? (
             <FormField label="พนักงาน" htmlFor="leave-employee" error={errors.employeeId?.message}>
               <select
@@ -527,7 +532,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
               placeholder="https://..."
             />
           </FormField>
-          <div className="span-2">
+          <div className={formGridSpan2}>
             <FormField label="เหตุผลการลา" htmlFor="leave-reason" error={errors.reason?.message}>
               <textarea
                 id="leave-reason"
@@ -540,19 +545,16 @@ export function LeavePage({ user, currentEmployee, showToast }) {
               />
             </FormField>
           </div>
-          <div className="span-2 row-actions">
+          <RowActions className={formGridSpan2}>
             <Button type="submit" disabled={saving || startDateInPast}>
               <Icon name="plus" />
               ส่งคำขอ
             </Button>
-          </div>
+          </RowActions>
         </form>
-      </section>
+      </Panel>
 
-      <section className="panel">
-        <div className="panel-header">
-          <h2>ปฏิทินวันลา</h2>
-        </div>
+      <Panel title="ปฏิทินวันลา">
         <div className="leave-calendar-list">
           {activeCalendarItems.length === 0 ? (
             <EmptyState icon="calendar" title="ยังไม่มีรายการวันลาในช่วงนี้" />
@@ -569,7 +571,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
             );
           })}
         </div>
-      </section>
+      </Panel>
 
       <section className="table-panel">
         <div className={`${LEAVE_TABLE_GRID} table-head`}>
@@ -655,6 +657,6 @@ export function LeavePage({ user, currentEmployee, showToast }) {
         onConfirm={(reason) => doCancel(confirmState.id, reason)}
         onCancel={() => setConfirmState(null)}
       />
-    </div>
+    </PageStack>
   );
 }
