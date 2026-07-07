@@ -27,6 +27,9 @@ spring:
     connect-retries: 3
     connect-retries-interval: 5
     # gl-r-erp.onrender.com is a demo/showcase deploy (not real prod), so it additionally
-    # applies db/migration-demo (currently just V21, the demo login/seed data) on top of the
-    # normal migrations. Kept out of the default location so unit/CI/local runs never seed it.
+    # applies db/migration-demo (demo login/seed data + follow-up fixups) on top of the normal
+    # migrations. Kept out of the default location so unit/CI/local runs never seed it.
+    # NOTE: Flyway validates version numbers across BOTH locations combined, so a migration-demo
+    # file must not reuse a version already used in db/migration (and vice versa) - check both
+    # directories before picking the next number, or the prod-profile deploy fails at validate().
     locations: classpath:db/migration,classpath:db/migration-demo
