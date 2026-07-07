@@ -4,7 +4,16 @@ import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { Avatar } from '../../components/common/Avatar.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
+
+/**
+ * Reproduces `.dashboard-grid`: grid-template-columns: 1.15fr 0.85fr; gap: 18px;
+ * align-items: start; ≤1040px: repeat(2, minmax(0, 1fr)); ≤720px: 1fr.
+ * No shared primitive yet for this exact column ratio, so it's kept local
+ * (matches the breakpoints of `.stat-grid`/`.dashboard-grid` in styles.css).
+ */
+const DASHBOARD_GRID = 'grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] max-[1040px]:grid-cols-2 max-[720px]:grid-cols-1';
 
 const COMPANY_ROLES = ['hr', 'admin', 'ceo'];
 
@@ -100,7 +109,7 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
     ];
 
   return (
-    <div className="page-stack">
+    <PageStack>
       <PageHeader title={title} subtitle={subtitle} />
 
       {employee ? (
@@ -114,7 +123,7 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
         </section>
       ) : null}
 
-      <div className="stat-grid">
+      <StatGrid>
         {cards.map((card) => (
           <StatCard key={`${card.label}-${card.helper}`} {...card} />
         ))}
@@ -125,25 +134,21 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
             <StatCard icon="calendar" label="อายุงาน" value={`${years} ปี`} tone="amber" />
           </>
         ) : null}
-      </div>
+      </StatGrid>
 
-      <div className="dashboard-grid">
-        <section className="panel">
-          <div className="panel-header">
-            <h2>การดำเนินการด่วน</h2>
-          </div>
+      <div className={DASHBOARD_GRID}>
+        <Panel title="การดำเนินการด่วน">
           <div className="action-list">
             {quickActions.map(([path, label]) => (
               <button type="button" key={path} onClick={() => navigate(path)}>{label}</button>
             ))}
           </div>
-        </section>
+        </Panel>
 
-        <section className="panel">
-          <div className="panel-header">
-            <h2>{mode === 'company' ? 'คำขอล่าสุด' : 'คำขอล่าสุดของฉัน'}</h2>
-            <Button type="button" variant="text" onClick={() => navigate(mode === 'company' ? '/requests' : '/my-requests')}>ดูทั้งหมด</Button>
-          </div>
+        <Panel
+          title={mode === 'company' ? 'คำขอล่าสุด' : 'คำขอล่าสุดของฉัน'}
+          actions={<Button type="button" variant="text" onClick={() => navigate(mode === 'company' ? '/requests' : '/my-requests')}>ดูทั้งหมด</Button>}
+        >
           <div className="request-feed">
             {profileRequests.length === 0 ? (
               <div className="empty-state">ยังไม่มีคำขอล่าสุด</div>
@@ -160,8 +165,8 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
               );
             })}
           </div>
-        </section>
+        </Panel>
       </div>
-    </div>
+    </PageStack>
   );
 }
