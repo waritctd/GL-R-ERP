@@ -9,6 +9,7 @@ import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
@@ -20,9 +21,11 @@ public class LeaveService {
     private static final Set<LeaveStatus> ACTIVE_QUOTA_STATUSES = Set.of(LeaveStatus.SUBMITTED, LeaveStatus.APPROVED);
 
     private final LeaveRepository leaveRepository;
+    private final AuditService auditService;
 
-    public LeaveService(LeaveRepository leaveRepository) {
+    public LeaveService(LeaveRepository leaveRepository, AuditService auditService) {
         this.leaveRepository = leaveRepository;
+        this.auditService = auditService;
     }
 
     public List<LeaveRequestDto> list(
@@ -105,7 +108,9 @@ public class LeaveService {
             remainingAfter.max(BigDecimal.ZERO),
             systemNote
         );
-        return requireRequest(id);
+        LeaveRequestDto created = requireRequest(id);
+        auditService.record(user, "SUBMIT_LEAVE_REQUEST", "leave_request", id, null, created);
+        return created;
     }
 
     @Transactional
@@ -118,7 +123,9 @@ public class LeaveService {
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "Leave request has already been reviewed");
         }
-        return requireRequest(id);
+        LeaveRequestDto after = requireRequest(id);
+        auditService.record(user, "APPROVE_LEAVE_REQUEST", "leave_request", id, existing, after);
+        return after;
     }
 
     @Transactional
@@ -131,7 +138,9 @@ public class LeaveService {
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "Leave request has already been reviewed");
         }
-        return requireRequest(id);
+        LeaveRequestDto after = requireRequest(id);
+        auditService.record(user, "REJECT_LEAVE_REQUEST", "leave_request", id, existing, after);
+        return after;
     }
 
     @Transactional
@@ -153,7 +162,9 @@ public class LeaveService {
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "Leave request can no longer be cancelled");
         }
-        return requireRequest(id);
+        LeaveRequestDto after = requireRequest(id);
+        auditService.record(user, "CANCEL_LEAVE_REQUEST", "leave_request", id, existing, after);
+        return after;
     }
 
     private LeaveBalanceDto balanceFor(long employeeId, int year, LeaveTypeDto type) {
