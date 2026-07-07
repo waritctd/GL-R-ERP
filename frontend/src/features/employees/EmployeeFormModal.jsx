@@ -55,6 +55,7 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
     register,
     handleSubmit,
     control,
+    setValue,
     formState: { errors },
   } = useForm({
     resolver: zodResolver(employeeFormSchema),
@@ -143,7 +144,7 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
           />
         </FormField>
         <FormField label="ฝ่าย" htmlFor="employee-divisionId">
-          <select id="employee-divisionId" {...register('divisionId')}>
+          <select id="employee-divisionId" {...register('divisionId', { onChange: () => setValue('departmentTh', '') })}>
             {divisionOptions.map((division) => <option key={division.value} value={division.value}>{division.label}</option>)}
           </select>
         </FormField>

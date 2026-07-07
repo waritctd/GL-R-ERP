@@ -71,6 +71,36 @@ describe('EmployeeFormModal form validation', () => {
     });
   });
 
+  it('clears the department when the division changes (parity with the old update() reset)', async () => {
+    const onSubmit = vi.fn();
+    const employee = {
+      id: 7,
+      code: 'GLR-007',
+      nameTh: 'ทดสอบ แผนก',
+      email: 'dept@example.com',
+      phone: '0800000000',
+      divisionId: '17',
+      divisionTh: 'HR-ฝ่ายบุคคล',
+      departmentTh: 'สรรหาบุคลากร',
+    };
+
+    render(<EmployeeFormModal employee={employee} employees={[]} onClose={vi.fn()} onSubmit={onSubmit} />);
+
+    const departmentInput = screen.getByLabelText('แผนก');
+    expect(departmentInput.value).toBe('สรรหาบุคลากร');
+
+    // Switch the division to a different ฝ่าย — the department must reset to ''.
+    fireEvent.change(screen.getByLabelText('ฝ่าย'), { target: { value: '10' } });
+    await waitFor(() => expect(departmentInput.value).toBe(''));
+
+    // And the stale department must not flow into the submitted payload.
+    fireEvent.click(screen.getByRole('button', { name: /บันทึก/ }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].departmentTh).toBe('');
+    expect(onSubmit.mock.calls[0][0].divisionId).toBe('10');
+    expect(onSubmit.mock.calls[0][0].divisionTh).toBe('AC-ฝ่ายบัญชี');
+  });
+
   it('seeds edit-mode defaults from the existing employee and preserves them on submit', async () => {
     const onSubmit = vi.fn();
     const employee = {
