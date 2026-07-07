@@ -41,6 +41,20 @@ describe('ChangePasswordModal form validation', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it('blocks submit and shows the required message when current password is empty', async () => {
+    const { onSubmit } = renderModal();
+
+    // Leave รหัสผ่านปัจจุบัน empty; fill a valid, matching new/confirm password.
+    fireEvent.change(screen.getByLabelText('รหัสผ่านใหม่'), { target: { value: 'newpass123' } });
+    fireEvent.change(screen.getByLabelText('ยืนยันรหัสผ่านใหม่'), { target: { value: 'newpass123' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /บันทึกรหัสผ่าน/ }));
+
+    // zod's required check blocks the submit and surfaces the inline message.
+    expect(await screen.findByText('กรุณาระบุรหัสผ่านปัจจุบัน')).not.toBeNull();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it('blocks submit and shows the mismatch message when confirm password does not match', async () => {
     const { onSubmit } = renderModal();
 

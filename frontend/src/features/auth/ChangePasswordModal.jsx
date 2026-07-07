@@ -8,6 +8,8 @@ import { Icon } from '../../components/common/Icon.jsx';
 
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
 
+const CURRENT_PASSWORD_REQUIRED_MESSAGE = 'กรุณาระบุรหัสผ่านปัจจุบัน';
+const CONFIRM_PASSWORD_REQUIRED_MESSAGE = 'กรุณายืนยันรหัสผ่านใหม่';
 const NEW_PASSWORD_TOO_SHORT_MESSAGE = 'รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร';
 const PASSWORD_MISMATCH_MESSAGE = 'รหัสผ่านใหม่และการยืนยันไม่ตรงกัน';
 const PASSWORD_REUSED_MESSAGE = 'รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสผ่านเดิม';
@@ -21,9 +23,9 @@ function defaultForm() {
 }
 
 const changePasswordFormSchema = z.object({
-  currentPassword: z.string(),
+  currentPassword: z.string().min(1, CURRENT_PASSWORD_REQUIRED_MESSAGE),
   newPassword: z.string(),
-  confirmPassword: z.string(),
+  confirmPassword: z.string().min(1, CONFIRM_PASSWORD_REQUIRED_MESSAGE),
 }).superRefine((data, context) => {
   if (data.newPassword.length > 0 && data.newPassword.length < 8) {
     context.addIssue({
@@ -78,6 +80,12 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
     : errors.newPassword?.message === PASSWORD_REUSED_MESSAGE
       ? PASSWORD_REUSED_MESSAGE
       : '';
+  // The confirm field can carry either the required error (shown inline) or the
+  // mismatch error (shown in the form-level formError banner below); render only
+  // the required message inline to avoid duplicating the mismatch message.
+  const confirmPasswordFieldError = errors.confirmPassword?.message === CONFIRM_PASSWORD_REQUIRED_MESSAGE
+    ? CONFIRM_PASSWORD_REQUIRED_MESSAGE
+    : undefined;
   const hasValidationError = Boolean(newPasswordTooShort || formError);
 
   useEffect(() => {
@@ -154,15 +162,22 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
         </header>
         <div className="modal-body">
           <form id="change-password-form" className="form-grid single" onSubmit={handleSubmit(submitPassword)} noValidate>
-            <label>
-              รหัสผ่านปัจจุบัน
+            <FormField
+              label="รหัสผ่านปัจจุบัน"
+              htmlFor="change-password-current"
+              error={errors.currentPassword?.message}
+            >
               <input
+                id="change-password-current"
                 type="password"
                 {...register('currentPassword')}
                 autoComplete="current-password"
+                className={errors.currentPassword ? 'is-invalid' : ''}
+                aria-invalid={Boolean(errors.currentPassword)}
+                aria-describedby={errors.currentPassword ? fieldErrorId('change-password-current') : undefined}
                 required
               />
-            </label>
+            </FormField>
             <FormField
               label="รหัสผ่านใหม่"
               htmlFor="change-password-new"
@@ -181,15 +196,22 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
                 required
               />
             </FormField>
-            <label>
-              ยืนยันรหัสผ่านใหม่
+            <FormField
+              label="ยืนยันรหัสผ่านใหม่"
+              htmlFor="change-password-confirm"
+              error={confirmPasswordFieldError}
+            >
               <input
+                id="change-password-confirm"
                 type="password"
                 {...register('confirmPassword')}
                 autoComplete="new-password"
+                className={confirmPasswordFieldError ? 'is-invalid' : ''}
+                aria-invalid={Boolean(confirmPasswordFieldError)}
+                aria-describedby={confirmPasswordFieldError ? fieldErrorId('change-password-confirm') : undefined}
                 required
               />
-            </label>
+            </FormField>
             {(formError || submitError) ? <div className="form-error" role="alert">{formError || submitError}</div> : null}
           </form>
         </div>
