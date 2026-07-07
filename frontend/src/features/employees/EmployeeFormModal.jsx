@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { divisions, statuses } from '../../data/referenceData.js';
@@ -75,11 +76,11 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
       onClose={onClose}
       footer={(
         <>
-          <button className="secondary-button" type="button" onClick={onClose}>ยกเลิก</button>
-          <button className="primary-button" type="submit" form="employee-form">
+          <Button variant="secondary" type="button" onClick={onClose}>ยกเลิก</Button>
+          <Button type="submit" form="employee-form">
             <Icon name="check" />
             บันทึก
-          </button>
+          </Button>
         </>
       )}
     >

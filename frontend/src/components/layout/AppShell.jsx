@@ -4,6 +4,7 @@ import { SALES_ENABLED } from '../../app/features.js';
 import { hasPermission } from '../../app/permissions.js';
 import { roleLabel } from '../../utils/format.js';
 import { Avatar } from '../common/Avatar.jsx';
+import { Button } from '../common/Button.jsx';
 import { ErrorBoundary } from '../common/ErrorBoundary.jsx';
 import { Icon } from '../common/Icon.jsx';
 import { NotificationBell } from '../common/NotificationBell.jsx';
@@ -119,9 +120,10 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       />
       <main className="app-main">
         <header className="topbar">
-          <button
+          <Button
             ref={menuButtonRef}
-            className="icon-button mobile-nav-toggle"
+            variant="icon"
+            className="!hidden max-[720px]:!inline-flex max-[720px]:flex-[0_0_44px]"
             type="button"
             onClick={() => setIsDrawerOpen((open) => !open)}
             aria-label="เปิดเมนูนำทาง"
@@ -129,7 +131,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
             aria-expanded={isDrawerOpen}
           >
             <Icon name="menu" />
-          </button>
+          </Button>
           <div className="topbar-title">
             <span>GL&R HR</span>
             <small>{roleLabel(user.role)}</small>
@@ -141,9 +143,9 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
             </div>
             <Avatar employee={employee} name={user.name} size="sm" />
             <NotificationBell onOpenTicket={(id) => navigate(`/tickets/${id}`)} />
-            <button className="icon-button" type="button" onClick={onLogout} title="ออกจากระบบ" aria-label="ออกจากระบบ">
+            <Button variant="icon" type="button" onClick={onLogout} title="ออกจากระบบ" aria-label="ออกจากระบบ">
               <Icon name="logout" />
-            </button>
+            </Button>
           </div>
         </header>
         <div className="content-scroll"><ErrorBoundary key={location.pathname}><Outlet /></ErrorBoundary></div>

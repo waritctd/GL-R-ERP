@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -13,7 +14,7 @@ export function MyRequestsPage({ profileRequests }) {
       <PageHeader
         title="คำขอของฉัน"
         subtitle={`${pendingCount} คำขอรออนุมัติ`}
-        actions={<button type="button" className="primary-button" onClick={() => navigate('/profile')}>ส่งคำขอใหม่</button>}
+        actions={<Button type="button" onClick={() => navigate('/profile')}>ส่งคำขอใหม่</Button>}
       />
 
       <section className="table-panel">

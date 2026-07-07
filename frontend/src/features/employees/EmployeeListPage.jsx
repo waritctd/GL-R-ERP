@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { hasPermission } from '../../app/permissions.js';
 import { Avatar } from '../../components/common/Avatar.jsx';
+import { Button } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -123,10 +124,10 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
         title="พนักงานทั้งหมด"
         subtitle="ค้นหา กรอง และดูข้อมูลพนักงาน"
         actions={canCreate ? (
-          <button type="button" className="primary-button" onClick={() => setCreating(true)}>
+          <Button type="button" onClick={() => setCreating(true)}>
             <Icon name="plus" />
             เพิ่มพนักงาน
-          </button>
+          </Button>
         ) : null}
       />
 
@@ -157,16 +158,17 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
           <option value="active">ใช้งานอยู่</option>
           <option value="inactive">พ้นสภาพ</option>
         </select>
-        <button
+        <Button
           type="button"
-          className="secondary-button"
+          variant="secondary"
+          className="max-[720px]:w-full"
           onClick={() => {
             setFilters({ search: '', divisionId: '', departmentTh: '', statusId: '', active: 'all' });
           }}
         >
           <Icon name="refresh" />
           ล้าง
-        </button>
+        </Button>
       </section>
 
       <DataTable

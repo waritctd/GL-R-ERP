@@ -6,6 +6,7 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Avatar } from '../../components/common/Avatar.jsx';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
+import { Button } from '../../components/common/Button.jsx';
 import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -56,10 +57,10 @@ export function EmployeeDetailPage({ user, onUpdateEmployee }) {
   return (
     <div className="page-stack">
       <Breadcrumbs items={[{ label: 'พนักงานทั้งหมด', onClick: onBack }, { label: employee.nameTh }]} />
-      <button type="button" className="back-button" onClick={onBack}>
+      <Button type="button" variant="text" onClick={onBack}>
         <Icon name="chevronLeft" />
         กลับไปรายชื่อพนักงาน
-      </button>
+      </Button>
 
       <section className="detail-hero">
         <Avatar employee={employee} size="xl" />
@@ -74,10 +75,10 @@ export function EmployeeDetailPage({ user, onUpdateEmployee }) {
         </div>
         <StatusBadge tone={employee.statusTone}>{employee.statusTh}</StatusBadge>
         {canManage ? (
-          <button type="button" className="primary-button" onClick={() => setEditing(true)}>
+          <Button type="button" onClick={() => setEditing(true)}>
             <Icon name="pencil" />
             แก้ไข
-          </button>
+          </Button>
         ) : null}
       </section>
 
