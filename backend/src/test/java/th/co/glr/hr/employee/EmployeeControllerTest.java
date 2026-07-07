@@ -78,6 +78,36 @@ class EmployeeControllerTest {
     }
 
     @Test
+    void resetPasswordReturnsPlaintextTemporaryPasswordForHr() throws Exception {
+        when(employeeService.resetPassword(eq(10L), any(UserPrincipal.class)))
+            .thenReturn(new PasswordResetResult("Temp-Abcd2345"));
+
+        mvc.perform(post("/api/employees/10/reset-password").session(sessionFor("hr")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.temporaryPassword").value("Temp-Abcd2345"));
+
+        verify(employeeService).resetPassword(eq(10L), any(UserPrincipal.class));
+    }
+
+    @Test
+    void forbidsNonHrFromResettingPassword() throws Exception {
+        mvc.perform(post("/api/employees/10/reset-password").session(sessionFor("employee")))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.message").value("Forbidden"));
+
+        verifyNoInteractions(employeeService);
+    }
+
+    @Test
+    void requiresAuthenticationToResetPassword() throws Exception {
+        mvc.perform(post("/api/employees/10/reset-password"))
+            .andExpect(status().isUnauthorized())
+            .andExpect(jsonPath("$.message").value("Not authenticated"));
+
+        verifyNoInteractions(employeeService);
+    }
+
+    @Test
     void selfDetailResponseOmitsPayrollAndSensitiveFields() throws Exception {
         when(employeeService.get(eq(10L), any(UserPrincipal.class)))
             .thenReturn(employee(10L).withoutSensitiveSelfServiceFields());
