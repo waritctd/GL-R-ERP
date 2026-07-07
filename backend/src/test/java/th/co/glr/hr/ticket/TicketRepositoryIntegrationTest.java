@@ -6,7 +6,6 @@ import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
@@ -24,7 +23,6 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * Exercises TicketRepository's batched item insert, summary/pagination SQL, and the multi-query
  * detail fetch against a real PostgreSQL database (issue #28).
  */
-@EnabledIfEnvironmentVariable(named = "TEST_DB_URL", matches = ".+")
 class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private long actorId;

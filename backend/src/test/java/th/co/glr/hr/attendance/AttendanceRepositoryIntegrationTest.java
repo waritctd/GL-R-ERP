@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
@@ -16,7 +15,6 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * plus employee resolution) against a real PostgreSQL database. The Mockito unit tests cannot cover
  * the dynamically built SQL. V7 seeds the SHOWROOM site and SHOWROOM_SC700 device.
  */
-@EnabledIfEnvironmentVariable(named = "TEST_DB_URL", matches = ".+")
 class AttendanceRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private AttendanceRepository repository;
 
