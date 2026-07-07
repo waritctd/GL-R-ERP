@@ -24,6 +24,7 @@ import { DepositNoticePage } from './features/deposits/DepositNoticePage.jsx';
 import { CeoSettingsPage } from './features/ceoSettings/CeoSettingsPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
+import { SALES_ENABLED } from './app/features.js';
 import { hasPermission } from './app/permissions.js';
 import { RequireAccess } from './app/RequireAccess.jsx';
 
@@ -238,26 +239,30 @@ export function App() {
               element={<PayrollPage showToast={showToast} />}
             />
             {/* Frozen sales stack — param-wired to keep working / URL-addressable. */}
-            <Route
-              path="/ticket-overview"
-              element={<TicketDashboard user={user} employee={currentEmployee} showToast={showToast} />}
-            />
-            <Route
-              path="/tickets"
-              element={<TicketListPage user={user} showToast={showToast} />}
-            />
-            <Route
-              path="/tickets/:id"
-              element={<TicketDetailRoute user={user} showToast={showToast} />}
-            />
-            <Route
-              path="/tickets/:ticketId/deposit"
-              element={<DepositNoticeRoute user={user} showToast={showToast} />}
-            />
-            <Route
-              path="/commissions"
-              element={<CommissionPage user={user} showToast={showToast} />}
-            />
+            {SALES_ENABLED && (
+              <>
+                <Route
+                  path="/ticket-overview"
+                  element={<TicketDashboard user={user} employee={currentEmployee} showToast={showToast} />}
+                />
+                <Route
+                  path="/tickets"
+                  element={<TicketListPage user={user} showToast={showToast} />}
+                />
+                <Route
+                  path="/tickets/:id"
+                  element={<TicketDetailRoute user={user} showToast={showToast} />}
+                />
+                <Route
+                  path="/tickets/:ticketId/deposit"
+                  element={<DepositNoticeRoute user={user} showToast={showToast} />}
+                />
+                <Route
+                  path="/commissions"
+                  element={<CommissionPage user={user} showToast={showToast} />}
+                />
+              </>
+            )}
           </Route>
 
           <Route
@@ -265,7 +270,9 @@ export function App() {
             element={<AttendancePage user={user} employees={employees} showToast={showToast} />}
           />
           {/* /ceo-settings had no allowedRoute guard historically (nav-gated only). */}
-          <Route path="/ceo-settings" element={<CeoSettingsPage showToast={showToast} />} />
+          {SALES_ENABLED && (
+            <Route path="/ceo-settings" element={<CeoSettingsPage showToast={showToast} />} />
+          )}
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

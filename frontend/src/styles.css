@@ -1742,6 +1742,19 @@ a.status-badge {
   display: none;
 }
 
+/* Desktop-only notice */
+.desktop-only-notice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-info);
+  border-radius: var(--radius-md);
+  background: var(--color-info-bg);
+  color: var(--color-info-dark);
+  font-size: var(--text-sm);
+}
+
 /* Skeleton */
 .skeleton {
   display: block;
