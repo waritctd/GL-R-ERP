@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { hasPermission } from '../../app/permissions.js';
 import { Avatar } from '../../components/common/Avatar.jsx';
+import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -34,6 +35,7 @@ export function EmployeeDetailPage({ user, employee, onBack, onUpdateEmployee })
 
   return (
     <div className="page-stack">
+      <Breadcrumbs items={[{ label: 'พนักงานทั้งหมด', onClick: onBack }, { label: employee.nameTh }]} />
       <button type="button" className="back-button" onClick={onBack}>
         <Icon name="chevronLeft" />
         กลับไปรายชื่อพนักงาน
