@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { DataTable } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
-import { Skeleton, SkeletonCard } from '../../components/common/Skeleton.jsx';
+import { SkeletonCard } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate } from '../../utils/format.js';
@@ -86,6 +87,77 @@ export function CommissionPage({ user, showToast }) {
     const submitted = records.filter((item) => item.status === 'SUBMITTED').length;
     return { base, approved, submitted };
   }, [records]);
+
+  const commissionColumns = useMemo(() => [
+    {
+      key: 'invoiceNumber',
+      header: 'Invoice',
+      sortable: true,
+      sortAccessor: (record) => record.invoiceDetails.invoiceNumber,
+      searchAccessor: (record) => record.invoiceDetails.invoiceNumber,
+      render: (record) => (
+        <span>
+          <strong>{record.invoiceDetails.invoiceNumber}</strong>
+          <small style={{ color: '#64748b', display: 'block' }}>{kindLabel(record.kind)} · {formatThaiDate(record.invoiceDetails.invoiceDate)}</small>
+        </span>
+      ),
+    },
+    {
+      key: 'salesRepName',
+      header: 'Sales',
+      sortable: true,
+      sortAccessor: (record) => record.salesRepName || record.salesRepId,
+      searchAccessor: (record) => record.salesRepName || record.salesRepId,
+      render: (record) => <span>{record.salesRepName || record.salesRepId}</span>,
+    },
+    {
+      key: 'actualReceived',
+      header: 'ยอดรับจริง',
+      sortable: true,
+      sortAccessor: (record) => Number(record.actualReceived || 0),
+      render: (record) => <code>{formatMoney(record.actualReceived)}</code>,
+    },
+    {
+      key: 'commissionableBase',
+      header: 'ฐานค่าคอม',
+      sortable: true,
+      sortAccessor: (record) => Number(record.commissionableBase || 0),
+      render: (record) => <code>{formatMoney(record.commissionableBase)}</code>,
+    },
+    {
+      key: 'status',
+      header: 'สถานะ',
+      render: (record) => {
+        const status = statusInfo(record.status);
+        return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
+      },
+    },
+    {
+      key: 'actions',
+      header: '',
+      render: (record) => (
+        <span style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
+          {canApprove && (
+            <>
+              <button type="button" className="icon-button" title="แก้ไขค่าหัก" aria-label="แก้ไขค่าหัก" onClick={() => beginEdit(record)}>
+                <Icon name="pencil" size={14} />
+              </button>
+              {record.status === 'SUBMITTED' && (
+                <button type="button" className="icon-button" title="อนุมัติ" aria-label="อนุมัติ" disabled={saving} onClick={() => approve(record.id)}>
+                  <Icon name="check" size={14} />
+                </button>
+              )}
+              {record.kind === 'SALE' && record.status === 'APPROVED' && (
+                <button type="button" className="icon-button" title="บันทึกหักคืน" aria-label="บันทึกหักคืน" disabled={saving} onClick={() => clawback(record.id)}>
+                  <Icon name="close" size={14} />
+                </button>
+              )}
+            </>
+          )}
+        </span>
+      ),
+    },
+  ], [canApprove, saving]);
 
   function updateForm(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -278,93 +350,53 @@ export function CommissionPage({ user, showToast }) {
             </section>
           )}
 
-          <section className="table-panel">
-            <div className="commission-table table-head">
-              <span>Invoice</span>
-              <span>Sales</span>
-              <span>ยอดรับจริง</span>
-              <span>ฐานค่าคอม</span>
-              <span>สถานะ</span>
-              <span />
-            </div>
-            {loading ? (
-              <div aria-busy="true" aria-label="กำลังโหลดรายการค่าคอมมิชชัน">
-                {[0, 1, 2].map((i) => (
-                  <div key={i} className="commission-table table-row">
-                    <span><Skeleton width="70%" height={13} /></span>
-                    <span><Skeleton width="50%" height={13} /></span>
-                    <span><Skeleton width="60%" height={13} /></span>
-                    <span><Skeleton width="60%" height={13} /></span>
-                    <span><Skeleton width={70} height={18} radius="var(--radius-pill)" /></span>
-                    <span />
+          <DataTable
+            columns={commissionColumns}
+            rows={records}
+            getRowKey={(record) => record.id}
+            gridClassName="commission-table"
+            pageSize={20}
+            searchable
+            searchPlaceholder="ค้นหาเลขที่ใบกำกับ / ชื่อ Sales"
+            loading={loading}
+            emptyState={{
+              icon: 'badge',
+              title: 'ยังไม่มีรายการค่าคอม',
+              description: 'เลือกรอบเดือนอื่นหรือบันทึกใบเสร็จใหม่',
+            }}
+          />
+
+          {editingId != null && (() => {
+            const editingRecord = records.find((record) => record.id === editingId);
+            if (!editingRecord) return null;
+            return (
+              <div className="commission-row-wrap">
+                <div style={{ padding: '10px 18px', background: '#f8fafc', borderBottom: '1px solid #e6eaf0', display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr)) auto', gap: 8, alignItems: 'end' }}>
+                  {[
+                    ['transportFee', 'ค่าขนส่ง'],
+                    ['cutFee', 'ค่าตัด'],
+                    ['shortfall', 'รับเงินขาด'],
+                  ].map(([key, label]) => (
+                    <label key={key} style={{ margin: 0, fontSize: 12 }}>
+                      {label}
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={deductionDraft[key]}
+                        onChange={(event) => setDeductionDraft((current) => ({ ...current, [key]: Number(event.target.value) }))}
+                        style={{ marginTop: 4 }}
+                      />
+                    </label>
+                  ))}
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button type="button" className="primary-button" disabled={saving} onClick={() => saveDeductions(editingRecord.id)}>บันทึก</button>
+                    <button type="button" className="secondary-button" disabled={saving} onClick={() => setEditingId(null)}>ยกเลิก</button>
                   </div>
-                ))}
-              </div>
-            ) : records.length === 0 ? (
-              <EmptyState icon="badge" title="ยังไม่มีรายการค่าคอม" description="เลือกรอบเดือนอื่นหรือบันทึกใบเสร็จใหม่" />
-            ) : records.map((record) => {
-              const status = statusInfo(record.status);
-              const editing = editingId === record.id;
-              return (
-                <div key={record.id} className="commission-row-wrap">
-                  <div className="commission-table table-row">
-                    <span>
-                      <strong>{record.invoiceDetails.invoiceNumber}</strong>
-                      <small style={{ color: '#64748b', display: 'block' }}>{kindLabel(record.kind)} · {formatThaiDate(record.invoiceDetails.invoiceDate)}</small>
-                    </span>
-                    <span>{record.salesRepName || record.salesRepId}</span>
-                    <code>{formatMoney(record.actualReceived)}</code>
-                    <code>{formatMoney(record.commissionableBase)}</code>
-                    <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-                    <span style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
-                      {canApprove && (
-                        <>
-                          <button type="button" className="icon-button" title="แก้ไขค่าหัก" aria-label="แก้ไขค่าหัก" onClick={() => beginEdit(record)}>
-                            <Icon name="pencil" size={14} />
-                          </button>
-                          {record.status === 'SUBMITTED' && (
-                            <button type="button" className="icon-button" title="อนุมัติ" aria-label="อนุมัติ" disabled={saving} onClick={() => approve(record.id)}>
-                              <Icon name="check" size={14} />
-                            </button>
-                          )}
-                          {record.kind === 'SALE' && record.status === 'APPROVED' && (
-                            <button type="button" className="icon-button" title="บันทึกหักคืน" aria-label="บันทึกหักคืน" disabled={saving} onClick={() => clawback(record.id)}>
-                              <Icon name="close" size={14} />
-                            </button>
-                          )}
-                        </>
-                      )}
-                    </span>
-                  </div>
-                  {editing && (
-                    <div style={{ padding: '10px 18px', background: '#f8fafc', borderBottom: '1px solid #e6eaf0', display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr)) auto', gap: 8, alignItems: 'end' }}>
-                      {[
-                        ['transportFee', 'ค่าขนส่ง'],
-                        ['cutFee', 'ค่าตัด'],
-                        ['shortfall', 'รับเงินขาด'],
-                      ].map(([key, label]) => (
-                        <label key={key} style={{ margin: 0, fontSize: 12 }}>
-                          {label}
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={deductionDraft[key]}
-                            onChange={(event) => setDeductionDraft((current) => ({ ...current, [key]: Number(event.target.value) }))}
-                            style={{ marginTop: 4 }}
-                          />
-                        </label>
-                      ))}
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button type="button" className="primary-button" disabled={saving} onClick={() => saveDeductions(record.id)}>บันทึก</button>
-                        <button type="button" className="secondary-button" disabled={saving} onClick={() => setEditingId(null)}>ยกเลิก</button>
-                      </div>
-                    </div>
-                  )}
                 </div>
-              );
-            })}
-          </section>
+              </div>
+            );
+          })()}
         </>
       )}
 
