@@ -1,54 +1,103 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/index.js';
+import { queryKeys } from '../api/queryKeys.js';
 import { allowedRoute, hasPermission } from '../app/permissions.js';
 
 export function useHrData({ user, showToast }) {
-  const [currentEmployee, setCurrentEmployee] = useState(null);
-  const [employees, setEmployees] = useState([]);
-  const [profileRequests, setProfileRequests] = useState([]);
-  const [dashboardSummary, setDashboardSummary] = useState(null);
+  const queryClient = useQueryClient();
+
+  // Local UI state (not server state). Routing is branch 5's concern.
   const [route, setRoute] = useState('dashboard');
   const [selectedEmployee, setSelectedEmployee] = useState(null);
 
-  async function loadData(nextUser, preferredRoute = route) {
-    const safeRoute = allowedRoute(preferredRoute, nextUser);
-    const currentEmployeePromise = nextUser.employeeId
-      ? api.employees.get(nextUser.employeeId).then((response) => response.employee)
-      : Promise.resolve(null);
-    const employeesPromise = hasPermission(nextUser.role, 'canViewEmployees')
-      ? api.employees.list().then((response) => response.employees)
-      : currentEmployeePromise.then((employee) => (employee ? [employee] : []));
-    const requestsPromise = api.profileRequests.list()
+  const canViewEmployees = !!user && hasPermission(user.role, 'canViewEmployees');
+
+  // --- Reads (all enabled-gated so nothing fires until `user` is set) ---
+  const currentEmployeeQuery = useQuery({
+    queryKey: queryKeys.currentEmployee(user?.employeeId),
+    queryFn: () => api.employees.get(user.employeeId).then((response) => response.employee),
+    enabled: !!user?.employeeId,
+  });
+  const currentEmployee = currentEmployeeQuery.data ?? null;
+
+  const employeesQuery = useQuery({
+    queryKey: queryKeys.employees(),
+    queryFn: () => api.employees.list().then((response) => response.employees),
+    enabled: canViewEmployees,
+  });
+
+  // Users without canViewEmployees never run the list query; their "employees"
+  // is derived from their own record, preserving the pre-Query behavior.
+  const derivedEmployees = useMemo(
+    () => (currentEmployee ? [currentEmployee] : []),
+    [currentEmployee],
+  );
+  const employees = canViewEmployees ? (employeesQuery.data ?? []) : derivedEmployees;
+
+  const profileRequestsQuery = useQuery({
+    queryKey: queryKeys.profileRequests(),
+    queryFn: () => api.profileRequests.list()
       .then((response) => response.profileRequests)
-      .catch(() => []);
-    const dashboardPromise = api.dashboard?.summary
-      ? api.dashboard.summary()
-        .then((response) => response?.summary ?? response ?? null)
-        .catch(() => null)
-      : Promise.resolve(null);
+      .catch(() => []),
+    enabled: !!user,
+  });
+  const profileRequests = profileRequestsQuery.data ?? [];
 
-    const [nextCurrentEmployee, nextEmployees, nextRequests, nextDashboardSummary] = await Promise.all([
-      currentEmployeePromise,
-      employeesPromise,
-      requestsPromise,
-      dashboardPromise,
-    ]);
+  const dashboardSummaryQuery = useQuery({
+    queryKey: queryKeys.dashboardSummary(),
+    queryFn: () => api.dashboard.summary()
+      .then((response) => response?.summary ?? response ?? null)
+      .catch(() => null),
+    enabled: !!user && !!api.dashboard?.summary,
+  });
+  const dashboardSummary = dashboardSummaryQuery.data ?? null;
 
-    setCurrentEmployee(nextCurrentEmployee);
-    setEmployees(nextEmployees);
-    setProfileRequests(nextRequests);
-    setDashboardSummary(nextDashboardSummary);
-    setRoute(safeRoute);
-    return { nextCurrentEmployee, nextEmployees, nextRequests, nextDashboardSummary };
-  }
+  // --- Mutations (exposed as same-signature async wrappers) ---
+  const createEmployeeMutation = useMutation({
+    mutationFn: (payload) => api.employees.create(payload).then((response) => response.employee),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.employees() });
+      routeTo('employees');
+      showToast('success', 'เพิ่มพนักงานเรียบร้อย');
+    },
+  });
+
+  const updateEmployeeMutation = useMutation({
+    mutationFn: ({ id, payload }) => api.employees.update(id, payload).then((response) => response.employee),
+    onSuccess: (employee, { id }) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.employees() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.currentEmployee(id) });
+      setSelectedEmployee(employee);
+      showToast('success', 'บันทึกข้อมูลพนักงานแล้ว');
+    },
+  });
+
+  const createProfileRequestMutation = useMutation({
+    mutationFn: (payload) => api.profileRequests.create(payload).then((response) => response.profileRequest),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.profileRequests() });
+      showToast('success', 'ส่งคำขอแก้ไขเรียบร้อย');
+    },
+  });
+
+  const reviewProfileRequestMutation = useMutation({
+    mutationFn: ({ id, status }) => api.profileRequests.update(id, { status }).then((response) => response.profileRequest),
+    onSuccess: (profileRequest, { status }) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.profileRequests() });
+      showToast(status === 'approved' ? 'success' : 'info', status === 'approved' ? 'อนุมัติคำขอแล้ว' : 'ปฏิเสธคำขอแล้ว');
+    },
+  });
 
   function resetData() {
-    setCurrentEmployee(null);
-    setEmployees([]);
-    setProfileRequests([]);
-    setDashboardSummary(null);
     setRoute('dashboard');
     setSelectedEmployee(null);
+    // Prefix-match removes ['currentEmployee', <any id>] so a different role
+    // logging in next never sees the previous user's cached record.
+    queryClient.removeQueries({ queryKey: ['currentEmployee'] });
+    queryClient.removeQueries({ queryKey: queryKeys.employees() });
+    queryClient.removeQueries({ queryKey: queryKeys.profileRequests() });
+    queryClient.removeQueries({ queryKey: queryKeys.dashboardSummary() });
   }
 
   function routeTo(nextRoute) {
@@ -62,33 +111,6 @@ export function useHrData({ user, showToast }) {
     setRoute('detail');
   }
 
-  async function createEmployee(payload) {
-    const response = await api.employees.create(payload);
-    setEmployees((current) => [response.employee, ...current]);
-    setRoute(allowedRoute('employees', user));
-    showToast('success', 'เพิ่มพนักงานเรียบร้อย');
-  }
-
-  async function updateEmployee(id, payload) {
-    const response = await api.employees.update(id, payload);
-    setSelectedEmployee(response.employee);
-    setEmployees((current) => current.map((employee) => (employee.id === id ? response.employee : employee)));
-    setCurrentEmployee((current) => (current?.id === id ? response.employee : current));
-    showToast('success', 'บันทึกข้อมูลพนักงานแล้ว');
-  }
-
-  async function createProfileRequest(payload) {
-    const response = await api.profileRequests.create(payload);
-    setProfileRequests((current) => [response.profileRequest, ...current]);
-    showToast('success', 'ส่งคำขอแก้ไขเรียบร้อย');
-  }
-
-  async function reviewProfileRequest(id, status) {
-    const response = await api.profileRequests.update(id, { status });
-    setProfileRequests((current) => current.map((request) => (request.id === id ? response.profileRequest : request)));
-    showToast(status === 'approved' ? 'success' : 'info', status === 'approved' ? 'อนุมัติคำขอแล้ว' : 'ปฏิเสธคำขอแล้ว');
-  }
-
   return {
     currentEmployee,
     employees,
@@ -96,13 +118,12 @@ export function useHrData({ user, showToast }) {
     dashboardSummary,
     route,
     selectedEmployee,
-    loadData,
     resetData,
     routeTo,
     openEmployee,
-    createEmployee,
-    updateEmployee,
-    createProfileRequest,
-    reviewProfileRequest,
+    createEmployee: (payload) => createEmployeeMutation.mutateAsync(payload),
+    updateEmployee: (id, payload) => updateEmployeeMutation.mutateAsync({ id, payload }),
+    createProfileRequest: (payload) => createProfileRequestMutation.mutateAsync(payload),
+    reviewProfileRequest: (id, status) => reviewProfileRequestMutation.mutateAsync({ id, status }),
   };
 }
