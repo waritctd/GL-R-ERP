@@ -10,7 +10,7 @@ export function Breadcrumbs({ items }) {
           const isLast = index === items.length - 1;
           return (
             <li key={item.label + index}>
-              {item.onClick && !isLast ? (
+              {typeof item.onClick === 'function' && !isLast ? (
                 <button type="button" onClick={item.onClick}>
                   {item.label}
                 </button>
