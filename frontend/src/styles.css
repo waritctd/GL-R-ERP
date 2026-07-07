@@ -201,16 +201,14 @@ code {
 }
 
 .login-form h1,
-.page-heading h1,
-.detail-hero h1 {
+.page-heading h1 {
   margin: 0;
   font-size: var(--text-2xl);
   line-height: 1.2;
 }
 
 .login-form p,
-.page-heading p,
-.detail-hero p {
+.page-heading p {
   margin: 4px 0 0;
   color: var(--color-text-muted);
 }
@@ -301,7 +299,6 @@ textarea:focus {
 .topbar-user span,
 .sidebar-account small,
 .stat-helper,
-.field-list dt,
 .request-feed small,
 .table-row small {
   display: block;
@@ -576,7 +573,6 @@ textarea:focus {
 .stat-card,
 .panel,
 .table-panel,
-.detail-hero,
 .profile-strip {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -647,13 +643,6 @@ textarea:focus {
 .stat-label {
   margin-top: 5px;
   font-weight: 700;
-}
-
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: 1.15fr 0.85fr;
-  gap: 18px;
-  align-items: start;
 }
 
 .panel {
@@ -736,21 +725,11 @@ textarea:focus {
   font-weight: 700;
 }
 
-.profile-strip,
-.detail-hero {
+.profile-strip {
   display: flex;
   align-items: center;
   gap: 18px;
   padding: 20px;
-}
-
-.detail-hero > div:nth-child(2) {
-  flex: 1;
-  min-width: 0;
-}
-
-.detail-hero.compact {
-  max-width: 980px;
 }
 
 .hero-meta {
@@ -766,22 +745,6 @@ textarea:focus {
   display: inline-flex;
   gap: 7px;
   align-items: center;
-}
-
-.filter-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 14px;
-}
-
-.filter-bar select {
-  width: auto;
-  min-width: 142px;
 }
 
 .search-field {
@@ -871,20 +834,8 @@ textarea:focus {
   background: var(--color-surface-hover);
 }
 
-.employee-table {
-  grid-template-columns: minmax(0,2.2fr) minmax(0,0.9fr) minmax(0,1.7fr) minmax(0,1.1fr) minmax(0,1fr) minmax(0,0.9fr);
-}
-
 .request-table {
   grid-template-columns: minmax(0,1.8fr) minmax(0,1.1fr) minmax(0,1.6fr) minmax(0,1.7fr) minmax(0,0.9fr) minmax(0,1.2fr);
-}
-
-.request-table.mine {
-  grid-template-columns: minmax(0,1.2fr) minmax(0,2fr) minmax(0,2fr) minmax(0,0.9fr) minmax(0,1fr);
-}
-
-.attendance-table {
-  grid-template-columns: 1.35fr 1.5fr 0.8fr 1.2fr 0.8fr 1.15fr;
 }
 
 .user-table {
@@ -909,20 +860,6 @@ textarea:focus {
 
 .payroll-table {
   grid-template-columns: minmax(0,1.6fr) minmax(0,0.9fr) minmax(0,0.8fr) minmax(0,1fr) minmax(0,0.9fr) minmax(0,0.9fr);
-}
-
-.overtime-table {
-  grid-template-columns: minmax(0,1.25fr) minmax(0,1.45fr) minmax(0,1.55fr) minmax(0,1fr) minmax(0,0.75fr) minmax(0,0.8fr);
-}
-
-.leave-table {
-  grid-template-columns: minmax(0,1.35fr) minmax(0,1.1fr) minmax(0,1.65fr) minmax(0,0.75fr) minmax(0,1.35fr) minmax(0,0.8fr);
-}
-
-.leave-balance-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
 }
 
 .leave-balance-card {
@@ -1362,38 +1299,6 @@ a.status-badge {
   border-bottom-color: var(--color-primary);
 }
 
-.info-grid {
-  display: grid;
-  gap: 16px;
-}
-
-.info-grid.two {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.field-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 15px 18px;
-  margin: 16px 0 0;
-}
-
-.field-list.three {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.field-list dt,
-.field-list dd {
-  margin: 0;
-}
-
-.field-list dd {
-  margin-top: 3px;
-  font-weight: 700;
-  color: var(--color-text);
-  overflow-wrap: anywhere;
-}
-
 .address-line {
   line-height: 1.7;
   color: var(--color-text-secondary);
@@ -1827,22 +1732,15 @@ a.status-badge {
     justify-items: center;
   }
 
-  .stat-grid,
-  .dashboard-grid,
-  .info-grid.two {
+  .stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .employee-table,
-  .attendance-table,
   .request-table,
-  .request-table.mine,
   .user-table,
   .commission-table,
   .commission-payroll-table,
   .payroll-table,
-  .overtime-table,
-  .leave-table,
   .reflow-cards {
     min-width: 900px;
   }
@@ -1863,12 +1761,7 @@ a.status-badge {
 @media (max-width: 720px) {
   .login-panel,
   .stat-grid,
-  .dashboard-grid,
-  .info-grid.two,
-  .field-list,
-  .field-list.three,
   .form-grid,
-  .leave-balance-grid,
   .payroll-detail-grid,
   .payroll-special-grid {
     grid-template-columns: 1fr;
@@ -1904,15 +1797,12 @@ a.status-badge {
   }
 
   .page-heading,
-  .detail-hero,
   .profile-strip,
   .pagination {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .filter-bar select,
-  .filter-bar .secondary-button,
   .attendance-import-panel .success-button {
     width: 100%;
   }
@@ -1990,36 +1880,23 @@ a.status-badge {
      instead of a 900px horizontal-scroll trap. Sales-stack tables
      (.user-table / .commission-table / .commission-payroll-table) are
      intentionally excluded — they keep scrolling horizontally. */
-  .employee-table,
-  .attendance-table,
   .request-table,
-  .request-table.mine,
   .payroll-table,
-  .overtime-table,
-  .leave-table,
   .reflow-cards {
     /* Override the 1040px min-width:900px scroll trap for these classes. */
     min-width: 0;
   }
 
   /* Each cell now carries its own label, so hide the shared header row. */
-  .employee-table.table-head,
-  .attendance-table.table-head,
   .request-table.table-head,
   .payroll-table.table-head,
-  .overtime-table.table-head,
-  .leave-table.table-head,
   .reflow-cards.table-head {
     display: none;
   }
 
   /* Turn every data row into a full-width card. */
-  .employee-table.table-row,
-  .attendance-table.table-row,
   .request-table.table-row,
   .payroll-table.table-row,
-  .overtime-table.table-row,
-  .leave-table.table-row,
   .reflow-cards.table-row {
     display: grid;
     grid-template-columns: 1fr;
@@ -2032,23 +1909,15 @@ a.status-badge {
     background: var(--color-surface);
   }
 
-  .employee-table.table-row + .table-row,
-  .attendance-table.table-row + .table-row,
   .request-table.table-row + .table-row,
   .payroll-table.table-row + .table-row,
-  .overtime-table.table-row + .table-row,
-  .leave-table.table-row + .table-row,
   .reflow-cards.table-row + .table-row {
     margin-top: 10px;
   }
 
   /* Each cell on its own line. */
-  .employee-table.table-row > span,
-  .attendance-table.table-row > span,
   .request-table.table-row > span,
   .payroll-table.table-row > span,
-  .overtime-table.table-row > span,
-  .leave-table.table-row > span,
   .reflow-cards.table-row > span {
     display: block;
     width: 100%;
@@ -2057,12 +1926,8 @@ a.status-badge {
 
   /* Show the column name as a small muted label above the value.
      Only cells that carry a non-empty data-label get a label. */
-  .employee-table.table-row > span[data-label]:not([data-label=""])::before,
-  .attendance-table.table-row > span[data-label]:not([data-label=""])::before,
   .request-table.table-row > span[data-label]:not([data-label=""])::before,
   .payroll-table.table-row > span[data-label]:not([data-label=""])::before,
-  .overtime-table.table-row > span[data-label]:not([data-label=""])::before,
-  .leave-table.table-row > span[data-label]:not([data-label=""])::before,
   .reflow-cards.table-row > span[data-label]:not([data-label=""])::before {
     content: attr(data-label);
     display: block;
@@ -2075,12 +1940,8 @@ a.status-badge {
   }
 
   /* Keep the action cell's buttons laid out in a row within its card line. */
-  .employee-table.table-row > .row-actions,
-  .attendance-table.table-row > .row-actions,
   .request-table.table-row > .row-actions,
   .payroll-table.table-row > .row-actions,
-  .overtime-table.table-row > .row-actions,
-  .leave-table.table-row > .row-actions,
   .reflow-cards.table-row > .row-actions {
     display: flex;
     flex-wrap: wrap;
