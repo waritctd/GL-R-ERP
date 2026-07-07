@@ -9,8 +9,11 @@ import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { Button } from '../../components/common/Button.jsx';
 import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
+import { DetailHero, FieldList, InfoGrid } from '../../components/common/FieldList.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { PageStack } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { cn } from '../../utils/cn.js';
 import { formatMoney, formatThaiDate } from '../../utils/format.js';
 import { EmployeeFormModal } from './EmployeeFormModal.jsx';
 
@@ -55,19 +58,19 @@ export function EmployeeDetailPage({ user, onUpdateEmployee }) {
   }
 
   return (
-    <div className="page-stack">
+    <PageStack>
       <Breadcrumbs items={[{ label: 'พนักงานทั้งหมด', onClick: onBack }, { label: employee.nameTh }]} />
       <Button type="button" variant="text" onClick={onBack}>
         <Icon name="chevronLeft" />
         กลับไปรายชื่อพนักงาน
       </Button>
 
-      <section className="detail-hero">
+      <DetailHero>
         <Avatar employee={employee} size="xl" />
         <div>
           <h1>{employee.nameTh}</h1>
           <p>{employee.nameEn} · ชื่อเล่น {employee.nickName}</p>
-          <div className="hero-meta">
+          <div className="flex flex-wrap gap-x-5 gap-y-[10px] mt-3 text-text-secondary text-sm [&_span]:inline-flex [&_span]:gap-[7px] [&_span]:items-center">
             <span><Icon name="badge" /> <code>{employee.code}</code></span>
             <span><Icon name="briefcase" /> {employee.positionTh}</span>
             <span><Icon name="building" /> {employee.divisionTh} · {employee.departmentTh}</span>
@@ -80,11 +83,19 @@ export function EmployeeDetailPage({ user, onUpdateEmployee }) {
             แก้ไข
           </Button>
         ) : null}
-      </section>
+      </DetailHero>
 
-      <nav className="tabs" aria-label="Employee detail sections">
+      <nav className="flex gap-[2px] border-b border-border-input overflow-x-auto" aria-label="Employee detail sections">
         {visibleTabs.map((tab) => (
-          <button key={tab.id} type="button" className={activeTab === tab.id ? 'active' : ''} onClick={() => setActiveTab(tab.id)}>
+          <button
+            key={tab.id}
+            type="button"
+            className={cn(
+              'inline-flex items-center gap-[7px] min-h-[44px] px-[14px] border-0 border-b-2 border-transparent bg-transparent text-text-muted font-bold whitespace-nowrap',
+              activeTab === tab.id ? 'text-primary border-b-primary' : '',
+            )}
+            onClick={() => setActiveTab(tab.id)}
+          >
             <Icon name={tab.icon} />
             {tab.label}
           </button>
@@ -97,47 +108,47 @@ export function EmployeeDetailPage({ user, onUpdateEmployee }) {
       {activeTab === 'sensitive' && canSeeSensitive ? <SensitiveTab employee={employee} /> : null}
 
       {editing ? <EmployeeFormModal employee={employee} onClose={() => setEditing(false)} onSubmit={submitEdit} /> : null}
-    </div>
+    </PageStack>
   );
 }
 
 function PersonalTab({ employee }) {
   return (
-    <div className="info-grid two">
+    <InfoGrid two>
       <CollapsibleSection title="ข้อมูลส่วนบุคคล">
-        <dl className="field-list">
+        <FieldList>
           <div><dt>คำนำหน้า · เพศ</dt><dd>{employee.titleTh} · {employee.genderTh}</dd></div>
           <div><dt>วันเกิด</dt><dd>{formatThaiDate(employee.birthDate)} ({employee.age} ปี)</dd></div>
           <div><dt>สัญชาติ</dt><dd>{employee.nationality}</dd></div>
           <div><dt>สถานภาพ</dt><dd>{employee.maritalStatus}</dd></div>
-        </dl>
+        </FieldList>
       </CollapsibleSection>
       <CollapsibleSection title="ช่องทางติดต่อ">
-        <dl className="field-list">
+        <FieldList>
           <div><dt>อีเมล</dt><dd>{employee.email}</dd></div>
           <div><dt>เบอร์โทรศัพท์</dt><dd>{employee.phone}</dd></div>
           <div><dt>บัตรพนักงาน</dt><dd><code>{employee.badge}</code></dd></div>
-        </dl>
+        </FieldList>
       </CollapsibleSection>
       <CollapsibleSection title="ที่อยู่ปัจจุบัน" defaultOpen={false}>
-        <p className="address-line">{employee.currentAddress.line1}<br />{employee.currentAddress.district} {employee.currentAddress.province} {employee.currentAddress.postalCode}</p>
+        <p className="leading-[1.7] text-text-secondary">{employee.currentAddress.line1}<br />{employee.currentAddress.district} {employee.currentAddress.province} {employee.currentAddress.postalCode}</p>
       </CollapsibleSection>
       <CollapsibleSection title="ผู้ติดต่อฉุกเฉิน" defaultOpen={false}>
-        <dl className="field-list">
+        <FieldList>
           <div><dt>ชื่อ</dt><dd>{employee.emergencyContact.name}</dd></div>
           <div><dt>ความสัมพันธ์</dt><dd>{employee.emergencyContact.relationship}</dd></div>
           <div><dt>เบอร์โทร</dt><dd>{employee.emergencyContact.phone}</dd></div>
-        </dl>
+        </FieldList>
       </CollapsibleSection>
-    </div>
+    </InfoGrid>
   );
 }
 
 function EmploymentTab({ employee, canSeeSalary }) {
   return (
-    <div className="info-grid two">
+    <InfoGrid two>
       <CollapsibleSection title="การมอบหมายงานปัจจุบัน">
-        <dl className="field-list">
+        <FieldList>
           <div><dt>ฝ่าย</dt><dd>{employee.divisionTh}</dd></div>
           <div><dt>แผนก</dt><dd>{employee.departmentTh}</dd></div>
           <div><dt>ตำแหน่ง</dt><dd>{employee.positionTh}</dd></div>
@@ -146,7 +157,7 @@ function EmploymentTab({ employee, canSeeSalary }) {
           <div><dt>รายงานต่อ</dt><dd>{employee.reportsTo}</dd></div>
           <div><dt>วันที่เริ่มงาน</dt><dd>{formatThaiDate(employee.hireDate)}</dd></div>
           <div><dt>วันที่บรรจุ</dt><dd>{formatThaiDate(employee.confirmationDate)}</dd></div>
-        </dl>
+        </FieldList>
       </CollapsibleSection>
       <div className="highlight-panel">
         <CollapsibleSection title="ค่าตอบแทน">
@@ -160,13 +171,13 @@ function EmploymentTab({ employee, canSeeSalary }) {
           )}
         </CollapsibleSection>
       </div>
-    </div>
+    </InfoGrid>
   );
 }
 
 function HistoryTab({ employee, canSeeSalary }) {
   return (
-    <div className="info-grid two">
+    <InfoGrid two>
       <CollapsibleSection title="ประวัติการมอบหมายงาน">
         <div className="timeline-list">
           {employee.assignments.map((assignment) => (
@@ -193,7 +204,7 @@ function HistoryTab({ employee, canSeeSalary }) {
           </div>
         ) : <p className="muted">แสดงเฉพาะบทบาท HR และ ADMIN</p>}
       </CollapsibleSection>
-    </div>
+    </InfoGrid>
   );
 }
 
@@ -205,13 +216,13 @@ function SensitiveTab({ employee }) {
         defaultOpen={false}
         headerRight={<StatusBadge tone="teal">PDPA</StatusBadge>}
       >
-        <dl className="field-list three">
+        <FieldList columns={3}>
           <div><dt>เลขบัตรประชาชน</dt><dd><code>{employee.sensitive.nationalId}</code></dd></div>
           <div><dt>เลขประจำตัวผู้เสียภาษี</dt><dd><code>{employee.sensitive.taxId}</code></dd></div>
           <div><dt>เลขประกันสังคม</dt><dd><code>{employee.sensitive.socialSecurityNo}</code></dd></div>
           <div><dt>โรงพยาบาลประกันสังคม</dt><dd>{employee.sensitive.socialSecurityHospital}</dd></div>
           <div><dt>กองทุนสำรองเลี้ยงชีพ</dt><dd><code>{employee.sensitive.providentFundNo}</code></dd></div>
-        </dl>
+        </FieldList>
       </CollapsibleSection>
     </div>
   );
