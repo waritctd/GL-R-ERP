@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/index.js';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
+import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
@@ -94,6 +96,11 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
   const [employeeOptions, setEmployeeOptions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [confirmState, setConfirmState] = useState(null);
+
+  const otTimeRangeInvalid = Boolean(
+    form.plannedStartAt && form.plannedEndAt && form.plannedEndAt <= form.plannedStartAt,
+  );
 
   const submitEmployeeOptions = useMemo(
     () => employeeOptions.filter((employee) => employee.self || employee.directReport || user.role === 'admin'),
@@ -172,6 +179,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
 
   async function submitOvertime(event) {
     event.preventDefault();
+    if (otTimeRangeInvalid) return;
     setSaving(true);
     try {
       await api.overtime.create({
@@ -205,13 +213,17 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
     }
   }
 
-  async function reject(id) {
-    const reviewerNote = window.prompt('เหตุผลการปฏิเสธ');
+  function reject(id) {
+    setConfirmState({ kind: 'reject', id });
+  }
+
+  async function confirmReject(reviewerNote) {
     if (!reviewerNote?.trim()) return;
     setSaving(true);
     try {
-      await api.overtime.reject(id, { reviewerNote: reviewerNote.trim() });
+      await api.overtime.reject(confirmState.id, { reviewerNote: reviewerNote.trim() });
       showToast('success', 'ปฏิเสธคำขอ OT แล้ว');
+      setConfirmState(null);
       await loadRequests(filters);
     } catch (error) {
       showToast('error', error.message || 'ปฏิเสธ OT ไม่สำเร็จ');
@@ -238,14 +250,21 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
     return ['SUBMITTED', 'APPROVED'].includes(request.status) && managesRequest(request);
   }
 
-  async function cancel(id) {
+  function cancel(id) {
     const request = requests.find((item) => item.id === id);
-    const reviewerNote = request && canManagerCancel(request) ? window.prompt('หมายเหตุการยกเลิก (ถ้ามี)') : '';
-    if (reviewerNote === null) return;
+    if (request && canManagerCancel(request)) {
+      setConfirmState({ kind: 'cancel', id });
+      return;
+    }
+    doCancel(id, '');
+  }
+
+  async function doCancel(id, reviewerNote) {
     setSaving(true);
     try {
       await api.overtime.cancel(id, { reviewerNote: reviewerNote?.trim() || null });
       showToast('success', 'ยกเลิกคำขอ OT แล้ว');
+      setConfirmState(null);
       await loadRequests(filters);
     } catch (error) {
       showToast('error', error.message || 'ยกเลิก OT ไม่สำเร็จ');
@@ -344,20 +363,37 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
               <option value="HOLIDAY">วันหยุด/วันหยุดนักขัตฤกษ์ · 3x</option>
             </select>
           </label>
-          <label>
-            เริ่ม
-            <input type="datetime-local" value={form.plannedStartAt} onChange={(event) => updateForm('plannedStartAt', event.target.value)} required />
-          </label>
-          <label>
-            สิ้นสุด
-            <input type="datetime-local" value={form.plannedEndAt} onChange={(event) => updateForm('plannedEndAt', event.target.value)} required />
-          </label>
+          <FormField label="เริ่ม" htmlFor="ot-planned-start">
+            <input
+              id="ot-planned-start"
+              type="datetime-local"
+              value={form.plannedStartAt}
+              onChange={(event) => updateForm('plannedStartAt', event.target.value)}
+              required
+            />
+          </FormField>
+          <FormField
+            label="สิ้นสุด"
+            htmlFor="ot-planned-end"
+            error={otTimeRangeInvalid ? 'เวลาสิ้นสุดต้องอยู่หลังเวลาเริ่ม' : undefined}
+          >
+            <input
+              id="ot-planned-end"
+              type="datetime-local"
+              value={form.plannedEndAt}
+              onChange={(event) => updateForm('plannedEndAt', event.target.value)}
+              className={otTimeRangeInvalid ? 'is-invalid' : ''}
+              aria-invalid={otTimeRangeInvalid}
+              aria-describedby={otTimeRangeInvalid ? fieldErrorId('ot-planned-end') : undefined}
+              required
+            />
+          </FormField>
           <label className="span-2">
             เหตุผลความจำเป็น
             <textarea rows={3} value={form.reason} onChange={(event) => updateForm('reason', event.target.value)} required />
           </label>
           <div className="span-2 row-actions">
-            <button type="submit" className="primary-button" disabled={saving}>
+            <button type="submit" className="primary-button" disabled={saving || otTimeRangeInvalid}>
               <Icon name="plus" />
               ส่งคำขอ
             </button>
@@ -425,6 +461,32 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
           );
         })}
       </section>
+
+      <ConfirmDialog
+        open={confirmState?.kind === 'reject'}
+        title="ปฏิเสธคำขอ OT"
+        message="ยืนยันการปฏิเสธคำขอ OT นี้?"
+        confirmLabel="ปฏิเสธคำขอ"
+        tone="danger"
+        busy={saving}
+        requireReason
+        reasonLabel="เหตุผลการปฏิเสธ"
+        onConfirm={confirmReject}
+        onCancel={() => setConfirmState(null)}
+      />
+      <ConfirmDialog
+        open={confirmState?.kind === 'cancel'}
+        title="ยกเลิกคำขอ OT"
+        message="ยืนยันการยกเลิกคำขอ OT นี้?"
+        confirmLabel="ยกเลิกคำขอ"
+        tone="danger"
+        busy={saving}
+        requireReason
+        optionalReason
+        reasonLabel="หมายเหตุการยกเลิก (ถ้ามี)"
+        onConfirm={(reason) => doCancel(confirmState.id, reason)}
+        onCancel={() => setConfirmState(null)}
+      />
     </div>
   );
 }
