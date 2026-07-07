@@ -3,6 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { hasPermission } from '../../app/permissions.js';
 import { roleLabel } from '../../utils/format.js';
 import { Avatar } from '../common/Avatar.jsx';
+import { ErrorBoundary } from '../common/ErrorBoundary.jsx';
 import { Icon } from '../common/Icon.jsx';
 import { NotificationBell } from '../common/NotificationBell.jsx';
 import { Sidebar } from './Sidebar.jsx';
@@ -144,7 +145,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
             </button>
           </div>
         </header>
-        <div className="content-scroll"><Outlet /></div>
+        <div className="content-scroll"><ErrorBoundary key={location.pathname}><Outlet /></ErrorBoundary></div>
       </main>
     </div>
   );
