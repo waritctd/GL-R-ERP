@@ -57,11 +57,17 @@ git mv docs/{M0_SURVEY.md,QUOTATION_AND_REVISION_PLAN.md,TICKET_DASHBOARD_PLAN.m
 ## Known Risks
 - None material (docs-only).
 
+## Branch Pruning (done 2026-07-07, repo-admin — not part of this PR diff)
+Evidence-based prune using GitHub PR state (merged-PR head = safe; open-PR head = protected):
+- Deleted **10 local** merged branches and **27 remote** branches (26 whose PRs were merged + 1
+  ancestor of `origin/main` with no PR: `feat/sit-uat-blockers`).
+- **Kept** the 2 open-PR branches (`backend/openapi-docs` #127, `docs/v0.1-cleanup` #128).
+- **Left for owner review — 4 orphan remotes** (no merged PR, not ancestors of `main`; may be
+  unmerged/abandoned WIP): `codex/complete-payroll-feature`, `demo/all-roles-showcase`,
+  `docs/security-audit-report`, `yang/ticket`.
+
 ## Things Not Finished
-- **Branch pruning** — repo-admin action (not a file diff). ~10 local branches are already merged into
-  `main` and safe to delete; several remote branches are also merged. Remote deletion is
-  outward-facing/hard-to-reverse, so it needs explicit owner confirmation before running. Track and
-  execute separately from this PR.
+- Owner to decide on the 4 orphan remote branches above (keep vs delete).
 
 ## Recommended Next Agent
 Owner: review/merge this PR. Then the remaining v0.1.0 gates are the **desktop-label** (#2) and
