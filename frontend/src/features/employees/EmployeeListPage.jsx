@@ -5,6 +5,7 @@ import { Avatar } from '../../components/common/Avatar.jsx';
 import { Button } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { FilterBar, PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate } from '../../utils/format.js';
@@ -119,7 +120,7 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
   }
 
   return (
-    <div className="page-stack">
+    <PageStack>
       <PageHeader
         title="พนักงานทั้งหมด"
         subtitle="ค้นหา กรอง และดูข้อมูลพนักงาน"
@@ -131,8 +132,8 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
         ) : null}
       />
 
-      <section className="filter-bar">
-        <label className="search-field">
+      <FilterBar>
+        <label className="relative flex-1 min-w-[240px] [&_svg]:absolute [&_svg]:left-3 [&_svg]:top-1/2 [&_svg]:-translate-y-1/2 [&_svg]:text-text-faint [&_input]:pl-10">
           <Icon name="search" />
           <input
             value={filters.search}
@@ -141,19 +142,39 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
             aria-label="ค้นหาพนักงาน"
           />
         </label>
-        <select aria-label="กรองตามฝ่าย" value={filters.divisionId} onChange={(event) => updateFilter('divisionId', event.target.value)}>
+        <select
+          className="w-auto min-w-[142px] max-[720px]:w-full"
+          aria-label="กรองตามฝ่าย"
+          value={filters.divisionId}
+          onChange={(event) => updateFilter('divisionId', event.target.value)}
+        >
           <option value="">ทุกฝ่าย</option>
           {divisionOptions.map((division) => <option key={division.value} value={division.value}>{division.label}</option>)}
         </select>
-        <select aria-label="กรองตามแผนก" value={filters.departmentTh} onChange={(event) => updateFilter('departmentTh', event.target.value)}>
+        <select
+          className="w-auto min-w-[142px] max-[720px]:w-full"
+          aria-label="กรองตามแผนก"
+          value={filters.departmentTh}
+          onChange={(event) => updateFilter('departmentTh', event.target.value)}
+        >
           <option value="">ทุกแผนก</option>
           {departmentOptions.map((department) => <option key={department.value} value={department.value}>{department.label}</option>)}
         </select>
-        <select aria-label="กรองตามสถานะ" value={filters.statusId} onChange={(event) => updateFilter('statusId', event.target.value)}>
+        <select
+          className="w-auto min-w-[142px] max-[720px]:w-full"
+          aria-label="กรองตามสถานะ"
+          value={filters.statusId}
+          onChange={(event) => updateFilter('statusId', event.target.value)}
+        >
           <option value="">ทุกสถานะ</option>
           {statuses.map((status) => <option key={status.id} value={status.id}>{status.th}</option>)}
         </select>
-        <select aria-label="กรองตามการใช้งาน" value={filters.active} onChange={(event) => updateFilter('active', event.target.value)}>
+        <select
+          className="w-auto min-w-[142px] max-[720px]:w-full"
+          aria-label="กรองตามการใช้งาน"
+          value={filters.active}
+          onChange={(event) => updateFilter('active', event.target.value)}
+        >
           <option value="all">ทั้งหมด</option>
           <option value="active">ใช้งานอยู่</option>
           <option value="inactive">พ้นสภาพ</option>
@@ -169,7 +190,7 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
           <Icon name="refresh" />
           ล้าง
         </Button>
-      </section>
+      </FilterBar>
 
       <DataTable
         columns={columns}
@@ -184,6 +205,6 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
       />
 
       {creating ? <EmployeeFormModal employees={employees} onClose={() => setCreating(false)} onSubmit={submitCreate} /> : null}
-    </div>
+    </PageStack>
   );
 }
