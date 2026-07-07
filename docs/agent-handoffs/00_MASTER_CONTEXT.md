@@ -34,25 +34,32 @@ v0.1.0 Stable HR Portal Foundation
 - Merge only after review.
 
 ## Definition of Done for v0.1.0
-- Core mobile flows are usable.
-- Desktop-first admin flows are clearly labeled.
-- Employee-code temporary password login is removed from production path.
-- TanStack Query is introduced for core server state.
-- Real frontend routing is introduced.
-- Backend OpenAPI documentation exists.
-- Backend Actuator health endpoints are safely configured.
-- Backend integration tests can run reliably, preferably with Testcontainers.
-- Documentation is cleaned and organized.
-- A release tag is created.
+_All items complete as of 2026-07-07 (main `634b19c`). v0.1.0 is ready to tag._
+- [x] Core mobile flows are usable. _(#116/#118 mobile shell + card reflow)_
+- [x] Desktop-first admin flows are clearly labeled. _(#130 `DesktopOnlyNotice` on payroll/attendance)_
+- [x] Employee-code temporary password login is removed from production path. _(#122)_
+- [x] TanStack Query is introduced for core server state. _(#119/#120)_
+- [x] Real frontend routing is introduced. _(#121 react-router v7)_
+- [x] Backend OpenAPI documentation exists. _(#127 springdoc, auth-gated under default-deny)_
+- [x] Backend Actuator health endpoints are safely configured. _(#125)_
+- [x] Backend integration tests can run reliably, preferably with Testcontainers. _(#124)_
+- [x] Documentation is cleaned and organized. _(#128 docs index + archive)_
+- [ ] A release tag is created. _(final step — tag `v0.1.0` on `634b19c` or later)_
+
+**Beyond the DoD, also shipped for the release:** default-deny authorization (#122), audit-log
+coverage extended to leave/overtime/commission/payroll (#129), and the frozen sales/CRM stack
+flag-hidden so v0.1.0 ships cleanly HR-core (`VITE_ENABLE_SALES=false`, #130).
 
 ---
 
-## Repository Snapshot (verified 2026-07-07)
-_This section is factual context for agents; the rules above govern behavior._
+## Repository Snapshot (updated 2026-07-07, post-stabilization)
+_This section is factual context for agents; the rules above govern behavior. The stabilization work
+(P0–P2) is merged — the bullets below reflect the current state, not the pre-stabilization audit
+snapshot in `01_STABILIZATION_AUDIT.md`._
 
-- **Default branch:** `main` (must stay deployable). No release tags exist yet.
-- **Frontend:** React 18 + Vite 8. **No router library**, **no state/server-state library**. Routing is a ~30-branch ternary in `frontend/src/App.jsx`. Data fetching is manual per page. Single global stylesheet `frontend/src/styles.css` (~1891 lines, only 4 `@media` queries). Mock API (`frontend/src/api/mockApi.js`, ~1727 lines) is guarded from prod by a runtime check in `frontend/src/api/index.js`.
-- **Backend:** Spring Boot 4.1 / Java 21. 19 REST controllers. Flyway migrations `V1`–`V32` (+ `migration-demo`). Session auth (Spring Session JDBC). `SecurityConfig` is `permitAll` at the filter layer; authorization is ~92 manual `SessionContext` checks + `@PreAuthorize` on only 2 controllers (payroll, commission).
-- **Scope split (see 01_STABILIZATION_AUDIT.md):** HR-core = employees, attendance, leave, overtime, payroll, profile, auth, dashboards. Sales/CRM stack (tickets, quotation, deposit, commission, pricing/FX, catalog, customer, factory) is **out of v0.1.0** — freeze and do not expand.
-- **CI:** `.github/workflows/` — `backend-ci.yml` (`mvnw clean verify` + Postgres service), `frontend-ci.yml` (lint + vitest + build + `npm audit`), `dependency-review.yml`. No coverage gate.
-- **Not present yet:** OpenAPI/springdoc, Spring Actuator, Testcontainers (integration tests only run in CI via `TEST_DB_URL`; a plain local `mvnw verify` skips them), correlation-ID logging, global frontend ErrorBoundary, URL routing.
+- **Default branch:** `main` (must stay deployable). `v0.1.0` is the first release tag (pending).
+- **Frontend:** React 18 + Vite 8. **URL routing via react-router v7** (`App.jsx` `<Routes>`), **TanStack Query** for core server state (`useHrData`), global `ErrorBoundary`, `useIsMobile` + mobile card reflow. Single global stylesheet `frontend/src/styles.css`. Mock API guarded from prod by a runtime check in `frontend/src/api/index.js`. Frozen sales pages are flag-hidden (`VITE_ENABLE_SALES`, default false).
+- **Backend:** Spring Boot 4.1 / Java 21. Flyway migrations `V1`–`V32` (+ `migration-demo`). Session auth (Spring Session JDBC). `SecurityConfig` is **default-deny** (`anyRequest().authenticated()` + a small explicit allowlist). OpenAPI/springdoc served auth-gated at `/v3/api-docs`. Audit logging (`AuditService`) covers employee/profile/attachment/leave/overtime/commission/payroll mutations.
+- **Scope split (see 01_STABILIZATION_AUDIT.md):** HR-core = employees, attendance, leave, overtime, payroll, profile, auth, dashboards. Sales/CRM stack (tickets, quotation, deposit, commission, pricing/FX, catalog, customer, factory) is **out of v0.1.0** — frozen, and flag-hidden from nav/routes.
+- **CI:** `.github/workflows/` — `backend-ci.yml` (`mvnw clean verify` on **Testcontainers**), `frontend-ci.yml` (lint + vitest + build + `npm audit`), `dependency-review.yml`. Backend has a Jacoco line-coverage ratchet (floor 0.51).
+- **Observability:** Spring Actuator health (`/actuator/health`, safely exposed), correlation-ID MDC filter, enriched `ApiExceptionHandler`.
