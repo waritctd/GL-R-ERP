@@ -1,8 +1,10 @@
+import { NavLink, useNavigate } from 'react-router-dom';
 import { roleLabel } from '../../utils/format.js';
 import { Avatar } from '../common/Avatar.jsx';
 import { Icon } from '../common/Icon.jsx';
 
-export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, activeRoute, onRoute, user, employee, onLogout }) {
+export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, user, employee, onLogout }) {
+  const navigate = useNavigate();
   return (
     <aside
       id={id}
@@ -10,7 +12,7 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, activeRout
       className={`sidebar ${isDrawerOpen ? 'is-mobile-drawer-open' : ''}`}
       tabIndex={-1}
     >
-      <button className="brand" type="button" onClick={() => onRoute('dashboard')}>
+      <button className="brand" type="button" onClick={() => navigate('/')}>
         <span className="brand-mark">
           <i />
           <i />
@@ -25,11 +27,11 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, activeRout
 
       <nav className="nav-list" aria-label="Primary navigation">
         {items.map((item) => (
-          <button
-            key={item.route}
-            type="button"
-            className={`nav-item ${activeRoute === item.route ? 'active' : ''}`}
-            onClick={() => onRoute(item.route)}
+          <NavLink
+            key={item.path}
+            to={item.path}
+            end={item.path === '/'}
+            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
           >
             <Icon name={item.icon} size={19} />
             <span>
@@ -37,7 +39,7 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, activeRout
               <small>{item.helper}</small>
             </span>
             {item.badge ? <b>{item.badge}</b> : null}
-          </button>
+          </NavLink>
         ))}
       </nav>
 

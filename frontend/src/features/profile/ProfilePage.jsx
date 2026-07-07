@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Avatar } from '../../components/common/Avatar.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -6,7 +7,8 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
 import { ChangeRequestModal } from './ChangeRequestModal.jsx';
 
-export function ProfilePage({ user, employee, profileRequests, onCreateRequest, onRoute }) {
+export function ProfilePage({ user, employee, profileRequests, onCreateRequest }) {
+  const navigate = useNavigate();
   const [requestField, setRequestField] = useState(null);
   const isEmployee = user.role === 'employee';
   const pendingKeys = useMemo(
@@ -68,7 +70,7 @@ export function ProfilePage({ user, employee, profileRequests, onCreateRequest, 
         <section className="panel">
           <div className="panel-header">
             <h2>คำขอแก้ไขของฉัน</h2>
-            {isEmployee ? <button type="button" className="text-button" onClick={() => onRoute('myrequests')}>ดูทั้งหมด</button> : null}
+            {isEmployee ? <button type="button" className="text-button" onClick={() => navigate('/my-requests')}>ดูทั้งหมด</button> : null}
           </div>
           <div className="request-feed">
             {profileRequests.slice(0, 5).map((request) => {

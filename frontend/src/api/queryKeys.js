@@ -3,6 +3,7 @@
 export const queryKeys = {
   currentEmployee: (id) => ['currentEmployee', id],
   employees: () => ['employees'],
+  employeeDetail: (id) => ['employeeDetail', id],
   profileRequests: () => ['profileRequests'],
   dashboardSummary: () => ['dashboardSummary'],
   leaveRequests: (filters = {}) => ['leave', 'list', filters.from, filters.to, filters.status, filters.employeeId],
