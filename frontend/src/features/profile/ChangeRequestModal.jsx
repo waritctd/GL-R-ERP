@@ -1,14 +1,29 @@
-import { useState } from 'react';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
 import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
+import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 
-export function ChangeRequestModal({ requestField, onClose, onSubmit }) {
-  const [value, setValue] = useState('');
+const changeRequestFormSchema = z.object({
+  newValue: z.string().min(1, 'กรุณาระบุค่าใหม่'),
+});
 
-  function submit(event) {
-    event.preventDefault();
-    onSubmit({ ...requestField, newValue: value });
+export function ChangeRequestModal({ requestField, onClose, onSubmit }) {
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+  } = useForm({
+    resolver: zodResolver(changeRequestFormSchema),
+    defaultValues: { newValue: '' },
+    mode: 'onChange',
+    reValidateMode: 'onChange',
+  });
+
+  function submit(values) {
+    onSubmit({ ...requestField, newValue: values.newValue });
   }
 
   return (
@@ -26,15 +41,21 @@ export function ChangeRequestModal({ requestField, onClose, onSubmit }) {
         </>
       )}
     >
-      <form id="change-request-form" className="form-grid single" onSubmit={submit}>
+      <form id="change-request-form" className="form-grid single" onSubmit={handleSubmit(submit)} noValidate>
         <label>
           ค่าเดิม
           <input value={requestField.oldValue} readOnly />
         </label>
-        <label>
-          ค่าใหม่
-          <textarea value={value} onChange={(event) => setValue(event.target.value)} rows="3" required />
-        </label>
+        <FormField label="ค่าใหม่" htmlFor="change-request-new-value" error={errors.newValue?.message}>
+          <textarea
+            id="change-request-new-value"
+            rows="3"
+            {...register('newValue')}
+            aria-invalid={Boolean(errors.newValue)}
+            aria-describedby={errors.newValue ? fieldErrorId('change-request-new-value') : undefined}
+            required
+          />
+        </FormField>
       </form>
     </Modal>
   );
