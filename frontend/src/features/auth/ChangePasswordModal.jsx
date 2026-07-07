@@ -1,9 +1,52 @@
 import { useEffect, useRef, useState } from 'react';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useForm, useWatch } from 'react-hook-form';
+import { z } from 'zod';
 import { Button } from '../../components/common/Button.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
+
+const NEW_PASSWORD_TOO_SHORT_MESSAGE = 'รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร';
+const PASSWORD_MISMATCH_MESSAGE = 'รหัสผ่านใหม่และการยืนยันไม่ตรงกัน';
+const PASSWORD_REUSED_MESSAGE = 'รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสผ่านเดิม';
+
+function defaultForm() {
+  return {
+    currentPassword: '',
+    newPassword: '',
+    confirmPassword: '',
+  };
+}
+
+const changePasswordFormSchema = z.object({
+  currentPassword: z.string(),
+  newPassword: z.string(),
+  confirmPassword: z.string(),
+}).superRefine((data, context) => {
+  if (data.newPassword.length > 0 && data.newPassword.length < 8) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['newPassword'],
+      message: NEW_PASSWORD_TOO_SHORT_MESSAGE,
+    });
+  }
+  if (data.confirmPassword.length > 0 && data.newPassword.length > 0 && data.newPassword !== data.confirmPassword) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['confirmPassword'],
+      message: PASSWORD_MISMATCH_MESSAGE,
+    });
+  }
+  if (data.newPassword.length > 0 && data.currentPassword.length > 0 && data.newPassword === data.currentPassword) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['newPassword'],
+      message: PASSWORD_REUSED_MESSAGE,
+    });
+  }
+});
 
 /**
  * Self-service password change. Used in two modes:
@@ -14,20 +57,28 @@ const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [ta
 export function ChangePasswordModal({ forced = false, loading = false, onSubmit, onClose, onLogout }) {
   const panelRef = useRef(null);
   const previouslyFocused = useRef(null);
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [submitError, setSubmitError] = useState('');
 
+  const {
+    register,
+    handleSubmit,
+    control,
+    formState: { errors },
+  } = useForm({
+    resolver: zodResolver(changePasswordFormSchema),
+    defaultValues: defaultForm(),
+    mode: 'onChange',
+    reValidateMode: 'onChange',
+  });
+
+  const newPassword = useWatch({ control, name: 'newPassword' });
   const newPasswordTooShort = newPassword.length > 0 && newPassword.length < 8;
-  const passwordMismatch = confirmPassword.length > 0 && newPassword.length > 0 && newPassword !== confirmPassword;
-  const passwordReused = newPassword.length > 0 && currentPassword.length > 0 && newPassword === currentPassword;
-  const hasValidationError = newPasswordTooShort || passwordMismatch || passwordReused;
-  const formError = passwordMismatch
-    ? 'รหัสผ่านใหม่และการยืนยันไม่ตรงกัน'
-    : passwordReused
-      ? 'รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสผ่านเดิม'
+  const formError = errors.confirmPassword?.message === PASSWORD_MISMATCH_MESSAGE
+    ? PASSWORD_MISMATCH_MESSAGE
+    : errors.newPassword?.message === PASSWORD_REUSED_MESSAGE
+      ? PASSWORD_REUSED_MESSAGE
       : '';
+  const hasValidationError = Boolean(newPasswordTooShort || formError);
 
   useEffect(() => {
     previouslyFocused.current = document.activeElement;
@@ -68,12 +119,11 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
     };
   }, [forced, onClose]);
 
-  async function submit(event) {
-    event.preventDefault();
+  async function submitPassword(values) {
     setSubmitError('');
     if (hasValidationError) return;
     try {
-      await onSubmit({ currentPassword, newPassword });
+      await onSubmit({ currentPassword: values.currentPassword, newPassword: values.newPassword });
     } catch (err) {
       setSubmitError(err?.message || 'เปลี่ยนรหัสผ่านไม่สำเร็จ');
     }
@@ -103,13 +153,12 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
           ) : null}
         </header>
         <div className="modal-body">
-          <form id="change-password-form" className="form-grid single" onSubmit={submit}>
+          <form id="change-password-form" className="form-grid single" onSubmit={handleSubmit(submitPassword)} noValidate>
             <label>
               รหัสผ่านปัจจุบัน
               <input
                 type="password"
-                value={currentPassword}
-                onChange={(event) => setCurrentPassword(event.target.value)}
+                {...register('currentPassword')}
                 autoComplete="current-password"
                 required
               />
@@ -117,14 +166,13 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
             <FormField
               label="รหัสผ่านใหม่"
               htmlFor="change-password-new"
-              error={newPasswordTooShort ? 'รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร' : undefined}
+              error={newPasswordTooShort ? NEW_PASSWORD_TOO_SHORT_MESSAGE : undefined}
               hint={!newPasswordTooShort ? 'อย่างน้อย 8 ตัวอักษร' : undefined}
             >
               <input
                 id="change-password-new"
                 type="password"
-                value={newPassword}
-                onChange={(event) => setNewPassword(event.target.value)}
+                {...register('newPassword')}
                 autoComplete="new-password"
                 minLength={8}
                 className={newPasswordTooShort ? 'is-invalid' : ''}
@@ -137,8 +185,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
               ยืนยันรหัสผ่านใหม่
               <input
                 type="password"
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
+                {...register('confirmPassword')}
                 autoComplete="new-password"
                 required
               />
