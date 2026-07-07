@@ -27,7 +27,7 @@ export function ProfileRequestsPage({ profileRequests, onReview }) {
           const status = requestStatus(request.status);
           return (
             <div className="request-table table-row" key={request.id}>
-              <span className="employee-cell">
+              <span className="employee-cell" data-label="พนักงาน">
                 <Avatar employee={request.employee} size="sm" />
                 <span>
                   <strong>{request.employee?.nameTh}</strong>
@@ -35,9 +35,9 @@ export function ProfileRequestsPage({ profileRequests, onReview }) {
                 </span>
               </span>
               <StatusBadge tone="indigo">{request.fieldLabel}</StatusBadge>
-              <span className="old-value">{request.oldValue}</span>
-              <strong>{request.newValue}</strong>
-              <span>{formatShortDate(request.requestedAt)}</span>
+              <span className="old-value" data-label="ค่าเดิม">{request.oldValue}</span>
+              <span data-label="ค่าใหม่"><strong>{request.newValue}</strong></span>
+              <span data-label="วันที่">{formatShortDate(request.requestedAt)}</span>
               {request.status === 'pending' ? (
                 <span className="row-actions">
                   <button type="button" className="danger-button icon-only" onClick={() => onReview(request.id, 'rejected')} title="ปฏิเสธ" aria-label="ปฏิเสธ">

@@ -1964,4 +1964,99 @@ a.status-badge {
   .sidebar-account span {
     display: revert;
   }
+
+  /* --- HR-core list card fallback (branch 2) ---
+     Below 720px the six HR-core grid tables become stacked label→value cards
+     instead of a 900px horizontal-scroll trap. Sales-stack tables
+     (.user-table / .commission-table / .commission-payroll-table) are
+     intentionally excluded — they keep scrolling horizontally. */
+  .employee-table,
+  .attendance-table,
+  .request-table,
+  .request-table.mine,
+  .payroll-table,
+  .overtime-table,
+  .leave-table {
+    /* Override the 1040px min-width:900px scroll trap for these classes. */
+    min-width: 0;
+  }
+
+  /* Each cell now carries its own label, so hide the shared header row. */
+  .employee-table.table-head,
+  .attendance-table.table-head,
+  .request-table.table-head,
+  .payroll-table.table-head,
+  .overtime-table.table-head,
+  .leave-table.table-head {
+    display: none;
+  }
+
+  /* Turn every data row into a full-width card. */
+  .employee-table.table-row,
+  .attendance-table.table-row,
+  .request-table.table-row,
+  .payroll-table.table-row,
+  .overtime-table.table-row,
+  .leave-table.table-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+    padding: 14px 16px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md, 12px);
+    background: var(--color-surface);
+  }
+
+  .employee-table.table-row + .table-row,
+  .attendance-table.table-row + .table-row,
+  .request-table.table-row + .table-row,
+  .payroll-table.table-row + .table-row,
+  .overtime-table.table-row + .table-row,
+  .leave-table.table-row + .table-row {
+    margin-top: 10px;
+  }
+
+  /* Each cell on its own line. */
+  .employee-table.table-row > span,
+  .attendance-table.table-row > span,
+  .request-table.table-row > span,
+  .payroll-table.table-row > span,
+  .overtime-table.table-row > span,
+  .leave-table.table-row > span {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* Show the column name as a small muted label above the value.
+     Only cells that carry a non-empty data-label get a label. */
+  .employee-table.table-row > span[data-label]:not([data-label=""])::before,
+  .attendance-table.table-row > span[data-label]:not([data-label=""])::before,
+  .request-table.table-row > span[data-label]:not([data-label=""])::before,
+  .payroll-table.table-row > span[data-label]:not([data-label=""])::before,
+  .overtime-table.table-row > span[data-label]:not([data-label=""])::before,
+  .leave-table.table-row > span[data-label]:not([data-label=""])::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+  }
+
+  /* Keep the action cell's buttons laid out in a row within its card line. */
+  .employee-table.table-row > .row-actions,
+  .attendance-table.table-row > .row-actions,
+  .request-table.table-row > .row-actions,
+  .payroll-table.table-row > .row-actions,
+  .overtime-table.table-row > .row-actions,
+  .leave-table.table-row > .row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
 }

@@ -421,21 +421,21 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
           const managerCancellable = canManagerCancel(request);
           return (
             <div className="overtime-table table-row" key={request.id}>
-              <span>
+              <span data-label="วันที่ / พนักงาน">
                 <strong>{formatWorkDate(request.workDate)}</strong>
                 <small>{request.employeeName || request.employeeCode || request.employeeId}</small>
               </span>
-              <span>
+              <span data-label="แผน OT">
                 <strong>{formatDateTime(request.plannedStartAt)}</strong>
                 <small>
                   {formatDateTime(request.plannedEndAt)} · {formatMinutes(request.plannedMinutes)} · {request.dayType === 'HOLIDAY' ? '3x' : '1.5x'}
                 </small>
               </span>
-              <span>
+              <span data-label="เหตุผล">
                 <strong>{request.reason}</strong>
                 <small>{request.reviewerNote || request.calculationNote || '-'}</small>
               </span>
-              <span>
+              <span data-label="เวลาจริง / จ่ายได้">
                 <strong>{formatMinutes(request.actualMinutes)}</strong>
                 <small>จ่ายได้ {formatMinutes(request.payableMinutes)}</small>
               </span>
