@@ -10,11 +10,19 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { formGridSpan2, Panel, PageStack, RowActions, StatGrid } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 
 const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.25fr)_minmax(0,1.45fr)_minmax(0,1.55fr)_minmax(0,1fr)_minmax(0,0.75fr)_minmax(0,0.8fr)] max-[1040px]:min-w-[900px] reflow-cards';
+// FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
+// (Enter-to-submit on the search button), so its exact utility string is reproduced
+// here rather than wrapping a <form> inside a non-form primitive.
+const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-center bg-surface border border-border rounded-md p-[14px]';
+// FormGrid (Layout.jsx) renders a <div>; the submit form needs to be a native <form>
+// for onSubmit/noValidate, so its exact (2-column) utility string is reproduced here.
+const FORM_GRID_CLASS = 'grid gap-[14px] max-[720px]:grid-cols-1 grid-cols-2';
 
 function bangkokDateParts(date = new Date()) {
   return Object.fromEntries(new Intl.DateTimeFormat('en-US', {
@@ -332,7 +340,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
   }
 
   return (
-    <div className="page-stack">
+    <PageStack>
       <PageHeader
         title="จัดการล่วงเวลา"
         subtitle={canSubmitForTeam ? 'ยื่นคำขอแทนทีมและอนุมัติจากเวลาสแกนจริง' : 'ยื่นคำขอ OT และดูประวัติของคุณ'}
@@ -344,14 +352,14 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
         )}
       />
 
-      <section className="stat-grid">
+      <StatGrid>
         <StatCard label="คำขอทั้งหมด" value={requests.length} helper="ในช่วงที่เลือก" icon="clock" tone="indigo" />
         <StatCard label="รออนุมัติ" value={totals.submitted} helper="Submitted" icon="clipboard" tone="amber" />
         <StatCard label="อนุมัติแล้ว" value={totals.approved} helper="Approved" icon="check" tone="teal" />
         <StatCard label="ชั่วโมงจ่ายได้" value={formatMinutes(totals.payableMinutes)} helper="Approved payable" icon="calendar" tone="blue" />
-      </section>
+      </StatGrid>
 
-      <form className="filter-bar" onSubmit={submitFilters}>
+      <form className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
         <label>
           จากวันที่
           <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
@@ -387,11 +395,8 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
         </Button>
       </form>
 
-      <section className="panel">
-        <div className="panel-header">
-          <h2>ยื่นคำขอ OT</h2>
-        </div>
-        <form className="form-grid" onSubmit={handleSubmit(submitOvertime)} noValidate>
+      <Panel title="ยื่นคำขอ OT">
+        <form className={FORM_GRID_CLASS} onSubmit={handleSubmit(submitOvertime)} noValidate>
           {hasMultipleSubmitOptions ? (
             <FormField label="พนักงาน" htmlFor="ot-employee" error={errors.employeeId?.message}>
               <select
@@ -461,7 +466,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
               required
             />
           </FormField>
-          <div className="span-2">
+          <div className={formGridSpan2}>
             <FormField label="เหตุผลความจำเป็น" htmlFor="ot-reason" error={errors.reason?.message}>
               <textarea
                 id="ot-reason"
@@ -474,14 +479,14 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
               />
             </FormField>
           </div>
-          <div className="span-2 row-actions">
+          <RowActions className={formGridSpan2}>
             <Button type="submit" disabled={saving || hasTimeRangeError}>
               <Icon name="plus" />
               ส่งคำขอ
             </Button>
-          </div>
+          </RowActions>
         </form>
-      </section>
+      </Panel>
 
       <section className="table-panel">
         <div className={`${OVERTIME_TABLE_GRID} table-head`}>
@@ -569,6 +574,6 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
         onConfirm={(reason) => doCancel(confirmState.id, reason)}
         onCancel={() => setConfirmState(null)}
       />
-    </div>
+    </PageStack>
   );
 }
