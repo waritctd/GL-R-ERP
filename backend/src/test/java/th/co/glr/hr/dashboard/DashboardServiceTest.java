@@ -78,8 +78,8 @@ class DashboardServiceTest {
     }
 
     @Test
-    void adminSummaryGetsCompanyAndTicketScopes() {
-        service.summary(user("admin", 20L, null, false));
+    void ceoSummaryGetsCompanyAndTicketScopes() {
+        service.summary(user("ceo", 20L, null, false));
 
         ArgumentCaptor<DashboardQueryScope> ticketScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
         verify(repository).tickets(ticketScope.capture(), eq(LocalDate.of(2026, 7, 1)), any());

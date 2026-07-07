@@ -8,6 +8,7 @@ public record PayrollCalculationInput(
     List<BigDecimal> specialPays,
     BigDecimal overtimePay,
     BigDecimal commissionPay,
+    BigDecimal nonTaxableIncome,
     BigDecimal unpaidLeaveDays,
     BigDecimal studentLoanDeduction,
     BigDecimal legalExecutionRequested,

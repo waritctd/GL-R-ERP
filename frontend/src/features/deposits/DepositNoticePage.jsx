@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
+import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 
 const DEPOSIT_OPTIONS = [
@@ -15,7 +18,7 @@ function money(v) {
   return Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export function DepositNoticePage({ ticketId, onBack, showToast }) {
+export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToast }) {
   const [doc, setDoc]               = useState(null);
   const [noteTemplates, setTemplates] = useState([]);
   const [customers, setCustomers]   = useState([]);
@@ -24,6 +27,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   const [saving, setSaving]         = useState(false);
   const [previewHtml, setPreview]   = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [confirmIssue, setConfirmIssue] = useState(false);
   const iframeRef = useRef(null);
 
   // form state
@@ -171,9 +175,12 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
     }
   }
 
-  async function handleIssue() {
+  function handleIssue() {
     if (!doc) return;
-    if (!window.confirm('ยืนยันการออกเอกสาร? หลังจากนี้จะไม่สามารถแก้ไขได้')) return;
+    setConfirmIssue(true);
+  }
+
+  async function confirmIssueDocument() {
     setSaving(true);
     try {
       // Save first
@@ -185,6 +192,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
       showToast('error', err.message || 'ออกเอกสารไม่สำเร็จ');
     } finally {
       setSaving(false);
+      setConfirmIssue(false);
     }
   }
 
@@ -243,8 +251,25 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
 
   if (loading) {
     return (
-      <div className="page-stack">
-        <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>กำลังโหลด...</div>
+      <div className="page-stack" aria-busy="true" aria-label="กำลังโหลดใบแจ้งยอดเงินรับมัดจำ">
+        <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+          <Skeleton width={80} height={28} />
+          <div style={{ flex: 1 }}>
+            <Skeleton width="35%" height={20} />
+          </div>
+        </header>
+        <section className="panel">
+          <div className="panel-header"><Skeleton width="25%" height={16} /></div>
+          <div style={{ padding: '14px 18px' }}>
+            <SkeletonText lines={4} />
+          </div>
+        </section>
+        <section className="panel">
+          <div className="panel-header"><Skeleton width="25%" height={16} /></div>
+          <div style={{ padding: '14px 18px' }}>
+            <SkeletonText lines={3} />
+          </div>
+        </section>
       </div>
     );
   }
@@ -253,6 +278,13 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
 
   return (
     <div className="page-stack">
+      <Breadcrumbs
+        items={[
+          { label: 'ใบขอราคา', onClick: onNavigateTickets },
+          { label: form.customerName || 'รายละเอียดใบขอราคา', onClick: onBack },
+          { label: 'ใบแจ้งยอดเงินรับมัดจำ' },
+        ]}
+      />
       <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
         <button type="button" className="secondary-button" onClick={onBack}>
           <Icon name="chevronLeft" size={14} /> กลับ
@@ -480,13 +512,34 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
               title="Deposit notice preview"
             />
             {previewLoading && (
-              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.8)' }}>
-                กำลังโหลด preview...
+              <div
+                style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.8)' }}
+                aria-busy="true"
+                aria-label="กำลังโหลดตัวอย่างเอกสาร"
+              >
+                <div style={{ width: '80%', maxWidth: 360, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <Skeleton width="60%" height={18} />
+                  <SkeletonText lines={6} />
+                </div>
               </div>
             )}
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={confirmIssue}
+        tone="danger"
+        title="ยืนยันการออกเอกสาร"
+        message={(
+          <p className="confirm-dialog-message">
+            ยืนยันการออกเอกสาร? <strong>หลังจากนี้จะไม่สามารถแก้ไขได้</strong>
+          </p>
+        )}
+        busy={saving}
+        onCancel={() => setConfirmIssue(false)}
+        onConfirm={confirmIssueDocument}
+      />
     </div>
   );
 }

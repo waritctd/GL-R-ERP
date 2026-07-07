@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/index.js';
 import { hasPermission } from '../../app/permissions.js';
-import { EmptyState } from '../../components/common/EmptyState.jsx';
+import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
@@ -219,41 +219,78 @@ export function AttendancePage({ user, employees, showToast }) {
         </form>
       ) : null}
 
-      <section className="table-panel">
-        <div className="attendance-table table-head">
-          <span>เวลา</span>
-          <span>พนักงาน</span>
-          <span>ชื่อเล่น</span>
-          <span>ตำแหน่ง</span>
-          <span>รหัสพนักงาน</span>
-          <span>ไซต์ / อุปกรณ์</span>
-        </div>
-        {loading ? (
-          <EmptyState icon="clock" title="กำลังโหลดข้อมูล" />
-        ) : punches.length === 0 ? (
-          <EmptyState icon="calendar" title="ไม่พบข้อมูลเวลา" description="ลองเปลี่ยนช่วงวันที่หรือนำเข้าไฟล์ .dat" />
-        ) : punches.map((punch) => (
-          <div className="attendance-table table-row" key={punch.punch_id}>
-            <span>
-              <strong>{formatPunchDateTime(punch.punch_time)}</strong>
-              <small>{punch.work_date}</small>
-            </span>
-            <span>
-              <strong>{punch.employee_name || 'ยังไม่แมปพนักงาน'}</strong>
-            </span>
-            <span>{punch.nick_name || '-'}</span>
-            <span>{punch.position_th || '-'}</span>
-            <code>{punch.employee_code || '-'}</code>
-            <span>
-              <strong>{punch.site_code}</strong>
-              <small>{punch.device_name || punch.device_code || '-'}</small>
-            </span>
-          </div>
-        ))}
-      </section>
+      <DataTable
+        columns={attendanceColumns}
+        rows={punches}
+        getRowKey={(punch) => punch.punch_id}
+        gridClassName="attendance-table"
+        pageSize={50}
+        searchable
+        searchPlaceholder="ค้นหาพนักงาน / รหัส / ชื่อเล่น"
+        loading={loading}
+        emptyState={{
+          icon: 'calendar',
+          title: 'ไม่พบข้อมูลเวลา',
+          description: 'ลองเปลี่ยนช่วงวันที่หรือนำเข้าไฟล์ .dat',
+        }}
+      />
     </div>
   );
 }
+
+const attendanceColumns = [
+  {
+    key: 'punch_time',
+    header: 'เวลา',
+    sortable: true,
+    sortAccessor: (punch) => punch.punch_time,
+    render: (punch) => (
+      <span>
+        <strong>{formatPunchDateTime(punch.punch_time)}</strong>
+        <small>{punch.work_date}</small>
+      </span>
+    ),
+  },
+  {
+    key: 'employee_name',
+    header: 'พนักงาน',
+    sortable: true,
+    sortAccessor: (punch) => punch.employee_name || 'ยังไม่แมปพนักงาน',
+    searchAccessor: (punch) => punch.employee_name || '',
+    render: (punch) => (
+      <span>
+        <strong>{punch.employee_name || 'ยังไม่แมปพนักงาน'}</strong>
+      </span>
+    ),
+  },
+  {
+    key: 'nick_name',
+    header: 'ชื่อเล่น',
+    searchAccessor: (punch) => punch.nick_name || '',
+    render: (punch) => punch.nick_name || '-',
+  },
+  {
+    key: 'position_th',
+    header: 'ตำแหน่ง',
+    render: (punch) => punch.position_th || '-',
+  },
+  {
+    key: 'employee_code',
+    header: 'รหัสพนักงาน',
+    searchAccessor: (punch) => punch.employee_code || '',
+    render: (punch) => <code>{punch.employee_code || '-'}</code>,
+  },
+  {
+    key: 'site',
+    header: 'ไซต์ / อุปกรณ์',
+    render: (punch) => (
+      <span>
+        <strong>{punch.site_code}</strong>
+        <small>{punch.device_name || punch.device_code || '-'}</small>
+      </span>
+    ),
+  },
+];
 
 function formatPunchDateTime(value) {
   if (!value) return '-';

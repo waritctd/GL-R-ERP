@@ -35,7 +35,7 @@ cd backend
 set -a
 source .env.local
 set +a
-mvn spring-boot:run
+./mvnw spring-boot:run
 ```
 
 See [backend/README.md](backend/README.md).
@@ -46,14 +46,16 @@ Run the backend unit/controller tests:
 
 ```bash
 cd backend
-mvn test
+./mvnw test
 ```
+
+15 integration tests are skipped unless `TEST_DB_URL`, `TEST_DB_USERNAME`, and `TEST_DB_PASSWORD` point at a real Postgres. `./mvnw test` passes without them but only runs the Mockito unit tests; set them to also exercise the Flyway/repository integration suite (`AbstractPostgresIntegrationTest`).
 
 Build the backend package:
 
 ```bash
 cd backend
-mvn -DskipTests package
+./mvnw -DskipTests package
 ```
 
 Build the frontend:
@@ -63,7 +65,15 @@ cd frontend
 npm run build
 ```
 
-The frontend currently has no `lint` or `test` npm scripts; use `npm run lint --if-present` and `npm test --if-present` in automation until those scripts are added.
+Run the frontend lint and test scripts:
+
+```bash
+cd frontend
+npm run lint
+npm test
+```
+
+`npm test` runs the Vitest suite.
 
 ## Vercel Frontend Deployment
 

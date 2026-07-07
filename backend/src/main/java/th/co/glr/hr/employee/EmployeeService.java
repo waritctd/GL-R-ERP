@@ -19,7 +19,7 @@ import th.co.glr.hr.profile.ProfileRequestRepository;
 public class EmployeeService {
     // Dedicated audit channel so PII-access events can be shipped/retained separately (issue #21).
     private static final Logger AUDIT = LoggerFactory.getLogger("th.co.glr.hr.audit");
-    private static final java.util.Set<String> PRIVILEGED_EMPLOYEE_ROLES = java.util.Set.of("hr", "admin");
+    private static final java.util.Set<String> PRIVILEGED_EMPLOYEE_ROLES = java.util.Set.of("hr");
 
     private final EmployeeRepository employees;
     private final ProfileRequestRepository profileRequests;

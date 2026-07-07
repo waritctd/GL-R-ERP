@@ -23,7 +23,7 @@ cd backend
 set -a
 source .env.local
 set +a
-mvn spring-boot:run
+./mvnw spring-boot:run
 ```
 
 For another Supabase project, copy `.env.example` to `.env.local` and fill in the host, user, and password.
@@ -54,7 +54,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8080 npm run dev
 
 ```bash
 cd backend
-mvn test
+./mvnw test
 ```
 
 The tests cover business rules, service behavior, validation, controller auth/permission checks, and security-sensitive auth behavior.
@@ -77,7 +77,7 @@ The `.dat` import expects JSON with `site_code`, `device_code`, `file_name`, and
 
 Recommended production hardening:
 
-- Use a dedicated app database role with least-privilege grants.
+- Use a dedicated app database role with least-privilege grants. See [docs/least-privilege-db-role.md](../docs/least-privilege-db-role.md) for the `hr_app` script + rollout runbook (issue #25).
 - Grant `hr_restricted` access only if this API is allowed to serve PDPA-sensitive fields to HR.
 - Put TLS and secure cookie settings behind the production reverse proxy.
 - Replace the temporary password flow with your organization IAM or a password reset workflow.

@@ -1,6 +1,10 @@
 package th.co.glr.hr.customer;
 
 import jakarta.servlet.http.HttpSession;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import java.util.List;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -37,7 +41,7 @@ public class CustomerController {
     }
 
     @PostMapping
-    Map<String, CustomerDto> create(@RequestBody CreateCustomerRequest req, HttpSession session) {
+    Map<String, CustomerDto> create(@Valid @RequestBody CreateCustomerRequest req, HttpSession session) {
         sessions.requireUser(session);
         return Map.of("customer", customers.create(req.name(), req.taxId(), req.address(), req.branch(), req.phone()));
     }
@@ -50,7 +54,7 @@ public class CustomerController {
 
     @PostMapping("/{customerId}/contacts")
     Map<String, ContactDto> createContact(@PathVariable long customerId,
-                                          @RequestBody CreateContactRequest req,
+                                          @Valid @RequestBody CreateContactRequest req,
                                           HttpSession session) {
         sessions.requireUser(session);
         return Map.of("contact", contacts.create(customerId,
@@ -65,13 +69,27 @@ public class CustomerController {
 
     @PostMapping("/{customerId}/projects")
     Map<String, ProjectDto> createProject(@PathVariable long customerId,
-                                          @RequestBody CreateProjectRequest req,
+                                          @Valid @RequestBody CreateProjectRequest req,
                                           HttpSession session) {
         sessions.requireUser(session);
         return Map.of("project", projects.create(customerId, req.name()));
     }
 
-    record CreateCustomerRequest(String name, String taxId, String address, String branch, String phone) {}
-    record CreateContactRequest(String firstName, String lastName, String position, String email, String phone) {}
-    record CreateProjectRequest(String name) {}
+    record CreateCustomerRequest(
+        @NotBlank @Size(max = 200) String name,
+        @Size(max = 20)  String taxId,
+        @Size(max = 2000) String address,
+        @Size(max = 100) String branch,
+        @Size(max = 50)  String phone
+    ) {}
+
+    record CreateContactRequest(
+        @NotBlank @Size(max = 100) String firstName,
+        @Size(max = 100) String lastName,
+        @Size(max = 100) String position,
+        @Email @Size(max = 200) String email,
+        @Size(max = 50)  String phone
+    ) {}
+
+    record CreateProjectRequest(@NotBlank @Size(max = 200) String name) {}
 }

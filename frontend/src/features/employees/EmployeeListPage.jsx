@@ -1,15 +1,13 @@
 import { useMemo, useState } from 'react';
 import { hasPermission } from '../../app/permissions.js';
 import { Avatar } from '../../components/common/Avatar.jsx';
-import { EmptyState } from '../../components/common/EmptyState.jsx';
+import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate } from '../../utils/format.js';
 import { statuses } from '../../data/referenceData.js';
 import { EmployeeFormModal } from './EmployeeFormModal.jsx';
-
-const pageSize = 8;
 
 function uniqueOptions(rows, valueKey, labelKey) {
   const options = new Map();
@@ -23,9 +21,61 @@ function uniqueOptions(rows, valueKey, labelKey) {
   return [...options.values()].sort((a, b) => a.label.localeCompare(b.label, 'th'));
 }
 
-export function EmployeeListPage({ user, employees, onOpenEmployee, onCreateEmployee }) {
+const columns = [
+  {
+    key: 'name',
+    header: 'พนักงาน',
+    sortable: true,
+    sortAccessor: (employee) => employee.nameTh,
+    searchAccessor: (employee) => employee.nameTh,
+    render: (employee) => (
+      <span className="employee-cell">
+        <Avatar employee={employee} size="sm" />
+        <span>
+          <strong>{employee.nameTh}</strong>
+          <small>{employee.nickName} · {employee.divisionTh}</small>
+        </span>
+      </span>
+    ),
+  },
+  {
+    key: 'code',
+    header: 'รหัส',
+    render: (employee) => <code>{employee.code}</code>,
+  },
+  {
+    key: 'position',
+    header: 'ตำแหน่ง / แผนก',
+    render: (employee) => (
+      <span>
+        <strong>{employee.positionTh}</strong>
+        <small>{employee.departmentTh}</small>
+      </span>
+    ),
+  },
+  {
+    key: 'hireDate',
+    header: 'วันที่เริ่มงาน',
+    sortable: true,
+    sortAccessor: (employee) => employee.hireDate,
+    render: (employee) => <span>{formatThaiDate(employee.hireDate)}</span>,
+  },
+  {
+    key: 'salary',
+    header: 'เงินเดือน',
+    sortable: true,
+    sortAccessor: (employee) => employee.salary,
+    render: (employee) => <code>{formatMoney(employee.salary)}</code>,
+  },
+  {
+    key: 'status',
+    header: 'สถานะ',
+    render: (employee) => <StatusBadge tone={employee.statusTone}>{employee.statusTh}</StatusBadge>,
+  },
+];
+
+export function EmployeeListPage({ user, employees, onOpenEmployee, onCreateEmployee, loading }) {
   const [filters, setFilters] = useState({ search: '', divisionId: '', departmentTh: '', statusId: '', active: 'all' });
-  const [page, setPage] = useState(1);
   const [creating, setCreating] = useState(false);
   const canCreate = hasPermission(user.role, 'canManageEmployees');
 
@@ -52,12 +102,7 @@ export function EmployeeListPage({ user, employees, onOpenEmployee, onCreateEmpl
     });
   }, [employees, filters]);
 
-  const pages = Math.max(1, Math.ceil(filteredEmployees.length / pageSize));
-  const safePage = Math.min(page, pages);
-  const rows = filteredEmployees.slice((safePage - 1) * pageSize, safePage * pageSize);
-
   function updateFilter(field, value) {
-    setPage(1);
     setFilters((current) => ({
       ...current,
       [field]: value,
@@ -114,7 +159,6 @@ export function EmployeeListPage({ user, employees, onOpenEmployee, onCreateEmpl
           type="button"
           className="secondary-button"
           onClick={() => {
-            setPage(1);
             setFilters({ search: '', divisionId: '', departmentTh: '', statusId: '', active: 'all' });
           }}
         >
@@ -123,50 +167,17 @@ export function EmployeeListPage({ user, employees, onOpenEmployee, onCreateEmpl
         </button>
       </section>
 
-      <section className="table-panel">
-        <div className="employee-table table-head">
-          <span>พนักงาน</span>
-          <span>รหัส</span>
-          <span>ตำแหน่ง / แผนก</span>
-          <span>วันที่เริ่มงาน</span>
-          <span>เงินเดือน</span>
-          <span>สถานะ</span>
-        </div>
-        {rows.length === 0 ? (
-          <EmptyState title="ไม่พบพนักงาน" description="ลองปรับคำค้นหาหรือตัวกรอง" />
-        ) : rows.map((employee) => (
-          <button type="button" className="employee-table table-row" key={employee.id} onClick={() => onOpenEmployee(employee.id)}>
-            <span className="employee-cell">
-              <Avatar employee={employee} size="sm" />
-              <span>
-                <strong>{employee.nameTh}</strong>
-                <small>{employee.nickName} · {employee.divisionTh}</small>
-              </span>
-            </span>
-            <code>{employee.code}</code>
-            <span>
-              <strong>{employee.positionTh}</strong>
-              <small>{employee.departmentTh}</small>
-            </span>
-            <span>{formatThaiDate(employee.hireDate)}</span>
-            <code>{formatMoney(employee.salary)}</code>
-            <StatusBadge tone={employee.statusTone}>{employee.statusTh}</StatusBadge>
-          </button>
-        ))}
-
-        <footer className="pagination">
-          <span>แสดง {(safePage - 1) * pageSize + (rows.length ? 1 : 0)}-{Math.min(safePage * pageSize, filteredEmployees.length)} จาก {filteredEmployees.length}</span>
-          <div>
-            <button type="button" className="icon-button" onClick={() => setPage(Math.max(1, safePage - 1))} disabled={safePage === 1} aria-label="หน้าก่อนหน้า">
-              <Icon name="chevronLeft" />
-            </button>
-            <strong>{safePage} / {pages}</strong>
-            <button type="button" className="icon-button" onClick={() => setPage(Math.min(pages, safePage + 1))} disabled={safePage === pages} aria-label="หน้าถัดไป">
-              <Icon name="chevronRight" />
-            </button>
-          </div>
-        </footer>
-      </section>
+      <DataTable
+        columns={columns}
+        rows={filteredEmployees}
+        getRowKey={(employee) => employee.id}
+        gridClassName="employee-table"
+        searchable={false}
+        onRowClick={(employee) => onOpenEmployee(employee.id)}
+        pageSize={12}
+        loading={loading}
+        emptyState={{ icon: 'users', title: 'ไม่พบพนักงาน', description: 'ลองปรับคำค้นหาหรือตัวกรอง' }}
+      />
 
       {creating ? <EmployeeFormModal employees={employees} onClose={() => setCreating(false)} onSubmit={submitCreate} /> : null}
     </div>

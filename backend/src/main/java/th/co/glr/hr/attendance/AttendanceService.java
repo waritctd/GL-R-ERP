@@ -20,8 +20,8 @@ import th.co.glr.hr.config.AppProperties;
 @Service
 public class AttendanceService {
     private static final ZoneId DEFAULT_WORK_DATE_ZONE = ZoneId.of("Asia/Bangkok");
-    // HR and executives (ceo) see all attendance company-wide; admin for support access.
-    private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo", "admin");
+    // HR and executives (ceo) see all attendance company-wide.
+    private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo");
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 

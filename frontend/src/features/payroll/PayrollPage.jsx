@@ -1,11 +1,66 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/index.js';
+import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { DataTable } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney } from '../../utils/format.js';
+
+const payrollColumns = [
+  {
+    key: 'employee',
+    header: 'พนักงาน',
+    sortable: true,
+    sortAccessor: (line) => line.employeeName,
+    searchAccessor: (line) => line.employeeName,
+    render: (line) => (
+      <span>
+        <strong>{line.employeeName}</strong>
+        <small>{line.employeeCode} · {line.departmentName || '-'}</small>
+      </span>
+    ),
+  },
+  {
+    key: 'grossEarnings',
+    header: 'รายได้',
+    sortable: true,
+    sortAccessor: (line) => Number(line.grossEarnings || 0),
+    render: (line) => <code>{formatMoney(line.grossEarnings)}</code>,
+  },
+  {
+    key: 'specialPayTotal',
+    header: 'เงินพิเศษ',
+    sortable: true,
+    sortAccessor: (line) => Number(line.specialPayTotal || 0),
+    render: (line) => <code>{formatMoney(line.specialPayTotal)}</code>,
+  },
+  {
+    key: 'otCommission',
+    header: 'OT / Commission',
+    sortable: true,
+    sortAccessor: (line) => Number(line.overtimePay || 0) + Number(line.commissionPay || 0),
+    render: (line) => <code>{formatMoney(Number(line.overtimePay || 0) + Number(line.commissionPay || 0))}</code>,
+  },
+  {
+    key: 'totalDeductions',
+    header: 'เงินหัก',
+    sortable: true,
+    sortAccessor: (line) => Number(line.totalDeductions || 0),
+    render: (line) => <code>{formatMoney(line.totalDeductions)}</code>,
+  },
+  {
+    key: 'netPay',
+    header: 'สุทธิ',
+    sortable: true,
+    sortAccessor: (line) => Number(line.netPay || 0),
+    render: (line) => <code>{formatMoney(line.netPay)}</code>,
+  },
+];
 
 const thisMonth = new Date().toISOString().slice(0, 7);
 const specialPayFields = [
@@ -19,13 +74,14 @@ const specialPayFields = [
   { key: 'specialPay8', label: 'พิเศษ 8 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)' },
 ];
 const specialPayKeys = specialPayFields.map((field) => field.key);
+const incomeInputKeys = ['nonTaxableIncome'];
 const deductionInputKeys = [
   'unpaidLeaveDays',
   'studentLoanDeduction',
   'legalExecutionDeduction',
   'otherPostTaxDeductions',
 ];
-const payrollInputKeys = [...specialPayKeys, ...deductionInputKeys];
+const payrollInputKeys = [...specialPayKeys, ...incomeInputKeys, ...deductionInputKeys];
 
 function defaultSpecialPayValue(key, applyDefaults) {
   if (!applyDefaults) return '';
@@ -47,6 +103,7 @@ function blankAdjustment(employeeId, { applyDefaults = false } = {}) {
   return {
     employeeId,
     ...Object.fromEntries(specialPayKeys.map((key) => [key, defaultSpecialPayValue(key, applyDefaults)])),
+    nonTaxableIncome: '',
     unpaidLeaveDays: '',
     studentLoanDeduction: '',
     legalExecutionDeduction: '',
@@ -60,6 +117,7 @@ function adjustmentFromLine(line, { applyDefaults = false } = {}) {
     const key = `specialPay${index + 1}`;
     adjustment[key] = draftValue(item.amount, defaultSpecialPayValue(key, applyDefaults));
   });
+  adjustment.nonTaxableIncome = draftValue(line.nonTaxableIncome);
   adjustment.unpaidLeaveDays = draftValue(line.unpaidLeaveDays);
   adjustment.studentLoanDeduction = draftValue(line.studentLoanDeduction);
   adjustment.legalExecutionDeduction = draftValue(line.legalExecutionDeduction);
@@ -96,6 +154,7 @@ export function PayrollPage({ showToast }) {
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [confirmProcess, setConfirmProcess] = useState(false);
 
   const selectedLine = useMemo(
     () => (period?.lines || []).find((line) => Number(line.employeeId) === Number(selectedEmployeeId)) || period?.lines?.[0] || null,
@@ -154,13 +213,17 @@ export function PayrollPage({ showToast }) {
     }
   }
 
-  async function process() {
-    if (!window.confirm(`ยืนยันประมวลผลเงินเดือนรอบ ${month}?`)) return;
+  function process() {
+    setConfirmProcess(true);
+  }
+
+  async function confirmProcessPayroll() {
     setSaving(true);
     try {
       const response = await api.payroll.process(payload());
       applyPeriod(response.period);
       showToast('success', 'ประมวลผลเงินเดือนเรียบร้อย');
+      setConfirmProcess(false);
     } catch (error) {
       showToast('error', error.message || 'ประมวลผลเงินเดือนไม่สำเร็จ');
     } finally {
@@ -246,38 +309,23 @@ export function PayrollPage({ showToast }) {
       </section>
 
       <section className="payroll-workspace">
-        <div className="table-panel">
-          <div className="payroll-table table-head">
-            <span>พนักงาน</span>
-            <span>รายได้</span>
-            <span>เงินพิเศษ</span>
-            <span>OT / Commission</span>
-            <span>เงินหัก</span>
-            <span>สุทธิ</span>
-          </div>
-          {loading ? (
-            <div className="table-row" style={{ justifyContent: 'center', color: '#94a3b8' }}>กำลังโหลด...</div>
-          ) : !period?.lines?.length ? (
-            <EmptyState icon="badgeDollar" title="ยังไม่มีข้อมูลเงินเดือน" description="เลือกรอบเดือนหรือกดรีเฟรชเพื่อคำนวณตัวอย่าง" />
-          ) : period.lines.map((line) => (
-            <button
-              key={line.employeeId}
-              type="button"
-              className={`payroll-table table-row payroll-row ${Number(line.employeeId) === Number(selectedLine?.employeeId) ? 'active' : ''}`}
-              onClick={() => setSelectedEmployeeId(line.employeeId)}
-            >
-              <span>
-                <strong>{line.employeeName}</strong>
-                <small>{line.employeeCode} · {line.departmentName || '-'}</small>
-              </span>
-              <code>{formatMoney(line.grossEarnings)}</code>
-              <code>{formatMoney(line.specialPayTotal)}</code>
-              <code>{formatMoney(Number(line.overtimePay || 0) + Number(line.commissionPay || 0))}</code>
-              <code>{formatMoney(line.totalDeductions)}</code>
-              <code>{formatMoney(line.netPay)}</code>
-            </button>
-          ))}
-        </div>
+        <DataTable
+          columns={payrollColumns}
+          rows={period?.lines || []}
+          getRowKey={(line) => line.employeeId}
+          gridClassName="payroll-table"
+          pageSize={25}
+          searchable
+          searchPlaceholder="ค้นหาพนักงาน"
+          onRowClick={(line) => setSelectedEmployeeId(line.employeeId)}
+          rowClassName={(line) => `payroll-row${Number(line.employeeId) === Number(selectedLine?.employeeId) ? ' active' : ''}`}
+          loading={loading}
+          emptyState={{
+            icon: 'badgeDollar',
+            title: 'ยังไม่มีข้อมูลเงินเดือน',
+            description: 'เลือกรอบเดือนหรือกดรีเฟรชเพื่อคำนวณตัวอย่าง',
+          }}
+        />
 
         <aside className="panel payroll-detail-panel">
           {selectedLine && selectedAdjustment ? (
@@ -294,8 +342,11 @@ export function PayrollPage({ showToast }) {
                 <MiniMetric label="เงินโอนสุทธิ" value={formatMoney(selectedLine.netPay)} />
               </div>
 
-              <div className="payroll-adjustment-group">
-                <h3>เงินพิเศษบริษัท</h3>
+              <CollapsibleSection
+                title="เงินพิเศษบริษัท"
+                defaultOpen
+                headerRight={<span className="collapsible-total">{formatMoney(specialPayKeys.reduce((sum, key) => sum + parsePayrollNumber(selectedAdjustment[key]), 0))}</span>}
+              >
                 <div className="payroll-special-grid">
                   {specialPayFields.map((field) => {
                     const inputId = `payroll-${field.key}`;
@@ -307,10 +358,19 @@ export function PayrollPage({ showToast }) {
                     );
                   })}
                 </div>
-              </div>
+              </CollapsibleSection>
 
-              <div className="payroll-adjustment-group">
-                <h3>รายการหักรายบุคคล</h3>
+              <CollapsibleSection title="รายได้ไม่คิดภาษี" defaultOpen={false}>
+                <div className="form-grid">
+                  <label htmlFor="payroll-non-taxable-income">
+                    รายได้อื่นๆ (ไม่คิดภาษี)
+                    <InfoTip label="รายได้อื่นๆ (ไม่คิดภาษี)" text="รายได้ส่วนนี้จะไม่ถูกนำไปรวมในฐานคำนวณภาษีเงินได้ของพนักงาน" />
+                    <MoneyInput id="payroll-non-taxable-income" value={selectedAdjustment.nonTaxableIncome} onChange={(value) => updateAdjustment('nonTaxableIncome', value)} />
+                  </label>
+                </div>
+              </CollapsibleSection>
+
+              <CollapsibleSection title="รายการหักรายบุคคล" defaultOpen={false}>
                 <div className="form-grid">
                   <label htmlFor="payroll-unpaid-leave-days">
                     วันลาไม่รับค่าจ้าง
@@ -318,10 +378,12 @@ export function PayrollPage({ showToast }) {
                   </label>
                   <label htmlFor="payroll-student-loan-deduction">
                     หัก กยศ.
+                    <InfoTip label="หัก กยศ." text="รายการหักภาระผูกพันกองทุนเงินให้กู้ยืมเพื่อการศึกษา หักหลังคำนวณภาษีแล้ว" />
                     <MoneyInput id="payroll-student-loan-deduction" value={selectedAdjustment.studentLoanDeduction} onChange={(value) => updateAdjustment('studentLoanDeduction', value)} />
                   </label>
                   <label htmlFor="payroll-legal-execution-deduction">
                     หักอายัดกรมบังคับคดี
+                    <InfoTip label="หักอายัดกรมบังคับคดี" text="รายการหักตามคำสั่งอายัดเงินเดือนจากกรมบังคับคดี หักหลังคำนวณภาษีแล้ว" />
                     <MoneyInput id="payroll-legal-execution-deduction" value={selectedAdjustment.legalExecutionDeduction} onChange={(value) => updateAdjustment('legalExecutionDeduction', value)} />
                   </label>
                   <label htmlFor="payroll-other-post-tax-deductions">
@@ -329,13 +391,14 @@ export function PayrollPage({ showToast }) {
                     <MoneyInput id="payroll-other-post-tax-deductions" value={selectedAdjustment.otherPostTaxDeductions} onChange={(value) => updateAdjustment('otherPostTaxDeductions', value)} />
                   </label>
                 </div>
-              </div>
+              </CollapsibleSection>
 
               <div className="payroll-breakdown">
                 <span><b>SSO</b>{formatMoney(selectedLine.socialSecurity)}</span>
                 <span><b>ฐาน ปกส.</b>{formatMoney(selectedLine.ssoWageBase)}</span>
                 <span><b>รายได้ทั้งปีประมาณการ</b>{formatMoney(selectedLine.projectedAnnualIncome)}</span>
                 <span><b>ค่าลดหย่อนรวม</b>{formatMoney(selectedLine.taxAllowanceTotal)}</span>
+                <span><b>รายได้ไม่คิดภาษี</b>{formatMoney(selectedLine.nonTaxableIncome)}</span>
               </div>
             </>
           ) : (
@@ -343,6 +406,26 @@ export function PayrollPage({ showToast }) {
           )}
         </aside>
       </section>
+
+      <ConfirmDialog
+        open={confirmProcess}
+        title="ประมวลผลเงินเดือน"
+        message={(
+          <div>
+            <p className="confirm-dialog-message">
+              ยืนยันประมวลผลเงินเดือนรอบ {month}? การดำเนินการนี้ไม่สามารถย้อนกลับได้
+            </p>
+            <p className="confirm-dialog-message">
+              รายได้รวม {formatMoney(period?.totalGross)} · เงินหักรวม {formatMoney(period?.totalDeductions)} · ยอดโอนสุทธิ {formatMoney(period?.totalNet)}
+            </p>
+          </div>
+        )}
+        confirmLabel="ยืนยันประมวลผล"
+        tone="danger"
+        busy={saving}
+        onConfirm={confirmProcessPayroll}
+        onCancel={() => setConfirmProcess(false)}
+      />
     </div>
   );
 }
@@ -357,6 +440,15 @@ function MiniMetric({ label, value }) {
 }
 
 function MoneyInput({ id, value, onChange }) {
+  function handleChange(event) {
+    const { value: nextValue } = event.target;
+    if (nextValue !== '' && Number(nextValue) < 0) {
+      onChange('0');
+      return;
+    }
+    onChange(nextValue);
+  }
+
   return (
     <span className="currency-input">
       <span className="currency-input-symbol" aria-hidden="true">฿</span>
@@ -368,7 +460,7 @@ function MoneyInput({ id, value, onChange }) {
         step="0.01"
         placeholder="0.00"
         value={value ?? ''}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={handleChange}
       />
     </span>
   );

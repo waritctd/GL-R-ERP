@@ -31,7 +31,8 @@ public class DepositNoticeController {
 
     // Note templates
     @GetMapping("/document-note-templates")
-    Map<String, List<DocumentNoteTemplateDto>> noteTemplates() {
+    Map<String, List<DocumentNoteTemplateDto>> noteTemplates(HttpSession session) {
+        sessions.requireUser(session);
         return Map.of("templates", service.getNoteTemplates());
     }
 
@@ -39,7 +40,7 @@ public class DepositNoticeController {
     @PostMapping("/tickets/{ticketId}/deposit-notice/draft")
     Map<String, DepositNoticeDto> createDraft(
         @PathVariable long ticketId,
-        @RequestBody DepositNoticeDraftRequest req,
+        @Valid @RequestBody DepositNoticeDraftRequest req,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
@@ -48,13 +49,15 @@ public class DepositNoticeController {
 
     // List documents for a ticket
     @GetMapping("/tickets/{ticketId}/deposit-notices")
-    Map<String, List<DepositNoticeDto>> listByTicket(@PathVariable long ticketId) {
+    Map<String, List<DepositNoticeDto>> listByTicket(@PathVariable long ticketId, HttpSession session) {
+        sessions.requireUser(session);
         return Map.of("depositNotices", service.listByTicket(ticketId));
     }
 
     // Get single document
     @GetMapping("/deposit-notices/{docId}")
-    Map<String, DepositNoticeDto> getDoc(@PathVariable long docId) {
+    Map<String, DepositNoticeDto> getDoc(@PathVariable long docId, HttpSession session) {
+        sessions.requireUser(session);
         return Map.of("depositNotice", service.getById(docId));
     }
 
@@ -62,7 +65,7 @@ public class DepositNoticeController {
     @PutMapping("/deposit-notices/{docId}")
     Map<String, DepositNoticeDto> update(
         @PathVariable long docId,
-        @RequestBody DepositNoticeDraftRequest req,
+        @Valid @RequestBody DepositNoticeDraftRequest req,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);

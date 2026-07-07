@@ -35,21 +35,21 @@ public class CommissionController {
     }
 
     @GetMapping
-    @PreAuthorize("hasAnyRole('SALES','SALES_MANAGER','CEO','ADMIN')")
+    @PreAuthorize("hasAnyRole('SALES','SALES_MANAGER','CEO')")
     public CommissionListResponse list(@RequestParam(required = false) String payrollMonth, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new CommissionListResponse(commissionService.list(parseMonth(payrollMonth), user));
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('SALES','SALES_MANAGER','CEO','ADMIN')")
+    @PreAuthorize("hasAnyRole('SALES','SALES_MANAGER','CEO')")
     public CommissionDetailResponse submit(@Valid @RequestBody SubmitCommissionRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new CommissionDetailResponse(commissionService.submit(request, user));
     }
 
     @PatchMapping("/{id}/deductions")
-    @PreAuthorize("hasAnyRole('SALES_MANAGER','CEO','ADMIN')")
+    @PreAuthorize("hasAnyRole('SALES_MANAGER','CEO')")
     public CommissionDetailResponse updateDeductions(
         @PathVariable long id,
         @Valid @RequestBody UpdateCommissionDeductionsRequest request,
@@ -60,14 +60,14 @@ public class CommissionController {
     }
 
     @PostMapping("/{id}/approve")
-    @PreAuthorize("hasAnyRole('SALES_MANAGER','CEO','ADMIN')")
+    @PreAuthorize("hasAnyRole('SALES_MANAGER','CEO')")
     public CommissionDetailResponse approve(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new CommissionDetailResponse(commissionService.approve(id, user));
     }
 
     @PostMapping("/{id}/clawback")
-    @PreAuthorize("hasAnyRole('SALES_MANAGER','CEO','ADMIN')")
+    @PreAuthorize("hasAnyRole('SALES_MANAGER','CEO')")
     public CommissionDetailResponse clawback(
         @PathVariable long id,
         @Valid @RequestBody CreateClawbackRequest request,
@@ -78,7 +78,7 @@ public class CommissionController {
     }
 
     @PostMapping("/simulator")
-    @PreAuthorize("hasAnyRole('SALES','SALES_MANAGER','CEO','ADMIN')")
+    @PreAuthorize("hasAnyRole('SALES','SALES_MANAGER','CEO')")
     public CommissionSimulationResponse simulator(
         @Valid @RequestBody CommissionSimulatorRequest request,
         HttpSession session
@@ -88,7 +88,7 @@ public class CommissionController {
     }
 
     @GetMapping("/payroll-ready")
-    @PreAuthorize("hasAnyRole('HR','ADMIN')")
+    @PreAuthorize("hasAnyRole('HR')")
     public PayrollSummaryResponse payrollReady(@RequestParam(required = false) String payrollMonth, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new PayrollSummaryResponse(commissionService.payrollReadySummary(parseMonth(payrollMonth), user));

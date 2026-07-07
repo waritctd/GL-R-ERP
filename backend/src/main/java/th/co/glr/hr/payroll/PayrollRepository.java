@@ -142,7 +142,8 @@ public class PayrollRepository {
                    pl.special_pay_1, pl.special_pay_2, pl.special_pay_3, pl.special_pay_4,
                    pl.special_pay_5, pl.special_pay_6, pl.special_pay_7, pl.special_pay_8,
                    pl.special_pay_total, pl.overtime_pay, pl.commission_pay,
-                   pl.gross_amount, pl.unpaid_leave_days, pl.unpaid_leave_deduction,
+                   pl.gross_amount, pl.non_taxable_income,
+                   pl.unpaid_leave_days, pl.unpaid_leave_deduction,
                    pl.gross_taxable_income, pl.sso_wage_base, pl.social_security,
                    pl.projected_annual_income, pl.tax_expense_deduction, pl.tax_allowance_total,
                    pl.taxable_annual_income, pl.annual_tax, pl.withholding_tax,
@@ -217,6 +218,7 @@ public class PayrollRepository {
                 special_pay_1, special_pay_2, special_pay_3, special_pay_4,
                 special_pay_5, special_pay_6, special_pay_7, special_pay_8,
                 special_pay_total, overtime_pay, commission_pay, gross_amount,
+                non_taxable_income,
                 unpaid_leave_days, unpaid_leave_deduction, gross_taxable_income,
                 sso_wage_base, social_security, projected_annual_income,
                 tax_expense_deduction, tax_allowance_total, taxable_annual_income,
@@ -229,6 +231,7 @@ public class PayrollRepository {
                 :specialPay1, :specialPay2, :specialPay3, :specialPay4,
                 :specialPay5, :specialPay6, :specialPay7, :specialPay8,
                 :specialPayTotal, :overtimePay, :commissionPay, :grossAmount,
+                :nonTaxableIncome,
                 :unpaidLeaveDays, :unpaidLeaveDeduction, :grossTaxableIncome,
                 :ssoWageBase, :socialSecurity, :projectedAnnualIncome,
                 :taxExpenseDeduction, :taxAllowanceTotal, :taxableAnnualIncome,
@@ -255,6 +258,7 @@ public class PayrollRepository {
                 .addValue("overtimePay", line.overtimePay())
                 .addValue("commissionPay", line.commissionPay())
                 .addValue("grossAmount", line.grossEarnings())
+                .addValue("nonTaxableIncome", line.nonTaxableIncome())
                 .addValue("unpaidLeaveDays", line.unpaidLeaveDays())
                 .addValue("unpaidLeaveDeduction", line.unpaidLeaveDeduction())
                 .addValue("grossTaxableIncome", line.grossTaxableIncome())
@@ -311,6 +315,7 @@ public class PayrollRepository {
             money(rs.getBigDecimal("overtime_pay")),
             money(rs.getBigDecimal("commission_pay")),
             money(rs.getBigDecimal("gross_amount")),
+            money(rs.getBigDecimal("non_taxable_income")),
             money(rs.getBigDecimal("unpaid_leave_days")),
             money(rs.getBigDecimal("unpaid_leave_deduction")),
             money(rs.getBigDecimal("gross_taxable_income")),
