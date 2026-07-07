@@ -192,7 +192,11 @@ export function DataTable({
               onClick={onRowClick ? () => onRowClick(row) : undefined}
             >
               {columns.map((column) => (
-                <span key={column.key} role="cell">
+                <span
+                  key={column.key}
+                  role="cell"
+                  data-label={typeof column.header === 'string' ? column.header : undefined}
+                >
                   {column.render(row)}
                 </span>
               ))}
