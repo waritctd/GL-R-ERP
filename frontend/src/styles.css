@@ -852,6 +852,12 @@ textarea:focus {
   text-transform: uppercase;
 }
 
+.table-head.is-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
 .table-row {
   border: 0;
   border-bottom: 1px solid var(--color-surface-subtle);
