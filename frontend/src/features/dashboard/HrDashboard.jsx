@@ -5,8 +5,17 @@ import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { Avatar } from '../../components/common/Avatar.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
 import { divisions, findDivision } from '../../data/referenceData.js';
+
+/**
+ * Reproduces `.dashboard-grid`: grid-template-columns: 1.15fr 0.85fr; gap: 18px;
+ * align-items: start; ≤1040px: repeat(2, minmax(0, 1fr)); ≤720px: 1fr.
+ * No shared primitive yet for this exact column ratio, so it's kept local
+ * (matches the breakpoints of `.stat-grid`/`.dashboard-grid` in styles.css).
+ */
+const DASHBOARD_GRID = 'grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] max-[1040px]:grid-cols-2 max-[720px]:grid-cols-1';
 
 export function HrDashboard({ employee, employees, profileRequests, dashboardSummary }) {
   const navigate = useNavigate();
@@ -64,34 +73,34 @@ export function HrDashboard({ employee, employees, profileRequests, dashboardSum
   }, [employees, profileRequests, dashboardSummary]);
 
   return (
-    <div className="page-stack">
+    <PageStack>
       <PageHeader
         title={`สวัสดี, คุณ${employee?.nickName || employee?.nameTh || ''}`}
         subtitle="ภาพรวมระบบทรัพยากรบุคคล"
       />
 
-      <div className="stat-grid">
+      <StatGrid>
         <StatCard icon="users" label="พนักงานทั้งหมด" value={dashboardStats.totalCount} helper="Total employees" tone="indigo" />
         <StatCard icon="badgeCheck" label="ทำงานปกติ" value={dashboardStats.activeCount} helper="Active" tone="teal" />
         <StatCard icon="clipboard" label="รออนุมัติทั้งหมด" value={dashboardStats.pendingCount} helper="Approvals" tone="rose" />
         <StatCard icon="badgeCheck" label="มาวันนี้" value={dashboardStats.todayPresent} helper="Attendance" tone="teal" />
-      </div>
+      </StatGrid>
 
-      <div className="stat-grid">
+      <StatGrid>
         <StatCard icon="userCog" label="แก้ไขข้อมูล" value={dashboardStats.pendingProfileRequests} helper="Profile requests" tone="amber" />
         <StatCard icon="clock" label="OT รออนุมัติ" value={dashboardStats.pendingOvertime} helper="Overtime" tone="blue" />
         <StatCard icon="calendar" label="ลารออนุมัติ" value={dashboardStats.pendingLeave} helper="Leave" tone="teal" />
         <StatCard icon="bell" label="แจ้งเตือนยังไม่อ่าน" value={dashboardStats.unreadNotifications} helper="Unread" tone="indigo" />
-      </div>
+      </StatGrid>
 
-      <div className="dashboard-grid">
-        <section className="panel">
-          <div className="panel-header">
-            <h2>จำนวนพนักงานตามฝ่าย</h2>
-            <Button type="button" variant="text" onClick={() => navigate('/employees')}>ดูรายชื่อ</Button>
-          </div>
+      <div className={DASHBOARD_GRID}>
+        <Panel
+          title="จำนวนพนักงานตามฝ่าย"
+          actions={<Button type="button" variant="text" onClick={() => navigate('/employees')}>ดูรายชื่อ</Button>}
+        >
           <div className="bar-list">
             {dashboardStats.divisionRows.map(({ division, count }) => {
+              const widthPct = Math.max(8, Math.round((count / dashboardStats.maxHeadcount) * 100));
               return (
                 <div className="bar-row" key={division.id}>
                   <span>
@@ -99,20 +108,19 @@ export function HrDashboard({ employee, employees, profileRequests, dashboardSum
                     <small>{division.en}</small>
                   </span>
                   <div className="bar-track">
-                    <i style={{ width: `${Math.max(8, Math.round((count / dashboardStats.maxHeadcount) * 100))}%` }} />
+                    <i className="w-[var(--bar-width)]" style={{ '--bar-width': `${widthPct}%` }} />
                   </div>
                   <b>{count}</b>
                 </div>
               );
             })}
           </div>
-        </section>
+        </Panel>
 
-        <section className="panel">
-          <div className="panel-header">
-            <h2>คำขอล่าสุด</h2>
-            <Button type="button" variant="text" onClick={() => navigate('/requests')}>ดูทั้งหมด</Button>
-          </div>
+        <Panel
+          title="คำขอล่าสุด"
+          actions={<Button type="button" variant="text" onClick={() => navigate('/requests')}>ดูทั้งหมด</Button>}
+        >
           <div className="request-feed">
             {profileRequests.slice(0, 5).map((request) => {
               const status = requestStatus(request.status);
@@ -128,8 +136,8 @@ export function HrDashboard({ employee, employees, profileRequests, dashboardSum
               );
             })}
           </div>
-        </section>
+        </Panel>
       </div>
-    </div>
+    </PageStack>
   );
 }
