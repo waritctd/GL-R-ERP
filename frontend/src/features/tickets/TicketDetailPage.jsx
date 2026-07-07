@@ -3,6 +3,7 @@ import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
@@ -713,6 +714,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                           {/* สกุลเงิน/หน่วย selector */}
                           <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 4 }}>
                             <span style={{ fontWeight: 400, color: '#64748b', fontSize: 11 }}>ราคาต่อ:</span>
+                            <InfoTip
+                              label="สกุลเงินและหน่วยนับ"
+                              text="เลือกครั้งเดียวต่อโรงงาน และใช้กับทุกรายการของโรงงานนี้"
+                            />
                             <select
                               value={draftFactoryCurr[factory]?.currency ?? 'THB'}
                               onChange={(e) => setDraftFactoryCurr((p) => ({ ...p, [factory]: { ...p[factory], currency: e.target.value } }))}
@@ -786,6 +791,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                                   value={draftRaw[item.id] ?? ''}
                                   onChange={(e) => setDraftRaw((prev) => ({ ...prev, [item.id]: e.target.value }))}
                                   placeholder={`ราคา/${unitLabel}`}
+                                  title="ราคาต่อหน่วยของรายการนี้เท่านั้น (สกุลเงิน/หน่วยนับใช้ค่าที่ตั้งไว้ของโรงงาน)"
                                   style={{ width: 110, padding: '4px 8px', border: '1px solid #93c5fd', borderRadius: 4, fontSize: 13 }} />
                                 <span style={{ fontSize: 11, color: '#2563eb', whiteSpace: 'nowrap' }}>{currLabel}/{unitLabel}</span>
                               </div>

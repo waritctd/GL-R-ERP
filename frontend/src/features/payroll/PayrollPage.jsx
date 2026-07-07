@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/index.js';
+import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -340,8 +342,11 @@ export function PayrollPage({ showToast }) {
                 <MiniMetric label="เงินโอนสุทธิ" value={formatMoney(selectedLine.netPay)} />
               </div>
 
-              <div className="payroll-adjustment-group">
-                <h3>เงินพิเศษบริษัท</h3>
+              <CollapsibleSection
+                title="เงินพิเศษบริษัท"
+                defaultOpen
+                headerRight={<span className="collapsible-total">{formatMoney(specialPayKeys.reduce((sum, key) => sum + parsePayrollNumber(selectedAdjustment[key]), 0))}</span>}
+              >
                 <div className="payroll-special-grid">
                   {specialPayFields.map((field) => {
                     const inputId = `payroll-${field.key}`;
@@ -353,20 +358,19 @@ export function PayrollPage({ showToast }) {
                     );
                   })}
                 </div>
-              </div>
+              </CollapsibleSection>
 
-              <div className="payroll-adjustment-group">
-                <h3>รายได้ไม่คิดภาษี</h3>
+              <CollapsibleSection title="รายได้ไม่คิดภาษี" defaultOpen={false}>
                 <div className="form-grid">
                   <label htmlFor="payroll-non-taxable-income">
                     รายได้อื่นๆ (ไม่คิดภาษี)
+                    <InfoTip label="รายได้อื่นๆ (ไม่คิดภาษี)" text="รายได้ส่วนนี้จะไม่ถูกนำไปรวมในฐานคำนวณภาษีเงินได้ของพนักงาน" />
                     <MoneyInput id="payroll-non-taxable-income" value={selectedAdjustment.nonTaxableIncome} onChange={(value) => updateAdjustment('nonTaxableIncome', value)} />
                   </label>
                 </div>
-              </div>
+              </CollapsibleSection>
 
-              <div className="payroll-adjustment-group">
-                <h3>รายการหักรายบุคคล</h3>
+              <CollapsibleSection title="รายการหักรายบุคคล" defaultOpen={false}>
                 <div className="form-grid">
                   <label htmlFor="payroll-unpaid-leave-days">
                     วันลาไม่รับค่าจ้าง
@@ -374,10 +378,12 @@ export function PayrollPage({ showToast }) {
                   </label>
                   <label htmlFor="payroll-student-loan-deduction">
                     หัก กยศ.
+                    <InfoTip label="หัก กยศ." text="รายการหักภาระผูกพันกองทุนเงินให้กู้ยืมเพื่อการศึกษา หักหลังคำนวณภาษีแล้ว" />
                     <MoneyInput id="payroll-student-loan-deduction" value={selectedAdjustment.studentLoanDeduction} onChange={(value) => updateAdjustment('studentLoanDeduction', value)} />
                   </label>
                   <label htmlFor="payroll-legal-execution-deduction">
                     หักอายัดกรมบังคับคดี
+                    <InfoTip label="หักอายัดกรมบังคับคดี" text="รายการหักตามคำสั่งอายัดเงินเดือนจากกรมบังคับคดี หักหลังคำนวณภาษีแล้ว" />
                     <MoneyInput id="payroll-legal-execution-deduction" value={selectedAdjustment.legalExecutionDeduction} onChange={(value) => updateAdjustment('legalExecutionDeduction', value)} />
                   </label>
                   <label htmlFor="payroll-other-post-tax-deductions">
@@ -385,7 +391,7 @@ export function PayrollPage({ showToast }) {
                     <MoneyInput id="payroll-other-post-tax-deductions" value={selectedAdjustment.otherPostTaxDeductions} onChange={(value) => updateAdjustment('otherPostTaxDeductions', value)} />
                   </label>
                 </div>
-              </div>
+              </CollapsibleSection>
 
               <div className="payroll-breakdown">
                 <span><b>SSO</b>{formatMoney(selectedLine.socialSecurity)}</span>
