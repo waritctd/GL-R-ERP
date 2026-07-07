@@ -55,6 +55,13 @@
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
         <dependency>
+            <!-- Actuator health endpoint only (P1-3 observability floor). Web exposure is locked
+                 down to `health` in application.yml, and SecurityConfig permits only that path
+                 under default-deny — no other actuator endpoint is reachable. -->
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
             <!-- Spring Boot 4 moved Flyway autoconfiguration out of spring-boot-autoconfigure
                  into this dedicated module (needed for FlywayMigrationInitializer, etc.). -->
             <groupId>org.springframework.boot</groupId>

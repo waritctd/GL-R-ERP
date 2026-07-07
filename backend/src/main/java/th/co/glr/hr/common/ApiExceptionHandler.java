@@ -1,5 +1,7 @@
 package th.co.glr.hr.common;
 
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpSession;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,6 +17,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+import th.co.glr.hr.auth.SessionContext;
+import th.co.glr.hr.auth.UserPrincipal;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -73,11 +77,28 @@ public class ApiExceptionHandler {
     }
 
     @ExceptionHandler(Exception.class)
-    ResponseEntity<ErrorResponse> handleUnexpected(Exception exception) {
-        log.error("Unhandled API exception", exception);
+    ResponseEntity<ErrorResponse> handleUnexpected(Exception exception, HttpServletRequest request) {
+        log.error("Unhandled API exception method={} path={} userId={}",
+            request.getMethod(), request.getRequestURI(), currentUserId(request), exception);
         return ResponseEntity
             .status(HttpStatus.INTERNAL_SERVER_ERROR)
             .body(new ErrorResponse("Internal server error", HttpStatus.INTERNAL_SERVER_ERROR.value()));
+    }
+
+    // Best-effort acting-user lookup for the log line above. Defensive: the session may not exist,
+    // may not carry the expected attribute, or (in unit tests calling the handler directly) the
+    // request may not be a real servlet request at all — any of these fall back to "anonymous".
+    // Never throws, and never logs anything beyond the numeric user id (no PII).
+    private static String currentUserId(HttpServletRequest request) {
+        HttpSession session = request.getSession(false);
+        if (session == null) {
+            return "anonymous";
+        }
+        Object value = session.getAttribute(SessionContext.SESSION_USER_KEY);
+        if (value instanceof UserPrincipal user) {
+            return String.valueOf(user.id());
+        }
+        return "anonymous";
     }
 
     private static String fieldMessage(FieldError error) {
