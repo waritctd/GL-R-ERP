@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { SALES_ENABLED } from '../../app/features.js';
 import { hasPermission } from '../../app/permissions.js';
 import { roleLabel } from '../../utils/format.js';
 import { Avatar } from '../common/Avatar.jsx';
@@ -18,10 +19,10 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const navItems = [
     { path: '/', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
     { path: '/hr', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', show: hasPermission(user.role, 'canViewEmployees') },
-    { path: '/ticket-overview', label: 'ภาพรวมใบขอราคา', helper: 'Ticket overview', icon: 'home', show: hasPermission(user.role, 'canViewTickets') },
-    { path: '/tickets', label: 'ใบขอราคา', helper: 'Price requests', icon: 'fileText', show: hasPermission(user.role, 'canViewTickets') },
-    { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', show: ['ceo', 'admin'].includes(user.role) },
-    { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', show: hasPermission(user.role, 'canViewCommissions') },
+    { path: '/ticket-overview', label: 'ภาพรวมใบขอราคา', helper: 'Ticket overview', icon: 'home', show: hasPermission(user.role, 'canViewTickets') && SALES_ENABLED },
+    { path: '/tickets', label: 'ใบขอราคา', helper: 'Price requests', icon: 'fileText', show: hasPermission(user.role, 'canViewTickets') && SALES_ENABLED },
+    { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', show: ['ceo', 'admin'].includes(user.role) && SALES_ENABLED },
+    { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED },
     { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', show: hasPermission(user.role, 'canManagePayroll') },
     { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', show: hasPermission(user.role, 'canViewEmployees') },
     { path: '/attendance', label: 'เวลาทำงาน', helper: 'Attendance', icon: 'calendar', show: true },

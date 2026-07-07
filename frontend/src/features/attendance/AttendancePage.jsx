@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/index.js';
 import { hasPermission } from '../../app/permissions.js';
 import { DataTable } from '../../components/common/DataTable.jsx';
+import { DesktopOnlyNotice } from '../../components/common/DesktopOnlyNotice.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
+import { useIsMobile } from '../../hooks/useIsMobile.js';
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const monthStartIso = () => {
@@ -13,6 +15,7 @@ const monthStartIso = () => {
 };
 
 export function AttendancePage({ user, employees, showToast }) {
+  const isMobile = useIsMobile();
   // HR/executives see everyone; ฝ่าย managers get the same view scoped to their division
   // (the backend limits the results to the manager's division).
   const canViewAll = hasPermission(user.role, 'canViewAllAttendance') || Boolean(user.manager);
@@ -133,6 +136,7 @@ export function AttendancePage({ user, employees, showToast }) {
 
   return (
     <div className="page-stack">
+      {isMobile && <DesktopOnlyNotice />}
       <PageHeader
         title="เวลาทำงาน"
         subtitle={canViewAll ? 'ตรวจสอบประวัติการสแกนของพนักงานทุกคน' : 'ตรวจสอบประวัติการสแกนของคุณ'}
