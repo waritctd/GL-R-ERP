@@ -30,6 +30,10 @@ export default [
       'react/prop-types': 'off',
       // Allow the "strip a field via rest" idiom, e.g. const { password, ...safe } = user.
       'no-unused-vars': ['error', { ignoreRestSiblings: true }],
+      // react-hooks v7 added Compiler-oriented rules; this one flags the standard
+      // fetch-on-mount pattern (calling a setState-bearing function from useEffect)
+      // used throughout this codebase, which is not a bug here.
+      'react-hooks/set-state-in-effect': 'off',
     },
   },
 ];
