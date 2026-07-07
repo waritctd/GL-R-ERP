@@ -5,10 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-@EnabledIfEnvironmentVariable(named = "TEST_DB_URL", matches = ".+")
 class OvertimeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private OvertimeRepository repository;
 

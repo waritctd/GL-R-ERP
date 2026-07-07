@@ -6,7 +6,6 @@ import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -14,7 +13,6 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * Exercises EmployeeRepository's dynamic filter/pagination SQL and the create round-trip against a
  * real PostgreSQL database (issue #28).
  */
-@EnabledIfEnvironmentVariable(named = "TEST_DB_URL", matches = ".+")
 class EmployeeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private EmployeeRepository repository;
 

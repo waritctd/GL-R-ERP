@@ -8,11 +8,9 @@ import java.time.OffsetDateTime;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-@EnabledIfEnvironmentVariable(named = "TEST_DB_URL", matches = ".+")
 class DashboardRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private DashboardRepository repository;
 

@@ -8,7 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import jakarta.servlet.Filter;
 import java.time.LocalDate;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -21,26 +21,31 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.support.PostgresTestSupport;
 
 /**
  * Verifies the default-deny authorization flip: unauthenticated API requests fail closed with 401,
  * the exact public allowlist (OPTIONS preflight + login + attendance punch) stays reachable, and the
  * {@code @PreAuthorize} role authorities still resolve (HR 200 vs wrong-role 403) on top of the real
- * SecurityFilterChain. Boots the real context, so it is Postgres-gated like the other integration
- * tests (runs in CI via {@code TEST_DB_URL}; skipped on the DB-less local {@code mvnw verify}).
+ * SecurityFilterChain. Boots the real context, so it needs a real Postgres: resolved by
+ * {@link PostgresTestSupport} (TEST_DB_URL override, else a throwaway Testcontainers Postgres);
+ * skipped only when neither is available.
  */
-@EnabledIfEnvironmentVariable(named = "TEST_DB_URL", matches = ".+")
+@EnabledIf(
+    value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
+    disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
 @SpringBootTest
 class SecurityAuthorizationIntegrationTest {
 
-    // Point the booted Spring context's datasource at the same Postgres this test is gated on
-    // (TEST_DB_URL), mirroring AbstractPostgresIntegrationTest. Without this, @SpringBootTest would
-    // fall back to the app default (spring.datasource.url=.../hris) and fail to boot.
+    // Point the booted Spring context's datasource at the Postgres resolved by PostgresTestSupport
+    // (TEST_DB_URL override, else the Testcontainers singleton), mirroring
+    // AbstractPostgresIntegrationTest. Without this, @SpringBootTest would fall back to the app
+    // default (spring.datasource.url=.../hris) and fail to boot.
     @DynamicPropertySource
     static void datasourceProperties(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", () -> System.getenv("TEST_DB_URL"));
-        registry.add("spring.datasource.username", () -> System.getenv("TEST_DB_USERNAME"));
-        registry.add("spring.datasource.password", () -> System.getenv("TEST_DB_PASSWORD"));
+        registry.add("spring.datasource.url", PostgresTestSupport::jdbcUrl);
+        registry.add("spring.datasource.username", PostgresTestSupport::username);
+        registry.add("spring.datasource.password", PostgresTestSupport::password);
     }
 
     private final MockMvc mvc;
