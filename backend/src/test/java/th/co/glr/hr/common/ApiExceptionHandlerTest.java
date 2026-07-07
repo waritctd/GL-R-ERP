@@ -13,7 +13,7 @@ class ApiExceptionHandlerTest {
     @Test
     void noResourceFoundReturns404NotUnexpected500() {
         NoResourceFoundException exception =
-            new NoResourceFoundException(org.springframework.http.HttpMethod.GET, "/");
+            new NoResourceFoundException(org.springframework.http.HttpMethod.GET, "/", "/");
 
         ResponseEntity<ApiExceptionHandler.ErrorResponse> response = handler.handleNoResourceFound(exception);
 
