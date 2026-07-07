@@ -5,6 +5,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { DesktopOnlyNotice } from '../../components/common/DesktopOnlyNotice.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { PageStack, StatGrid } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
@@ -14,6 +15,12 @@ const monthStartIso = () => {
   const now = new Date();
   return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
 };
+
+// Reproduces `.filter-bar` for this page's native <form onSubmit> (Enter-to-submit
+// needed); Layout.jsx's FilterBar only renders a <div> — same pattern established in
+// OvertimePage/LeavePage (docs/agent-handoffs/29_tw-convert-overtime-leave.md).
+const FILTER_BAR_CLASS =
+  'flex flex-wrap gap-[10px] items-center bg-surface border border-border rounded-md p-[14px]';
 
 export function AttendancePage({ user, employees, showToast }) {
   const isMobile = useIsMobile();
@@ -136,7 +143,7 @@ export function AttendancePage({ user, employees, showToast }) {
   }
 
   return (
-    <div className="page-stack">
+    <PageStack>
       {isMobile && <DesktopOnlyNotice />}
       <PageHeader
         title="เวลาทำงาน"
@@ -149,14 +156,14 @@ export function AttendancePage({ user, employees, showToast }) {
         )}
       />
 
-      <section className="stat-grid">
+      <StatGrid>
         <StatCard label="รายการในช่วงที่เลือก" value={punches.length} helper="Punch records" icon="calendar" tone="indigo" />
         <StatCard label="พนักงานที่พบ" value={uniqueEmployees} helper={canViewAll ? 'จากผลลัพธ์ปัจจุบัน' : 'บัญชีของคุณ'} icon="users" tone="teal" />
         <StatCard label="ยังไม่แมปพนักงาน" value={unresolvedCount} helper="badge_card_no ไม่ตรง" icon="badge" tone="amber" />
         <StatCard label="แหล่งข้อมูล" value={sourceSummary.value} helper={sourceSummary.helper} icon="clock" tone="rose" />
-      </section>
+      </StatGrid>
 
-      <form className="filter-bar" onSubmit={submitFilters}>
+      <form className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
         <label>
           จากวันที่
           <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
@@ -239,7 +246,7 @@ export function AttendancePage({ user, employees, showToast }) {
           description: 'ลองเปลี่ยนช่วงวันที่หรือนำเข้าไฟล์ .dat',
         }}
       />
-    </div>
+    </PageStack>
   );
 }
 
