@@ -2,7 +2,10 @@ package th.co.glr.hr.payroll;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -15,6 +18,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.commission.CommissionCalculator;
 import th.co.glr.hr.commission.CommissionRepository;
@@ -22,11 +26,13 @@ import th.co.glr.hr.common.ApiException;
 
 class PayrollServiceTest {
     private final PayrollRepository payrollRepository = mock(PayrollRepository.class);
+    private final AuditService auditService = mock(AuditService.class);
     private final PayrollService service = new PayrollService(
         payrollRepository,
         mock(PayrollCalculator.class),
         mock(CommissionRepository.class),
-        mock(CommissionCalculator.class)
+        mock(CommissionCalculator.class),
+        auditService
     );
 
     @Test
@@ -68,6 +74,23 @@ class PayrollServiceTest {
         String body = service.bankExport(99L, ceoUser());
 
         assertThat(body).contains("GLR_PAYROLL|2026-06-01|1|30000.00");
+    }
+
+    @Test
+    void hrProcessingPayrollRecordsAuditTrail() {
+        when(payrollRepository.findActiveEmployees()).thenReturn(List.of());
+        when(payrollRepository.findApprovedOvertimePayByEmployee(LocalDate.of(2026, 6, 1))).thenReturn(java.util.Map.of());
+        when(payrollRepository.findYearToDateByEmployee(LocalDate.of(2026, 6, 1))).thenReturn(java.util.Map.of());
+        when(payrollRepository.saveProcessedPeriod(eq(LocalDate.of(2026, 6, 1)), eq(42L), eq(List.of()))).thenReturn(99L);
+        PayrollPeriodDto savedPeriod = period();
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(savedPeriod));
+        ProcessPayrollRequest request = new ProcessPayrollRequest(LocalDate.of(2026, 6, 1), List.of());
+        UserPrincipal hr = hrUser();
+
+        PayrollPeriodDto result = service.process(request, hr);
+
+        assertThat(result.id()).isEqualTo(99L);
+        verify(auditService).record(hr, "PROCESS_PAYROLL", "payroll_period", 99L, null, savedPeriod);
     }
 
     @Test

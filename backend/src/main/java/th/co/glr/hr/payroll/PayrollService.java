@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.commission.CommissionCalculator;
 import th.co.glr.hr.commission.CommissionRecord;
@@ -31,17 +32,20 @@ public class PayrollService {
     private final PayrollCalculator payrollCalculator;
     private final CommissionRepository commissionRepository;
     private final CommissionCalculator commissionCalculator;
+    private final AuditService auditService;
 
     public PayrollService(
         PayrollRepository payrollRepository,
         PayrollCalculator payrollCalculator,
         CommissionRepository commissionRepository,
-        CommissionCalculator commissionCalculator
+        CommissionCalculator commissionCalculator,
+        AuditService auditService
     ) {
         this.payrollRepository = payrollRepository;
         this.payrollCalculator = payrollCalculator;
         this.commissionRepository = commissionRepository;
         this.commissionCalculator = commissionCalculator;
+        this.auditService = auditService;
     }
 
     public PayrollPeriodDto currentOrPreview(LocalDate payrollMonth, UserPrincipal actor) {
@@ -71,6 +75,7 @@ public class PayrollService {
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Payroll period was not saved"));
         auditPayrollAccess("PROCESS_PAYROLL", actor, period,
             "base_salary,gross_earnings,deductions,net_pay");
+        auditService.record(actor, "PROCESS_PAYROLL", "payroll_period", periodId, null, period);
         return period;
     }
 

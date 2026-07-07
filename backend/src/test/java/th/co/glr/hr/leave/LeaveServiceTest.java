@@ -17,12 +17,14 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
+import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
 class LeaveServiceTest {
     private final LeaveRepository leaveRepository = mock(LeaveRepository.class);
-    private final LeaveService leaveService = new LeaveService(leaveRepository);
+    private final AuditService auditService = mock(AuditService.class);
+    private final LeaveService leaveService = new LeaveService(leaveRepository, auditService);
 
     @Test
     void employeesCanSubmitOwnLeaveWhenQuotaIsAvailable() {
@@ -108,11 +110,13 @@ class LeaveServiceTest {
             .thenReturn(Optional.of(submitted))
             .thenReturn(Optional.of(approved));
         when(leaveRepository.approve(77L, 20L, "ok")).thenReturn(1);
+        UserPrincipal hr = user("hr", 20L);
 
-        LeaveRequestDto result = leaveService.approve(77L, new ReviewLeaveRequest("ok"), user("hr", 20L));
+        LeaveRequestDto result = leaveService.approve(77L, new ReviewLeaveRequest("ok"), hr);
 
         assertThat(result.status()).isEqualTo("APPROVED");
         verify(leaveRepository).approve(77L, 20L, "ok");
+        verify(auditService).record(hr, "APPROVE_LEAVE_REQUEST", "leave_request", 77L, submitted, approved);
     }
 
     @Test
