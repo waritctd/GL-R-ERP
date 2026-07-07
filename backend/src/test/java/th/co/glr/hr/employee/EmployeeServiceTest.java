@@ -110,6 +110,26 @@ class EmployeeServiceTest {
     }
 
     @Test
+    void employeesCanFetchOwnSafeProfileWithoutPayrollOrSensitiveFields() {
+        when(employees.findEmployeeById(5L, false)).thenReturn(Optional.of(employee(5L)));
+        when(profileRequests.pendingCountByEmployee(5L)).thenReturn(2);
+
+        EmployeeDto result = service.get(5L,
+            new UserPrincipal(8L, "e@glr.co.th", "E", "employee", 5L, true, LocalDate.now(), false, null, false));
+
+        assertThat(result.id()).isEqualTo(5L);
+        assertThat(result.email()).isEqualTo("employee5@glr.co.th");
+        assertThat(result.currentAddress()).isNotNull();
+        assertThat(result.pendingRequestCount()).isEqualTo(2);
+        assertThat(result.salary()).isNull();
+        assertThat(result.salaryHistory()).isEmpty();
+        assertThat(result.bank()).isNull();
+        assertThat(result.bankAccount()).isNull();
+        assertThat(result.payType()).isNull();
+        assertThat(result.sensitive()).isNull();
+    }
+
+    @Test
     void doesNotLogAuditEventForSelfServiceView() {
         when(employees.findEmployeeById(5L, false)).thenReturn(Optional.of(employee(5L)));
         when(profileRequests.pendingCountByEmployee(5L)).thenReturn(0);
@@ -135,6 +155,22 @@ class EmployeeServiceTest {
                 assertThat(exception.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
 
         verifyNoInteractions(employees, profileRequests);
+    }
+
+    @Test
+    void hrCanFetchFullEmployeeDetail() {
+        when(employees.findEmployeeById(5L, true)).thenReturn(Optional.of(employee(5L)));
+        when(profileRequests.pendingCountByEmployee(5L)).thenReturn(0);
+
+        EmployeeDto result = service.get(5L,
+            new UserPrincipal(9L, "hr2@glr.co.th", "HR2", "hr", 9L, true, LocalDate.now(), false, null, false));
+
+        assertThat(result.salary()).isEqualByComparingTo("25000.00");
+        assertThat(result.salaryHistory()).hasSize(1);
+        assertThat(result.bank()).isEqualTo("ธนาคารทดสอบ");
+        assertThat(result.bankAccount()).isEqualTo("123-4-56789-0");
+        assertThat(result.payType()).isEqualTo("รายเดือน");
+        assertThat(result.sensitive().nationalId()).isEqualTo("1101700000005");
     }
 
     private ListAppender<ILoggingEvent> attachAuditAppender() {
@@ -184,17 +220,17 @@ class EmployeeServiceTest {
             "success",
             true,
             "รายเดือน",
-            BigDecimal.ZERO,
+            new BigDecimal("25000.00"),
             LocalDate.of(2024, 1, 1),
             null,
             "-",
-            "",
-            "",
+            "ธนาคารทดสอบ",
+            "123-4-56789-0",
             new AddressDto("", "", "", ""),
             new EmergencyContactDto("", "", ""),
             List.of(),
-            List.of(),
-            SensitiveDto.empty(),
+            List.of(new SalaryHistoryDto(LocalDate.of(2024, 1, 1), null, new BigDecimal("25000.00"), "Initial salary")),
+            new SensitiveDto("1101700000005", "TAX-5", "SSO-5", "โรงพยาบาลทดสอบ", "PF-5"),
             0
         );
     }

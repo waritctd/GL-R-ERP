@@ -10,9 +10,17 @@ public record TicketItemDto(
     String color,
     String texture,
     String size,
+    String factory,
     BigDecimal qty,
+    BigDecimal qtySqm,
+    BigDecimal rawPrice,
+    String rawCurrency,
+    String rawUnit,
     BigDecimal proposedPrice,
     BigDecimal approvedPrice,
     String currency,
-    int sortOrder
+    int sortOrder,
+    BigDecimal calcedCost,
+    BigDecimal calcedPrice,
+    Integer calcConfigVersion
 ) {}

@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
+import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { InfoTip } from '../../components/common/InfoTip.jsx';
+import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
 
@@ -45,8 +49,14 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   // Propose-price mode
   const [proposeMode, setProposeMode] = useState(false);
-  const [draftPrices, setDraftPrices] = useState({});
+  const [draftRaw, setDraftRaw] = useState({});              // itemId → rawPrice (string)
+  const [draftFactoryCurr, setDraftFactoryCurr] = useState({}); // factoryName → { currency, unit }
   const [proposeNote, setProposeNote] = useState('');
+
+  // Factory configs + email drafts
+  const [factoryConfigs, setFactoryConfigs] = useState({});   // factoryName → config
+  const [emailDraft, setEmailDraft] = useState(null);         // { factory, to, subject, body } | null
+  const [emailSending, setEmailSending] = useState(false);
 
   // Edit-items mode
   const [editMode, setEditMode] = useState(false);
@@ -57,6 +67,15 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
 
+  // R4: CEO price calculation
+  const [calcLoading, setCalcLoading] = useState(false);
+
+  // R5: Attachments
+  const [attachments, setAttachments] = useState([]);
+  const [attachLoading, setAttachLoading] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const [deletingAttachment, setDeletingAttachment] = useState(false);
+
   // Revision form
   const [showReviseForm, setShowReviseForm] = useState(false);
   const [reviseScope, setReviseScope] = useState('QTY_OR_NOTE');
@@ -64,6 +83,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   // Comment
   const [commentText, setCommentText] = useState('');
+
+  // Confirmation dialogs (state-driven, replaces native browser confirm)
+  const [confirm, setConfirm] = useState(null); // { kind: 'deleteAttachment', id, name } | { kind: 'cancelTicket' } | null
 
   async function loadTicket() {
     setLoading(true);
@@ -77,7 +99,22 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     }
   }
 
-  useEffect(() => { if (ticketId) loadTicket(); }, [ticketId]);
+  async function loadAttachments() {
+    setAttachLoading(true);
+    try {
+      const res = await api.attachments.list(ticketId);
+      setAttachments(res.attachments ?? []);
+    } catch { /* non-critical */ } finally {
+      setAttachLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (ticketId) {
+      loadTicket();
+      loadAttachments();
+    }
+  }, [ticketId]);
 
   async function doAction(fn, successMsg) {
     setActionLoading(true);
@@ -94,8 +131,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       setShowReviseForm(false);
       setReviseReason('');
       setCommentText('');
-      setDraftPrices({});
+      setDraftRaw({});
+      setDraftFactoryCurr({});
       setProposeNote('');
+      setEmailDraft(null);
     } catch (error) {
       showToast('error', error.message || 'เกิดข้อผิดพลาด');
     } finally {
@@ -105,8 +144,34 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   if (loading) {
     return (
-      <div className="page-stack">
-        <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>กำลังโหลด...</div>
+      <div className="page-stack" aria-busy="true" aria-label="กำลังโหลดข้อมูลใบขอราคา">
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between' }}>
+          <div style={{ flex: 1 }}>
+            <Skeleton width={80} height={28} radius="var(--radius-md)" className="skeleton" />
+            <div style={{ marginTop: 12 }}>
+              <Skeleton width="40%" height={22} />
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <Skeleton width={220} height={16} />
+            </div>
+          </div>
+        </div>
+        <section className="panel">
+          <div className="panel-header">
+            <Skeleton width="30%" height={16} />
+          </div>
+          <div style={{ padding: '14px 18px' }}>
+            <SkeletonText lines={4} />
+          </div>
+        </section>
+        <section className="table-panel">
+          <div className="panel-header">
+            <Skeleton width="30%" height={16} />
+          </div>
+          <div style={{ padding: '14px 18px' }}>
+            <SkeletonText lines={5} />
+          </div>
+        </section>
       </div>
     );
   }
@@ -123,24 +188,29 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     );
   }
 
-  const { summary, items, events, quotation } = ticket;
+  const { summary, items, events, quotations } = ticket;
   const st = summary.status;
   const role = user.role;
   const isOwner = user.id === summary.createdById;
 
   const showProposed = ROLE_PERMISSIONS.canProposePrices.includes(role) || ROLE_PERMISSIONS.canApproveReject.includes(role);
-  const itemsGridCols = showProposed
-    ? 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr) minmax(0,1.1fr)'
-    : 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr)';
+  const showCalcBreakdown = ROLE_PERMISSIONS.canApproveReject.includes(role) && items.some((it) => it.calcedCost != null);
+  const itemsGridCols = showCalcBreakdown
+    ? 'minmax(0,1.4fr) minmax(0,1fr) minmax(0,0.5fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.9fr)'
+    : showProposed
+      ? 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr) minmax(0,1.1fr)'
+      : 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr)';
 
   const EDITABLE_STATUSES = ['submitted', 'in_review', 'price_proposed'];
   const can = {
-    pickup:           st === 'submitted'       && ROLE_PERMISSIONS.canPickupTickets.includes(role),
-    propose:          st === 'in_review'       && ROLE_PERMISSIONS.canProposePrices.includes(role),
-    approve:          st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    reject:           st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    generateDocument: st === 'approved'        && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
-    revise:           (st === 'approved' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
+    pickup:            st === 'submitted'       && ROLE_PERMISSIONS.canPickupTickets.includes(role),
+    propose:           st === 'in_review'       && ROLE_PERMISSIONS.canProposePrices.includes(role),
+    calculatePrices:   st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
+    approve:           st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
+    reject:            st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
+    generateQuotation: (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canGenerateQuotation.includes(role) && (isOwner || role === 'admin'),
+    generateDocument: (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
+    revise:           (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
     close:            st === 'document_issued' && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
     cancel:           !TERMINAL.includes(st)   && (isOwner || role === 'admin'),
     comment:          !TERMINAL.includes(st),
@@ -154,28 +224,166 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   const status = ticketStatusLabel(st);
 
-  function initPropose() {
-    const map = {};
-    items.forEach((item) => { map[item.id] = item.proposedPrice ?? ''; });
-    setDraftPrices(map);
+  async function initPropose() {
+    // load factory configs first so we can init currency defaults
+    let fcMap = factoryConfigs;
+    if (Object.keys(fcMap).length === 0) {
+      try {
+        const res = await api.factoryConfigs.list();
+        fcMap = {};
+        (res.factories ?? []).forEach((fc) => { fcMap[fc.factoryName] = fc; });
+        setFactoryConfigs(fcMap);
+      } catch { /* non-critical */ }
+    }
+
+    // init raw price per item (carry over existing rawPrice if re-opening)
+    const rawMap = {};
+    items.forEach((item) => { rawMap[item.id] = item.rawPrice != null ? String(item.rawPrice) : ''; });
+
+    // init currency/unit per factory group (from config or existing item data)
+    const currMap = {};
+    const groups = groupByFactory(items);
+    groups.forEach(({ factory, items: gItems }) => {
+      const fc = fcMap[factory];
+      // prefer existing raw data on items, fallback to config, fallback to THB/piece
+      const firstWithRaw = gItems.find((it) => it.rawCurrency);
+      currMap[factory] = {
+        currency: firstWithRaw?.rawCurrency ?? fc?.currency ?? 'THB',
+        unit:     firstWithRaw?.rawUnit     ?? fc?.unit     ?? 'piece',
+      };
+    });
+
+    setDraftRaw(rawMap);
+    setDraftFactoryCurr(currMap);
     setProposeMode(true);
   }
 
   async function handleProposePrice() {
     const payload = {
-      items: items.map((item) => ({
-        brand: item.brand,
-        model: item.model,
-        color: item.color,
-        texture: item.texture,
-        size: item.size,
-        qty: item.qty,
-        proposedPrice: draftPrices[item.id] !== '' ? Number(draftPrices[item.id]) : null,
-        currency: item.currency ?? 'THB',
-      })),
+      items: items.map((item) => {
+        const rawPriceStr = draftRaw[item.id] ?? '';
+        const fc = draftFactoryCurr[item.factory] ?? {};
+        return {
+          brand: item.brand, model: item.model, color: item.color,
+          texture: item.texture, size: item.size, factory: item.factory ?? null,
+          qty: item.qty, qtySqm: item.qtySqm ?? null,
+          rawPrice:    rawPriceStr !== '' ? Number(rawPriceStr) : null,
+          rawCurrency: fc.currency ?? null,
+          rawUnit:     fc.unit     ?? null,
+          proposedPrice: null, // calculated in R4
+          currency: 'THB',
+        };
+      }),
       note: proposeNote.trim() || null,
     };
     await doAction(() => api.tickets.proposePrice(ticketId, payload), 'ส่งราคาเสนอเรียบร้อย');
+  }
+
+  // Group items by factory for Import propose-price view
+  function groupByFactory(itemList) {
+    const groups = [];
+    const seen = new Map();
+    itemList.forEach((item) => {
+      const key = item.factory || '(ไม่ระบุโรงงาน)';
+      if (!seen.has(key)) { seen.set(key, []); groups.push({ factory: key, items: seen.get(key) }); }
+      seen.get(key).push(item);
+    });
+    return groups;
+  }
+
+  function buildEmailDraft(factory, groupItems) {
+    const fc = factoryConfigs[factory] ?? {};
+    const currency = fc.currency ?? 'THB';
+    const unit = fc.unit ?? 'piece';
+    const unitLabel = unit === 'sqm' ? 'ตร.ม.' : 'แผ่น';
+    const itemLines = groupItems.map((item, i) => {
+      const qty = unit === 'sqm' ? (item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : `${item.qty} แผ่น`) : `${item.qty} แผ่น`;
+      return `${i + 1}. ${item.brand} ${item.model} ${item.color} ${item.texture} ${item.size} — ${qty}`;
+    }).join('\n');
+    return {
+      factory,
+      to: fc.email ?? '',
+      subject: `ขอราคาสินค้า — ${summary.code} — ${factory}`,
+      body: `เรียน ${factory}\n\nทางบริษัท จี แอล แอนด์ อาร์ จำกัด ขอทราบราคาสินค้าดังต่อไปนี้\n\nใบขอราคาเลขที่: ${summary.code}\nลูกค้า: ${summary.customerName || summary.title}\n\nรายการสินค้า:\n${itemLines}\n\nกรุณาตอบกลับราคาสินค้าในสกุลเงิน ${currency} ต่อ ${unitLabel}\n\nขอบคุณครับ/ค่ะ\nฝ่ายนำเข้า\nบริษัท จี แอล แอนด์ อาร์ จำกัด`,
+    };
+  }
+
+  async function sendFactoryEmail() {
+    if (!emailDraft) return;
+    setEmailSending(true);
+    try {
+      await api.factoryConfigs.sendEmail(ticketId, emailDraft);
+      showToast('success', `ส่งอีเมลถึง ${emailDraft.factory} แล้ว`);
+      setEmailDraft(null);
+    } catch (err) {
+      showToast('error', err.message || 'ส่งอีเมลไม่สำเร็จ');
+    } finally {
+      setEmailSending(false);
+    }
+  }
+
+  async function handleCalculatePrices() {
+    setCalcLoading(true);
+    try {
+      const response = await api.tickets.calculatePrices(ticketId);
+      setTicket(response.ticket);
+      showToast('success', 'คำนวณราคาเรียบร้อย — ตรวจสอบราคาแล้วกดอนุมัติได้เลย');
+    } catch (error) {
+      showToast('error', error.message || 'คำนวณราคาไม่สำเร็จ');
+    } finally {
+      setCalcLoading(false);
+    }
+  }
+
+  async function handleUploadAttachment(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const attachType = file.name.toLowerCase().includes('po') ? 'PO' : 'OTHER';
+    setUploadingFile(true);
+    try {
+      await api.attachments.upload(ticketId, file, attachType);
+      await loadAttachments();
+      showToast('success', `แนบไฟล์ ${file.name} แล้ว`);
+    } catch (err) {
+      showToast('error', err.message || 'อัปโหลดไม่สำเร็จ');
+    } finally {
+      setUploadingFile(false);
+      e.target.value = '';
+    }
+  }
+
+  function handleDeleteAttachment(id, name) {
+    setConfirm({ kind: 'deleteAttachment', id, name });
+  }
+
+  async function confirmDeleteAttachment(id) {
+    setDeletingAttachment(true);
+    try {
+      await api.attachments.delete(id);
+      setAttachments((prev) => prev.filter((a) => a.id !== id));
+      showToast('success', 'ลบไฟล์แล้ว');
+    } catch (err) {
+      showToast('error', err.message || 'ลบไม่สำเร็จ');
+    } finally {
+      setDeletingAttachment(false);
+      setConfirm(null);
+    }
+  }
+
+  async function handleDownloadQuotation(quotationId, number, format) {
+    try {
+      const blob = format === 'pdf'
+        ? await api.tickets.downloadQuotationPdf(ticketId, quotationId)
+        : await api.tickets.downloadQuotationXlsx(ticketId, quotationId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (number ?? 'quotation') + '.' + format;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      showToast('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
+    }
   }
 
   async function handleReject() {
@@ -190,6 +398,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   return (
     <div className="page-stack">
+      <Breadcrumbs items={[{ label: 'ใบขอราคา', onClick: onBack }, { label: summary.code || summary.customerName || summary.title }]} />
       <header style={{ display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between' }}>
         <div>
           <button type="button" className="secondary-button" onClick={onBack} style={{ marginBottom: 12 }}>
@@ -231,8 +440,17 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               </button>
             )}
 
+            {can.calculatePrices && (
+              <button type="button" className="secondary-button" disabled={calcLoading || actionLoading}
+                onClick={handleCalculatePrices}
+                style={{ background: '#eff6ff', borderColor: '#93c5fd', color: '#1d4ed8' }}>
+                <Icon name="calculator" size={14} />
+                {calcLoading ? 'กำลังคำนวณ...' : 'คำนวณราคา (CIF)'}
+              </button>
+            )}
+
             {can.approve && (
-              <button type="button" className="primary-button" disabled={actionLoading}
+              <button type="button" className="primary-button" disabled={actionLoading || calcLoading}
                 onClick={() => doAction(() => api.tickets.approve(ticketId), 'อนุมัติราคาแล้ว')}>
                 <Icon name="check" size={14} />
                 อนุมัติ
@@ -245,6 +463,14 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 style={{ color: '#dc2626', borderColor: '#fca5a5' }}>
                 <Icon name="close" size={14} />
                 ไม่อนุมัติ
+              </button>
+            )}
+
+            {can.generateQuotation && (
+              <button type="button" className="secondary-button" disabled={actionLoading}
+                onClick={() => doAction(() => api.tickets.quotation(ticketId), 'ออกใบเสนอราคาแล้ว')}>
+                <Icon name="fileText" size={14} />
+                {ticket.quotations && ticket.quotations.length > 0 ? 'ออกใบเสนอราคาใหม่ (Rev)' : 'ออกใบเสนอราคา'}
               </button>
             )}
 
@@ -287,11 +513,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             {can.cancel && (
               <button type="button" className="secondary-button" disabled={actionLoading}
                 style={{ marginLeft: 'auto', color: '#dc2626', borderColor: '#fca5a5' }}
-                onClick={() => {
-                  if (window.confirm('ยืนยันการยกเลิกใบขอราคานี้?')) {
-                    doAction(() => api.tickets.cancel(ticketId), 'ยกเลิกใบขอราคาแล้ว');
-                  }
-                }}>
+                onClick={() => setConfirm({ kind: 'cancelTicket' })}>
                 ยกเลิก
               </button>
             )}
@@ -366,6 +588,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               <h2>ข้อมูลทั่วไป</h2>
             </div>
             <InfoRow label="ลูกค้า" value={summary.customerName} />
+            {summary.projectName && <InfoRow label="โครงการ" value={summary.projectName} />}
+            {summary.contactName && (
+              <InfoRow label="ผู้ติดต่อ" value={summary.contactName} />
+            )}
             <InfoRow label="สร้างโดย" value={summary.createdByName} />
             <InfoRow label="วันที่สร้าง" value={formatThaiDate(summary.createdAt)} />
             <InfoRow label="เจ้าหน้าที่นำเข้า" value={summary.assignedToName} />
@@ -397,6 +623,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                         { key: 'color', label: 'สี', placeholder: 'เช่น ขาว, เทา' },
                         { key: 'texture', label: 'เนื้อผิว', placeholder: 'เช่น ด้าน, มัน' },
                         { key: 'size', label: 'ขนาด', placeholder: 'เช่น 60x60 ซม.' },
+                        { key: 'factory', label: 'โรงงาน', placeholder: 'เช่น SCG Ceramics' },
                       ].map(({ key, label, placeholder }) => (
                         <label key={key} style={{ margin: 0 }}>
                           <span style={{ fontSize: 12 }}>{label}</span>
@@ -435,7 +662,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                     onClick={() => doAction(() => api.tickets.editItems(ticketId, {
                       items: editDraft.map((item) => ({
                         brand: item.brand, model: item.model, color: item.color,
-                        texture: item.texture, size: item.size, qty: Number(item.qty) || 1,
+                        texture: item.texture, size: item.size,
+                        factory: item.factory || null,
+                        qty: Number(item.qty) || 1,
                         proposedPrice: item.proposedPrice != null && item.proposedPrice !== '' ? Number(item.proposedPrice) : null,
                         currency: item.currency ?? 'THB',
                       })),
@@ -455,35 +684,159 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   <span>ยี่ห้อ / รุ่น</span>
                   <span>สี / เนื้อผิว</span>
                   <span>จำนวน</span>
-                  {showProposed && <span>ราคาที่เสนอ {proposeMode ? '(แก้ไข)' : ''}</span>}
-                  <span>ราคาที่อนุมัติ</span>
+                  {showCalcBreakdown ? (
+                    <>
+                      <span>ราคาโรงงาน</span>
+                      <span>ต้นทุน (THB/ชิ้น)</span>
+                      <span>ราคาขาย (THB/ชิ้น)</span>
+                    </>
+                  ) : showProposed ? (
+                    <>
+                      <span>ราคาที่เสนอ {proposeMode ? '(แก้ไข)' : ''}</span>
+                      <span>ราคาที่อนุมัติ</span>
+                    </>
+                  ) : (
+                    <span>ราคาที่อนุมัติ</span>
+                  )}
                 </div>
                 {items.length === 0 ? (
                   <EmptyState title="ไม่มีรายการสินค้า" />
+                ) : proposeMode ? (
+                  groupByFactory(items).map(({ factory, items: groupItems }) => {
+                    const fc = factoryConfigs[factory];
+                    const isDraftOpen = emailDraft?.factory === factory;
+                    return (
+                      <div key={factory}>
+                        {/* Factory group header */}
+                        <div style={{ padding: '8px 18px', background: '#f1f5f9', fontSize: 12, fontWeight: 700, color: '#1e3a5f', borderTop: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <Icon name="building" size={13} />
+                          <span>{factory}</span>
+                          <span style={{ fontWeight: 400, color: '#64748b' }}>({groupItems.length} รายการ)</span>
+                          {fc?.email && <span style={{ fontWeight: 400, color: '#94a3b8', fontSize: 11 }}>· {fc.email}</span>}
+                          {/* สกุลเงิน/หน่วย selector */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 4 }}>
+                            <span style={{ fontWeight: 400, color: '#64748b', fontSize: 11 }}>ราคาต่อ:</span>
+                            <InfoTip
+                              label="สกุลเงินและหน่วยนับ"
+                              text="เลือกครั้งเดียวต่อโรงงาน และใช้กับทุกรายการของโรงงานนี้"
+                            />
+                            <select
+                              value={draftFactoryCurr[factory]?.currency ?? 'THB'}
+                              onChange={(e) => setDraftFactoryCurr((p) => ({ ...p, [factory]: { ...p[factory], currency: e.target.value } }))}
+                              style={{ fontSize: 11, padding: '2px 4px', border: '1px solid #cbd5e1', borderRadius: 4, background: '#fff', cursor: 'pointer' }}>
+                              {['THB','EUR','USD','JPY','CNY','GBP'].map((c) => <option key={c}>{c}</option>)}
+                            </select>
+                            <select
+                              value={draftFactoryCurr[factory]?.unit ?? 'piece'}
+                              onChange={(e) => setDraftFactoryCurr((p) => ({ ...p, [factory]: { ...p[factory], unit: e.target.value } }))}
+                              style={{ fontSize: 11, padding: '2px 4px', border: '1px solid #cbd5e1', borderRadius: 4, background: '#fff', cursor: 'pointer' }}>
+                              <option value="piece">แผ่น</option>
+                              <option value="sqm">ตร.ม.</option>
+                              <option value="box">กล่อง</option>
+                            </select>
+                          </div>
+                          <button type="button" className="secondary-button"
+                            style={{ marginLeft: 'auto', fontSize: 11, padding: '2px 10px' }}
+                            onClick={() => setEmailDraft(isDraftOpen ? null : buildEmailDraft(factory, groupItems))}>
+                            <Icon name="fileText" size={12} />
+                            {isDraftOpen ? 'ปิดร่างอีเมล' : 'ร่างอีเมล'}
+                          </button>
+                        </div>
+
+                        {/* Email draft panel */}
+                        {isDraftOpen && emailDraft && (
+                          <div style={{ margin: '0 18px 8px', padding: '12px', border: '1px solid #bfdbfe', borderRadius: 8, background: '#eff6ff', fontSize: 13 }}>
+                            <p style={{ margin: '0 0 8px', fontWeight: 700, fontSize: 12, color: '#1d4ed8' }}>ร่างอีเมลถึง {factory}</p>
+                            <label style={{ display: 'block', marginBottom: 6 }}>
+                              <span style={{ fontSize: 11, color: '#64748b' }}>ถึง (To)</span>
+                              <input value={emailDraft.to} onChange={(e) => setEmailDraft((d) => ({ ...d, to: e.target.value }))} style={{ marginTop: 2 }} />
+                            </label>
+                            <label style={{ display: 'block', marginBottom: 6 }}>
+                              <span style={{ fontSize: 11, color: '#64748b' }}>หัวข้อ (Subject)</span>
+                              <input value={emailDraft.subject} onChange={(e) => setEmailDraft((d) => ({ ...d, subject: e.target.value }))} style={{ marginTop: 2 }} />
+                            </label>
+                            <label style={{ display: 'block', marginBottom: 8 }}>
+                              <span style={{ fontSize: 11, color: '#64748b' }}>เนื้อหา</span>
+                              <textarea rows={8} value={emailDraft.body} onChange={(e) => setEmailDraft((d) => ({ ...d, body: e.target.value }))} style={{ marginTop: 2, fontFamily: 'monospace', fontSize: 12 }} />
+                            </label>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <button type="button" className="primary-button" disabled={emailSending || !emailDraft.to} onClick={sendFactoryEmail} style={{ fontSize: 12 }}>
+                                {emailSending ? 'กำลังส่ง...' : 'ส่งอีเมล'}
+                              </button>
+                              <button type="button" className="secondary-button" onClick={() => setEmailDraft(null)} style={{ fontSize: 12 }}>ปิด</button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Items */}
+                        {groupItems.map((item, i) => {
+                          const selectedCurr = draftFactoryCurr[factory] ?? {};
+                          const currLabel = selectedCurr.currency ?? 'THB';
+                          const unitLabel = selectedCurr.unit === 'sqm' ? 'ตร.ม.' : selectedCurr.unit === 'box' ? 'กล่อง' : 'แผ่น';
+                          return (
+                            <div key={item.id ?? i} className="ticket-items-table table-row" style={{ gridTemplateColumns: itemsGridCols }}>
+                              <span>
+                                <strong>{item.brand}</strong>
+                                {item.model && <small style={{ color: '#64748b' }}>{item.model}</small>}
+                              </span>
+                              <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                {item.color && <span>{item.color}</span>}
+                                {item.texture && <small style={{ color: '#64748b' }}>{item.texture}</small>}
+                                {item.size && <small style={{ color: '#94a3b8' }}>{item.size}</small>}
+                              </span>
+                              <span>
+                                {item.qty} แผ่น
+                                {item.qtySqm != null && <small style={{ display: 'block', color: '#94a3b8' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}
+                              </span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                <input type="number" min="0" step="0.0001"
+                                  value={draftRaw[item.id] ?? ''}
+                                  onChange={(e) => setDraftRaw((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                                  placeholder={`ราคา/${unitLabel}`}
+                                  title="ราคาต่อหน่วยของรายการนี้เท่านั้น (สกุลเงิน/หน่วยนับใช้ค่าที่ตั้งไว้ของโรงงาน)"
+                                  style={{ width: 110, padding: '4px 8px', border: '1px solid #93c5fd', borderRadius: 4, fontSize: 13 }} />
+                                <span style={{ fontSize: 11, color: '#2563eb', whiteSpace: 'nowrap' }}>{currLabel}/{unitLabel}</span>
+                              </div>
+                              <code>{formatMoney(item.approvedPrice)}</code>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })
                 ) : items.map((item, i) => (
                   <div key={item.id ?? i} className="ticket-items-table table-row" style={{ gridTemplateColumns: itemsGridCols }}>
                     <span>
                       <strong>{item.brand}</strong>
                       {item.model && <small style={{ color: '#64748b' }}>{item.model}</small>}
+                      {item.factory && <small style={{ color: '#94a3b8', fontSize: 11 }}>{item.factory}</small>}
                     </span>
                     <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                       {item.color && <span>{item.color}</span>}
                       {item.texture && <small style={{ color: '#64748b' }}>{item.texture}</small>}
                       {item.size && <small style={{ color: '#94a3b8' }}>{item.size}</small>}
                     </span>
-                    <span>{item.qty}</span>
-                    {showProposed && (
-                      proposeMode ? (
-                        <input type="number" min="0" step="0.01"
-                          value={draftPrices[item.id] ?? ''}
-                          onChange={(e) => setDraftPrices((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                          placeholder="ราคา"
-                          style={{ width: 120, padding: '4px 8px', border: '1px solid #cbd5e1', borderRadius: 4, fontSize: 13 }} />
-                      ) : (
-                        <code>{formatMoney(item.proposedPrice)}</code>
-                      )
+                    <span>
+                      {item.qty} แผ่น
+                      {item.qtySqm != null && <small style={{ display: 'block', color: '#94a3b8' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}
+                    </span>
+                    {showCalcBreakdown ? (
+                      <>
+                        <span style={{ fontSize: 12 }}>
+                          {item.rawPrice != null
+                            ? <><strong>{Number(item.rawPrice).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</strong><small style={{ color: '#94a3b8' }}> {item.rawCurrency}/{item.rawUnit === 'sqm' ? 'ตร.ม.' : 'แผ่น'}</small></>
+                            : <span style={{ color: '#94a3b8' }}>-</span>}
+                          {item.calcConfigVersion && <small style={{ display: 'block', color: '#94a3b8', fontSize: 10 }}>config v{item.calcConfigVersion}</small>}
+                        </span>
+                        <code style={{ color: '#0369a1' }}>{item.calcedCost != null ? formatMoney(item.calcedCost) : '—'}</code>
+                        <code style={{ color: '#059669', fontWeight: 700 }}>{item.calcedPrice != null ? formatMoney(item.calcedPrice) : '—'}</code>
+                      </>
+                    ) : (
+                      <>
+                        {showProposed && <code>{formatMoney(item.proposedPrice)}</code>}
+                        <code>{formatMoney(item.approvedPrice)}</code>
+                      </>
                     )}
-                    <code>{formatMoney(item.approvedPrice)}</code>
                   </div>
                 ))}
 
@@ -499,7 +852,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                         ยืนยันราคาเสนอ
                       </button>
                       <button type="button" className="secondary-button"
-                        onClick={() => { setProposeMode(false); setDraftPrices({}); setProposeNote(''); }} disabled={actionLoading}>
+                        onClick={() => { setProposeMode(false); setDraftRaw({}); setDraftFactoryCurr({}); setProposeNote(''); setEmailDraft(null); }} disabled={actionLoading}>
                         ยกเลิก
                       </button>
                     </div>
@@ -509,15 +862,102 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             )}
           </section>
 
-          {quotation && (
+          {/* R5: Attachments */}
+          <section className="panel">
+            <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2>ไฟล์แนบ (PO / ใบเซ็น)</h2>
+              {!TERMINAL.includes(st) && (
+                <label style={{ cursor: 'pointer' }}>
+                  <input type="file" style={{ display: 'none' }} onChange={handleUploadAttachment}
+                    accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" />
+                  <span className="secondary-button" style={{ fontSize: 12, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <Icon name="upload" size={13} />
+                    {uploadingFile ? 'กำลังอัปโหลด...' : 'แนบไฟล์'}
+                  </span>
+                </label>
+              )}
+            </div>
+            {attachLoading ? (
+              <div
+                style={{ padding: '8px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}
+                aria-busy="true"
+                aria-label="กำลังโหลดไฟล์แนบ"
+              >
+                {[0, 1, 2].map((i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#f8fafc', borderRadius: 6, border: '1px solid #e2e8f0' }}>
+                    <Skeleton width={13} height={13} radius="var(--radius-sm)" />
+                    <Skeleton width="50%" height={13} />
+                    <Skeleton width={40} height={16} radius="var(--radius-pill)" />
+                  </div>
+                ))}
+              </div>
+            ) : attachments.length === 0 ? (
+              <p style={{ padding: '12px 18px', color: '#94a3b8', fontSize: 13 }}>ยังไม่มีไฟล์แนบ</p>
+            ) : (
+              <div style={{ padding: '8px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {attachments.map((att) => (
+                  <div key={att.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#f8fafc', borderRadius: 6, border: '1px solid #e2e8f0' }}>
+                    <Icon name="paperclip" size={13} style={{ color: '#64748b', flexShrink: 0 }} />
+                    <span style={{ flex: 1, fontSize: 13, color: '#0f172a', wordBreak: 'break-all' }}>{att.fileName}</span>
+                    <span style={{ fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap', background: '#f1f5f9', padding: '1px 6px', borderRadius: 99 }}>
+                      {att.attachType}
+                    </span>
+                    <a href={api.attachments.fileUrl(att.id)} target="_blank" rel="noreferrer"
+                      style={{ fontSize: 12, color: '#2563eb', textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                      ดูไฟล์
+                    </a>
+                    {!TERMINAL.includes(st) && (
+                      <button type="button" className="icon-button"
+                        style={{ color: '#ef4444', flexShrink: 0 }}
+                        onClick={() => handleDeleteAttachment(att.id, att.fileName)}>
+                        <Icon name="close" size={13} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {(quotations && quotations.length > 0) && (
             <section className="panel">
               <div className="panel-header">
                 <h2>ใบเสนอราคา</h2>
               </div>
-              <InfoRow label="เลขที่ใบเสนอราคา" value={quotation.number} />
-              <InfoRow label="ยอดรวม" value={formatMoney(quotation.totalAmount)} />
-              <InfoRow label="ออกโดย" value={quotation.issuedByName} />
-              <InfoRow label="วันที่ออก" value={formatThaiDate(quotation.issuedAt)} />
+              {quotations.map((q) => (
+                <div key={q.id} style={{ padding: '10px 18px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                  <div style={{ flexShrink: 0, marginTop: 2 }}>
+                    <span style={{
+                      fontSize: 11, fontWeight: 700, borderRadius: 4, padding: '2px 7px',
+                      background: q.docStatus === 'SUPERSEDED' ? '#f1f5f9' : q.docStatus === 'ISSUED' ? '#dcfce7' : '#eff6ff',
+                      color: q.docStatus === 'SUPERSEDED' ? '#94a3b8' : q.docStatus === 'ISSUED' ? '#16a34a' : '#2563eb',
+                    }}>Rev {q.quotationVersion}</span>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ fontWeight: 600, fontSize: 13 }}>{q.number}</span>
+                      <span style={{
+                        fontSize: 10, borderRadius: 3, padding: '1px 5px', fontWeight: 600,
+                        background: q.docStatus === 'SUPERSEDED' ? '#f1f5f9' : q.docStatus === 'ISSUED' ? '#dcfce7' : '#eff6ff',
+                        color: q.docStatus === 'SUPERSEDED' ? '#94a3b8' : q.docStatus === 'ISSUED' ? '#16a34a' : '#3b82f6',
+                      }}>{q.docStatus}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>
+                      ยอดรวม {formatMoney(q.totalAmount)} · ออกโดย {q.issuedByName} · {formatThaiDate(q.issuedAt)}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                      onClick={() => handleDownloadQuotation(q.id, q.number, 'xlsx')}>
+                      <Icon name="fileText" size={12} /> Excel
+                    </button>
+                    <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                      onClick={() => handleDownloadQuotation(q.id, q.number, 'pdf')}>
+                      <Icon name="fileText" size={12} /> PDF
+                    </button>
+                  </div>
+                </div>
+              ))}
             </section>
           )}
         </div>
@@ -529,23 +969,44 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           <div className="ticket-events">
             {events.length === 0 ? (
               <p style={{ color: '#94a3b8', fontSize: 13 }}>ยังไม่มีประวัติ</p>
-            ) : [...events].reverse().map((event) => (
-              <div key={event.id} className="ticket-event">
-                <span className={eventDotClass(event.kind)} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <strong style={{ display: 'block', fontSize: 13, color: '#0f172a' }}>
-                    {EVENT_KIND_LABEL[event.kind] ?? event.kind}
-                  </strong>
-                  <span style={{ color: '#475569', fontSize: 12 }}>{event.actorName}</span>
-                  {event.message && (
-                    <p style={{ margin: '4px 0 0', fontSize: 12, color: '#64748b', background: '#f8fafc', borderRadius: 4, padding: '4px 8px' }}>
-                      {event.message}
-                    </p>
-                  )}
-                  <small style={{ color: '#94a3b8', fontSize: 11 }}>{formatThaiDate(event.createdAt)}</small>
+            ) : [...events].reverse().map((event) => {
+              let snapItems = null;
+              if (event.kind === 'PRICE_PROPOSED' && event.itemSnapshot) {
+                try { snapItems = JSON.parse(event.itemSnapshot); } catch { snapItems = null; }
+              }
+              return (
+                <div key={event.id} className="ticket-event">
+                  <span className={eventDotClass(event.kind)} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <strong style={{ display: 'block', fontSize: 13, color: '#0f172a' }}>
+                      {EVENT_KIND_LABEL[event.kind] ?? event.kind}
+                    </strong>
+                    <span style={{ color: '#475569', fontSize: 12 }}>{event.actorName}</span>
+                    {event.message && (
+                      <p style={{ margin: '4px 0 0', fontSize: 12, color: '#64748b', background: '#f8fafc', borderRadius: 4, padding: '4px 8px' }}>
+                        {event.message}
+                      </p>
+                    )}
+                    {snapItems && snapItems.length > 0 && (
+                      <div style={{ margin: '6px 0 0', fontSize: 11, color: '#475569', background: '#f8fafc', borderRadius: 4, padding: '6px 10px', borderLeft: '3px solid #94a3b8' }}>
+                        <div style={{ fontWeight: 600, marginBottom: 4, color: '#64748b' }}>รายการสินค้า ณ เวลาที่เสนอราคา</div>
+                        {snapItems.map((it, i) => (
+                          <div key={i} style={{ paddingBottom: 2 }}>
+                            {it.brand} {it.model} — {it.qty} ชิ้น
+                            {it.rawPrice != null && (
+                              <span style={{ color: '#94a3b8', marginLeft: 4 }}>
+                                @ {it.rawPrice} {it.rawCurrency}/{it.rawUnit}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <small style={{ color: '#94a3b8', fontSize: 11 }}>{formatThaiDate(event.createdAt)}</small>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {can.comment && (
@@ -565,6 +1026,29 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           )}
         </section>
       </div>
+
+      <ConfirmDialog
+        open={confirm?.kind === 'deleteAttachment'}
+        tone="danger"
+        title="ลบไฟล์"
+        message={`ลบไฟล์ "${confirm?.name}" ออก?`}
+        busy={deletingAttachment}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => confirmDeleteAttachment(confirm?.id)}
+      />
+
+      <ConfirmDialog
+        open={confirm?.kind === 'cancelTicket'}
+        tone="danger"
+        title="ยกเลิกใบขอราคา"
+        message="ยืนยันการยกเลิกใบขอราคานี้?"
+        busy={actionLoading}
+        onCancel={() => setConfirm(null)}
+        onConfirm={async () => {
+          await doAction(() => api.tickets.cancel(ticketId), 'ยกเลิกใบขอราคาแล้ว');
+          setConfirm(null);
+        }}
+      />
     </div>
   );
 }

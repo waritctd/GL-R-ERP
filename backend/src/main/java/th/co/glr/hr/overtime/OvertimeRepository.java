@@ -231,9 +231,9 @@ public class OvertimeRepository {
         return jdbc.update("""
             UPDATE hr.overtime_request
                SET status = 'CANCELLED',
-                   reviewed_by_id = COALESCE(:reviewedById, reviewed_by_id),
-                   reviewed_at = CASE WHEN :reviewedById IS NULL THEN reviewed_at ELSE now() END,
-                   reviewer_note = COALESCE(:reviewerNote, reviewer_note),
+                   reviewed_by_id = COALESCE(CAST(:reviewedById AS bigint), reviewed_by_id),
+                   reviewed_at = CASE WHEN CAST(:reviewedById AS bigint) IS NULL THEN reviewed_at ELSE now() END,
+                   reviewer_note = COALESCE(CAST(:reviewerNote AS text), reviewer_note),
                    cancelled_at = now(),
                    updated_at = now()
              WHERE overtime_request_id = :id

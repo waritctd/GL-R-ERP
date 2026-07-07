@@ -19,6 +19,7 @@ import th.co.glr.hr.profile.ProfileRequestRepository;
 public class EmployeeService {
     // Dedicated audit channel so PII-access events can be shipped/retained separately (issue #21).
     private static final Logger AUDIT = LoggerFactory.getLogger("th.co.glr.hr.audit");
+    private static final java.util.Set<String> PRIVILEGED_EMPLOYEE_ROLES = java.util.Set.of("hr");
 
     private final EmployeeRepository employees;
     private final ProfileRequestRepository profileRequests;
@@ -57,12 +58,12 @@ public class EmployeeService {
     }
 
     public EmployeeDto get(long id, UserPrincipal user) {
-        boolean canSeeAnyEmployee = user.role().equals("hr");
+        boolean canSeeAnyEmployee = canSeeSensitiveEmployeeFields(user);
         if (!canSeeAnyEmployee && (user.employeeId() == null || user.employeeId() != id)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
 
-        boolean includeSensitive = user.role().equals("hr");
+        boolean includeSensitive = canSeeSensitiveEmployeeFields(user);
         EmployeeDto employee = employees.findEmployeeById(id, includeSensitive)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Employee not found"));
         if (includeSensitive) {
@@ -71,7 +72,8 @@ public class EmployeeService {
                 user.id(), user.email(), id, employee.salaryHistory().size());
         }
         int pendingCount = profileRequests.pendingCountByEmployee(employee.id());
-        return employee.withPendingRequestCount(pendingCount);
+        EmployeeDto withPendingCount = employee.withPendingRequestCount(pendingCount);
+        return includeSensitive ? withPendingCount : withPendingCount.withoutSensitiveSelfServiceFields();
     }
 
     @Transactional
@@ -92,7 +94,7 @@ public class EmployeeService {
     }
 
     private void auditSalarySummaryAccess(UserPrincipal user, List<EmployeeDto> rows) {
-        if (user == null || !"hr".equals(user.role()) || rows.isEmpty()) {
+        if (user == null || !canSeeSensitiveEmployeeFields(user) || rows.isEmpty()) {
             return;
         }
         String targetEmployeeIds = rows.stream()
@@ -102,5 +104,9 @@ public class EmployeeService {
         AUDIT.info(
             "sensitive_data_access action=LIST_EMPLOYEE_SALARY_SUMMARY actorId={} actorEmail=\"{}\" targetEmployeeIds=\"{}\" resultCount={} fields=\"current_salary\"",
             user.id(), user.email(), targetEmployeeIds, rows.size());
+    }
+
+    private boolean canSeeSensitiveEmployeeFields(UserPrincipal user) {
+        return user != null && PRIVILEGED_EMPLOYEE_ROLES.contains(user.role());
     }
 }

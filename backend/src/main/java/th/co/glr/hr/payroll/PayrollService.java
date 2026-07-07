@@ -23,7 +23,8 @@ import th.co.glr.hr.common.ApiException;
 
 @Service
 public class PayrollService {
-    private static final Set<String> PAYROLL_ROLES = Set.of("hr", "admin");
+    private static final Set<String> PAYROLL_VIEW_ROLES = Set.of("hr", "ceo");
+    private static final Set<String> PAYROLL_EDIT_ROLES = Set.of("hr");
     private static final Logger AUDIT = LoggerFactory.getLogger("th.co.glr.hr.audit");
 
     private final PayrollRepository payrollRepository;
@@ -44,7 +45,7 @@ public class PayrollService {
     }
 
     public PayrollPeriodDto currentOrPreview(LocalDate payrollMonth, UserPrincipal actor) {
-        requirePayrollRole(actor);
+        requireRole(actor, PAYROLL_VIEW_ROLES);
         LocalDate month = normalizeMonth(payrollMonth);
         return payrollRepository.findPeriodByMonth(month)
             .map(period -> {
@@ -56,13 +57,13 @@ public class PayrollService {
     }
 
     public PayrollPeriodDto preview(ProcessPayrollRequest request, UserPrincipal actor) {
-        requirePayrollRole(actor);
+        requireRole(actor, PAYROLL_VIEW_ROLES);
         return preview(normalizeMonth(request.payrollMonth()), safeInputs(request.inputs()), actor);
     }
 
     @Transactional
     public PayrollPeriodDto process(ProcessPayrollRequest request, UserPrincipal actor) {
-        requirePayrollRole(actor);
+        requireRole(actor, PAYROLL_EDIT_ROLES);
         LocalDate month = normalizeMonth(request.payrollMonth());
         PayrollPeriodDto preview = preview(month, safeInputs(request.inputs()), actor);
         long periodId = payrollRepository.saveProcessedPeriod(month, actor.employeeId(), preview.lines());
@@ -74,7 +75,7 @@ public class PayrollService {
     }
 
     public String bankExport(long periodId, UserPrincipal actor) {
-        requirePayrollRole(actor);
+        requireRole(actor, PAYROLL_VIEW_ROLES);
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
         StringBuilder builder = new StringBuilder();
@@ -149,6 +150,7 @@ public class PayrollService {
             input == null ? List.of() : input.specialPays(),
             overtimePay,
             commissionPay,
+            input == null ? BigDecimal.ZERO : input.nonTaxableIncome(),
             input == null ? BigDecimal.ZERO : input.unpaidLeaveDays(),
             input == null ? BigDecimal.ZERO : input.studentLoanDeduction(),
             input == null ? BigDecimal.ZERO : input.legalExecutionDeduction(),
@@ -173,6 +175,7 @@ public class PayrollService {
             calculation.overtimePay(),
             calculation.commissionPay(),
             calculation.grossEarnings(),
+            calculation.nonTaxableIncome(),
             calculation.unpaidLeaveDays(),
             calculation.unpaidLeaveDeduction(),
             calculation.grossTaxableIncome(),
@@ -209,14 +212,14 @@ public class PayrollService {
 
     private List<PayrollSpecialPayDto> specialPayDtos(List<BigDecimal> specialPays) {
         return List.of(
-            new PayrollSpecialPayDto("specialPay1", "เงินพิเศษ 1", specialPays.get(0)),
-            new PayrollSpecialPayDto("specialPay2", "เงินพิเศษ 2", specialPays.get(1)),
-            new PayrollSpecialPayDto("specialPay3", "เงินพิเศษ 3", specialPays.get(2)),
-            new PayrollSpecialPayDto("specialPay4", "เงินพิเศษ 4", specialPays.get(3)),
-            new PayrollSpecialPayDto("specialPay5", "เงินพิเศษ 5", specialPays.get(4)),
-            new PayrollSpecialPayDto("specialPay6", "เงินพิเศษ 6", specialPays.get(5)),
-            new PayrollSpecialPayDto("specialPay7", "เงินพิเศษ 7", specialPays.get(6)),
-            new PayrollSpecialPayDto("specialPay8", "เงินพิเศษ 8", specialPays.get(7))
+            new PayrollSpecialPayDto("specialPay1", "พิเศษ 1 (ค่าครองชีพ)", specialPays.get(0)),
+            new PayrollSpecialPayDto("specialPay2", "พิเศษ 2 (เบี้ยเลี้ยงประจำ)", specialPays.get(1)),
+            new PayrollSpecialPayDto("specialPay3", "พิเศษ 3 (ค่าตำแหน่ง)", specialPays.get(2)),
+            new PayrollSpecialPayDto("specialPay4", "พิเศษ 4 (เบี้ยขยันประจำ)", specialPays.get(3)),
+            new PayrollSpecialPayDto("specialPay5", "พิเศษ 5 (ค่า GPRS)", specialPays.get(4)),
+            new PayrollSpecialPayDto("specialPay6", "พิเศษ 6 (คอมมิชชั่น)", specialPays.get(5)),
+            new PayrollSpecialPayDto("specialPay7", "พิเศษ 7 (ทำได้ตาม KPI)", specialPays.get(6)),
+            new PayrollSpecialPayDto("specialPay8", "พิเศษ 8 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)", specialPays.get(7))
         );
     }
 
@@ -231,8 +234,8 @@ public class PayrollService {
         return payrollMonth.withDayOfMonth(1);
     }
 
-    private void requirePayrollRole(UserPrincipal actor) {
-        if (actor == null || !PAYROLL_ROLES.contains(actor.role())) {
+    private void requireRole(UserPrincipal actor, Set<String> allowed) {
+        if (actor == null || !allowed.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
     }

@@ -42,12 +42,6 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
         <dependency>
-            <!-- BCrypt password hashing only; avoids reshaping the manual session/CORS/CSRF
-                 layer that the full spring-boot-starter-security would impose. -->
-            <groupId>org.springframework.security</groupId>
-            <artifactId>spring-security-crypto</artifactId>
-        </dependency>
-        <dependency>
             <!-- Used directly by LoginRateLimitFilter to read the login email from the request
                  body; present transitively at runtime but declared explicitly since we compile
                  against it. -->
@@ -55,6 +49,8 @@
             <artifactId>jackson-databind</artifactId>
         </dependency>
         <dependency>
+            <!-- Provides BCrypt (spring-security-crypto, transitive) and the @PreAuthorize
+                 method-security used throughout the controllers. -->
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
@@ -71,6 +67,11 @@
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
+        <!-- Email sending for factory Import Requests -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -80,7 +81,14 @@
         <dependency>
             <groupId>org.apache.poi</groupId>
             <artifactId>poi-ooxml</artifactId>
-            <version>5.3.0</version>
+            <version>5.4.0</version>
+        </dependency>
+        <!-- PDFBox — PDF generation with an embedded Thai font (Sarabun), so Thai text
+             renders correctly instead of the ASCII-only fallback used previously. -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.7</version>
         </dependency>
     </dependencies>
 

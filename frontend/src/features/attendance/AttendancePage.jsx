@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/index.js';
 import { hasPermission } from '../../app/permissions.js';
-import { EmptyState } from '../../components/common/EmptyState.jsx';
+import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
-import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const monthStartIso = () => {
@@ -29,6 +28,8 @@ export function AttendancePage({ user, employees, showToast }) {
   const [importing, setImporting] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [lastImport, setLastImport] = useState(null);
+  const [devices, setDevices] = useState([]);
+  const [importDeviceCode, setImportDeviceCode] = useState('');
 
   const sortedEmployees = useMemo(
     () => [...employees].sort((a, b) => (a.nameTh || '').localeCompare(b.nameTh || '', 'th')),
@@ -36,6 +37,13 @@ export function AttendancePage({ user, employees, showToast }) {
   );
   const uniqueEmployees = useMemo(() => new Set(punches.map((punch) => punch.employee_id).filter(Boolean)).size, [punches]);
   const unresolvedCount = punches.filter((punch) => !punch.employee_id).length;
+  // Multiple scanners/locations feed this table; summarise how many distinct sites appear in the results.
+  const sourceSummary = useMemo(() => {
+    const sites = new Set(punches.map((punch) => punch.site_code).filter(Boolean));
+    if (sites.size === 0) return { value: '-', helper: 'ยังไม่มีข้อมูล' };
+    if (sites.size === 1) return { value: [...sites][0], helper: 'สถานที่เดียว' };
+    return { value: `${sites.size} สถานที่`, helper: 'หลายเครื่องสแกน' };
+  }, [punches]);
 
   async function loadPunches(nextFilters = filters) {
     setLoading(true);
@@ -59,6 +67,25 @@ export function AttendancePage({ user, employees, showToast }) {
     loadPunches();
   }, []);
 
+  // Load the registered scanners so HR/C-level can attribute an import to the right location.
+  useEffect(() => {
+    if (!canImport) return;
+    let cancelled = false;
+    api.attendance.devices()
+      .then((response) => {
+        if (cancelled) return;
+        const list = response.devices || [];
+        setDevices(list);
+        setImportDeviceCode((current) => current || list[0]?.device_code || '');
+      })
+      .catch(() => {
+        if (!cancelled) setDevices([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canImport]);
+
   function updateFilter(field, value) {
     setFilters((current) => ({ ...current, [field]: value }));
   }
@@ -74,13 +101,18 @@ export function AttendancePage({ user, employees, showToast }) {
       showToast('error', 'เลือกไฟล์ .dat ก่อนนำเข้า');
       return;
     }
+    const device = devices.find((item) => item.device_code === importDeviceCode);
+    if (!device) {
+      showToast('error', 'เลือกเครื่องสแกน/สถานที่ก่อนนำเข้า');
+      return;
+    }
     setImporting(true);
     try {
       const content = await selectedFile.text();
       const detectedRange = dateRangeFromDatContent(content);
       const response = await api.attendance.importDat({
-        site_code: 'SHOWROOM',
-        device_code: 'SHOWROOM_SC700',
+        site_code: device.site_code,
+        device_code: device.device_code,
         file_name: selectedFile.name,
         content,
       });
@@ -116,7 +148,7 @@ export function AttendancePage({ user, employees, showToast }) {
         <StatCard label="รายการในช่วงที่เลือก" value={punches.length} helper="Punch records" icon="calendar" tone="indigo" />
         <StatCard label="พนักงานที่พบ" value={uniqueEmployees} helper={canViewAll ? 'จากผลลัพธ์ปัจจุบัน' : 'บัญชีของคุณ'} icon="users" tone="teal" />
         <StatCard label="ยังไม่แมปพนักงาน" value={unresolvedCount} helper="badge_card_no ไม่ตรง" icon="badge" tone="amber" />
-        <StatCard label="แหล่งข้อมูล" value="SC700" helper="SHOWROOM_SC700" icon="clock" tone="rose" />
+        <StatCard label="แหล่งข้อมูล" value={sourceSummary.value} helper={sourceSummary.helper} icon="clock" tone="rose" />
       </section>
 
       <form className="filter-bar" onSubmit={submitFilters}>
@@ -157,11 +189,25 @@ export function AttendancePage({ user, employees, showToast }) {
       {canImport ? (
         <form className="attendance-import-panel" onSubmit={importFile}>
           <div>
-            <strong>นำเข้าไฟล์ SC700 .dat</strong>
-            <small>Showroom only · SHOWROOM_SC700</small>
+            <strong>นำเข้าไฟล์ Attendance (.dat)</strong>
+            <small>เฉพาะ HR / ผู้บริหาร</small>
           </div>
+          <label className="attendance-import-device">
+            เครื่องสแกน / สถานที่
+            <select value={importDeviceCode} onChange={(event) => setImportDeviceCode(event.target.value)}>
+              {devices.length === 0 ? (
+                <option value="">ไม่พบเครื่องสแกน</option>
+              ) : (
+                devices.map((device) => (
+                  <option key={device.device_code} value={device.device_code}>
+                    {device.site_name} · {device.device_name}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
           <input type="file" accept=".dat,text/plain" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} />
-          <button type="submit" className="success-button" disabled={importing || !selectedFile}>
+          <button type="submit" className="success-button" disabled={importing || !selectedFile || !importDeviceCode}>
             <Icon name="plus" />
             {importing ? 'กำลังนำเข้า' : 'นำเข้า'}
           </button>
@@ -173,46 +219,78 @@ export function AttendancePage({ user, employees, showToast }) {
         </form>
       ) : null}
 
-      <section className="table-panel">
-        <div className="attendance-table table-head">
-          <span>เวลา</span>
-          <span>พนักงาน</span>
-          <span>รหัสบัตร</span>
-          <span>ไซต์ / อุปกรณ์</span>
-          <span>สถานะ</span>
-          <span>วิธีนำเข้า</span>
-        </div>
-        {loading ? (
-          <EmptyState icon="clock" title="กำลังโหลดข้อมูล" />
-        ) : punches.length === 0 ? (
-          <EmptyState icon="calendar" title="ไม่พบข้อมูลเวลา" description="ลองเปลี่ยนช่วงวันที่หรือนำเข้าไฟล์ .dat" />
-        ) : punches.map((punch) => (
-          <div className="attendance-table table-row" key={punch.punch_id}>
-            <span>
-              <strong>{formatPunchDateTime(punch.punch_time)}</strong>
-              <small>{punch.work_date}</small>
-            </span>
-            <span>
-              <strong>{punch.employee_name || 'ยังไม่แมปพนักงาน'}</strong>
-              <small>{punch.employee_code || '-'}</small>
-            </span>
-            <code>{punch.badge_code}</code>
-            <span>
-              <strong>{punch.site_code}</strong>
-              <small>{punch.device_code || punch.device_name || '-'}</small>
-            </span>
-            <span>
-              <StatusBadge tone="neutral">state {punch.punch_state}</StatusBadge>
-            </span>
-            <span>
-              <StatusBadge tone={punch.ingest_method === 'USB_DAT_IMPORT' ? 'indigo' : 'success'}>{methodLabel(punch.ingest_method)}</StatusBadge>
-            </span>
-          </div>
-        ))}
-      </section>
+      <DataTable
+        columns={attendanceColumns}
+        rows={punches}
+        getRowKey={(punch) => punch.punch_id}
+        gridClassName="attendance-table"
+        pageSize={50}
+        searchable
+        searchPlaceholder="ค้นหาพนักงาน / รหัส / ชื่อเล่น"
+        loading={loading}
+        emptyState={{
+          icon: 'calendar',
+          title: 'ไม่พบข้อมูลเวลา',
+          description: 'ลองเปลี่ยนช่วงวันที่หรือนำเข้าไฟล์ .dat',
+        }}
+      />
     </div>
   );
 }
+
+const attendanceColumns = [
+  {
+    key: 'punch_time',
+    header: 'เวลา',
+    sortable: true,
+    sortAccessor: (punch) => punch.punch_time,
+    render: (punch) => (
+      <span>
+        <strong>{formatPunchDateTime(punch.punch_time)}</strong>
+        <small>{punch.work_date}</small>
+      </span>
+    ),
+  },
+  {
+    key: 'employee_name',
+    header: 'พนักงาน',
+    sortable: true,
+    sortAccessor: (punch) => punch.employee_name || 'ยังไม่แมปพนักงาน',
+    searchAccessor: (punch) => punch.employee_name || '',
+    render: (punch) => (
+      <span>
+        <strong>{punch.employee_name || 'ยังไม่แมปพนักงาน'}</strong>
+      </span>
+    ),
+  },
+  {
+    key: 'nick_name',
+    header: 'ชื่อเล่น',
+    searchAccessor: (punch) => punch.nick_name || '',
+    render: (punch) => punch.nick_name || '-',
+  },
+  {
+    key: 'position_th',
+    header: 'ตำแหน่ง',
+    render: (punch) => punch.position_th || '-',
+  },
+  {
+    key: 'employee_code',
+    header: 'รหัสพนักงาน',
+    searchAccessor: (punch) => punch.employee_code || '',
+    render: (punch) => <code>{punch.employee_code || '-'}</code>,
+  },
+  {
+    key: 'site',
+    header: 'ไซต์ / อุปกรณ์',
+    render: (punch) => (
+      <span>
+        <strong>{punch.site_code}</strong>
+        <small>{punch.device_name || punch.device_code || '-'}</small>
+      </span>
+    ),
+  },
+];
 
 function formatPunchDateTime(value) {
   if (!value) return '-';
@@ -223,17 +301,6 @@ function formatPunchDateTime(value) {
     timeStyle: 'medium',
     hour12: false,
   }).format(date);
-}
-
-function methodLabel(method) {
-  const labels = {
-    USB_DAT_IMPORT: 'DAT',
-    LIVE_CAPTURE: 'LIVE',
-    CATCHUP_PULL: 'PULL',
-    WEB_PORTAL: 'WEB',
-    MANUAL_ENTRY: 'MANUAL',
-  };
-  return labels[method] || method || '-';
 }
 
 function dateRangeFromDatContent(content) {

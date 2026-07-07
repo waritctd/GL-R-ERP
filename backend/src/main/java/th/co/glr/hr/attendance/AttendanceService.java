@@ -20,8 +20,8 @@ import th.co.glr.hr.config.AppProperties;
 @Service
 public class AttendanceService {
     private static final ZoneId DEFAULT_WORK_DATE_ZONE = ZoneId.of("Asia/Bangkok");
-    // HR and executives (ceo) see all attendance company-wide; admin for support access.
-    private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo", "admin");
+    // HR and executives (ceo) see all attendance company-wide.
+    private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo");
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
@@ -71,16 +71,8 @@ public class AttendanceService {
             user.employeeId()
         );
 
-        int insertedCount = 0;
-        int skippedCount = 0;
-        for (NormalizedAttendancePunch punch : parseResult.punches()) {
-            Long punchId = attendanceRepository.upsertPunch(punch);
-            if (punchId == null) {
-                skippedCount++;
-            } else {
-                insertedCount++;
-            }
-        }
+        int insertedCount = attendanceRepository.batchInsertPunches(parseResult.punches());
+        int skippedCount = parseResult.punches().size() - insertedCount;
         attendanceRepository.insertImportErrors(importId, parseResult.errors());
         attendanceRepository.updateImportCounts(
             importId,
@@ -134,6 +126,38 @@ public class AttendanceService {
 
         return attendanceRepository.findPunches(
             new AttendancePunchFilter(employeeId, divisionId, effectiveFrom, effectiveTo, limit));
+    }
+
+    /** Active scanners/locations available as an import source. */
+    public List<AttendanceDeviceDto> listDevices() {
+        return attendanceRepository.findActiveDevices();
+    }
+
+    /**
+     * Backfills hr.employee.badge_card_no from a device-user export so historical card punches
+     * resolve. Each row's device User ID (Pin) is matched to employee_code; rows without a card
+     * number (fingerprint/PIN-only users) are skipped, and cards whose Pin matches no employee are
+     * reported as unmatched. Once badge_card_no is set, the punch-history query resolves those rows.
+     */
+    @Transactional
+    public AttendanceCardBackfillResponse backfillCardNumbers(AttendanceCardBackfillRequest request) {
+        int updated = 0;
+        int skipped = 0;
+        int unmatched = 0;
+        for (AttendanceCardBackfillRequest.CardMapping mapping : request.mappings()) {
+            String employeeCode = mapping.employeeCode() == null ? "" : mapping.employeeCode().trim();
+            String cardNo = mapping.cardNo() == null ? "" : mapping.cardNo().trim();
+            if (employeeCode.isBlank() || cardNo.isBlank() || cardNo.equals("0")) {
+                skipped++;
+                continue;
+            }
+            if (attendanceRepository.updateEmployeeBadgeByCode(employeeCode, cardNo) > 0) {
+                updated++;
+            } else {
+                unmatched++;
+            }
+        }
+        return new AttendanceCardBackfillResponse(updated, skipped, unmatched);
     }
 
     /**

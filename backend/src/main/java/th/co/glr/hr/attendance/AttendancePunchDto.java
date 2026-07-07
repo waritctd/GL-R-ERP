@@ -13,6 +13,12 @@ public record AttendancePunchDto(
     String employeeCode,
     @JsonProperty("employee_name")
     String employeeName,
+    @JsonProperty("nick_name")
+    String nickName,
+    @JsonProperty("position_th")
+    String positionTh,
+    @JsonProperty("badge_card_no")
+    String badgeCardNo,
     @JsonProperty("badge_code")
     String badgeCode,
     @JsonProperty("punch_time")

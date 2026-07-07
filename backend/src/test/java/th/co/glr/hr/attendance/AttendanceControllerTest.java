@@ -99,6 +99,91 @@ class AttendanceControllerTest {
     }
 
     @Test
+    void allowsCeoToImportDatFile() throws Exception {
+        when(attendanceService.importDatFile(org.mockito.ArgumentMatchers.any(AttendanceDatImportRequest.class), org.mockito.ArgumentMatchers.any(UserPrincipal.class)))
+            .thenReturn(new AttendanceImportResponse(8L, "imported", 1, 1, 0, 0));
+
+        mvc.perform(post("/api/attendance/imports/dat")
+                .session(sessionFor("ceo"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "site_code": "SHOWROOM",
+                      "device_code": "SHOWROOM_SC700",
+                      "file_name": "1_attlog.dat",
+                      "content": "10012\\t2020-11-02 10:33:55\\t1\\t0\\t0\\t0\\r\\n"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.import_id").value(8));
+    }
+
+    @Test
+    void backfillsCardsForHr() throws Exception {
+        when(attendanceService.backfillCardNumbers(org.mockito.ArgumentMatchers.any(AttendanceCardBackfillRequest.class)))
+            .thenReturn(new AttendanceCardBackfillResponse(2, 1, 0));
+
+        mvc.perform(post("/api/attendance/cards/backfill")
+                .session(sessionFor("hr"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "mappings": [
+                        {"employee_code": "10063", "card_no": "14187218"},
+                        {"employee_code": "10064", "card_no": "0"}
+                      ]
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.updated").value(2))
+            .andExpect(jsonPath("$.skipped").value(1));
+    }
+
+    @Test
+    void rejectsEmptyCardBackfill() throws Exception {
+        mvc.perform(post("/api/attendance/cards/backfill")
+                .session(sessionFor("hr"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"mappings\": []}"))
+            .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(attendanceService);
+    }
+
+    @Test
+    void forbidsEmployeesFromBackfillingCards() throws Exception {
+        mvc.perform(post("/api/attendance/cards/backfill")
+                .session(sessionFor("employee"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"mappings\": [{\"employee_code\": \"10063\", \"card_no\": \"14187218\"}]}"))
+            .andExpect(status().isForbidden());
+
+        verifyNoInteractions(attendanceService);
+    }
+
+    @Test
+    void listsDevicesForHr() throws Exception {
+        when(attendanceService.listDevices())
+            .thenReturn(java.util.List.of(
+                new AttendanceDeviceDto("SHOWROOM_SC700", "Showroom ZKTeco SC700", "SHOWROOM", "GL&R Office / Showroom")));
+
+        mvc.perform(get("/api/attendance/devices")
+                .session(sessionFor("hr")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.devices[0].device_code").value("SHOWROOM_SC700"))
+            .andExpect(jsonPath("$.devices[0].site_name").value("GL&R Office / Showroom"));
+    }
+
+    @Test
+    void forbidsEmployeesFromListingDevices() throws Exception {
+        mvc.perform(get("/api/attendance/devices")
+                .session(sessionFor("employee")))
+            .andExpect(status().isForbidden());
+
+        verifyNoInteractions(attendanceService);
+    }
+
+    @Test
     void forbidsEmployeesFromImportingDatFile() throws Exception {
         mvc.perform(post("/api/attendance/imports/dat")
                 .session(sessionFor("employee"))

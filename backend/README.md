@@ -23,7 +23,7 @@ cd backend
 set -a
 source .env.local
 set +a
-mvn spring-boot:run
+./mvnw spring-boot:run
 ```
 
 For another Supabase project, copy `.env.example` to `.env.local` and fill in the host, user, and password.
@@ -54,7 +54,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8080 npm run dev
 
 ```bash
 cd backend
-mvn test
+./mvnw test
 ```
 
 The tests cover business rules, service behavior, validation, controller auth/permission checks, and security-sensitive auth behavior.

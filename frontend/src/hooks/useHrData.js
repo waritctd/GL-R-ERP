@@ -6,6 +6,7 @@ export function useHrData({ user, showToast }) {
   const [currentEmployee, setCurrentEmployee] = useState(null);
   const [employees, setEmployees] = useState([]);
   const [profileRequests, setProfileRequests] = useState([]);
+  const [dashboardSummary, setDashboardSummary] = useState(null);
   const [route, setRoute] = useState('dashboard');
   const [selectedEmployee, setSelectedEmployee] = useState(null);
 
@@ -20,24 +21,32 @@ export function useHrData({ user, showToast }) {
     const requestsPromise = api.profileRequests.list()
       .then((response) => response.profileRequests)
       .catch(() => []);
+    const dashboardPromise = api.dashboard?.summary
+      ? api.dashboard.summary()
+        .then((response) => response?.summary ?? response ?? null)
+        .catch(() => null)
+      : Promise.resolve(null);
 
-    const [nextCurrentEmployee, nextEmployees, nextRequests] = await Promise.all([
+    const [nextCurrentEmployee, nextEmployees, nextRequests, nextDashboardSummary] = await Promise.all([
       currentEmployeePromise,
       employeesPromise,
       requestsPromise,
+      dashboardPromise,
     ]);
 
     setCurrentEmployee(nextCurrentEmployee);
     setEmployees(nextEmployees);
     setProfileRequests(nextRequests);
+    setDashboardSummary(nextDashboardSummary);
     setRoute(safeRoute);
-    return { nextCurrentEmployee, nextEmployees, nextRequests };
+    return { nextCurrentEmployee, nextEmployees, nextRequests, nextDashboardSummary };
   }
 
   function resetData() {
     setCurrentEmployee(null);
     setEmployees([]);
     setProfileRequests([]);
+    setDashboardSummary(null);
     setRoute('dashboard');
     setSelectedEmployee(null);
   }
@@ -84,6 +93,7 @@ export function useHrData({ user, showToast }) {
     currentEmployee,
     employees,
     profileRequests,
+    dashboardSummary,
     route,
     selectedEmployee,
     loadData,

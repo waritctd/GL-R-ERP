@@ -18,6 +18,7 @@ export const API_ROUTES = {
   attendance: {
     punches: '/api/attendance/punches',
     importDat: '/api/attendance/imports/dat',
+    devices: '/api/attendance/devices',
   },
   overtime: {
     list: '/api/overtime',
@@ -43,20 +44,33 @@ export const API_ROUTES = {
     detail: (id) => `/api/tickets/${id}`,
     action: (id, action) => `/api/tickets/${id}/${action}`,
     editItems: (id) => `/api/tickets/${id}/items`,
-    createDocDraft: (id) => `/api/tickets/${id}/document/draft`,
-    listDocs: (id) => `/api/tickets/${id}/documents`,
+    createDocDraft: (id) => `/api/tickets/${id}/deposit-notice/draft`,
+    listDocs: (id) => `/api/tickets/${id}/deposit-notices`,
     revision: (id) => `/api/tickets/${id}/revision`,
+    quotationFile: (id, quotationId, fmt) => `/api/tickets/${id}/quotations/${quotationId}/file?format=${fmt ?? 'xlsx'}`,
   },
-  documents: {
-    get: (id) => `/api/documents/${id}`,
-    update: (id) => `/api/documents/${id}`,
-    preview: (id) => `/api/documents/${id}/preview`,
-    issue: (id) => `/api/documents/${id}/issue`,
-    file: (id, fmt) => `/api/documents/${id}/file?format=${fmt}`,
+  depositNotices: {
+    get: (id) => `/api/deposit-notices/${id}`,
+    update: (id) => `/api/deposit-notices/${id}`,
+    preview: (id) => `/api/deposit-notices/${id}/preview`,
+    issue: (id) => `/api/deposit-notices/${id}/issue`,
+    file: (id, fmt) => `/api/deposit-notices/${id}/file?format=${fmt}`,
     noteTemplates: '/api/document-note-templates',
   },
+  catalog: {
+    search: (q) => `/api/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`,
+  },
+  factoryConfigs: {
+    list: '/api/factory-configs',
+    sendEmail: (ticketId) => `/api/tickets/${ticketId}/factory-emails/send`,
+  },
   customers: {
+    create: '/api/customers',
     search: (q) => `/api/customers${q ? `?search=${encodeURIComponent(q)}` : ''}`,
+    contacts: (customerId) => `/api/customers/${customerId}/contacts`,
+    createContact: (customerId) => `/api/customers/${customerId}/contacts`,
+    projects: (customerId) => `/api/customers/${customerId}/projects`,
+    createProject: (customerId) => `/api/customers/${customerId}/projects`,
   },
   dashboard: {
     summary: '/api/dashboard/summary',
@@ -64,6 +78,20 @@ export const API_ROUTES = {
   notifications: {
     list: '/api/notifications',
     markRead: (id) => `/api/notifications/${id}/read`,
+  },
+  fxRates: {
+    list: '/api/fx-rates',
+    upsert: (currency) => `/api/fx-rates/${currency}`,
+  },
+  priceCalcConfigs: {
+    list: '/api/price-calc-configs',
+    update: '/api/price-calc-configs',
+  },
+  attachments: {
+    list: (ticketId) => `/api/tickets/${ticketId}/attachments`,
+    upload: (ticketId) => `/api/tickets/${ticketId}/attachments`,
+    file: (id) => `/api/attachments/${id}/file`,
+    delete: (id) => `/api/attachments/${id}`,
   },
   commissions: {
     list: '/api/commissions',
@@ -85,11 +113,11 @@ export const API_ROUTES = {
 export const ROLE_PERMISSIONS = {
   canUseEmployeeExperience: ['employee'],
   canSubmitProfileRequests: ['employee'],
-  canViewEmployees: ['hr'],
-  canManageEmployees: ['hr'],
-  canReviewProfileRequests: ['hr'],
-  canViewAllAttendance: ['hr'],
-  canImportAttendance: ['hr'],
+  canViewEmployees: ['hr', 'admin'],
+  canManageEmployees: ['hr', 'admin'],
+  canReviewProfileRequests: ['hr', 'admin'],
+  canViewAllAttendance: ['hr', 'ceo'],
+  canImportAttendance: ['hr', 'ceo'],
   canViewAllOvertime: ['hr', 'ceo', 'admin'],
   canViewAllLeave: ['hr', 'ceo', 'admin'],
   canReviewLeave: ['hr', 'admin'],

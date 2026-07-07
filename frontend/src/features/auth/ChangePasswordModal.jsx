@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
@@ -15,7 +16,17 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [error, setError] = useState('');
+  const [submitError, setSubmitError] = useState('');
+
+  const newPasswordTooShort = newPassword.length > 0 && newPassword.length < 8;
+  const passwordMismatch = confirmPassword.length > 0 && newPassword.length > 0 && newPassword !== confirmPassword;
+  const passwordReused = newPassword.length > 0 && currentPassword.length > 0 && newPassword === currentPassword;
+  const hasValidationError = newPasswordTooShort || passwordMismatch || passwordReused;
+  const formError = passwordMismatch
+    ? 'รหัสผ่านใหม่และการยืนยันไม่ตรงกัน'
+    : passwordReused
+      ? 'รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสผ่านเดิม'
+      : '';
 
   useEffect(() => {
     previouslyFocused.current = document.activeElement;
@@ -58,23 +69,12 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
 
   async function submit(event) {
     event.preventDefault();
-    setError('');
-    if (newPassword.length < 8) {
-      setError('รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setError('รหัสผ่านใหม่และการยืนยันไม่ตรงกัน');
-      return;
-    }
-    if (newPassword === currentPassword) {
-      setError('รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสผ่านเดิม');
-      return;
-    }
+    setSubmitError('');
+    if (hasValidationError) return;
     try {
       await onSubmit({ currentPassword, newPassword });
-    } catch (submitError) {
-      setError(submitError?.message || 'เปลี่ยนรหัสผ่านไม่สำเร็จ');
+    } catch (err) {
+      setSubmitError(err?.message || 'เปลี่ยนรหัสผ่านไม่สำเร็จ');
     }
   }
 
@@ -113,17 +113,25 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
                 required
               />
             </label>
-            <label>
-              รหัสผ่านใหม่
+            <FormField
+              label="รหัสผ่านใหม่"
+              htmlFor="change-password-new"
+              error={newPasswordTooShort ? 'รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร' : undefined}
+              hint={!newPasswordTooShort ? 'อย่างน้อย 8 ตัวอักษร' : undefined}
+            >
               <input
+                id="change-password-new"
                 type="password"
                 value={newPassword}
                 onChange={(event) => setNewPassword(event.target.value)}
                 autoComplete="new-password"
                 minLength={8}
+                className={newPasswordTooShort ? 'is-invalid' : ''}
+                aria-invalid={newPasswordTooShort}
+                aria-describedby={newPasswordTooShort ? fieldErrorId('change-password-new') : undefined}
                 required
               />
-            </label>
+            </FormField>
             <label>
               ยืนยันรหัสผ่านใหม่
               <input
@@ -134,7 +142,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
                 required
               />
             </label>
-            {error ? <div className="form-error" role="alert">{error}</div> : null}
+            {(formError || submitError) ? <div className="form-error" role="alert">{formError || submitError}</div> : null}
           </form>
         </div>
         <footer className="modal-footer">
@@ -143,7 +151,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
           ) : (
             <button type="button" className="secondary-button" onClick={onClose}>ยกเลิก</button>
           )}
-          <button type="submit" form="change-password-form" className="primary-button" disabled={loading}>
+          <button type="submit" form="change-password-form" className="primary-button" disabled={loading || hasValidationError}>
             <Icon name="check" />
             {loading ? 'กำลังบันทึก...' : 'บันทึกรหัสผ่าน'}
           </button>

@@ -27,6 +27,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--password", default=os.getenv("GLR_IMPORT_PASSWORD"), help="HR password; defaults to GLR_IMPORT_PASSWORD")
     parser.add_argument("--site-code", default=os.getenv("ATTENDANCE_SITE_CODE", DEFAULT_SITE_CODE))
     parser.add_argument("--device-code", default=os.getenv("ATTENDANCE_DEVICE_CODE", DEFAULT_DEVICE_CODE))
+    parser.add_argument("--timeout", type=int, default=int(os.getenv("GLR_IMPORT_TIMEOUT", "180")),
+                        help="HTTP read timeout in seconds (default 180; raise for large files / cold starts)")
     return parser.parse_args(argv)
 
 
@@ -75,6 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         f"{api_base_url}/api/attendance/imports/dat",
         payload,
         headers={"X-XSRF-TOKEN": csrf_token},
+        timeout=args.timeout,
     )
 
     print(json.dumps(import_response, indent=2, sort_keys=True))
@@ -90,11 +93,12 @@ def post_json(
         session: requests.Session,
         url: str,
         payload: dict[str, Any],
-        headers: dict[str, str] | None = None) -> dict[str, Any]:
+        headers: dict[str, str] | None = None,
+        timeout: int = 60) -> dict[str, Any]:
     request_headers = {"Content-Type": "application/json"}
     if headers:
         request_headers.update(headers)
-    response = session.post(url, data=json.dumps(payload), headers=request_headers, timeout=60)
+    response = session.post(url, data=json.dumps(payload), headers=request_headers, timeout=timeout)
     if not response.ok:
         message = response.text
         try:

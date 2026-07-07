@@ -67,6 +67,134 @@ if (db.leaveRequests.length === 0) {
 }
 let sessionUser = null;
 
+// ── Mock in-memory document store ─────────────────────────────────────────────
+const mockCustomers = [
+  { id: 1, name: 'บริษัท ก้าวหน้า คอนสตรัคชั่น จำกัด',  taxId: '0105565012345', address: '123 ถนนสุขุมวิท แขวงคลองเตย กรุงเทพฯ 10110', branch: 'สำนักงานใหญ่', phone: '02-123-4567' },
+  { id: 2, name: 'บริษัท ไทยแลนด์ ดีเวลลอปเมนท์ จำกัด', taxId: '0105556789012', address: '456 ถนนรัชดาภิเษก แขวงลาดยาว กรุงเทพฯ 10900',  branch: 'สำนักงานใหญ่', phone: '02-234-5678' },
+  { id: 3, name: 'บริษัท พรีเมียม ดีไซน์ กรุ๊ป จำกัด',   taxId: '0105578901234', address: '789 ถนนพระราม 4 แขวงพระโขนง กรุงเทพฯ 10260',    branch: 'สำนักงานใหญ่', phone: '02-345-6789' },
+  { id: 4, name: 'บริษัท เรืองแสง พร็อพเพอร์ตี้ จำกัด',  taxId: '0105591234567', address: '321 ถนนนวมินทร์ แขวงคลองกุ่ม กรุงเทพฯ 10240',  branch: 'สำนักงานใหญ่', phone: '02-456-7890' },
+];
+let mockCustomerSeq = mockCustomers.length + 1;
+
+const mockContacts = [
+  { id: 1, customerId: 1, firstName: 'วิภา',   lastName: 'สมิทธ์',   position: 'ผู้จัดการโครงการ', email: 'wipa@kaona.co.th',     phone: '081-111-2222' },
+  { id: 2, customerId: 1, firstName: 'ธนพล',   lastName: 'อภิชัย',   position: 'วิศวกรโยธา',       email: 'thanaphon@kaona.co.th', phone: '082-333-4444' },
+  { id: 3, customerId: 2, firstName: 'ปรีชา',  lastName: 'วงศ์สกุล', position: 'จัดซื้อ',          email: 'preecha@tld.co.th',     phone: '083-555-6666' },
+  { id: 4, customerId: 3, firstName: 'สุภาพร', lastName: 'ทองดี',    position: 'ผู้อำนวยการ',       email: 'supaporn@pdg.co.th',    phone: '084-777-8888' },
+  { id: 5, customerId: 4, firstName: 'กมล',    lastName: 'เรืองศรี', position: 'ผู้จัดการ',         email: 'kamol@rp.co.th',        phone: '085-999-0000' },
+];
+let mockContactSeq = mockContacts.length + 1;
+
+const mockProjects = [
+  { id: 1, customerId: 1, name: 'โครงการ Central Ladprao ชั้น B1' },
+  { id: 2, customerId: 1, name: 'โครงการ The Mall Bangkapi' },
+  { id: 3, customerId: 2, name: 'โครงการ Asoke Tower ชั้น 12-15' },
+  { id: 4, customerId: 3, name: 'โครงการ PDG HQ Renovation' },
+  { id: 5, customerId: 4, name: 'โครงการ Rueangchat Condo Phase 2' },
+];
+let mockProjectSeq = mockProjects.length + 1;
+
+// R4: FX rates + price calc configs
+const mockFxRates = [
+  { id: 1, currency: 'CNY', rateToThb: 4.85,  effectiveDate: '2026-07-01', updatedAt: new Date().toISOString() },
+  { id: 2, currency: 'EUR', rateToThb: 38.50, effectiveDate: '2026-07-01', updatedAt: new Date().toISOString() },
+  { id: 3, currency: 'GBP', rateToThb: 44.80, effectiveDate: '2026-07-01', updatedAt: new Date().toISOString() },
+  { id: 4, currency: 'JPY', rateToThb: 0.24,  effectiveDate: '2026-07-01', updatedAt: new Date().toISOString() },
+  { id: 5, currency: 'THB', rateToThb: 1.00,  effectiveDate: '2026-07-01', updatedAt: new Date().toISOString() },
+  { id: 6, currency: 'USD', rateToThb: 35.20, effectiveDate: '2026-07-01', updatedAt: new Date().toISOString() },
+];
+
+const mockPriceCalcConfigs = [
+  {
+    configId: 1, version: 1, country: 'Italy',
+    freightPerSqm: 120, insurancePerSqm: 15,
+    inlandFactoryToPortPerSqm: 30, inlandPortToWarehousePerSqm: 50,
+    importDutyPct: 0.05, marginPct: 0.25,
+    isCurrent: true, effectiveFrom: '2026-01-01', updatedAt: new Date().toISOString(),
+  },
+  {
+    configId: 2, version: 1, country: 'Thailand',
+    freightPerSqm: 0, insurancePerSqm: 0,
+    inlandFactoryToPortPerSqm: 0, inlandPortToWarehousePerSqm: 50,
+    importDutyPct: 0, marginPct: 0.20,
+    isCurrent: true, effectiveFrom: '2026-01-01', updatedAt: new Date().toISOString(),
+  },
+];
+let mockPriceConfigSeq = mockPriceCalcConfigs.length + 1;
+
+// R5: Attachments
+const mockAttachments = [];
+let mockAttachSeq = 1;
+
+const mockFactoryConfigs = [
+  { id: 1, factoryName: 'SCG Ceramics',      email: 'sales@scg.co.th',         currency: 'THB', unit: 'piece', country: 'Thailand' },
+  { id: 2, factoryName: 'Cotto Industry',    email: 'orders@cotto.co.th',       currency: 'THB', unit: 'piece', country: 'Thailand' },
+  { id: 3, factoryName: 'Duragres Thailand', email: 'sales@duragres.co.th',     currency: 'THB', unit: 'piece', country: 'Thailand' },
+  { id: 4, factoryName: 'Panaria SpA',       email: 'export@panaria.it',        currency: 'EUR', unit: 'sqm',   country: 'Italy' },
+];
+
+const mockCatalog = [
+  { id: 1,  brand: 'SCG',      collection: 'Elegance Series',   color: 'ขาวนวล',      surface: 'ด้าน',         size: '60x60 ซม.',  factory: 'SCG Ceramics',      sqmPerPiece: 0.36 },
+  { id: 2,  brand: 'SCG',      collection: 'Elegance Series',   color: 'เทาอ่อน',     surface: 'ด้าน',         size: '60x60 ซม.',  factory: 'SCG Ceramics',      sqmPerPiece: 0.36 },
+  { id: 3,  brand: 'SCG',      collection: 'Natura Collection', color: 'เบจธรรมชาติ', surface: 'หยาบ',         size: '30x60 ซม.',  factory: 'SCG Ceramics',      sqmPerPiece: 0.18 },
+  { id: 4,  brand: 'SCG',      collection: 'Natura Collection', color: 'น้ำตาลไม้',   surface: 'หยาบ',         size: '20x100 ซม.', factory: 'SCG Ceramics',      sqmPerPiece: 0.20 },
+  { id: 5,  brand: 'SCG',      collection: 'Crystal White',     color: 'ขาวมุก',      surface: 'มัน',          size: '60x120 ซม.', factory: 'SCG Ceramics',      sqmPerPiece: 0.72 },
+  { id: 6,  brand: 'Cotto',    collection: 'Metro Square',      color: 'ขาว',         surface: 'ด้าน',         size: '30x30 ซม.',  factory: 'Cotto Industry',    sqmPerPiece: 0.09 },
+  { id: 7,  brand: 'Cotto',    collection: 'Metro Square',      color: 'ครีม',        surface: 'ด้าน',         size: '30x30 ซม.',  factory: 'Cotto Industry',    sqmPerPiece: 0.09 },
+  { id: 8,  brand: 'Cotto',    collection: 'Stone Series',      color: 'เทาเข้ม',     surface: 'หยาบ',         size: '60x60 ซม.',  factory: 'Cotto Industry',    sqmPerPiece: 0.36 },
+  { id: 9,  brand: 'Cotto',    collection: 'Timber Line',       color: 'น้ำตาลอ่อน', surface: 'ลายไม้',       size: '20x120 ซม.', factory: 'Cotto Industry',    sqmPerPiece: 0.24 },
+  { id: 10, brand: 'Duragres', collection: 'Granite Plus',      color: 'เทากลาง',     surface: 'หยาบกึ่งมัน', size: '60x60 ซม.',  factory: 'Duragres Thailand', sqmPerPiece: 0.36 },
+  { id: 11, brand: 'Duragres', collection: 'Granite Plus',      color: 'ดำ',          surface: 'หยาบกึ่งมัน', size: '60x60 ซม.',  factory: 'Duragres Thailand', sqmPerPiece: 0.36 },
+  { id: 12, brand: 'Duragres', collection: 'Porcelain Pro',     color: 'ขาวเนียน',    surface: 'มัน',          size: '80x80 ซม.',  factory: 'Duragres Thailand', sqmPerPiece: 0.64 },
+  { id: 13, brand: 'Panaria',  collection: 'Trilogy',           color: 'Ivory',       surface: 'Lappato',      size: '60x120 cm',  factory: 'Panaria SpA',       sqmPerPiece: 0.72 },
+  { id: 14, brand: 'Panaria',  collection: 'Frame',             color: 'Ash',         surface: 'Naturale',     size: '80x80 cm',   factory: 'Panaria SpA',       sqmPerPiece: 0.64 },
+];
+
+const mockNoteTemplates = [
+  { id: 1, text: 'ราคารวมค่าขนส่งถึงชั้น 1 ของหน่วยงานในเขต กทม. แต่ไม่รวมค่าตัด/ติดตั้ง', defaultSelected: true, sortOrder: 1 },
+  { id: 2, text: 'จ่ายเช็คในนาม บจก. จี แอล แอนด์ อาร์ฯ / โอนเข้า กสิกรไทย 003-1-15914-8 (กระแสรายวัน สาขาสุขุมวิท 33)', defaultSelected: true, sortOrder: 2 },
+  { id: 3, text: 'กรณีโอนเงินส่ง Pay-in มาที่ e-mail : info@glr.co.th', defaultSelected: true, sortOrder: 3 },
+];
+
+const mockDepositNotices = []; // { id, ticketId, docType, version, docNumber, status, customerName, ... items:[], notes:[] }
+let mockDocSeq = 1;
+let mockDocNumberSeq = 1;
+
+function buildMockDoc(doc) {
+  const items = doc.items ?? [];
+  const depositPct = doc.depositPercent ?? 0.5;
+  const subtotal = items.reduce((s, it) => s + (Number(it.netUnitPrice) || 0) * (Number(it.qty) || 0), 0);
+  const deposit  = Math.round(subtotal * depositPct * 100) / 100;
+  const vat      = Math.round(deposit * 0.07 * 100) / 100;
+  const total    = Math.round((deposit + vat) * 100) / 100;
+  return { ...doc, subtotal, depositAmount: deposit, vatAmount: vat, totalPayable: total };
+}
+
+function mockPreviewHtml(doc) {
+  const money = (v) => v == null ? '—' : Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2 });
+  const depositPct = Math.round((doc.depositPercent ?? 0.5) * 100);
+  let rows = (doc.items ?? []).map((it, i) =>
+    `<tr><td>${i+1}</td><td>${it.description??''}</td><td style="text-align:right">${it.qty}</td><td>${it.unit??'แผ่น'}</td><td style="text-align:right">${money(it.unitPrice)}</td><td style="text-align:right">${money(it.netUnitPrice??it.unitPrice)}</td><td style="text-align:right">${money((it.netUnitPrice??it.unitPrice)*it.qty)}</td></tr>`
+  ).join('');
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:sans-serif;padding:20px;font-size:13px}table{width:100%;border-collapse:collapse;margin:12px 0}th{background:#1e3a5f;color:#fff;padding:6px 8px;text-align:left}td{padding:5px 8px;border-bottom:1px solid #eee}.sum{text-align:right;width:300px;float:right;margin-top:12px}.sum td{padding:4px 8px}</style></head><body>
+<div style="display:flex;justify-content:space-between;border-bottom:2px solid #1e3a5f;padding-bottom:12px;margin-bottom:16px">
+  <div><strong>บริษัท จี แอล แอนด์ อาร์ จำกัด</strong><br><small>เลขภาษี 0105542026329</small></div>
+  <div style="text-align:right"><strong style="font-size:16px">ใบแจ้งยอด / เงินรับมัดจำ</strong><br><code>${doc.docNumber??'DRAFT'}</code></div>
+</div>
+<div>เรียน: <strong>${doc.customerName??''}</strong></div>
+<div style="color:#666;font-size:12px">${doc.customerAddress??''}</div>
+${doc.projectName ? `<div>โครงการ: ${doc.projectName}</div>` : ''}
+<table><thead><tr><th>ลำดับ</th><th>รายละเอียด</th><th>จำนวน</th><th>หน่วย</th><th>ราคา/หน่วย</th><th>ราคาสุทธิ</th><th>เป็นเงิน</th></tr></thead><tbody>${rows}</tbody></table>
+<table class="sum"><tr><td>รวมเป็นเงิน</td><td style="text-align:right">${money(doc.subtotal)} บาท</td></tr>
+<tr><td>มัดจำ ${depositPct}%</td><td style="text-align:right">${money(doc.depositAmount)} บาท</td></tr>
+<tr><td>VAT 7% (จากมัดจำ)</td><td style="text-align:right">${money(doc.vatAmount)} บาท</td></tr>
+<tr style="font-weight:bold;border-top:2px solid #1e3a5f"><td>รวมต้องชำระ</td><td style="text-align:right">${money(doc.totalPayable)} บาท</td></tr></table>
+<div style="clear:both"></div>
+${doc.notes?.length ? `<div style="margin-top:20px;font-size:12px"><strong>หมายเหตุ:</strong><ol>${doc.notes.map(n=>`<li>${n}</li>`).join('')}</ol></div>` : ''}
+<div style="margin-top:30px;font-size:12px;color:#666">ผู้จัดทำ: จินตนา หาญมนตรี</div>
+</body></html>`;
+}
+
 function delay(value) {
   return new Promise((resolve) => {
     window.setTimeout(() => resolve(structuredClone(value)), 140);
@@ -82,7 +210,12 @@ function fail(message, status = 400) {
 function publicUser(user) {
   if (!user) return null;
   const { password, ...safe } = user;
-  return safe;
+  const employee = employeeForUser(user);
+  return {
+    ...safe,
+    divisionId: safe.divisionId ?? employee?.divisionId ?? null,
+    manager: safe.manager ?? dashboardManager(user),
+  };
 }
 
 function requireSession() {
@@ -108,9 +241,28 @@ function verifyStatus(ticket, expected) {
   if (ticket.status !== expected) fail(`Expected status '${expected}' but ticket is '${ticket.status}'`, 409);
 }
 
-function pushEvent(ticket, actor, kind, fromStatus, toStatus, message) {
+function buildMockQuotationCsv(ticketId, quotationId) {
+  const ticket = findTicketRaw(Number(ticketId));
+  const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
+  if (!quotation) fail('Quotation not found', 404);
+  const rows = [
+    ['ใบเสนอราคา', quotation.number],
+    ['ลูกค้า', ticket.customerName ?? ''],
+    ['วันที่', quotation.issuedAt],
+    [],
+    ['รายละเอียด', 'จำนวน', 'ราคา/หน่วย', 'เป็นเงิน'],
+    ...ticket.items
+      .filter((it) => it.approvedPrice != null)
+      .map((it) => [`${it.brand ?? ''} ${it.model ?? ''}`.trim(), it.qty, it.approvedPrice, it.approvedPrice * it.qty]),
+    [],
+    ['รวมเป็นเงิน', '', '', quotation.totalAmount],
+  ];
+  return rows.map((r) => r.join(',')).join('\n');
+}
+
+function pushEvent(ticket, actor, kind, fromStatus, toStatus, message, itemSnapshot = null) {
   const nextId = Math.max(...db.tickets.flatMap((t) => t.events.map((e) => e.id)), 0) + 1;
-  ticket.events.push({ id: nextId, ticketId: ticket.id, actorId: actor.id, actorName: actor.name, kind, fromStatus, toStatus, message, createdAt: new Date().toISOString() });
+  ticket.events.push({ id: nextId, ticketId: ticket.id, actorId: actor.id, actorName: actor.name, kind, fromStatus, toStatus, message, createdAt: new Date().toISOString(), itemSnapshot });
 }
 
 function addNotification(userId, ticketId, ticketCode, type, message) {
@@ -119,7 +271,28 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
 }
 
 function buildTicketDetail(ticket) {
-  return { summary: { id: ticket.id, code: ticket.code, type: ticket.type, title: ticket.title, status: ticket.status, priority: ticket.priority, createdById: ticket.createdById, createdByName: ticket.createdByName, assignedToId: ticket.assignedToId, assignedToName: ticket.assignedToName, customerName: ticket.customerName, note: ticket.note, createdAt: ticket.createdAt, updatedAt: ticket.updatedAt, closedAt: ticket.closedAt, itemCount: ticket.items.length, hasEdits: ticket.hasEdits ?? false }, items: ticket.items, events: ticket.events, quotation: ticket.quotation };
+  const project = ticket.projectId ? mockProjects.find((p) => p.id === ticket.projectId) : null;
+  const contact = ticket.contactId ? mockContacts.find((c) => c.id === ticket.contactId) : null;
+  return {
+    summary: {
+      id: ticket.id, code: ticket.code, type: ticket.type, title: ticket.title,
+      status: ticket.status, priority: ticket.priority,
+      createdById: ticket.createdById, createdByName: ticket.createdByName,
+      assignedToId: ticket.assignedToId, assignedToName: ticket.assignedToName,
+      customerName: ticket.customerName,
+      customerId: ticket.customerId ?? null,
+      projectId: ticket.projectId ?? null,
+      projectName: project?.name ?? null,
+      contactId: ticket.contactId ?? null,
+      contactName: contact ? `${contact.firstName} ${contact.lastName ?? ''}`.trim() : null,
+      note: ticket.note,
+      createdAt: ticket.createdAt, updatedAt: ticket.updatedAt, closedAt: ticket.closedAt,
+      itemCount: ticket.items.length, hasEdits: ticket.hasEdits ?? false,
+    },
+    items: ticket.items, events: ticket.events,
+    quotation: ticket.quotations ? ticket.quotations[0] ?? null : ticket.quotation ?? null,
+    quotations: ticket.quotations ?? (ticket.quotation ? [ticket.quotation] : []),
+  };
 }
 
 function commissionMonth(value) {
@@ -154,6 +327,154 @@ function progressiveCommission(baseValue) {
 
 function buildCommissionRecord(record) {
   return structuredClone(record);
+}
+
+function employeeForUser(user) {
+  return user?.employeeId ? db.employees.find((employee) => employee.id === user.employeeId) : null;
+}
+
+function dashboardManager(user) {
+  const employee = employeeForUser(user);
+  return Boolean(
+    user?.manager
+    || user?.role === 'supervisor'
+    || user?.role === 'sales_manager'
+    || employee?.positionTh === 'ผู้จัดการฝ่าย'
+  );
+}
+
+function dashboardDivisionId(user) {
+  return user?.divisionId ?? employeeForUser(user)?.divisionId ?? null;
+}
+
+function dashboardEmployeeScope(user) {
+  const employee = employeeForUser(user);
+  if (['hr', 'admin', 'ceo'].includes(user.role)) return { label: 'all', employees: db.employees };
+  if (dashboardManager(user) && dashboardDivisionId(user)) {
+    return {
+      label: 'division',
+      employees: db.employees.filter((item) => item.divisionId === dashboardDivisionId(user)),
+    };
+  }
+  return { label: employee ? 'self' : 'none', employees: employee ? [employee] : [] };
+}
+
+function dashboardHeadcount(user) {
+  const company = ['hr', 'ceo', 'admin'].includes(user.role);
+  const manager = dashboardManager(user);
+  const divisionId = dashboardDivisionId(user);
+  const employees = company
+    ? db.employees
+    : manager && divisionId
+      ? db.employees.filter((employee) => employee.divisionId === divisionId)
+      : [];
+  if (employees.length === 0) return { scope: 'none', active: null, inactive: null, total: null, byDivision: [] };
+
+  const byDivision = [...employees.reduce((groups, employee) => {
+    const key = employee.divisionId || 'unknown';
+    const current = groups.get(key) || {
+      divisionId: employee.divisionId ?? null,
+      divisionCode: employee.divisionId ?? null,
+      divisionName: employee.divisionTh || 'ไม่ระบุฝ่าย',
+      active: 0,
+      inactive: 0,
+      total: 0,
+    };
+    if (employee.active) current.active += 1;
+    else current.inactive += 1;
+    current.total += 1;
+    groups.set(key, current);
+    return groups;
+  }, new Map()).values()];
+
+  return {
+    scope: company ? 'all' : 'division',
+    active: employees.filter((employee) => employee.active).length,
+    inactive: employees.filter((employee) => !employee.active).length,
+    total: employees.length,
+    byDivision,
+  };
+}
+
+function dashboardTickets(user) {
+  const allVisible = ['import', 'ceo', 'admin'].includes(user.role);
+  const ownVisible = user.role === 'sales';
+  const list = allVisible
+    ? db.tickets
+    : ownVisible
+      ? db.tickets.filter((ticket) => ticket.createdById === user.id || (user.employeeId && ticket.createdById === user.employeeId))
+      : [];
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+  const threeDaysAgo = new Date(now - 3 * 86400000).toISOString().slice(0, 10);
+  return {
+    scope: allVisible ? 'all' : ownVisible ? 'self' : 'none',
+    draft: list.filter((ticket) => ticket.status === 'draft').length,
+    submitted: list.filter((ticket) => ticket.status === 'submitted').length,
+    inReview: list.filter((ticket) => ticket.status === 'in_review').length,
+    priceProposed: list.filter((ticket) => ticket.status === 'price_proposed').length,
+    approved: list.filter((ticket) => ticket.status === 'approved').length,
+    quotationIssued: list.filter((ticket) => ticket.status === 'quotation_issued').length,
+    documentIssued: list.filter((ticket) => ticket.status === 'document_issued').length,
+    closed: list.filter((ticket) => ticket.status === 'closed').length,
+    cancelled: list.filter((ticket) => ticket.status === 'cancelled').length,
+    total: list.length,
+    totalOpen: list.filter((ticket) => !['closed', 'cancelled'].includes(ticket.status)).length,
+    closedThisMonth: list.filter((ticket) => ticket.status === 'closed' && ticket.closedAt >= monthStart).length,
+    cancelledThisMonth: list.filter((ticket) => ticket.status === 'cancelled' && ticket.updatedAt >= monthStart).length,
+    overdueOver3Days: list.filter((ticket) => !['closed', 'cancelled', 'draft'].includes(ticket.status) && ticket.createdAt < threeDaysAgo).length,
+  };
+}
+
+function dashboardPending(user, ticketSummary) {
+  const employeeScope = dashboardEmployeeScope(user);
+  const employeeIds = new Set(employeeScope.employees.map((employee) => employee.id));
+  const employeeSelf = employeeScope.label === 'self';
+  const manager = employeeScope.label === 'division';
+  const hrOrAdmin = ['hr', 'admin'].includes(user.role);
+  const profileRequests = hrOrAdmin || employeeSelf
+    ? db.profileRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'pending').length
+    : 0;
+  const leave = hrOrAdmin || manager || employeeSelf
+    ? db.leaveRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'SUBMITTED').length
+    : 0;
+  const commissions = ['sales_manager', 'ceo', 'admin'].includes(user.role)
+    ? db.commissions.filter((record) => record.status === 'SUBMITTED').length
+    : user.role === 'sales'
+      ? db.commissions.filter((record) => record.salesRepId === user.id && record.status === 'SUBMITTED').length
+      : 0;
+  const tickets = ['sales', 'import', 'ceo', 'admin'].includes(user.role)
+    ? ticketSummary.submitted + ticketSummary.inReview + ticketSummary.priceProposed
+    : 0;
+  return {
+    scope: employeeScope.label,
+    profileRequests,
+    overtime: 0,
+    leave,
+    commissions,
+    tickets,
+    total: profileRequests + leave + commissions + tickets,
+  };
+}
+
+function dashboardAttendance(user) {
+  if (['hr', 'ceo', 'admin'].includes(user.role)) {
+    return { scope: 'all', todayPresent: 0, lateToday: 0, missingCheckout: 0, punchCountToday: 0, monthlyAttendanceDays: 0 };
+  }
+  if (dashboardManager(user) && dashboardDivisionId(user)) {
+    return { scope: 'division', todayPresent: 0, lateToday: 0, missingCheckout: 0, punchCountToday: 0, monthlyAttendanceDays: 0 };
+  }
+  return { scope: 'self', monthlyAttendanceDays: 0, todayStatus: 'NO_RECORD', firstIn: null, lastOut: null, lateMinutesToday: 0 };
+}
+
+function dashboardNotifications(user) {
+  const ids = new Set([user.id, user.employeeId].filter(Boolean));
+  const list = db.notifications.filter((notification) => ids.has(notification.userId));
+  return {
+    unread: list.filter((notification) => !notification.read).length,
+    read: list.filter((notification) => notification.read).length,
+    total: list.length,
+  };
 }
 
 function managerIdForEmployee(employee) {
@@ -501,7 +822,7 @@ export const api = {
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
       if (!ticket) fail('Ticket not found', 404);
       if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
-      return delay({ ticket: { summary: { id: ticket.id, code: ticket.code, type: ticket.type, title: ticket.title, status: ticket.status, priority: ticket.priority, createdById: ticket.createdById, createdByName: ticket.createdByName, assignedToId: ticket.assignedToId, assignedToName: ticket.assignedToName, customerName: ticket.customerName, note: ticket.note, createdAt: ticket.createdAt, updatedAt: ticket.updatedAt, closedAt: ticket.closedAt, itemCount: ticket.items.length }, items: ticket.items, events: ticket.events, quotation: ticket.quotation } });
+      return delay({ ticket: buildTicketDetail(ticket) });
     },
 
     async create(payload) {
@@ -516,13 +837,17 @@ export const api = {
         createdById: user.id, createdByName: user.name,
         assignedToId: null, assignedToName: null,
         customerName: payload.customerName || null,
+        customerId: payload.customerId ?? null,
+        projectId: payload.projectId ?? null,
+        contactId: payload.contactId ?? null,
         note: payload.note || null,
         createdAt: now.slice(0, 10), updatedAt: now.slice(0, 10), closedAt: null,
         items: (payload.items || []).map((item, i) => ({
           id: nextId * 100 + i, ticketId: nextId,
           brand: item.brand, model: item.model,
           color: item.color, texture: item.texture, size: item.size,
-          qty: item.qty,
+          factory: item.factory || null,
+          qty: item.qty, qtySqm: item.qtySqm ?? null,
           proposedPrice: null, approvedPrice: null,
           currency: item.currency || 'THB', sortOrder: i,
         })),
@@ -561,7 +886,11 @@ export const api = {
       }));
       ticket.status = 'price_proposed';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'PRICE_PROPOSED', 'in_review', 'price_proposed', payload.note || null);
+      const snap = JSON.stringify((payload.items || []).map((it) => ({
+        brand: it.brand, model: it.model, qty: it.qty,
+        rawPrice: it.rawPrice, rawCurrency: it.rawCurrency, rawUnit: it.rawUnit,
+      })));
+      pushEvent(ticket, user, 'PRICE_PROPOSED', 'in_review', 'price_proposed', payload.note || null, snap);
       addNotification(8, ticket.id, ticket.code, 'PRICE_PROPOSED', `Ticket ${ticket.code} มีราคาเสนอรอการอนุมัติ`);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
@@ -580,7 +909,11 @@ export const api = {
         ...ticket.items[i],
         brand: item.brand, model: item.model,
         color: item.color, texture: item.texture, size: item.size,
-        qty: item.qty,
+        factory: item.factory ?? ticket.items[i]?.factory ?? null,
+        qty: item.qty, qtySqm: item.qtySqm ?? ticket.items[i]?.qtySqm ?? null,
+        rawPrice: item.rawPrice ?? ticket.items[i]?.rawPrice ?? null,
+        rawCurrency: item.rawCurrency ?? ticket.items[i]?.rawCurrency ?? null,
+        rawUnit: item.rawUnit ?? ticket.items[i]?.rawUnit ?? null,
         proposedPrice: item.proposedPrice ?? ticket.items[i]?.proposedPrice ?? null,
         id: ticket.items[i]?.id ?? ticket.id * 100 + i,
         ticketId: ticket.id, sortOrder: i,
@@ -588,6 +921,48 @@ export const api = {
       ticket.hasEdits = true;
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'EDITED', st, st, payload.note || null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async calculatePrices(id) {
+      hasRole('ceo', 'admin');
+      const ticket = findTicketRaw(Number(id));
+      verifyStatus(ticket, 'price_proposed');
+
+      const fcMap = {};
+      mockFactoryConfigs.forEach((fc) => { fcMap[fc.factoryName] = fc; });
+      const fxMap = {};
+      mockFxRates.forEach((fx) => { fxMap[fx.currency] = fx.rateToThb; });
+      const cfgMap = {};
+      mockPriceCalcConfigs.filter((c) => c.isCurrent).forEach((c) => { cfgMap[c.country] = c; });
+
+      ticket.items = ticket.items.map((item) => {
+        if (item.rawPrice == null) return item;
+        const fc = fcMap[item.factory] ?? { country: 'Thailand' };
+        const cfg = cfgMap[fc.country] ?? cfgMap['Thailand'] ?? { freightPerSqm: 0, insurancePerSqm: 0, inlandFactoryToPortPerSqm: 0, inlandPortToWarehousePerSqm: 50, importDutyPct: 0, marginPct: 0.2, version: 1 };
+        const fxRate = fxMap[item.rawCurrency ?? 'THB'] ?? 1;
+
+        const sqmPerPiece = (item.qtySqm && item.qty && item.qty > 0) ? item.qtySqm / item.qty : 1;
+
+        let goodsCostPerSqm;
+        if (item.rawUnit === 'sqm') {
+          goodsCostPerSqm = item.rawPrice * fxRate;
+        } else {
+          goodsCostPerSqm = sqmPerPiece > 0 ? (item.rawPrice * fxRate / sqmPerPiece) : item.rawPrice * fxRate;
+        }
+
+        const cifPerSqm = goodsCostPerSqm + cfg.freightPerSqm + cfg.insurancePerSqm;
+        const dutyPerSqm = cifPerSqm * cfg.importDutyPct;
+        const landedPerSqm = cifPerSqm + dutyPerSqm + cfg.inlandFactoryToPortPerSqm + cfg.inlandPortToWarehousePerSqm;
+        const sellPerSqm = landedPerSqm * (1 + cfg.marginPct);
+
+        const calcedCost  = Math.round(landedPerSqm * sqmPerPiece * 10000) / 10000;
+        const calcedPrice = Math.round(sellPerSqm  * sqmPerPiece * 100)   / 100;
+
+        return { ...item, calcedCost, calcedPrice, calcConfigVersion: cfg.version, proposedPrice: calcedPrice };
+      });
+
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
@@ -618,20 +993,51 @@ export const api = {
     async quotation(id) {
       const user = hasRole('sales', 'admin');
       const ticket = findTicketRaw(Number(id));
-      verifyStatus(ticket, 'approved');
+      if (ticket.status !== 'approved' && ticket.status !== 'quotation_issued') {
+        fail(`Expected status 'approved' or 'quotation_issued' but ticket is '${ticket.status}'`, 409);
+      }
+      const fromStatus = ticket.status;
       if (ticket.createdById !== user.id && user.role !== 'admin') fail('Forbidden', 403);
       const total = ticket.items.reduce((sum, item) => sum + (item.approvedPrice || 0) * item.qty, 0);
-      const nextQNum = db.tickets.filter((t) => t.quotation).length + 1;
-      ticket.quotation = { id: nextQNum, ticketId: ticket.id, number: `QT-2026-${String(nextQNum).padStart(4, '0')}`, issuedById: user.id, issuedByName: user.name, issuedAt: new Date().toISOString(), pdfPath: null, totalAmount: total, currency: 'THB' };
+
+      // init quotations array if not present
+      if (!ticket.quotations) ticket.quotations = ticket.quotation ? [{ ...ticket.quotation, quotationVersion: 1, docStatus: 'SUPERSEDED' }] : [];
+
+      // supersede existing non-superseded quotations
+      ticket.quotations.forEach((q) => { if (q.docStatus !== 'SUPERSEDED') q.docStatus = 'SUPERSEDED'; });
+
+      const nextVersion = ticket.quotations.length + 1;
+      const nextQNum = db.tickets.flatMap((t) => t.quotations ?? (t.quotation ? [t.quotation] : [])).length + 1;
+      const newQuotation = {
+        id: nextQNum, ticketId: ticket.id,
+        number: `QT-2026-${String(nextQNum).padStart(4, '0')}`,
+        issuedById: user.id, issuedByName: user.name,
+        issuedAt: new Date().toISOString(), pdfPath: null,
+        totalAmount: total, currency: 'THB',
+        quotationVersion: nextVersion, docStatus: 'DRAFT',
+      };
+      ticket.quotations.unshift(newQuotation); // newest first
+      ticket.quotation = newQuotation; // backward compat
+
       ticket.status = 'quotation_issued';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'QUOTATION_ISSUED', 'approved', 'quotation_issued', null);
+      pushEvent(ticket, user, 'QUOTATION_ISSUED', fromStatus, 'quotation_issued', null);
       return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async downloadQuotationXlsx(ticketId, quotationId) {
+      const csv = buildMockQuotationCsv(ticketId, quotationId);
+      return new Blob([csv], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    },
+
+    async downloadQuotationPdf(ticketId, quotationId) {
+      const csv = buildMockQuotationCsv(ticketId, quotationId);
+      return new Blob([csv], { type: 'application/pdf' });
     },
 
     async close(id) {
       const user = requireSession();
-      return delay(doTransition(Number(id), 'quotation_issued', 'closed', 'CLOSED', user, null));
+      return delay(doTransition(Number(id), 'document_issued', 'closed', 'CLOSED', user, null));
     },
 
     async cancel(id) {
@@ -650,6 +1056,32 @@ export const api = {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
       pushEvent(ticket, user, 'COMMENTED', null, null, payload.message);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async createDocDraft(ticketId, payload) {
+      // delegate to depositNotices.createDraft (defined below — works at call time)
+      return api.depositNotices.createDraft(ticketId, payload);
+    },
+
+    async listDocs(ticketId) {
+      return api.depositNotices.listByTicket(ticketId);
+    },
+
+    async revision(id, payload) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      if (!['approved', 'document_issued'].includes(ticket.status)) fail('ไม่สามารถขอแก้ไขในสถานะนี้', 409);
+
+      const toStatus = {
+        QTY_OR_NOTE:  'approved',
+        PRICE_CHANGE: 'price_proposed',
+        NEW_ITEM:     'in_review',
+      }[payload.scope] ?? ticket.status;
+
+      ticket.status = toStatus;
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'REVISION_REQUESTED', ticket.status, toStatus, `[${payload.scope}] ${payload.reason}`);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
   },
@@ -980,24 +1412,30 @@ export const api = {
   dashboard: {
     async summary() {
       const user = requireSession();
-      if (!['sales', 'import', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
-      const list = user.role === 'sales'
-        ? db.tickets.filter((t) => t.createdById === user.id)
-        : db.tickets;
-      const now = new Date();
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-      const threeDaysAgo = new Date(now - 3 * 86400000).toISOString().slice(0, 10);
+      const tickets = dashboardTickets(user);
+      const pendingApprovals = dashboardPending(user, tickets);
+      const notifications = dashboardNotifications(user);
       return delay({
         summary: {
-          totalOpen: list.filter((t) => !['closed', 'cancelled'].includes(t.status)).length,
-          submitted: list.filter((t) => t.status === 'submitted').length,
-          inReview: list.filter((t) => t.status === 'in_review').length,
-          priceProposed: list.filter((t) => t.status === 'price_proposed').length,
-          approved: list.filter((t) => t.status === 'approved').length,
-          quotationIssued: list.filter((t) => t.status === 'quotation_issued').length,
-          closedThisMonth: list.filter((t) => t.status === 'closed' && t.closedAt >= monthStart).length,
-          cancelledThisMonth: list.filter((t) => t.status === 'cancelled' && t.updatedAt >= monthStart).length,
-          overdueOver3Days: list.filter((t) => !['closed', 'cancelled', 'draft'].includes(t.status) && t.createdAt < threeDaysAgo).length,
+          role: user.role,
+          employeeId: user.employeeId ?? null,
+          divisionId: dashboardDivisionId(user),
+          manager: dashboardManager(user),
+          generatedAt: new Date().toISOString(),
+          headcount: dashboardHeadcount(user),
+          pendingApprovals,
+          attendance: dashboardAttendance(user),
+          tickets,
+          notifications,
+          totalOpen: tickets.totalOpen,
+          submitted: tickets.submitted,
+          inReview: tickets.inReview,
+          priceProposed: tickets.priceProposed,
+          approved: tickets.approved,
+          quotationIssued: tickets.quotationIssued,
+          closedThisMonth: tickets.closedThisMonth,
+          cancelledThisMonth: tickets.cancelledThisMonth,
+          overdueOver3Days: tickets.overdueOver3Days,
         },
       });
     },
@@ -1019,4 +1457,271 @@ export const api = {
       return delay({ ok: true });
     },
   },
+
+  catalog: {
+    async search(q) {
+      requireSession();
+      const lower = (q ?? '').toLowerCase();
+      const results = lower
+        ? mockCatalog.filter((c) =>
+            c.brand.toLowerCase().includes(lower) ||
+            c.collection.toLowerCase().includes(lower) ||
+            c.color.toLowerCase().includes(lower) ||
+            (c.factory ?? '').toLowerCase().includes(lower))
+        : mockCatalog.slice(0, 30);
+      return delay({ items: results });
+    },
+  },
+
+  factoryConfigs: {
+    async list() {
+      requireSession();
+      return delay({ factories: mockFactoryConfigs });
+    },
+    async sendEmail(ticketId, payload) {
+      requireSession();
+      console.log(`[mock] Factory email sent | ticket=${ticketId} factory=${payload.factory} to=${payload.to}`);
+      return delay({ status: 'sent' });
+    },
+  },
+
+  fxRates: {
+    async list() {
+      requireSession();
+      return delay({ fxRates: structuredClone(mockFxRates) });
+    },
+    async upsert(currency, payload) {
+      hasRole('ceo', 'admin');
+      const existing = mockFxRates.find((r) => r.currency === currency.toUpperCase());
+      if (existing) {
+        existing.rateToThb = payload.rateToThb;
+        existing.effectiveDate = payload.effectiveDate ?? new Date().toISOString().slice(0, 10);
+        existing.updatedAt = new Date().toISOString();
+        return delay({ fxRate: structuredClone(existing) });
+      }
+      const newRate = {
+        id: mockFxRates.length + 1, currency: currency.toUpperCase(),
+        rateToThb: payload.rateToThb,
+        effectiveDate: payload.effectiveDate ?? new Date().toISOString().slice(0, 10),
+        updatedAt: new Date().toISOString(),
+      };
+      mockFxRates.push(newRate);
+      return delay({ fxRate: structuredClone(newRate) });
+    },
+  },
+
+  priceCalcConfigs: {
+    async list() {
+      requireSession();
+      return delay({ configs: structuredClone(mockPriceCalcConfigs.filter((c) => c.isCurrent)) });
+    },
+    async update(payload) {
+      hasRole('ceo', 'admin');
+      // mark old current as not current
+      mockPriceCalcConfigs
+        .filter((c) => c.country === payload.country && c.isCurrent)
+        .forEach((c) => { c.isCurrent = false; });
+      const maxVer = Math.max(0, ...mockPriceCalcConfigs.filter((c) => c.country === payload.country).map((c) => c.version));
+      const newCfg = {
+        configId: mockPriceConfigSeq++, version: maxVer + 1, country: payload.country,
+        freightPerSqm: Number(payload.freightPerSqm),
+        insurancePerSqm: Number(payload.insurancePerSqm),
+        inlandFactoryToPortPerSqm: Number(payload.inlandFactoryToPortPerSqm),
+        inlandPortToWarehousePerSqm: Number(payload.inlandPortToWarehousePerSqm),
+        importDutyPct: Number(payload.importDutyPct),
+        marginPct: Number(payload.marginPct),
+        isCurrent: true,
+        effectiveFrom: payload.effectiveFrom ?? new Date().toISOString().slice(0, 10),
+        updatedAt: new Date().toISOString(),
+      };
+      mockPriceCalcConfigs.push(newCfg);
+      return delay({ config: structuredClone(newCfg) });
+    },
+  },
+
+  attachments: {
+    async list(ticketId) {
+      requireSession();
+      return delay({ attachments: structuredClone(mockAttachments.filter((a) => a.ticketId === Number(ticketId))) });
+    },
+    async upload(ticketId, file, attachType) {
+      const user = requireSession();
+      const attachment = {
+        id: mockAttachSeq++, ticketId: Number(ticketId), quotationId: null,
+        fileName: file?.name ?? 'file.pdf',
+        attachType: (attachType ?? 'OTHER').toUpperCase(),
+        mimeType: file?.type ?? 'application/pdf',
+        fileSize: file?.size ?? 0,
+        uploadedBy: user.id,
+        uploadedAt: new Date().toISOString(),
+      };
+      mockAttachments.push(attachment);
+      return delay({ attachment: structuredClone(attachment) });
+    },
+    fileUrl: (id) => `#mock-file-${id}`,
+    async delete(id) {
+      requireSession();
+      const idx = mockAttachments.findIndex((a) => a.id === Number(id));
+      if (idx >= 0) mockAttachments.splice(idx, 1);
+      return delay({ ok: true });
+    },
+  },
+
+  customers: {
+    async create(payload) {
+      requireSession();
+      const customer = { id: mockCustomerSeq++, name: payload.name, taxId: payload.taxId || null, address: payload.address || null, branch: payload.branch || 'สำนักงานใหญ่', phone: payload.phone || null };
+      mockCustomers.push(customer);
+      return delay({ customer });
+    },
+    async search(q) {
+      requireSession();
+      const lower = (q ?? '').toLowerCase();
+      const results = lower
+        ? mockCustomers.filter((c) => c.name.toLowerCase().includes(lower) || (c.taxId ?? '').includes(lower))
+        : mockCustomers;
+      return delay({ customers: results });
+    },
+    async contacts(customerId) {
+      requireSession();
+      return delay({ contacts: mockContacts.filter((c) => c.customerId === Number(customerId)) });
+    },
+    async createContact(customerId, payload) {
+      requireSession();
+      const contact = { id: mockContactSeq++, customerId: Number(customerId), ...payload };
+      mockContacts.push(contact);
+      return delay({ contact });
+    },
+    async projects(customerId) {
+      requireSession();
+      return delay({ projects: mockProjects.filter((p) => p.customerId === Number(customerId)) });
+    },
+    async createProject(customerId, payload) {
+      requireSession();
+      const project = { id: mockProjectSeq++, customerId: Number(customerId), name: payload.name };
+      mockProjects.push(project);
+      return delay({ project });
+    },
+  },
+
+  depositNotices: {
+    async noteTemplates() {
+      requireSession();
+      return delay({ templates: mockNoteTemplates });
+    },
+
+    async createDraft(ticketId, payload) {
+      requireSession();
+      const ticket = findTicketRaw(Number(ticketId));
+      if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('Ticket must be approved', 409);
+
+      // Auto-build items from approved ticket items
+      const items = payload.items?.length ? payload.items : ticket.items
+        .filter((it) => it.approvedPrice != null)
+        .map((it, idx) => {
+          const desc = [it.brand, it.model, it.color, it.texture, it.size].filter(Boolean).join(' ');
+          return { seq: idx + 1, description: desc, qty: Number(it.qty), unit: 'แผ่น', unitPrice: Number(it.approvedPrice), discountLabel: null, netUnitPrice: Number(it.approvedPrice) };
+        });
+
+      const notes = payload.notes ?? mockNoteTemplates.filter((t) => t.defaultSelected).map((t) => t.text);
+      const nextVer = mockDepositNotices.filter((d) => d.ticketId === Number(ticketId)).length + 1;
+
+      const doc = buildMockDoc({
+        id: mockDocSeq++, ticketId: Number(ticketId), docType: 'DEPOSIT_NOTICE',
+        version: nextVer, docNumber: null, issueDate: null, status: 'DRAFT',
+        customerName: payload.customerName ?? ticket.customerName ?? '',
+        customerTaxId: payload.customerTaxId ?? '', customerAddress: payload.customerAddress ?? '',
+        projectName: payload.projectName ?? '', reference: payload.reference ?? '',
+        depositPercent: payload.depositPercent ?? 0.5, vatPercent: 0.07,
+        notes, items, issuedByName: null, preparerName: 'จินตนา หาญมนตรี',
+        hasPdf: false, hasXlsx: false,
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      });
+      mockDepositNotices.push(doc);
+      return delay({ depositNotice: structuredClone(doc) });
+    },
+
+    async listByTicket(ticketId) {
+      requireSession();
+      return delay({ depositNotices: structuredClone(mockDepositNotices.filter((d) => d.ticketId === Number(ticketId))) });
+    },
+
+    async get(docId) {
+      requireSession();
+      const doc = mockDepositNotices.find((d) => d.id === Number(docId));
+      if (!doc) fail('Deposit notice not found', 404);
+      return delay({ depositNotice: structuredClone(doc) });
+    },
+
+    async update(docId, payload) {
+      requireSession();
+      const doc = mockDepositNotices.find((d) => d.id === Number(docId));
+      if (!doc) fail('Deposit notice not found', 404);
+      if (doc.status !== 'DRAFT') fail('Deposit notice is not draft', 409);
+      Object.assign(doc, {
+        customerName:    payload.customerName    ?? doc.customerName,
+        customerTaxId:   payload.customerTaxId   ?? doc.customerTaxId,
+        customerAddress: payload.customerAddress ?? doc.customerAddress,
+        projectName:     payload.projectName     ?? doc.projectName,
+        reference:       payload.reference       ?? doc.reference,
+        depositPercent:  payload.depositPercent  ?? doc.depositPercent,
+        notes:           payload.notes           ?? doc.notes,
+        items:           payload.items?.length ? payload.items : doc.items,
+        updatedAt:       new Date().toISOString(),
+      });
+      const updated = buildMockDoc(doc);
+      Object.assign(doc, updated);
+      return delay({ depositNotice: structuredClone(doc) });
+    },
+
+    async preview(docId) {
+      requireSession();
+      const doc = mockDepositNotices.find((d) => d.id === Number(docId));
+      if (!doc) fail('Deposit notice not found', 404);
+      // Return HTML string directly (not wrapped in JSON)
+      return mockPreviewHtml(buildMockDoc(doc));
+    },
+
+    async issue(docId) {
+      const user = requireSession();
+      const doc = mockDepositNotices.find((d) => d.id === Number(docId));
+      if (!doc) fail('Deposit notice not found', 404);
+      if (doc.status !== 'DRAFT') fail('Not a draft', 409);
+      const ticket = findTicketRaw(doc.ticketId);
+
+      // Supersede previous issued docs
+      mockDepositNotices.forEach((d) => { if (d.ticketId === doc.ticketId && d.id !== doc.id && d.status === 'ISSUED') d.status = 'SUPERSEDED'; });
+
+      const thaiYear = new Date().getFullYear() + 543;
+      doc.docNumber = `GLRD${String(thaiYear).slice(-2)}${String(mockDocNumberSeq++).padStart(3,'0')}`;
+      doc.issueDate = new Date().toISOString().slice(0, 10);
+      doc.status = 'ISSUED';
+      doc.issuedByName = user.name;
+      doc.updatedAt = new Date().toISOString();
+
+      // Transition ticket to document_issued
+      ticket.status = 'document_issued';
+      ticket.updatedAt = doc.updatedAt;
+      pushEvent(ticket, user, 'DOCUMENT_ISSUED', 'approved', 'document_issued', `เอกสาร ${doc.docNumber} ออกแล้ว`);
+
+      return delay({ depositNotice: structuredClone(doc) });
+    },
+
+    async downloadXlsx(docId) {
+      requireSession();
+      const doc = mockDepositNotices.find((d) => d.id === Number(docId));
+      if (!doc) fail('Deposit notice not found', 404);
+      const html = mockPreviewHtml(buildMockDoc(doc));
+      return new Blob([html], { type: 'text/html' });
+    },
+
+    async downloadPdf(docId) {
+      requireSession();
+      const doc = mockDepositNotices.find((d) => d.id === Number(docId));
+      if (!doc) fail('Deposit notice not found', 404);
+      const html = mockPreviewHtml(buildMockDoc(doc));
+      return new Blob([html], { type: 'application/pdf' });
+    },
+  },
+
 };

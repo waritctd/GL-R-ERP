@@ -109,6 +109,73 @@ python3 agents/attendance/import_dat.py /Users/ploy_warit/Downloads/1_attlog.dat
 
 The importer logs in through `/api/auth/login`, sends the `.dat` content to `POST /api/attendance/imports/dat`, and prints the import counts returned by the backend. Re-running the same file returns `duplicate_file` rather than importing it again.
 
+## Historical backfill from the device
+
+To load the punches already stored on the device (not just the last few days the
+live agent covers), export the device transaction table to `.dat` and bulk-import
+it. This is much faster than posting one punch at a time, and the backend dedups
+against anything already captured live. Pause the service first (one Pull-SDK
+session at a time):
+
+```powershell
+cd C:\glr\agents\attendance
+.\pause-for-zkaccess.ps1
+py -3-32 export_transactions_dat.py --days 365      # writes showroom_backfill_00N.dat
+# import each file it lists (HR login required):
+$env:GLR_IMPORT_EMAIL = "hr-user@glr.co.th"; $env:GLR_IMPORT_PASSWORD = "..."
+py -3-32 import_dat.py "showroom_backfill_001.dat" --api-base-url https://gl-r-erp.onrender.com
+.\resume-agent.ps1
+```
+
+The exporter keeps every row that carries an identifier (a PIN, or a card number
+for card reads) within `--days`; rows with neither (door-open / system events)
+can't be stored and are skipped.
+
+### Resolving punches to employees
+
+The backend matches the device identifier against **either** `hr.employee.employee_code`
+**or** `hr.employee.badge_card_no`, and the attendance history view resolves rows by
+badge on the fly -- so once the right column holds the identifier, historical punches
+map without a re-import (no manual re-link step needed).
+
+- **PIN / fingerprint users** log their User ID (= `employee_code`), so they map with
+  no extra step.
+- **Card taps** log the raw *card serial* (e.g. `14187218`), which lives only in the
+  device's user table. Record each employee's serial in `badge_card_no` by syncing the
+  device user table (Pin -> CardNo) to the backend:
+
+```powershell
+cd C:\glr\agents\attendance
+.\pause-for-zkaccess.ps1
+$env:GLR_IMPORT_EMAIL = "hr-user@glr.co.th"; $env:GLR_IMPORT_PASSWORD = "..."
+py -3-32 sync_card_mapping.py --api-base-url https://gl-r-erp.onrender.com --dry-run   # review
+py -3-32 sync_card_mapping.py --api-base-url https://gl-r-erp.onrender.com             # apply
+.\resume-agent.ps1
+```
+
+The response reports `updated` (badge_card_no set), `skipped` (users with no card),
+and `unmatched` (a device User ID with no matching `employee_code`). Card taps from
+**unregistered** cards -- serials not enrolled to any device user -- have no owner and
+can't be mapped; they stay unresolved in the history.
+
+## Using ZKAccess while the agent runs (maintenance)
+
+The SC700 tolerates only one Pull-SDK session, so the agent service and ZKAccess
+cannot use the device at the same time. To do maintenance in ZKAccess (enrolling
+users, pushing config, etc.), pause the agent first and resume it after:
+
+```powershell
+.\pause-for-zkaccess.ps1     # stops the service, frees the device
+# ...open ZKAccess, do the work, then close it from its own menu...
+.\resume-agent.ps1           # restarts the service; catch-up backfills the gap
+```
+
+This loses no data: punches accumulate on the device while the agent is paused,
+and on resume the agent's catch-up reads the device transaction table and
+delivers anything it missed (the backend dedups). Two rules while in ZKAccess:
+do **not** tick "Clear data in device", and always close ZKAccess from its own
+menu (a force-kill leaves a stuck session that needs a device reboot to clear).
+
 ## Notes
 
 - Keep the SC700, T360 server, and backend clock synced to Bangkok time.

@@ -42,8 +42,8 @@ public class NotificationRepository {
             });
     }
 
-    public void markRead(long notificationId, long employeeId) {
-        jdbc.update("""
+    public int markRead(long notificationId, long employeeId) {
+        return jdbc.update("""
             UPDATE sales.notification SET is_read = TRUE
              WHERE notification_id = :id AND employee_id = :employeeId
             """, Map.of("id", notificationId, "employeeId", employeeId));

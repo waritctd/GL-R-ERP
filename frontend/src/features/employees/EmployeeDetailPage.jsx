@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { hasPermission } from '../../app/permissions.js';
 import { Avatar } from '../../components/common/Avatar.jsx';
+import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
+import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -33,6 +35,7 @@ export function EmployeeDetailPage({ user, employee, onBack, onUpdateEmployee })
 
   return (
     <div className="page-stack">
+      <Breadcrumbs items={[{ label: 'พนักงานทั้งหมด', onClick: onBack }, { label: employee.nameTh }]} />
       <button type="button" className="back-button" onClick={onBack}>
         <Icon name="chevronLeft" />
         กลับไปรายชื่อพนักงาน
@@ -80,35 +83,31 @@ export function EmployeeDetailPage({ user, employee, onBack, onUpdateEmployee })
 function PersonalTab({ employee }) {
   return (
     <div className="info-grid two">
-      <section className="panel">
-        <h2>ข้อมูลส่วนบุคคล</h2>
+      <CollapsibleSection title="ข้อมูลส่วนบุคคล">
         <dl className="field-list">
           <div><dt>คำนำหน้า · เพศ</dt><dd>{employee.titleTh} · {employee.genderTh}</dd></div>
           <div><dt>วันเกิด</dt><dd>{formatThaiDate(employee.birthDate)} ({employee.age} ปี)</dd></div>
           <div><dt>สัญชาติ</dt><dd>{employee.nationality}</dd></div>
           <div><dt>สถานภาพ</dt><dd>{employee.maritalStatus}</dd></div>
         </dl>
-      </section>
-      <section className="panel">
-        <h2>ช่องทางติดต่อ</h2>
+      </CollapsibleSection>
+      <CollapsibleSection title="ช่องทางติดต่อ">
         <dl className="field-list">
           <div><dt>อีเมล</dt><dd>{employee.email}</dd></div>
           <div><dt>เบอร์โทรศัพท์</dt><dd>{employee.phone}</dd></div>
           <div><dt>บัตรพนักงาน</dt><dd><code>{employee.badge}</code></dd></div>
         </dl>
-      </section>
-      <section className="panel">
-        <h2>ที่อยู่ปัจจุบัน</h2>
+      </CollapsibleSection>
+      <CollapsibleSection title="ที่อยู่ปัจจุบัน" defaultOpen={false}>
         <p className="address-line">{employee.currentAddress.line1}<br />{employee.currentAddress.district} {employee.currentAddress.province} {employee.currentAddress.postalCode}</p>
-      </section>
-      <section className="panel">
-        <h2>ผู้ติดต่อฉุกเฉิน</h2>
+      </CollapsibleSection>
+      <CollapsibleSection title="ผู้ติดต่อฉุกเฉิน" defaultOpen={false}>
         <dl className="field-list">
           <div><dt>ชื่อ</dt><dd>{employee.emergencyContact.name}</dd></div>
           <div><dt>ความสัมพันธ์</dt><dd>{employee.emergencyContact.relationship}</dd></div>
           <div><dt>เบอร์โทร</dt><dd>{employee.emergencyContact.phone}</dd></div>
         </dl>
-      </section>
+      </CollapsibleSection>
     </div>
   );
 }
@@ -116,8 +115,7 @@ function PersonalTab({ employee }) {
 function EmploymentTab({ employee, canSeeSalary }) {
   return (
     <div className="info-grid two">
-      <section className="panel">
-        <h2>การมอบหมายงานปัจจุบัน</h2>
+      <CollapsibleSection title="การมอบหมายงานปัจจุบัน">
         <dl className="field-list">
           <div><dt>ฝ่าย</dt><dd>{employee.divisionTh}</dd></div>
           <div><dt>แผนก</dt><dd>{employee.departmentTh}</dd></div>
@@ -128,18 +126,19 @@ function EmploymentTab({ employee, canSeeSalary }) {
           <div><dt>วันที่เริ่มงาน</dt><dd>{formatThaiDate(employee.hireDate)}</dd></div>
           <div><dt>วันที่บรรจุ</dt><dd>{formatThaiDate(employee.confirmationDate)}</dd></div>
         </dl>
-      </section>
-      <section className="panel highlight-panel">
-        <h2>ค่าตอบแทน</h2>
-        {canSeeSalary ? (
-          <>
-            <div className="salary-value">{formatMoney(employee.salary)}</div>
-            <span>ต่อเดือน · {employee.payType}</span>
-          </>
-        ) : (
-          <p>แสดงเฉพาะบทบาท HR และ ADMIN</p>
-        )}
-      </section>
+      </CollapsibleSection>
+      <div className="highlight-panel">
+        <CollapsibleSection title="ค่าตอบแทน">
+          {canSeeSalary ? (
+            <>
+              <div className="salary-value">{formatMoney(employee.salary)}</div>
+              <span>ต่อเดือน · {employee.payType}</span>
+            </>
+          ) : (
+            <p>แสดงเฉพาะบทบาท HR และ ADMIN</p>
+          )}
+        </CollapsibleSection>
+      </div>
     </div>
   );
 }
@@ -147,8 +146,7 @@ function EmploymentTab({ employee, canSeeSalary }) {
 function HistoryTab({ employee, canSeeSalary }) {
   return (
     <div className="info-grid two">
-      <section className="panel">
-        <h2>ประวัติการมอบหมายงาน</h2>
+      <CollapsibleSection title="ประวัติการมอบหมายงาน">
         <div className="timeline-list">
           {employee.assignments.map((assignment) => (
             <div key={`${assignment.from}-${assignment.title}`} className={assignment.current ? 'current' : ''}>
@@ -158,9 +156,8 @@ function HistoryTab({ employee, canSeeSalary }) {
             </div>
           ))}
         </div>
-      </section>
-      <section className="panel">
-        <h2>ประวัติเงินเดือน</h2>
+      </CollapsibleSection>
+      <CollapsibleSection title="ประวัติเงินเดือน" defaultOpen={false}>
         {canSeeSalary ? (
           <div className="salary-history">
             {employee.salaryHistory.map((item) => (
@@ -174,25 +171,27 @@ function HistoryTab({ employee, canSeeSalary }) {
             ))}
           </div>
         ) : <p className="muted">แสดงเฉพาะบทบาท HR และ ADMIN</p>}
-      </section>
+      </CollapsibleSection>
     </div>
   );
 }
 
 function SensitiveTab({ employee }) {
   return (
-    <section className="panel sensitive-panel">
-      <div className="panel-header">
-        <h2>ข้อมูลอ่อนไหว</h2>
-        <StatusBadge tone="teal">PDPA</StatusBadge>
-      </div>
-      <dl className="field-list three">
-        <div><dt>เลขบัตรประชาชน</dt><dd><code>{employee.sensitive.nationalId}</code></dd></div>
-        <div><dt>เลขประจำตัวผู้เสียภาษี</dt><dd><code>{employee.sensitive.taxId}</code></dd></div>
-        <div><dt>เลขประกันสังคม</dt><dd><code>{employee.sensitive.socialSecurityNo}</code></dd></div>
-        <div><dt>โรงพยาบาลประกันสังคม</dt><dd>{employee.sensitive.socialSecurityHospital}</dd></div>
-        <div><dt>กองทุนสำรองเลี้ยงชีพ</dt><dd><code>{employee.sensitive.providentFundNo}</code></dd></div>
-      </dl>
-    </section>
+    <div className="sensitive-panel">
+      <CollapsibleSection
+        title="ข้อมูลอ่อนไหว"
+        defaultOpen={false}
+        headerRight={<StatusBadge tone="teal">PDPA</StatusBadge>}
+      >
+        <dl className="field-list three">
+          <div><dt>เลขบัตรประชาชน</dt><dd><code>{employee.sensitive.nationalId}</code></dd></div>
+          <div><dt>เลขประจำตัวผู้เสียภาษี</dt><dd><code>{employee.sensitive.taxId}</code></dd></div>
+          <div><dt>เลขประกันสังคม</dt><dd><code>{employee.sensitive.socialSecurityNo}</code></dd></div>
+          <div><dt>โรงพยาบาลประกันสังคม</dt><dd>{employee.sensitive.socialSecurityHospital}</dd></div>
+          <div><dt>กองทุนสำรองเลี้ยงชีพ</dt><dd><code>{employee.sensitive.providentFundNo}</code></dd></div>
+        </dl>
+      </CollapsibleSection>
+    </div>
   );
 }

@@ -19,7 +19,8 @@ import { TicketListPage } from './features/tickets/TicketListPage.jsx';
 import { TicketDetailPage } from './features/tickets/TicketDetailPage.jsx';
 import { CommissionPage } from './features/commissions/CommissionPage.jsx';
 import { PayrollPage } from './features/payroll/PayrollPage.jsx';
-import { DocumentPage } from './features/documents/DocumentPage.jsx';
+import { DepositNoticePage } from './features/deposits/DepositNoticePage.jsx';
+import { CeoSettingsPage } from './features/ceoSettings/CeoSettingsPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
 import { hasPermission } from './app/permissions.js';
@@ -30,12 +31,13 @@ export function App() {
   const [loginError, setLoginError] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState(null);
-  const [documentTicketId, setDocumentTicketId] = useState(null);
+  const [depositTicketId, setDepositTicketId] = useState(null);
   const { toast, showToast, dismissToast } = useToast();
   const {
     currentEmployee,
     employees,
     profileRequests,
+    dashboardSummary,
     route,
     selectedEmployee,
     loadData,
@@ -54,6 +56,7 @@ export function App() {
   );
   const isEmployeeExperience = hasPermission(user?.role, 'canUseEmployeeExperience');
   const pendingCount = (isEmployeeExperience ? ownRequests : profileRequests).filter((request) => request.status === 'pending').length;
+  const dashboardRequests = isEmployeeExperience && !user?.manager ? ownRequests : profileRequests;
 
   useEffect(() => {
     let alive = true;
@@ -106,7 +109,7 @@ export function App() {
 
   function handleRoute(nextRoute) {
     if (nextRoute !== 'ticket-detail') setSelectedTicket(null);
-    if (nextRoute !== 'document-create') setDocumentTicketId(null);
+    if (nextRoute !== 'deposit-create') setDepositTicketId(null);
     routeTo(nextRoute);
   }
 
@@ -115,9 +118,9 @@ export function App() {
     routeTo('ticket-detail');
   }
 
-  function openDocument(ticketId) {
-    setDocumentTicketId(ticketId);
-    routeTo('document-create');
+  function openDepositNotice(ticketId) {
+    setDepositTicketId(ticketId);
+    routeTo('deposit-create');
   }
 
   if (!user) {
@@ -144,9 +147,9 @@ export function App() {
   }
 
   const screen = route === 'dashboard'
-    ? <EmployeeDashboard employee={currentEmployee} profileRequests={ownRequests} onRoute={handleRoute} />
+    ? <EmployeeDashboard user={user} employee={currentEmployee} profileRequests={dashboardRequests} dashboardSummary={dashboardSummary} onRoute={handleRoute} />
     : route === 'hr-dashboard'
-      ? <HrDashboard employee={currentEmployee} employees={employees} profileRequests={profileRequests} onRoute={handleRoute} />
+      ? <HrDashboard employee={currentEmployee} employees={employees} profileRequests={profileRequests} dashboardSummary={dashboardSummary} onRoute={handleRoute} />
     : route === 'ticket-dashboard'
       ? <TicketDashboard user={user} employee={currentEmployee} onOpenTicket={openTicket} showToast={showToast} />
     : route === 'employees'
@@ -170,10 +173,12 @@ export function App() {
               : route === 'tickets'
                 ? <TicketListPage user={user} onOpenTicket={openTicket} showToast={showToast} />
                 : route === 'ticket-detail'
-                  ? <TicketDetailPage user={user} ticketId={selectedTicket} onBack={() => handleRoute('tickets')} onOpenDocument={openDocument} showToast={showToast} />
-                : route === 'document-create'
-                  ? <DocumentPage user={user} ticketId={documentTicketId} onBack={() => { openTicket(documentTicketId); }} showToast={showToast} />
-                  : <ProfilePage user={user} employee={currentEmployee} profileRequests={ownRequests} onCreateRequest={createProfileRequest} onRoute={handleRoute} />;
+                  ? <TicketDetailPage user={user} ticketId={selectedTicket} onBack={() => handleRoute('tickets')} onOpenDocument={openDepositNotice} showToast={showToast} />
+                : route === 'deposit-create'
+                  ? <DepositNoticePage user={user} ticketId={depositTicketId} onBack={() => { openTicket(depositTicketId); }} onNavigateTickets={() => handleRoute('tickets')} showToast={showToast} />
+                  : route === 'ceo-settings'
+                    ? <CeoSettingsPage showToast={showToast} />
+                    : <ProfilePage user={user} employee={currentEmployee} profileRequests={ownRequests} onCreateRequest={createProfileRequest} onRoute={handleRoute} />;
 
   return (
     <>

@@ -1,5 +1,6 @@
 package th.co.glr.hr.ticket;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Set;
@@ -10,20 +11,35 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.Page;
 import th.co.glr.hr.common.PageRequest;
+import th.co.glr.hr.customer.CustomerDto;
+import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.pricing.PriceCalcService;
 
 @Service
 public class TicketService {
-    private static final Set<String> SALES_ROLES  = Set.of("sales", "admin");
-    private static final Set<String> IMPORT_ROLES = Set.of("import", "admin");
-    private static final Set<String> CEO_ROLES    = Set.of("ceo", "admin");
+    private static final Set<String> SALES_ROLES  = Set.of("sales");
+    private static final Set<String> IMPORT_ROLES = Set.of("import");
+    private static final Set<String> CEO_ROLES    = Set.of("ceo");
+    private static final Set<String> QUOTATION_ALLOWED_STATUSES =
+        Set.of(TicketStatus.APPROVED, TicketStatus.QUOTATION_ISSUED);
 
     private final TicketRepository tickets;
     private final NotificationRepository notifications;
+    private final PriceCalcService priceCalcService;
+    private final ObjectMapper objectMapper;
+    private final CustomerRepository customers;
+    private final QuotationRenderer quotationRenderer;
 
-    public TicketService(TicketRepository tickets, NotificationRepository notifications) {
-        this.tickets = tickets;
-        this.notifications = notifications;
+    public TicketService(TicketRepository tickets, NotificationRepository notifications,
+                         PriceCalcService priceCalcService, ObjectMapper objectMapper,
+                         CustomerRepository customers, QuotationRenderer quotationRenderer) {
+        this.tickets           = tickets;
+        this.notifications     = notifications;
+        this.priceCalcService  = priceCalcService;
+        this.objectMapper      = objectMapper;
+        this.customers         = customers;
+        this.quotationRenderer = quotationRenderer;
     }
 
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
@@ -65,7 +81,7 @@ public class TicketService {
     public TicketDto submit(long ticketId, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.DRAFT);
-        if (s.createdById() != actor.id() && !isAdmin(actor)) {
+        if (s.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Only the ticket owner can submit");
         }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -91,11 +107,27 @@ public class TicketService {
         requireRole(actor, IMPORT_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.IN_REVIEW);
         tickets.replaceItems(ticketId, request.items());
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.PRICE_PROPOSED, TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED, request.note());
+        String snapshot = buildItemSnapshot(request.items());
+        tickets.addEventWithSnapshot(ticketId, actor.id(), actor.name(),
+            TicketEventKind.PRICE_PROPOSED, TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED,
+            request.note(), snapshot);
         notifications.notifyByRole("ceo", ticketId, "PRICE_PROPOSED",
             "Ticket " + s.code() + " มีราคาเสนอรอการอนุมัติ");
         return requireTicket(ticketId);
+    }
+
+    private String buildItemSnapshot(List<TicketItemRequest> items) {
+        try {
+            record ItemSnap(String brand, String model, BigDecimal qty,
+                            BigDecimal rawPrice, String rawCurrency, String rawUnit) {}
+            var snaps = items.stream()
+                .map(it -> new ItemSnap(it.brand(), it.model(), it.qty(),
+                                        it.rawPrice(), it.rawCurrency(), it.rawUnit()))
+                .toList();
+            return objectMapper.writeValueAsString(snaps);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     @Transactional
@@ -125,8 +157,13 @@ public class TicketService {
     @Transactional
     public TicketDto generateQuotation(long ticketId, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
-        TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.APPROVED);
-        if (s.createdById() != actor.id() && !isAdmin(actor)) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        String fromStatus = s.status();
+        if (!QUOTATION_ALLOWED_STATUSES.contains(fromStatus)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Expected status 'approved' or 'quotation_issued' but ticket is '" + fromStatus + "'");
+        }
+        if (s.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Only the ticket owner can generate a quotation");
         }
         TicketDto full = requireTicket(ticketId);
@@ -139,14 +176,43 @@ public class TicketService {
         String number = tickets.nextQuotationCode();
         tickets.createQuotation(ticketId, number, actor.id(), total);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.QUOTATION_ISSUED, TicketStatus.APPROVED, TicketStatus.QUOTATION_ISSUED, null);
+            TicketEventKind.QUOTATION_ISSUED, fromStatus, TicketStatus.QUOTATION_ISSUED, null);
         return requireTicket(ticketId);
+    }
+
+    // Renders the quotation straight from the current ticket + quotation record — there is no
+    // separate draft/edit phase, so "regenerating" just means re-rendering from live data.
+    public byte[] getQuotationXlsx(long ticketId, long quotationId, UserPrincipal actor) {
+        var ctx = loadQuotationContext(ticketId, quotationId, actor);
+        return quotationRenderer.toXlsx(ctx.ticket(), ctx.quotation(), ctx.customer());
+    }
+
+    public byte[] getQuotationPdf(long ticketId, long quotationId, UserPrincipal actor) {
+        var ctx = loadQuotationContext(ticketId, quotationId, actor);
+        return quotationRenderer.toPdf(ctx.ticket(), ctx.quotation(), ctx.customer());
+    }
+
+    private record QuotationRenderContext(TicketDto ticket, QuotationDto quotation, CustomerDto customer) {}
+
+    private QuotationRenderContext loadQuotationContext(long ticketId, long quotationId, UserPrincipal actor) {
+        TicketDto ticket = requireTicket(ticketId);
+        if ("sales".equals(actor.role()) && ticket.summary().createdById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        QuotationDto quotation = ticket.quotations().stream()
+            .filter(q -> q.id() == quotationId)
+            .findFirst()
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Quotation not found"));
+        CustomerDto customer = ticket.summary().customerId() != null
+            ? customers.findById(ticket.summary().customerId()).orElse(null)
+            : null;
+        return new QuotationRenderContext(ticket, quotation, customer);
     }
 
     @Transactional
     public TicketDto close(long ticketId, UserPrincipal actor) {
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.DOCUMENT_ISSUED);
-        if (s.createdById() != actor.id() && !isAdmin(actor)) {
+        if (s.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -161,7 +227,7 @@ public class TicketService {
         if (TicketStatus.CLOSED.equals(currentStatus) || TicketStatus.CANCELLED.equals(currentStatus)) {
             throw new ApiException(HttpStatus.CONFLICT, "Cannot cancel a closed or already cancelled ticket");
         }
-        if (ticket.summary().createdById() != actor.id() && !isAdmin(actor)) {
+        if (ticket.summary().createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -201,6 +267,17 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
+    @Transactional
+    public TicketDto calculatePrices(long ticketId, UserPrincipal actor) {
+        requireRole(actor, CEO_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (!TicketStatus.PRICE_PROPOSED.equals(s.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "คำนวณราคาได้เฉพาะ ticket ที่มีสถานะ price_proposed");
+        }
+        return priceCalcService.calculateForTicket(ticketId);
+    }
+
     // --- helpers ---
 
     private TicketDto requireTicket(long id) {
@@ -221,9 +298,5 @@ public class TicketService {
         if (!allowed.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
-    }
-
-    private boolean isAdmin(UserPrincipal actor) {
-        return "admin".equals(actor.role());
     }
 }

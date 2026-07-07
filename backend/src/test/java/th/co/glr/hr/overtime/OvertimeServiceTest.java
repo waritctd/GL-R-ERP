@@ -194,6 +194,54 @@ class OvertimeServiceTest {
             .isEqualTo(HttpStatus.FORBIDDEN);
     }
 
+    @Test
+    void ownerCanCancelOwnSubmittedOvertime() {
+        OvertimeRequestDto submitted = requestDto(77L, 10L, "SUBMITTED");
+        OvertimeRequestDto cancelled = requestDto(77L, 10L, "CANCELLED");
+        when(overtimeRepository.findById(77L))
+            .thenReturn(Optional.of(submitted))
+            .thenReturn(Optional.of(cancelled));
+        when(overtimeRepository.findEmployeeAccess(10L))
+            .thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
+        when(overtimeRepository.cancel(77L, null, "owner cancel")).thenReturn(1);
+
+        OvertimeRequestDto result = overtimeService.cancel(77L, new ReviewOvertimeRequest(" owner cancel "), user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("CANCELLED");
+        verify(overtimeRepository).cancel(77L, null, "owner cancel");
+    }
+
+    @Test
+    void cancelInvalidStateReturnsConflict() {
+        when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "REJECTED")));
+
+        assertThatThrownBy(() -> overtimeService.cancel(77L, new ReviewOvertimeRequest(null), user("employee", 10L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    @Test
+    void unauthorizedCancelReturnsForbidden() {
+        when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "SUBMITTED")));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> overtimeService.cancel(77L, new ReviewOvertimeRequest(null), user("employee", 11L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void cancelMissingRequestReturnsNotFound() {
+        when(overtimeRepository.findById(404L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> overtimeService.cancel(404L, new ReviewOvertimeRequest(null), user("employee", 10L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
     private SubmitOvertimeRequest validSubmit(Long employeeId) {
         return new SubmitOvertimeRequest(
             employeeId,
