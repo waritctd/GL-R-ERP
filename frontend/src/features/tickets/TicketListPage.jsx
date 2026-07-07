@@ -24,6 +24,12 @@ const TONE_ACTIVE = {
   danger:  { bg: '#fee2e2', color: '#b91c1c', border: '#ef4444' },
 };
 
+const STATUS_ORDER = [
+  'draft', 'submitted', 'in_review', 'price_proposed',
+  'approved', 'rejected', 'quotation_issued', 'document_issued',
+  'closed', 'cancelled',
+];
+
 const STATUS_TABS = [
   { value: '', label: 'ทั้งหมด',              tone: 'primary' },
   { value: 'submitted',        label: 'รอรับเรื่อง',          tone: 'warning' },
@@ -156,6 +162,8 @@ const TICKET_COLUMNS = [
   {
     key: 'status',
     header: 'สถานะ',
+    sortable: true,
+    sortAccessor: (ticket) => STATUS_ORDER.indexOf(ticket.status),
     render: (ticket) => {
       const status = ticketStatusLabel(ticket.status);
       return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
