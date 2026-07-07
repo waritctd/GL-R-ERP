@@ -2,7 +2,9 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Avatar } from '../../components/common/Avatar.jsx';
 import { Button } from '../../components/common/Button.jsx';
+import { DetailHero, InfoGrid } from '../../components/common/FieldList.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel, PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
@@ -30,21 +32,20 @@ export function ProfilePage({ user, employee, profileRequests, onCreateRequest }
   }
 
   return (
-    <div className="page-stack">
+    <PageStack>
       <PageHeader title="ข้อมูลของฉัน" subtitle={`${employee?.positionTh || ''} · ${employee?.divisionTh || ''}`} />
 
-      <section className="detail-hero compact">
+      <DetailHero compact>
         <Avatar employee={employee} size="lg" />
         <div>
           <h1>{employee?.nameTh}</h1>
           <p>{employee?.nameEn} · <code>{employee?.code}</code></p>
         </div>
         <StatusBadge tone={employee?.statusTone}>{employee?.statusTh}</StatusBadge>
-      </section>
+      </DetailHero>
 
-      <div className="info-grid two">
-        <section className="panel">
-          <h2>ข้อมูลติดต่อ</h2>
+      <InfoGrid two>
+        <Panel title="ข้อมูลติดต่อ">
           <div className="editable-list">
             {requestableFields.map((field) => (
               <div key={field.fieldKey}>
@@ -66,13 +67,12 @@ export function ProfilePage({ user, employee, profileRequests, onCreateRequest }
               </div>
             ))}
           </div>
-        </section>
+        </Panel>
 
-        <section className="panel">
-          <div className="panel-header">
-            <h2>คำขอแก้ไขของฉัน</h2>
-            {isEmployee ? <Button type="button" variant="text" onClick={() => navigate('/my-requests')}>ดูทั้งหมด</Button> : null}
-          </div>
+        <Panel
+          title="คำขอแก้ไขของฉัน"
+          actions={isEmployee ? <Button type="button" variant="text" onClick={() => navigate('/my-requests')}>ดูทั้งหมด</Button> : null}
+        >
           <div className="request-feed">
             {profileRequests.slice(0, 5).map((request) => {
               const status = requestStatus(request.status);
@@ -87,10 +87,10 @@ export function ProfilePage({ user, employee, profileRequests, onCreateRequest }
               );
             })}
           </div>
-        </section>
-      </div>
+        </Panel>
+      </InfoGrid>
 
       {requestField ? <ChangeRequestModal requestField={requestField} onClose={() => setRequestField(null)} onSubmit={submitRequest} /> : null}
-    </div>
+    </PageStack>
   );
 }
