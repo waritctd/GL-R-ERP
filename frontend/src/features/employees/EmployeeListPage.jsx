@@ -175,7 +175,7 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
         columns={columns}
         rows={filteredEmployees}
         getRowKey={(employee) => employee.id}
-        gridClassName="employee-table"
+        gridClassName="grid-cols-[minmax(0,2.2fr)_minmax(0,0.9fr)_minmax(0,1.7fr)_minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,0.9fr)] max-[1040px]:min-w-[900px] reflow-cards"
         searchable={false}
         onRowClick={(employee) => navigate(`/employees/${employee.id}`)}
         pageSize={12}

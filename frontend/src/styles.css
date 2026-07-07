@@ -1842,7 +1842,8 @@ a.status-badge {
   .commission-payroll-table,
   .payroll-table,
   .overtime-table,
-  .leave-table {
+  .leave-table,
+  .reflow-cards {
     min-width: 900px;
   }
 
@@ -1995,7 +1996,8 @@ a.status-badge {
   .request-table.mine,
   .payroll-table,
   .overtime-table,
-  .leave-table {
+  .leave-table,
+  .reflow-cards {
     /* Override the 1040px min-width:900px scroll trap for these classes. */
     min-width: 0;
   }
@@ -2006,7 +2008,8 @@ a.status-badge {
   .request-table.table-head,
   .payroll-table.table-head,
   .overtime-table.table-head,
-  .leave-table.table-head {
+  .leave-table.table-head,
+  .reflow-cards.table-head {
     display: none;
   }
 
@@ -2016,7 +2019,8 @@ a.status-badge {
   .request-table.table-row,
   .payroll-table.table-row,
   .overtime-table.table-row,
-  .leave-table.table-row {
+  .leave-table.table-row,
+  .reflow-cards.table-row {
     display: grid;
     grid-template-columns: 1fr;
     gap: 8px;
@@ -2033,7 +2037,8 @@ a.status-badge {
   .request-table.table-row + .table-row,
   .payroll-table.table-row + .table-row,
   .overtime-table.table-row + .table-row,
-  .leave-table.table-row + .table-row {
+  .leave-table.table-row + .table-row,
+  .reflow-cards.table-row + .table-row {
     margin-top: 10px;
   }
 
@@ -2043,7 +2048,8 @@ a.status-badge {
   .request-table.table-row > span,
   .payroll-table.table-row > span,
   .overtime-table.table-row > span,
-  .leave-table.table-row > span {
+  .leave-table.table-row > span,
+  .reflow-cards.table-row > span {
     display: block;
     width: 100%;
     min-width: 0;
@@ -2056,7 +2062,8 @@ a.status-badge {
   .request-table.table-row > span[data-label]:not([data-label=""])::before,
   .payroll-table.table-row > span[data-label]:not([data-label=""])::before,
   .overtime-table.table-row > span[data-label]:not([data-label=""])::before,
-  .leave-table.table-row > span[data-label]:not([data-label=""])::before {
+  .leave-table.table-row > span[data-label]:not([data-label=""])::before,
+  .reflow-cards.table-row > span[data-label]:not([data-label=""])::before {
     content: attr(data-label);
     display: block;
     margin-bottom: 2px;
@@ -2073,7 +2080,8 @@ a.status-badge {
   .request-table.table-row > .row-actions,
   .payroll-table.table-row > .row-actions,
   .overtime-table.table-row > .row-actions,
-  .leave-table.table-row > .row-actions {
+  .leave-table.table-row > .row-actions,
+  .reflow-cards.table-row > .row-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
