@@ -175,7 +175,7 @@ export function App() {
                 : route === 'ticket-detail'
                   ? <TicketDetailPage user={user} ticketId={selectedTicket} onBack={() => handleRoute('tickets')} onOpenDocument={openDepositNotice} showToast={showToast} />
                 : route === 'deposit-create'
-                  ? <DepositNoticePage user={user} ticketId={depositTicketId} onBack={() => { openTicket(depositTicketId); }} showToast={showToast} />
+                  ? <DepositNoticePage user={user} ticketId={depositTicketId} onBack={() => { openTicket(depositTicketId); }} onNavigateTickets={() => handleRoute('tickets')} showToast={showToast} />
                   : route === 'ceo-settings'
                     ? <CeoSettingsPage showToast={showToast} />
                     : <ProfilePage user={user} employee={currentEmployee} profileRequests={ownRequests} onCreateRequest={createProfileRequest} onRoute={handleRoute} />;

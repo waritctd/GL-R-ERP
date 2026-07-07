@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
+import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -397,6 +398,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   return (
     <div className="page-stack">
+      <Breadcrumbs items={[{ label: 'ใบขอราคา', onClick: onBack }, { label: summary.code || summary.customerName || summary.title }]} />
       <header style={{ display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between' }}>
         <div>
           <button type="button" className="secondary-button" onClick={onBack} style={{ marginBottom: 12 }}>
