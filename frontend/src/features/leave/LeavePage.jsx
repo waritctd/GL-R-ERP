@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { hasPermission } from '../../app/permissions.js';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
@@ -27,6 +29,10 @@ const monthStartIso = () => {
   const parts = bangkokDateParts();
   return `${parts.year}-${parts.month}-01`;
 };
+
+function yearFrom(dateString) {
+  return Number((dateString || todayIso()).slice(0, 4));
+}
 
 function defaultForm(employeeId = '', leaveTypeCode = 'VACATION') {
   const date = todayIso();
@@ -84,24 +90,72 @@ function formatDays(value) {
 }
 
 export function LeavePage({ user, currentEmployee, showToast }) {
-  const [filters, setFilters] = useState({
+  const queryClient = useQueryClient();
+  const initialFilters = {
     from: monthStartIso(),
     to: todayIso(),
     employeeId: '',
     status: '',
-  });
+  };
+  const [filters, setFilters] = useState(initialFilters);
+  const [appliedFilters, setAppliedFilters] = useState(initialFilters);
   const [form, setForm] = useState(() => defaultForm(currentEmployee?.id || user.employeeId || ''));
-  const [requests, setRequests] = useState([]);
-  const [employeeOptions, setEmployeeOptions] = useState([]);
-  const [leaveTypes, setLeaveTypes] = useState([]);
-  const [balances, setBalances] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [confirmState, setConfirmState] = useState(null);
+
+  const canReviewAll = hasPermission(user.role, 'canReviewLeave');
+
+  // --- Reads (TanStack Query) ---
+  const employeesQuery = useQuery({
+    queryKey: queryKeys.leaveEmployees(),
+    queryFn: () => api.leave.employees().then((response) => response.employees || []),
+  });
+  const employeeOptions = useMemo(() => employeesQuery.data ?? [], [employeesQuery.data]);
+
+  const leaveTypesQuery = useQuery({
+    queryKey: queryKeys.leaveTypes(),
+    queryFn: () => api.leave.types().then((response) => response.leaveTypes || []),
+  });
+  const leaveTypes = useMemo(() => leaveTypesQuery.data ?? [], [leaveTypesQuery.data]);
+
+  const requestsQuery = useQuery({
+    queryKey: queryKeys.leaveRequests(appliedFilters),
+    queryFn: () => api.leave.list({
+      from: appliedFilters.from,
+      to: appliedFilters.to,
+      status: appliedFilters.status,
+      ...(appliedFilters.employeeId ? { employeeId: appliedFilters.employeeId } : {}),
+    }).then((response) => response.requests || []),
+  });
+  const requests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
+  const loading = requestsQuery.isLoading || requestsQuery.isFetching;
+
+  const balancesYear = yearFrom(form.startDate);
+  const balancesQuery = useQuery({
+    queryKey: queryKeys.leaveBalances(form.employeeId, balancesYear),
+    queryFn: () => api.leave.balances({
+      ...(form.employeeId ? { employeeId: form.employeeId } : {}),
+      year: balancesYear,
+    }).then((response) => response.balances || []),
+    enabled: !!form.employeeId,
+  });
+  const balances = useMemo(() => balancesQuery.data ?? [], [balancesQuery.data]);
+
+  // Preserve the original error-toast behavior of the imperative loaders.
+  useEffect(() => {
+    if (employeesQuery.error) showToast('error', employeesQuery.error.message || 'โหลดข้อมูลตั้งต้นวันลาไม่สำเร็จ');
+  }, [employeesQuery.error, showToast]);
+  useEffect(() => {
+    if (leaveTypesQuery.error) showToast('error', leaveTypesQuery.error.message || 'โหลดข้อมูลตั้งต้นวันลาไม่สำเร็จ');
+  }, [leaveTypesQuery.error, showToast]);
+  useEffect(() => {
+    if (requestsQuery.error) showToast('error', requestsQuery.error.message || 'โหลดข้อมูลวันลาไม่สำเร็จ');
+  }, [requestsQuery.error, showToast]);
+  useEffect(() => {
+    if (balancesQuery.error) showToast('error', balancesQuery.error.message || 'โหลดโควตาวันลาไม่สำเร็จ');
+  }, [balancesQuery.error, showToast]);
 
   const startDateInPast = Boolean(form.startDate && form.startDate < todayIso());
 
-  const canReviewAll = hasPermission(user.role, 'canReviewLeave');
   const submitEmployeeOptions = useMemo(
     () => employeeOptions.filter((employee) => employee.self || employee.directReport || canReviewAll),
     [employeeOptions, canReviewAll],
@@ -127,64 +181,28 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     [requests],
   );
 
-  async function loadRequests(nextFilters = filters) {
-    setLoading(true);
-    try {
-      const response = await api.leave.list({
-        from: nextFilters.from,
-        to: nextFilters.to,
-        status: nextFilters.status,
-        ...(nextFilters.employeeId ? { employeeId: nextFilters.employeeId } : {}),
-      });
-      setRequests(response.requests || []);
-    } catch (error) {
-      showToast('error', error.message || 'โหลดข้อมูลวันลาไม่สำเร็จ');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loadBalances(employeeId = form.employeeId) {
-    try {
-      const response = await api.leave.balances({
-        ...(employeeId ? { employeeId } : {}),
-        year: Number((form.startDate || todayIso()).slice(0, 4)),
-      });
-      setBalances(response.balances || []);
-    } catch (error) {
-      showToast('error', error.message || 'โหลดโควตาวันลาไม่สำเร็จ');
-    }
-  }
-
-  async function loadReferenceData() {
-    try {
-      const [employeesResponse, typesResponse] = await Promise.all([
-        api.leave.employees(),
-        api.leave.types(),
-      ]);
-      const options = employeesResponse.employees || [];
-      const types = typesResponse.leaveTypes || [];
-      const submitOptions = options.filter((employee) => employee.self || employee.directReport || canReviewAll);
-      setEmployeeOptions(options);
-      setLeaveTypes(types);
-      setForm((current) => ({
-        ...current,
-        employeeId: current.employeeId || submitOptions.find((employee) => employee.self)?.employeeId || submitOptions[0]?.employeeId || '',
-        leaveTypeCode: current.leaveTypeCode || types[0]?.code || 'VACATION',
-      }));
-    } catch (error) {
-      showToast('error', error.message || 'โหลดข้อมูลตั้งต้นวันลาไม่สำเร็จ');
-    }
-  }
-
+  // Seed form defaults once reference data lands (preserves the pre-Query behavior:
+  // default the acting employee and leave type from whatever the queries return).
   useEffect(() => {
-    loadReferenceData();
-    loadRequests();
-  }, []);
+    if (!employeesQuery.data && !leaveTypesQuery.data) return;
+    setForm((current) => {
+      const nextEmployeeId = current.employeeId
+        || submitEmployeeOptions.find((employee) => employee.self)?.employeeId
+        || submitEmployeeOptions[0]?.employeeId
+        || '';
+      const nextLeaveTypeCode = current.leaveTypeCode || leaveTypes[0]?.code || 'VACATION';
+      if (nextEmployeeId === current.employeeId && nextLeaveTypeCode === current.leaveTypeCode) return current;
+      return { ...current, employeeId: nextEmployeeId, leaveTypeCode: nextLeaveTypeCode };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employeesQuery.data, leaveTypesQuery.data]);
 
-  useEffect(() => {
-    if (form.employeeId) loadBalances(form.employeeId);
-  }, [form.employeeId, form.startDate]);
+  function invalidateLeave() {
+    return Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.leaveRequests(appliedFilters) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.leaveBalances(form.employeeId, balancesYear) }),
+    ]);
+  }
 
   function updateFilter(field, value) {
     setFilters((current) => ({ ...current, [field]: value }));
@@ -201,26 +219,14 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     });
   }
 
-  async function submitFilters(event) {
+  function submitFilters(event) {
     event.preventDefault();
-    await loadRequests(filters);
+    setAppliedFilters(filters);
   }
 
-  async function submitLeave(event) {
-    event.preventDefault();
-    if (startDateInPast) return;
-    setSaving(true);
-    try {
-      const response = await api.leave.create({
-        employeeId: form.employeeId ? Number(form.employeeId) : null,
-        leaveTypeCode: form.leaveTypeCode,
-        startDate: form.startDate,
-        endDate: form.endDate,
-        reason: form.reason.trim(),
-        attachmentName: form.attachmentName.trim() || null,
-        attachmentUrl: form.attachmentUrl.trim() || null,
-      });
-      const created = response.request;
+  const createMutation = useMutation({
+    mutationFn: (payload) => api.leave.create(payload).then((response) => response.request),
+    onSuccess: (created) => {
       const nextEmployeeId = form.employeeId || currentEmployee?.id || user.employeeId || '';
       setForm(defaultForm(nextEmployeeId, form.leaveTypeCode));
       if (created?.status === 'AUTO_REJECTED') {
@@ -228,44 +234,68 @@ export function LeavePage({ user, currentEmployee, showToast }) {
       } else {
         showToast('success', 'ส่งคำขอลาแล้ว');
       }
-      await Promise.all([loadRequests(filters), loadBalances(nextEmployeeId)]);
-    } catch (error) {
-      showToast('error', error.message || 'ส่งคำขอลาไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-    }
+      invalidateLeave();
+    },
+    onError: (error) => showToast('error', error.message || 'ส่งคำขอลาไม่สำเร็จ'),
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: (id) => api.leave.approve(id, {}).then((response) => response.request),
+    onSuccess: () => {
+      showToast('success', 'อนุมัติวันลาแล้ว');
+      invalidateLeave();
+    },
+    onError: (error) => showToast('error', error.message || 'อนุมัติวันลาไม่สำเร็จ'),
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: ({ id, reviewerNote }) => api.leave.reject(id, { reviewerNote }).then((response) => response.request),
+    onSuccess: () => {
+      showToast('success', 'ปฏิเสธคำขอลาแล้ว');
+      setConfirmState(null);
+      invalidateLeave();
+    },
+    onError: (error) => showToast('error', error.message || 'ปฏิเสธวันลาไม่สำเร็จ'),
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: ({ id, reviewerNote }) => api.leave.cancel(id, { reviewerNote: reviewerNote?.trim() || null }).then((response) => response.request),
+    onSuccess: () => {
+      showToast('success', 'ยกเลิกคำขอลาแล้ว');
+      setConfirmState(null);
+      invalidateLeave();
+    },
+    onError: (error) => showToast('error', error.message || 'ยกเลิกวันลาไม่สำเร็จ'),
+  });
+
+  const saving = createMutation.isPending || approveMutation.isPending
+    || rejectMutation.isPending || cancelMutation.isPending;
+
+  function submitLeave(event) {
+    event.preventDefault();
+    if (startDateInPast) return;
+    createMutation.mutate({
+      employeeId: form.employeeId ? Number(form.employeeId) : null,
+      leaveTypeCode: form.leaveTypeCode,
+      startDate: form.startDate,
+      endDate: form.endDate,
+      reason: form.reason.trim(),
+      attachmentName: form.attachmentName.trim() || null,
+      attachmentUrl: form.attachmentUrl.trim() || null,
+    });
   }
 
-  async function approve(id) {
-    setSaving(true);
-    try {
-      await api.leave.approve(id, {});
-      showToast('success', 'อนุมัติวันลาแล้ว');
-      await Promise.all([loadRequests(filters), loadBalances(form.employeeId)]);
-    } catch (error) {
-      showToast('error', error.message || 'อนุมัติวันลาไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-    }
+  function approve(id) {
+    approveMutation.mutate(id);
   }
 
   function reject(id) {
     setConfirmState({ kind: 'reject', id });
   }
 
-  async function confirmReject(reviewerNote) {
+  function confirmReject(reviewerNote) {
     if (!reviewerNote?.trim()) return;
-    setSaving(true);
-    try {
-      await api.leave.reject(confirmState.id, { reviewerNote: reviewerNote.trim() });
-      showToast('success', 'ปฏิเสธคำขอลาแล้ว');
-      setConfirmState(null);
-      await Promise.all([loadRequests(filters), loadBalances(form.employeeId)]);
-    } catch (error) {
-      showToast('error', error.message || 'ปฏิเสธวันลาไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-    }
+    rejectMutation.mutate({ id: confirmState.id, reviewerNote: reviewerNote.trim() });
   }
 
   function cancel(id) {
@@ -277,18 +307,8 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     doCancel(id, '');
   }
 
-  async function doCancel(id, reviewerNote) {
-    setSaving(true);
-    try {
-      await api.leave.cancel(id, { reviewerNote: reviewerNote?.trim() || null });
-      showToast('success', 'ยกเลิกคำขอลาแล้ว');
-      setConfirmState(null);
-      await Promise.all([loadRequests(filters), loadBalances(form.employeeId)]);
-    } catch (error) {
-      showToast('error', error.message || 'ยกเลิกวันลาไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-    }
+  function doCancel(id, reviewerNote) {
+    cancelMutation.mutate({ id, reviewerNote });
   }
 
   function canReviewRequest(request) {
@@ -307,7 +327,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
         title="จัดการการลา"
         subtitle={canSubmitForTeam ? 'ยื่นคำขอแทนทีม ตรวจโควตา และอนุมัติวันลา' : 'ยื่นคำขอลาและดูโควตาของคุณ'}
         actions={(
-          <button type="button" className="secondary-button" onClick={() => loadRequests(filters)} disabled={loading}>
+          <button type="button" className="secondary-button" onClick={() => requestsQuery.refetch()} disabled={loading}>
             <Icon name="refresh" />
             รีเฟรช
           </button>

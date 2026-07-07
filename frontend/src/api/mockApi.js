@@ -65,6 +65,60 @@ if (db.leaveRequests.length === 0) {
     },
   ];
 }
+db.overtimeRequests = db.overtimeRequests || [];
+if (db.overtimeRequests.length === 0) {
+  const now = new Date().toISOString();
+  db.overtimeRequests = [
+    {
+      id: 1,
+      employeeId: db.employees[8].id,
+      workDate: '2026-07-04',
+      plannedStartAt: '2026-07-04T18:00:00+07:00',
+      plannedEndAt: '2026-07-04T20:00:00+07:00',
+      plannedMinutes: 120,
+      dayType: 'WORKDAY',
+      reason: 'ปิดยอดสิ้นเดือน',
+      status: 'SUBMITTED',
+      actualMinutes: null,
+      payableMinutes: null,
+      calculationNote: null,
+      requestedById: db.employees[8].id,
+      requestedByName: db.employees[8].nameTh,
+      requestedAt: now,
+      reviewedById: null,
+      reviewedByName: null,
+      reviewedAt: null,
+      reviewerNote: null,
+      cancelledAt: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 2,
+      employeeId: db.employees[12].id,
+      workDate: '2026-06-28',
+      plannedStartAt: '2026-06-28T09:00:00+07:00',
+      plannedEndAt: '2026-06-28T13:00:00+07:00',
+      plannedMinutes: 240,
+      dayType: 'HOLIDAY',
+      reason: 'งานติดตั้งนอกสถานที่',
+      status: 'APPROVED',
+      actualMinutes: 240,
+      payableMinutes: 720,
+      calculationNote: null,
+      requestedById: db.employees[12].id,
+      requestedByName: db.employees[12].nameTh,
+      requestedAt: now,
+      reviewedById: db.employees[20].id,
+      reviewedByName: db.employees[20].nameTh,
+      reviewedAt: now,
+      reviewerNote: null,
+      cancelledAt: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+}
 let sessionUser = null;
 
 // ── Mock in-memory document store ─────────────────────────────────────────────
@@ -547,6 +601,27 @@ function buildLeaveRecord(record) {
     managerName: manager?.nameTh || null,
     leaveTypeNameTh: leaveType.nameTh,
     leaveTypeNameEn: leaveType.nameEn,
+  };
+}
+
+function overtimeMinutesBetween(startAt, endAt) {
+  const start = new Date(startAt);
+  const end = new Date(endAt);
+  const diff = Math.round((end.getTime() - start.getTime()) / 60000);
+  if (Number.isNaN(diff) || diff <= 0) fail('Overtime end time must be after start time', 400);
+  return diff;
+}
+
+function buildOvertimeRecord(record) {
+  const employee = db.employees.find((item) => item.id === record.employeeId);
+  const managerEmployeeId = managerIdForEmployee(employee);
+  const manager = managerEmployeeId ? db.employees.find((item) => item.id === managerEmployeeId) : null;
+  return {
+    ...structuredClone(record),
+    employeeCode: employee?.code || null,
+    employeeName: employee?.nameTh || null,
+    managerEmployeeId,
+    managerName: manager?.nameTh || null,
   };
 }
 
@@ -1225,6 +1300,125 @@ export const api = {
       request.reviewerNote = payload.reviewerNote || request.reviewerNote;
       request.updatedAt = now;
       return delay({ request: buildLeaveRecord(request) });
+    },
+  },
+
+  overtime: {
+    async employees() {
+      const user = requireSession();
+      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
+      const rows = db.employees
+        .filter((employee) => employee.active)
+        .filter((employee) => includeAll || employee.id === user.employeeId || managerIdForEmployee(employee) === user.employeeId)
+        .map((employee) => ({
+          employeeId: employee.id,
+          employeeCode: employee.code,
+          employeeName: employee.nameTh,
+          departmentName: employee.departmentTh,
+          self: employee.id === user.employeeId,
+          directReport: managerIdForEmployee(employee) === user.employeeId,
+        }));
+      return delay({ employees: rows });
+    },
+
+    async list(params = {}) {
+      const user = requireSession();
+      let list = db.overtimeRequests;
+      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
+      if (!includeAll) list = list.filter((item) => item.employeeId === user.employeeId || canReviewLeave(user, item.employeeId));
+      if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
+      if (params.status) list = list.filter((item) => item.status === params.status);
+      if (params.from) list = list.filter((item) => item.workDate >= params.from);
+      if (params.to) list = list.filter((item) => item.workDate <= params.to);
+      return delay({ requests: list.map(buildOvertimeRecord) });
+    },
+
+    async create(payload) {
+      const user = requireSession();
+      const employeeId = payload.employeeId ? Number(payload.employeeId) : user.employeeId;
+      if (!employeeId) fail('User is not linked to an employee', 400);
+      if (employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
+      findEmployee(employeeId);
+      const plannedMinutes = overtimeMinutesBetween(payload.plannedStartAt, payload.plannedEndAt);
+      const id = Math.max(0, ...db.overtimeRequests.map((item) => item.id)) + 1;
+      const now = new Date().toISOString();
+      const request = {
+        id,
+        employeeId,
+        workDate: payload.workDate,
+        plannedStartAt: payload.plannedStartAt,
+        plannedEndAt: payload.plannedEndAt,
+        plannedMinutes,
+        dayType: payload.dayType || 'WORKDAY',
+        reason: payload.reason,
+        status: 'SUBMITTED',
+        actualMinutes: null,
+        payableMinutes: null,
+        calculationNote: null,
+        requestedById: user.employeeId,
+        requestedByName: user.name,
+        requestedAt: now,
+        reviewedById: null,
+        reviewedByName: null,
+        reviewedAt: null,
+        reviewerNote: null,
+        cancelledAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      db.overtimeRequests.unshift(request);
+      return delay({ request: buildOvertimeRecord(request) });
+    },
+
+    async approve(id, payload = {}) {
+      const user = requireSession();
+      const request = db.overtimeRequests.find((item) => item.id === Number(id));
+      if (!request) fail('Overtime request not found', 404);
+      if (!canReviewLeave(user, request.employeeId)) fail('Forbidden', 403);
+      if (request.status !== 'SUBMITTED') fail('Overtime request has already been reviewed', 409);
+      const now = new Date().toISOString();
+      const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
+      request.status = 'APPROVED';
+      request.actualMinutes = request.actualMinutes ?? request.plannedMinutes;
+      request.payableMinutes = Math.round(request.actualMinutes * multiplier);
+      request.reviewedById = user.employeeId;
+      request.reviewedByName = user.name;
+      request.reviewedAt = now;
+      request.reviewerNote = payload.reviewerNote || null;
+      request.updatedAt = now;
+      return delay({ request: buildOvertimeRecord(request) });
+    },
+
+    async reject(id, payload = {}) {
+      const user = requireSession();
+      const request = db.overtimeRequests.find((item) => item.id === Number(id));
+      if (!request) fail('Overtime request not found', 404);
+      if (!canReviewLeave(user, request.employeeId)) fail('Forbidden', 403);
+      if (request.status !== 'SUBMITTED') fail('Overtime request has already been reviewed', 409);
+      const now = new Date().toISOString();
+      request.status = 'REJECTED';
+      request.reviewedById = user.employeeId;
+      request.reviewedByName = user.name;
+      request.reviewedAt = now;
+      request.reviewerNote = payload.reviewerNote || null;
+      request.updatedAt = now;
+      return delay({ request: buildOvertimeRecord(request) });
+    },
+
+    async cancel(id, payload = {}) {
+      const user = requireSession();
+      const request = db.overtimeRequests.find((item) => item.id === Number(id));
+      if (!request) fail('Overtime request not found', 404);
+      const approver = canReviewLeave(user, request.employeeId);
+      if (!approver && request.employeeId !== user.employeeId) fail('Forbidden', 403);
+      if (!approver && request.status !== 'SUBMITTED') fail('Only submitted overtime requests can be cancelled by employees', 409);
+      if (!['SUBMITTED', 'APPROVED'].includes(request.status)) fail('Only active overtime requests can be cancelled', 409);
+      const now = new Date().toISOString();
+      request.status = 'CANCELLED';
+      request.cancelledAt = now;
+      request.reviewerNote = payload.reviewerNote || request.reviewerNote;
+      request.updatedAt = now;
+      return delay({ request: buildOvertimeRecord(request) });
     },
   },
 
