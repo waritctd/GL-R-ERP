@@ -489,20 +489,20 @@ export function LeavePage({ user, currentEmployee, showToast }) {
           const managerCancellable = canManagerCancel(request);
           return (
             <div className="leave-table table-row" key={request.id}>
-              <span>
+              <span data-label="ช่วงลา / พนักงาน">
                 <strong>{formatDateRange(request.startDate, request.endDate)}</strong>
                 <small>{request.employeeName || request.employeeCode || request.employeeId}</small>
               </span>
-              <span>
+              <span data-label="ประเภท / จำนวนวัน">
                 <strong>{request.leaveTypeNameTh || request.leaveTypeCode}</strong>
                 <small>{formatDays(request.totalDays)} · เหลือ {formatDays(request.quotaRemainingAfter)}</small>
               </span>
-              <span>
+              <span data-label="เหตุผล / เอกสาร">
                 <strong>{request.reason}</strong>
                 <small>{request.attachmentName || request.attachmentUrl || '-'}</small>
               </span>
               <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-              <span>
+              <span data-label="อนุมัติ / หมายเหตุ">
                 <strong>{request.reviewedByName || '-'}</strong>
                 <small>{request.reviewerNote || request.systemNote || formatDateTime(request.requestedAt)}</small>
               </span>
