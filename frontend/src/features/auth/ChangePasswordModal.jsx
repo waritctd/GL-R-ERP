@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { Button } from '../../components/common/Button.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { FormGrid } from '../../components/common/Layout.jsx';
 
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
 
@@ -161,7 +162,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
           ) : null}
         </header>
         <div className="modal-body">
-          <form id="change-password-form" className="form-grid single" onSubmit={handleSubmit(submitPassword)} noValidate>
+          <FormGrid as="form" single id="change-password-form" onSubmit={handleSubmit(submitPassword)} noValidate>
             <FormField
               label="รหัสผ่านปัจจุบัน"
               htmlFor="change-password-current"
@@ -213,7 +214,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
               />
             </FormField>
             {(formError || submitError) ? <div className="form-error" role="alert">{formError || submitError}</div> : null}
-          </form>
+          </FormGrid>
         </div>
         <footer className="modal-footer">
           {forced ? (

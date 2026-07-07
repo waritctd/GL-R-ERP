@@ -5,6 +5,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { FormGrid } from '../../components/common/Layout.jsx';
 
 const changeRequestFormSchema = z.object({
   newValue: z.string().min(1, 'กรุณาระบุค่าใหม่'),
@@ -41,7 +42,7 @@ export function ChangeRequestModal({ requestField, onClose, onSubmit }) {
         </>
       )}
     >
-      <form id="change-request-form" className="form-grid single" onSubmit={handleSubmit(submit)} noValidate>
+      <FormGrid as="form" single id="change-request-form" onSubmit={handleSubmit(submit)} noValidate>
         <label>
           ค่าเดิม
           <input value={requestField.oldValue} readOnly />
@@ -56,7 +57,7 @@ export function ChangeRequestModal({ requestField, onClose, onSubmit }) {
             required
           />
         </FormField>
-      </form>
+      </FormGrid>
     </Modal>
   );
 }

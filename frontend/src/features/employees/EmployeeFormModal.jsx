@@ -6,6 +6,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { FormGrid, formGridSpan2 } from '../../components/common/Layout.jsx';
 import { divisions, statuses } from '../../data/referenceData.js';
 
 function uniqueOptions(rows, valueKey, labelKey) {
@@ -108,7 +109,7 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
         </>
       )}
     >
-      <form id="employee-form" className="form-grid" onSubmit={handleSubmit(submit)} noValidate>
+      <FormGrid as="form" id="employee-form" onSubmit={handleSubmit(submit)} noValidate>
         <FormField label="ชื่อ-นามสกุล" htmlFor="employee-nameTh" error={errors.nameTh?.message}>
           <input
             id="employee-nameTh"
@@ -171,7 +172,7 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
         <FormField label="วันที่เริ่มงาน" htmlFor="employee-hireDate">
           <input id="employee-hireDate" type="date" {...register('hireDate')} />
         </FormField>
-        <div className="span-2">
+        <div className={formGridSpan2}>
           <FormField label="ที่อยู่ปัจจุบัน" htmlFor="employee-address">
             <textarea id="employee-address" rows="2" {...register('address')} />
           </FormField>
@@ -182,7 +183,7 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
         <FormField label="เบอร์ฉุกเฉิน" htmlFor="employee-emergencyPhone">
           <input id="employee-emergencyPhone" {...register('emergencyPhone')} />
         </FormField>
-      </form>
+      </FormGrid>
     </Modal>
   );
 }

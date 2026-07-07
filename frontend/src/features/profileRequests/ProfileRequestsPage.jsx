@@ -3,6 +3,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { PageStack, RowActions } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
 
@@ -10,7 +11,7 @@ export function ProfileRequestsPage({ profileRequests, onReview }) {
   const pendingCount = profileRequests.filter((request) => request.status === 'pending').length;
 
   return (
-    <div className="page-stack">
+    <PageStack>
       <PageHeader title="คำขอแก้ไขข้อมูล" subtitle={`${pendingCount} คำขอรอการอนุมัติ`} />
 
       <section className="table-panel">
@@ -40,7 +41,7 @@ export function ProfileRequestsPage({ profileRequests, onReview }) {
               <span data-label="ค่าใหม่"><strong>{request.newValue}</strong></span>
               <span data-label="วันที่">{formatShortDate(request.requestedAt)}</span>
               {request.status === 'pending' ? (
-                <span className="row-actions">
+                <RowActions>
                   <Button
                     type="button"
                     variant="danger"
@@ -55,12 +56,12 @@ export function ProfileRequestsPage({ profileRequests, onReview }) {
                     <Icon name="check" />
                     อนุมัติ
                   </Button>
-                </span>
+                </RowActions>
               ) : <StatusBadge tone={status.tone}>{status.label}</StatusBadge>}
             </div>
           );
         })}
       </section>
-    </div>
+    </PageStack>
   );
 }
