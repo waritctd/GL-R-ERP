@@ -40,7 +40,6 @@ export function App() {
     dashboardSummary,
     route,
     selectedEmployee,
-    loadData,
     resetData,
     routeTo,
     openEmployee,
@@ -65,7 +64,6 @@ export function App() {
         const response = await api.auth.me();
         if (!alive) return;
         setUser(response.user);
-        await loadData(response.user, 'dashboard');
       } catch {
         if (alive) setUser(null);
       }
@@ -80,7 +78,6 @@ export function App() {
     try {
       const response = await api.auth.login(payload);
       setUser(response.user);
-      await loadData(response.user, 'dashboard');
       showToast('success', 'เข้าสู่ระบบสำเร็จ');
     } catch (error) {
       setLoginError(error.message || 'เข้าสู่ระบบไม่สำเร็จ');
