@@ -1,6 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useForm, useWatch } from 'react-hook-form';
+import { z } from 'zod';
 import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
+import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { divisions, statuses } from '../../data/referenceData.js';
 
@@ -16,6 +20,25 @@ function uniqueOptions(rows, valueKey, labelKey) {
   return [...options.values()].sort((a, b) => a.label.localeCompare(b.label, 'th'));
 }
 
+const employeeFormSchema = z.object({
+  nameTh: z.string().min(1, 'กรุณาระบุชื่อ-นามสกุล'),
+  nameEn: z.string(),
+  nickName: z.string(),
+  email: z.string().min(1, 'กรุณาระบุอีเมล').pipe(z.email('รูปแบบอีเมลไม่ถูกต้อง')),
+  phone: z.string().min(1, 'กรุณาระบุเบอร์โทร'),
+  divisionId: z.string(),
+  departmentTh: z.string(),
+  positionTh: z.string(),
+  level: z.string(),
+  salary: z.union([z.string(), z.number()]),
+  statusId: z.string(),
+  hireDate: z.string(),
+  locationTh: z.string(),
+  address: z.string(),
+  emergencyName: z.string(),
+  emergencyPhone: z.string(),
+});
+
 export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit }) {
   const divisionOptions = useMemo(() => {
     const existing = uniqueOptions(employees, 'divisionId', 'divisionTh');
@@ -27,46 +50,46 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
     return [...merged.values()];
   }, [employee, employees]);
   const defaultDivision = employee?.divisionId || divisionOptions[0]?.value || '';
-  const [form, setForm] = useState(() => ({
-    nameTh: employee?.nameTh || '',
-    nameEn: employee?.nameEn || '',
-    nickName: employee?.nickName || '',
-    email: employee?.email || '',
-    phone: employee?.phone || '',
-    divisionId: defaultDivision,
-    departmentTh: employee?.departmentTh || '',
-    positionTh: employee?.positionTh || 'เจ้าหน้าที่',
-    level: employee?.level || 'O2',
-    salary: employee?.salary || '',
-    statusId: employee?.statusId || 'ACT',
-    hireDate: employee?.hireDate || '',
-    locationTh: employee?.locationTh || 'สำนักงานใหญ่ กรุงเทพฯ',
-    address: employee?.currentAddress?.line1 || '',
-    emergencyName: employee?.emergencyContact?.name || '',
-    emergencyPhone: employee?.emergencyContact?.phone || '',
-  }));
 
+  const {
+    register,
+    handleSubmit,
+    control,
+    formState: { errors },
+  } = useForm({
+    resolver: zodResolver(employeeFormSchema),
+    defaultValues: {
+      nameTh: employee?.nameTh || '',
+      nameEn: employee?.nameEn || '',
+      nickName: employee?.nickName || '',
+      email: employee?.email || '',
+      phone: employee?.phone || '',
+      divisionId: defaultDivision,
+      departmentTh: employee?.departmentTh || '',
+      positionTh: employee?.positionTh || 'เจ้าหน้าที่',
+      level: employee?.level || 'O2',
+      salary: employee?.salary || '',
+      statusId: employee?.statusId || 'ACT',
+      hireDate: employee?.hireDate || '',
+      locationTh: employee?.locationTh || 'สำนักงานใหญ่ กรุงเทพฯ',
+      address: employee?.currentAddress?.line1 || '',
+      emergencyName: employee?.emergencyContact?.name || '',
+      emergencyPhone: employee?.emergencyContact?.phone || '',
+    },
+    mode: 'onChange',
+    reValidateMode: 'onChange',
+  });
+
+  const formDivisionId = useWatch({ control, name: 'divisionId' });
   const departmentOptions = useMemo(() => uniqueOptions(
-    employees.filter((item) => !form.divisionId || item.divisionId === form.divisionId),
+    employees.filter((item) => !formDivisionId || item.divisionId === formDivisionId),
     'departmentTh',
     'departmentTh',
-  ), [employees, form.divisionId]);
+  ), [employees, formDivisionId]);
 
-  function update(field, value) {
-    setForm((current) => {
-      const next = { ...current, [field]: value };
-      if (field === 'divisionId') {
-        next.departmentTh = '';
-        next.divisionTh = divisionOptions.find((division) => division.value === value)?.label;
-      }
-      return next;
-    });
-  }
-
-  function submit(event) {
-    event.preventDefault();
-    const division = divisionOptions.find((item) => item.value === form.divisionId);
-    onSubmit({ ...form, divisionTh: division?.label, salary: Number(form.salary || 0) });
+  function submit(values) {
+    const division = divisionOptions.find((item) => item.value === values.divisionId);
+    onSubmit({ ...values, divisionTh: division?.label, salary: Number(values.salary || 0) });
   }
 
   return (
@@ -84,74 +107,80 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
         </>
       )}
     >
-      <form id="employee-form" className="form-grid" onSubmit={submit}>
-        <label>
-          ชื่อ-นามสกุล
-          <input value={form.nameTh} onChange={(event) => update('nameTh', event.target.value)} required />
-        </label>
-        <label>
-          Name
-          <input value={form.nameEn} onChange={(event) => update('nameEn', event.target.value)} />
-        </label>
-        <label>
-          ชื่อเล่น
-          <input value={form.nickName} onChange={(event) => update('nickName', event.target.value)} />
-        </label>
-        <label>
-          อีเมล
-          <input type="email" value={form.email} onChange={(event) => update('email', event.target.value)} required />
-        </label>
-        <label>
-          เบอร์โทร
-          <input value={form.phone} onChange={(event) => update('phone', event.target.value)} required />
-        </label>
-        <label>
-          ฝ่าย
-          <select value={form.divisionId} onChange={(event) => update('divisionId', event.target.value)}>
+      <form id="employee-form" className="form-grid" onSubmit={handleSubmit(submit)} noValidate>
+        <FormField label="ชื่อ-นามสกุล" htmlFor="employee-nameTh" error={errors.nameTh?.message}>
+          <input
+            id="employee-nameTh"
+            {...register('nameTh')}
+            aria-invalid={Boolean(errors.nameTh)}
+            aria-describedby={errors.nameTh ? fieldErrorId('employee-nameTh') : undefined}
+            required
+          />
+        </FormField>
+        <FormField label="Name" htmlFor="employee-nameEn">
+          <input id="employee-nameEn" {...register('nameEn')} />
+        </FormField>
+        <FormField label="ชื่อเล่น" htmlFor="employee-nickName">
+          <input id="employee-nickName" {...register('nickName')} />
+        </FormField>
+        <FormField label="อีเมล" htmlFor="employee-email" error={errors.email?.message}>
+          <input
+            id="employee-email"
+            type="email"
+            {...register('email')}
+            aria-invalid={Boolean(errors.email)}
+            aria-describedby={errors.email ? fieldErrorId('employee-email') : undefined}
+            required
+          />
+        </FormField>
+        <FormField label="เบอร์โทร" htmlFor="employee-phone" error={errors.phone?.message}>
+          <input
+            id="employee-phone"
+            {...register('phone')}
+            aria-invalid={Boolean(errors.phone)}
+            aria-describedby={errors.phone ? fieldErrorId('employee-phone') : undefined}
+            required
+          />
+        </FormField>
+        <FormField label="ฝ่าย" htmlFor="employee-divisionId">
+          <select id="employee-divisionId" {...register('divisionId')}>
             {divisionOptions.map((division) => <option key={division.value} value={division.value}>{division.label}</option>)}
           </select>
-        </label>
-        <label>
-          แผนก
-          <input list="department-options" value={form.departmentTh} onChange={(event) => update('departmentTh', event.target.value)} />
+        </FormField>
+        <FormField label="แผนก" htmlFor="employee-departmentTh">
+          <input id="employee-departmentTh" list="department-options" {...register('departmentTh')} />
           <datalist id="department-options">
             {departmentOptions.map((department) => <option key={department.value} value={department.value}>{department.label}</option>)}
           </datalist>
-        </label>
-        <label>
-          ตำแหน่ง
-          <input value={form.positionTh} onChange={(event) => update('positionTh', event.target.value)} />
-        </label>
-        <label>
-          ระดับ
-          <input value={form.level} onChange={(event) => update('level', event.target.value)} />
-        </label>
-        <label>
-          เงินเดือน
-          <input type="number" value={form.salary} onChange={(event) => update('salary', event.target.value)} />
-        </label>
-        <label>
-          สถานะ
-          <select value={form.statusId} onChange={(event) => update('statusId', event.target.value)}>
+        </FormField>
+        <FormField label="ตำแหน่ง" htmlFor="employee-positionTh">
+          <input id="employee-positionTh" {...register('positionTh')} />
+        </FormField>
+        <FormField label="ระดับ" htmlFor="employee-level">
+          <input id="employee-level" {...register('level')} />
+        </FormField>
+        <FormField label="เงินเดือน" htmlFor="employee-salary">
+          <input id="employee-salary" type="number" {...register('salary')} />
+        </FormField>
+        <FormField label="สถานะ" htmlFor="employee-statusId">
+          <select id="employee-statusId" {...register('statusId')}>
             {statuses.map((status) => <option key={status.id} value={status.id}>{status.th}</option>)}
           </select>
-        </label>
-        <label>
-          วันที่เริ่มงาน
-          <input type="date" value={form.hireDate || ''} onChange={(event) => update('hireDate', event.target.value)} />
-        </label>
-        <label className="span-2">
-          ที่อยู่ปัจจุบัน
-          <textarea value={form.address} onChange={(event) => update('address', event.target.value)} rows="2" />
-        </label>
-        <label>
-          ผู้ติดต่อฉุกเฉิน
-          <input value={form.emergencyName} onChange={(event) => update('emergencyName', event.target.value)} />
-        </label>
-        <label>
-          เบอร์ฉุกเฉิน
-          <input value={form.emergencyPhone} onChange={(event) => update('emergencyPhone', event.target.value)} />
-        </label>
+        </FormField>
+        <FormField label="วันที่เริ่มงาน" htmlFor="employee-hireDate">
+          <input id="employee-hireDate" type="date" {...register('hireDate')} />
+        </FormField>
+        <div className="span-2">
+          <FormField label="ที่อยู่ปัจจุบัน" htmlFor="employee-address">
+            <textarea id="employee-address" rows="2" {...register('address')} />
+          </FormField>
+        </div>
+        <FormField label="ผู้ติดต่อฉุกเฉิน" htmlFor="employee-emergencyName">
+          <input id="employee-emergencyName" {...register('emergencyName')} />
+        </FormField>
+        <FormField label="เบอร์ฉุกเฉิน" htmlFor="employee-emergencyPhone">
+          <input id="employee-emergencyPhone" {...register('emergencyPhone')} />
+        </FormField>
       </form>
     </Modal>
   );
