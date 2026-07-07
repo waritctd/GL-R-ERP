@@ -29,6 +29,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()      // no session yet; CSRF-exempt already
                 .requestMatchers(HttpMethod.POST, "/api/attendance/punch").permitAll()// device X-GLR-Agent-Token; no session
                 .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**").permitAll() // LB/probe health only; no other actuator endpoint
+                // OpenAPI docs (/v3/api-docs, /swagger-ui) are intentionally NOT allowlisted: they
+                // fall under default-deny below, so reading the contract / enumerating endpoints
+                // requires an authenticated session rather than being anonymously accessible.
                 .anyRequest().authenticated())
             .addFilterBefore(sessionSecurityFilter, AnonymousAuthenticationFilter.class);
         return http.build();

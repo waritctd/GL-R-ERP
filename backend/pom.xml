@@ -130,6 +130,13 @@
             <artifactId>pdfbox</artifactId>
             <version>3.0.7</version>
         </dependency>
+        <!-- springdoc-openapi — generated OpenAPI contract + Swagger UI; not in the Spring Boot BOM
+             for Spring Boot 4.x, so the version is pinned explicitly. -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>3.0.3</version>
+        </dependency>
     </dependencies>
 
     <build>
