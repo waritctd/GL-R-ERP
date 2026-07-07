@@ -1,13 +1,64 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/index.js';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { DataTable } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
-import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney } from '../../utils/format.js';
+
+const payrollColumns = [
+  {
+    key: 'employee',
+    header: 'พนักงาน',
+    sortable: true,
+    sortAccessor: (line) => line.employeeName,
+    searchAccessor: (line) => line.employeeName,
+    render: (line) => (
+      <span>
+        <strong>{line.employeeName}</strong>
+        <small>{line.employeeCode} · {line.departmentName || '-'}</small>
+      </span>
+    ),
+  },
+  {
+    key: 'grossEarnings',
+    header: 'รายได้',
+    sortable: true,
+    sortAccessor: (line) => Number(line.grossEarnings || 0),
+    render: (line) => <code>{formatMoney(line.grossEarnings)}</code>,
+  },
+  {
+    key: 'specialPayTotal',
+    header: 'เงินพิเศษ',
+    sortable: true,
+    sortAccessor: (line) => Number(line.specialPayTotal || 0),
+    render: (line) => <code>{formatMoney(line.specialPayTotal)}</code>,
+  },
+  {
+    key: 'otCommission',
+    header: 'OT / Commission',
+    sortable: true,
+    sortAccessor: (line) => Number(line.overtimePay || 0) + Number(line.commissionPay || 0),
+    render: (line) => <code>{formatMoney(Number(line.overtimePay || 0) + Number(line.commissionPay || 0))}</code>,
+  },
+  {
+    key: 'totalDeductions',
+    header: 'เงินหัก',
+    sortable: true,
+    sortAccessor: (line) => Number(line.totalDeductions || 0),
+    render: (line) => <code>{formatMoney(line.totalDeductions)}</code>,
+  },
+  {
+    key: 'netPay',
+    header: 'สุทธิ',
+    sortable: true,
+    sortAccessor: (line) => Number(line.netPay || 0),
+    render: (line) => <code>{formatMoney(line.netPay)}</code>,
+  },
+];
 
 const thisMonth = new Date().toISOString().slice(0, 7);
 const specialPayFields = [
@@ -256,52 +307,23 @@ export function PayrollPage({ showToast }) {
       </section>
 
       <section className="payroll-workspace">
-        <div className="table-panel">
-          <div className="payroll-table table-head">
-            <span>พนักงาน</span>
-            <span>รายได้</span>
-            <span>เงินพิเศษ</span>
-            <span>OT / Commission</span>
-            <span>เงินหัก</span>
-            <span>สุทธิ</span>
-          </div>
-          {loading ? (
-            <div aria-busy="true" aria-label="กำลังโหลดข้อมูลเงินเดือน">
-              {Array.from({ length: 5 }, (_, index) => (
-                <div className="payroll-table table-row" key={index}>
-                  <span>
-                    <Skeleton width="70%" height={14} />
-                    <Skeleton width="50%" height={12} />
-                  </span>
-                  <Skeleton width="60%" height={14} />
-                  <Skeleton width="60%" height={14} />
-                  <Skeleton width="60%" height={14} />
-                  <Skeleton width="60%" height={14} />
-                  <Skeleton width="60%" height={14} />
-                </div>
-              ))}
-            </div>
-          ) : !period?.lines?.length ? (
-            <EmptyState icon="badgeDollar" title="ยังไม่มีข้อมูลเงินเดือน" description="เลือกรอบเดือนหรือกดรีเฟรชเพื่อคำนวณตัวอย่าง" />
-          ) : period.lines.map((line) => (
-            <button
-              key={line.employeeId}
-              type="button"
-              className={`payroll-table table-row payroll-row ${Number(line.employeeId) === Number(selectedLine?.employeeId) ? 'active' : ''}`}
-              onClick={() => setSelectedEmployeeId(line.employeeId)}
-            >
-              <span>
-                <strong>{line.employeeName}</strong>
-                <small>{line.employeeCode} · {line.departmentName || '-'}</small>
-              </span>
-              <code>{formatMoney(line.grossEarnings)}</code>
-              <code>{formatMoney(line.specialPayTotal)}</code>
-              <code>{formatMoney(Number(line.overtimePay || 0) + Number(line.commissionPay || 0))}</code>
-              <code>{formatMoney(line.totalDeductions)}</code>
-              <code>{formatMoney(line.netPay)}</code>
-            </button>
-          ))}
-        </div>
+        <DataTable
+          columns={payrollColumns}
+          rows={period?.lines || []}
+          getRowKey={(line) => line.employeeId}
+          gridClassName="payroll-table"
+          pageSize={25}
+          searchable
+          searchPlaceholder="ค้นหาพนักงาน"
+          onRowClick={(line) => setSelectedEmployeeId(line.employeeId)}
+          rowClassName={(line) => `payroll-row${Number(line.employeeId) === Number(selectedLine?.employeeId) ? ' active' : ''}`}
+          loading={loading}
+          emptyState={{
+            icon: 'badgeDollar',
+            title: 'ยังไม่มีข้อมูลเงินเดือน',
+            description: 'เลือกรอบเดือนหรือกดรีเฟรชเพื่อคำนวณตัวอย่าง',
+          }}
+        />
 
         <aside className="panel payroll-detail-panel">
           {selectedLine && selectedAdjustment ? (
