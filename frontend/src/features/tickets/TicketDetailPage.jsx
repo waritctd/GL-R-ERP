@@ -73,6 +73,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const [attachments, setAttachments] = useState([]);
   const [attachLoading, setAttachLoading] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [deletingAttachment, setDeletingAttachment] = useState(false);
 
   // Revision form
   const [showReviseForm, setShowReviseForm] = useState(false);
@@ -355,6 +356,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   }
 
   async function confirmDeleteAttachment(id) {
+    setDeletingAttachment(true);
     try {
       await api.attachments.delete(id);
       setAttachments((prev) => prev.filter((a) => a.id !== id));
@@ -362,6 +364,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     } catch (err) {
       showToast('error', err.message || 'ลบไม่สำเร็จ');
     } finally {
+      setDeletingAttachment(false);
       setConfirm(null);
     }
   }
@@ -1027,6 +1030,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         tone="danger"
         title="ลบไฟล์"
         message={`ลบไฟล์ "${confirm?.name}" ออก?`}
+        busy={deletingAttachment}
         onCancel={() => setConfirm(null)}
         onConfirm={() => confirmDeleteAttachment(confirm?.id)}
       />
