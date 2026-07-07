@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/index.js';
 import { hasPermission } from '../../app/permissions.js';
+import { Button } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { DesktopOnlyNotice } from '../../components/common/DesktopOnlyNotice.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -141,10 +142,10 @@ export function AttendancePage({ user, employees, showToast }) {
         title="เวลาทำงาน"
         subtitle={canViewAll ? 'ตรวจสอบประวัติการสแกนของพนักงานทุกคน' : 'ตรวจสอบประวัติการสแกนของคุณ'}
         actions={(
-          <button type="button" className="secondary-button" onClick={() => loadPunches(filters)} disabled={loading}>
+          <Button variant="secondary" onClick={() => loadPunches(filters)} disabled={loading}>
             <Icon name="refresh" />
             รีเฟรช
-          </button>
+          </Button>
         )}
       />
 
@@ -184,10 +185,10 @@ export function AttendancePage({ user, employees, showToast }) {
             <option value={2000}>2,000</option>
           </select>
         </label>
-        <button type="submit" className="primary-button" disabled={loading}>
+        <Button type="submit" disabled={loading}>
           <Icon name="search" />
           ค้นหา
-        </button>
+        </Button>
       </form>
 
       {canImport ? (
@@ -211,10 +212,10 @@ export function AttendancePage({ user, employees, showToast }) {
             </select>
           </label>
           <input type="file" accept=".dat,text/plain" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} />
-          <button type="submit" className="success-button" disabled={importing || !selectedFile || !importDeviceCode}>
+          <Button type="submit" variant="success" className="max-[720px]:w-full" disabled={importing || !selectedFile || !importDeviceCode}>
             <Icon name="plus" />
             {importing ? 'กำลังนำเข้า' : 'นำเข้า'}
-          </button>
+          </Button>
           {lastImport ? (
             <span className="attendance-import-result">
               {lastImport.status}: เพิ่ม {lastImport.inserted_punch_count} · ข้าม {lastImport.skipped_punch_count} · ผิดพลาด {lastImport.error_count}
