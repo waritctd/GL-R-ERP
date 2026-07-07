@@ -1,15 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/index.js';
 import { queryKeys } from '../api/queryKeys.js';
-import { allowedRoute, hasPermission } from '../app/permissions.js';
+import { hasPermission } from '../app/permissions.js';
 
 export function useHrData({ user, showToast }) {
   const queryClient = useQueryClient();
-
-  // Local UI state (not server state). Routing is branch 5's concern.
-  const [route, setRoute] = useState('dashboard');
-  const [selectedEmployee, setSelectedEmployee] = useState(null);
 
   const canViewEmployees = !!user && hasPermission(user.role, 'canViewEmployees');
 
@@ -58,7 +54,6 @@ export function useHrData({ user, showToast }) {
     mutationFn: (payload) => api.employees.create(payload).then((response) => response.employee),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.employees() });
-      routeTo('employees');
       showToast('success', 'เพิ่มพนักงานเรียบร้อย');
     },
   });
@@ -68,7 +63,7 @@ export function useHrData({ user, showToast }) {
     onSuccess: (employee, { id }) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.employees() });
       queryClient.invalidateQueries({ queryKey: queryKeys.currentEmployee(id) });
-      setSelectedEmployee(employee);
+      queryClient.invalidateQueries({ queryKey: queryKeys.employeeDetail(id) });
       showToast('success', 'บันทึกข้อมูลพนักงานแล้ว');
     },
   });
@@ -90,25 +85,13 @@ export function useHrData({ user, showToast }) {
   });
 
   function resetData() {
-    setRoute('dashboard');
-    setSelectedEmployee(null);
     // Prefix-match removes ['currentEmployee', <any id>] so a different role
     // logging in next never sees the previous user's cached record.
     queryClient.removeQueries({ queryKey: ['currentEmployee'] });
+    queryClient.removeQueries({ queryKey: ['employeeDetail'] });
     queryClient.removeQueries({ queryKey: queryKeys.employees() });
     queryClient.removeQueries({ queryKey: queryKeys.profileRequests() });
     queryClient.removeQueries({ queryKey: queryKeys.dashboardSummary() });
-  }
-
-  function routeTo(nextRoute) {
-    setRoute(allowedRoute(nextRoute, user));
-    if (nextRoute !== 'detail') setSelectedEmployee(null);
-  }
-
-  async function openEmployee(id) {
-    const response = await api.employees.get(id);
-    setSelectedEmployee(response.employee);
-    setRoute('detail');
   }
 
   return {
@@ -116,11 +99,7 @@ export function useHrData({ user, showToast }) {
     employees,
     profileRequests,
     dashboardSummary,
-    route,
-    selectedEmployee,
     resetData,
-    routeTo,
-    openEmployee,
     createEmployee: (payload) => createEmployeeMutation.mutateAsync(payload),
     updateEmployee: (id, payload) => updateEmployeeMutation.mutateAsync({ id, payload }),
     createProfileRequest: (payload) => createProfileRequestMutation.mutateAsync(payload),

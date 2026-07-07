@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { api } from './api/index.js';
 import { AppShell } from './components/layout/AppShell.jsx';
 import { Toast } from './components/common/Toast.jsx';
@@ -24,25 +25,52 @@ import { CeoSettingsPage } from './features/ceoSettings/CeoSettingsPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
 import { hasPermission } from './app/permissions.js';
+import { RequireAccess } from './app/RequireAccess.jsx';
+
+// Thin wrappers that source the ticket id from the URL for the frozen sales
+// pages (they already fetch by id internally — branch 5 only rewires how the
+// id and navigation arrive).
+function TicketDetailRoute({ user, showToast }) {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  return (
+    <TicketDetailPage
+      user={user}
+      ticketId={id}
+      onBack={() => navigate('/tickets')}
+      onOpenDocument={(ticketId) => navigate(`/tickets/${ticketId}/deposit`)}
+      showToast={showToast}
+    />
+  );
+}
+
+function DepositNoticeRoute({ user, showToast }) {
+  const { ticketId } = useParams();
+  const navigate = useNavigate();
+  return (
+    <DepositNoticePage
+      user={user}
+      ticketId={ticketId}
+      onBack={() => navigate(`/tickets/${ticketId}`)}
+      onNavigateTickets={() => navigate('/tickets')}
+      showToast={showToast}
+    />
+  );
+}
 
 export function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
-  const [selectedTicket, setSelectedTicket] = useState(null);
-  const [depositTicketId, setDepositTicketId] = useState(null);
+  const navigate = useNavigate();
   const { toast, showToast, dismissToast } = useToast();
   const {
     currentEmployee,
     employees,
     profileRequests,
     dashboardSummary,
-    route,
-    selectedEmployee,
     resetData,
-    routeTo,
-    openEmployee,
     createEmployee,
     updateEmployee,
     createProfileRequest,
@@ -100,24 +128,8 @@ export function App() {
   async function handleLogout() {
     await api.auth.logout();
     setUser(null);
-    setSelectedTicket(null);
     resetData();
-  }
-
-  function handleRoute(nextRoute) {
-    if (nextRoute !== 'ticket-detail') setSelectedTicket(null);
-    if (nextRoute !== 'deposit-create') setDepositTicketId(null);
-    routeTo(nextRoute);
-  }
-
-  function openTicket(id) {
-    setSelectedTicket(id);
-    routeTo('ticket-detail');
-  }
-
-  function openDepositNotice(ticketId) {
-    setDepositTicketId(ticketId);
-    routeTo('deposit-create');
+    navigate('/');
   }
 
   if (!user) {
@@ -143,53 +155,121 @@ export function App() {
     );
   }
 
-  const screen = route === 'dashboard'
-    ? <EmployeeDashboard user={user} employee={currentEmployee} profileRequests={dashboardRequests} dashboardSummary={dashboardSummary} onRoute={handleRoute} />
-    : route === 'hr-dashboard'
-      ? <HrDashboard employee={currentEmployee} employees={employees} profileRequests={profileRequests} dashboardSummary={dashboardSummary} onRoute={handleRoute} />
-    : route === 'ticket-dashboard'
-      ? <TicketDashboard user={user} employee={currentEmployee} onOpenTicket={openTicket} showToast={showToast} />
-    : route === 'employees'
-      ? <EmployeeListPage user={user} employees={employees} onOpenEmployee={openEmployee} onCreateEmployee={createEmployee} />
-      : route === 'detail'
-        ? <EmployeeDetailPage user={user} employee={selectedEmployee} onBack={() => handleRoute('employees')} onUpdateEmployee={updateEmployee} />
-        : route === 'requests'
-          ? <ProfileRequestsPage profileRequests={profileRequests} onReview={reviewProfileRequest} />
-          : route === 'myrequests'
-            ? <MyRequestsPage profileRequests={ownRequests} onNewRequest={() => handleRoute('profile')} />
-            : route === 'attendance'
-              ? <AttendancePage user={user} employees={employees} showToast={showToast} />
-              : route === 'overtime'
-                ? <OvertimePage user={user} currentEmployee={currentEmployee} showToast={showToast} />
-              : route === 'leave'
-                ? <LeavePage user={user} currentEmployee={currentEmployee} showToast={showToast} />
-              : route === 'commissions'
-                ? <CommissionPage user={user} showToast={showToast} />
-              : route === 'payroll'
-                ? <PayrollPage user={user} showToast={showToast} />
-              : route === 'tickets'
-                ? <TicketListPage user={user} onOpenTicket={openTicket} showToast={showToast} />
-                : route === 'ticket-detail'
-                  ? <TicketDetailPage user={user} ticketId={selectedTicket} onBack={() => handleRoute('tickets')} onOpenDocument={openDepositNotice} showToast={showToast} />
-                : route === 'deposit-create'
-                  ? <DepositNoticePage user={user} ticketId={depositTicketId} onBack={() => { openTicket(depositTicketId); }} onNavigateTickets={() => handleRoute('tickets')} showToast={showToast} />
-                  : route === 'ceo-settings'
-                    ? <CeoSettingsPage showToast={showToast} />
-                    : <ProfilePage user={user} employee={currentEmployee} profileRequests={ownRequests} onCreateRequest={createProfileRequest} onRoute={handleRoute} />;
-
   return (
     <>
-      <AppShell
-        user={user}
-        employee={currentEmployee}
-        route={route}
-        onRoute={handleRoute}
-        onLogout={handleLogout}
-        pendingRequestCount={pendingCount}
-        onOpenTicket={openTicket}
-      >
-        {screen}
-      </AppShell>
+      <Routes>
+        <Route
+          element={(
+            <AppShell
+              user={user}
+              employee={currentEmployee}
+              onLogout={handleLogout}
+              pendingRequestCount={pendingCount}
+            />
+          )}
+        >
+          <Route
+            path="/"
+            element={(
+              <EmployeeDashboard
+                user={user}
+                employee={currentEmployee}
+                profileRequests={dashboardRequests}
+                dashboardSummary={dashboardSummary}
+              />
+            )}
+          />
+
+          <Route element={<RequireAccess user={user} />}>
+            <Route
+              path="/hr"
+              element={(
+                <HrDashboard
+                  employee={currentEmployee}
+                  employees={employees}
+                  profileRequests={profileRequests}
+                  dashboardSummary={dashboardSummary}
+                />
+              )}
+            />
+            <Route
+              path="/employees"
+              element={(
+                <EmployeeListPage
+                  user={user}
+                  employees={employees}
+                  onCreateEmployee={createEmployee}
+                />
+              )}
+            />
+            <Route
+              path="/employees/:id"
+              element={<EmployeeDetailPage user={user} onUpdateEmployee={updateEmployee} />}
+            />
+            <Route
+              path="/requests"
+              element={<ProfileRequestsPage profileRequests={profileRequests} onReview={reviewProfileRequest} />}
+            />
+            <Route
+              path="/my-requests"
+              element={<MyRequestsPage profileRequests={ownRequests} />}
+            />
+            <Route
+              path="/profile"
+              element={(
+                <ProfilePage
+                  user={user}
+                  employee={currentEmployee}
+                  profileRequests={ownRequests}
+                  onCreateRequest={createProfileRequest}
+                />
+              )}
+            />
+            <Route
+              path="/overtime"
+              element={<OvertimePage user={user} currentEmployee={currentEmployee} showToast={showToast} />}
+            />
+            <Route
+              path="/leave"
+              element={<LeavePage user={user} currentEmployee={currentEmployee} showToast={showToast} />}
+            />
+            <Route
+              path="/payroll"
+              element={<PayrollPage showToast={showToast} />}
+            />
+            {/* Frozen sales stack — param-wired to keep working / URL-addressable. */}
+            <Route
+              path="/ticket-overview"
+              element={<TicketDashboard user={user} employee={currentEmployee} showToast={showToast} />}
+            />
+            <Route
+              path="/tickets"
+              element={<TicketListPage user={user} showToast={showToast} />}
+            />
+            <Route
+              path="/tickets/:id"
+              element={<TicketDetailRoute user={user} showToast={showToast} />}
+            />
+            <Route
+              path="/tickets/:ticketId/deposit"
+              element={<DepositNoticeRoute user={user} showToast={showToast} />}
+            />
+            <Route
+              path="/commissions"
+              element={<CommissionPage user={user} showToast={showToast} />}
+            />
+          </Route>
+
+          <Route
+            path="/attendance"
+            element={<AttendancePage user={user} employees={employees} showToast={showToast} />}
+          />
+          {/* /ceo-settings had no allowedRoute guard historically (nav-gated only). */}
+          <Route path="/ceo-settings" element={<CeoSettingsPage showToast={showToast} />} />
+
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
       <Toast toast={toast} onDismiss={dismissToast} />
       {loading ? <div className="loading-veil">Loading...</div> : null}
     </>

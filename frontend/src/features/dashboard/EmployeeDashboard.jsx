@@ -1,3 +1,4 @@
+import { useNavigate } from 'react-router-dom';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { Avatar } from '../../components/common/Avatar.jsx';
@@ -69,7 +70,8 @@ function dashboardCards(mode, summary, pendingCount) {
   ];
 }
 
-export function EmployeeDashboard({ user, employee, profileRequests = [], dashboardSummary, onRoute }) {
+export function EmployeeDashboard({ user, employee, profileRequests = [], dashboardSummary }) {
+  const navigate = useNavigate();
   const pendingCount = profileRequests.filter((request) => request.status === 'pending').length;
   const years = employee?.hireDate ? new Date().getFullYear() - new Date(employee.hireDate).getFullYear() : 0;
   const mode = dashboardMode(user, dashboardSummary);
@@ -84,16 +86,16 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
       : `${employee?.positionTh || ''} · ${employee?.divisionTh || ''}`;
   const quickActions = mode === 'company'
     ? [
-      ['hr-dashboard', 'ภาพรวม HR'],
-      ['employees', 'รายชื่อพนักงาน'],
-      ['requests', 'คำขอแก้ไขข้อมูล'],
-      ['attendance', 'ข้อมูลเวลาเข้างาน'],
+      ['/hr', 'ภาพรวม HR'],
+      ['/employees', 'รายชื่อพนักงาน'],
+      ['/requests', 'คำขอแก้ไขข้อมูล'],
+      ['/attendance', 'ข้อมูลเวลาเข้างาน'],
     ]
     : [
-      ['profile', 'ดูข้อมูลของฉัน'],
-      ['myrequests', 'ติดตามคำขอแก้ไข'],
-      ['overtime', 'รายการ OT'],
-      ['leave', 'รายการลา'],
+      ['/profile', 'ดูข้อมูลของฉัน'],
+      ['/my-requests', 'ติดตามคำขอแก้ไข'],
+      ['/overtime', 'รายการ OT'],
+      ['/leave', 'รายการลา'],
     ];
 
   return (
@@ -130,8 +132,8 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
             <h2>การดำเนินการด่วน</h2>
           </div>
           <div className="action-list">
-            {quickActions.map(([route, label]) => (
-              <button type="button" key={route} onClick={() => onRoute(route)}>{label}</button>
+            {quickActions.map(([path, label]) => (
+              <button type="button" key={path} onClick={() => navigate(path)}>{label}</button>
             ))}
           </div>
         </section>
@@ -139,7 +141,7 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
         <section className="panel">
           <div className="panel-header">
             <h2>{mode === 'company' ? 'คำขอล่าสุด' : 'คำขอล่าสุดของฉัน'}</h2>
-            <button type="button" className="text-button" onClick={() => onRoute(mode === 'company' ? 'requests' : 'myrequests')}>ดูทั้งหมด</button>
+            <button type="button" className="text-button" onClick={() => navigate(mode === 'company' ? '/requests' : '/my-requests')}>ดูทั้งหมด</button>
           </div>
           <div className="request-feed">
             {profileRequests.length === 0 ? (

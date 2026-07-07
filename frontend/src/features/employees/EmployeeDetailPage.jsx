@@ -1,5 +1,9 @@
 import { useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { hasPermission } from '../../app/permissions.js';
+import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { Avatar } from '../../components/common/Avatar.jsx';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
@@ -16,20 +20,36 @@ const tabDefs = [
   { id: 'sensitive', label: 'ข้อมูลอ่อนไหว', icon: 'shield', restricted: true },
 ];
 
-export function EmployeeDetailPage({ user, employee, onBack, onUpdateEmployee }) {
+export function EmployeeDetailPage({ user, onUpdateEmployee }) {
+  const { id } = useParams();
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('personal');
   const [editing, setEditing] = useState(false);
   const canManage = hasPermission(user.role, 'canManageEmployees');
   const canSeeSensitive = user.role === 'hr';
 
+  const onBack = () => navigate('/employees');
+
+  const employeeQuery = useQuery({
+    queryKey: queryKeys.employeeDetail(id),
+    queryFn: () => api.employees.get(id).then((response) => response.employee),
+    enabled: !!id,
+  });
+  const employee = employeeQuery.data ?? null;
+
   if (!employee) {
+    if (employeeQuery.isLoading) {
+      return <EmptyState title="กำลังโหลดข้อมูลพนักงาน" />;
+    }
     return <EmptyState title="ไม่พบข้อมูลพนักงาน" description="กลับไปเลือกรายชื่อพนักงานอีกครั้ง" />;
   }
 
   const visibleTabs = tabDefs.filter((tab) => !tab.restricted || canSeeSensitive);
 
   async function submitEdit(payload) {
-    await onUpdateEmployee(employee.id, payload);
+    // Pass the URL id so the query-key invalidated in useHrData
+    // (`employeeDetail(id)`) matches this page's query key exactly.
+    await onUpdateEmployee(id, payload);
     setEditing(false);
   }
 

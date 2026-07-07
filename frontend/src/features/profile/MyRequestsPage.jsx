@@ -1,9 +1,11 @@
+import { useNavigate } from 'react-router-dom';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
 
-export function MyRequestsPage({ profileRequests, onNewRequest }) {
+export function MyRequestsPage({ profileRequests }) {
+  const navigate = useNavigate();
   const pendingCount = profileRequests.filter((request) => request.status === 'pending').length;
 
   return (
@@ -11,7 +13,7 @@ export function MyRequestsPage({ profileRequests, onNewRequest }) {
       <PageHeader
         title="คำขอของฉัน"
         subtitle={`${pendingCount} คำขอรออนุมัติ`}
-        actions={<button type="button" className="primary-button" onClick={onNewRequest}>ส่งคำขอใหม่</button>}
+        actions={<button type="button" className="primary-button" onClick={() => navigate('/profile')}>ส่งคำขอใหม่</button>}
       />
 
       <section className="table-panel">

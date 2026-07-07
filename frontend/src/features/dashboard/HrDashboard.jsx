@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { Avatar } from '../../components/common/Avatar.jsx';
@@ -6,7 +7,8 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
 import { divisions, findDivision } from '../../data/referenceData.js';
 
-export function HrDashboard({ employee, employees, profileRequests, dashboardSummary, onRoute }) {
+export function HrDashboard({ employee, employees, profileRequests, dashboardSummary }) {
+  const navigate = useNavigate();
   const dashboardStats = useMemo(() => {
     const headcountByDivision = new Map(divisions.map((division) => [division.id, { division, count: 0 }]));
     const extraDivisions = new Map();
@@ -85,7 +87,7 @@ export function HrDashboard({ employee, employees, profileRequests, dashboardSum
         <section className="panel">
           <div className="panel-header">
             <h2>จำนวนพนักงานตามฝ่าย</h2>
-            <button type="button" className="text-button" onClick={() => onRoute('employees')}>ดูรายชื่อ</button>
+            <button type="button" className="text-button" onClick={() => navigate('/employees')}>ดูรายชื่อ</button>
           </div>
           <div className="bar-list">
             {dashboardStats.divisionRows.map(({ division, count }) => {
@@ -108,7 +110,7 @@ export function HrDashboard({ employee, employees, profileRequests, dashboardSum
         <section className="panel">
           <div className="panel-header">
             <h2>คำขอล่าสุด</h2>
-            <button type="button" className="text-button" onClick={() => onRoute('requests')}>ดูทั้งหมด</button>
+            <button type="button" className="text-button" onClick={() => navigate('/requests')}>ดูทั้งหมด</button>
           </div>
           <div className="request-feed">
             {profileRequests.slice(0, 5).map((request) => {

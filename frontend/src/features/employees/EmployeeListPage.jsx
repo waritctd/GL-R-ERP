@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { hasPermission } from '../../app/permissions.js';
 import { Avatar } from '../../components/common/Avatar.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
@@ -74,7 +75,8 @@ const columns = [
   },
 ];
 
-export function EmployeeListPage({ user, employees, onOpenEmployee, onCreateEmployee, loading }) {
+export function EmployeeListPage({ user, employees, onCreateEmployee, loading }) {
+  const navigate = useNavigate();
   const [filters, setFilters] = useState({ search: '', divisionId: '', departmentTh: '', statusId: '', active: 'all' });
   const [creating, setCreating] = useState(false);
   const canCreate = hasPermission(user.role, 'canManageEmployees');
@@ -173,7 +175,7 @@ export function EmployeeListPage({ user, employees, onOpenEmployee, onCreateEmpl
         getRowKey={(employee) => employee.id}
         gridClassName="employee-table"
         searchable={false}
-        onRowClick={(employee) => onOpenEmployee(employee.id)}
+        onRowClick={(employee) => navigate(`/employees/${employee.id}`)}
         pageSize={12}
         loading={loading}
         emptyState={{ icon: 'users', title: 'ไม่พบพนักงาน', description: 'ลองปรับคำค้นหาหรือตัวกรอง' }}

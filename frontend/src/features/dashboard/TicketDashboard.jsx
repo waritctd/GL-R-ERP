@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Skeleton, SkeletonCard } from '../../components/common/Skeleton.jsx';
@@ -20,7 +21,8 @@ function GreetingSubtitle({ role }) {
 
 const SHOW_SALES_ROLES = ['import', 'ceo', 'admin'];
 
-export function TicketDashboard({ user, employee, onOpenTicket, showToast }) {
+export function TicketDashboard({ user, employee, showToast }) {
+  const navigate = useNavigate();
   const [summary, setSummary] = useState(null);
   const [recent, setRecent] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -129,7 +131,7 @@ export function TicketDashboard({ user, employee, onOpenTicket, showToast }) {
                   <button
                     key={ticket.id}
                     type="button"
-                    onClick={() => onOpenTicket(ticket.id)}
+                    onClick={() => navigate(`/tickets/${ticket.id}`)}
                     style={{
                       width: '100%', display: 'grid',
                       gridTemplateColumns: 'minmax(0,0.9fr) minmax(0,2.2fr) minmax(0,1.4fr) minmax(0,1.3fr) minmax(0,1fr)',
