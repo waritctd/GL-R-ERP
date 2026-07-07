@@ -2,9 +2,14 @@ import { roleLabel } from '../../utils/format.js';
 import { Avatar } from '../common/Avatar.jsx';
 import { Icon } from '../common/Icon.jsx';
 
-export function Sidebar({ items, activeRoute, onRoute, user, employee, onLogout }) {
+export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, activeRoute, onRoute, user, employee, onLogout }) {
   return (
-    <aside className="sidebar">
+    <aside
+      id={id}
+      ref={drawerRef}
+      className={`sidebar ${isDrawerOpen ? 'is-mobile-drawer-open' : ''}`}
+      tabIndex={-1}
+    >
       <button className="brand" type="button" onClick={() => onRoute('dashboard')}>
         <span className="brand-mark">
           <i />

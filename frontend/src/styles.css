@@ -101,7 +101,7 @@
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
+  min-height: 100dvh;
   background: var(--color-bg);
 }
 
@@ -126,7 +126,7 @@ code {
 }
 
 .login-screen {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   padding: 28px;
@@ -228,6 +228,7 @@ select,
 textarea {
   width: 100%;
   min-height: 40px;
+  font-size: 16px;
   border: 1.5px solid var(--color-border-input);
   border-radius: var(--radius-md);
   background: var(--color-surface);
@@ -310,7 +311,7 @@ textarea:focus {
 }
 
 .app-shell {
-  height: 100vh;
+  height: 100dvh;
   display: flex;
   overflow: hidden;
 }
@@ -423,6 +424,11 @@ textarea:focus {
 
 .topbar-user-text {
   text-align: right;
+}
+
+.icon-button.mobile-nav-toggle,
+.mobile-drawer-backdrop {
+  display: none;
 }
 
 .content-scroll {
@@ -542,8 +548,8 @@ textarea:focus {
 }
 
 .icon-button {
-  width: 36px;
-  min-height: 36px;
+  width: 44px;
+  min-height: 44px;
   padding: 0;
   background: var(--color-surface);
   color: var(--color-icon-muted);
@@ -1318,6 +1324,12 @@ textarea:focus {
   white-space: nowrap;
 }
 
+button.status-badge,
+a.status-badge {
+  min-height: 44px;
+  padding: 8px 14px;
+}
+
 .tabs {
   display: flex;
   gap: 2px;
@@ -1443,7 +1455,7 @@ textarea:focus {
 
 .modal-panel {
   width: min(720px, 100%);
-  max-height: min(760px, calc(100vh - 40px));
+  max-height: min(760px, calc(100dvh - 40px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1887,5 +1899,69 @@ textarea:focus {
 
   .attendance-import-panel {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .app-main {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .icon-button.mobile-nav-toggle {
+    display: inline-flex;
+    flex: 0 0 44px;
+  }
+
+  .mobile-drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    display: block;
+    width: 100%;
+    min-height: 100dvh;
+    padding: 0;
+    border: 0;
+    background: rgba(15, 23, 42, 0.48);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 160ms ease;
+  }
+
+  .mobile-drawer-backdrop.is-open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 40;
+    display: flex;
+    width: min(300px, calc(100vw - 56px));
+    max-width: 100%;
+    flex-basis: auto;
+    overflow-y: auto;
+    transform: translateX(-100%);
+    visibility: hidden;
+    box-shadow: var(--shadow-lg-heavy);
+    transition:
+      transform 180ms ease,
+      visibility 0s linear 180ms;
+  }
+
+  .sidebar.is-mobile-drawer-open {
+    transform: translateX(0);
+    visibility: visible;
+    transition: transform 180ms ease;
+  }
+
+  /* The 1040px icon-rail rule hides these labels for the collapsed desktop
+     sidebar; that rule still matches here too (375px <= 1040px), so undo it
+     inside the full-width drawer where there is room for text. */
+  .brand span:not(.brand-mark),
+  .nav-item span,
+  .sidebar-account span {
+    display: revert;
   }
 }
