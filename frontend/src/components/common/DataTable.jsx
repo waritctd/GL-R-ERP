@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { isValidElement, useEffect, useMemo, useState } from 'react';
+import {
+  getCoreRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  useReactTable,
+} from '@tanstack/react-table';
 import { EmptyState } from './EmptyState.jsx';
 import { Icon } from './Icon.jsx';
 import { Skeleton } from './Skeleton.jsx';
@@ -38,6 +45,44 @@ function defaultCompare(a, b) {
   return String(a).localeCompare(String(b), 'th');
 }
 
+function textFromRendered(value) {
+  if (value == null || typeof value === 'boolean') return '';
+  if (typeof value === 'string' || typeof value === 'number') return String(value);
+  if (Array.isArray(value)) return value.map(textFromRendered).join('');
+  if (isValidElement(value)) return textFromRendered(value.props.children);
+  return String(value);
+}
+
+function csvEscape(value) {
+  const stringValue = value == null ? '' : String(value);
+  if (!/[",\r\n]/.test(stringValue)) return stringValue;
+  return `"${stringValue.replaceAll('"', '""')}"`;
+}
+
+function buildCsv(columns, rows) {
+  const headers = columns.map((column) => (typeof column.header === 'string' ? column.header : column.key));
+  const lines = [
+    headers.map(csvEscape).join(','),
+    ...rows.map((row) => columns.map((column) => {
+      const value = typeof column.searchAccessor === 'function'
+        ? column.searchAccessor(row)
+        : textFromRendered(column.render(row));
+      return csvEscape(value);
+    }).join(',')),
+  ];
+  return lines.join('\r\n');
+}
+
+function downloadCsv(csv, filename = 'data-table-export.csv') {
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 /**
  * Generic, controlled-data table primitive. Keeps emitting the exact
  * `{gridClassName} table-head` / `{gridClassName} table-row` classes the
@@ -63,59 +108,101 @@ export function DataTable({
   emptyState,
   initialSort,
   toolbarExtra,
+  stickyHeader = false,
+  exportable = false,
+  onExportCsv,
 }) {
   const [search, setSearch] = useState('');
-  const [sortKey, setSortKey] = useState(initialSort?.key ?? null);
-  const [sortDir, setSortDir] = useState(initialSort?.dir ?? 'asc');
-  const [page, setPage] = useState(1);
+  const [sorting, setSorting] = useState(
+    initialSort?.key ? [{ id: initialSort.key, desc: initialSort.dir === 'desc' }] : [],
+  );
+  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize });
 
-  const searchableColumns = useMemo(
-    () => columns.filter((column) => typeof column.searchAccessor === 'function'),
+  const columnMap = useMemo(
+    () => new Map(columns.map((column) => [column.key, column])),
     [columns],
   );
 
-  const searched = useMemo(() => {
-    if (!searchable || !search.trim()) return rows;
-    const query = search.trim().toLowerCase();
-    return rows.filter((row) => searchableColumns.some((column) => {
-      const value = column.searchAccessor(row);
+  const tableColumns = useMemo(() => columns.map((column) => ({
+    id: column.key,
+    accessorFn: (row) => (typeof column.searchAccessor === 'function' ? column.searchAccessor(row) : row),
+    enableSorting: Boolean(column.sortable),
+    enableGlobalFilter: Boolean(searchable && typeof column.searchAccessor === 'function'),
+    sortingFn: (rowA, rowB, columnId) => {
+      const sourceColumn = columnMap.get(columnId);
+      if (!sourceColumn) return 0;
+      const accessor = sourceColumn.sortAccessor || sourceColumn.render;
+      return defaultCompare(accessor(rowA.original), accessor(rowB.original));
+    },
+  })), [columns, columnMap, searchable]);
+
+  // eslint-disable-next-line react-hooks/incompatible-library -- requested headless table engine; returned methods are used directly in render.
+  const table = useReactTable({
+    data: rows,
+    columns: tableColumns,
+    state: {
+      sorting,
+      globalFilter: searchable ? search : '',
+      pagination,
+    },
+    onSortingChange: setSorting,
+    onPaginationChange: setPagination,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    getColumnCanGlobalFilter: (column) => Boolean(column.columnDef.enableGlobalFilter),
+    globalFilterFn: (row, columnId, filterValue) => {
+      if (!searchable) return true;
+      const query = String(filterValue || '').trim().toLowerCase();
+      if (!query) return true;
+      const sourceColumn = columnMap.get(columnId);
+      if (typeof sourceColumn?.searchAccessor !== 'function') return false;
+      const value = sourceColumn.searchAccessor(row.original);
       return value != null && String(value).toLowerCase().includes(query);
-    }));
-  }, [rows, searchable, search, searchableColumns]);
+    },
+    autoResetPageIndex: false,
+  });
 
-  const sorted = useMemo(() => {
-    if (!sortKey) return searched;
-    const column = columns.find((item) => item.key === sortKey);
-    if (!column) return searched;
-    const dir = sortDir === 'asc' ? 1 : -1;
-    const accessor = column.sortAccessor || column.render;
-    const copy = [...searched];
-    copy.sort((a, b) => dir * defaultCompare(accessor(a), accessor(b)));
-    return copy;
-  }, [searched, sortKey, sortDir, columns]);
-
-  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
-  const safePage = Math.min(page, totalPages);
-  const pageRows = sorted.slice((safePage - 1) * pageSize, safePage * pageSize);
-  const from = sorted.length === 0 ? 0 : (safePage - 1) * pageSize + 1;
-  const to = Math.min(safePage * pageSize, sorted.length);
+  const sortedRows = table.getPrePaginationRowModel().rows.map((row) => row.original);
+  const pageRows = table.getPaginationRowModel().rows.map((row) => row.original);
+  const totalPages = Math.max(1, table.getPageCount());
+  const safePage = Math.min(pagination.pageIndex + 1, totalPages);
+  const from = sortedRows.length === 0 ? 0 : (safePage - 1) * pageSize + 1;
+  const to = Math.min(safePage * pageSize, sortedRows.length);
+  const sortKey = sorting[0]?.id ?? null;
+  const sortDir = sorting[0]?.desc ? 'desc' : 'asc';
+  const canExport = exportable || typeof onExportCsv === 'function';
 
   useEffect(() => {
-    setPage(1);
+    setPagination((current) => ({ ...current, pageIndex: 0, pageSize }));
+  }, [pageSize]);
+
+  useEffect(() => {
+    setPagination((current) => ({ ...current, pageIndex: 0 }));
   }, [search]);
 
   useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
+    if (pagination.pageIndex + 1 > totalPages) {
+      setPagination((current) => ({ ...current, pageIndex: totalPages - 1 }));
+    }
+  }, [pagination.pageIndex, totalPages]);
 
   function handleSort(key) {
-    if (key === sortKey) {
-      setSortDir((direction) => (direction === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortKey(key);
-      setSortDir('asc');
+    setSorting((current) => {
+      if (current[0]?.id === key) return [{ id: key, desc: !current[0].desc }];
+      return [{ id: key, desc: false }];
+    });
+    setPagination((current) => ({ ...current, pageIndex: 0 }));
+  }
+
+  function handleExportCsv() {
+    const csv = buildCsv(columns, sortedRows);
+    if (typeof onExportCsv === 'function') {
+      onExportCsv(csv, sortedRows);
+      return;
     }
-    setPage(1);
+    downloadCsv(csv);
   }
 
   const RowTag = onRowClick ? 'button' : 'div';
@@ -123,7 +210,7 @@ export function DataTable({
 
   return (
     <div className="data-table">
-      {(searchable || toolbarExtra) ? (
+      {(searchable || toolbarExtra || canExport) ? (
         <div className="data-table-toolbar">
           {searchable ? (
             <label className="data-table-search search-field">
@@ -138,11 +225,17 @@ export function DataTable({
             </label>
           ) : null}
           {toolbarExtra}
+          {canExport ? (
+            <button type="button" className="secondary-button" onClick={handleExportCsv}>
+              <Icon name="fileText" />
+              Export CSV
+            </button>
+          ) : null}
         </div>
       ) : null}
 
       <section className="table-panel" role="table">
-        <div className={`${gridClassName} table-head`} role="row">
+        <div className={`${gridClassName} table-head${stickyHeader ? ' is-sticky' : ''}`} role="row">
           {columns.map((column) => (
             column.sortable ? (
               <SortHeader
@@ -172,7 +265,7 @@ export function DataTable({
               </div>
             ))}
           </div>
-        ) : sorted.length === 0 ? (
+        ) : sortedRows.length === 0 ? (
           <EmptyState
             icon={emptyState?.icon}
             title={emptyState?.title ?? 'ไม่พบข้อมูล'}
@@ -204,14 +297,17 @@ export function DataTable({
           );
         })}
 
-        {!loading && sorted.length > 0 && (
+        {!loading && sortedRows.length > 0 && (
           <footer className="pagination">
-            <span style={{ fontSize: 13 }}>แสดง {from}–{to} จาก {sorted.length} รายการ</span>
+            <span style={{ fontSize: 13 }}>แสดง {from}–{to} จาก {sortedRows.length} รายการ</span>
             <div>
               <button
                 type="button"
                 className="icon-button"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                onClick={() => setPagination((current) => ({
+                  ...current,
+                  pageIndex: Math.max(0, current.pageIndex - 1),
+                }))}
                 disabled={safePage === 1}
                 title="หน้าก่อนหน้า"
                 aria-label="หน้าก่อนหน้า"
@@ -224,7 +320,10 @@ export function DataTable({
               <button
                 type="button"
                 className="icon-button"
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                onClick={() => setPagination((current) => ({
+                  ...current,
+                  pageIndex: Math.min(totalPages - 1, current.pageIndex + 1),
+                }))}
                 disabled={safePage === totalPages}
                 title="หน้าถัดไป"
                 aria-label="หน้าถัดไป"

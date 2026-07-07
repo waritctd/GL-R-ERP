@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { DataTable } from './DataTable.jsx';
 
@@ -178,5 +178,50 @@ describe('DataTable', () => {
     expect(rowButton).toBeTruthy();
     fireEvent.click(rowButton);
     expect(onRowClick.calledWith.id).toBe(1);
+  });
+
+  it('adds the sticky header class only when stickyHeader is enabled', () => {
+    const { container } = render(
+      <DataTable
+        columns={baseColumns}
+        rows={makeRows(1)}
+        getRowKey={(row) => row.id}
+        gridClassName="employee-table"
+        stickyHeader
+      />,
+    );
+
+    expect(container.querySelector('.employee-table.table-head.is-sticky')).toBeTruthy();
+  });
+
+  it('exports the current sorted and filtered rows as CSV', () => {
+    const onExportCsv = vi.fn();
+    const rows = [
+      { id: 1, name: 'Charlie', age: 30 },
+      { id: 2, name: 'Alice', age: 25 },
+      { id: 3, name: 'Bob', age: 40 },
+    ];
+
+    render(
+      <DataTable
+        columns={baseColumns}
+        rows={rows}
+        getRowKey={(row) => row.id}
+        gridClassName="employee-table"
+        pageSize={1}
+        searchable
+        searchPlaceholder="ค้นหาพนักงาน"
+        initialSort={{ key: 'name', dir: 'asc' }}
+        onExportCsv={onExportCsv}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('ค้นหาพนักงาน'), { target: { value: 'i' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+
+    expect(onExportCsv).toHaveBeenCalledWith(
+      'Name,Age\r\nAlice,25\r\nCharlie,30',
+      [rows[1], rows[0]],
+    );
   });
 });
