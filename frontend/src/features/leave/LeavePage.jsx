@@ -15,6 +15,8 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 
+const LEAVE_TABLE_GRID = 'grid-cols-[minmax(0,1.35fr)_minmax(0,1.1fr)_minmax(0,1.65fr)_minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,0.8fr)] max-[1040px]:min-w-[900px] reflow-cards';
+
 function bangkokDateParts(date = new Date()) {
   return Object.fromEntries(new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Bangkok',
@@ -570,7 +572,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
       </section>
 
       <section className="table-panel">
-        <div className="leave-table table-head">
+        <div className={`${LEAVE_TABLE_GRID} table-head`}>
           <span>ช่วงลา / พนักงาน</span>
           <span>ประเภท / จำนวนวัน</span>
           <span>เหตุผล / เอกสาร</span>
@@ -588,7 +590,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
           const canCancel = request.status === 'SUBMITTED' && Number(request.employeeId) === Number(user.employeeId);
           const managerCancellable = canManagerCancel(request);
           return (
-            <div className="leave-table table-row" key={request.id}>
+            <div className={`${LEAVE_TABLE_GRID} table-row`} key={request.id}>
               <span data-label="ช่วงลา / พนักงาน">
                 <strong>{formatDateRange(request.startDate, request.endDate)}</strong>
                 <small>{request.employeeName || request.employeeCode || request.employeeId}</small>

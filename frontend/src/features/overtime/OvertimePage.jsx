@@ -14,6 +14,8 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 
+const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.25fr)_minmax(0,1.45fr)_minmax(0,1.55fr)_minmax(0,1fr)_minmax(0,0.75fr)_minmax(0,0.8fr)] max-[1040px]:min-w-[900px] reflow-cards';
+
 function bangkokDateParts(date = new Date()) {
   return Object.fromEntries(new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Bangkok',
@@ -482,7 +484,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
       </section>
 
       <section className="table-panel">
-        <div className="overtime-table table-head">
+        <div className={`${OVERTIME_TABLE_GRID} table-head`}>
           <span>วันที่ / พนักงาน</span>
           <span>แผน OT</span>
           <span>เหตุผล</span>
@@ -500,7 +502,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
           const canCancel = request.status === 'SUBMITTED' && Number(request.employeeId) === Number(user.employeeId);
           const managerCancellable = canManagerCancel(request);
           return (
-            <div className="overtime-table table-row" key={request.id}>
+            <div className={`${OVERTIME_TABLE_GRID} table-row`} key={request.id}>
               <span data-label="วันที่ / พนักงาน">
                 <strong>{formatWorkDate(request.workDate)}</strong>
                 <small>{request.employeeName || request.employeeCode || request.employeeId}</small>
