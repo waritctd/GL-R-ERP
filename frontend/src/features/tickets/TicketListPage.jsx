@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -40,7 +41,8 @@ const STATUS_TABS = [
   { value: 'closed',           label: 'ปิดแล้ว',             tone: 'neutral' },
 ];
 
-export function TicketListPage({ user, onOpenTicket, showToast }) {
+export function TicketListPage({ user, showToast }) {
+  const navigate = useNavigate();
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -118,7 +120,7 @@ export function TicketListPage({ user, onOpenTicket, showToast }) {
         rows={tickets}
         getRowKey={(ticket) => ticket.id}
         gridClassName="ticket-table"
-        onRowClick={(ticket) => onOpenTicket(ticket.id)}
+        onRowClick={(ticket) => navigate(`/tickets/${ticket.id}`)}
         rowStyle={(ticket) => ({
           borderLeft: `4px solid ${TONE_BORDER[ticketStatusLabel(ticket.status).tone] ?? '#94a3b8'}`,
         })}

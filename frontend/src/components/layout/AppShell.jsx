@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { hasPermission } from '../../app/permissions.js';
 import { roleLabel } from '../../utils/format.js';
 import { Avatar } from '../common/Avatar.jsx';
@@ -6,42 +7,36 @@ import { Icon } from '../common/Icon.jsx';
 import { NotificationBell } from '../common/NotificationBell.jsx';
 import { Sidebar } from './Sidebar.jsx';
 
-export function AppShell({ user, employee, route, onRoute, onLogout, pendingRequestCount, onOpenTicket, children }) {
+export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const drawerRef = useRef(null);
   const menuButtonRef = useRef(null);
-  const previousRouteRef = useRef(route);
+  const location = useLocation();
+  const navigate = useNavigate();
   const drawerId = 'mobile-navigation-drawer';
   const navItems = [
-    { route: 'dashboard', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
-    { route: 'hr-dashboard', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', show: hasPermission(user.role, 'canViewEmployees') },
-    { route: 'ticket-dashboard', label: 'ภาพรวมใบขอราคา', helper: 'Ticket overview', icon: 'home', show: hasPermission(user.role, 'canViewTickets') },
-    { route: 'tickets', label: 'ใบขอราคา', helper: 'Price requests', icon: 'fileText', show: hasPermission(user.role, 'canViewTickets') },
-    { route: 'ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', show: ['ceo', 'admin'].includes(user.role) },
-    { route: 'commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', show: hasPermission(user.role, 'canViewCommissions') },
-    { route: 'payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', show: hasPermission(user.role, 'canManagePayroll') },
-    { route: 'employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', show: hasPermission(user.role, 'canViewEmployees') },
-    { route: 'attendance', label: 'เวลาทำงาน', helper: 'Attendance', icon: 'calendar', show: true },
-    { route: 'overtime', label: 'ล่วงเวลา', helper: 'Overtime', icon: 'clock', show: !!user.employeeId || hasPermission(user.role, 'canViewAllOvertime') },
-    { route: 'leave', label: 'วันลา', helper: 'Leave', icon: 'clipboard', show: !!user.employeeId || hasPermission(user.role, 'canViewAllLeave') },
-    { route: 'requests', label: 'คำขอแก้ไขข้อมูล', helper: 'Profile requests', icon: 'clipboard', show: hasPermission(user.role, 'canReviewProfileRequests'), badge: pendingRequestCount },
-    { route: 'profile', label: 'ข้อมูลของฉัน', helper: 'My profile', icon: 'badge', show: !!user.employeeId },
-    { route: 'myrequests', label: 'คำขอของฉัน', helper: 'My requests', icon: 'clock', show: hasPermission(user.role, 'canSubmitProfileRequests'), badge: pendingRequestCount },
+    { path: '/', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
+    { path: '/hr', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', show: hasPermission(user.role, 'canViewEmployees') },
+    { path: '/ticket-overview', label: 'ภาพรวมใบขอราคา', helper: 'Ticket overview', icon: 'home', show: hasPermission(user.role, 'canViewTickets') },
+    { path: '/tickets', label: 'ใบขอราคา', helper: 'Price requests', icon: 'fileText', show: hasPermission(user.role, 'canViewTickets') },
+    { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', show: ['ceo', 'admin'].includes(user.role) },
+    { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', show: hasPermission(user.role, 'canViewCommissions') },
+    { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', show: hasPermission(user.role, 'canManagePayroll') },
+    { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', show: hasPermission(user.role, 'canViewEmployees') },
+    { path: '/attendance', label: 'เวลาทำงาน', helper: 'Attendance', icon: 'calendar', show: true },
+    { path: '/overtime', label: 'ล่วงเวลา', helper: 'Overtime', icon: 'clock', show: !!user.employeeId || hasPermission(user.role, 'canViewAllOvertime') },
+    { path: '/leave', label: 'วันลา', helper: 'Leave', icon: 'clipboard', show: !!user.employeeId || hasPermission(user.role, 'canViewAllLeave') },
+    { path: '/requests', label: 'คำขอแก้ไขข้อมูล', helper: 'Profile requests', icon: 'clipboard', show: hasPermission(user.role, 'canReviewProfileRequests'), badge: pendingRequestCount },
+    { path: '/profile', label: 'ข้อมูลของฉัน', helper: 'My profile', icon: 'badge', show: !!user.employeeId },
+    { path: '/my-requests', label: 'คำขอของฉัน', helper: 'My requests', icon: 'clock', show: hasPermission(user.role, 'canSubmitProfileRequests'), badge: pendingRequestCount },
   ].filter((item) => item.show);
 
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);
 
-  const handleRoute = useCallback((nextRoute) => {
-    closeDrawer();
-    onRoute(nextRoute);
-  }, [closeDrawer, onRoute]);
-
+  // Close the mobile drawer whenever the URL changes (navigation happened).
   useEffect(() => {
-    if (previousRouteRef.current !== route) {
-      closeDrawer();
-      previousRouteRef.current = route;
-    }
-  }, [closeDrawer, route]);
+    closeDrawer();
+  }, [closeDrawer, location.pathname]);
 
   useEffect(() => {
     if (!isDrawerOpen) return undefined;
@@ -109,8 +104,6 @@ export function AppShell({ user, employee, route, onRoute, onLogout, pendingRequ
         drawerRef={drawerRef}
         isDrawerOpen={isDrawerOpen}
         items={navItems}
-        activeRoute={route}
-        onRoute={handleRoute}
         user={user}
         employee={employee}
         onLogout={onLogout}
@@ -145,13 +138,13 @@ export function AppShell({ user, employee, route, onRoute, onLogout, pendingRequ
               <span>{user.email}</span>
             </div>
             <Avatar employee={employee} name={user.name} size="sm" />
-            <NotificationBell onOpenTicket={onOpenTicket} />
+            <NotificationBell onOpenTicket={(id) => navigate(`/tickets/${id}`)} />
             <button className="icon-button" type="button" onClick={onLogout} title="ออกจากระบบ" aria-label="ออกจากระบบ">
               <Icon name="logout" />
             </button>
           </div>
         </header>
-        <div className="content-scroll">{children}</div>
+        <div className="content-scroll"><Outlet /></div>
       </main>
     </div>
   );
