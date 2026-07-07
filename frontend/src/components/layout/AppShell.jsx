@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { SALES_ENABLED } from '../../app/features.js';
 import { hasPermission } from '../../app/permissions.js';
@@ -6,6 +6,7 @@ import { roleLabel } from '../../utils/format.js';
 import { Avatar } from '../common/Avatar.jsx';
 import { Button } from '../common/Button.jsx';
 import { ErrorBoundary } from '../common/ErrorBoundary.jsx';
+import { RouteFallback } from '../common/RouteFallback.jsx';
 import { Icon } from '../common/Icon.jsx';
 import { NotificationBell } from '../common/NotificationBell.jsx';
 import { Sidebar } from './Sidebar.jsx';
@@ -148,7 +149,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
             </Button>
           </div>
         </header>
-        <div className="content-scroll"><ErrorBoundary key={location.pathname}><Outlet /></ErrorBoundary></div>
+        <div className="content-scroll"><ErrorBoundary key={location.pathname}><Suspense fallback={<RouteFallback />}><Outlet /></Suspense></ErrorBoundary></div>
       </main>
     </div>
   );
