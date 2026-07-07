@@ -82,22 +82,22 @@ export function LoginPage({ onLogin, loading, error }) {
           </Button>
 
           {isMock && (
-            <div style={{ borderTop: '1px solid #e6eaf0', paddingTop: 14 }}>
-              <p style={{ margin: '0 0 10px', fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>DEMO — เข้าสู่ระบบด่วน</p>
-              <div style={{ display: 'grid', gap: 6 }}>
+            <div className="border-t border-border pt-[14px]">
+              <p className="!m-0 !mb-[10px] text-xs !text-text-faint font-semibold">DEMO — เข้าสู่ระบบด่วน</p>
+              <div className="grid gap-[6px]">
                 {quickAccounts.map((account) => (
                   <Button
                     key={account.role}
                     type="button"
                     variant="secondary"
-                    style={{ justifyContent: 'flex-start', gap: 10, padding: '6px 12px' }}
+                    className="justify-start gap-[10px] py-[6px] px-3"
                     disabled={loading}
                     onClick={() => onLogin({ role: account.role })}
                   >
                     <Icon name={account.icon} size={15} />
                     <span>
-                      <strong style={{ fontSize: 13 }}>{account.label}</strong>
-                      <small style={{ display: 'block', color: '#94a3b8', fontSize: 11 }}>{account.helper}</small>
+                      <strong className="text-sm">{account.label}</strong>
+                      <small className="block text-text-faint text-2xs">{account.helper}</small>
                     </span>
                   </Button>
                 ))}
