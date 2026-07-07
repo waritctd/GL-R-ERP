@@ -3,12 +3,14 @@ import { api } from '../../api/index.js';
 import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
+import { DesktopOnlyNotice } from '../../components/common/DesktopOnlyNotice.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { formatMoney } from '../../utils/format.js';
 
 const payrollColumns = [
@@ -148,6 +150,7 @@ function statusInfo(status) {
 }
 
 export function PayrollPage({ showToast }) {
+  const isMobile = useIsMobile();
   const [month, setMonth] = useState(thisMonth);
   const [period, setPeriod] = useState(null);
   const [adjustments, setAdjustments] = useState({});
@@ -264,6 +267,7 @@ export function PayrollPage({ showToast }) {
 
   return (
     <div className="page-stack">
+      {isMobile && <DesktopOnlyNotice />}
       <PageHeader
         title="ประมวลผลเงินเดือน"
         subtitle="Payroll Processing"
