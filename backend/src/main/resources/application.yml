@@ -72,8 +72,29 @@ app:
     window-seconds: ${APP_LOGIN_WINDOW_SECONDS:900}
     lockout-seconds: ${APP_LOGIN_LOCKOUT_SECONDS:900}
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health          # ONLY health is web-exposed (not beans/env/etc.)
+  endpoint:
+    health:
+      show-details: never        # anonymous-safe UP/DOWN; DB still rolls into the aggregate
+      probes:
+        enabled: true             # /actuator/health/liveness + /readiness
+  health:
+    mail:
+      # The mail health indicator opens a live SMTP connection to spring.mail.host on every check.
+      # That's an outbound-egress dependency having nothing to do with this app's liveness (mail is
+      # used only for the async factory Import Request notification), and it flips the aggregate
+      # health to DOWN in any sandboxed/offline environment. Excluded so /actuator/health reflects
+      # this app's own readiness (DB) rather than a third-party SMTP host's reachability.
+      enabled: false
+
 logging:
   level:
     th.co.glr.hr: INFO
     # Dedicated channel for PII-access audit events; keep at INFO so they are always emitted.
     th.co.glr.hr.audit: INFO
+  pattern:
+    level: "%5p [%X{correlationId:-}]"   # ':-' -> empty when absent (e.g. startup logs)
