@@ -4,7 +4,7 @@
   "buildCommand": "vite build",
   "outputDirectory": "dist",
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://gl-r-erp.onrender.com/api/:path*" },
+    { "source": "/api/:path*", "destination": "https://gl-r-erp-uat.onrender.com/api/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "headers": [
