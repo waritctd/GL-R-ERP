@@ -11,6 +11,7 @@ public class AppProperties {
     private final LoginRateLimit loginRateLimit = new LoginRateLimit();
     private final Auth auth = new Auth();
     private final Leave leave = new Leave();
+    private final Overtime overtime = new Overtime();
 
     public Cors getCors() {
         return cors;
@@ -30,6 +31,10 @@ public class AppProperties {
 
     public Leave getLeave() {
         return leave;
+    }
+
+    public Overtime getOvertime() {
+        return overtime;
     }
 
     public static class Cors {
@@ -60,6 +65,18 @@ public class AppProperties {
 
     public static class Leave {
         private int advanceNoticeDays = 7;
+
+        public int getAdvanceNoticeDays() {
+            return advanceNoticeDays;
+        }
+
+        public void setAdvanceNoticeDays(int advanceNoticeDays) {
+            this.advanceNoticeDays = advanceNoticeDays;
+        }
+    }
+
+    public static class Overtime {
+        private int advanceNoticeDays = 3;
 
         public int getAdvanceNoticeDays() {
             return advanceNoticeDays;

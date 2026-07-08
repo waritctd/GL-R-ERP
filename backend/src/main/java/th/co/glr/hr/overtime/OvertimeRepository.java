@@ -185,15 +185,28 @@ public class OvertimeRepository {
             .findFirst();
     }
 
-    public int approve(long id, Long reviewedById, OvertimeCalculation calculation, String reviewerNote) {
+    public List<Long> findCeoApproverEmployeeIds() {
+        return jdbc.query("""
+            SELECT e.employee_id
+              FROM hr.employee e
+              JOIN hr.division d ON d.division_id = e.division_id
+             WHERE e.is_active = TRUE
+               AND (d.source_code ILIKE 'MD%' OR d.source_code ILIKE 'MN%')
+             ORDER BY e.employee_id
+            """, Map.of(), (rs, rowNum) -> rs.getLong("employee_id"));
+    }
+
+    public int managerApprove(long id, Long reviewedById, OvertimeCalculation calculation, String reviewerNote) {
         return jdbc.update("""
             UPDATE hr.overtime_request
-               SET status = 'APPROVED',
+               SET status = 'MANAGER_APPROVED',
                    actual_start_at = :actualStartAt,
                    actual_end_at = :actualEndAt,
                    actual_minutes = :actualMinutes,
                    payable_minutes = :payableMinutes,
                    calculation_note = :calculationNote,
+                   manager_approved_by = :reviewedById,
+                   manager_approved_at = now(),
                    reviewed_by_id = :reviewedById,
                    reviewed_at = now(),
                    reviewer_note = :reviewerNote,
@@ -208,6 +221,24 @@ public class OvertimeRepository {
             .addValue("actualMinutes", calculation.actualMinutes())
             .addValue("payableMinutes", calculation.payableMinutes())
             .addValue("calculationNote", calculation.calculationNote())
+            .addValue("reviewerNote", cleanNote(reviewerNote)));
+    }
+
+    public int ceoApprove(long id, Long reviewedById, String reviewerNote) {
+        return jdbc.update("""
+            UPDATE hr.overtime_request
+               SET status = 'APPROVED',
+                   ceo_approved_by = :reviewedById,
+                   ceo_approved_at = now(),
+                   reviewed_by_id = :reviewedById,
+                   reviewed_at = now(),
+                   reviewer_note = COALESCE(CAST(:reviewerNote AS text), reviewer_note),
+                   updated_at = now()
+             WHERE overtime_request_id = :id
+               AND status = 'MANAGER_APPROVED'
+            """, new MapSqlParameterSource()
+            .addValue("id", id)
+            .addValue("reviewedById", reviewedById)
             .addValue("reviewerNote", cleanNote(reviewerNote)));
     }
 
@@ -237,7 +268,7 @@ public class OvertimeRepository {
                    cancelled_at = now(),
                    updated_at = now()
              WHERE overtime_request_id = :id
-               AND status IN ('SUBMITTED', 'APPROVED')
+               AND status IN ('SUBMITTED', 'MANAGER_APPROVED', 'APPROVED')
             """, new MapSqlParameterSource()
             .addValue("id", id)
             .addValue("reviewedById", reviewedById)
@@ -267,6 +298,12 @@ public class OvertimeRepository {
                    o.requested_by_id,
                    concat_ws(' ', requested_by.first_name_th, requested_by.last_name_th) AS requested_by_name,
                    o.requested_at,
+                   o.manager_approved_by,
+                   concat_ws(' ', manager_approver.first_name_th, manager_approver.last_name_th) AS manager_approved_by_name,
+                   o.manager_approved_at,
+                   o.ceo_approved_by,
+                   concat_ws(' ', ceo_approver.first_name_th, ceo_approver.last_name_th) AS ceo_approved_by_name,
+                   o.ceo_approved_at,
                    o.reviewed_by_id,
                    concat_ws(' ', reviewed_by.first_name_th, reviewed_by.last_name_th) AS reviewed_by_name,
                    o.reviewed_at,
@@ -279,6 +316,8 @@ public class OvertimeRepository {
               FROM hr.overtime_request o
               JOIN hr.employee e ON e.employee_id = o.employee_id
               LEFT JOIN hr.employee requested_by ON requested_by.employee_id = o.requested_by_id
+              LEFT JOIN hr.employee manager_approver ON manager_approver.employee_id = o.manager_approved_by
+              LEFT JOIN hr.employee ceo_approver ON ceo_approver.employee_id = o.ceo_approved_by
               LEFT JOIN hr.employee reviewed_by ON reviewed_by.employee_id = o.reviewed_by_id
               LEFT JOIN hr.employee manager ON manager.employee_id = e.reports_to_employee_id
             """;
@@ -307,6 +346,12 @@ public class OvertimeRepository {
             nullableLong(rs, "requested_by_id"),
             blankToNull(rs.getString("requested_by_name")),
             rs.getObject("requested_at", OffsetDateTime.class),
+            nullableLong(rs, "manager_approved_by"),
+            blankToNull(rs.getString("manager_approved_by_name")),
+            rs.getObject("manager_approved_at", OffsetDateTime.class),
+            nullableLong(rs, "ceo_approved_by"),
+            blankToNull(rs.getString("ceo_approved_by_name")),
+            rs.getObject("ceo_approved_at", OffsetDateTime.class),
             nullableLong(rs, "reviewed_by_id"),
             blankToNull(rs.getString("reviewed_by_name")),
             rs.getObject("reviewed_at", OffsetDateTime.class),
