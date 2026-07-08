@@ -6,6 +6,7 @@ export const queryKeys = {
   employeeDetail: (id) => ['employeeDetail', id],
   profileRequests: () => ['profileRequests'],
   dashboardSummary: () => ['dashboardSummary'],
+  notifications: () => ['notifications'],
   leaveRequests: (filters = {}) => ['leave', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   leaveBalances: (employeeId, year) => ['leave', 'balances', employeeId, year],
   leaveEmployees: () => ['leave', 'employees'],
