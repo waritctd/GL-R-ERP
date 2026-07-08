@@ -15,7 +15,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 
-const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.25fr)_minmax(0,1.45fr)_minmax(0,1.55fr)_minmax(0,1fr)_minmax(0,0.75fr)_minmax(0,0.8fr)] max-[1040px]:min-w-[900px] reflow-cards';
+const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,0.75fr)] max-[1040px]:min-w-[940px] reflow-cards';
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
 // (Enter-to-submit on the search button), so its exact utility string is reproduced
 // here rather than wrapping a <form> inside a non-form primitive.
@@ -33,9 +33,17 @@ function bangkokDateParts(date = new Date()) {
   }).formatToParts(date).map((part) => [part.type, part.value]));
 }
 
-const todayIso = () => {
-  const parts = bangkokDateParts();
+const dateIso = (date = new Date()) => {
+  const parts = bangkokDateParts(date);
   return `${parts.year}-${parts.month}-${parts.day}`;
+};
+
+const todayIso = () => dateIso();
+
+const addDaysIso = (days) => {
+  const date = new Date(`${todayIso()}T00:00:00+07:00`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return dateIso(date);
 };
 
 const monthStartIso = () => {
@@ -44,7 +52,7 @@ const monthStartIso = () => {
 };
 
 function defaultForm(employeeId = '') {
-  const date = todayIso();
+  const date = addDaysIso(3);
   return {
     employeeId: employeeId ? String(employeeId) : '',
     workDate: date,
@@ -85,7 +93,8 @@ function createOvertimeFormSchema({ requireEmployeeId }) {
 
 function statusInfo(status) {
   const map = {
-    SUBMITTED: { label: 'รออนุมัติ', tone: 'warning' },
+    SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
+    MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },
     APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
     REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
     CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'neutral' },
@@ -132,7 +141,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
   const queryClient = useQueryClient();
   const initialFilters = {
     from: monthStartIso(),
-    to: todayIso(),
+    to: addDaysIso(30),
     employeeId: '',
     status: '',
   };
@@ -192,9 +201,9 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
     mode: 'onChange',
     reValidateMode: 'onChange',
   });
-  const [plannedStartAt, plannedEndAt] = useWatch({
+  const [plannedStartAt, plannedEndAt, selectedEmployeeId, selectedDayType] = useWatch({
     control,
-    name: ['plannedStartAt', 'plannedEndAt'],
+    name: ['plannedStartAt', 'plannedEndAt', 'employeeId', 'dayType'],
   });
   const hasTimeRangeError = Boolean(
     plannedStartAt && plannedEndAt && plannedEndAt <= plannedStartAt,
@@ -203,9 +212,10 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
 
   const totals = useMemo(() => {
     const submitted = requests.filter((request) => request.status === 'SUBMITTED').length;
+    const managerApproved = requests.filter((request) => request.status === 'MANAGER_APPROVED').length;
     const approved = requests.filter((request) => request.status === 'APPROVED');
     const payableMinutes = approved.reduce((sum, request) => sum + Number(request.payableMinutes || 0), 0);
-    return { submitted, approved: approved.length, payableMinutes };
+    return { submitted, managerApproved, approved: approved.length, payableMinutes };
   }, [requests]);
 
   // Seed the acting employee once the option list lands (preserves pre-Query behavior).
@@ -318,12 +328,20 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
     return Boolean(directManager || divisionManager);
   }
 
-  function canReviewRequest(request) {
+  function canManagerApprove(request) {
     return request.status === 'SUBMITTED' && managesRequest(request);
   }
 
+  function canCeoApprove(request) {
+    return request.status === 'MANAGER_APPROVED' && user.role === 'ceo';
+  }
+
+  function canReviewRequest(request) {
+    return canManagerApprove(request) || canCeoApprove(request);
+  }
+
   function canManagerCancel(request) {
-    return ['SUBMITTED', 'APPROVED'].includes(request.status) && managesRequest(request);
+    return ['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'].includes(request.status) && managesRequest(request);
   }
 
   function cancel(id) {
@@ -354,7 +372,8 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
 
       <StatGrid>
         <StatCard label="คำขอทั้งหมด" value={requests.length} helper="ในช่วงที่เลือก" icon="clock" tone="indigo" />
-        <StatCard label="รออนุมัติ" value={totals.submitted} helper="Submitted" icon="clipboard" tone="amber" />
+        <StatCard label="รอผู้จัดการ" value={totals.submitted} helper="Submitted" icon="clipboard" tone="amber" />
+        <StatCard label="รอ CEO" value={totals.managerApproved} helper="Manager approved" icon="clipboard" tone="indigo" />
         <StatCard label="อนุมัติแล้ว" value={totals.approved} helper="Approved" icon="check" tone="teal" />
         <StatCard label="ชั่วโมงจ่ายได้" value={formatMinutes(totals.payableMinutes)} helper="Approved payable" icon="calendar" tone="blue" />
       </StatGrid>
@@ -372,7 +391,8 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
           สถานะ
           <select value={filters.status} onChange={(event) => updateFilter('status', event.target.value)}>
             <option value="">ทุกสถานะ</option>
-            <option value="SUBMITTED">รออนุมัติ</option>
+            <option value="SUBMITTED">รอผู้จัดการ</option>
+            <option value="MANAGER_APPROVED">รอ CEO</option>
             <option value="APPROVED">อนุมัติแล้ว</option>
             <option value="REJECTED">ปฏิเสธแล้ว</option>
             <option value="CANCELLED">ยกเลิกแล้ว</option>
@@ -402,6 +422,8 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
               <select
                 id="ot-employee"
                 {...register('employeeId')}
+                value={selectedEmployeeId ?? ''}
+                onChange={(event) => setValue('employeeId', event.target.value, { shouldDirty: true, shouldValidate: true })}
                 aria-invalid={Boolean(errors.employeeId)}
                 aria-describedby={errors.employeeId ? fieldErrorId('ot-employee') : undefined}
                 required
@@ -433,6 +455,8 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
             <select
               id="ot-day-type"
               {...register('dayType')}
+              value={selectedDayType ?? ''}
+              onChange={(event) => setValue('dayType', event.target.value, { shouldDirty: true, shouldValidate: true })}
               aria-invalid={Boolean(errors.dayType)}
               aria-describedby={errors.dayType ? fieldErrorId('ot-day-type') : undefined}
             >
@@ -494,7 +518,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
           <span>แผน OT</span>
           <span>เหตุผล</span>
           <span>เวลาจริง / จ่ายได้</span>
-          <span>สถานะ</span>
+          <span>ขั้นอนุมัติ</span>
           <span />
         </div>
         {loading ? (
@@ -504,6 +528,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
         ) : requests.map((request) => {
           const status = statusInfo(request.status);
           const reviewable = canReviewRequest(request);
+          const approveTitle = canCeoApprove(request) ? 'CEO อนุมัติ' : 'ผู้จัดการอนุมัติ';
           const canCancel = request.status === 'SUBMITTED' && Number(request.employeeId) === Number(user.employeeId);
           const managerCancellable = canManagerCancel(request);
           return (
@@ -526,11 +551,15 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
                 <strong>{formatMinutes(request.actualMinutes)}</strong>
                 <small>จ่ายได้ {formatMinutes(request.payableMinutes)}</small>
               </span>
-              <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+              <span data-label="ขั้นอนุมัติ">
+                <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                <small>ผู้จัดการ: {request.managerApprovedAt ? `${request.managerApprovedByName || '-'} · ${formatDateTime(request.managerApprovedAt)}` : '-'}</small>
+                <small>CEO: {request.ceoApprovedAt ? `${request.ceoApprovedByName || '-'} · ${formatDateTime(request.ceoApprovedAt)}` : '-'}</small>
+              </span>
               <span className="row-actions">
                 {reviewable ? (
                   <>
-                    <Button type="button" variant="icon" title="อนุมัติ" aria-label="อนุมัติ" disabled={saving} onClick={() => approve(request.id)}>
+                    <Button type="button" variant="icon" title={approveTitle} aria-label={approveTitle} disabled={saving} onClick={() => approve(request.id)}>
                       <Icon name="check" size={14} />
                     </Button>
                     <Button type="button" variant="icon" title="ปฏิเสธ" aria-label="ปฏิเสธ" disabled={saving} onClick={() => reject(request.id)}>

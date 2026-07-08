@@ -616,12 +616,16 @@ function buildOvertimeRecord(record) {
   const employee = db.employees.find((item) => item.id === record.employeeId);
   const managerEmployeeId = managerIdForEmployee(employee);
   const manager = managerEmployeeId ? db.employees.find((item) => item.id === managerEmployeeId) : null;
+  const managerApprover = record.managerApprovedBy ? db.employees.find((item) => item.id === record.managerApprovedBy) : null;
+  const ceoApprover = record.ceoApprovedBy ? db.employees.find((item) => item.id === record.ceoApprovedBy) : null;
   return {
     ...structuredClone(record),
     employeeCode: employee?.code || null,
     employeeName: employee?.nameTh || null,
     managerEmployeeId,
     managerName: manager?.nameTh || null,
+    managerApprovedByName: managerApprover?.nameTh || null,
+    ceoApprovedByName: ceoApprover?.nameTh || null,
   };
 }
 
@@ -1369,6 +1373,10 @@ export const api = {
         requestedById: user.employeeId,
         requestedByName: user.name,
         requestedAt: now,
+        managerApprovedBy: null,
+        managerApprovedAt: null,
+        ceoApprovedBy: null,
+        ceoApprovedAt: null,
         reviewedById: null,
         reviewedByName: null,
         reviewedAt: null,
@@ -1385,35 +1393,63 @@ export const api = {
       const user = requireSession();
       const request = db.overtimeRequests.find((item) => item.id === Number(id));
       if (!request) fail('Overtime request not found', 404);
-      if (!canReviewLeave(user, request.employeeId)) fail('Forbidden', 403);
-      if (request.status !== 'SUBMITTED') fail('Overtime request has already been reviewed', 409);
       const now = new Date().toISOString();
-      const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
-      request.status = 'APPROVED';
-      request.actualMinutes = request.actualMinutes ?? request.plannedMinutes;
-      request.payableMinutes = Math.round(request.actualMinutes * multiplier);
-      request.reviewedById = user.employeeId;
-      request.reviewedByName = user.name;
-      request.reviewedAt = now;
-      request.reviewerNote = payload.reviewerNote || null;
-      request.updatedAt = now;
-      return delay({ request: buildOvertimeRecord(request) });
+      if (request.status === 'SUBMITTED') {
+        if (!canReviewLeave(user, request.employeeId)) fail('Forbidden', 403);
+        const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
+        request.status = 'MANAGER_APPROVED';
+        request.actualMinutes = request.actualMinutes ?? request.plannedMinutes;
+        request.payableMinutes = Math.round(request.actualMinutes * multiplier);
+        request.managerApprovedBy = user.employeeId;
+        request.managerApprovedAt = now;
+        request.reviewedById = user.employeeId;
+        request.reviewedByName = user.name;
+        request.reviewedAt = now;
+        request.reviewerNote = payload.reviewerNote || null;
+        request.updatedAt = now;
+        return delay({ request: buildOvertimeRecord(request) });
+      }
+      if (request.status === 'MANAGER_APPROVED') {
+        if (user.role !== 'ceo') fail('Only the CEO can approve manager-approved overtime', 403);
+        request.status = 'APPROVED';
+        request.ceoApprovedBy = user.employeeId;
+        request.ceoApprovedAt = now;
+        request.reviewedById = user.employeeId;
+        request.reviewedByName = user.name;
+        request.reviewedAt = now;
+        request.reviewerNote = payload.reviewerNote || request.reviewerNote;
+        request.updatedAt = now;
+        return delay({ request: buildOvertimeRecord(request) });
+      }
+      fail('Overtime request has already been reviewed', 409);
     },
 
     async reject(id, payload = {}) {
       const user = requireSession();
       const request = db.overtimeRequests.find((item) => item.id === Number(id));
       if (!request) fail('Overtime request not found', 404);
-      if (!canReviewLeave(user, request.employeeId)) fail('Forbidden', 403);
-      if (request.status !== 'SUBMITTED') fail('Overtime request has already been reviewed', 409);
       const now = new Date().toISOString();
-      request.status = 'REJECTED';
-      request.reviewedById = user.employeeId;
-      request.reviewedByName = user.name;
-      request.reviewedAt = now;
-      request.reviewerNote = payload.reviewerNote || null;
-      request.updatedAt = now;
-      return delay({ request: buildOvertimeRecord(request) });
+      if (request.status === 'SUBMITTED') {
+        if (!canReviewLeave(user, request.employeeId)) fail('Forbidden', 403);
+        request.status = 'REJECTED';
+        request.reviewedById = user.employeeId;
+        request.reviewedByName = user.name;
+        request.reviewedAt = now;
+        request.reviewerNote = payload.reviewerNote || null;
+        request.updatedAt = now;
+        return delay({ request: buildOvertimeRecord(request) });
+      }
+      if (request.status === 'MANAGER_APPROVED') {
+        if (user.role !== 'ceo') fail('Only the CEO can approve manager-approved overtime', 403);
+        request.status = 'REJECTED';
+        request.reviewedById = user.employeeId;
+        request.reviewedByName = user.name;
+        request.reviewedAt = now;
+        request.reviewerNote = payload.reviewerNote || null;
+        request.updatedAt = now;
+        return delay({ request: buildOvertimeRecord(request) });
+      }
+      fail('Overtime request has already been reviewed', 409);
     },
 
     async cancel(id, payload = {}) {
@@ -1423,7 +1459,7 @@ export const api = {
       const approver = canReviewLeave(user, request.employeeId);
       if (!approver && request.employeeId !== user.employeeId) fail('Forbidden', 403);
       if (!approver && request.status !== 'SUBMITTED') fail('Only submitted overtime requests can be cancelled by employees', 409);
-      if (!['SUBMITTED', 'APPROVED'].includes(request.status)) fail('Only active overtime requests can be cancelled', 409);
+      if (!['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'].includes(request.status)) fail('Only active overtime requests can be cancelled', 409);
       const now = new Date().toISOString();
       request.status = 'CANCELLED';
       request.cancelledAt = now;
