@@ -562,11 +562,9 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
                     <Button type="button" variant="icon" title={approveTitle} aria-label={approveTitle} disabled={saving} onClick={() => approve(request.id)}>
                       <Icon name="check" size={14} />
                     </Button>
-                    {canManagerApprove(request) ? (
-                      <Button type="button" variant="icon" title="ปฏิเสธ" aria-label="ปฏิเสธ" disabled={saving} onClick={() => reject(request.id)}>
-                        <Icon name="close" size={14} />
-                      </Button>
-                    ) : null}
+                    <Button type="button" variant="icon" title="ปฏิเสธ" aria-label="ปฏิเสธ" disabled={saving} onClick={() => reject(request.id)}>
+                      <Icon name="close" size={14} />
+                    </Button>
                   </>
                 ) : null}
                 {(canCancel || managerCancellable) ? (

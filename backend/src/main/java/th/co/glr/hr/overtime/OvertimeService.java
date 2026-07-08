@@ -151,14 +151,47 @@ public class OvertimeService {
     public OvertimeRequestDto reject(long id, ReviewOvertimeRequest request, UserPrincipal user) {
         Long actorEmployeeId = requireEmployeeId(user);
         OvertimeRequestDto existing = requireRequest(id);
+        OvertimeStatus status = parseStatus(existing.status());
+        if (status == OvertimeStatus.SUBMITTED) {
+            return managerReject(id, request, user, actorEmployeeId, existing);
+        }
+        if (status == OvertimeStatus.MANAGER_APPROVED) {
+            return ceoReject(id, request, user, actorEmployeeId, existing);
+        }
+        throw new ApiException(HttpStatus.CONFLICT, "Overtime request has already been reviewed");
+    }
+
+    private OvertimeRequestDto managerReject(
+            long id,
+            ReviewOvertimeRequest request,
+            UserPrincipal user,
+            Long actorEmployeeId,
+            OvertimeRequestDto existing) {
         requireManager(existing.employeeId(), user);
-        requireStatus(existing, OvertimeStatus.SUBMITTED);
         int updated = overtimeRepository.reject(id, actorEmployeeId, note(request));
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "Overtime request has already been reviewed");
         }
         OvertimeRequestDto after = requireRequest(id);
         auditService.record(user, "REJECT_OVERTIME_REQUEST", "overtime_request", id, existing, after);
+        notifyRejected(after);
+        return after;
+    }
+
+    private OvertimeRequestDto ceoReject(
+            long id,
+            ReviewOvertimeRequest request,
+            UserPrincipal user,
+            Long actorEmployeeId,
+            OvertimeRequestDto existing) {
+        requireCeo(user);
+        int updated = overtimeRepository.ceoReject(id, actorEmployeeId, note(request));
+        if (updated != 1) {
+            throw new ApiException(HttpStatus.CONFLICT, "Overtime request has already been reviewed");
+        }
+        OvertimeRequestDto after = requireRequest(id);
+        auditService.record(user, "CEO_REJECT_OVERTIME_REQUEST", "overtime_request", id, existing, after);
+        notifyRejected(after);
         return after;
     }
 
@@ -388,6 +421,18 @@ public class OvertimeService {
                 true
             );
         }
+    }
+
+    private void notifyRejected(OvertimeRequestDto request) {
+        notificationService.notify(
+            request.employeeId(),
+            "OVERTIME_REJECTED",
+            "คำขอ OT ถูกปฏิเสธ",
+            "คำขอ OT วันที่ " + request.workDate() + " ถูกปฏิเสธ: "
+                + (request.reviewerNote() == null ? "กรุณาติดต่อผู้จัดการหรือ HR" : request.reviewerNote()),
+            "/overtime",
+            true
+        );
     }
 
     private Long requireEmployeeId(UserPrincipal user) {

@@ -196,6 +196,53 @@ class OvertimeServiceTest {
     }
 
     @Test
+    void managerRejectionTransitionsSubmittedToRejected() {
+        OvertimeRequestDto submitted = requestDto(77L, 10L, "SUBMITTED");
+        OvertimeRequestDto rejected = requestDto(77L, 10L, "REJECTED");
+        when(overtimeRepository.findById(77L))
+            .thenReturn(Optional.of(submitted))
+            .thenReturn(Optional.of(rejected));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, null, true)));
+        when(overtimeRepository.reject(77L, 99L, "no budget")).thenReturn(1);
+        UserPrincipal manager = user("employee", 99L);
+
+        OvertimeRequestDto result = overtimeService.reject(77L, new ReviewOvertimeRequest("no budget"), manager);
+
+        assertThat(result.status()).isEqualTo("REJECTED");
+        verify(overtimeRepository).reject(77L, 99L, "no budget");
+        verify(auditService).record(eq(manager), eq("REJECT_OVERTIME_REQUEST"), eq("overtime_request"), eq(77L), eq(submitted), eq(rejected));
+        verify(notificationService).notify(eq(10L), eq("OVERTIME_REJECTED"), anyString(), anyString(), eq("/overtime"), eq(true));
+    }
+
+    @Test
+    void ceoRejectionTransitionsManagerApprovedToRejected() {
+        OvertimeRequestDto managerApproved = requestDto(77L, 10L, "MANAGER_APPROVED");
+        OvertimeRequestDto rejected = requestDto(77L, 10L, "REJECTED");
+        when(overtimeRepository.findById(77L))
+            .thenReturn(Optional.of(managerApproved))
+            .thenReturn(Optional.of(rejected));
+        when(overtimeRepository.ceoReject(77L, 500L, "not justified")).thenReturn(1);
+        UserPrincipal ceo = user("ceo", 500L);
+
+        OvertimeRequestDto result = overtimeService.reject(77L, new ReviewOvertimeRequest("not justified"), ceo);
+
+        assertThat(result.status()).isEqualTo("REJECTED");
+        verify(overtimeRepository).ceoReject(77L, 500L, "not justified");
+        verify(auditService).record(eq(ceo), eq("CEO_REJECT_OVERTIME_REQUEST"), eq("overtime_request"), eq(77L), eq(managerApproved), eq(rejected));
+        verify(notificationService).notify(eq(10L), eq("OVERTIME_REJECTED"), anyString(), anyString(), eq("/overtime"), eq(true));
+    }
+
+    @Test
+    void managerCannotCeoRejectManagerApprovedOvertime() {
+        when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "MANAGER_APPROVED")));
+
+        assertThatThrownBy(() -> overtimeService.reject(77L, new ReviewOvertimeRequest(null), manager(88L, 5L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
     void employeesCannotApproveOvertime() {
         when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "SUBMITTED")));
         when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, null, true)));
