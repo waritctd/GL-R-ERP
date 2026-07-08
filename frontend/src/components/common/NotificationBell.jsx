@@ -21,7 +21,7 @@ function timeAgo(iso) {
   return `${Math.floor(diff / 86400)} วันที่แล้ว`;
 }
 
-export function NotificationBell({ onOpenTicket }) {
+export function NotificationBell({ onNavigate }) {
   const [items, setItems] = useState([]);
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -56,7 +56,7 @@ export function NotificationBell({ onOpenTicket }) {
       setItems((prev) => prev.map((n) => n.id === item.id ? { ...n, read: true } : n));
     }
     setOpen(false);
-    if (item.ticketId) onOpenTicket(item.ticketId);
+    if (item.link) onNavigate(item.link);
   }
 
   async function markAllRead() {

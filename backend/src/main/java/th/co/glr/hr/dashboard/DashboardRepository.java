@@ -170,7 +170,7 @@ public class DashboardRepository {
             SELECT COUNT(*) FILTER (WHERE is_read = FALSE) AS unread,
                    COUNT(*) FILTER (WHERE is_read = TRUE) AS read,
                    COUNT(*) AS total
-              FROM sales.notification
+              FROM hr.notification
              WHERE employee_id = :employeeId
             """,
             Map.of("employeeId", employeeId),

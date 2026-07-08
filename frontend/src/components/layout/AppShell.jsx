@@ -143,7 +143,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
               <span>{user.email}</span>
             </div>
             <Avatar employee={employee} name={user.name} size="sm" />
-            <NotificationBell onOpenTicket={(id) => navigate(`/tickets/${id}`)} />
+            <NotificationBell onNavigate={(link) => navigate(link)} />
             <Button variant="icon" type="button" onClick={onLogout} title="ออกจากระบบ" aria-label="ออกจากระบบ">
               <Icon name="logout" />
             </Button>

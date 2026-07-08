@@ -241,8 +241,8 @@ class DashboardRepositoryIntegrationTest extends AbstractPostgresIntegrationTest
 
     private void insertNotification(long employeeId, boolean read) {
         jdbc.update("""
-            INSERT INTO sales.notification (employee_id, type, message, is_read)
-            VALUES (:employeeId, 'INFO', 'Dashboard test', :read)
+            INSERT INTO hr.notification (employee_id, type, title, message, is_read)
+            VALUES (:employeeId, 'INFO', 'Dashboard test', 'Dashboard test', :read)
             """, Map.of("employeeId", employeeId, "read", read));
     }
 
