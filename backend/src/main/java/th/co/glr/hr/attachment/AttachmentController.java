@@ -2,18 +2,11 @@ package th.co.glr.hr.attachment;
 
 import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
-import java.net.URLConnection;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ContentDisposition;
@@ -47,16 +40,16 @@ public class AttachmentController {
     private final SessionContext sessions;
     private final TicketRepository tickets;
     private final AuditService auditService;
-
-    @Value("${app.uploads-dir:./uploads}")
-    private String uploadsDir;
+    private final FileStorageService fileStorage;
 
     public AttachmentController(AttachmentRepository attachments, SessionContext sessions,
-                                TicketRepository tickets, AuditService auditService) {
+                                TicketRepository tickets, AuditService auditService,
+                                FileStorageService fileStorage) {
         this.attachments  = attachments;
         this.sessions     = sessions;
         this.tickets      = tickets;
         this.auditService = auditService;
+        this.fileStorage  = fileStorage;
     }
 
     @GetMapping("/tickets/{ticketId}/attachments")
@@ -77,29 +70,9 @@ public class AttachmentController {
         UserPrincipal user = sessions.requireUser(session);
         if (file.isEmpty()) throw new ApiException(HttpStatus.BAD_REQUEST, "ไฟล์ว่างเปล่า");
 
-        String originalName = file.getOriginalFilename() != null
-            ? Paths.get(file.getOriginalFilename()).getFileName().toString()
-            : "file";
-        String ext = originalName.contains(".")
-            ? originalName.substring(originalName.lastIndexOf('.'))
-            : "";
-        String stored = UUID.randomUUID() + ext;
-        Path dir  = Paths.get(uploadsDir, String.valueOf(ticketId));
-        Path dest = dir.resolve(stored);
-
-        try {
-            Files.createDirectories(dir);
-            try (InputStream in = file.getInputStream()) {
-                Files.copy(in, dest, StandardCopyOption.REPLACE_EXISTING);
-            }
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-
-        String mime = file.getContentType();
-        if (mime == null) mime = URLConnection.guessContentTypeFromName(originalName);
-        AttachmentDto dto = attachments.save(ticketId, quotationId, originalName,
-            dest.toString(), mime, file.getSize(), attachType.toUpperCase(), user.id());
+        FileStorageService.StoredFile storedFile = fileStorage.store("tickets", ticketId, file, Set.of());
+        AttachmentDto dto = attachments.save(ticketId, quotationId, storedFile.fileName(),
+            storedFile.filePath(), storedFile.mimeType(), storedFile.fileSize(), attachType.toUpperCase(), user.id());
         return Map.of("attachment", dto);
     }
 

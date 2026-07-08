@@ -105,8 +105,7 @@ describe('LeavePage form validation', () => {
       startDate: futureDate,
       endDate: futureDate,
       reason: 'ทดสอบระบบ',
-      attachmentName: null,
-      attachmentUrl: null,
+      attachmentFile: null,
     });
   });
 });

@@ -9,23 +9,45 @@ import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
+import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.notification.NotificationService;
 
 @Service
 public class LeaveService {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
+    private static final Set<String> LEAVE_ATTACHMENT_MIME_TYPES = Set.of(
+        "application/pdf",
+        "image/jpeg",
+        "image/png"
+    );
     private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo");
     private static final Set<String> REVIEW_ALL_ROLES = Set.of("hr");
     private static final Set<LeaveStatus> ACTIVE_QUOTA_STATUSES = Set.of(LeaveStatus.SUBMITTED, LeaveStatus.APPROVED);
 
     private final LeaveRepository leaveRepository;
+    private final LeaveAttachmentRepository leaveAttachments;
+    private final FileStorageService fileStorage;
     private final AuditService auditService;
+    private final NotificationService notificationService;
+    private final AppProperties appProperties;
 
-    public LeaveService(LeaveRepository leaveRepository, AuditService auditService) {
+    public LeaveService(LeaveRepository leaveRepository,
+                        LeaveAttachmentRepository leaveAttachments,
+                        FileStorageService fileStorage,
+                        AuditService auditService,
+                        NotificationService notificationService,
+                        AppProperties appProperties) {
         this.leaveRepository = leaveRepository;
+        this.leaveAttachments = leaveAttachments;
+        this.fileStorage = fileStorage;
         this.auditService = auditService;
+        this.notificationService = notificationService;
+        this.appProperties = appProperties;
     }
 
     public List<LeaveRequestDto> list(
@@ -83,6 +105,12 @@ public class LeaveService {
 
     @Transactional
     public LeaveRequestDto submit(SubmitLeaveRequest request, UserPrincipal user) {
+        return submit(request, null, user);
+    }
+
+    @Transactional
+    public LeaveRequestDto submit(SubmitLeaveRequest request, MultipartFile attachment, UserPrincipal user) {
+        validateSubmitRequest(request);
         long actorEmployeeId = requireEmployeeId(user);
         long employeeId = resolveTargetEmployee(request.employeeId(), user);
         validateEmployee(employeeId);
@@ -93,9 +121,10 @@ public class LeaveService {
         int quotaYear = request.startDate().getYear();
         BigDecimal remainingBefore = remainingDays(employeeId, leaveType, quotaYear);
         boolean quotaAvailable = remainingBefore.compareTo(totalDays) >= 0;
-        LeaveStatus status = quotaAvailable ? LeaveStatus.SUBMITTED : LeaveStatus.AUTO_REJECTED;
-        BigDecimal remainingAfter = quotaAvailable ? remainingBefore.subtract(totalDays) : remainingBefore;
-        String systemNote = quotaAvailable ? null : insufficientQuotaNote(remainingBefore, totalDays);
+        boolean hasAttachment = attachment != null && !attachment.isEmpty();
+        String systemNote = autoRejectNote(leaveType, request.startDate(), quotaAvailable, hasAttachment, remainingBefore, totalDays);
+        LeaveStatus status = systemNote == null ? LeaveStatus.APPROVED : LeaveStatus.AUTO_REJECTED;
+        BigDecimal remainingAfter = status == LeaveStatus.APPROVED ? remainingBefore.subtract(totalDays) : remainingBefore;
 
         long id = leaveRepository.create(
             employeeId,
@@ -108,8 +137,21 @@ public class LeaveService {
             remainingAfter.max(BigDecimal.ZERO),
             systemNote
         );
+        if (hasAttachment) {
+            FileStorageService.StoredFile storedFile = fileStorage.store("leave", id, attachment, LEAVE_ATTACHMENT_MIME_TYPES);
+            LeaveAttachmentDto savedAttachment = leaveAttachments.save(
+                id,
+                storedFile.fileName(),
+                storedFile.filePath(),
+                storedFile.mimeType(),
+                storedFile.fileSize(),
+                actorEmployeeId
+            );
+            leaveRepository.attachFile(id, savedAttachment.id());
+        }
         LeaveRequestDto created = requireRequest(id);
         auditService.record(user, "SUBMIT_LEAVE_REQUEST", "leave_request", id, null, created);
+        notifyAfterSubmit(created, status);
         return created;
     }
 
@@ -125,6 +167,14 @@ public class LeaveService {
         }
         LeaveRequestDto after = requireRequest(id);
         auditService.record(user, "APPROVE_LEAVE_REQUEST", "leave_request", id, existing, after);
+        notificationService.notify(
+            after.employeeId(),
+            "LEAVE_APPROVED",
+            "คำขอลาได้รับการอนุมัติ",
+            "คำขอลา " + after.leaveTypeNameTh() + " วันที่ " + after.startDate() + " ถึง " + after.endDate()
+                + " ได้รับการอนุมัติแล้ว เหลือโควตา " + formatDays(after.quotaRemainingAfter()) + " วัน",
+            "/leave",
+            true);
         return after;
     }
 
@@ -140,6 +190,14 @@ public class LeaveService {
         }
         LeaveRequestDto after = requireRequest(id);
         auditService.record(user, "REJECT_LEAVE_REQUEST", "leave_request", id, existing, after);
+        notificationService.notify(
+            after.employeeId(),
+            "LEAVE_REJECTED",
+            "คำขอลาถูกปฏิเสธ",
+            "คำขอลา " + after.leaveTypeNameTh() + " วันที่ " + after.startDate() + " ถึง " + after.endDate()
+                + " ถูกปฏิเสธ: " + (after.reviewerNote() == null ? "กรุณาติดต่อ HR" : after.reviewerNote()),
+            "/leave",
+            true);
         return after;
     }
 
@@ -188,6 +246,55 @@ public class LeaveService {
         return leaveType.annualQuotaDays().subtract(used).max(BigDecimal.ZERO);
     }
 
+    private String autoRejectNote(LeaveTypeDto leaveType, LocalDate startDate, boolean quotaAvailable,
+                                  boolean hasAttachment, BigDecimal remainingBefore, BigDecimal requestedDays) {
+        if (!quotaAvailable) {
+            return insufficientQuotaNote(remainingBefore, requestedDays);
+        }
+        if ("SICK".equals(leaveType.code()) && !hasAttachment) {
+            return "Sick leave requires a medical certificate attachment. Attach the certificate or contact HR for help.";
+        }
+        int noticeDays = Math.max(0, appProperties.getLeave().getAdvanceNoticeDays());
+        LocalDate earliestAllowed = LocalDate.now(BUSINESS_ZONE).plusDays(noticeDays);
+        if (!"SICK".equals(leaveType.code()) && startDate.isBefore(earliestAllowed)) {
+            return "Leave requests must be submitted at least " + noticeDays
+                + " day(s) before the start date. Contact your manager or HR for urgent leave.";
+        }
+        return null;
+    }
+
+    private void notifyAfterSubmit(LeaveRequestDto request, LeaveStatus status) {
+        if (status == LeaveStatus.APPROVED) {
+            notificationService.notify(
+                request.employeeId(),
+                "LEAVE_AUTO_APPROVED",
+                "คำขอลาได้รับการอนุมัติอัตโนมัติ",
+                "คำขอลา " + request.leaveTypeNameTh() + " วันที่ " + request.startDate() + " ถึง "
+                    + request.endDate() + " ได้รับการอนุมัติแล้ว เหลือโควตา "
+                    + formatDays(request.quotaRemainingAfter()) + " วัน",
+                "/leave",
+                true);
+            if (request.managerEmployeeId() != null) {
+                notificationService.notify(
+                    request.managerEmployeeId(),
+                    "LEAVE_AUTO_APPROVED",
+                    "ลูกทีมมีวันลาที่อนุมัติอัตโนมัติ",
+                    request.employeeName() + " ลา " + request.leaveTypeNameTh() + " วันที่ "
+                        + request.startDate() + " ถึง " + request.endDate(),
+                    "/leave",
+                    false);
+            }
+            return;
+        }
+        notificationService.notify(
+            request.employeeId(),
+            "LEAVE_AUTO_REJECTED",
+            "คำขอลาไม่ผ่านเงื่อนไข",
+            request.systemNote() == null ? "คำขอลาไม่ผ่านเงื่อนไข กรุณาติดต่อ HR" : request.systemNote(),
+            "/leave",
+            true);
+    }
+
     private long resolveTargetEmployee(Long requestedEmployeeId, UserPrincipal user) {
         long actorEmployeeId = requireEmployeeId(user);
         long targetEmployeeId = requestedEmployeeId == null ? actorEmployeeId : requestedEmployeeId;
@@ -201,6 +308,18 @@ public class LeaveService {
     private void validateEmployee(long employeeId) {
         if (!leaveRepository.employeeExists(employeeId)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Employee not found");
+        }
+    }
+
+    private void validateSubmitRequest(SubmitLeaveRequest request) {
+        if (request == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Leave request is required");
+        }
+        if (request.startDate() == null || request.endDate() == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Leave dates are required");
+        }
+        if (request.reason() == null || request.reason().isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Leave reason is required");
         }
     }
 
@@ -304,5 +423,9 @@ public class LeaveService {
         return "Remaining quota is " + remainingBefore.stripTrailingZeros().toPlainString()
             + " day(s), which is not enough for this " + requestedDays.stripTrailingZeros().toPlainString()
             + " day request. Contact HR to adjust quota or follow the unpaid leave process.";
+    }
+
+    private String formatDays(BigDecimal value) {
+        return value.stripTrailingZeros().toPlainString();
     }
 }

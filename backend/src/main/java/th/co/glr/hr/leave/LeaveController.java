@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.leave.LeaveResponses.LeaveBalancesResponse;
@@ -45,10 +47,24 @@ public class LeaveController {
         return new LeaveListResponse(leaveService.list(user, fromDate, toDate, employeeId, status));
     }
 
-    @PostMapping
+    @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     LeaveDetailResponse submit(@Valid @RequestBody SubmitLeaveRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new LeaveDetailResponse(leaveService.submit(request, user));
+    }
+
+    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    LeaveDetailResponse submitMultipart(
+            @RequestParam(value = "employeeId", required = false) Long employeeId,
+            @RequestParam("leaveTypeCode") String leaveTypeCode,
+            @RequestParam("startDate") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam("endDate") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            @RequestParam("reason") String reason,
+            @RequestParam(value = "attachment", required = false) MultipartFile attachment,
+            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        SubmitLeaveRequest request = new SubmitLeaveRequest(employeeId, leaveTypeCode, startDate, endDate, reason);
+        return new LeaveDetailResponse(leaveService.submit(request, attachment, user));
     }
 
     @GetMapping("/employees")

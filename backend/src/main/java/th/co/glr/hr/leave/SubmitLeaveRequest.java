@@ -10,8 +10,6 @@ public record SubmitLeaveRequest(
     @NotBlank @Size(max = 30) String leaveTypeCode,
     @NotNull LocalDate startDate,
     @NotNull LocalDate endDate,
-    @NotBlank @Size(max = 2000) String reason,
-    @Size(max = 255) String attachmentName,
-    @Size(max = 2000) String attachmentUrl
+    @NotBlank @Size(max = 2000) String reason
 ) {
 }

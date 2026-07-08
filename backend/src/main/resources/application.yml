@@ -64,6 +64,8 @@ app:
     # OFF by default: never seed the low-entropy employee_code as a temp login password (guessable
     # before first login). Opt in for local dev only; secure onboarding uses the HR reset endpoint.
     seed-employee-code-passwords: ${APP_AUTH_SEED_EMPLOYEE_CODE_PASSWORDS:false}
+  leave:
+    advance-notice-days: ${APP_LEAVE_ADVANCE_NOTICE_DAYS:7}
   uploads-dir: ${APP_UPLOADS_DIR:./uploads}
   login-rate-limit:
     enabled: ${APP_LOGIN_RATE_LIMIT_ENABLED:true}
