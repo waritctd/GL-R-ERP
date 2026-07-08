@@ -258,6 +258,22 @@ public class OvertimeRepository {
             .addValue("reviewerNote", cleanNote(reviewerNote)));
     }
 
+    public int ceoReject(long id, Long reviewedById, String reviewerNote) {
+        return jdbc.update("""
+            UPDATE hr.overtime_request
+               SET status = 'REJECTED',
+                   reviewed_by_id = :reviewedById,
+                   reviewed_at = now(),
+                   reviewer_note = :reviewerNote,
+                   updated_at = now()
+             WHERE overtime_request_id = :id
+               AND status = 'MANAGER_APPROVED'
+            """, new MapSqlParameterSource()
+            .addValue("id", id)
+            .addValue("reviewedById", reviewedById)
+            .addValue("reviewerNote", cleanNote(reviewerNote)));
+    }
+
     public int cancel(long id, Long reviewedById, String reviewerNote) {
         return jdbc.update("""
             UPDATE hr.overtime_request
