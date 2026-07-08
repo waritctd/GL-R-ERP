@@ -131,12 +131,12 @@ public class LeaveRepository {
         Long id = jdbc.queryForObject("""
             INSERT INTO hr.leave_request (
                 employee_id, leave_type_code, start_date, end_date, total_days, quota_year,
-                reason, attachment_name, attachment_url, status, quota_remaining_before,
+                reason, status, quota_remaining_before,
                 quota_remaining_after, system_note, requested_by_id
             )
             VALUES (
                 :employeeId, :leaveTypeCode, :startDate, :endDate, :totalDays, :quotaYear,
-                :reason, :attachmentName, :attachmentUrl, :status, :quotaRemainingBefore,
+                :reason, :status, :quotaRemainingBefore,
                 :quotaRemainingAfter, :systemNote, :requestedById
             )
             RETURNING leave_request_id
@@ -148,14 +148,23 @@ public class LeaveRepository {
             .addValue("totalDays", totalDays)
             .addValue("quotaYear", quotaYear)
             .addValue("reason", request.reason().trim())
-            .addValue("attachmentName", clean(request.attachmentName()))
-            .addValue("attachmentUrl", clean(request.attachmentUrl()))
             .addValue("status", status.name())
             .addValue("quotaRemainingBefore", quotaRemainingBefore)
             .addValue("quotaRemainingAfter", quotaRemainingAfter)
             .addValue("systemNote", systemNote)
             .addValue("requestedById", requestedById), Long.class);
         return id == null ? 0 : id;
+    }
+
+    public int attachFile(long leaveRequestId, long attachmentId) {
+        return jdbc.update("""
+            UPDATE hr.leave_request
+               SET attachment_id = :attachmentId,
+                   updated_at = now()
+             WHERE leave_request_id = :leaveRequestId
+            """, new MapSqlParameterSource()
+            .addValue("leaveRequestId", leaveRequestId)
+            .addValue("attachmentId", attachmentId));
     }
 
     public Optional<LeaveRequestDto> findById(long id) {
@@ -255,8 +264,8 @@ public class LeaveRepository {
                    lr.total_days,
                    lr.quota_year,
                    lr.reason,
-                   lr.attachment_name,
-                   lr.attachment_url,
+                   lr.attachment_id,
+                   fa.file_name AS attachment_file_name,
                    lr.status,
                    lr.quota_remaining_before,
                    lr.quota_remaining_after,
@@ -279,6 +288,7 @@ public class LeaveRepository {
               LEFT JOIN hr.employee requested_by ON requested_by.employee_id = lr.requested_by_id
               LEFT JOIN hr.employee reviewed_by ON reviewed_by.employee_id = lr.reviewed_by_id
               LEFT JOIN hr.employee manager ON manager.employee_id = e.reports_to_employee_id
+              LEFT JOIN hr.file_attachment fa ON fa.attachment_id = lr.attachment_id
             """;
     }
 
@@ -306,8 +316,8 @@ public class LeaveRepository {
             rs.getObject("total_days", BigDecimal.class),
             rs.getInt("quota_year"),
             rs.getString("reason"),
-            rs.getString("attachment_name"),
-            rs.getString("attachment_url"),
+            nullableLong(rs, "attachment_id"),
+            rs.getString("attachment_file_name"),
             rs.getString("status"),
             rs.getObject("quota_remaining_before", BigDecimal.class),
             rs.getObject("quota_remaining_after", BigDecimal.class),

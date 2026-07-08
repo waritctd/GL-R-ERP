@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import imageCompression from 'browser-image-compression';
 import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { api } from '../../api/index.js';
@@ -59,8 +60,6 @@ function defaultForm(employeeId = '', leaveTypeCode = 'VACATION') {
     startDate: date,
     endDate: date,
     reason: '',
-    attachmentName: '',
-    attachmentUrl: '',
   };
 }
 
@@ -73,8 +72,6 @@ function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
     startDate: z.string().min(1, 'กรุณาเลือกวันที่เริ่ม'),
     endDate: z.string().min(1, 'กรุณาเลือกวันที่สิ้นสุด'),
     reason: z.string().min(1, 'กรุณาระบุเหตุผลการลา'),
-    attachmentName: z.string(),
-    attachmentUrl: z.string(),
   }).superRefine((data, context) => {
     if (requireEmployeeId && !data.employeeId) {
       context.addIssue({
@@ -146,6 +143,8 @@ export function LeavePage({ user, currentEmployee, showToast }) {
   const [filters, setFilters] = useState(initialFilters);
   const [appliedFilters, setAppliedFilters] = useState(initialFilters);
   const [confirmState, setConfirmState] = useState(null);
+  const [attachmentFile, setAttachmentFile] = useState(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
 
   const canReviewAll = hasPermission(user.role, 'canReviewLeave');
 
@@ -214,6 +213,10 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     enabled: !!formEmployeeId,
   });
   const balances = useMemo(() => balancesQuery.data ?? [], [balancesQuery.data]);
+  const selectedBalance = useMemo(
+    () => balances.find((balance) => balance.leaveTypeCode === formLeaveTypeCode),
+    [balances, formLeaveTypeCode],
+  );
 
   // Preserve the original error-toast behavior of the imperative loaders.
   useEffect(() => {
@@ -294,10 +297,12 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     onSuccess: (created) => {
       const nextEmployeeId = formEmployeeId || currentEmployee?.id || user.employeeId || '';
       reset(defaultForm(nextEmployeeId, formLeaveTypeCode));
+      setAttachmentFile(null);
+      setFileInputKey((key) => key + 1);
       if (created?.status === 'AUTO_REJECTED') {
-        showToast('error', created.systemNote || 'โควตาวันลาไม่เพียงพอ');
+        showToast('error', created.systemNote || 'คำขอลาไม่ผ่านเงื่อนไข');
       } else {
-        showToast('success', 'ส่งคำขอลาแล้ว');
+        showToast('success', 'ส่งคำขอลาและอนุมัติอัตโนมัติแล้ว');
       }
       invalidateLeave();
     },
@@ -336,15 +341,36 @@ export function LeavePage({ user, currentEmployee, showToast }) {
   const saving = createMutation.isPending || approveMutation.isPending
     || rejectMutation.isPending || cancelMutation.isPending;
 
-  function submitLeave(values) {
+  async function prepareAttachment(file) {
+    if (!file) return null;
+    if (!['application/pdf', 'image/jpeg', 'image/png'].includes(file.type)) {
+      throw new Error('รองรับเฉพาะไฟล์ PDF, JPG หรือ PNG');
+    }
+    if (!file.type.startsWith('image/')) {
+      return file;
+    }
+    return imageCompression(file, {
+      maxSizeMB: 2,
+      maxWidthOrHeight: 1600,
+      useWebWorker: true,
+    });
+  }
+
+  async function submitLeave(values) {
+    let preparedAttachment = null;
+    try {
+      preparedAttachment = await prepareAttachment(attachmentFile);
+    } catch (error) {
+      showToast('error', error.message || 'เตรียมไฟล์แนบไม่สำเร็จ');
+      return;
+    }
     createMutation.mutate({
       employeeId: values.employeeId ? Number(values.employeeId) : null,
       leaveTypeCode: values.leaveTypeCode,
       startDate: values.startDate,
       endDate: values.endDate,
       reason: values.reason.trim(),
-      attachmentName: values.attachmentName.trim() || null,
-      attachmentUrl: values.attachmentUrl.trim() || null,
+      attachmentFile: preparedAttachment,
     });
   }
 
@@ -491,6 +517,9 @@ export function LeavePage({ user, currentEmployee, showToast }) {
                 <option key={type.code} value={type.code}>{type.nameTh || type.nameEn}</option>
               ))}
             </select>
+            {selectedBalance ? (
+              <small>คงเหลือ {formatDays(selectedBalance.remainingDays)} จากสิทธิ์ {formatDays(selectedBalance.annualQuotaDays)}</small>
+            ) : null}
           </FormField>
           <FormField
             label="วันที่เริ่ม"
@@ -518,19 +547,15 @@ export function LeavePage({ user, currentEmployee, showToast }) {
               required
             />
           </FormField>
-          <FormField label="ชื่อเอกสาร" htmlFor="leave-attachment-name">
+          <FormField label="เอกสารแนบ" htmlFor="leave-attachment-file">
             <input
-              id="leave-attachment-name"
-              {...register('attachmentName')}
-              placeholder="Medical certificate.pdf"
+              key={fileInputKey}
+              id="leave-attachment-file"
+              type="file"
+              accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
+              onChange={(event) => setAttachmentFile(event.target.files?.[0] || null)}
             />
-          </FormField>
-          <FormField label="ลิงก์เอกสาร" htmlFor="leave-attachment-url">
-            <input
-              id="leave-attachment-url"
-              {...register('attachmentUrl')}
-              placeholder="https://..."
-            />
+            <small>{attachmentFile ? attachmentFile.name : 'ลาป่วยต้องแนบใบรับรองแพทย์'}</small>
           </FormField>
           <div className={formGridSpan2}>
             <FormField label="เหตุผลการลา" htmlFor="leave-reason" error={errors.reason?.message}>
@@ -552,6 +577,11 @@ export function LeavePage({ user, currentEmployee, showToast }) {
             </Button>
           </RowActions>
         </form>
+        <p className="mt-3 text-sm text-text-muted">
+          อ้างอิง พ.ร.บ. คุ้มครองแรงงาน พ.ศ. 2541: ลากิจธุระจำเป็นไม่น้อยกว่า 3 วันต่อปี,
+          ลาป่วยได้รับค่าจ้างไม่เกิน 30 วันทำงานต่อปี และลาพักร้อนไม่น้อยกว่า 6 วันต่อปีหลังทำงานครบ 1 ปี.
+          <a href="https://www.mol.go.th/employee/สิทธิตามกฎหมายแรงงาน" target="_blank" rel="noreferrer"> กระทรวงแรงงาน</a>
+        </p>
       </Panel>
 
       <Panel title="ปฏิทินวันลา">
@@ -603,7 +633,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
               </span>
               <span data-label="เหตุผล / เอกสาร">
                 <strong>{request.reason}</strong>
-                <small>{request.attachmentName || request.attachmentUrl || '-'}</small>
+                <small>{request.attachmentFileName || '-'}</small>
               </span>
               <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
               <span data-label="อนุมัติ / หมายเหตุ">

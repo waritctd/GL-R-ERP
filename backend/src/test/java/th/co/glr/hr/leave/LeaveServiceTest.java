@@ -11,40 +11,54 @@ import static org.mockito.Mockito.when;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
+import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.notification.NotificationService;
 
 class LeaveServiceTest {
+    private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
+
     private final LeaveRepository leaveRepository = mock(LeaveRepository.class);
+    private final LeaveAttachmentRepository leaveAttachments = mock(LeaveAttachmentRepository.class);
+    private final FileStorageService fileStorage = mock(FileStorageService.class);
     private final AuditService auditService = mock(AuditService.class);
-    private final LeaveService leaveService = new LeaveService(leaveRepository, auditService);
+    private final NotificationService notificationService = mock(NotificationService.class);
+    private final AppProperties appProperties = new AppProperties();
+    private final LeaveService leaveService = new LeaveService(
+        leaveRepository, leaveAttachments, fileStorage, auditService, notificationService, appProperties);
 
     @Test
-    void employeesCanSubmitOwnLeaveWhenQuotaIsAvailable() {
+    void submitAutoApprovesWhenQuotaAndAdvanceNoticeAreSatisfied() {
         SubmitLeaveRequest request = validSubmit(null);
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
-        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class)))
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(new BigDecimal("1.00"));
-        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(2026),
-            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null)))
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null)))
             .thenReturn(55L);
-        when(leaveRepository.findById(55L)).thenReturn(Optional.of(requestDto(55L, 10L, "SUBMITTED")));
+        when(leaveRepository.findById(55L)).thenReturn(Optional.of(requestDto(55L, 10L, "APPROVED", request.startDate(), request.endDate())));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
         assertThat(result.id()).isEqualTo(55L);
+        assertThat(result.status()).isEqualTo("APPROVED");
         ArgumentCaptor<BigDecimal> totalDays = ArgumentCaptor.forClass(BigDecimal.class);
-        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), totalDays.capture(), eq(2026),
-            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null));
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), totalDays.capture(), eq(request.startDate().getYear()),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null));
         assertThat(totalDays.getValue()).isEqualByComparingTo("2.00");
+        verify(notificationService).notify(eq(10L), eq("LEAVE_AUTO_APPROVED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(99L), eq("LEAVE_AUTO_APPROVED"), any(String.class), any(String.class), eq("/leave"), eq(false));
     }
 
     @Test
@@ -52,18 +66,69 @@ class LeaveServiceTest {
         SubmitLeaveRequest request = validSubmit(null);
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
-        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class)))
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(new BigDecimal("5.00"));
-        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(2026),
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class)))
             .thenReturn(56L);
-        when(leaveRepository.findById(56L)).thenReturn(Optional.of(requestDto(56L, 10L, "AUTO_REJECTED")));
+        when(leaveRepository.findById(56L)).thenReturn(Optional.of(requestDto(56L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate())));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(2026),
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class));
+        verify(notificationService).notify(eq(10L), eq("LEAVE_AUTO_REJECTED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+    }
+
+    @Test
+    void submissionAutoRejectsWhenAdvanceNoticeIsTooShort() {
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null,
+            "VACATION",
+            nextWeekdayWithinNotice(),
+            nextWeekdayWithinNotice(),
+            "Urgent errand"
+        );
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class)))
+            .thenReturn(57L);
+        when(leaveRepository.findById(57L)).thenReturn(Optional.of(requestDto(57L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate())));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), org.mockito.ArgumentMatchers.contains("at least 7"));
+    }
+
+    @Test
+    void submissionAutoRejectsSickLeaveWithoutCertificate() {
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null,
+            "SICK",
+            nextWeekday(),
+            nextWeekday(),
+            "Fever"
+        );
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("SICK")).thenReturn(Optional.of(sickType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class)))
+            .thenReturn(58L);
+        when(leaveRepository.findById(58L)).thenReturn(Optional.of(requestDto(58L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate())));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), org.mockito.ArgumentMatchers.contains("medical certificate"));
     }
 
     @Test
@@ -104,8 +169,8 @@ class LeaveServiceTest {
 
     @Test
     void hrCanApproveLeave() {
-        LeaveRequestDto submitted = requestDto(77L, 10L, "SUBMITTED");
-        LeaveRequestDto approved = requestDto(77L, 10L, "APPROVED");
+        LeaveRequestDto submitted = requestDto(77L, 10L, "SUBMITTED", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"));
+        LeaveRequestDto approved = requestDto(77L, 10L, "APPROVED", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"));
         when(leaveRepository.findById(77L))
             .thenReturn(Optional.of(submitted))
             .thenReturn(Optional.of(approved));
@@ -121,7 +186,7 @@ class LeaveServiceTest {
 
     @Test
     void employeesCannotApproveTheirOwnLeave() {
-        when(leaveRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "SUBMITTED")));
+        when(leaveRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "SUBMITTED", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"))));
         when(leaveRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new LeaveEmployeeAccess(10L, 99L, true)));
 
         assertThatThrownBy(() -> leaveService.approve(77L, new ReviewLeaveRequest(null), user("employee", 10L)))
@@ -137,9 +202,7 @@ class LeaveServiceTest {
             "VACATION",
             LocalDate.parse("2026-12-31"),
             LocalDate.parse("2027-01-02"),
-            "Year-end trip",
-            null,
-            null
+            "Year-end trip"
         );
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
@@ -151,22 +214,49 @@ class LeaveServiceTest {
     }
 
     private SubmitLeaveRequest validSubmit(Long employeeId) {
+        LocalDate startDate = nextWeekdayAfterNotice();
         return new SubmitLeaveRequest(
             employeeId,
             "VACATION",
-            LocalDate.parse("2026-07-13"),
-            LocalDate.parse("2026-07-14"),
-            "Family trip",
-            null,
-            null
+            startDate,
+            startDate.plusDays(1),
+            "Family trip"
         );
+    }
+
+    private LocalDate nextWeekdayAfterNotice() {
+        LocalDate date = LocalDate.now(BUSINESS_ZONE).plusDays(8);
+        while (date.getDayOfWeek().getValue() >= 6) {
+            date = date.plusDays(1);
+        }
+        return date;
+    }
+
+    private LocalDate nextWeekdayWithinNotice() {
+        LocalDate date = LocalDate.now(BUSINESS_ZONE).plusDays(1);
+        while (date.getDayOfWeek().getValue() >= 6) {
+            date = date.plusDays(1);
+        }
+        return date;
+    }
+
+    private LocalDate nextWeekday() {
+        LocalDate date = LocalDate.now(BUSINESS_ZONE);
+        while (date.getDayOfWeek().getValue() >= 6) {
+            date = date.plusDays(1);
+        }
+        return date;
     }
 
     private LeaveTypeDto vacationType() {
         return new LeaveTypeDto("VACATION", "Vacation", "Vacation leave", new BigDecimal("6.00"), false);
     }
 
-    private LeaveRequestDto requestDto(long id, long employeeId, String status) {
+    private LeaveTypeDto sickType() {
+        return new LeaveTypeDto("SICK", "Sick", "Sick leave", new BigDecimal("30.00"), true);
+    }
+
+    private LeaveRequestDto requestDto(long id, long employeeId, String status, LocalDate startDate, LocalDate endDate) {
         OffsetDateTime timestamp = OffsetDateTime.parse("2026-06-14T10:00:00+07:00");
         return new LeaveRequestDto(
             id,
@@ -176,10 +266,10 @@ class LeaveServiceTest {
             "VACATION",
             "Vacation",
             "Vacation leave",
-            LocalDate.parse("2026-07-13"),
-            LocalDate.parse("2026-07-14"),
+            startDate,
+            endDate,
             new BigDecimal("2.00"),
-            2026,
+            startDate.getYear(),
             "Family trip",
             null,
             null,

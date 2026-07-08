@@ -41,10 +41,11 @@ class AttachmentControllerTest {
     private final AttachmentRepository attachmentRepository = mock(AttachmentRepository.class);
     private final TicketRepository ticketRepository = mock(TicketRepository.class);
     private final AuditService auditService = mock(AuditService.class);
+    private final FileStorageService fileStorageService = mock(FileStorageService.class);
 
     private final MockMvc mvc = MockMvcBuilders
         .standaloneSetup(new AttachmentController(
-            attachmentRepository, new SessionContext(), ticketRepository, auditService))
+            attachmentRepository, new SessionContext(), ticketRepository, auditService, fileStorageService))
         .setControllerAdvice(new ApiExceptionHandler())
         .build();
 

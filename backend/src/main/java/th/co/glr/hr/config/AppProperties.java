@@ -10,6 +10,7 @@ public class AppProperties {
     private final Attendance attendance = new Attendance();
     private final LoginRateLimit loginRateLimit = new LoginRateLimit();
     private final Auth auth = new Auth();
+    private final Leave leave = new Leave();
 
     public Cors getCors() {
         return cors;
@@ -25,6 +26,10 @@ public class AppProperties {
 
     public Auth getAuth() {
         return auth;
+    }
+
+    public Leave getLeave() {
+        return leave;
     }
 
     public static class Cors {
@@ -50,6 +55,18 @@ public class AppProperties {
 
         public void setAgentToken(String agentToken) {
             this.agentToken = agentToken;
+        }
+    }
+
+    public static class Leave {
+        private int advanceNoticeDays = 7;
+
+        public int getAdvanceNoticeDays() {
+            return advanceNoticeDays;
+        }
+
+        public void setAdvanceNoticeDays(int advanceNoticeDays) {
+            this.advanceNoticeDays = advanceNoticeDays;
         }
     }
 
