@@ -46,7 +46,28 @@ export const api = {
     employees: () => apiRequest(API_ROUTES.leave.employees),
     types: () => apiRequest(API_ROUTES.leave.types),
     balances: (params) => apiRequest(withQuery(API_ROUTES.leave.balances, params)),
-    create: (payload) => apiRequest(API_ROUTES.leave.create, { method: 'POST', body: payload }),
+    create: async (payload) => {
+      if (!Object.prototype.hasOwnProperty.call(payload, 'attachmentFile')) {
+        return apiRequest(API_ROUTES.leave.create, { method: 'POST', body: payload });
+      }
+      const formData = new FormData();
+      if (payload.employeeId) formData.append('employeeId', String(payload.employeeId));
+      formData.append('leaveTypeCode', payload.leaveTypeCode);
+      formData.append('startDate', payload.startDate);
+      formData.append('endDate', payload.endDate);
+      formData.append('reason', payload.reason);
+      if (payload.attachmentFile) formData.append('attachment', payload.attachmentFile);
+      const res = await fetch(API_ROUTES.leave.create, {
+        method: 'POST',
+        credentials: 'include',
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'ส่งคำขอลาไม่สำเร็จ');
+      }
+      return res.json();
+    },
     approve: (id, payload = {}) => apiRequest(API_ROUTES.leave.approve(id), { method: 'POST', body: payload }),
     reject: (id, payload = {}) => apiRequest(API_ROUTES.leave.reject(id), { method: 'POST', body: payload }),
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.leave.cancel(id), { method: 'POST', body: payload }),

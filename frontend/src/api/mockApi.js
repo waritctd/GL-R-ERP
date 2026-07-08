@@ -20,9 +20,9 @@ if (db.leaveRequests.length === 0) {
       totalDays: 2,
       quotaYear: 2026,
       reason: 'Family trip',
-      attachmentName: null,
-      attachmentUrl: null,
-      status: 'SUBMITTED',
+      attachmentId: null,
+      attachmentFileName: null,
+      status: 'APPROVED',
       quotaRemainingBefore: 6,
       quotaRemainingAfter: 4,
       systemNote: null,
@@ -46,8 +46,8 @@ if (db.leaveRequests.length === 0) {
       totalDays: 1,
       quotaYear: 2026,
       reason: 'Medical appointment',
-      attachmentName: 'medical-certificate.pdf',
-      attachmentUrl: null,
+      attachmentId: 2,
+      attachmentFileName: 'medical-certificate.pdf',
       status: 'APPROVED',
       quotaRemainingBefore: 30,
       quotaRemainingAfter: 29,
@@ -1218,8 +1218,19 @@ export const api = {
       const used = leaveUsedDays(employeeId, leaveType.code, quotaYear, ['SUBMITTED', 'APPROVED']);
       const remainingBefore = Math.max(0, leaveType.annualQuotaDays - used);
       const quotaAvailable = remainingBefore >= totalDays;
-      const status = quotaAvailable ? 'SUBMITTED' : 'AUTO_REJECTED';
-      const remainingAfter = quotaAvailable ? remainingBefore - totalDays : remainingBefore;
+      const today = new Date().toISOString().slice(0, 10);
+      const sevenDaysAhead = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const hasAttachment = Boolean(payload.attachmentFile);
+      let systemNote = null;
+      if (!quotaAvailable) {
+        systemNote = `โควตาคงเหลือ ${remainingBefore} วัน ไม่พอสำหรับคำขอ ${totalDays} วัน กรุณาติดต่อ HR เพื่อปรับโควตาหรือดำเนินการลาไม่รับค่าจ้าง`;
+      } else if (leaveType.code === 'SICK' && !hasAttachment) {
+        systemNote = 'ลาป่วยต้องแนบใบรับรองแพทย์ กรุณาแนบเอกสารหรือติดต่อ HR';
+      } else if (leaveType.code !== 'SICK' && payload.startDate < sevenDaysAhead && payload.startDate >= today) {
+        systemNote = 'ต้องยื่นคำขอลาล่วงหน้าอย่างน้อย 7 วัน กรุณาติดต่อหัวหน้าหรือ HR หากเป็นเหตุเร่งด่วน';
+      }
+      const status = systemNote ? 'AUTO_REJECTED' : 'APPROVED';
+      const remainingAfter = status === 'APPROVED' ? remainingBefore - totalDays : remainingBefore;
       const id = Math.max(0, ...db.leaveRequests.map((item) => item.id)) + 1;
       const now = new Date().toISOString();
       const request = {
@@ -1231,12 +1242,12 @@ export const api = {
         totalDays,
         quotaYear,
         reason: payload.reason,
-        attachmentName: payload.attachmentName || null,
-        attachmentUrl: payload.attachmentUrl || null,
+        attachmentId: hasAttachment ? id : null,
+        attachmentFileName: payload.attachmentFile?.name || null,
         status,
         quotaRemainingBefore: remainingBefore,
         quotaRemainingAfter: remainingAfter,
-        systemNote: quotaAvailable ? null : `โควตาคงเหลือ ${remainingBefore} วัน ไม่พอสำหรับคำขอ ${totalDays} วัน กรุณาติดต่อ HR เพื่อปรับโควตาหรือดำเนินการลาไม่รับค่าจ้าง`,
+        systemNote,
         requestedById: user.employeeId,
         requestedByName: user.name,
         requestedAt: now,
