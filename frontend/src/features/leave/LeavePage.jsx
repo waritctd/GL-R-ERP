@@ -488,6 +488,8 @@ export function LeavePage({ user, currentEmployee, showToast }) {
               <select
                 id="leave-employee"
                 {...register('employeeId')}
+                value={formEmployeeId ?? ''}
+                onChange={(event) => setValue('employeeId', event.target.value, { shouldValidate: true })}
                 aria-invalid={Boolean(errors.employeeId)}
                 aria-describedby={errors.employeeId ? fieldErrorId('leave-employee') : undefined}
                 required
@@ -509,6 +511,8 @@ export function LeavePage({ user, currentEmployee, showToast }) {
             <select
               id="leave-type-code"
               {...register('leaveTypeCode')}
+              value={formLeaveTypeCode ?? ''}
+              onChange={(event) => setValue('leaveTypeCode', event.target.value, { shouldValidate: true })}
               aria-invalid={Boolean(errors.leaveTypeCode)}
               aria-describedby={errors.leaveTypeCode ? fieldErrorId('leave-type-code') : undefined}
               required
