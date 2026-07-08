@@ -124,7 +124,7 @@
 | ID | Priority | Steps | Expected result |
 |---|---|---|---|
 | PAY-01 | 🔴 | HR previews payroll for a month | Every active employee listed with full breakdown |
-| PAY-02 | 🔴 | Verify OT + commission on lines | Approved OT and commissions included |
+| PAY-02 | 🔴 | Verify OT + commission on lines — use the **2026-06** period for `GLR-0005` (verified live: `overtimePay=350`, `commissionPay=600`, matching the tier-band math exactly). Note: the seeded `UAT_Test_Data.xlsx`'s `PayrollMonth` reference sheet shows these figures under a `2026-07` row, but the underlying `overtime_request`/`commission_record` rows both carry `payroll_month=2026-06` (per `Commissions.csv`, seeded verbatim under the "seed the CSV, don't fix data" rule already applied elsewhere in `db/migration-uat/V903`) — a pre-existing cross-sheet dating inconsistency in the authored dataset, not a seeding defect. Use June, not July, to see this fixture live. | Approved OT and commissions included |
 | PAY-03 | 🔴 | Verify SSO & withholding tax | SSO on capped base; progressive tax via annualized calc |
 | PAY-04 | 🟡 | Enter special pays / allowances / unpaid-leave days | Net pay recalculates correctly |
 | PAY-05 | 🔴 | Process the period | Saved with processor identity; audit entry `PROCESS_PAYROLL` |
