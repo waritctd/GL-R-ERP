@@ -14,26 +14,47 @@ public class NotificationEmailService {
 
     private final JavaMailSender mailer;
     private final String fromAddress;
+    private final String overrideTo;
+    private final String subjectPrefix;
 
     public NotificationEmailService(JavaMailSender mailer,
-                                    @Value("${spring.mail.username:noreply@glr.co.th}") String fromAddress) {
+                                    @Value("${spring.mail.username:noreply@glr.co.th}") String fromAddress,
+                                    @Value("${app.mail.override-to:}") String overrideTo,
+                                    @Value("${app.mail.subject-prefix:}") String subjectPrefix) {
         this.mailer = mailer;
         this.fromAddress = fromAddress;
+        this.overrideTo = overrideTo;
+        this.subjectPrefix = subjectPrefix;
     }
 
     @Async
     public void send(long employeeId, String to, String subject, String body) {
+        // override-to lets a test deployment redirect every notification email to one real inbox
+        // (regardless of the employee's actual/fake address, or even a missing one) so the email
+        // pipeline can be verified without real per-employee mailboxes. Blank on every other
+        // deployment, so real deployments behave exactly as before.
+        String recipient = overrideTo.isBlank() ? to : overrideTo;
+        if (recipient == null || recipient.isBlank()) {
+            log.info("Notification email skipped: employee={} has no email and no override configured",
+                employeeId);
+            return;
+        }
+        String finalSubject = subjectPrefix.isBlank() ? subject : subjectPrefix + subject;
+        String finalBody = overrideTo.isBlank()
+            ? body
+            : body + "\n\n[Redirected for testing - originally addressed to employee #" + employeeId
+                + (to == null || to.isBlank() ? ", no email on file]" : ", " + to + "]");
         try {
             SimpleMailMessage message = new SimpleMailMessage();
             message.setFrom(fromAddress);
-            message.setTo(to);
-            message.setSubject(subject);
-            message.setText(body);
+            message.setTo(recipient);
+            message.setSubject(finalSubject);
+            message.setText(finalBody);
             mailer.send(message);
-            log.info("Notification email sent: employee={} to={}", employeeId, to);
+            log.info("Notification email sent: employee={} to={}", employeeId, recipient);
         } catch (Exception exception) {
             log.error("Failed to send notification email: employee={} to={} error={}",
-                employeeId, to, exception.getMessage());
+                employeeId, recipient, exception.getMessage());
         }
     }
 }

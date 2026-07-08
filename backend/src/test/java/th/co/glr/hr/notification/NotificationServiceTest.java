@@ -104,7 +104,7 @@ class NotificationServiceTest {
 
         @Bean
         NotificationEmailService notificationEmailService(JavaMailSender mailer) {
-            return new NotificationEmailService(mailer, "noreply@test.glr");
+            return new NotificationEmailService(mailer, "noreply@test.glr", "", "");
         }
 
         @Bean

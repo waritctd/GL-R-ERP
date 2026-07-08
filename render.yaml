@@ -54,6 +54,13 @@ services:
         value: "true"
       - key: APP_CORS_ALLOWED_ORIGINS
         sync: false            # set to the UAT Vercel origin in the dashboard
+      # Test-only: redirect every notification email to one real inbox (regardless of the seeded
+      # employee's actual/fake address) so the email pipeline can be verified end-to-end. Blank on
+      # gl-r-erp (demo/prod) above, so this has zero effect there. See NotificationEmailService.
+      - key: APP_MAIL_OVERRIDE_TO
+        value: fasaiglrhr@gmail.com
+      - key: APP_MAIL_SUBJECT_PREFIX
+        value: "[UAT TEST] "
       # Secrets — set in the Render dashboard, pointing at the NEW UAT Supabase project only.
       - key: SPRING_DATASOURCE_URL
         sync: false
@@ -62,4 +69,11 @@ services:
       - key: SPRING_DATASOURCE_PASSWORD
         sync: false
       - key: APP_ATTENDANCE_AGENT_TOKEN
+        sync: false
+      # SMTP credentials to actually send the emails above (Gmail requires a 2FA App Password, not
+      # the account password) — set in the Render dashboard. MAIL_HOST/MAIL_PORT default to Gmail's
+      # smtp.gmail.com:587 (application.yml), so only these two need setting.
+      - key: MAIL_USERNAME
+        sync: false
+      - key: MAIL_PASSWORD
         sync: false

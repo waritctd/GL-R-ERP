@@ -41,10 +41,11 @@ public class NotificationService {
         NotificationDto created = notifications.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Notification was not saved"));
         if (sendEmail) {
-            notifications.findEmployeeEmail(employeeId)
-                .ifPresentOrElse(
-                    to -> sendEmailAfterCommit(employeeId, to, subject.trim(), body.trim()),
-                    () -> log.info("Notification email skipped: employee={} has no email", employeeId));
+            // Always hand off to NotificationEmailService, even when the employee has no email on
+            // file (`to` is null then) - it decides whether to skip or redirect to a configured
+            // override address (used by test/UAT deployments to verify the email pipeline works).
+            String to = notifications.findEmployeeEmail(employeeId).orElse(null);
+            sendEmailAfterCommit(employeeId, to, subject.trim(), body.trim());
         }
         return created;
     }

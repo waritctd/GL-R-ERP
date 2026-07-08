@@ -69,6 +69,13 @@ app:
   overtime:
     advance-notice-days: ${APP_OVERTIME_ADVANCE_NOTICE_DAYS:3}
   uploads-dir: ${APP_UPLOADS_DIR:./uploads}
+  mail:
+    # OFF by default (blank): notification emails go to the real employee address as normal. Set only
+    # on a test/UAT deployment to redirect every outbound notification email to one real inbox
+    # (regardless of the employee's actual/fake seeded address) so the email pipeline itself can be
+    # verified without needing real per-employee mailboxes.
+    override-to: ${APP_MAIL_OVERRIDE_TO:}
+    subject-prefix: ${APP_MAIL_SUBJECT_PREFIX:}
   login-rate-limit:
     enabled: ${APP_LOGIN_RATE_LIMIT_ENABLED:true}
     max-account-failures: ${APP_LOGIN_MAX_ACCOUNT_FAILURES:5}
