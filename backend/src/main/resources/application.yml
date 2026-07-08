@@ -66,6 +66,8 @@ app:
     seed-employee-code-passwords: ${APP_AUTH_SEED_EMPLOYEE_CODE_PASSWORDS:false}
   leave:
     advance-notice-days: ${APP_LEAVE_ADVANCE_NOTICE_DAYS:7}
+  overtime:
+    advance-notice-days: ${APP_OVERTIME_ADVANCE_NOTICE_DAYS:3}
   uploads-dir: ${APP_UPLOADS_DIR:./uploads}
   login-rate-limit:
     enabled: ${APP_LOGIN_RATE_LIMIT_ENABLED:true}
