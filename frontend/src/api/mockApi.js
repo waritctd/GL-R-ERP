@@ -380,7 +380,24 @@ function progressiveCommission(baseValue) {
 }
 
 function buildCommissionRecord(record) {
-  return structuredClone(record);
+  return structuredClone({
+    managerApprovedBy: null,
+    managerApprovedByName: null,
+    managerApprovedAt: null,
+    ceoApprovedBy: null,
+    ceoApprovedByName: null,
+    ceoApprovedAt: null,
+    rejectedById: null,
+    rejectedByName: null,
+    rejectedAt: null,
+    rejectionReason: null,
+    ...record,
+    invoiceDetails: {
+      invoiceAttachmentId: null,
+      invoiceAttachmentFileName: null,
+      ...record.invoiceDetails,
+    },
+  });
 }
 
 function employeeForUser(user) {
@@ -493,7 +510,7 @@ function dashboardPending(user, ticketSummary) {
     ? db.leaveRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'SUBMITTED').length
     : 0;
   const commissions = ['sales_manager', 'ceo', 'admin'].includes(user.role)
-    ? db.commissions.filter((record) => record.status === 'SUBMITTED').length
+    ? db.commissions.filter((record) => ['SUBMITTED', 'MANAGER_APPROVED'].includes(record.status)).length
     : user.role === 'sales'
       ? db.commissions.filter((record) => record.salesRepId === user.id && record.status === 'SUBMITTED').length
       : 0;
@@ -1484,6 +1501,7 @@ export const api = {
       if (user.role === 'sales' && (Number(payload.transportFee || 0) > 0 || Number(payload.cutFee || 0) > 0 || Number(payload.shortfall || 0) > 0)) {
         fail('Sales cannot edit deduction fields', 403);
       }
+      if (!payload.invoiceAttachment) fail('Tax invoice file is required', 400);
       if (db.commissions.some((item) => item.invoiceDetails.invoiceNumber === payload.invoiceNumber)) {
         fail('Invoice number already exists', 409);
       }
@@ -1508,6 +1526,16 @@ export const api = {
         commissionableBase: calc.commissionableBase,
         approvedById: null,
         approvedAt: null,
+        managerApprovedBy: null,
+        managerApprovedByName: null,
+        managerApprovedAt: null,
+        ceoApprovedBy: null,
+        ceoApprovedByName: null,
+        ceoApprovedAt: null,
+        rejectedById: null,
+        rejectedByName: null,
+        rejectedAt: null,
+        rejectionReason: null,
         cancellationOfId: null,
         cancellationReason: null,
         createdAt: new Date().toISOString(),
@@ -1522,6 +1550,8 @@ export const api = {
           transportFee: user.role === 'sales' ? 0 : Number(payload.transportFee || 0),
           cutFee: user.role === 'sales' ? 0 : Number(payload.cutFee || 0),
           shortfall: user.role === 'sales' ? 0 : Number(payload.shortfall || 0),
+          invoiceAttachmentId: id,
+          invoiceAttachmentFileName: payload.invoiceAttachment?.name || 'tax-invoice.pdf',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         },
@@ -1542,7 +1572,7 @@ export const api = {
       });
       const calc = invoiceCalculation(record.invoiceDetails);
       db.commissions
-        .filter((item) => item.invoiceDetails.id === record.invoiceDetails.id && item.status !== 'VOID')
+        .filter((item) => item.invoiceDetails.id === record.invoiceDetails.id && !['VOID', 'REJECTED'].includes(item.status))
         .forEach((item) => {
           item.actualReceived = item.kind === 'CLAWBACK' ? -Math.abs(calc.actualReceived) : calc.actualReceived;
           item.commissionableBase = item.kind === 'CLAWBACK' ? -Math.abs(calc.commissionableBase) : calc.commissionableBase;
@@ -1555,11 +1585,52 @@ export const api = {
       const user = hasRole('sales_manager', 'ceo', 'admin');
       const record = db.commissions.find((item) => item.id === Number(id));
       if (!record) fail('Commission record not found', 404);
-      if (record.status !== 'SUBMITTED') fail('Only submitted commission records can be approved', 409);
-      record.status = 'APPROVED';
+      const now = new Date().toISOString();
+      if (record.status === 'SUBMITTED') {
+        if (user.role !== 'sales_manager') fail('Only a sales manager can review submitted commissions', 403);
+        record.status = 'MANAGER_APPROVED';
+        record.managerApprovedBy = user.employeeId || user.id;
+        record.managerApprovedByName = user.name;
+        record.managerApprovedAt = now;
+        record.approvedById = user.id;
+        record.approvedAt = now;
+        record.updatedAt = now;
+        return delay({ commission: buildCommissionRecord(record) });
+      }
+      if (record.status === 'MANAGER_APPROVED') {
+        if (user.role !== 'ceo') fail('Only the CEO can review manager-approved commissions', 403);
+        record.status = 'APPROVED';
+        record.ceoApprovedBy = user.employeeId || user.id;
+        record.ceoApprovedByName = user.name;
+        record.ceoApprovedAt = now;
+        record.approvedById = user.id;
+        record.approvedAt = now;
+        record.updatedAt = now;
+        return delay({ commission: buildCommissionRecord(record) });
+      }
+      fail('Commission record has already been reviewed', 409);
+    },
+
+    async reject(id, payload = {}) {
+      const user = hasRole('sales_manager', 'ceo', 'admin');
+      const record = db.commissions.find((item) => item.id === Number(id));
+      if (!record) fail('Commission record not found', 404);
+      const now = new Date().toISOString();
+      if (record.status === 'SUBMITTED') {
+        if (user.role !== 'sales_manager') fail('Only a sales manager can review submitted commissions', 403);
+      } else if (record.status === 'MANAGER_APPROVED') {
+        if (user.role !== 'ceo') fail('Only the CEO can review manager-approved commissions', 403);
+      } else {
+        fail('Commission record has already been reviewed', 409);
+      }
+      record.status = 'REJECTED';
+      record.rejectedById = user.employeeId || user.id;
+      record.rejectedByName = user.name;
+      record.rejectedAt = now;
+      record.rejectionReason = payload.reviewerNote || null;
       record.approvedById = user.id;
-      record.approvedAt = new Date().toISOString();
-      record.updatedAt = record.approvedAt;
+      record.approvedAt = now;
+      record.updatedAt = now;
       return delay({ commission: buildCommissionRecord(record) });
     },
 
@@ -1605,7 +1676,9 @@ export const api = {
         shortfall: user.role === 'sales' ? 0 : payload.shortfall,
       });
       const existingMonthlyBase = db.commissions
-        .filter((item) => item.salesRepId === salesRepId && commissionMonth(item.payrollMonth) === month && item.status !== 'VOID')
+        .filter((item) => item.salesRepId === salesRepId
+          && commissionMonth(item.payrollMonth) === month
+          && !['VOID', 'REJECTED'].includes(item.status))
         .reduce((sum, item) => sum + Number(item.commissionableBase || 0), 0);
       const projectedMonthlyBase = existingMonthlyBase + calc.commissionableBase;
       const projectedMonthlyCommission = progressiveCommission(projectedMonthlyBase);

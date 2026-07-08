@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import imageCompression from 'browser-image-compression';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
@@ -23,12 +24,15 @@ const emptyForm = {
   transportFee: '0',
   cutFee: '0',
   shortfall: '0',
+  invoiceAttachment: null,
 };
 
 function statusInfo(status) {
   const map = {
-    SUBMITTED: { label: 'รออนุมัติ', tone: 'warning' },
+    SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
+    MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },
     APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
+    REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
     VOID: { label: 'ยกเลิก', tone: 'danger' },
   };
   return map[status] ?? { label: status, tone: 'neutral' };
@@ -54,6 +58,8 @@ export function CommissionPage({ user, showToast }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [clawbackId, setClawbackId] = useState(null); // record id pending clawback reason, or null
+  const [rejectId, setRejectId] = useState(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
 
   const canSubmit = ROLE_PERMISSIONS.canSubmitCommissions.includes(user.role);
   const canApprove = ROLE_PERMISSIONS.canApproveCommissions.includes(user.role);
@@ -85,8 +91,21 @@ export function CommissionPage({ user, showToast }) {
     const base = records.reduce((sum, item) => sum + Number(item.commissionableBase || 0), 0);
     const approved = records.filter((item) => item.status === 'APPROVED').length;
     const submitted = records.filter((item) => item.status === 'SUBMITTED').length;
-    return { base, approved, submitted };
+    const managerApproved = records.filter((item) => item.status === 'MANAGER_APPROVED').length;
+    return { base, approved, submitted, managerApproved };
   }, [records]);
+
+  function canManagerReview(record) {
+    return record.status === 'SUBMITTED' && user.role === 'sales_manager';
+  }
+
+  function canCeoReview(record) {
+    return record.status === 'MANAGER_APPROVED' && user.role === 'ceo';
+  }
+
+  function canReviewRecord(record) {
+    return canManagerReview(record) || canCeoReview(record);
+  }
 
   const commissionColumns = useMemo(() => [
     {
@@ -99,6 +118,7 @@ export function CommissionPage({ user, showToast }) {
         <span>
           <strong>{record.invoiceDetails.invoiceNumber}</strong>
           <small style={{ color: '#64748b', display: 'block' }}>{kindLabel(record.kind)} · {formatThaiDate(record.invoiceDetails.invoiceDate)}</small>
+          <small style={{ color: '#64748b', display: 'block' }}>ไฟล์: {record.invoiceDetails.invoiceAttachmentFileName || '-'}</small>
         </span>
       ),
     },
@@ -129,7 +149,17 @@ export function CommissionPage({ user, showToast }) {
       header: 'สถานะ',
       render: (record) => {
         const status = statusInfo(record.status);
-        return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
+        return (
+          <span>
+            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+            <small style={{ color: '#64748b', display: 'block', marginTop: 4 }}>
+              ผู้จัดการ: {record.managerApprovedAt ? `${record.managerApprovedByName || '-'} · ${formatThaiDate(record.managerApprovedAt)}` : '-'}
+            </small>
+            <small style={{ color: '#64748b', display: 'block' }}>
+              CEO: {record.ceoApprovedAt ? `${record.ceoApprovedByName || '-'} · ${formatThaiDate(record.ceoApprovedAt)}` : '-'}
+            </small>
+          </span>
+        );
       },
     },
     {
@@ -142,9 +172,28 @@ export function CommissionPage({ user, showToast }) {
               <button type="button" className="icon-button" title="แก้ไขค่าหัก" aria-label="แก้ไขค่าหัก" onClick={() => beginEdit(record)}>
                 <Icon name="pencil" size={14} />
               </button>
-              {record.status === 'SUBMITTED' && (
-                <button type="button" className="icon-button" title="อนุมัติ" aria-label="อนุมัติ" disabled={saving} onClick={() => approve(record.id)}>
+              {canReviewRecord(record) && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  title={canCeoReview(record) ? 'CEO อนุมัติ' : 'ผู้จัดการอนุมัติ'}
+                  aria-label={canCeoReview(record) ? 'CEO อนุมัติ' : 'ผู้จัดการอนุมัติ'}
+                  disabled={saving}
+                  onClick={() => approve(record.id)}
+                >
                   <Icon name="check" size={14} />
+                </button>
+              )}
+              {canReviewRecord(record) && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  title={canCeoReview(record) ? 'CEO ปฏิเสธ' : 'ผู้จัดการปฏิเสธ'}
+                  aria-label={canCeoReview(record) ? 'CEO ปฏิเสธ' : 'ผู้จัดการปฏิเสธ'}
+                  disabled={saving}
+                  onClick={() => reject(record.id)}
+                >
+                  <Icon name="close" size={14} />
                 </button>
               )}
               {record.kind === 'SALE' && record.status === 'APPROVED' && (
@@ -157,7 +206,7 @@ export function CommissionPage({ user, showToast }) {
         </span>
       ),
     },
-  ], [canApprove, saving]);
+  ], [canApprove, saving, user.role]);
 
   function updateForm(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -177,12 +226,27 @@ export function CommissionPage({ user, showToast }) {
     };
   }
 
+  async function prepareInvoiceAttachment(file) {
+    if (!file) throw new Error('กรุณาแนบไฟล์ใบกำกับภาษี');
+    if (!['application/pdf', 'image/jpeg', 'image/png'].includes(file.type)) {
+      throw new Error('รองรับเฉพาะไฟล์ PDF, JPG หรือ PNG');
+    }
+    if (!file.type.startsWith('image/')) return file;
+    return imageCompression(file, {
+      maxSizeMB: 2,
+      maxWidthOrHeight: 1600,
+      useWebWorker: true,
+    });
+  }
+
   async function submitCommission(event) {
     event.preventDefault();
     setSaving(true);
     try {
-      await api.commissions.create(payloadFromForm());
+      const invoiceAttachment = await prepareInvoiceAttachment(form.invoiceAttachment);
+      await api.commissions.create({ ...payloadFromForm(), invoiceAttachment });
       setForm(emptyForm);
+      setFileInputKey((key) => key + 1);
       setSimulation(null);
       showToast('success', 'บันทึกค่าคอมเรียบร้อย');
       await load();
@@ -241,6 +305,24 @@ export function CommissionPage({ user, showToast }) {
     }
   }
 
+  function reject(id) {
+    setRejectId(id);
+  }
+
+  async function confirmReject(reviewerNote) {
+    setSaving(true);
+    try {
+      await api.commissions.reject(rejectId, { reviewerNote });
+      showToast('success', 'ปฏิเสธค่าคอมแล้ว');
+      await load();
+    } catch (error) {
+      showToast('error', error.message || 'ปฏิเสธไม่สำเร็จ');
+    } finally {
+      setSaving(false);
+      setRejectId(null);
+    }
+  }
+
   function clawback(id) {
     setClawbackId(id);
   }
@@ -279,7 +361,8 @@ export function CommissionPage({ user, showToast }) {
           <div className="stat-grid">
             <StatCard icon="badge" label="ฐานค่าคอมเดือนนี้" value={formatMoney(totals.base)} helper="Commissionable base" tone="indigo" />
             <StatCard icon="check" label="อนุมัติแล้ว" value={totals.approved} helper="Approved records" tone="teal" />
-            <StatCard icon="clock" label="รออนุมัติ" value={totals.submitted} helper="Submitted records" tone="amber" />
+            <StatCard icon="clock" label="รอผู้จัดการ" value={totals.submitted} helper="Submitted records" tone="amber" />
+            <StatCard icon="clock" label="รอ CEO" value={totals.managerApproved} helper="Manager approved" tone="indigo" />
           </div>
 
           {canSubmit && (
@@ -297,6 +380,17 @@ export function CommissionPage({ user, showToast }) {
                 <label>
                   Invoice Number *
                   <input value={form.invoiceNumber} onChange={(event) => updateForm('invoiceNumber', event.target.value)} required />
+                </label>
+                <label>
+                  Tax Invoice File *
+                  <input
+                    key={fileInputKey}
+                    type="file"
+                    accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
+                    onChange={(event) => updateForm('invoiceAttachment', event.target.files?.[0] || null)}
+                    required
+                  />
+                  <small>{form.invoiceAttachment ? form.invoiceAttachment.name : 'PDF, JPG หรือ PNG'}</small>
                 </label>
                 <label>
                   Invoice Date *
@@ -410,6 +504,17 @@ export function CommissionPage({ user, showToast }) {
         busy={saving}
         onCancel={() => setClawbackId(null)}
         onConfirm={confirmClawback}
+      />
+      <ConfirmDialog
+        open={rejectId != null}
+        tone="danger"
+        title="ปฏิเสธค่าคอม"
+        message="ยืนยันการปฏิเสธรายการค่าคอมนี้?"
+        requireReason
+        reasonLabel="เหตุผลการปฏิเสธ"
+        busy={saving}
+        onCancel={() => setRejectId(null)}
+        onConfirm={confirmReject}
       />
     </div>
   );
