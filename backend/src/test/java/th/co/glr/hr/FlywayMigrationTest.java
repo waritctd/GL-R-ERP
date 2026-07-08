@@ -74,4 +74,34 @@ class FlywayMigrationTest {
         assertThat(result.success).isTrue();
         assertThat(result.migrationsExecuted).isGreaterThan(0);
     }
+
+    /**
+     * Mirrors {@code application-uat.yml}'s {@code spring.flyway.locations}, which appends
+     * {@code db/migration-uat} (the synthetic, PII-free UAT seed) on top of the normal migrations for
+     * the {@code gl-r-erp-uat} Render service. Same combined-location version-collision guard as the
+     * demo test above: the UAT seed uses the V900+ range to stay clear of the real {@code db/migration}
+     * history, and this test is what catches a UAT-vs-real version/checksum collision before the
+     * uat-profile deploy fails at {@code validate()}. The default-location tests never scan
+     * {@code db/migration-uat}, so only this test covers it.
+     */
+    @Test
+    void uatProfileCombinedLocationsApplyToACleanDatabase() {
+        Flyway flyway = Flyway.configure()
+            .dataSource(
+                PostgresTestSupport.jdbcUrl(),
+                PostgresTestSupport.username(),
+                PostgresTestSupport.password())
+            .locations("classpath:db/migration", "classpath:db/migration-uat")
+            .schemas("hr", "hr_restricted", "sales")
+            .defaultSchema("hr")
+            .cleanDisabled(false)
+            .load();
+
+        flyway.clean();
+
+        MigrateResult result = flyway.migrate();
+
+        assertThat(result.success).isTrue();
+        assertThat(result.migrationsExecuted).isGreaterThan(0);
+    }
 }
