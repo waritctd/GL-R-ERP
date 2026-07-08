@@ -5,7 +5,8 @@
 | **Document** | 11 — User Acceptance Test Cases |
 | **Version** | 1.0 · 2 July 2026 |
 | **Audience** | QA, business testers |
-| **How to run** | Execute each case in order; record Pass/Fail and notes. Use the demo environment (`Demo@2026` accounts, one per role) or a seeded test DB. |
+| **How to run** | Execute each case in order; record Pass/Fail and notes. Preferred environment: the **hosted UAT stack** (`gl-r-erp-uat` Render service on the `uat` branch, `SPRING_PROFILES_ACTIVE=uat`), which auto-seeds the realistic dataset + the **9 `@uat.glr` accounts** — see `UAT Deliverables/UAT_Accounts.md`. The public demo (`Demo@2026`) may be used for a quick smoke only, never for sign-off. |
+| **Baseline** | Reflects current `main` (Flyway head **V36**): 3-step overtime approval, dual manager+CEO commission approval, in-app **and email** notifications, and Thai **PDF** document export are all live. |
 
 ---
 
@@ -21,6 +22,7 @@
 8. [Commission](#8-commission)
 9. [Payroll](#9-payroll)
 10. [Security & Authorization](#10-security--authorization)
+10a. [Notifications](#10a-notifications-v32v36--shipped-formerly-a-known-gap)
 11. [Sign-off](#11-sign-off)
 
 ---
@@ -72,19 +74,21 @@
 |---|---|---|---|
 | OT-01 | 🔴 | Employee submits a workday OT request | Created `SUBMITTED`, multiplier 1.50 |
 | OT-02 | 🔴 | Employee submits a holiday OT request | Multiplier 3.00 |
-| OT-03 | 🔴 | Manager approves an OT request | Status `APPROVED`; payable minutes recorded |
+| OT-03 | 🔴 | Manager approves an OT request | Status `MANAGER_APPROVED`; routed to CEO for final approval (not yet payable) |
 | OT-04 | 🔴 | Approved OT appears in that month's payroll preview | OT pay included on the employee's line |
 | OT-05 | 🟡 | Employee cancels a pending request | Status `CANCELLED` |
 | OT-06 | 🟡 | Submit OT with end before start | Rejected (validation/DB constraint) |
 | OT-07 | 🔴 | Manager tries to approve OT outside their division | Not permitted |
+| OT-08 | 🔴 | CEO gives final approval to a `MANAGER_APPROVED` request | Status `APPROVED`; payable minutes recorded (3-step chain employee→manager→CEO complete, V34) |
+| OT-09 | 🔴 | Reject at the manager or CEO step | Status `REJECTED` with reason; returns to employee; each transition notifies |
 
 ## 6. Leave
 
 | ID | Priority | Steps | Expected result |
 |---|---|---|---|
-| LV-01 | 🔴 | Submit vacation leave within quota | Accepted; balance reduced |
-| LV-02 | 🔴 | Submit leave exceeding remaining quota | Immediately rejected with reason |
-| LV-03 | 🔴 | Submit sick leave without attachment | Blocked — attachment required |
+| LV-01 | 🔴 | Submit vacation leave within quota (adequate notice) | **Auto-approved** on submit (V33); balance reduced; manager notified |
+| LV-02 | 🔴 | Submit leave exceeding remaining quota | Immediately auto-rejected with reason (`AUTO_REJECTED`) |
+| LV-03 | 🔴 | Submit sick leave without a medical-certificate attachment | Blocked — attachment required (sick leave is exempt from the advance-notice rule) |
 | LV-04 | 🔴 | Manager/HR approves a leave request | Status approved |
 | LV-05 | 🟡 | Employee cancels a pending leave | Status cancelled; balance restored |
 | LV-06 | 🟡 | View leave types & balances | Correct quotas (Sick 30 / Vacation 6 / Personal 3) |
@@ -98,7 +102,7 @@
 | TKT-03 | 🔴 | Sales manager approves the price | `approved`; event logged |
 | TKT-04 | 🟡 | Sales manager rejects the price | Returns for re-pricing |
 | TKT-05 | 🔴 | Edit items after submission | `has_edits` flagged for approver |
-| TKT-06 | 🔴 | Issue a quotation/document | Draft → issued; running number assigned; file downloadable |
+| TKT-06 | 🔴 | Issue a quotation/document | Draft → issued; running number assigned; file downloadable as a **Thai PDF** (PDFBox + Sarabun) — XLSX export also available |
 | TKT-07 | 🔴 | Open a revision on an issued document | `revision_no` increments; original retained |
 | TKT-08 | 🟡 | Add a comment to a ticket | Comment recorded as an event |
 | TKT-09 | 🔴 | Close the ticket | Status `closed` |
@@ -107,11 +111,13 @@
 
 | ID | Priority | Steps | Expected result |
 |---|---|---|---|
-| COM-01 | 🔴 | Sales submits a commission from invoice details | Amount computed from tier config; status pending |
+| COM-01 | 🔴 | Sales submits a commission from invoice details **with a tax-invoice file upload** | Amount computed from tier config; status `SUBMITTED`; a name/number field alone is insufficient (upload required, V35) |
 | COM-02 | 🟡 | Use the simulator before submitting | Shows expected commission; nothing saved |
-| COM-03 | 🔴 | Sales manager approves | Status approved |
+| COM-03 | 🔴 | Sales manager approves | Status `MANAGER_APPROVED`; **not yet final** — awaits CEO |
 | COM-04 | 🔴 | Approved commission appears in payroll-ready feed | Aggregated per employee/month |
-| COM-05 | 🟡 | Record a clawback | Negative record offsets future payroll |
+| COM-05 | 🟡 | Record a clawback | Negative record (`kind=CLAWBACK`) offsets future payroll |
+| COM-06 | 🔴 | CEO gives second sign-off on a `MANAGER_APPROVED` commission | Status `APPROVED`; a single approval (manager **or** CEO alone) must NOT finalize — dual sign-off required (V35) |
+| COM-07 | 🔴 | Reject at manager or CEO step | Status `REJECTED` with reason; returns to sales; each transition notifies |
 
 ## 9. Payroll
 
@@ -135,6 +141,17 @@
 | SEC-04 | 🔴 | Post a punch without a valid device token | Rejected |
 | SEC-05 | 🟡 | Request an unknown API route | 404 (not 500) |
 | SEC-06 | 🟡 | Inspect response headers | CSP, HSTS, X-Frame-Options, nosniff present |
+
+## 10a. Notifications (V32/V36 — shipped; formerly a known gap)
+
+In-app notifications **and** email now exist for submit/approve/reject across leave, overtime, and
+commission (generic `NotificationService.notify(...)` → `hr.notification` + async email). Test:
+
+| ID | Priority | Steps | Expected result |
+|---|---|---|---|
+| NOTIF-01 | 🔴 | Perform a submit/approve/reject on a leave, OT, or commission item | An in-app notification appears for the target user **and** an email is sent |
+| NOTIF-02 | 🟡 | Open the notification bell as the recipient | The unread notification is listed; marking it read updates its state |
+| NOTIF-03 | 🔴 | Try to mark **another user's** notification read (e.g. GLR-0007's seeded PRICE_PROPOSED notice, as a different user) | Denied / scoped out — a user cannot read or mutate notifications they don't own |
 
 ## 11. Sign-off
 
