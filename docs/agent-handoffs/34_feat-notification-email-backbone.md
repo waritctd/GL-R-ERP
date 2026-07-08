@@ -9,6 +9,15 @@ anymore) was a real regression, not an acceptable gap — it silently breaks the
 and dashboard unread-count for every sales/import/CEO user on every ticket event. Claude Sonnet
 applied the fix on this same branch (see "Fixes Applied in Review" below) before merge.
 
+**Update 2 (production incident, 2026-07-08):** this branch's `V32__hr_notification_schema.sql`
+collided with the pre-existing `db/migration-demo/V32__link_demo_ticket_customers.sql`, crash-looping
+the Render demo deploy (`FlywayException: Found more than one migration with version 32`). Neither
+this review nor CI caught it — CI's Flyway tests only ever scanned the default `db/migration`
+location, never the combined `db/migration,db/migration-demo` set that `application-prod.yml`
+actually configures for Render. Renumbered the file to `V36` (all references to "V32" below are the
+accurate historical record of what this branch shipped at merge time, not the current filename) and
+added a permanent regression test. Full writeup: `docs/agent-handoffs/39_fix-v32-migration-collision.md`.
+
 ## Branch
 feat/notification-email-backbone
 
