@@ -2,9 +2,7 @@ package th.co.glr.hr.notification;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -20,7 +18,6 @@ import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.core.task.SyncTaskExecutor;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
-import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
@@ -35,9 +32,6 @@ class NotificationServiceTest {
 
     @jakarta.annotation.Resource
     private JavaMailSender mailer;
-
-    @jakarta.annotation.Resource
-    private AuditService auditService;
 
     @Test
     void notifyWritesInAppRowAndAttemptsEmailSynchronouslyInTest() {
@@ -76,8 +70,7 @@ class NotificationServiceTest {
     }
 
     @Test
-    void markReadRejectsMissingOrUnownedNotificationWithoutAudit() {
-        clearInvocations(auditService);
+    void markReadRejectsMissingOrUnownedNotification() {
         UserPrincipal actor = new UserPrincipal(
             7L, "employee@glr.co.th", "Employee", "employee", 7L,
             true, java.time.LocalDate.of(2026, 1, 1), false, null, false);
@@ -86,10 +79,18 @@ class NotificationServiceTest {
         assertThatThrownBy(() -> service.markRead(42L, actor))
             .isInstanceOf(ApiException.class)
             .hasMessage("Notification not found");
+    }
 
-        verify(auditService, never()).record(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString(),
-            org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.any());
+    @Test
+    void markReadSucceedsWhenRepositoryUpdatesOwnedNotification() {
+        UserPrincipal actor = new UserPrincipal(
+            7L, "employee@glr.co.th", "Employee", "employee", 7L,
+            true, java.time.LocalDate.of(2026, 1, 1), false, null, false);
+        when(notifications.markRead(42L, 7L)).thenReturn(1);
+
+        service.markRead(42L, actor);
+
+        verify(notifications).markRead(42L, 7L);
     }
 
     @Configuration
@@ -97,9 +98,8 @@ class NotificationServiceTest {
     static class TestConfig {
         @Bean
         NotificationService notificationService(NotificationRepository notifications,
-                                                NotificationEmailService emailService,
-                                                AuditService auditService) {
-            return new NotificationService(notifications, emailService, auditService);
+                                                NotificationEmailService emailService) {
+            return new NotificationService(notifications, emailService);
         }
 
         @Bean
@@ -115,11 +115,6 @@ class NotificationServiceTest {
         @Bean
         JavaMailSender javaMailSender() {
             return mock(JavaMailSender.class);
-        }
-
-        @Bean
-        AuditService auditService() {
-            return mock(AuditService.class);
         }
 
         @Bean(name = "taskExecutor")

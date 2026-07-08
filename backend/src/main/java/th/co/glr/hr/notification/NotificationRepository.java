@@ -81,16 +81,28 @@ public class NotificationRepository {
         }
     }
 
+    // Ticket-event types are short machine codes (e.g. "PRICE_PROPOSED"); hr.notification.title is
+    // NOT NULL and human-facing, so map each to a short Thai label. Unmapped types (new ticket event
+    // kinds added later) fall back to a generic title rather than failing the insert.
+    private static final Map<String, String> TICKET_EVENT_TITLES = Map.of(
+        "SUBMITTED", "มีคำขอราคาใหม่",
+        "PRICE_PROPOSED", "รอการอนุมัติราคา",
+        "APPROVED", "ราคาได้รับการอนุมัติ",
+        "REJECTED", "ราคาถูกตีกลับ",
+        "REVISION_REQUESTED", "ขอแก้ไขเอกสาร"
+    );
+
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {
         jdbc.update("""
-            INSERT INTO sales.notification (employee_id, ticket_id, type, message)
-            VALUES (:employeeId, :ticketId, :type, :message)
+            INSERT INTO hr.notification (employee_id, type, title, message, link)
+            VALUES (:employeeId, :type, :title, :message, :link)
             """,
             new MapSqlParameterSource()
                 .addValue("employeeId", employeeId)
-                .addValue("ticketId", ticketId)
                 .addValue("type", type)
-                .addValue("message", message));
+                .addValue("title", ticketEventTitle(type))
+                .addValue("message", message)
+                .addValue("link", "/tickets/" + ticketId));
     }
 
     /**
@@ -107,16 +119,21 @@ public class NotificationRepository {
         if (divisionFilter == null) return;
 
         jdbc.update("""
-            INSERT INTO sales.notification (employee_id, ticket_id, type, message)
-            SELECT e.employee_id, :ticketId, :type, :message
+            INSERT INTO hr.notification (employee_id, type, title, message, link)
+            SELECT e.employee_id, :type, :title, :message, :link
               FROM hr.employee e
               JOIN hr.division d ON d.division_id = e.division_id
              WHERE (%s) AND e.is_active = TRUE
             """.formatted(divisionFilter),
             new MapSqlParameterSource()
-                .addValue("ticketId", ticketId)
                 .addValue("type", type)
-                .addValue("message", message));
+                .addValue("title", ticketEventTitle(type))
+                .addValue("message", message)
+                .addValue("link", "/tickets/" + ticketId));
+    }
+
+    private String ticketEventTitle(String type) {
+        return TICKET_EVENT_TITLES.getOrDefault(type, "อัปเดตสถานะใบขอราคา");
     }
 
     private NotificationDto mapHrNotification(java.sql.ResultSet rs) throws java.sql.SQLException {
