@@ -2,6 +2,8 @@ package th.co.glr.hr.notification;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -16,37 +18,67 @@ public class NotificationRepository {
 
     public List<NotificationDto> findByEmployeeId(long employeeId) {
         return jdbc.query("""
-            SELECT n.notification_id, n.employee_id, n.ticket_id,
-                   t.code AS ticket_code,
-                   n.type, n.message, n.is_read, n.created_at
-              FROM sales.notification n
-              LEFT JOIN sales.ticket t ON t.ticket_id = n.ticket_id
+            SELECT n.notification_id, n.employee_id,
+                   n.type, n.title, n.message, n.link, n.is_read, n.created_at
+              FROM hr.notification n
              WHERE n.employee_id = :employeeId
              ORDER BY n.created_at DESC
              LIMIT 50
             """,
             Map.of("employeeId", employeeId),
-            (rs, rowNum) -> {
-                long rawTicketId = rs.getLong("ticket_id");
-                Long ticketId = rs.wasNull() ? null : rawTicketId;
-                return new NotificationDto(
-                    rs.getLong("notification_id"),
-                    rs.getLong("employee_id"),
-                    ticketId,
-                    rs.getString("ticket_code"),
-                    rs.getString("type"),
-                    rs.getString("message"),
-                    rs.getBoolean("is_read"),
-                    rs.getTimestamp("created_at").toInstant()
-                );
-            });
+            (rs, rowNum) -> mapHrNotification(rs));
+    }
+
+    public Optional<NotificationDto> findById(long id) {
+        try {
+            NotificationDto notification = jdbc.queryForObject("""
+                SELECT n.notification_id, n.employee_id,
+                       n.type, n.title, n.message, n.link, n.is_read, n.created_at
+                  FROM hr.notification n
+                 WHERE n.notification_id = :id
+                """,
+                Map.of("id", id),
+                (rs, rowNum) -> mapHrNotification(rs));
+            return Optional.ofNullable(notification);
+        } catch (EmptyResultDataAccessException exception) {
+            return Optional.empty();
+        }
+    }
+
+    public long insert(long employeeId, String type, String title, String message, String link) {
+        Number id = jdbc.queryForObject("""
+            INSERT INTO hr.notification (employee_id, type, title, message, link)
+            VALUES (:employeeId, :type, :title, :message, :link)
+            RETURNING notification_id
+            """,
+            new MapSqlParameterSource()
+                .addValue("employeeId", employeeId)
+                .addValue("type", type)
+                .addValue("title", title)
+                .addValue("message", message)
+                .addValue("link", link),
+            Number.class);
+        return id.longValue();
     }
 
     public int markRead(long notificationId, long employeeId) {
         return jdbc.update("""
-            UPDATE sales.notification SET is_read = TRUE
+            UPDATE hr.notification SET is_read = TRUE
              WHERE notification_id = :id AND employee_id = :employeeId
             """, Map.of("id", notificationId, "employeeId", employeeId));
+    }
+
+    public Optional<String> findEmployeeEmail(long employeeId) {
+        try {
+            String email = jdbc.queryForObject("""
+                SELECT NULLIF(BTRIM(email), '')
+                  FROM hr.employee
+                 WHERE employee_id = :employeeId
+                """, Map.of("employeeId", employeeId), String.class);
+            return Optional.ofNullable(email);
+        } catch (EmptyResultDataAccessException exception) {
+            return Optional.empty();
+        }
     }
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {
@@ -85,5 +117,20 @@ public class NotificationRepository {
                 .addValue("ticketId", ticketId)
                 .addValue("type", type)
                 .addValue("message", message));
+    }
+
+    private NotificationDto mapHrNotification(java.sql.ResultSet rs) throws java.sql.SQLException {
+        return new NotificationDto(
+            rs.getLong("notification_id"),
+            rs.getLong("employee_id"),
+            null,
+            null,
+            rs.getString("type"),
+            rs.getString("title"),
+            rs.getString("message"),
+            rs.getString("link"),
+            rs.getBoolean("is_read"),
+            rs.getTimestamp("created_at").toInstant()
+        );
     }
 }
