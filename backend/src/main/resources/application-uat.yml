@@ -1,0 +1,27 @@
+# UAT-only overrides. Active when SPRING_PROFILES_ACTIVE=uat (set by the gl-r-erp-uat Render service).
+#
+# Mirrors application-prod.yml (same Render cold-start rationale) but swaps the Flyway seed location:
+# UAT applies db/migration-uat (synthetic, PII-free test data) instead of the demo seed. The two are
+# mutually exclusive — a service is either prod (demo seed) or uat (UAT seed), never both.
+#
+# NOTE: Flyway validates version numbers across ALL configured locations combined. db/migration-uat
+# files use the V900+ range to stay clear of the real db/migration V1..VNN range and its future
+# additions. Check both directories before adding a UAT migration, or the uat-profile deploy fails at
+# validate().
+spring:
+  main:
+    lazy-initialization: true
+  datasource:
+    # UAT runs on the same Render starter plan against the same Supabase (Tokyo) region as prod, so it
+    # needs the identical cold-start tuning (see application-prod.yml for the full rationale): don't
+    # pre-open idle connections during startup, and never block startup waiting on the pool to fill.
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    hikari:
+      minimum-idle: 0
+      initialization-fail-timeout: -1
+  flyway:
+    connect-retries: 3
+    connect-retries-interval: 5
+    locations: classpath:db/migration,classpath:db/migration-uat
