@@ -6,6 +6,7 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.commission.CommissionResponses.CommissionDetailResponse;
@@ -41,11 +43,43 @@ public class CommissionController {
         return new CommissionListResponse(commissionService.list(parseMonth(payrollMonth), user));
     }
 
-    @PostMapping
+    @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     @PreAuthorize("hasAnyRole('SALES','SALES_MANAGER','CEO')")
     public CommissionDetailResponse submit(@Valid @RequestBody SubmitCommissionRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new CommissionDetailResponse(commissionService.submit(request, user));
+    }
+
+    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasAnyRole('SALES','SALES_MANAGER','CEO')")
+    public CommissionDetailResponse submitMultipart(
+        @RequestParam(value = "sourceTicketId", required = false) Long sourceTicketId,
+        @RequestParam(value = "salesRepId", required = false) Long salesRepId,
+        @RequestParam("invoiceNumber") String invoiceNumber,
+        @RequestParam("invoiceDate") LocalDate invoiceDate,
+        @RequestParam("grossAmount") java.math.BigDecimal grossAmount,
+        @RequestParam(value = "bankFees", required = false) java.math.BigDecimal bankFees,
+        @RequestParam(value = "suspenseVat", required = false) java.math.BigDecimal suspenseVat,
+        @RequestParam(value = "transportFee", required = false) java.math.BigDecimal transportFee,
+        @RequestParam(value = "cutFee", required = false) java.math.BigDecimal cutFee,
+        @RequestParam(value = "shortfall", required = false) java.math.BigDecimal shortfall,
+        @RequestParam("invoiceAttachment") MultipartFile invoiceAttachment,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        SubmitCommissionRequest request = new SubmitCommissionRequest(
+            sourceTicketId,
+            salesRepId,
+            invoiceNumber,
+            invoiceDate,
+            grossAmount,
+            bankFees,
+            suspenseVat,
+            transportFee,
+            cutFee,
+            shortfall
+        );
+        return new CommissionDetailResponse(commissionService.submit(request, invoiceAttachment, user));
     }
 
     @PatchMapping("/{id}/deductions")
@@ -64,6 +98,17 @@ public class CommissionController {
     public CommissionDetailResponse approve(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new CommissionDetailResponse(commissionService.approve(id, user));
+    }
+
+    @PostMapping("/{id}/reject")
+    @PreAuthorize("hasAnyRole('SALES_MANAGER','CEO')")
+    public CommissionDetailResponse reject(
+        @PathVariable long id,
+        @Valid @RequestBody(required = false) ReviewCommissionRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new CommissionDetailResponse(commissionService.reject(id, request, user));
     }
 
     @PostMapping("/{id}/clawback")

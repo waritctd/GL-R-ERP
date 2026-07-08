@@ -22,13 +22,28 @@ public class CommissionRepository {
                cr.submitted_by_id, cr.kind, cr.status, cr.payroll_month,
                cr.actual_received, cr.commissionable_base,
                cr.approved_by_id, cr.approved_at, cr.cancellation_of_id, cr.cancellation_reason,
+               cr.manager_approved_by,
+               NULLIF(TRIM(CONCAT_WS(' ', manager_approver.first_name_th, manager_approver.last_name_th)), '') AS manager_approved_by_name,
+               cr.manager_approved_at,
+               cr.ceo_approved_by,
+               NULLIF(TRIM(CONCAT_WS(' ', ceo_approver.first_name_th, ceo_approver.last_name_th)), '') AS ceo_approved_by_name,
+               cr.ceo_approved_at,
+               cr.rejected_by_id,
+               NULLIF(TRIM(CONCAT_WS(' ', rejected_by.first_name_th, rejected_by.last_name_th)), '') AS rejected_by_name,
+               cr.rejected_at,
+               cr.rejection_reason,
                cr.created_at AS record_created_at, cr.updated_at AS record_updated_at,
                inv.invoice_id, inv.invoice_number, inv.invoice_date, inv.gross_amount,
                inv.bank_fees, inv.suspense_vat, inv.transport_fee, inv.cut_fee, inv.shortfall,
+               inv.invoice_attachment_id, fa.file_name AS invoice_attachment_file_name,
                inv.created_at AS invoice_created_at, inv.updated_at AS invoice_updated_at
           FROM sales.commission_record cr
           JOIN sales.invoice_details inv ON inv.invoice_id = cr.invoice_id
           JOIN hr.employee sr ON sr.employee_id = cr.sales_rep_id
+          LEFT JOIN hr.employee manager_approver ON manager_approver.employee_id = cr.manager_approved_by
+          LEFT JOIN hr.employee ceo_approver ON ceo_approver.employee_id = cr.ceo_approved_by
+          LEFT JOIN hr.employee rejected_by ON rejected_by.employee_id = cr.rejected_by_id
+          LEFT JOIN hr.file_attachment fa ON fa.attachment_id = inv.invoice_attachment_id
         """;
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -95,7 +110,7 @@ public class CommissionRepository {
               FROM sales.commission_record
              WHERE sales_rep_id = :salesRepId
                AND payroll_month = :payrollMonth
-               AND status <> 'VOID'
+               AND status NOT IN ('VOID', 'REJECTED')
             """,
             new MapSqlParameterSource()
                 .addValue("salesRepId", salesRepId)
@@ -117,6 +132,30 @@ public class CommissionRepository {
             Map.of("commissionId", commissionId),
             Boolean.class);
         return Boolean.TRUE.equals(value);
+    }
+
+    public List<Long> findSalesManagerApproverEmployeeIds() {
+        return jdbc.query("""
+            SELECT e.employee_id
+              FROM hr.employee e
+              JOIN hr.division d ON d.division_id = e.division_id
+              LEFT JOIN hr.position p ON p.position_id = e.position_id
+             WHERE e.is_active = TRUE
+               AND d.source_code ILIKE 'SA%'
+               AND p.name_th LIKE '%ผู้จัดการ%'
+             ORDER BY e.employee_id
+            """, Map.of(), (rs, rowNum) -> rs.getLong("employee_id"));
+    }
+
+    public List<Long> findCeoApproverEmployeeIds() {
+        return jdbc.query("""
+            SELECT e.employee_id
+              FROM hr.employee e
+              JOIN hr.division d ON d.division_id = e.division_id
+             WHERE e.is_active = TRUE
+               AND (d.source_code ILIKE 'MD%' OR d.source_code ILIKE 'MN%')
+             ORDER BY e.employee_id
+            """, Map.of(), (rs, rowNum) -> rs.getLong("employee_id"));
     }
 
     public long createInvoice(SubmitCommissionRequest request) {
@@ -141,6 +180,15 @@ public class CommissionRepository {
             keyHolder,
             new String[]{"invoice_id"});
         return keyHolder.getKey().longValue();
+    }
+
+    public void attachInvoiceFile(long invoiceId, long attachmentId) {
+        jdbc.update("""
+            UPDATE sales.invoice_details
+               SET invoice_attachment_id = :attachmentId,
+                   updated_at = now()
+             WHERE invoice_id = :invoiceId
+            """, Map.of("invoiceId", invoiceId, "attachmentId", attachmentId));
     }
 
     public long createCommissionRecord(
@@ -223,7 +271,7 @@ public class CommissionRepository {
                    commissionable_base = CASE WHEN kind = 'CLAWBACK' THEN :commissionableBase * -1 ELSE :commissionableBase END,
                    updated_at = now()
              WHERE invoice_id = :invoiceId
-               AND status <> 'VOID'
+               AND status NOT IN ('VOID', 'REJECTED')
             """,
             new MapSqlParameterSource()
                 .addValue("invoiceId", invoiceId)
@@ -231,16 +279,72 @@ public class CommissionRepository {
                 .addValue("commissionableBase", calculation.commissionableBase().abs()));
     }
 
-    public void approve(long commissionId, long actorId) {
+    public void managerApprove(long commissionId, long actorId) {
         jdbc.update("""
             UPDATE sales.commission_record
-               SET status = 'APPROVED',
+               SET status = 'MANAGER_APPROVED',
+                   manager_approved_by = :actorId,
+                   manager_approved_at = now(),
                    approved_by_id = :actorId,
                    approved_at = now(),
                    updated_at = now()
              WHERE commission_id = :commissionId
+               AND status = 'SUBMITTED'
             """,
             Map.of("commissionId", commissionId, "actorId", actorId));
+    }
+
+    public void ceoApprove(long commissionId, long actorId) {
+        jdbc.update("""
+            UPDATE sales.commission_record
+               SET status = 'APPROVED',
+                   ceo_approved_by = :actorId,
+                   ceo_approved_at = now(),
+                   approved_by_id = :actorId,
+                   approved_at = now(),
+                   updated_at = now()
+             WHERE commission_id = :commissionId
+               AND status = 'MANAGER_APPROVED'
+            """,
+            Map.of("commissionId", commissionId, "actorId", actorId));
+    }
+
+    public void managerReject(long commissionId, long actorId, String reason) {
+        jdbc.update("""
+            UPDATE sales.commission_record
+               SET status = 'REJECTED',
+                   rejected_by_id = :actorId,
+                   rejected_at = now(),
+                   rejection_reason = :reason,
+                   approved_by_id = :actorId,
+                   approved_at = now(),
+                   updated_at = now()
+             WHERE commission_id = :commissionId
+               AND status = 'SUBMITTED'
+            """,
+            new MapSqlParameterSource()
+                .addValue("commissionId", commissionId)
+                .addValue("actorId", actorId)
+                .addValue("reason", clean(reason)));
+    }
+
+    public void ceoReject(long commissionId, long actorId, String reason) {
+        jdbc.update("""
+            UPDATE sales.commission_record
+               SET status = 'REJECTED',
+                   rejected_by_id = :actorId,
+                   rejected_at = now(),
+                   rejection_reason = :reason,
+                   approved_by_id = :actorId,
+                   approved_at = now(),
+                   updated_at = now()
+             WHERE commission_id = :commissionId
+               AND status = 'MANAGER_APPROVED'
+            """,
+            new MapSqlParameterSource()
+                .addValue("commissionId", commissionId)
+                .addValue("actorId", actorId)
+                .addValue("reason", clean(reason)));
     }
 
     private MapSqlParameterSource amountParams() {
@@ -262,6 +366,8 @@ public class CommissionRepository {
             rs.getBigDecimal("transport_fee"),
             rs.getBigDecimal("cut_fee"),
             rs.getBigDecimal("shortfall"),
+            nullableLong(rs, "invoice_attachment_id"),
+            rs.getString("invoice_attachment_file_name"),
             rs.getTimestamp("invoice_created_at").toInstant(),
             rs.getTimestamp("invoice_updated_at").toInstant()
         );
@@ -270,6 +376,9 @@ public class CommissionRepository {
         long approvedByRaw = rs.getLong("approved_by_id");
         Long approvedById = rs.wasNull() ? null : approvedByRaw;
         Timestamp approvedAt = rs.getTimestamp("approved_at");
+        Timestamp managerApprovedAt = rs.getTimestamp("manager_approved_at");
+        Timestamp ceoApprovedAt = rs.getTimestamp("ceo_approved_at");
+        Timestamp rejectedAt = rs.getTimestamp("rejected_at");
         long cancellationOfRaw = rs.getLong("cancellation_of_id");
         Long cancellationOfId = rs.wasNull() ? null : cancellationOfRaw;
         return new CommissionRecord(
@@ -286,10 +395,29 @@ public class CommissionRepository {
             rs.getBigDecimal("commissionable_base"),
             approvedById,
             approvedAt == null ? null : approvedAt.toInstant(),
+            nullableLong(rs, "manager_approved_by"),
+            rs.getString("manager_approved_by_name"),
+            managerApprovedAt == null ? null : managerApprovedAt.toInstant(),
+            nullableLong(rs, "ceo_approved_by"),
+            rs.getString("ceo_approved_by_name"),
+            ceoApprovedAt == null ? null : ceoApprovedAt.toInstant(),
+            nullableLong(rs, "rejected_by_id"),
+            rs.getString("rejected_by_name"),
+            rejectedAt == null ? null : rejectedAt.toInstant(),
+            rs.getString("rejection_reason"),
             cancellationOfId,
             rs.getString("cancellation_reason"),
             rs.getTimestamp("record_created_at").toInstant(),
             rs.getTimestamp("record_updated_at").toInstant()
         );
+    }
+
+    private Long nullableLong(ResultSet rs, String column) throws SQLException {
+        long value = rs.getLong(column);
+        return rs.wasNull() ? null : value;
+    }
+
+    private String clean(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 }

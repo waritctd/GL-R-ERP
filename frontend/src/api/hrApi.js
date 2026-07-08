@@ -174,9 +174,36 @@ export const api = {
   },
   commissions: {
     list: (params) => apiRequest(withQuery(API_ROUTES.commissions.list, params)),
-    create: (payload) => apiRequest(API_ROUTES.commissions.create, { method: 'POST', body: payload }),
+    create: async (payload) => {
+      if (!Object.prototype.hasOwnProperty.call(payload, 'invoiceAttachment')) {
+        return apiRequest(API_ROUTES.commissions.create, { method: 'POST', body: payload });
+      }
+      const formData = new FormData();
+      if (payload.sourceTicketId) formData.append('sourceTicketId', String(payload.sourceTicketId));
+      if (payload.salesRepId) formData.append('salesRepId', String(payload.salesRepId));
+      formData.append('invoiceNumber', payload.invoiceNumber);
+      formData.append('invoiceDate', payload.invoiceDate);
+      formData.append('grossAmount', String(payload.grossAmount));
+      formData.append('bankFees', String(payload.bankFees ?? 0));
+      formData.append('suspenseVat', String(payload.suspenseVat ?? 0));
+      formData.append('transportFee', String(payload.transportFee ?? 0));
+      formData.append('cutFee', String(payload.cutFee ?? 0));
+      formData.append('shortfall', String(payload.shortfall ?? 0));
+      if (payload.invoiceAttachment) formData.append('invoiceAttachment', payload.invoiceAttachment);
+      const res = await fetch(API_ROUTES.commissions.create, {
+        method: 'POST',
+        credentials: 'include',
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'บันทึกค่าคอมไม่สำเร็จ');
+      }
+      return res.json();
+    },
     updateDeductions: (id, payload) => apiRequest(API_ROUTES.commissions.deductions(id), { method: 'PATCH', body: payload }),
     approve: (id) => apiRequest(API_ROUTES.commissions.approve(id), { method: 'POST' }),
+    reject: (id, payload = {}) => apiRequest(API_ROUTES.commissions.reject(id), { method: 'POST', body: payload }),
     clawback: (id, payload) => apiRequest(API_ROUTES.commissions.clawback(id), { method: 'POST', body: payload }),
     simulate: (payload) => apiRequest(API_ROUTES.commissions.simulator, { method: 'POST', body: payload }),
     payrollReady: (params) => apiRequest(withQuery(API_ROUTES.commissions.payrollReady, params)),
