@@ -70,10 +70,13 @@ services:
         sync: false
       - key: APP_ATTENDANCE_AGENT_TOKEN
         sync: false
-      # SMTP credentials to actually send the emails above (Gmail requires a 2FA App Password, not
-      # the account password) — set in the Render dashboard. MAIL_HOST/MAIL_PORT default to Gmail's
-      # smtp.gmail.com:587 (application.yml), so only these two need setting.
-      - key: MAIL_USERNAME
+      # Email now sends over Resend's HTTP API, not SMTP — Render blocks outbound SMTP ports
+      # (25/465/587) on free/starter web services (confirmed live: MailConnectException/timeout to
+      # smtp.gmail.com:587), and this transport also survives the planned on-prem migration
+      # unchanged, since outbound HTTPS is not commonly blocked the way SMTP is. See
+      # th.co.glr.hr.mail.ResendMailer. Set the real key in the Render dashboard.
+      - key: APP_MAIL_RESEND_API_KEY
         sync: false
-      - key: MAIL_PASSWORD
-        sync: false
+      # APP_MAIL_FROM defaults to Resend's sandbox sender (onboarding@resend.dev), which can only
+      # send to the Resend account's own verified email until a real domain is verified with Resend
+      # — fine for this UAT test, revisit once a company domain (e.g. glr.co.th) is verified.

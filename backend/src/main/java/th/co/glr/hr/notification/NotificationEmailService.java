@@ -3,26 +3,22 @@ package th.co.glr.hr.notification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import th.co.glr.hr.mail.ResendMailer;
 
 @Service
 public class NotificationEmailService {
     private static final Logger log = LoggerFactory.getLogger(NotificationEmailService.class);
 
-    private final JavaMailSender mailer;
-    private final String fromAddress;
+    private final ResendMailer mailer;
     private final String overrideTo;
     private final String subjectPrefix;
 
-    public NotificationEmailService(JavaMailSender mailer,
-                                    @Value("${spring.mail.username:noreply@glr.co.th}") String fromAddress,
+    public NotificationEmailService(ResendMailer mailer,
                                     @Value("${app.mail.override-to:}") String overrideTo,
                                     @Value("${app.mail.subject-prefix:}") String subjectPrefix) {
         this.mailer = mailer;
-        this.fromAddress = fromAddress;
         this.overrideTo = overrideTo;
         this.subjectPrefix = subjectPrefix;
     }
@@ -45,12 +41,7 @@ public class NotificationEmailService {
             : body + "\n\n[Redirected for testing - originally addressed to employee #" + employeeId
                 + (to == null || to.isBlank() ? ", no email on file]" : ", " + to + "]");
         try {
-            SimpleMailMessage message = new SimpleMailMessage();
-            message.setFrom(fromAddress);
-            message.setTo(recipient);
-            message.setSubject(finalSubject);
-            message.setText(finalBody);
-            mailer.send(message);
+            mailer.send(recipient, finalSubject, finalBody);
             log.info("Notification email sent: employee={} to={}", employeeId, recipient);
         } catch (Exception exception) {
             log.error("Failed to send notification email: employee={} to={} error={}",

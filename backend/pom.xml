@@ -89,10 +89,15 @@
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
-        <!-- Email sending for factory Import Requests -->
+        <!-- Email sending (notifications + factory Import Requests) via Resend's HTTP API. Chosen
+             over SMTP (spring-boot-starter-mail) because outbound SMTP (ports 25/465/587) is
+             frequently blocked by both cloud-host free tiers (Render) and corporate/on-prem network
+             policy, whereas outbound HTTPS is not - this transport survives the planned on-prem
+             migration unchanged. See th.co.glr.hr.mail.ResendMailer. -->
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-mail</artifactId>
+            <groupId>com.resend</groupId>
+            <artifactId>resend-java</artifactId>
+            <version>4.13.0</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

@@ -10,16 +10,14 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.Executor;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.core.task.SyncTaskExecutor;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.mail.ResendMailer;
 
 @SpringJUnitConfig(NotificationServiceTest.TestConfig.class)
 class NotificationServiceTest {
@@ -31,7 +29,7 @@ class NotificationServiceTest {
     private NotificationRepository notifications;
 
     @jakarta.annotation.Resource
-    private JavaMailSender mailer;
+    private ResendMailer mailer;
 
     @Test
     void notifyWritesInAppRowAndAttemptsEmailSynchronouslyInTest() {
@@ -62,11 +60,7 @@ class NotificationServiceTest {
         assertThat(result).isEqualTo(saved);
         verify(notifications).insert(7L, "LEAVE_SUBMITTED", "Leave submitted",
             "Your leave request was submitted.", "/leave/1");
-        ArgumentCaptor<SimpleMailMessage> message = ArgumentCaptor.forClass(SimpleMailMessage.class);
-        verify(mailer).send(message.capture());
-        assertThat(message.getValue().getTo()).containsExactly("employee@glr.co.th");
-        assertThat(message.getValue().getSubject()).isEqualTo("Leave submitted");
-        assertThat(message.getValue().getText()).isEqualTo("Your leave request was submitted.");
+        verify(mailer).send("employee@glr.co.th", "Leave submitted", "Your leave request was submitted.");
     }
 
     @Test
@@ -103,8 +97,8 @@ class NotificationServiceTest {
         }
 
         @Bean
-        NotificationEmailService notificationEmailService(JavaMailSender mailer) {
-            return new NotificationEmailService(mailer, "noreply@test.glr", "", "");
+        NotificationEmailService notificationEmailService(ResendMailer mailer) {
+            return new NotificationEmailService(mailer, "", "");
         }
 
         @Bean
@@ -113,8 +107,8 @@ class NotificationServiceTest {
         }
 
         @Bean
-        JavaMailSender javaMailSender() {
-            return mock(JavaMailSender.class);
+        ResendMailer resendMailer() {
+            return mock(ResendMailer.class);
         }
 
         @Bean(name = "taskExecutor")

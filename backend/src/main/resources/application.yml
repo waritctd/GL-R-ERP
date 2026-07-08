@@ -46,15 +46,6 @@ spring:
     multipart:
       max-file-size: ${APP_MAX_FILE_SIZE:10MB}
       max-request-size: ${APP_MAX_REQUEST_SIZE:12MB}
-  mail:
-    host: ${MAIL_HOST:smtp.gmail.com}
-    port: ${MAIL_PORT:587}
-    username: ${MAIL_USERNAME:}
-    password: ${MAIL_PASSWORD:}
-    properties:
-      mail.smtp.auth: true
-      mail.smtp.starttls.enable: true
-
 app:
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174}
@@ -70,6 +61,10 @@ app:
     advance-notice-days: ${APP_OVERTIME_ADVANCE_NOTICE_DAYS:3}
   uploads-dir: ${APP_UPLOADS_DIR:./uploads}
   mail:
+    # Resend (HTTP API, not SMTP) - see th.co.glr.hr.mail.ResendMailer for why. Blank api-key is
+    # fine for local/dev/CI (no email is ever sent unless something calls ResendMailer.send()).
+    resend-api-key: ${APP_MAIL_RESEND_API_KEY:}
+    from: ${APP_MAIL_FROM:onboarding@resend.dev}
     # OFF by default (blank): notification emails go to the real employee address as normal. Set only
     # on a test/UAT deployment to redirect every outbound notification email to one real inbox
     # (regardless of the employee's actual/fake seeded address) so the email pipeline itself can be
@@ -93,14 +88,9 @@ management:
       show-details: never        # anonymous-safe UP/DOWN; DB still rolls into the aggregate
       probes:
         enabled: true             # /actuator/health/liveness + /readiness
-  health:
-    mail:
-      # The mail health indicator opens a live SMTP connection to spring.mail.host on every check.
-      # That's an outbound-egress dependency having nothing to do with this app's liveness (mail is
-      # used only for the async factory Import Request notification), and it flips the aggregate
-      # health to DOWN in any sandboxed/offline environment. Excluded so /actuator/health reflects
-      # this app's own readiness (DB) rather than a third-party SMTP host's reachability.
-      enabled: false
+      # No management.health.mail.enabled override needed: Spring's MailHealthIndicator
+      # auto-configures only when spring-boot-starter-mail is on the classpath, and email now goes
+      # over Resend's HTTP API (th.co.glr.hr.mail.ResendMailer), not JavaMailSender/SMTP.
 
 logging:
   level:
