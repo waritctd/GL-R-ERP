@@ -98,6 +98,7 @@ export const API_ROUTES = {
     create: '/api/commissions',
     deductions: (id) => `/api/commissions/${id}/deductions`,
     approve: (id) => `/api/commissions/${id}/approve`,
+    reject: (id) => `/api/commissions/${id}/reject`,
     clawback: (id) => `/api/commissions/${id}/clawback`,
     simulator: '/api/commissions/simulator',
     payrollReady: '/api/commissions/payroll-ready',

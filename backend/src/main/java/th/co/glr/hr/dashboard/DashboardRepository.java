@@ -325,7 +325,7 @@ public class DashboardRepository {
             SELECT COUNT(*)
               FROM sales.commission_record r
               JOIN hr.employee e ON e.employee_id = r.sales_rep_id
-             WHERE r.status = 'SUBMITTED'
+             WHERE r.status IN ('SUBMITTED', 'MANAGER_APPROVED')
             """, scope);
     }
 
