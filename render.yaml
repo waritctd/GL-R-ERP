@@ -30,3 +30,36 @@ services:
         sync: false
       - key: APP_ATTENDANCE_AGENT_TOKEN
         sync: false
+
+  # Dedicated UAT stack — separate service, separate DB, auto-deploys from the `uat`
+  # integration branch. Backlog features merge to `uat` for stakeholder acceptance
+  # testing, then promote to main. The ONLY functional difference from gl-r-erp is the
+  # `uat` Spring profile, which applies db/migration-uat (synthetic, PII-free seed) instead
+  # of the demo seed. Point SPRING_DATASOURCE_* at a NEW UAT-only Supabase project — never
+  # the demo DB and never a real-prod DB (a UAT payroll run bank-exports the seeded fake
+  # account numbers, which must stay isolated).
+  - type: web
+    name: gl-r-erp-uat
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    region: singapore
+    plan: starter
+    branch: uat                # auto-deploy from the UAT integration branch
+    autoDeploy: true
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: uat             # pinned in git (reviewable); a stray `prod` would seed demo data / wrong DB
+      - key: APP_FLYWAY_ENABLED
+        value: "true"
+      - key: APP_CORS_ALLOWED_ORIGINS
+        sync: false            # set to the UAT Vercel origin in the dashboard
+      # Secrets — set in the Render dashboard, pointing at the NEW UAT Supabase project only.
+      - key: SPRING_DATASOURCE_URL
+        sync: false
+      - key: SPRING_DATASOURCE_USERNAME
+        sync: false
+      - key: SPRING_DATASOURCE_PASSWORD
+        sync: false
+      - key: APP_ATTENDANCE_AGENT_TOKEN
+        sync: false
