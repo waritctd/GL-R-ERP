@@ -14,6 +14,7 @@ const buttonVariants = cva(
     'border-transparent',
     '!font-bold',
     'min-h-[38px]',
+    'pointer-coarse:min-h-[44px]',
     'py-0',
   ],
   {
@@ -35,7 +36,7 @@ const buttonVariants = cva(
       {
         variant: 'icon',
         size: 'sm',
-        className: 'w-9 min-h-[36px] p-0',
+        className: 'w-9 min-h-[36px] p-0 pointer-coarse:w-11',
       },
       {
         variant: 'text',
