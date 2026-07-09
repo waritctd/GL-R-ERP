@@ -1,0 +1,4 @@
+reports/
+.pytest_cache/
+__pycache__/
+.venv/
