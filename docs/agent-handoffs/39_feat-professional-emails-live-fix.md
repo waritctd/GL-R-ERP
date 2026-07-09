@@ -19,7 +19,7 @@ uat
 be78f73 (already on origin/uat; Codex's implementation was uncommitted on top of this)
 
 ## Current Commit
-<fill in after commit — see below>
+1fbfc48d77fc730926b4afcb5480f30a98b7aaf7
 
 ## Agent / Model Used
 Claude Opus 4.8 (fix + verification + live-send proof + commit)
