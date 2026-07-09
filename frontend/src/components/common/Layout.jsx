@@ -1,12 +1,12 @@
 import { cn } from '../../utils/cn.js';
 
 /**
- * PageStack — reproduces `.page-stack`:
- *   display: grid; gap: 18px; max-width: 1320px;
+ * PageStack — top-level page rhythm:
+ *   display: grid; gap: var(--space-5) (20px); max-width: 1320px;
  */
 export function PageStack({ className, children, ...props }) {
   return (
-    <div className={cn('grid gap-[18px] max-w-[1320px]', className)} {...props}>
+    <div className={cn('grid gap-[20px] max-w-[1320px]', className)} {...props}>
       {children}
     </div>
   );
@@ -40,14 +40,14 @@ export function Panel({ title, actions, className, children, ...props }) {
 }
 
 /**
- * Panel.Header — reproduces `.panel-header`:
+ * Panel.Header — title/actions row:
  *   display: flex; align-items: center; justify-content: space-between;
- *   gap: 14px; margin-bottom: 16px;
+ *   gap: var(--space-4) (16px); margin-bottom: var(--space-4) (16px);
  */
 function PanelHeader({ className, children, ...props }) {
   return (
     <div
-      className={cn('flex items-center justify-between gap-[14px] mb-4', className)}
+      className={cn('flex items-center justify-between gap-4 mb-4', className)}
       {...props}
     >
       {children}
@@ -58,8 +58,8 @@ function PanelHeader({ className, children, ...props }) {
 Panel.Header = PanelHeader;
 
 /**
- * FormGrid — reproduces `.form-grid` / `.form-grid.single`:
- *   display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px;
+ * FormGrid — form field grid:
+ *   display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4) (16px);
  *   (single: grid-template-columns: 1fr)
  *   ≤720px: grid-template-columns: 1fr (both variants)
  * `span-2` children should pass `className="span-2-item"` via the exported
@@ -71,7 +71,7 @@ export function FormGrid({ as: Component = 'div', single = false, className, chi
   return (
     <Component
       className={cn(
-        'grid gap-[14px] max-[720px]:grid-cols-1',
+        'grid gap-4 max-[720px]:grid-cols-1',
         single ? 'grid-cols-1' : 'grid-cols-2',
         className,
       )}
@@ -86,15 +86,15 @@ export function FormGrid({ as: Component = 'div', single = false, className, chi
 export const formGridSpan2 = 'col-span-2 max-[720px]:col-span-1';
 
 /**
- * StatGrid — reproduces `.stat-grid`:
- *   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px;
+ * StatGrid — dashboard stat-card grid:
+ *   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-4) (16px);
  *   ≤1040px: repeat(2, minmax(0, 1fr)); ≤720px: 1fr
  */
 export function StatGrid({ className, children, ...props }) {
   return (
     <div
       className={cn(
-        'grid grid-cols-4 gap-[14px] max-[1040px]:grid-cols-2 max-[720px]:grid-cols-1',
+        'grid grid-cols-4 gap-4 max-[1040px]:grid-cols-2 max-[720px]:grid-cols-1',
         className,
       )}
       {...props}
@@ -105,16 +105,16 @@ export function StatGrid({ className, children, ...props }) {
 }
 
 /**
- * FilterBar — reproduces `.filter-bar`:
- *   display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+ * FilterBar — toolbar row for search/filter controls:
+ *   display: flex; flex-wrap: wrap; gap: var(--space-2) (8px); align-items: center;
  *   background: var(--color-surface); border: 1px solid var(--color-border);
- *   border-radius: var(--radius-md); padding: 14px;
+ *   border-radius: var(--radius-md); padding: var(--space-4) (16px);
  */
 export function FilterBar({ className, children, ...props }) {
   return (
     <div
       className={cn(
-        'flex flex-wrap gap-[10px] items-center bg-surface border border-border rounded-md p-[14px]',
+        'flex flex-wrap gap-2 items-center bg-surface border border-border rounded-md p-4',
         className,
       )}
       {...props}
