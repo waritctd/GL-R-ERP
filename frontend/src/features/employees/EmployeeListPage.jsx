@@ -35,8 +35,8 @@ const columns = [
       <span className="employee-cell">
         <Avatar employee={employee} size="sm" />
         <span>
-          <strong>{employee.nameTh}</strong>
-          <small>{employee.nickName} · {employee.divisionTh}</small>
+          <strong title={employee.nameTh}>{employee.nameTh}</strong>
+          <small title={`${employee.nickName} · ${employee.divisionTh}`}>{employee.nickName} · {employee.divisionTh}</small>
         </span>
       </span>
     ),

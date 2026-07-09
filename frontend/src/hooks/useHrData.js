@@ -104,5 +104,6 @@ export function useHrData({ user, showToast }) {
     updateEmployee: (id, payload) => updateEmployeeMutation.mutateAsync({ id, payload }),
     createProfileRequest: (payload) => createProfileRequestMutation.mutateAsync(payload),
     reviewProfileRequest: (id, status) => reviewProfileRequestMutation.mutateAsync({ id, status }),
+    reviewingProfileRequest: reviewProfileRequestMutation.isPending,
   };
 }

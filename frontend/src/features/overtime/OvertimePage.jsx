@@ -544,7 +544,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
                 </small>
               </span>
               <span data-label="เหตุผล">
-                <strong>{request.reason}</strong>
+                <strong title={request.reason}>{request.reason}</strong>
                 <small>{request.reviewerNote || request.calculationNote || '-'}</small>
               </span>
               <span data-label="เวลาจริง / จ่ายได้">
