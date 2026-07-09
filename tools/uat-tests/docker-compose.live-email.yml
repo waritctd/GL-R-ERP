@@ -1,0 +1,17 @@
+# Opt-in override for `./run.sh --live-email`: swaps the backend's mail transport from Mailpit
+# (deterministic local capture, the default) to the REAL Resend API, so every triggering action in
+# test_live_email_smoke.py actually delivers to a real inbox you can check by eye. Not used by the
+# main ./run.sh pass/fail suite (that stays on Mailpit — fast, free, no network dependency).
+#
+# Usage: APP_MAIL_RESEND_API_KEY=re_... LIVE_EMAIL_TO=you@example.com ./run.sh --live-email
+# Resend's sandbox sender (onboarding@resend.dev, the default until glr.co.th is domain-verified)
+# can only deliver to the Resend account's OWN registered email — LIVE_EMAIL_TO must be that address.
+name: glr-uat-tests
+services:
+  backend:
+    environment:
+      APP_MAIL_PROVIDER: resend
+      APP_MAIL_RESEND_API_KEY: ${APP_MAIL_RESEND_API_KEY:?set APP_MAIL_RESEND_API_KEY to your real Resend key}
+      APP_MAIL_FROM: ${APP_MAIL_FROM:-onboarding@resend.dev}
+      APP_MAIL_OVERRIDE_TO: ${LIVE_EMAIL_TO:?set LIVE_EMAIL_TO to the inbox that should receive every test email}
+      APP_MAIL_SUBJECT_PREFIX: "[UAT LIVE] "

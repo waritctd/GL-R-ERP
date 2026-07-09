@@ -78,6 +78,10 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "uat(id, title='', priority=''): UAT case tag for the report"
     )
+    config.addinivalue_line(
+        "markers",
+        "live_email: fires a real email via Resend (./run.sh --live-email only, excluded by default)",
+    )
 
 
 @pytest.hookimpl(hookwrapper=True)

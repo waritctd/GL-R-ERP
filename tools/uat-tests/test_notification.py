@@ -1,9 +1,12 @@
 import pytest
 
 from helpers import (
+    approved_ticket,
     assert_status,
+    create_ticket,
     mailpit_body,
     mailpit_clear,
+    price_proposed_ticket,
     submit_commission,
     submit_leave,
     submit_ot,
@@ -92,4 +95,40 @@ def test_mail03_ot_email(employee):
         plannedEndAt="2026-09-16T20:00:00+07:00",
     )
     msg = wait_for_email(to="employee@uat.glr", subject_contains="ส่งคำขอ OT แล้ว")
+    assert msg["From"]["Address"] == "job@glr.co.th", msg
+
+
+# ---------------------------------------------------------------------------
+# Ticket flows previously sent in-app notifications only (NotificationRepository.notifyByRole/
+# notifyEmployee, bypassing the email pipeline entirely). TicketService/DepositNoticeService were
+# migrated to NotificationService so ticket events now email too, same as commission/OT/leave.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.uat("MAIL-04", title="Ticket submit emails import and ceo roles", priority="P0")
+def test_mail04_ticket_submit_email(sales):
+    mailpit_clear()
+    create_ticket(sales, unique("MAIL04"))
+    import_msg = wait_for_email(to="import@uat.glr", subject_contains="มีคำขอราคาใหม่")
+    ceo_msg = wait_for_email(to="ceo@uat.glr", subject_contains="มีคำขอราคาใหม่")
+    assert import_msg["From"]["Address"] == "job@glr.co.th", import_msg
+    assert ceo_msg["From"]["Address"] == "job@glr.co.th", ceo_msg
+
+
+@pytest.mark.uat("MAIL-05", title="Ticket approve emails the ticket creator", priority="P0")
+def test_mail05_ticket_approve_email(sales, import_, ceo):
+    mailpit_clear()
+    approved_ticket(sales, import_, ceo)
+    msg = wait_for_email(to="sales@uat.glr", subject_contains="ราคาได้รับการอนุมัติ")
+    assert msg["From"]["Address"] == "job@glr.co.th", msg
+
+
+@pytest.mark.uat("MAIL-06", title="Ticket reject emails the import role", priority="P1")
+def test_mail06_ticket_reject_email(sales, import_, ceo):
+    mailpit_clear()
+    ticket = price_proposed_ticket(sales, import_)
+    tid = ticket["summary"]["id"]
+    r = ceo.post(f"/api/tickets/{tid}/reject", json={"reason": "UAT MAIL-06 reject"})
+    assert_status(r, 200)
+    msg = wait_for_email(to="import@uat.glr", subject_contains="ราคาถูกตีกลับ")
     assert msg["From"]["Address"] == "job@glr.co.th", msg
