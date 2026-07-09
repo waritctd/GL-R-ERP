@@ -121,6 +121,16 @@ button:disabled {
   opacity: 0.55;
 }
 
+button:focus-visible,
+a:focus-visible,
+summary:focus-visible,
+[role="tab"]:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus-ring);
+}
+
 code {
   font-family: var(--font-family-mono);
 }
@@ -1548,11 +1558,6 @@ a.status-badge {
   background: var(--color-surface-hover);
 }
 
-.collapsible-header-button:focus-visible {
-  outline: none;
-  box-shadow: var(--shadow-focus-ring);
-}
-
 .collapsible-header-right {
   padding-right: var(--space-4);
 }
@@ -1624,11 +1629,6 @@ a.status-badge {
   background: var(--color-info-bg-alt);
   color: var(--color-info-dark);
   border-color: var(--color-info);
-}
-
-.info-tip-trigger:focus-visible {
-  outline: none;
-  box-shadow: var(--shadow-focus-ring);
 }
 
 .info-tip-bubble {
