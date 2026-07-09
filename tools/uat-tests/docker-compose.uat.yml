@@ -1,6 +1,8 @@
 # Ephemeral local UAT stack for the automated harness: Postgres (no named volume -> wiped on `down`,
-# so every run starts from a fresh V1-V36 + V900-V903 seed) + the backend on SPRING_PROFILES_ACTIVE=uat.
-# APP_MAIL_PROVIDER=log so the harness never sends email.
+# so every run starts from a fresh V1-V36 + V900-V903 seed) + the backend on SPRING_PROFILES_ACTIVE=uat
+# + Mailpit (SMTP capture). The backend uses the real `smtp` transport pointed at Mailpit, so every
+# notification email is captured for assertion (see the MAIL-* tests) and the on-prem SmtpMailer path
+# is exercised. Mailpit's REST API is on :8025; nothing leaves the machine.
 name: glr-uat-tests
 services:
   db:
@@ -14,6 +16,13 @@ services:
       interval: 3s
       timeout: 3s
       retries: 20
+  mailpit:
+    image: axllent/mailpit:latest
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"       # accept unauthenticated SMTP (the harness has no creds)
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    ports:
+      - "8025:8025"                          # REST API / web UI (queried by the MAIL-* tests)
   backend:
     build:
       context: ../../backend
@@ -21,14 +30,23 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     environment:
       SPRING_PROFILES_ACTIVE: uat
       APP_FLYWAY_ENABLED: "true"
-      APP_MAIL_PROVIDER: log
+      # Real SMTP transport -> Mailpit (captures every notification email; exercises SmtpMailer).
+      APP_MAIL_PROVIDER: smtp
+      APP_MAIL_FROM: job@glr.co.th
+      APP_MAIL_SMTP_HOST: mailpit
+      APP_MAIL_SMTP_PORT: "1025"
+      APP_MAIL_SMTP_STARTTLS: "false"
+      # APP_MAIL_OVERRIDE_TO intentionally unset -> true 1-to-many (each notification to its real recipient)
       SERVER_SESSION_COOKIE_SECURE: "false"
       SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/hris
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: postgres
       APP_CORS_ALLOWED_ORIGINS: http://localhost:8099
+      APP_UPLOADS_DIR: /tmp/glr-uploads
     ports:
       - "8099:8080"

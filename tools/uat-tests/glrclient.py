@@ -47,5 +47,10 @@ class GlrClient:
             f"{self.base}{path}", json=json, headers=self._h(headers), timeout=30, **kw
         )
 
+    def put(self, path, json=None, headers=None, **kw):
+        return self.s.put(
+            f"{self.base}{path}", json=json, headers=self._h(headers), timeout=30, **kw
+        )
+
     def logout(self):
         return self.s.post(f"{self.base}/api/auth/logout", headers=self._h(), timeout=30)

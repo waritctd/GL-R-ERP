@@ -69,6 +69,11 @@ def nulldiv(base_url):
     return _persona(base_url, "nulldiv@uat.glr")
 
 
+@pytest.fixture
+def admin(base_url):
+    return _persona(base_url, "admin@uat.glr")
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "uat(id, title='', priority=''): UAT case tag for the report"
