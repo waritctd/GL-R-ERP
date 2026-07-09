@@ -664,6 +664,7 @@ textarea:focus {
   font-size: var(--text-3xl);
   font-weight: 800;
   line-height: 1.1;
+  font-variant-numeric: tabular-nums;
 }
 
 .stat-label {
@@ -839,6 +840,7 @@ textarea:focus {
   font-weight: 800;
   text-align: left;
   text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .table-head.is-sticky {
@@ -1345,6 +1347,7 @@ a.status-badge {
   color: var(--color-surface);
   font-size: var(--text-4xl);
   font-weight: 800;
+  font-variant-numeric: tabular-nums;
 }
 
 .timeline-list > div {
