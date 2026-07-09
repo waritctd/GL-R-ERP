@@ -17,7 +17,7 @@ import org.springframework.core.task.SyncTaskExecutor;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.mail.ResendMailer;
+import th.co.glr.hr.mail.Mailer;
 
 @SpringJUnitConfig(NotificationServiceTest.TestConfig.class)
 class NotificationServiceTest {
@@ -29,7 +29,7 @@ class NotificationServiceTest {
     private NotificationRepository notifications;
 
     @jakarta.annotation.Resource
-    private ResendMailer mailer;
+    private Mailer mailer;
 
     @Test
     void notifyWritesInAppRowAndAttemptsEmailSynchronouslyInTest() {
@@ -97,7 +97,7 @@ class NotificationServiceTest {
         }
 
         @Bean
-        NotificationEmailService notificationEmailService(ResendMailer mailer) {
+        NotificationEmailService notificationEmailService(Mailer mailer) {
             return new NotificationEmailService(mailer, "", "");
         }
 
@@ -107,8 +107,8 @@ class NotificationServiceTest {
         }
 
         @Bean
-        ResendMailer resendMailer() {
-            return mock(ResendMailer.class);
+        Mailer mailer() {
+            return mock(Mailer.class);
         }
 
         @Bean(name = "taskExecutor")

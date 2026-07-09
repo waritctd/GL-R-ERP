@@ -89,15 +89,22 @@
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
-        <!-- Email sending (notifications + factory Import Requests) via Resend's HTTP API. Chosen
-             over SMTP (spring-boot-starter-mail) because outbound SMTP (ports 25/465/587) is
-             frequently blocked by both cloud-host free tiers (Render) and corporate/on-prem network
-             policy, whereas outbound HTTPS is not - this transport survives the planned on-prem
-             migration unchanged. See th.co.glr.hr.mail.ResendMailer. -->
+        <!-- Email is pluggable behind th.co.glr.hr.mail.Mailer, selected by app.mail.provider:
+               resend -> Resend HTTP API (cloud/UAT; Render blocks outbound SMTP 25/465/587)
+               smtp   -> authenticated SMTP as the company mailbox (on-prem, $0)
+               log    -> logs instead of sending (dev/CI default)
+             Both transports ship in the one build so switching hosts is a config change, not code. -->
         <dependency>
             <groupId>com.resend</groupId>
             <artifactId>resend-java</artifactId>
             <version>4.13.0</version>
+        </dependency>
+        <!-- Provides JavaMailSenderImpl + Jakarta Mail for SmtpMailer (app.mail.provider=smtp).
+             SmtpMailer builds its own sender from app.mail.smtp.*; no spring.mail.* auto-config bean
+             is created, so the SMTP-connecting mail health indicator never activates. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

@@ -9,14 +9,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import org.junit.jupiter.api.Test;
-import th.co.glr.hr.mail.ResendMailer;
+import th.co.glr.hr.mail.Mailer;
 
 // Locks in the app.mail.override-to / app.mail.subject-prefix behavior used to redirect every
 // notification email to one real inbox on a test/UAT deployment (verifies the email pipeline works
 // without needing real per-employee mailboxes). Both are blank by default so every other deployment
 // keeps sending to the real employee address unchanged - see NotificationServiceTest for that path.
 class NotificationEmailServiceTest {
-    private final ResendMailer mailer = mock(ResendMailer.class);
+    private final Mailer mailer = mock(Mailer.class);
 
     @Test
     void sendsToRealAddressWhenNoOverrideConfigured() {

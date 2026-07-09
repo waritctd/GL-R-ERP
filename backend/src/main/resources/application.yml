@@ -61,14 +61,23 @@ app:
     advance-notice-days: ${APP_OVERTIME_ADVANCE_NOTICE_DAYS:3}
   uploads-dir: ${APP_UPLOADS_DIR:./uploads}
   mail:
-    # Resend (HTTP API, not SMTP) - see th.co.glr.hr.mail.ResendMailer for why. Blank api-key is
-    # fine for local/dev/CI (no email is ever sent unless something calls ResendMailer.send()).
-    resend-api-key: ${APP_MAIL_RESEND_API_KEY:}
+    # Transport is pluggable behind th.co.glr.hr.mail.Mailer. Default `log` = boot/run with no mail
+    # creds and no accidental sends (dev/CI). `resend` = Resend HTTP API (cloud/UAT; Render blocks
+    # SMTP). `smtp` = authenticated SMTP as app.mail.from (on-prem; e.g. job@glr.co.th).
+    provider: ${APP_MAIL_PROVIDER:log}
     from: ${APP_MAIL_FROM:onboarding@resend.dev}
-    # OFF by default (blank): notification emails go to the real employee address as normal. Set only
-    # on a test/UAT deployment to redirect every outbound notification email to one real inbox
-    # (regardless of the employee's actual/fake seeded address) so the email pipeline itself can be
-    # verified without needing real per-employee mailboxes.
+    # provider=resend
+    resend-api-key: ${APP_MAIL_RESEND_API_KEY:}
+    # provider=smtp (on-prem): the company mail host + the sending mailbox's credentials
+    smtp:
+      host: ${APP_MAIL_SMTP_HOST:}
+      port: ${APP_MAIL_SMTP_PORT:587}
+      username: ${APP_MAIL_SMTP_USERNAME:}
+      password: ${APP_MAIL_SMTP_PASSWORD:}
+      starttls: ${APP_MAIL_SMTP_STARTTLS:true}
+    # OFF by default (blank) = 1-to-many: each notification goes to the real per-employee address. Set
+    # only on a test/UAT deployment to redirect every notification email to one inbox (regardless of
+    # the employee's actual/fake seeded address) so the pipeline can be verified without real mailboxes.
     override-to: ${APP_MAIL_OVERRIDE_TO:}
     subject-prefix: ${APP_MAIL_SUBJECT_PREFIX:}
   login-rate-limit:
@@ -88,9 +97,10 @@ management:
       show-details: never        # anonymous-safe UP/DOWN; DB still rolls into the aggregate
       probes:
         enabled: true             # /actuator/health/liveness + /readiness
-      # No management.health.mail.enabled override needed: Spring's MailHealthIndicator
-      # auto-configures only when spring-boot-starter-mail is on the classpath, and email now goes
-      # over Resend's HTTP API (th.co.glr.hr.mail.ResendMailer), not JavaMailSender/SMTP.
+      # No management.health.mail.enabled override needed: Spring's MailHealthIndicator activates
+      # only when a JavaMailSender *bean* exists. SmtpMailer builds a private JavaMailSenderImpl (not
+      # a bean) and no spring.mail.* auto-config runs, so no such bean is ever exposed - the health
+      # aggregate reflects this app's own readiness (DB), not an SMTP host's reachability.
 
 logging:
   level:

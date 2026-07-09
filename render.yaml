@@ -70,11 +70,11 @@ services:
         sync: false
       - key: APP_ATTENDANCE_AGENT_TOKEN
         sync: false
-      # Email now sends over Resend's HTTP API, not SMTP — Render blocks outbound SMTP ports
-      # (25/465/587) on free/starter web services (confirmed live: MailConnectException/timeout to
-      # smtp.gmail.com:587), and this transport also survives the planned on-prem migration
-      # unchanged, since outbound HTTPS is not commonly blocked the way SMTP is. See
-      # th.co.glr.hr.mail.ResendMailer. Set the real key in the Render dashboard.
+      # Email transport = Resend HTTP API (Render blocks outbound SMTP 25/465/587 on free/starter web
+      # services — confirmed live: MailConnectException/timeout to smtp.gmail.com:587). On-prem uses
+      # provider=smtp instead (see th.co.glr.hr.mail.Mailer). Set the real key in the Render dashboard.
+      - key: APP_MAIL_PROVIDER
+        value: resend
       - key: APP_MAIL_RESEND_API_KEY
         sync: false
       # APP_MAIL_FROM defaults to Resend's sandbox sender (onboarding@resend.dev), which can only

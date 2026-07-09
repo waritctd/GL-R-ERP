@@ -3,15 +3,15 @@ package th.co.glr.hr.factory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import th.co.glr.hr.mail.ResendMailer;
+import th.co.glr.hr.mail.Mailer;
 
 @Service
 public class FactoryEmailService {
     private static final Logger log = LoggerFactory.getLogger(FactoryEmailService.class);
 
-    private final ResendMailer mailer;
+    private final Mailer mailer;
 
-    public FactoryEmailService(ResendMailer mailer) {
+    public FactoryEmailService(Mailer mailer) {
         this.mailer = mailer;
     }
 

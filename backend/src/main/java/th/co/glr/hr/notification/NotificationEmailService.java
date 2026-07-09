@@ -5,17 +5,17 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import th.co.glr.hr.mail.ResendMailer;
+import th.co.glr.hr.mail.Mailer;
 
 @Service
 public class NotificationEmailService {
     private static final Logger log = LoggerFactory.getLogger(NotificationEmailService.class);
 
-    private final ResendMailer mailer;
+    private final Mailer mailer;
     private final String overrideTo;
     private final String subjectPrefix;
 
-    public NotificationEmailService(ResendMailer mailer,
+    public NotificationEmailService(Mailer mailer,
                                     @Value("${app.mail.override-to:}") String overrideTo,
                                     @Value("${app.mail.subject-prefix:}") String subjectPrefix) {
         this.mailer = mailer;
