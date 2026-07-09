@@ -636,7 +636,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
                 <small>{formatDays(request.totalDays)} · เหลือ {formatDays(request.quotaRemainingAfter)}</small>
               </span>
               <span data-label="เหตุผล / เอกสาร">
-                <strong>{request.reason}</strong>
+                <strong title={request.reason}>{request.reason}</strong>
                 <small>{request.attachmentFileName || '-'}</small>
               </span>
               <StatusBadge tone={status.tone}>{status.label}</StatusBadge>

@@ -83,6 +83,7 @@ export function App() {
     updateEmployee,
     createProfileRequest,
     reviewProfileRequest,
+    reviewingProfileRequest,
   } = useHrData({ user, showToast });
 
   const ownRequests = useMemo(
@@ -218,7 +219,13 @@ export function App() {
             />
             <Route
               path="/requests"
-              element={<ProfileRequestsPage profileRequests={profileRequests} onReview={reviewProfileRequest} />}
+              element={(
+                <ProfileRequestsPage
+                  profileRequests={profileRequests}
+                  onReview={reviewProfileRequest}
+                  reviewing={reviewingProfileRequest}
+                />
+              )}
             />
             <Route
               path="/my-requests"
