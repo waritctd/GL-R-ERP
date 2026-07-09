@@ -3,6 +3,7 @@ package th.co.glr.hr.mail;
 import java.util.Properties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.mail.SimpleMailMessage;
@@ -32,6 +33,11 @@ public class SmtpMailer implements Mailer {
     private final JavaMailSender sender;
     private final String fromAddress;
 
+    // @Autowired marks THIS as the constructor Spring uses — required because the class also has a
+    // package-private test-seam constructor below, and with two constructors and none annotated Spring
+    // falls back to a (nonexistent) no-arg constructor and fails to wire the whole context when
+    // app.mail.provider=smtp (would crash-loop an on-prem SMTP deploy at startup).
+    @Autowired
     public SmtpMailer(@Value("${app.mail.from:noreply@glr.co.th}") String fromAddress,
                       @Value("${app.mail.smtp.host:}") String host,
                       @Value("${app.mail.smtp.port:587}") int port,
