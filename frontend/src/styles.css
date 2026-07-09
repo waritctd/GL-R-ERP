@@ -667,7 +667,7 @@ textarea:focus {
 }
 
 .stat-label {
-  margin-top: 5px;
+  margin-top: var(--space-2);
   font-weight: 700;
 }
 
@@ -695,7 +695,7 @@ textarea:focus {
 .timeline-list,
 .salary-history {
   display: grid;
-  gap: 10px;
+  gap: var(--space-3);
 }
 
 .bar-row {
