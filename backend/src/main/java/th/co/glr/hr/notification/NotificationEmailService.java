@@ -14,17 +14,20 @@ public class NotificationEmailService {
     private final Mailer mailer;
     private final String overrideTo;
     private final String subjectPrefix;
+    private final String appBaseUrl;
 
     public NotificationEmailService(Mailer mailer,
                                     @Value("${app.mail.override-to:}") String overrideTo,
-                                    @Value("${app.mail.subject-prefix:}") String subjectPrefix) {
+                                    @Value("${app.mail.subject-prefix:}") String subjectPrefix,
+                                    @Value("${app.mail.app-base-url:https://demo-glr-git-uat-waritctds-projects.vercel.app}") String appBaseUrl) {
         this.mailer = mailer;
-        this.overrideTo = overrideTo;
-        this.subjectPrefix = subjectPrefix;
+        this.overrideTo = clean(overrideTo);
+        this.subjectPrefix = subjectPrefix == null ? "" : subjectPrefix;
+        this.appBaseUrl = stripTrailingSlash(clean(appBaseUrl));
     }
 
     @Async
-    public void send(long employeeId, String to, String subject, String body) {
+    public void send(long employeeId, String to, String recipientName, String subject, String body, String link) {
         // override-to lets a test deployment redirect every notification email to one real inbox
         // (regardless of the employee's actual/fake address, or even a missing one) so the email
         // pipeline can be verified without real per-employee mailboxes. Blank on every other
@@ -35,10 +38,11 @@ public class NotificationEmailService {
                 employeeId);
             return;
         }
-        String finalSubject = subjectPrefix.isBlank() ? subject : subjectPrefix + subject;
+        String finalSubject = subjectPrefix + "[GL&R HR] " + subject;
+        String templatedBody = professionalBody(recipientName, body, link);
         String finalBody = overrideTo.isBlank()
-            ? body
-            : body + "\n\n[Redirected for testing - originally addressed to employee #" + employeeId
+            ? templatedBody
+            : templatedBody + "\n\n[Redirected for testing - originally addressed to employee #" + employeeId
                 + (to == null || to.isBlank() ? ", no email on file]" : ", " + to + "]");
         try {
             mailer.send(recipient, finalSubject, finalBody);
@@ -47,5 +51,39 @@ public class NotificationEmailService {
             log.error("Failed to send notification email: employee={} to={} error={}",
                 employeeId, recipient, exception.getMessage());
         }
+    }
+
+    private String professionalBody(String recipientName, String body, String link) {
+        String greeting = clean(recipientName).isBlank()
+            ? "เรียน ท่านผู้ใช้งาน,"
+            : "เรียน คุณ" + clean(recipientName) + ",";
+        StringBuilder message = new StringBuilder()
+            .append(greeting)
+            .append("\n\n")
+            .append(clean(body))
+            .append("\n\n");
+        String cleanLink = clean(link);
+        if (!cleanLink.isBlank()) {
+            message.append("ดูรายละเอียดในระบบ: ")
+                .append(appBaseUrl)
+                .append(cleanLink.startsWith("/") ? cleanLink : "/" + cleanLink)
+                .append("\n\n");
+        }
+        return message
+            .append("ขอแสดงความนับถือ\n")
+            .append("ระบบบริหารงานบุคคล GL&R (GL&R HR Portal)\n")
+            .append("— อีเมลฉบับนี้ส่งจากระบบอัตโนมัติ กรุณาอย่าตอบกลับ")
+            .toString();
+    }
+
+    private String clean(String value) {
+        return value == null ? "" : value.trim();
+    }
+
+    private String stripTrailingSlash(String value) {
+        if (value.endsWith("/")) {
+            return value.substring(0, value.length() - 1);
+        }
+        return value;
     }
 }

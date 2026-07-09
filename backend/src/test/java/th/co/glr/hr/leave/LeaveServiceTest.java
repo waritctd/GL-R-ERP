@@ -58,7 +58,7 @@ class LeaveServiceTest {
             eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null));
         assertThat(totalDays.getValue()).isEqualByComparingTo("2.00");
         verify(notificationService).notify(eq(10L), eq("LEAVE_AUTO_APPROVED"), any(String.class), any(String.class), eq("/leave"), eq(true));
-        verify(notificationService).notify(eq(99L), eq("LEAVE_AUTO_APPROVED"), any(String.class), any(String.class), eq("/leave"), eq(false));
+        verify(notificationService).notify(eq(99L), eq("LEAVE_AUTO_APPROVED"), any(String.class), any(String.class), eq("/leave"), eq(true));
     }
 
     @Test
@@ -228,6 +228,9 @@ class LeaveServiceTest {
         LocalDate date = LocalDate.now(BUSINESS_ZONE).plusDays(8);
         while (date.getDayOfWeek().getValue() >= 6) {
             date = date.plusDays(1);
+        }
+        if (date.getDayOfWeek().getValue() == 5) {
+            date = date.plusDays(3);
         }
         return date;
     }

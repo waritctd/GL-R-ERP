@@ -9,6 +9,7 @@ import csv
 import datetime
 import os
 import pathlib
+import time
 
 import pytest
 
@@ -82,6 +83,20 @@ def pytest_configure(config):
         "markers",
         "live_email: fires a real email via Resend (./run.sh --live-email only, excluded by default)",
     )
+
+
+@pytest.fixture(autouse=True)
+def _pace_live_email(request):
+    """Spread live-email tests over time so the real Resend sends stay under its 10 req/s cap.
+
+    Each `@pytest.mark.live_email` test fires 1-3 async notification emails via the real Resend API
+    (./run.sh --live-email only). Running all ~21 of them back-to-back bursts ~76 emails in a few
+    seconds and gets many HTTP 429s. Sleeping after each live test spreads the ~76 emails over
+    ~30-40s (~2/s) instead. Does not affect the default Mailpit suite (no marker -> no sleep).
+    """
+    yield
+    if request.node.get_closest_marker("live_email") is not None:
+        time.sleep(1.5)
 
 
 @pytest.hookimpl(hookwrapper=True)

@@ -54,10 +54,20 @@ fi
 
 mkdir -p reports
 set +e
-UAT_BASE_URL="$BASE_URL" "$PYTHON" -m pytest -q -m "$MARKER_EXPR" \
-  --junitxml=reports/junit.xml "${PYTEST_ARGS[@]}"
+if [ "${#PYTEST_ARGS[@]}" -gt 0 ]; then
+  UAT_BASE_URL="$BASE_URL" "$PYTHON" -m pytest -q -m "$MARKER_EXPR" \
+    --junitxml=reports/junit.xml "${PYTEST_ARGS[@]}"
+else
+  UAT_BASE_URL="$BASE_URL" "$PYTHON" -m pytest -q -m "$MARKER_EXPR" \
+    --junitxml=reports/junit.xml
+fi
 rc=$?
 set -e
+
+if [ "$LIVE_EMAIL" = true ]; then
+  echo ">> live-email tests fired; waiting ~45s for async Resend sends (+ 429 retries) to drain before teardown..."
+  sleep 45
+fi
 
 if [ "$BASE_URL" = "http://localhost:8099" ]; then
   $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true

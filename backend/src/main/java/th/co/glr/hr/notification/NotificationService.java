@@ -44,8 +44,15 @@ public class NotificationService {
             // Always hand off to NotificationEmailService, even when the employee has no email on
             // file (`to` is null then) - it decides whether to skip or redirect to a configured
             // override address (used by test/UAT deployments to verify the email pipeline works).
-            String to = notifications.findEmployeeEmail(employeeId).orElse(null);
-            sendEmailAfterCommit(employeeId, to, subject.trim(), body.trim());
+            EmployeeContact contact = notifications.findEmployeeContact(employeeId)
+                .orElse(new EmployeeContact(null, null));
+            sendEmailAfterCommit(
+                employeeId,
+                contact.email(),
+                contact.name(),
+                subject.trim(),
+                body.trim(),
+                trimmedOrNull(link));
         }
         return created;
     }
@@ -72,15 +79,16 @@ public class NotificationService {
         }
     }
 
-    private void sendEmailAfterCommit(long employeeId, String to, String subject, String body) {
+    private void sendEmailAfterCommit(long employeeId, String to, String recipientName, String subject,
+                                      String body, String link) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            emailService.send(employeeId, to, subject, body);
+            emailService.send(employeeId, to, recipientName, subject, body, link);
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                emailService.send(employeeId, to, subject, body);
+                emailService.send(employeeId, to, recipientName, subject, body, link);
             }
         });
     }

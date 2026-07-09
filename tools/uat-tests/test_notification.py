@@ -132,3 +132,81 @@ def test_mail06_ticket_reject_email(sales, import_, ceo):
     assert_status(r, 200)
     msg = wait_for_email(to="import@uat.glr", subject_contains="ราคาถูกตีกลับ")
     assert msg["From"]["Address"] == "job@glr.co.th", msg
+
+
+@pytest.mark.uat("MAIL-07", title="Profile request submit emails HR", priority="P0")
+def test_mail07_profile_request_submit_email(employee):
+    mailpit_clear()
+    r = employee.post(
+        "/api/profile-requests",
+        json={
+            "fieldKey": "email",
+            "fieldLabel": "อีเมล",
+            "oldValue": "employee@uat.glr",
+            "newValue": f"{unique('mail07').lower()}@uat-harness.glr",
+        },
+    )
+    assert_status(r, 200)
+    msg = wait_for_email(to="hr@uat.glr", subject_contains="มีคำขอแก้ไขข้อมูลพนักงาน")
+    assert msg["From"]["Address"] == "job@glr.co.th", msg
+
+
+@pytest.mark.uat("MAIL-08", title="Profile request approval emails employee", priority="P0")
+def test_mail08_profile_request_approval_email(employee, hr):
+    r = employee.post(
+        "/api/profile-requests",
+        json={
+            "fieldKey": "address",
+            "fieldLabel": "ที่อยู่ปัจจุบัน",
+            "oldValue": "",
+            "newValue": unique("UAT MAIL-08 address"),
+        },
+    )
+    assert_status(r, 200)
+    req_id = r.json()["profileRequest"]["id"]
+    mailpit_clear()
+    r = hr.patch(f"/api/profile-requests/{req_id}", json={"status": "approved", "reviewerNote": "OK"})
+    assert_status(r, 200)
+    msg = wait_for_email(to="employee@uat.glr", subject_contains="คำขอแก้ไขข้อมูลได้รับการอนุมัติ")
+    assert msg["From"]["Address"] == "job@glr.co.th", msg
+
+
+@pytest.mark.uat("MAIL-09", title="Profile request rejection emails employee with reason", priority="P1")
+def test_mail09_profile_request_rejection_email(employee, hr):
+    reason = "Need clearer evidence"
+    r = employee.post(
+        "/api/profile-requests",
+        json={
+            "fieldKey": "emergency",
+            "fieldLabel": "ผู้ติดต่อฉุกเฉิน",
+            "oldValue": "",
+            "newValue": "UAT Contact · 0800000909",
+        },
+    )
+    assert_status(r, 200)
+    req_id = r.json()["profileRequest"]["id"]
+    mailpit_clear()
+    r = hr.patch(f"/api/profile-requests/{req_id}", json={"status": "rejected", "reviewerNote": reason})
+    assert_status(r, 200)
+    msg = wait_for_email(to="employee@uat.glr", subject_contains="คำขอแก้ไขข้อมูลไม่ได้รับการอนุมัติ")
+    body = mailpit_body(msg["ID"]).get("Text", "")
+    assert reason in body, body
+    assert msg["From"]["Address"] == "job@glr.co.th", msg
+
+
+@pytest.mark.uat("MAIL-10", title="Email template has greeting CTA and signature", priority="P0")
+def test_mail10_email_template_structure(employee):
+    mailpit_clear()
+    submit_leave(
+        employee,
+        "UAT MAIL-10 template",
+        leaveTypeCode="VACATION",
+        startDate="2026-09-17",
+        endDate="2026-09-17",
+    )
+    msg = wait_for_email(to="employee@uat.glr", subject_contains="คำขอลาได้รับการอนุมัติอัตโนมัติ")
+    assert msg["Subject"].startswith("[GL&R HR] "), msg
+    body = mailpit_body(msg["ID"]).get("Text", "")
+    assert "เรียน คุณ" in body or "เรียน ท่านผู้ใช้งาน," in body, body
+    assert "ดูรายละเอียดในระบบ: https://demo-glr-git-uat-waritctds-projects.vercel.app/leave" in body, body
+    assert "ระบบบริหารงานบุคคล GL&R" in body, body

@@ -2,6 +2,8 @@ package th.co.glr.hr.notification;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -48,7 +50,8 @@ class NotificationServiceTest {
         when(notifications.insert(7L, "LEAVE_SUBMITTED", "Leave submitted",
             "Your leave request was submitted.", "/leave/1")).thenReturn(42L);
         when(notifications.findById(42L)).thenReturn(Optional.of(saved));
-        when(notifications.findEmployeeEmail(7L)).thenReturn(Optional.of("employee@glr.co.th"));
+        when(notifications.findEmployeeContact(7L)).thenReturn(Optional.of(
+            new EmployeeContact("สมชาย", "employee@glr.co.th")));
 
         NotificationDto result = service.notify(
             7L,
@@ -61,7 +64,12 @@ class NotificationServiceTest {
         assertThat(result).isEqualTo(saved);
         verify(notifications).insert(7L, "LEAVE_SUBMITTED", "Leave submitted",
             "Your leave request was submitted.", "/leave/1");
-        verify(mailer).send("employee@glr.co.th", "Leave submitted", "Your leave request was submitted.");
+        verify(mailer).send(
+            eq("employee@glr.co.th"),
+            eq("[GL&R HR] Leave submitted"),
+            argThat(body -> body.contains("เรียน คุณสมชาย,")
+                && body.contains("Your leave request was submitted.")
+                && body.contains("https://portal.example/leave/1")));
     }
 
     @Test
@@ -77,15 +85,23 @@ class NotificationServiceTest {
         when(notifications.findById(102L)).thenReturn(Optional.of(new NotificationDto(
             102L, 4L, null, null, "SUBMITTED", "Ticket title", "Ticket body", "/tickets/9", false,
             Instant.parse("2026-07-08T00:00:00Z"))));
-        when(notifications.findEmployeeEmail(3L)).thenReturn(Optional.of("import1@glr.co.th"));
-        when(notifications.findEmployeeEmail(4L)).thenReturn(Optional.of("import2@glr.co.th"));
+        when(notifications.findEmployeeContact(3L)).thenReturn(Optional.of(
+            new EmployeeContact("Import One", "import1@glr.co.th")));
+        when(notifications.findEmployeeContact(4L)).thenReturn(Optional.of(
+            new EmployeeContact("Import Two", "import2@glr.co.th")));
 
         service.notifyByRole("import", "SUBMITTED", "Ticket title", "Ticket body", "/tickets/9", true);
 
         verify(notifications).insert(3L, "SUBMITTED", "Ticket title", "Ticket body", "/tickets/9");
         verify(notifications).insert(4L, "SUBMITTED", "Ticket title", "Ticket body", "/tickets/9");
-        verify(mailer).send("import1@glr.co.th", "Ticket title", "Ticket body");
-        verify(mailer).send("import2@glr.co.th", "Ticket title", "Ticket body");
+        verify(mailer).send(
+            eq("import1@glr.co.th"),
+            eq("[GL&R HR] Ticket title"),
+            argThat(body -> body.contains("เรียน คุณImport One,") && body.contains("https://portal.example/tickets/9")));
+        verify(mailer).send(
+            eq("import2@glr.co.th"),
+            eq("[GL&R HR] Ticket title"),
+            argThat(body -> body.contains("เรียน คุณImport Two,") && body.contains("https://portal.example/tickets/9")));
     }
 
     @Test
@@ -132,7 +148,7 @@ class NotificationServiceTest {
 
         @Bean
         NotificationEmailService notificationEmailService(Mailer mailer) {
-            return new NotificationEmailService(mailer, "", "");
+            return new NotificationEmailService(mailer, "", "", "https://portal.example");
         }
 
         @Bean

@@ -57,6 +57,37 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
     }
 
     @Test
+    void findActiveEmployeeIdsByRoleMapsHrDivision() {
+        long hrDivision = insertDivision("HR", "Human Resources");
+        long activeHrEmployee = insertEmployee("EMP-300", hrDivision, true);
+
+        assertThat(repository.findActiveEmployeeIdsByRole("hr")).containsExactly(activeHrEmployee);
+    }
+
+    @Test
+    void findEmployeeContactReturnsNameAndTrimmedEmail() {
+        long divisionId = insertDivision("ZXCONTACT", "Contact Test");
+        long employeeId = insertEmployee("EMP-400", divisionId, true);
+        jdbc.update("""
+            UPDATE hr.employee
+               SET first_name_th = :firstName,
+                   last_name_th = :lastName,
+                   email = :email
+             WHERE employee_id = :employeeId
+            """,
+            Map.of(
+                "firstName", "สมชาย",
+                "lastName", "ใจดี",
+                "email", " contact@glr.co.th ",
+                "employeeId", employeeId));
+
+        EmployeeContact contact = repository.findEmployeeContact(employeeId).orElseThrow();
+
+        assertThat(contact.name()).isEqualTo("สมชาย ใจดี");
+        assertThat(contact.email()).isEqualTo("contact@glr.co.th");
+    }
+
+    @Test
     void findActiveEmployeeIdsByRoleReturnsEmptyForUnmappedRole() {
         assertThat(repository.findActiveEmployeeIdsByRole("employee")).isEmpty();
     }

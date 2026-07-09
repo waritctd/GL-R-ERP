@@ -80,6 +80,7 @@ app:
     # the employee's actual/fake seeded address) so the pipeline can be verified without real mailboxes.
     override-to: ${APP_MAIL_OVERRIDE_TO:}
     subject-prefix: ${APP_MAIL_SUBJECT_PREFIX:}
+    app-base-url: ${APP_MAIL_APP_BASE_URL:https://demo-glr-git-uat-waritctds-projects.vercel.app}
   login-rate-limit:
     enabled: ${APP_LOGIN_RATE_LIMIT_ENABLED:true}
     max-account-failures: ${APP_LOGIN_MAX_ACCOUNT_FAILURES:5}

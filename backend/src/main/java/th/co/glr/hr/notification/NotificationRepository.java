@@ -69,13 +69,20 @@ public class NotificationRepository {
     }
 
     public Optional<String> findEmployeeEmail(long employeeId) {
+        return findEmployeeContact(employeeId).map(EmployeeContact::email);
+    }
+
+    public Optional<EmployeeContact> findEmployeeContact(long employeeId) {
         try {
-            String email = jdbc.queryForObject("""
-                SELECT NULLIF(BTRIM(email), '')
+            EmployeeContact contact = jdbc.queryForObject("""
+                SELECT NULLIF(TRIM(CONCAT_WS(' ', first_name_th, last_name_th)), '') AS name,
+                       NULLIF(BTRIM(email), '') AS email
                   FROM hr.employee
                  WHERE employee_id = :employeeId
-                """, Map.of("employeeId", employeeId), String.class);
-            return Optional.ofNullable(email);
+                """,
+                Map.of("employeeId", employeeId),
+                (rs, rowNum) -> new EmployeeContact(rs.getString("name"), rs.getString("email")));
+            return Optional.ofNullable(contact);
         } catch (EmptyResultDataAccessException exception) {
             return Optional.empty();
         }
@@ -93,6 +100,7 @@ public class NotificationRepository {
             case "import" -> "d.source_code ILIKE 'PCIM%'";
             case "ceo"    -> "d.source_code ILIKE 'MD%' OR d.source_code ILIKE 'MN%'";
             case "sales"  -> "d.source_code ILIKE 'SA%'";
+            case "hr"     -> "d.source_code ILIKE 'HR%'";
             default -> null;
         };
         if (divisionFilter == null) return List.of();

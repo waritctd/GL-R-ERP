@@ -282,7 +282,7 @@ public class LeaveService {
                     request.employeeName() + " ลา " + request.leaveTypeNameTh() + " วันที่ "
                         + request.startDate() + " ถึง " + request.endDate(),
                     "/leave",
-                    false);
+                    true);
             }
             return;
         }
