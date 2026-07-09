@@ -23,18 +23,18 @@ import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.CustomerRepository;
-import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.pricing.PriceCalcService;
 
 class TicketServiceTest {
 
     private final TicketRepository ticketRepo = mock(TicketRepository.class);
-    private final NotificationRepository notifRepo = mock(NotificationRepository.class);
+    private final NotificationService notificationService = mock(NotificationService.class);
     private final PriceCalcService priceCalcService = mock(PriceCalcService.class);
     private final CustomerRepository customerRepo = mock(CustomerRepository.class);
     private final QuotationRenderer quotationRenderer = new QuotationRenderer();
     private final TicketService service = new TicketService(
-        ticketRepo, notifRepo, priceCalcService, new ObjectMapper(), customerRepo, quotationRenderer);
+        ticketRepo, notificationService, priceCalcService, new ObjectMapper(), customerRepo, quotationRenderer);
 
     private final UserPrincipal salesActor  = actor(1L, "sales");
     private final UserPrincipal otherSales  = actor(2L, "sales");
@@ -85,8 +85,8 @@ class TicketServiceTest {
 
         verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.SUBMITTED), eq(TicketStatus.DRAFT), eq(TicketStatus.SUBMITTED), isNull());
-        verify(notifRepo).notifyByRole(eq("import"), eq(10L), anyString(), anyString());
-        verify(notifRepo).notifyByRole(eq("ceo"),    eq(10L), anyString(), anyString());
+        verify(notificationService).notifyByRole(eq("import"), anyString(), anyString(), anyString(), eq("/tickets/10"), eq(true));
+        verify(notificationService).notifyByRole(eq("ceo"), anyString(), anyString(), anyString(), eq("/tickets/10"), eq(true));
     }
 
     @Test
@@ -146,7 +146,7 @@ class TicketServiceTest {
         verify(ticketRepo).addEventWithSnapshot(eq(10L), eq(3L), anyString(),
             eq(TicketEventKind.PRICE_PROPOSED), eq(TicketStatus.IN_REVIEW), eq(TicketStatus.PRICE_PROPOSED),
             eq("ราคาจาก supplier"), anyString());
-        verify(notifRepo).notifyByRole(eq("ceo"), eq(10L), anyString(), anyString());
+        verify(notificationService).notifyByRole(eq("ceo"), anyString(), anyString(), anyString(), eq("/tickets/10"), eq(true));
     }
 
     @Test
@@ -176,7 +176,7 @@ class TicketServiceTest {
         verify(ticketRepo).approveItemPrices(10L);
         verify(ticketRepo).addEvent(eq(10L), eq(4L), anyString(),
             eq(TicketEventKind.APPROVED), eq(TicketStatus.PRICE_PROPOSED), eq(TicketStatus.APPROVED), isNull());
-        verify(notifRepo).notifyEmployee(eq(1L), eq(10L), anyString(), anyString());
+        verify(notificationService).notify(eq(1L), anyString(), anyString(), anyString(), eq("/tickets/10"), eq(true));
     }
 
     @Test
@@ -205,7 +205,7 @@ class TicketServiceTest {
 
         verify(ticketRepo).addEvent(eq(10L), eq(4L), anyString(),
             eq(TicketEventKind.REJECTED), eq(TicketStatus.PRICE_PROPOSED), eq(TicketStatus.IN_REVIEW), eq("ราคาสูงเกิน"));
-        verify(notifRepo).notifyByRole(eq("import"), eq(10L), anyString(), anyString());
+        verify(notificationService).notifyByRole(eq("import"), anyString(), anyString(), anyString(), eq("/tickets/10"), eq(true));
     }
 
     @Test

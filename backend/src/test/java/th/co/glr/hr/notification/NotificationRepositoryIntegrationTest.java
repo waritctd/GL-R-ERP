@@ -8,9 +8,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-// Locks in that ticket-event notifications land in hr.notification (the table the notification bell
-// and dashboard unread-count now read from) rather than the legacy sales.notification table, which
-// nothing reads anymore. See docs/agent-handoffs/34_feat-notification-email-backbone.md.
+// Locks in that notifications land in hr.notification (the table the notification bell and dashboard
+// unread-count now read from) rather than the legacy sales.notification table, which nothing reads
+// anymore. See docs/agent-handoffs/34_feat-notification-email-backbone.md.
+//
+// notifyEmployee/notifyByRole (insert + auto-derived title) were removed in favor of
+// NotificationService.notify/notifyByRole, which insert AND optionally email through one shared path
+// (see NotificationServiceTest for that orchestration). This repository now only resolves *who* to
+// notify by role - findActiveEmployeeIdsByRole - plus the plain insert/read primitives.
 class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private NotificationRepository repository;
 
@@ -20,36 +25,40 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
     }
 
     @Test
-    void notifyEmployeeWritesToHrNotificationWithTicketLink() {
+    void insertWritesToHrNotificationNotLegacySalesTable() {
         long divisionId = insertDivision("SA", "Sales");
         long employeeId = insertEmployee("EMP-100", divisionId, true);
 
-        repository.notifyEmployee(employeeId, 55L, "APPROVED", "Ticket PR-2026-0099 ได้รับการอนุมัติราคาแล้ว");
+        long id = repository.insert(employeeId, "APPROVED", "ราคาได้รับการอนุมัติ",
+            "Ticket PR-2026-0099 ได้รับการอนุมัติราคาแล้ว", "/tickets/55");
 
-        List<NotificationDto> rows = repository.findByEmployeeId(employeeId);
-        assertThat(rows).hasSize(1);
-        NotificationDto row = rows.get(0);
+        NotificationDto row = repository.findById(id).orElseThrow();
+        assertThat(row.employeeId()).isEqualTo(employeeId);
         assertThat(row.type()).isEqualTo("APPROVED");
         assertThat(row.title()).isEqualTo("ราคาได้รับการอนุมัติ");
         assertThat(row.message()).isEqualTo("Ticket PR-2026-0099 ได้รับการอนุมัติราคาแล้ว");
         assertThat(row.link()).isEqualTo("/tickets/55");
+        assertThat(repository.findByEmployeeId(employeeId)).containsExactly(row);
         assertThat(countLegacySalesNotifications()).isZero();
     }
 
     @Test
-    void notifyByRoleFansOutToActiveEmployeesInMatchingDivisionOnly() {
+    void findActiveEmployeeIdsByRoleReturnsOnlyActiveEmployeesInMatchingDivision() {
         long importDivision = insertDivision("PCIM", "Import");
         long salesDivision = insertDivision("SA", "Sales");
         long activeImportEmployee = insertEmployee("EMP-200", importDivision, true);
         long inactiveImportEmployee = insertEmployee("EMP-201", importDivision, false);
         long salesEmployee = insertEmployee("EMP-202", salesDivision, true);
 
-        repository.notifyByRole("import", 77L, "SUBMITTED", "Ticket PR-2026-0100 รอการรับเรื่อง");
+        List<Long> importIds = repository.findActiveEmployeeIdsByRole("import");
 
-        assertThat(repository.findByEmployeeId(activeImportEmployee)).hasSize(1);
-        assertThat(repository.findByEmployeeId(inactiveImportEmployee)).isEmpty();
-        assertThat(repository.findByEmployeeId(salesEmployee)).isEmpty();
-        assertThat(countLegacySalesNotifications()).isZero();
+        assertThat(importIds).containsExactly(activeImportEmployee);
+        assertThat(importIds).doesNotContain(inactiveImportEmployee, salesEmployee);
+    }
+
+    @Test
+    void findActiveEmployeeIdsByRoleReturnsEmptyForUnmappedRole() {
+        assertThat(repository.findActiveEmployeeIdsByRole("employee")).isEmpty();
     }
 
     private Integer countLegacySalesNotifications() {

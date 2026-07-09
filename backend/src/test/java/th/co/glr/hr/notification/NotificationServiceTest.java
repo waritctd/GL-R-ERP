@@ -7,6 +7,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executor;
 import org.junit.jupiter.api.Test;
@@ -61,6 +62,39 @@ class NotificationServiceTest {
         verify(notifications).insert(7L, "LEAVE_SUBMITTED", "Leave submitted",
             "Your leave request was submitted.", "/leave/1");
         verify(mailer).send("employee@glr.co.th", "Leave submitted", "Your leave request was submitted.");
+    }
+
+    @Test
+    void notifyByRoleFansOutToEveryResolvedEmployeeWithItsOwnRowAndEmail() {
+        when(notifications.findActiveEmployeeIdsByRole("import")).thenReturn(List.of(3L, 4L));
+        when(notifications.insert(3L, "SUBMITTED", "Ticket title", "Ticket body", "/tickets/9"))
+            .thenReturn(101L);
+        when(notifications.insert(4L, "SUBMITTED", "Ticket title", "Ticket body", "/tickets/9"))
+            .thenReturn(102L);
+        when(notifications.findById(101L)).thenReturn(Optional.of(new NotificationDto(
+            101L, 3L, null, null, "SUBMITTED", "Ticket title", "Ticket body", "/tickets/9", false,
+            Instant.parse("2026-07-08T00:00:00Z"))));
+        when(notifications.findById(102L)).thenReturn(Optional.of(new NotificationDto(
+            102L, 4L, null, null, "SUBMITTED", "Ticket title", "Ticket body", "/tickets/9", false,
+            Instant.parse("2026-07-08T00:00:00Z"))));
+        when(notifications.findEmployeeEmail(3L)).thenReturn(Optional.of("import1@glr.co.th"));
+        when(notifications.findEmployeeEmail(4L)).thenReturn(Optional.of("import2@glr.co.th"));
+
+        service.notifyByRole("import", "SUBMITTED", "Ticket title", "Ticket body", "/tickets/9", true);
+
+        verify(notifications).insert(3L, "SUBMITTED", "Ticket title", "Ticket body", "/tickets/9");
+        verify(notifications).insert(4L, "SUBMITTED", "Ticket title", "Ticket body", "/tickets/9");
+        verify(mailer).send("import1@glr.co.th", "Ticket title", "Ticket body");
+        verify(mailer).send("import2@glr.co.th", "Ticket title", "Ticket body");
+    }
+
+    @Test
+    void notifyByRoleIsNoopForAnUnresolvedRole() {
+        when(notifications.findActiveEmployeeIdsByRole("unknown-role")).thenReturn(List.of());
+
+        service.notifyByRole("unknown-role", "SUBMITTED", "t", "b", "/l", true);
+
+        org.mockito.Mockito.verifyNoInteractions(mailer);
     }
 
     @Test

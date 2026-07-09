@@ -7,7 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketItemDto;
@@ -21,18 +21,21 @@ public class DepositNoticeService {
     private static final java.util.Set<String> SALES_ROLES  = java.util.Set.of("sales");
     private static final java.util.Set<String> CEO_ROLES    = java.util.Set.of("ceo");
     private static final java.util.Set<String> IMPORT_ROLES = java.util.Set.of("import");
+    // Ticket-event title mirrors th.co.glr.hr.ticket.TicketService.TICKET_EVENT_TITLES for the one
+    // event type this service raises. NotificationService.notify requires an explicit title.
+    private static final String REVISION_REQUESTED_TITLE = "ขอแก้ไขเอกสาร";
 
     private final DepositNoticeRepository docs;
     private final TicketRepository   tickets;
-    private final NotificationRepository notifications;
+    private final NotificationService notificationService;
     private final DepositNoticeRenderer renderer;
 
     public DepositNoticeService(DepositNoticeRepository docs, TicketRepository tickets,
-                           NotificationRepository notifications, DepositNoticeRenderer renderer) {
-        this.docs          = docs;
-        this.tickets       = tickets;
-        this.notifications = notifications;
-        this.renderer      = renderer;
+                           NotificationService notificationService, DepositNoticeRenderer renderer) {
+        this.docs                = docs;
+        this.tickets              = tickets;
+        this.notificationService = notificationService;
+        this.renderer             = renderer;
     }
 
     public List<DocumentNoteTemplateDto> getNoteTemplates() {
@@ -170,11 +173,11 @@ public class DepositNoticeService {
             "[" + req.scope().name() + "] " + req.reason());
 
         if (req.scope() == RevisionScope.PRICE_CHANGE) {
-            notifications.notifyByRole("ceo", ticketId, "REVISION_REQUESTED",
-                "Ticket " + s.code() + " ขอแก้ไขราคา — รออนุมัติใหม่");
+            notificationService.notifyByRole("ceo", "REVISION_REQUESTED", REVISION_REQUESTED_TITLE,
+                "Ticket " + s.code() + " ขอแก้ไขราคา — รออนุมัติใหม่", "/tickets/" + ticketId, true);
         } else if (req.scope() == RevisionScope.NEW_ITEM) {
-            notifications.notifyByRole("import", ticketId, "REVISION_REQUESTED",
-                "Ticket " + s.code() + " มีสินค้าเพิ่มใหม่ — กรุณาตั้งราคา");
+            notificationService.notifyByRole("import", "REVISION_REQUESTED", REVISION_REQUESTED_TITLE,
+                "Ticket " + s.code() + " มีสินค้าเพิ่มใหม่ — กรุณาตั้งราคา", "/tickets/" + ticketId, true);
         }
 
         return tickets.findById(ticketId).orElseThrow();

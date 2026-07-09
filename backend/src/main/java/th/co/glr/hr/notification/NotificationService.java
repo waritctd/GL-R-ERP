@@ -50,6 +50,20 @@ public class NotificationService {
         return created;
     }
 
+    /**
+     * Fans {@link #notify} out to every active employee in the given role (ticket-module roles:
+     * import/ceo/sales — see {@link NotificationRepository#findActiveEmployeeIdsByRole}). Each
+     * recipient gets its own in-app row and, if requested, its own email — same one-stop path as a
+     * single-employee notify(), just looped.
+     */
+    @Transactional
+    public void notifyByRole(String role, String type, String subject, String body, String link,
+                             boolean sendEmail) {
+        for (Long employeeId : notifications.findActiveEmployeeIdsByRole(role)) {
+            notify(employeeId, type, subject, body, link, sendEmail);
+        }
+    }
+
     @Transactional
     public void markRead(long notificationId, UserPrincipal actor) {
         int updated = notifications.markRead(notificationId, actor.id());

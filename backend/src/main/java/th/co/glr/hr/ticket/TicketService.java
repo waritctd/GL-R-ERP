@@ -3,6 +3,7 @@ package th.co.glr.hr.ticket;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -13,7 +14,7 @@ import th.co.glr.hr.common.Page;
 import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
-import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.pricing.PriceCalcService;
 
 @Service
@@ -24,22 +25,47 @@ public class TicketService {
     private static final Set<String> QUOTATION_ALLOWED_STATUSES =
         Set.of(TicketStatus.APPROVED, TicketStatus.QUOTATION_ISSUED);
 
+    // Ticket-event types are short machine codes (e.g. "PRICE_PROPOSED"); NotificationService.notify
+    // requires an explicit human-facing title, so map each to a short Thai label. Unmapped types fall
+    // back to a generic title rather than failing.
+    private static final Map<String, String> TICKET_EVENT_TITLES = Map.of(
+        "SUBMITTED", "มีคำขอราคาใหม่",
+        "PRICE_PROPOSED", "รอการอนุมัติราคา",
+        "APPROVED", "ราคาได้รับการอนุมัติ",
+        "REJECTED", "ราคาถูกตีกลับ",
+        "REVISION_REQUESTED", "ขอแก้ไขเอกสาร"
+    );
+
     private final TicketRepository tickets;
-    private final NotificationRepository notifications;
+    private final NotificationService notificationService;
     private final PriceCalcService priceCalcService;
     private final ObjectMapper objectMapper;
     private final CustomerRepository customers;
     private final QuotationRenderer quotationRenderer;
 
-    public TicketService(TicketRepository tickets, NotificationRepository notifications,
+    public TicketService(TicketRepository tickets, NotificationService notificationService,
                          PriceCalcService priceCalcService, ObjectMapper objectMapper,
                          CustomerRepository customers, QuotationRenderer quotationRenderer) {
-        this.tickets           = tickets;
-        this.notifications     = notifications;
-        this.priceCalcService  = priceCalcService;
-        this.objectMapper      = objectMapper;
-        this.customers         = customers;
-        this.quotationRenderer = quotationRenderer;
+        this.tickets             = tickets;
+        this.notificationService = notificationService;
+        this.priceCalcService    = priceCalcService;
+        this.objectMapper        = objectMapper;
+        this.customers           = customers;
+        this.quotationRenderer   = quotationRenderer;
+    }
+
+    private void notifyByRole(String role, long ticketId, String type, String message) {
+        notificationService.notifyByRole(role, type, ticketEventTitle(type), message,
+            "/tickets/" + ticketId, true);
+    }
+
+    private void notifyEmployee(long employeeId, long ticketId, String type, String message) {
+        notificationService.notify(employeeId, type, ticketEventTitle(type), message,
+            "/tickets/" + ticketId, true);
+    }
+
+    private String ticketEventTitle(String type) {
+        return TICKET_EVENT_TITLES.getOrDefault(type, "อัปเดตสถานะใบขอราคา");
     }
 
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
@@ -70,9 +96,9 @@ public class TicketService {
         requireRole(actor, SALES_ROLES);
         String code = tickets.nextTicketCode();
         long id = tickets.create(request, code, actor.id(), actor.name());
-        notifications.notifyByRole("import", id, "SUBMITTED",
+        notifyByRole("import", id, "SUBMITTED",
             "Ticket " + code + " รอการรับเรื่อง");
-        notifications.notifyByRole("ceo", id, "SUBMITTED",
+        notifyByRole("ceo", id, "SUBMITTED",
             "Ticket " + code + " ส่งเข้าระบบแล้ว");
         return requireTicket(id);
     }
@@ -86,9 +112,9 @@ public class TicketService {
         }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.SUBMITTED, TicketStatus.DRAFT, TicketStatus.SUBMITTED, null);
-        notifications.notifyByRole("import", ticketId, "SUBMITTED",
+        notifyByRole("import", ticketId, "SUBMITTED",
             "Ticket " + s.code() + " รอการรับเรื่อง");
-        notifications.notifyByRole("ceo", ticketId, "SUBMITTED",
+        notifyByRole("ceo", ticketId, "SUBMITTED",
             "Ticket " + s.code() + " ส่งเข้าระบบแล้ว");
         return requireTicket(ticketId);
     }
@@ -111,7 +137,7 @@ public class TicketService {
         tickets.addEventWithSnapshot(ticketId, actor.id(), actor.name(),
             TicketEventKind.PRICE_PROPOSED, TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED,
             request.note(), snapshot);
-        notifications.notifyByRole("ceo", ticketId, "PRICE_PROPOSED",
+        notifyByRole("ceo", ticketId, "PRICE_PROPOSED",
             "Ticket " + s.code() + " มีราคาเสนอรอการอนุมัติ");
         return requireTicket(ticketId);
     }
@@ -138,7 +164,7 @@ public class TicketService {
         tickets.setHasEdits(ticketId, false);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.APPROVED, TicketStatus.PRICE_PROPOSED, TicketStatus.APPROVED, null);
-        notifications.notifyEmployee(s.createdById(), ticketId, "APPROVED",
+        notifyEmployee(s.createdById(), ticketId, "APPROVED",
             "Ticket " + s.code() + " ได้รับการอนุมัติราคาแล้ว — กด Generate ใบเสนอราคาได้เลย");
         return requireTicket(ticketId);
     }
@@ -149,7 +175,7 @@ public class TicketService {
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.PRICE_PROPOSED);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.REJECTED, TicketStatus.PRICE_PROPOSED, TicketStatus.IN_REVIEW, request.reason());
-        notifications.notifyByRole("import", ticketId, "REJECTED",
+        notifyByRole("import", ticketId, "REJECTED",
             "Ticket " + s.code() + " ถูกตีกลับ — กรุณาแก้ไขราคาเสนอ");
         return requireTicket(ticketId);
     }
