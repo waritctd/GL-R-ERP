@@ -574,6 +574,22 @@ textarea:focus {
   padding: 0;
 }
 
+/* Touch devices (no reliable mouse/hover): guarantee 44px touch targets
+   regardless of a control's visual density. */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea,
+  .primary-button,
+  .secondary-button,
+  .success-button,
+  .danger-button,
+  .text-button,
+  .back-button {
+    min-height: 44px;
+  }
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
