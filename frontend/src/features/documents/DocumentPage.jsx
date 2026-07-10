@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatMoney, formatThaiDate } from '../../utils/format.js';
 
 const DEPOSIT_OPTIONS = [
   { value: 0.3,  label: '30%' },
@@ -16,7 +15,7 @@ function money(v) {
   return Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export function DocumentPage({ user, ticketId, onBack, showToast }) {
+export function DocumentPage({ ticketId, onBack, showToast }) {
   const [doc, setDoc]               = useState(null);
   const [noteTemplates, setTemplates] = useState([]);
   const [customers, setCustomers]   = useState([]);
@@ -297,8 +296,9 @@ export function DocumentPage({ user, ticketId, onBack, showToast }) {
             <div className="panel-header"><h2>ข้อมูลลูกค้า</h2></div>
             <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ position: 'relative' }}>
-                <label style={{ fontSize: 12 }}>ค้นหาลูกค้า (master)</label>
+                <label htmlFor="customer-search" style={{ fontSize: 12 }}>ค้นหาลูกค้า (master)</label>
                 <input
+                  id="customer-search"
                   value={customerSearch}
                   onChange={(e) => {
                     setCsSearch(e.target.value);

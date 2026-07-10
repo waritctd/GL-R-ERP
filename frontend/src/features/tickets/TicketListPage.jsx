@@ -40,27 +40,6 @@ const STATUS_ORDER = [
   'approved', 'quotation_issued', 'document_issued', 'closed', 'cancelled', 'rejected',
 ];
 
-function SortHeader({ label, sortKey, active, dir, onSort }) {
-  return (
-    <button
-      type="button"
-      onClick={() => onSort(sortKey)}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4,
-        background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-        fontWeight: 700, fontSize: 12, color: active ? '#1e40af' : 'inherit',
-        textTransform: 'uppercase', letterSpacing: '0.05em',
-      }}
-    >
-      {label}
-      <Icon
-        name={active ? (dir === 'asc' ? 'chevronUp' : 'chevronDown') : 'chevronDown'}
-        size={13}
-        style={{ opacity: active ? 1 : 0.3 }}
-      />
-    </button>
-  );
-}
 
 export function TicketListPage({ user, showToast }) {
   const navigate = useNavigate();

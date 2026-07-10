@@ -210,8 +210,7 @@ const mockNoteTemplates = [
   { id: 3, text: 'กรณีโอนเงินส่ง Pay-in มาที่ e-mail : info@glr.co.th', defaultSelected: true, sortOrder: 3 },
 ];
 
-const mockDepositNotices = []; // used by depositNotices API group
-const mockDocuments = mockDepositNotices; // documents API group aliases the same store
+const mockDepositNotices = []; // used by both depositNotices and documents API groups
 let mockDocSeq = 1;
 let mockDocNumberSeq = 1;
 
@@ -1925,7 +1924,7 @@ export const api = {
     },
 
     async createDraft(ticketId, payload) {
-      const user = requireSession();
+      requireSession();
       const ticket = findTicketRaw(Number(ticketId));
       if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('Ticket must be approved', 409);
 

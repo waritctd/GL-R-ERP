@@ -43,3 +43,5 @@ ERP Documentation/00_ALL_DOCS_BUNDLE.md
 
 # Vercel deploy artifacts
 .vercel/
+.vercel
+.env*
