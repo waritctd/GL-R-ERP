@@ -140,11 +140,6 @@ export function App() {
     navigate('/');
   }
 
-  function openDocument(ticketId) {
-    setDocumentTicketId(ticketId);
-    routeTo('document-create');
-  }
-
   if (!user) {
     return (
       <>
