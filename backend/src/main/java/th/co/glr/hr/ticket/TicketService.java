@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Set;
+import th.co.glr.hr.pricing.PriceBreakdownItemDto;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,6 +24,8 @@ public class TicketService {
     private static final Set<String> CEO_ROLES    = Set.of("ceo");
     private static final Set<String> QUOTATION_ALLOWED_STATUSES =
         Set.of(TicketStatus.APPROVED, TicketStatus.QUOTATION_ISSUED);
+    private static final Set<String> PROPOSE_ALLOWED_STATUSES =
+        Set.of(TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED, TicketStatus.APPROVED);
 
     private final TicketRepository tickets;
     private final NotificationRepository notifications;
@@ -104,15 +107,24 @@ public class TicketService {
 
     @Transactional
     public TicketDto proposePrice(long ticketId, ProposePriceRequest request, UserPrincipal actor) {
-        requireRole(actor, IMPORT_ROLES);
-        TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.IN_REVIEW);
+        if (!IMPORT_ROLES.contains(actor.role()) && !isAdmin(actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
+        String currentStatus = s.status();
+        if (!PROPOSE_ALLOWED_STATUSES.contains(currentStatus)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Cannot propose price when ticket is '" + currentStatus + "'");
+        }
         tickets.replaceItems(ticketId, request.items());
         String snapshot = buildItemSnapshot(request.items());
+        boolean isRevision = !TicketStatus.IN_REVIEW.equals(currentStatus);
+        String eventKind = isRevision ? TicketEventKind.PRICE_REVISED : TicketEventKind.PRICE_PROPOSED;
         tickets.addEventWithSnapshot(ticketId, actor.id(), actor.name(),
-            TicketEventKind.PRICE_PROPOSED, TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED,
-            request.note(), snapshot);
+            eventKind, currentStatus, TicketStatus.PRICE_PROPOSED, request.note(), snapshot);
         notifications.notifyByRole("ceo", ticketId, "PRICE_PROPOSED",
-            "Ticket " + s.code() + " มีราคาเสนอรอการอนุมัติ");
+            "Ticket " + s.code() + (isRevision ? " มีการแก้ไขราคาเสนอ — กรุณาตรวจสอบใหม่" : " มีราคาเสนอรอการอนุมัติ"));
         return requireTicket(ticketId);
     }
 
@@ -211,12 +223,138 @@ public class TicketService {
 
     @Transactional
     public TicketDto close(long ticketId, UserPrincipal actor) {
-        TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.DOCUMENT_ISSUED);
-        if (s.createdById() != actor.id()) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (s.createdById() != actor.id() && !isAdmin(actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
+        String st = s.status();
+        // Legacy path: status=DOCUMENT_ISSUED
+        // Dual-track path: both tracks complete
+        boolean legacyOk = TicketStatus.DOCUMENT_ISSUED.equals(st);
+        boolean dualTrackOk = TicketStatus.QUOTATION_ISSUED.equals(st)
+            && "FULLY_PAID".equals(s.paymentStatus())
+            && "GOODS_RECEIVED".equals(s.fulfillmentStatus());
+        if (!legacyOk && !dualTrackOk) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Cannot close: require paymentStatus=FULLY_PAID and fulfillmentStatus=GOODS_RECEIVED");
+        }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.CLOSED, TicketStatus.DOCUMENT_ISSUED, TicketStatus.CLOSED, null);
+            TicketEventKind.CLOSED, st, TicketStatus.CLOSED, null);
+        return requireTicket(ticketId);
+    }
+
+    // ── Dual-track transitions (ข้อ 13) ─────────────────────────────────────
+
+    @Transactional
+    public TicketDto confirmCustomer(long ticketId, UserPrincipal actor) {
+        requireRole(actor, SALES_ROLES);
+        TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
+        tickets.updatePaymentStatus(ticketId, "CUSTOMER_CONFIRMED");
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.CUSTOMER_CONFIRMED, s.status(), s.status(), null);
+        return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto issueDepositNotice(long ticketId, UserPrincipal actor) {
+        requireRole(actor, SALES_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (!TicketStatus.QUOTATION_ISSUED.equals(s.status())
+                || !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Deposit notice requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED");
+        }
+        tickets.updatePaymentStatus(ticketId, "DEPOSIT_NOTICE_ISSUED");
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.DEPOSIT_NOTICE_ISSUED, s.status(), s.status(), null);
+        return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto confirmDepositPaid(long ticketId, UserPrincipal actor) {
+        requireRole(actor, SALES_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (!"DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT, "Expected paymentStatus=DEPOSIT_NOTICE_ISSUED");
+        }
+        tickets.updatePaymentStatus(ticketId, "DEPOSIT_PAID");
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.DEPOSIT_PAID, s.status(), s.status(), null);
+        return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto issueImportRequest(long ticketId, UserPrincipal actor) {
+        requireRole(actor, IMPORT_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (!TicketStatus.QUOTATION_ISSUED.equals(s.status())
+                || !"DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "IR requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED");
+        }
+        tickets.updateFulfillmentStatus(ticketId, "IR_ISSUED");
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.IR_ISSUED, s.status(), s.status(), null);
+        return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto markIrSent(long ticketId, UserPrincipal actor) {
+        requireRole(actor, IMPORT_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (!"IR_ISSUED".equals(s.fulfillmentStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT, "Expected fulfillmentStatus=IR_ISSUED");
+        }
+        tickets.updateFulfillmentStatus(ticketId, "IR_SENT");
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.IR_SENT, s.status(), s.status(), null);
+        return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto markShipping(long ticketId, UserPrincipal actor) {
+        requireRole(actor, IMPORT_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (!"IR_SENT".equals(s.fulfillmentStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT, "Expected fulfillmentStatus=IR_SENT");
+        }
+        tickets.updateFulfillmentStatus(ticketId, "SHIPPING");
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.SHIPPING, s.status(), s.status(), null);
+        return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto markGoodsReceived(long ticketId, UserPrincipal actor) {
+        if (!IMPORT_ROLES.contains(actor.role()) && !isAdmin(actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (!"SHIPPING".equals(s.fulfillmentStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT, "Expected fulfillmentStatus=SHIPPING");
+        }
+        tickets.updateFulfillmentStatus(ticketId, "GOODS_RECEIVED");
+        // Also advance payment track to AWAITING_FINAL_PAYMENT if deposit was paid
+        if ("DEPOSIT_PAID".equals(s.paymentStatus())) {
+            tickets.updatePaymentStatus(ticketId, "AWAITING_FINAL_PAYMENT");
+            tickets.addEvent(ticketId, actor.id(), actor.name(),
+                TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
+        }
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.GOODS_RECEIVED, s.status(), s.status(), null);
+        return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto confirmFinalPayment(long ticketId, UserPrincipal actor) {
+        requireRole(actor, SALES_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (!"AWAITING_FINAL_PAYMENT".equals(s.paymentStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT, "Expected paymentStatus=AWAITING_FINAL_PAYMENT");
+        }
+        tickets.updatePaymentStatus(ticketId, "FULLY_PAID");
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.FULLY_PAID, s.status(), s.status(), null);
         return requireTicket(ticketId);
     }
 
@@ -244,10 +382,10 @@ public class TicketService {
 
         boolean salesCanEdit = SALES_ROLES.contains(actor.role()) && isOwner
             && Set.of(TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED).contains(st);
-        boolean importCanEdit = IMPORT_ROLES.contains(actor.role())
-            && Set.of(TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED).contains(st);
+        boolean adminCanEdit = isAdmin(actor)
+            && Set.of(TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED).contains(st);
 
-        if (!salesCanEdit && !importCanEdit) {
+        if (!salesCanEdit && !adminCanEdit) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้");
         }
         tickets.replaceItems(ticketId, request.items());
@@ -268,14 +406,35 @@ public class TicketService {
     }
 
     @Transactional
-    public TicketDto calculatePrices(long ticketId, UserPrincipal actor) {
+    public CalculatePricesResult calculatePrices(long ticketId, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         if (!TicketStatus.PRICE_PROPOSED.equals(s.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "คำนวณราคาได้เฉพาะ ticket ที่มีสถานะ price_proposed");
         }
-        return priceCalcService.calculateForTicket(ticketId);
+        TicketDto ticket = priceCalcService.calculateForTicket(ticketId);
+        List<PriceBreakdownItemDto> breakdown = priceCalcService.calculateBreakdown(ticketId);
+        return new CalculatePricesResult(ticket, breakdown);
+    }
+
+    public record CalculatePricesResult(TicketDto ticket, List<PriceBreakdownItemDto> breakdown) {}
+
+    @Transactional
+    public TicketDto overrideItemPrice(long ticketId, long itemId, OverridePriceRequest request, UserPrincipal actor) {
+        requireRole(actor, CEO_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (!TicketStatus.PRICE_PROPOSED.equals(s.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "override ราคาได้เฉพาะ ticket ที่มีสถานะ price_proposed");
+        }
+        boolean itemExists = requireTicket(ticketId).items().stream()
+            .anyMatch(it -> it.id() == itemId);
+        if (!itemExists) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "Item not found in this ticket");
+        }
+        tickets.updateItemManualPrice(itemId, request.manualPrice(), request.reason());
+        return requireTicket(ticketId);
     }
 
     // --- helpers ---
@@ -298,5 +457,9 @@ public class TicketService {
         if (!allowed.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
+    }
+
+    private boolean isAdmin(UserPrincipal actor) {
+        return "admin".equals(actor.role());
     }
 }

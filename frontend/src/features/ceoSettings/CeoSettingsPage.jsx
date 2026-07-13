@@ -112,10 +112,14 @@ export function CeoSettingsPage({ showToast }) {
         <div className="panel-header px-[18px] py-[14px] border-b border-border">
           <h2>อัตราแลกเปลี่ยน (1 หน่วย = ? บาท)</h2>
         </div>
+        <div className="px-[18px] py-2 text-[11px] text-text-muted border-b border-surface-subtle flex gap-3">
+          <span>ดึงอัตโนมัติจาก BOT API ทุกวัน 18:00 (เวลาไทย)</span>
+          <span className="text-icon-faint">• ตั้งค่า BOT_API_TOKEN เพื่อเปิดใช้งาน</span>
+        </div>
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="bg-surface-muted">
-              {['สกุลเงิน', 'อัตรา (THB)', 'วันที่มีผล', 'แก้ไข'].map((h) => (
+              {['สกุลเงิน', 'อัตรา (THB)', 'วันที่มีผล', 'แหล่งข้อมูล', 'แก้ไข (Manual)'].map((h) => (
                 <th key={h} className="px-4 py-2 text-left font-semibold text-icon-muted border-b border-border">{h}</th>
               ))}
             </tr>
@@ -123,6 +127,7 @@ export function CeoSettingsPage({ showToast }) {
           <tbody>
             {fxRates.map((fx) => {
               const isEditing = editFx[fx.currency] !== undefined;
+              const isBot = fx.source === 'BOT';
               return (
                 <tr key={fx.currency} className="border-b border-surface-subtle">
                   <td className="px-4 py-2 font-bold">
@@ -154,10 +159,16 @@ export function CeoSettingsPage({ showToast }) {
                   </td>
                   <td className="px-4 py-2 text-text-muted text-xs">{fx.effectiveDate}</td>
                   <td className="px-4 py-2">
+                    {isBot
+                      ? <span className="status-badge status-info">BOT อัตโนมัติ</span>
+                      : <span className="status-badge status-neutral">กรอกเอง</span>
+                    }
+                  </td>
+                  <td className="px-4 py-2">
                     {fx.currency !== 'THB' && !isEditing && (
                       <button type="button" className="secondary-button text-[11px] px-2 py-[3px]"
                         onClick={() => setEditFx((p) => ({ ...p, [fx.currency]: String(fx.rateToThb) }))}>
-                        แก้ไข
+                        Override
                       </button>
                     )}
                   </td>

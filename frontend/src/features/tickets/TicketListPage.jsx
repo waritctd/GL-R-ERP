@@ -45,13 +45,14 @@ const STATUS_ORDER = [
 ];
 
 const STATUS_TABS = [
-  { value: '', label: 'ทั้งหมด',              tone: 'primary' },
+  { value: '',                 label: 'ทั้งหมด',              tone: 'primary' },
   { value: 'submitted',        label: 'รอรับเรื่อง',          tone: 'warning' },
   { value: 'in_review',        label: 'กำลังดำเนินการ',       tone: 'info'    },
   { value: 'price_proposed',   label: 'รอการอนุมัติ',         tone: 'warning' },
-  { value: 'approved',         label: 'อนุมัติแล้ว',         tone: 'success' },
-  { value: 'document_issued',  label: 'ออกใบแจ้งยอดแล้ว',   tone: 'success' },
-  { value: 'closed',           label: 'ปิดแล้ว',             tone: 'neutral' },
+  { value: 'approved',         label: 'อนุมัติแล้ว',          tone: 'success' },
+  { value: 'quotation_issued', label: 'ออกใบเสนอราคาแล้ว',   tone: 'success' },
+  { value: 'document_issued',  label: 'ออกใบแจ้งยอดแล้ว',    tone: 'success' },
+  { value: 'closed',           label: 'ปิดแล้ว',              tone: 'neutral' },
 ];
 
 export function TicketListPage({ user, showToast }) {
@@ -148,6 +149,18 @@ export function TicketListPage({ user, showToast }) {
   );
 }
 
+const TRACK_LABEL = {
+  CUSTOMER_CONFIRMED:     'P: ลูกค้ายืนยันแล้ว',
+  DEPOSIT_NOTICE_ISSUED:  'P: ออกใบแจ้งมัดจำแล้ว',
+  DEPOSIT_PAID:           'P: รับมัดจำแล้ว',
+  AWAITING_FINAL_PAYMENT: 'P: รอชำระส่วนที่เหลือ',
+  FULLY_PAID:             'P: ชำระครบแล้ว',
+  IR_ISSUED:              'F: ออก IR แล้ว',
+  IR_SENT:                'F: ส่ง IR แล้ว',
+  SHIPPING:               'F: กำลังขนส่ง',
+  GOODS_RECEIVED:         'F: รับสินค้าแล้ว',
+};
+
 const TICKET_COLUMNS = [
   {
     key: 'code',
@@ -174,7 +187,17 @@ const TICKET_COLUMNS = [
     sortAccessor: (ticket) => STATUS_ORDER.indexOf(ticket.status),
     render: (ticket) => {
       const status = ticketStatusLabel(ticket.status);
-      return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
+      const subLabel = ticket.status === 'quotation_issued'
+        ? TRACK_LABEL[ticket.paymentStatus] ?? TRACK_LABEL[ticket.fulfillmentStatus] ?? null
+        : null;
+      return (
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+          {subLabel && (
+            <span style={{ fontSize: 11, color: '#64748b', paddingLeft: 2 }}>{subLabel}</span>
+          )}
+        </span>
+      );
     },
   },
   {

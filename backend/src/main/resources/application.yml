@@ -69,6 +69,8 @@ app:
   overtime:
     advance-notice-days: ${APP_OVERTIME_ADVANCE_NOTICE_DAYS:3}
   uploads-dir: ${APP_UPLOADS_DIR:./uploads}
+  bot:
+    api-token: ${BOT_API_TOKEN:}
   login-rate-limit:
     enabled: ${APP_LOGIN_RATE_LIMIT_ENABLED:true}
     max-account-failures: ${APP_LOGIN_MAX_ACCOUNT_FAILURES:5}
