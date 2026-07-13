@@ -68,6 +68,12 @@ export const API_ROUTES = {
   },
   catalog: {
     search: (q) => `/api/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`,
+    prices: (q, factoryId) => {
+      const p = new URLSearchParams();
+      if (q) p.set('q', q);
+      if (factoryId) p.set('factoryId', factoryId);
+      return `/api/catalog/prices${p.toString() ? `?${p}` : ''}`;
+    },
   },
   factoryConfigs: {
     list: '/api/factory-configs',
@@ -118,6 +124,15 @@ export const API_ROUTES = {
     process: '/api/payroll/process',
     bankExport: (periodId) => `/api/payroll/${periodId}/bank-export`,
   },
+  priceImport: {
+    factories: '/api/price-import/factories',
+    versions: (factoryId) => `/api/price-import/versions?factoryId=${factoryId}`,
+    upload: '/api/price-import/upload',
+    validate: (versionId) => `/api/price-import/validate/${versionId}`,
+    staging: (versionId) => `/api/price-import/staging/${versionId}`,
+    commit: (versionId) => `/api/price-import/commit/${versionId}`,
+    profile: (factoryId) => `/api/price-import/profile/${factoryId}`,
+  },
 };
 
 export const ROLE_PERMISSIONS = {
@@ -143,4 +158,5 @@ export const ROLE_PERMISSIONS = {
   canApproveCommissions: ['sales_manager', 'ceo', 'admin'],
   canViewPayrollCommissions: ['hr', 'admin'],
   canManagePayroll: ['hr', 'admin'],
+  canManagePriceImport: ['ceo', 'import', 'admin'],
 };

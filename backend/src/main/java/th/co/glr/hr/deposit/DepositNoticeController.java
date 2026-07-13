@@ -29,13 +29,6 @@ public class DepositNoticeController {
         this.sessions = sessions;
     }
 
-    // Note templates
-    @GetMapping("/document-note-templates")
-    Map<String, List<DocumentNoteTemplateDto>> noteTemplates(HttpSession session) {
-        sessions.requireUser(session);
-        return Map.of("templates", service.getNoteTemplates());
-    }
-
     // Draft creation from ticket
     @PostMapping("/tickets/{ticketId}/deposit-notice/draft")
     Map<String, DepositNoticeDto> createDraft(
@@ -114,18 +107,6 @@ public class DepositNoticeController {
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
             .contentType(MediaType.APPLICATION_PDF)
             .body(bytes);
-    }
-
-    // Revision request (Part A)
-    @PostMapping("/tickets/{ticketId}/revision")
-    Map<String, Object> requestRevision(
-        @PathVariable long ticketId,
-        @Valid @RequestBody RevisionRequest req,
-        HttpSession session
-    ) {
-        UserPrincipal user = sessions.requireUser(session);
-        var ticket = service.requestRevision(ticketId, req, user);
-        return Map.of("ticket", ticket);
     }
 
     // Remaining invoice download (ข้อ 13.5)

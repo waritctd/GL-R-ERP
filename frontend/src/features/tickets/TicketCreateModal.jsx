@@ -70,9 +70,9 @@ function SearchSelect({ label, value, onSelect, placeholder, options, onSearch, 
 
 // ── main modal ────────────────────────────────────────────────────────────────
 
-export function TicketCreateModal({ onClose, onSubmit }) {
+export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   const [form, setForm] = useState({ note: '' });
-  const [items, setItems] = useState([emptyItem()]);
+  const [items, setItems] = useState(() => initialItems?.length ? initialItems : [emptyItem()]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 

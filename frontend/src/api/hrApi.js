@@ -154,6 +154,7 @@ export const api = {
   },
   catalog: {
     search: (q) => apiRequest(API_ROUTES.catalog.search(q ?? '')),
+    prices: (q, factoryId) => apiRequest(API_ROUTES.catalog.prices(q, factoryId)),
   },
   factoryConfigs: {
     list: () => apiRequest(API_ROUTES.factoryConfigs.list),
@@ -244,5 +245,37 @@ export const api = {
     preview: (payload) => apiRequest(API_ROUTES.payroll.preview, { method: 'POST', body: payload }),
     process: (payload) => apiRequest(API_ROUTES.payroll.process, { method: 'POST', body: payload }),
     bankExport: (periodId) => apiRequest(API_ROUTES.payroll.bankExport(periodId)),
+  },
+  priceImport: {
+    factories: () => apiRequest(API_ROUTES.priceImport.factories),
+    versions: (factoryId) => apiRequest(API_ROUTES.priceImport.versions(factoryId)),
+    upload: async (factoryId, file, label) => {
+      const formData = new FormData();
+      formData.append('factoryId', String(factoryId));
+      formData.append('file', file);
+      if (label) formData.append('label', label);
+      const csrfToken = document.cookie.split('; ')
+        .find((c) => c.startsWith('XSRF-TOKEN='))
+        ?.split('=')[1];
+      const res = await fetch(API_ROUTES.priceImport.upload, {
+        method: 'POST',
+        credentials: 'include',
+        headers: csrfToken ? { 'X-XSRF-TOKEN': csrfToken } : {},
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'อัปโหลดไม่สำเร็จ');
+      }
+      return res.json();
+    },
+    validate: (versionId) => apiRequest(API_ROUTES.priceImport.validate(versionId), { method: 'POST' }),
+    staging: (versionId) => apiRequest(API_ROUTES.priceImport.staging(versionId)),
+    commit: (versionId) => apiRequest(API_ROUTES.priceImport.commit(versionId), { method: 'POST' }),
+    getProfile: (factoryId) => apiRequest(API_ROUTES.priceImport.profile(factoryId)),
+    updateProfile: (factoryId, json) => apiRequest(API_ROUTES.priceImport.profile(factoryId), {
+      method: 'PUT',
+      body: JSON.parse(json),
+    }),
   },
 };

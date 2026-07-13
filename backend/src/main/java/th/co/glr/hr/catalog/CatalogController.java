@@ -25,4 +25,16 @@ public class CatalogController {
         sessions.requireUser(session);
         return Map.of("items", catalog.search(q));
     }
+
+    @GetMapping("/prices")
+    Map<String, List<ProductPriceDto>> searchPrices(
+        @RequestParam(required = false) String q,
+        @RequestParam(required = false) Long  factoryId,
+        @RequestParam(defaultValue = "50") int limit,
+        HttpSession session
+    ) {
+        sessions.requireUser(session);
+        int safeLimit = Math.min(Math.max(limit, 1), 200);
+        return Map.of("items", catalog.searchProductPrices(q, factoryId, safeLimit));
+    }
 }

@@ -34,6 +34,8 @@ const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.
 const PayrollPage = lazy(() => import('./features/payroll/PayrollPage.jsx').then(toDefault('PayrollPage')));
 const DepositNoticePage = lazy(() => import('./features/deposits/DepositNoticePage.jsx').then(toDefault('DepositNoticePage')));
 const CeoSettingsPage = lazy(() => import('./features/ceoSettings/CeoSettingsPage.jsx').then(toDefault('CeoSettingsPage')));
+const PriceImportPage = lazy(() => import('./features/catalog/PriceImportPage.jsx').then(toDefault('PriceImportPage')));
+const CatalogSearchPage = lazy(() => import('./features/catalog/CatalogSearchPage.jsx').then(toDefault('CatalogSearchPage')));
 
 // Thin wrappers that source the ticket id from the URL for the frozen sales
 // pages (they already fetch by id internally — branch 5 only rewires how the
@@ -281,6 +283,12 @@ export function App() {
           {/* /ceo-settings had no allowedRoute guard historically (nav-gated only). */}
           {SALES_ENABLED && (
             <Route path="/ceo-settings" element={<CeoSettingsPage showToast={showToast} />} />
+          )}
+          {SALES_ENABLED && (
+            <Route path="/price-import" element={<PriceImportPage showToast={showToast} />} />
+          )}
+          {SALES_ENABLED && (
+            <Route path="/catalog" element={<CatalogSearchPage user={user} showToast={showToast} />} />
           )}
 
           <Route path="*" element={<Navigate to="/" replace />} />

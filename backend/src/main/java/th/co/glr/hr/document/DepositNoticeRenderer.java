@@ -18,7 +18,7 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
-@Component
+@Component("documentDepositNoticeRenderer")
 public class DepositNoticeRenderer {
 
     private static final String TEMPLATE = "templates/deposit_notice_template.xlsx";

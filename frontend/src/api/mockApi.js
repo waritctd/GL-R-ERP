@@ -205,6 +205,39 @@ const mockCatalog = [
   { id: 14, brand: 'Panaria',  collection: 'Frame',             color: 'Ash',         surface: 'Naturale',     size: '80x80 cm',   factory: 'Panaria SpA',       sqmPerPiece: 0.64 },
 ];
 
+const mockPriceImportFactories = [
+  { factoryId: 1, name: 'Panaria SpA',    country: 'Italy',   numberFormat: 'eu' },
+  { factoryId: 2, name: 'REFIN',          country: 'Italy',   numberFormat: 'eu' },
+  { factoryId: 3, name: 'Equipe',         country: 'Spain',   numberFormat: 'eu' },
+  { factoryId: 4, name: 'Vives',          country: 'Spain',   numberFormat: 'eu' },
+  { factoryId: 5, name: 'Bode',           country: 'Germany', numberFormat: 'us' },
+  { factoryId: 6, name: 'CDE',            country: 'Italy',   numberFormat: 'eu' },
+  { factoryId: 7, name: 'Padana Marmi',   country: 'Italy',   numberFormat: 'eu' },
+  { factoryId: 8, name: 'LEA',            country: 'Italy',   numberFormat: 'eu' },
+  { factoryId: 9, name: 'CITY Ceramica',  country: 'Italy',   numberFormat: 'eu' },
+];
+
+let mockProductPriceSeq = 100;
+const mockProductPrices = [
+  { priceId: 1, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-T600-IVO', grade: null,  collection: 'Trilogy',      productName: 'Ivory Lappato',    color: 'Ivory',   surface: 'Lappato',   sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+  { priceId: 2, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-T600-GRY', grade: null,  collection: 'Trilogy',      productName: 'Grigio Naturale',  color: 'Grigio',  surface: 'Naturale',  sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+  { priceId: 3, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-F800-ASH', grade: null,  collection: 'Frame',        productName: 'Ash',              color: 'Ash',     surface: 'Naturale',  sizeRaw: '80x80',  price: 38.50, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.64 },
+  { priceId: 4, factoryId: 2, factoryName: 'REFIN',        productCode: null,           grade: null,  collection: 'Terraço',      productName: 'L-Trim',           color: null,      surface: null,        sizeRaw: '10x60',  price: 38.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: null },
+  { priceId: 5, factoryId: 2, factoryName: 'REFIN',        productCode: null,           grade: null,  collection: 'Terraço',      productName: 'Corner',           color: null,      surface: null,        sizeRaw: '10x10',  price: 55.00, currency: 'EUR', priceUnit: 'per_piece', sqmPerPiece: null },
+  { priceId: 6, factoryId: 2, factoryName: 'REFIN',        productCode: 'RF-BAL-6060',  grade: null,  collection: 'Balneo',       productName: 'Floor Tile',       color: 'White',   surface: 'Lappato',   sizeRaw: '60x60',  price: 42.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  { priceId: 7, factoryId: 3, factoryName: 'Equipe',       productCode: 'EQ-001',       grade: null,  collection: 'Stromboli',    productName: '1.2X20 Jolly Ash', color: 'Ash',     surface: 'Mate',      sizeRaw: '1.2x20', price: 25.50, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: null },
+  { priceId: 8, factoryId: 4, factoryName: 'Vives',        productCode: 'VV-001',       grade: null,  collection: 'Masia',        productName: 'Tile A',           color: 'Beige',   surface: 'Mate',      sizeRaw: "15'8X31'6", price: 5.50, currency: 'EUR', priceUnit: 'per_piece', sqmPerPiece: 0.05 },
+  { priceId: 9, factoryId: 5, factoryName: 'Bode',         productCode: 'BVLE10426KGA', grade: null,  collection: 'Limestone',    productName: null,               color: null,      surface: 'Honed',     sizeRaw: '600x600',price: 23.50, currency: 'USD', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  { priceId: 10,factoryId: 7, factoryName: 'Padana Marmi', productCode: '0400012',      grade: 'A01', collection: 'Stone',        productName: null,               color: 'Beige',   surface: 'Lucidato',  sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+  { priceId: 11,factoryId: 7, factoryName: 'Padana Marmi', productCode: '0400012',      grade: 'A02', collection: 'Stone',        productName: null,               color: 'Beige',   surface: 'Lucidato',  sizeRaw: '60x120', price: 21.50, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+];
+
+const mockPriceImportVersions = [
+  { versionId: 1, factoryId: 1, label: 'Price List 2026 Q1', status: 'ACTIVE',   createdAt: '2026-01-10T09:00:00Z', uploadedByName: 'Admin' },
+  { versionId: 2, factoryId: 2, label: 'REFIN 2026',         status: 'ACTIVE',   createdAt: '2026-02-01T11:00:00Z', uploadedByName: 'Admin' },
+  { versionId: 3, factoryId: 5, label: 'Bode USD 2026',      status: 'ARCHIVED', createdAt: '2025-12-01T08:00:00Z', uploadedByName: 'Admin' },
+];
+
 const mockNoteTemplates = [
   { id: 1, text: 'ราคารวมค่าขนส่งถึงชั้น 1 ของหน่วยงานในเขต กทม. แต่ไม่รวมค่าตัด/ติดตั้ง', defaultSelected: true, sortOrder: 1 },
   { id: 2, text: 'จ่ายเช็คในนาม บจก. จี แอล แอนด์ อาร์ฯ / โอนเข้า กสิกรไทย 003-1-15914-8 (กระแสรายวัน สาขาสุขุมวิท 33)', defaultSelected: true, sortOrder: 2 },
@@ -2047,6 +2080,24 @@ export const api = {
         : mockCatalog.slice(0, 30);
       return delay({ items: results });
     },
+    async prices(q, factoryId) {
+      requireSession();
+      const lower = (q ?? '').toLowerCase();
+      const fid = factoryId ? Number(factoryId) : null;
+      let results = mockProductPrices.filter((p) => {
+        if (fid && p.factoryId !== fid) return false;
+        if (!lower) return true;
+        return (
+          (p.productCode   ?? '').toLowerCase().includes(lower) ||
+          (p.collection    ?? '').toLowerCase().includes(lower) ||
+          (p.productName   ?? '').toLowerCase().includes(lower) ||
+          (p.color         ?? '').toLowerCase().includes(lower) ||
+          (p.surface       ?? '').toLowerCase().includes(lower) ||
+          (p.factoryName   ?? '').toLowerCase().includes(lower)
+        );
+      });
+      return delay({ items: results.slice(0, 50) });
+    },
   },
 
   factoryConfigs: {
@@ -2340,6 +2391,73 @@ export const api = {
       if (!rawDoc) fail('Deposit notice not found', 404);
       const html = mockPreviewHtml(buildMockDoc(rawDoc));
       return new Blob([html], { type: 'text/html;charset=utf-8' });
+    },
+  },
+
+  priceImport: {
+    async factories() {
+      requireSession();
+      return delay(mockPriceImportFactories);
+    },
+    async versions(factoryId) {
+      requireSession();
+      const fid = Number(factoryId);
+      return delay(mockPriceImportVersions.filter((v) => v.factoryId === fid));
+    },
+    async upload(factoryId, file, label) {
+      requireSession();
+      const fid = Number(factoryId);
+      const versionId = mockProductPriceSeq++;
+      mockPriceImportVersions.push({
+        versionId, factoryId: fid,
+        label: label || file?.name || `Version ${versionId}`,
+        status: 'DRAFT',
+        createdAt: new Date().toISOString(),
+        uploadedByName: 'Admin',
+      });
+      return delay({
+        versionId,
+        parsedRows: 12,
+        stagedRows: 12,
+        parseErrors: [],
+      });
+    },
+    async validate(versionId) {
+      requireSession();
+      return delay({ status: 'validated', versionId: Number(versionId) });
+    },
+    async staging(versionId) {
+      requireSession();
+      return delay({
+        versionId: Number(versionId),
+        totalRows: 12,
+        errorRows: 0,
+        newRows: 10,
+        changedRows: 2,
+        removedRows: 1,
+        unchangedRows: 0,
+      });
+    },
+    async commit(versionId) {
+      requireSession();
+      const vid = Number(versionId);
+      const ver = mockPriceImportVersions.find((v) => v.versionId === vid);
+      if (ver) {
+        const fid = ver.factoryId;
+        mockPriceImportVersions
+          .filter((v) => v.factoryId === fid && v.status === 'ACTIVE')
+          .forEach((v) => { v.status = 'ARCHIVED'; });
+        ver.status = 'ACTIVE';
+      }
+      return delay({ versionId: vid, inserted: 10, updated: 2, archived: 1 });
+    },
+    async getProfile(factoryId) {
+      requireSession();
+      return delay(JSON.stringify({ number_format: 'eu', sheets: [{ name: 'Sheet1', header_row: 1 }], columns: {} }));
+    },
+    async updateProfile(factoryId, json) {
+      requireSession();
+      return delay({ status: 'updated', factoryId: Number(factoryId) });
     },
   },
 
