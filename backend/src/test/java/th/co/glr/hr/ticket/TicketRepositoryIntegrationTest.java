@@ -146,6 +146,6 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private TicketItemRequest item(String brand, String model, String color, String texture, String size) {
         return new TicketItemRequest(brand, model, color, texture, size, null,
-            new BigDecimal("1"), null, null, null, null, null, "THB");
+            new BigDecimal("1"), null, null, null, null, null, null, "THB");
     }
 }

@@ -20,30 +20,20 @@ public class FxRateRepository {
 
     public List<FxRateDto> findAll() {
         return jdbc.query("""
-            SELECT fx_rate_id, currency, rate_to_thb, effective_date, updated_at
+            SELECT fx_rate_id, currency, rate_to_thb, effective_date, updated_at, source, fetched_at
               FROM sales.fx_rates
              ORDER BY currency
-            """, Map.of(), (rs, i) -> new FxRateDto(
-                rs.getLong("fx_rate_id"),
-                rs.getString("currency"),
-                rs.getBigDecimal("rate_to_thb"),
-                rs.getDate("effective_date").toLocalDate(),
-                rs.getTimestamp("updated_at").toInstant()));
+            """, Map.of(), (rs, i) -> mapRow(rs));
     }
 
     public Optional<FxRateDto> findByCurrency(String currency) {
         try {
             return Optional.ofNullable(jdbc.queryForObject("""
-                SELECT fx_rate_id, currency, rate_to_thb, effective_date, updated_at
+                SELECT fx_rate_id, currency, rate_to_thb, effective_date, updated_at, source, fetched_at
                   FROM sales.fx_rates WHERE currency = :currency
                 """,
                 Map.of("currency", currency),
-                (rs, i) -> new FxRateDto(
-                    rs.getLong("fx_rate_id"),
-                    rs.getString("currency"),
-                    rs.getBigDecimal("rate_to_thb"),
-                    rs.getDate("effective_date").toLocalDate(),
-                    rs.getTimestamp("updated_at").toInstant())));
+                (rs, i) -> mapRow(rs)));
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
         }
@@ -52,13 +42,15 @@ public class FxRateRepository {
     public FxRateDto upsert(String currency, BigDecimal rateToThb, LocalDate effectiveDate, Long updatedBy) {
         LocalDate date = effectiveDate != null ? effectiveDate : LocalDate.now();
         jdbc.update("""
-            INSERT INTO sales.fx_rates (currency, rate_to_thb, effective_date, updated_by, updated_at)
-            VALUES (:currency, :rate, :date, :updatedBy, now())
+            INSERT INTO sales.fx_rates (currency, rate_to_thb, effective_date, updated_by, updated_at, source)
+            VALUES (:currency, :rate, :date, :updatedBy, now(), 'MANUAL')
             ON CONFLICT (currency) DO UPDATE
             SET rate_to_thb    = EXCLUDED.rate_to_thb,
                 effective_date = EXCLUDED.effective_date,
                 updated_by     = EXCLUDED.updated_by,
-                updated_at     = now()
+                updated_at     = now(),
+                source         = 'MANUAL',
+                fetched_at     = NULL
             """,
             new MapSqlParameterSource()
                 .addValue("currency", currency)
@@ -66,5 +58,34 @@ public class FxRateRepository {
                 .addValue("date", date)
                 .addValue("updatedBy", updatedBy));
         return findByCurrency(currency).orElseThrow();
+    }
+
+    public void upsertFromBot(String currency, BigDecimal rateToThb, LocalDate effectiveDate) {
+        jdbc.update("""
+            INSERT INTO sales.fx_rates (currency, rate_to_thb, effective_date, updated_at, source, fetched_at)
+            VALUES (:currency, :rate, :date, now(), 'BOT', now())
+            ON CONFLICT (currency) DO UPDATE
+            SET rate_to_thb    = EXCLUDED.rate_to_thb,
+                effective_date = EXCLUDED.effective_date,
+                updated_at     = now(),
+                source         = 'BOT',
+                fetched_at     = now()
+            """,
+            new MapSqlParameterSource()
+                .addValue("currency", currency)
+                .addValue("rate", rateToThb)
+                .addValue("date", effectiveDate));
+    }
+
+    private FxRateDto mapRow(java.sql.ResultSet rs) throws java.sql.SQLException {
+        java.sql.Timestamp fetchedAt = rs.getTimestamp("fetched_at");
+        return new FxRateDto(
+            rs.getLong("fx_rate_id"),
+            rs.getString("currency"),
+            rs.getBigDecimal("rate_to_thb"),
+            rs.getDate("effective_date").toLocalDate(),
+            rs.getTimestamp("updated_at").toInstant(),
+            rs.getString("source"),
+            fetchedAt != null ? fetchedAt.toInstant() : null);
     }
 }

@@ -12,6 +12,7 @@ public class AppProperties {
     private final Auth auth = new Auth();
     private final Leave leave = new Leave();
     private final Overtime overtime = new Overtime();
+    private final Bot bot = new Bot();
 
     public Cors getCors() {
         return cors;
@@ -35,6 +36,22 @@ public class AppProperties {
 
     public Overtime getOvertime() {
         return overtime;
+    }
+
+    public Bot getBot() {
+        return bot;
+    }
+
+    public static class Bot {
+        private String apiToken = "";
+
+        public String getApiToken() {
+            return apiToken;
+        }
+
+        public void setApiToken(String apiToken) {
+            this.apiToken = apiToken;
+        }
     }
 
     public static class Cors {

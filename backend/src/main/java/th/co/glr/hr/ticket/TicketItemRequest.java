@@ -1,8 +1,6 @@
 package th.co.glr.hr.ticket;
 
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Positive;
 import java.math.BigDecimal;
 
 public record TicketItemRequest(
@@ -12,8 +10,9 @@ public record TicketItemRequest(
     @NotBlank String texture,
     @NotBlank String size,
     String factory,
-    @NotNull @Positive BigDecimal qty,
+    BigDecimal qty,
     BigDecimal qtySqm,
+    String unitBasis,
     BigDecimal rawPrice,
     String rawCurrency,
     String rawUnit,

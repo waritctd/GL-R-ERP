@@ -97,13 +97,7 @@ export function TicketDashboard({ user, employee, showToast }) {
             <StatCard icon="check"     label="อนุมัติแล้ว"         value={summary.approved}        helper="Approved"           tone="teal"   />
             <StatCard icon="fileText"  label="ออกใบเสนอราคาแล้ว"  value={summary.quotationIssued} helper="Quotation issued"   tone="teal"   />
             <StatCard icon="badge"     label="ปิดแล้วเดือนนี้"    value={summary.closedThisMonth} helper="Closed this month"  tone="indigo" />
-            <StatCard
-              icon="close"
-              label="ค้างเกิน 3 วัน"
-              value={summary.overdueOver3Days}
-              helper="Overdue > 3 days"
-              tone={summary.overdueOver3Days > 0 ? 'rose' : 'indigo'}
-            />
+            <StatCard icon="close"     label="ยกเลิกเดือนนี้"     value={summary.cancelledThisMonth} helper="Cancelled this month" tone="neutral" />
           </div>
 
           {recent.length > 0 && (

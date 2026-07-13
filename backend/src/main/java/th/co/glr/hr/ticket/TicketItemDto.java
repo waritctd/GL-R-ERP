@@ -22,5 +22,8 @@ public record TicketItemDto(
     int sortOrder,
     BigDecimal calcedCost,
     BigDecimal calcedPrice,
-    Integer calcConfigVersion
+    Integer calcConfigVersion,
+    String unitBasis,
+    BigDecimal manualPrice,
+    String manualOverrideReason
 ) {}

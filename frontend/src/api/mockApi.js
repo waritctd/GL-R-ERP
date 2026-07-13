@@ -150,12 +150,12 @@ let mockProjectSeq = mockProjects.length + 1;
 
 // R4: FX rates + price calc configs
 const mockFxRates = [
-  { id: 1, currency: 'CNY', rateToThb: 4.85,  effectiveDate: '2026-07-01', updatedAt: new Date().toISOString() },
-  { id: 2, currency: 'EUR', rateToThb: 38.50, effectiveDate: '2026-07-01', updatedAt: new Date().toISOString() },
-  { id: 3, currency: 'GBP', rateToThb: 44.80, effectiveDate: '2026-07-01', updatedAt: new Date().toISOString() },
-  { id: 4, currency: 'JPY', rateToThb: 0.24,  effectiveDate: '2026-07-01', updatedAt: new Date().toISOString() },
-  { id: 5, currency: 'THB', rateToThb: 1.00,  effectiveDate: '2026-07-01', updatedAt: new Date().toISOString() },
-  { id: 6, currency: 'USD', rateToThb: 35.20, effectiveDate: '2026-07-01', updatedAt: new Date().toISOString() },
+  { id: 1, currency: 'CNY', rateToThb: 4.85,  effectiveDate: '2026-07-01', updatedAt: new Date().toISOString(), source: 'BOT',    fetchedAt: new Date().toISOString() },
+  { id: 2, currency: 'EUR', rateToThb: 38.50, effectiveDate: '2026-07-01', updatedAt: new Date().toISOString(), source: 'BOT',    fetchedAt: new Date().toISOString() },
+  { id: 3, currency: 'GBP', rateToThb: 44.80, effectiveDate: '2026-07-10', updatedAt: new Date().toISOString(), source: 'BOT',    fetchedAt: new Date().toISOString() },
+  { id: 4, currency: 'JPY', rateToThb: 0.24,  effectiveDate: '2026-07-01', updatedAt: new Date().toISOString(), source: 'BOT',    fetchedAt: new Date().toISOString() },
+  { id: 5, currency: 'THB', rateToThb: 1.00,  effectiveDate: '2026-07-01', updatedAt: new Date().toISOString(), source: 'MANUAL', fetchedAt: null },
+  { id: 6, currency: 'USD', rateToThb: 33.6264, effectiveDate: '2026-07-10', updatedAt: new Date().toISOString(), source: 'BOT',    fetchedAt: new Date().toISOString() },
 ];
 
 const mockPriceCalcConfigs = [
@@ -295,23 +295,104 @@ function verifyStatus(ticket, expected) {
   if (ticket.status !== expected) fail(`Expected status '${expected}' but ticket is '${ticket.status}'`, 409);
 }
 
-function buildMockQuotationCsv(ticketId, quotationId) {
+// ── Thai date helper (mirrors QuotationRenderer.java thaiDate) ───────────────
+const MOCK_THAI_MONTHS = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+function mockThaiDate(d) {
+  if (!d) return '';
+  const date = d instanceof Date ? d : new Date(d);
+  return `${date.getDate()} ${MOCK_THAI_MONTHS[date.getMonth()]} ${date.getFullYear() + 543}`;
+}
+
+function mockItemDesc(it) {
+  return [it.brand, it.model, it.color, it.texture, it.size].filter(Boolean).join(' ');
+}
+
+// Demo-mode placeholder blob. The real xlsx is rendered server-side by Apache POI
+// (QuotationRenderer/RemainingInvoiceRenderer/DepositNoticeRenderer) and streamed to the
+// client; mock mode only needs to return a valid Blob so download callers stay happy without
+// pulling in the SheetJS (`xlsx`) dependency, which carries an unpatched high-severity advisory.
+function mockDocPlaceholderBlob(lines) {
+  const body = ['⚠ Demo Mode — ไฟล์จริงสร้างจาก template บน server (Apache POI)', '', ...lines].join('\n');
+  return new Blob([body], { type: 'text/plain;charset=utf-8' });
+}
+
+// ── Quotation XLSX (demo placeholder) — real file from QuotationRenderer.java ───
+async function buildMockQuotationXlsx(ticketId, quotationId) {
   const ticket = findTicketRaw(Number(ticketId));
   const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
   if (!quotation) fail('Quotation not found', 404);
-  const rows = [
-    ['ใบเสนอราคา', quotation.number],
-    ['ลูกค้า', ticket.customerName ?? ''],
-    ['วันที่', quotation.issuedAt],
-    [],
-    ['รายละเอียด', 'จำนวน', 'ราคา/หน่วย', 'เป็นเงิน'],
-    ...ticket.items
-      .filter((it) => it.approvedPrice != null)
-      .map((it) => [`${it.brand ?? ''} ${it.model ?? ''}`.trim(), it.qty, it.approvedPrice, it.approvedPrice * it.qty]),
-    [],
-    ['รวมเป็นเงิน', '', '', quotation.totalAmount],
+
+  const issueDate = quotation.issuedAt ? new Date(quotation.issuedAt) : new Date();
+  const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
+  const lines = [
+    `ใบเสนอราคา  เลขที่ ${quotation.number ?? ''}`,
+    `วันที่: ${mockThaiDate(issueDate)}`,
+    `ลูกค้า: ${ticket.customerName ?? ''}`,
+    ...(ticket.projectName ? [`Project: ${ticket.projectName}`] : []),
+    '',
+    ...priceItems.map((it, i) => {
+      const qty = Number(it.qty) || 0;
+      const price = Number(it.approvedPrice) || 0;
+      return `${i + 1}. ${mockItemDesc(it)} — ${qty} ${it.rawUnit ?? 'แผ่น'} × ${price}`;
+    }),
   ];
-  return rows.map((r) => r.join(',')).join('\n');
+  return mockDocPlaceholderBlob(lines);
+}
+
+// ── Quotation HTML preview — shown when "PDF" is clicked in demo mode ────────
+function buildMockQuotationHtml(ticketId, quotationId) {
+  const ticket = findTicketRaw(Number(ticketId));
+  const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
+  if (!quotation) fail('Quotation not found', 404);
+  const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
+  const fmtNum = (n) => Number(n).toLocaleString('th-TH', { minimumFractionDigits: 2 });
+  const rowsHtml = priceItems.map((it, i) => {
+    const amt = Number(it.approvedPrice) * Number(it.qty);
+    return `<tr><td>${i+1}</td><td>${mockItemDesc(it)}</td><td style="text-align:right">${Number(it.qty).toLocaleString('th-TH')}</td><td>${it.rawUnit ?? 'แผ่น'}</td><td style="text-align:right">${fmtNum(it.approvedPrice)}</td><td style="text-align:right">${fmtNum(amt)}</td></tr>`;
+  }).join('');
+  const total = fmtNum(quotation.totalAmount ?? 0);
+  const html = `<!DOCTYPE html><html lang="th"><head><meta charset="utf-8"/><title>ใบเสนอราคา ${quotation.number}</title>
+<style>body{font-family:sans-serif;padding:40px;color:#1e293b;max-width:900px;margin:auto}
+h2{margin:0 0 4px}.meta{color:#64748b;font-size:13px;margin-bottom:24px}
+table{width:100%;border-collapse:collapse;margin-top:16px}
+th{background:#f1f5f9;border:1px solid #cbd5e1;padding:8px 10px;text-align:left;font-size:13px}
+td{border:1px solid #e2e8f0;padding:8px 10px;font-size:13px}
+.banner{background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:10px 14px;margin-bottom:20px;font-size:13px;color:#92400e}
+.total{font-weight:700;font-size:15px;text-align:right;margin-top:16px}</style></head>
+<body><div class="banner">⚠ Demo Mode — PDF จริงสร้างจาก template บน server</div>
+<h2>ใบเสนอราคา</h2>
+<div class="meta">เลขที่: <strong>${quotation.number}</strong> &nbsp;|&nbsp; ลูกค้า: <strong>${ticket.customerName ?? ''}</strong> &nbsp;|&nbsp; วันที่: ${mockThaiDate(new Date(quotation.issuedAt))}</div>
+<table><thead><tr><th>#</th><th>รายละเอียด</th><th>จำนวน</th><th>หน่วย</th><th>ราคา/หน่วย</th><th>เป็นเงิน (บาท)</th></tr></thead>
+<tbody>${rowsHtml}</tbody>
+<tfoot><tr><td colspan="5" style="text-align:right;font-weight:700">รวมเป็นเงิน</td><td style="text-align:right;font-weight:700">${total}</td></tr></tfoot></table>
+<div class="total">ยอดรวมทั้งสิ้น: ${total} บาท</div></body></html>`;
+  return new Blob([html], { type: 'text/html;charset=utf-8' });
+}
+
+// ── Remaining invoice XLSX (demo placeholder) — real file from RemainingInvoiceRenderer.java ─
+async function buildMockRemainingInvoiceXlsx(ticketId) {
+  const ticket = findTicketRaw(Number(ticketId));
+  if (!ticket) fail('Ticket not found', 404);
+
+  const today = new Date();
+  const thaiYear2 = String(today.getFullYear() + 543).slice(-2);
+  const docNumber = `GLR${thaiYear2}${String(ticketId).padStart(3, '0')}`;
+  const firstQ = (ticket.quotations ?? [])[0];
+  const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
+  const lines = [
+    `ใบแจ้งหนี้ส่วนที่เหลือ  เลขที่ ${docNumber}`,
+    `วันที่: ${mockThaiDate(today)}`,
+    `ลูกค้า: ${ticket.customerName ?? ''}`,
+    ...(firstQ ? [`อ้างอิง: ${firstQ.number}`] : []),
+    ...(ticket.projectName ? [`Project: ${ticket.projectName}`] : []),
+    '',
+    ...priceItems.map((it, i) => {
+      const qty = Number(it.qty) || 0;
+      return `${i + 1}. ${mockItemDesc(it)} — ${qty} ${it.rawUnit ?? 'แผ่น'} × ${Number(it.approvedPrice) || 0}`;
+    }),
+    `หัก  มัดจำ${firstQ ? '  ' + firstQ.number : ''}`,
+  ];
+  return mockDocPlaceholderBlob(lines);
 }
 
 function pushEvent(ticket, actor, kind, fromStatus, toStatus, message, itemSnapshot = null) {
@@ -342,6 +423,8 @@ function buildTicketDetail(ticket) {
       note: ticket.note,
       createdAt: ticket.createdAt, updatedAt: ticket.updatedAt, closedAt: ticket.closedAt,
       itemCount: ticket.items.length, hasEdits: ticket.hasEdits ?? false,
+      paymentStatus: ticket.paymentStatus ?? null,
+      fulfillmentStatus: ticket.fulfillmentStatus ?? null,
     },
     items: ticket.items, events: ticket.events,
     quotation: ticket.quotations ? ticket.quotations[0] ?? null : ticket.quotation ?? null,
@@ -908,6 +991,8 @@ export const api = {
         customerName: t.customerName, note: t.note,
         createdAt: t.createdAt, updatedAt: t.updatedAt, closedAt: t.closedAt,
         itemCount: t.items.length,
+        paymentStatus: t.paymentStatus ?? null,
+        fulfillmentStatus: t.fulfillmentStatus ?? null,
       }));
       return delay({ tickets });
     },
@@ -1055,9 +1140,44 @@ export const api = {
         const calcedCost  = Math.round(landedPerSqm * sqmPerPiece * 10000) / 10000;
         const calcedPrice = Math.round(sellPerSqm  * sqmPerPiece * 100)   / 100;
 
+        item._breakdown = {
+          itemId: item.id,
+          brand: item.brand, model: item.model, factory: item.factory,
+          rawCurrency: item.rawCurrency, fxRate, sqmPerPiece,
+          goodsCostPerSqm: Math.round(goodsCostPerSqm * 10000) / 10000,
+          freightPerSqm: cfg.freightPerSqm, insurancePerSqm: cfg.insurancePerSqm,
+          cifPerSqm: Math.round(cifPerSqm * 10000) / 10000,
+          importDutyPerSqm: Math.round(dutyPerSqm * 10000) / 10000,
+          inlandPerSqm: Math.round((cfg.inlandFactoryToPortPerSqm + cfg.inlandPortToWarehousePerSqm) * 10000) / 10000,
+          landedCostPerSqm: Math.round(landedPerSqm * 10000) / 10000,
+          marginPct: cfg.marginPct,
+          sellPricePerSqm: Math.round(sellPerSqm * 10000) / 10000,
+          calcedCostPerPiece: calcedCost,
+          calcedPricePerPiece: calcedPrice,
+          configVersion: cfg.version,
+        };
         return { ...item, calcedCost, calcedPrice, calcConfigVersion: cfg.version, proposedPrice: calcedPrice };
       });
 
+      const breakdown = ticket.items.filter((it) => it._breakdown).map((it) => {
+        const b = it._breakdown;
+        delete it._breakdown;
+        return b;
+      });
+
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      return delay({ ticket: buildTicketDetail(ticket), breakdown });
+    },
+
+    async overrideItemPrice(ticketId, itemId, payload) {
+      hasRole('ceo', 'admin');
+      const ticket = findTicketRaw(Number(ticketId));
+      verifyStatus(ticket, 'price_proposed');
+      const item = ticket.items.find((it) => it.id === Number(itemId));
+      if (!item) throw new Error('Item not found');
+      item.manualPrice = payload.manualPrice;
+      item.manualOverrideReason = payload.reason ?? null;
+      item.proposedPrice = payload.manualPrice;
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
@@ -1122,13 +1242,11 @@ export const api = {
     },
 
     async downloadQuotationXlsx(ticketId, quotationId) {
-      const csv = buildMockQuotationCsv(ticketId, quotationId);
-      return new Blob([csv], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      return buildMockQuotationXlsx(ticketId, quotationId);
     },
 
     async downloadQuotationPdf(ticketId, quotationId) {
-      const csv = buildMockQuotationCsv(ticketId, quotationId);
-      return new Blob([csv], { type: 'application/pdf' });
+      return buildMockQuotationHtml(ticketId, quotationId);
     },
 
     async close(id) {
@@ -1178,6 +1296,102 @@ export const api = {
       ticket.status = toStatus;
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'REVISION_REQUESTED', ticket.status, toStatus, `[${payload.scope}] ${payload.reason}`);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    // ── Dual-track post-quotation (ข้อ 13) ──────────────────────────────────
+
+    async downloadRemainingInvoice(id) {
+      const ticket = findTicketRaw(Number(id));
+      if (ticket.status !== 'quotation_issued') fail('Expected quotation_issued', 409);
+      return buildMockRemainingInvoiceXlsx(Number(id));
+    },
+
+    async confirmCustomer(id) {
+      const user = hasRole('sales', 'admin');
+      const ticket = findTicketRaw(Number(id));
+      if (ticket.status !== 'quotation_issued') fail('Expected quotation_issued', 409);
+      ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async issueDepositNotice(id) {
+      const user = hasRole('sales', 'admin');
+      const ticket = findTicketRaw(Number(id));
+      if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
+        fail('Requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED', 409);
+      }
+      ticket.paymentStatus = 'DEPOSIT_NOTICE_ISSUED';
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'DEPOSIT_NOTICE_ISSUED', ticket.status, ticket.status, null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async confirmDepositPaid(id) {
+      const user = hasRole('sales', 'admin');
+      const ticket = findTicketRaw(Number(id));
+      if (ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') fail('Expected paymentStatus=DEPOSIT_NOTICE_ISSUED', 409);
+      ticket.paymentStatus = 'DEPOSIT_PAID';
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'DEPOSIT_PAID', ticket.status, ticket.status, null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async issueImportRequest(id) {
+      const user = hasRole('import', 'admin');
+      const ticket = findTicketRaw(Number(id));
+      if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') {
+        fail('Requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED', 409);
+      }
+      ticket.fulfillmentStatus = 'IR_ISSUED';
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'IR_ISSUED', ticket.status, ticket.status, null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async markIrSent(id) {
+      const user = hasRole('import', 'admin');
+      const ticket = findTicketRaw(Number(id));
+      if (ticket.fulfillmentStatus !== 'IR_ISSUED') fail('Expected fulfillmentStatus=IR_ISSUED', 409);
+      ticket.fulfillmentStatus = 'IR_SENT';
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'IR_SENT', ticket.status, ticket.status, null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async markShipping(id) {
+      const user = hasRole('import', 'admin');
+      const ticket = findTicketRaw(Number(id));
+      if (ticket.fulfillmentStatus !== 'IR_SENT') fail('Expected fulfillmentStatus=IR_SENT', 409);
+      ticket.fulfillmentStatus = 'SHIPPING';
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'SHIPPING', ticket.status, ticket.status, null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async markGoodsReceived(id) {
+      const user = hasRole('import', 'admin');
+      const ticket = findTicketRaw(Number(id));
+      if (ticket.fulfillmentStatus !== 'SHIPPING') fail('Expected fulfillmentStatus=SHIPPING', 409);
+      ticket.fulfillmentStatus = 'GOODS_RECEIVED';
+      if (ticket.paymentStatus === 'DEPOSIT_PAID') {
+        ticket.paymentStatus = 'AWAITING_FINAL_PAYMENT';
+        pushEvent(ticket, user, 'AWAITING_FINAL_PAYMENT', ticket.status, ticket.status, null);
+      }
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'GOODS_RECEIVED', ticket.status, ticket.status, null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async confirmFinalPayment(id) {
+      const user = hasRole('sales', 'admin');
+      const ticket = findTicketRaw(Number(id));
+      if (ticket.paymentStatus !== 'AWAITING_FINAL_PAYMENT') fail('Expected paymentStatus=AWAITING_FINAL_PAYMENT', 409);
+      ticket.paymentStatus = 'FULLY_PAID';
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'FULLY_PAID', ticket.status, ticket.status, null);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
   },
@@ -1811,6 +2025,8 @@ export const api = {
         existing.rateToThb = payload.rateToThb;
         existing.effectiveDate = payload.effectiveDate ?? new Date().toISOString().slice(0, 10);
         existing.updatedAt = new Date().toISOString();
+        existing.source = 'MANUAL';
+        existing.fetchedAt = null;
         return delay({ fxRate: structuredClone(existing) });
       }
       const newRate = {
@@ -1818,6 +2034,7 @@ export const api = {
         rateToThb: payload.rateToThb,
         effectiveDate: payload.effectiveDate ?? new Date().toISOString().slice(0, 10),
         updatedAt: new Date().toISOString(),
+        source: 'MANUAL', fetchedAt: null,
       };
       mockFxRates.push(newRate);
       return delay({ fxRate: structuredClone(newRate) });
@@ -2023,18 +2240,39 @@ export const api = {
 
     async downloadXlsx(docId) {
       requireSession();
-      const doc = mockDepositNotices.find((d) => d.id === Number(docId));
-      if (!doc) fail('Deposit notice not found', 404);
-      const html = mockPreviewHtml(buildMockDoc(doc));
-      return new Blob([html], { type: 'text/html' });
+      const rawDoc = mockDepositNotices.find((d) => d.id === Number(docId));
+      if (!rawDoc) fail('Deposit notice not found', 404);
+      const doc = buildMockDoc(rawDoc);
+
+      // Demo placeholder — real xlsx from DepositNoticeRenderer.java (server, Apache POI)
+      const items = (doc.items ?? []).map((it, i) => {
+        const net = Number(it.netUnitPrice ?? it.unitPrice) || 0;
+        const qty = Number(it.qty) || 0;
+        return `${i + 1}. ${it.description ?? ''} — ${qty} ${it.unit ?? 'แผ่น'} × ${Number(it.unitPrice) || 0} = ${net * qty}`;
+      });
+      const lines = [
+        `ใบแจ้งยอดมัดจำ  เลขที่ ${doc.docNumber ?? 'DRAFT'}`,
+        `วันที่: ${mockThaiDate(doc.issueDate ? new Date(doc.issueDate) : new Date())}`,
+        `เรียน ${doc.customerName ?? ''}`,
+        ...(doc.reference ? [`อ้างอิง: ${doc.reference}`] : []),
+        ...(doc.projectName ? [`Project: ${doc.projectName}`] : []),
+        '',
+        ...items,
+        '',
+        `ยอดก่อนภาษี: ${doc.subtotal ?? 0}`,
+        `มัดจำ ${((doc.depositPercent ?? 0.5) * 100)}%: ${doc.depositAmount ?? 0}`,
+        `ภาษี 7%: ${doc.vatAmount ?? 0}`,
+        `ยอดชำระ: ${doc.totalPayable ?? 0}`,
+      ];
+      return mockDocPlaceholderBlob(lines);
     },
 
     async downloadPdf(docId) {
       requireSession();
-      const doc = mockDepositNotices.find((d) => d.id === Number(docId));
-      if (!doc) fail('Deposit notice not found', 404);
-      const html = mockPreviewHtml(buildMockDoc(doc));
-      return new Blob([html], { type: 'application/pdf' });
+      const rawDoc = mockDepositNotices.find((d) => d.id === Number(docId));
+      if (!rawDoc) fail('Deposit notice not found', 404);
+      const html = mockPreviewHtml(buildMockDoc(rawDoc));
+      return new Blob([html], { type: 'text/html;charset=utf-8' });
     },
   },
 
