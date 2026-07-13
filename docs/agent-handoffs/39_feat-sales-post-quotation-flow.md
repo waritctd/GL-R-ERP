@@ -17,21 +17,23 @@ one commit's sales-stack delta was cherry-picked.
 `f655b77` (main tip at start of this task — PR #162 merge)
 
 ## Current Commit
-`8d4ccf4` (5 commits on the branch, not pushed, not merged)
+Branch tip = the `security(sales): drop xlsx dep …` commit below (5 commits on the branch,
+not pushed, not merged).
 
 ```
-8d4ccf4 security(sales): drop xlsx dep, stub mock-mode doc downloads to placeholder blobs
+<tip>   security(sales): drop xlsx dep + dead public templates, stub mock-mode doc downloads to placeholder blobs
 e0c962b docs(handoffs): add handoff for feat/sales-post-quotation-flow
-cb99680 fix(sales): keep xlsx dependency — mockApi.js imports it at runtime   (superseded by 8d4ccf4)
+cb99680 fix(sales): keep xlsx dependency — mockApi.js imports it at runtime   (superseded by the tip commit)
 116705b fix(sales): repair cherry-pick fallout in TicketStatus and BotFxFetchService
 a466e43 :Fix flow for sales and add flow after generate quotation   (cherry-pick of d9bedef)
 ```
 
-> **Post-review follow-up (commit `8d4ccf4`):** Opus reviewed the port and approved it, but flagged
+> **Post-review follow-up (branch-tip commit):** Opus reviewed the port and approved it, but flagged
 > that `frontend-ci.yml` runs `npm audit --audit-level=moderate` as a hard gate, so keeping the
 > high-severity `xlsx` dependency would turn `main`'s CI red. Per the user's decision, `xlsx` was
-> **removed** (see the updated xlsx section below). Commit `cb99680`'s "keep xlsx" decision is
-> therefore superseded — it is left in history for traceability but its conclusion no longer holds.
+> **removed** and the now-unused `frontend/public/templates/*.xlsx` deleted (see the updated xlsx
+> section below). Commit `cb99680`'s "keep xlsx" decision is therefore superseded — it is left in
+> history for traceability but its conclusion no longer holds.
 
 ## Agent / Model Used
 Claude Opus (orchestrator prompt) running as Sonnet 4.5 implementation agent, plus one
