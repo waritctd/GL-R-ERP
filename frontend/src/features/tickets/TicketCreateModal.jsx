@@ -3,7 +3,7 @@ import { api } from '../../api/index.js';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 
-const emptyItem = () => ({ brand: '', model: '', color: '', texture: '', size: '', factory: '', qty: 1, qtySqm: '', sqmPerPiece: null });
+const emptyItem = () => ({ brand: '', model: '', color: '', texture: '', size: '', factory: '', unitBasis: 'PIECE', qty: 1, qtySqm: '', sqmPerPiece: null });
 
 let _catalogTimer = null;
 function debouncedCatalogSearch(q, cb) {
@@ -135,12 +135,15 @@ export function TicketCreateModal({ onClose, onSubmit }) {
     setItems((cur) => cur.map((item, i) => {
       if (i !== index) return item;
       const updated = { ...item, [field]: value };
-      // auto-calc the other qty field when sqmPerPiece is known
       if (field === 'qty' && item.sqmPerPiece) {
         updated.qtySqm = value ? (Number(value) * item.sqmPerPiece).toFixed(3) : '';
       }
       if (field === 'qtySqm' && item.sqmPerPiece) {
         updated.qty = value ? Math.ceil(Number(value) / item.sqmPerPiece) : '';
+      }
+      if (field === 'unitBasis' && item.sqmPerPiece) {
+        if (value === 'SQM' && item.qty) updated.qtySqm = (Number(item.qty) * item.sqmPerPiece).toFixed(3);
+        if (value === 'PIECE' && item.qtySqm) updated.qty = Math.ceil(Number(item.qtySqm) / item.sqmPerPiece);
       }
       return updated;
     }));
@@ -213,8 +216,17 @@ export function TicketCreateModal({ onClose, onSubmit }) {
     if (!selectedCustomer) { setError('กรุณาเลือกบริษัท/ลูกค้า'); return; }
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
-      if (!item.brand.trim() || !item.model.trim() || !item.color.trim() || !item.texture.trim() || !item.size.trim() || !item.qty) {
+      const basis = item.unitBasis || 'PIECE';
+      if (!item.brand.trim() || !item.model.trim() || !item.color.trim() || !item.texture.trim() || !item.size.trim()) {
         setError(`กรุณากรอกข้อมูลสินค้าให้ครบทุกช่องในรายการที่ ${i + 1}`);
+        return;
+      }
+      if (basis === 'PIECE' && (!item.qty || Number(item.qty) <= 0)) {
+        setError(`กรุณากรอกจำนวน (แผ่น) ในรายการที่ ${i + 1}`);
+        return;
+      }
+      if (basis === 'SQM' && (!item.qtySqm || Number(item.qtySqm) <= 0)) {
+        setError(`กรุณากรอกพื้นที่ (ตร.ม.) ในรายการที่ ${i + 1}`);
         return;
       }
     }
@@ -235,7 +247,8 @@ export function TicketCreateModal({ onClose, onSubmit }) {
           texture: item.texture.trim(),
           size: item.size.trim(),
           factory: item.factory.trim() || null,
-          qty: Number(item.qty) || 1,
+          unitBasis: item.unitBasis || 'PIECE',
+          qty: Number(item.qty) || 0,
           qtySqm: item.qtySqm !== '' && item.qtySqm != null ? Number(item.qtySqm) : null,
         })),
       });
@@ -507,22 +520,57 @@ export function TicketCreateModal({ onClose, onSubmit }) {
                   <input value={item.factory} onChange={(e) => updateItem(index, 'factory', e.target.value)} placeholder="เช่น SCG Ceramics" />
                 </label>
 
-                {/* Dual qty */}
-                <label style={{ margin: 0 }}>
-                  <span style={{ fontSize: 12 }}>จำนวน (แผ่น) *</span>
-                  <input type="number" value={item.qty} min="1" step="1"
-                    onChange={(e) => updateItem(index, 'qty', e.target.value)}
-                    placeholder="จำนวนแผ่น" required />
-                </label>
-                <label style={{ margin: 0 }}>
-                  <span style={{ fontSize: 12 }}>
-                    พื้นที่ (ตร.ม.)
-                    {item.sqmPerPiece && <span style={{ color: '#94a3b8', fontSize: 10, marginLeft: 4 }}>{item.sqmPerPiece} ตร.ม./แผ่น</span>}
-                  </span>
-                  <input type="number" value={item.qtySqm} min="0" step="0.001"
-                    onChange={(e) => updateItem(index, 'qtySqm', e.target.value)}
-                    placeholder="ตร.ม. (คำนวณอัตโนมัติ)" />
-                </label>
+                {/* Unit basis toggle */}
+                <div style={{ margin: 0, gridColumn: '1 / -1' }}>
+                  <span style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>หน่วยที่ใช้สั่ง *</span>
+                  <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+                    {[{ value: 'PIECE', label: 'แผ่น' }, { value: 'SQM', label: 'ตร.ม.' }].map((opt) => (
+                      <label key={opt.value} style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer', fontSize: 13 }}>
+                        <input type="radio" name={`unitBasis-${index}`} value={opt.value}
+                          checked={(item.unitBasis || 'PIECE') === opt.value}
+                          onChange={() => updateItem(index, 'unitBasis', opt.value)}
+                          style={{ width: 16, height: 16, accentColor: '#1e40af', cursor: 'pointer' }} />
+                        <strong>{opt.label}</strong>
+                      </label>
+                    ))}
+                    {item.sqmPerPiece && (
+                      <span style={{ fontSize: 11, color: '#64748b' }}>· 1 แผ่น = {item.sqmPerPiece} ตร.ม.</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Primary qty input */}
+                {(item.unitBasis || 'PIECE') === 'PIECE' ? (
+                  <>
+                    <label style={{ margin: 0 }}>
+                      <span style={{ fontSize: 12 }}>จำนวน (แผ่น) *</span>
+                      <input type="number" value={item.qty} step="1"
+                        onChange={(e) => updateItem(index, 'qty', e.target.value)}
+                        placeholder="จำนวนแผ่น" required />
+                    </label>
+                    <div style={{ margin: 0 }}>
+                      <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>พื้นที่รวม (ตร.ม.)</span>
+                      <div style={{ padding: '7px 10px', border: '1px solid #e2e8f0', borderRadius: 6, background: '#f8fafc', fontSize: 13, color: item.qtySqm ? '#475569' : '#94a3b8' }}>
+                        {item.qtySqm ? `${Number(item.qtySqm).toFixed(3)} ตร.ม.` : item.sqmPerPiece ? 'กรอกจำนวนแผ่นก่อน' : '—'}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <label style={{ margin: 0 }}>
+                      <span style={{ fontSize: 12 }}>พื้นที่ (ตร.ม.) *</span>
+                      <input type="number" value={item.qtySqm} min="0" step="0.001"
+                        onChange={(e) => updateItem(index, 'qtySqm', e.target.value)}
+                        placeholder="เช่น 120.500" required />
+                    </label>
+                    <div style={{ margin: 0 }}>
+                      <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>จำนวน (แผ่น)</span>
+                      <div style={{ padding: '7px 10px', border: '1px solid #e2e8f0', borderRadius: 6, background: '#f8fafc', fontSize: 13, color: item.qty ? '#475569' : '#94a3b8' }}>
+                        {item.qty ? `${item.qty} แผ่น` : item.sqmPerPiece ? 'กรอกพื้นที่ก่อน' : '—'}
+                      </div>
+                    </div>
+                  </>
+                )}
 
               </div>
             </div>

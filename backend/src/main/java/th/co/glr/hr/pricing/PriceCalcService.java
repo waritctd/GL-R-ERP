@@ -2,6 +2,7 @@ package th.co.glr.hr.pricing;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.ArrayList;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -102,5 +103,68 @@ public class PriceCalcService {
         }
 
         return tickets.findById(ticketId).orElseThrow();
+    }
+
+    public List<PriceBreakdownItemDto> calculateBreakdown(long ticketId) {
+        TicketDto ticket = tickets.findById(ticketId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+
+        List<PriceBreakdownItemDto> result = new ArrayList<>();
+        for (TicketItemDto item : ticket.items()) {
+            if (item.rawPrice() == null) continue;
+
+            String country = factoryConfigs.findByName(item.factory())
+                .map(FactoryConfigDto::country)
+                .orElse("Thailand");
+
+            PriceCalcConfigDto config = priceConfigs.findCurrentByCountry(country)
+                .orElseGet(() -> priceConfigs.findCurrentByCountry("Thailand").orElseThrow());
+
+            BigDecimal fxRate = fxRates.findByCurrency(
+                    item.rawCurrency() != null ? item.rawCurrency() : "THB")
+                .map(FxRateDto::rateToThb)
+                .orElse(ONE);
+
+            BigDecimal sqmPerPiece = ONE;
+            if (item.qtySqm() != null && item.qty() != null
+                    && item.qty().compareTo(BigDecimal.ZERO) > 0) {
+                sqmPerPiece = item.qtySqm().divide(item.qty(), 8, RoundingMode.HALF_UP);
+            }
+
+            BigDecimal goodsCostPerSqm;
+            if ("sqm".equals(item.rawUnit())) {
+                goodsCostPerSqm = item.rawPrice().multiply(fxRate);
+            } else {
+                goodsCostPerSqm = sqmPerPiece.compareTo(BigDecimal.ZERO) > 0
+                    ? item.rawPrice().multiply(fxRate).divide(sqmPerPiece, 8, RoundingMode.HALF_UP)
+                    : item.rawPrice().multiply(fxRate);
+            }
+
+            BigDecimal cifPerSqm = goodsCostPerSqm
+                .add(config.freightPerSqm())
+                .add(config.insurancePerSqm());
+            BigDecimal importDutyPerSqm = cifPerSqm.multiply(config.importDutyPct());
+            BigDecimal inlandPerSqm = config.inlandFactoryToPortPerSqm()
+                .add(config.inlandPortToWarehousePerSqm());
+            BigDecimal landedCostPerSqm = cifPerSqm.add(importDutyPerSqm).add(inlandPerSqm);
+            BigDecimal sellPricePerSqm = landedCostPerSqm.multiply(ONE.add(config.marginPct()));
+
+            result.add(new PriceBreakdownItemDto(
+                item.id(), item.brand(), item.model(), item.factory(),
+                item.rawCurrency(), fxRate, sqmPerPiece,
+                goodsCostPerSqm.setScale(4, RoundingMode.HALF_UP),
+                config.freightPerSqm(), config.insurancePerSqm(),
+                cifPerSqm.setScale(4, RoundingMode.HALF_UP),
+                importDutyPerSqm.setScale(4, RoundingMode.HALF_UP),
+                inlandPerSqm.setScale(4, RoundingMode.HALF_UP),
+                landedCostPerSqm.setScale(4, RoundingMode.HALF_UP),
+                config.marginPct(),
+                sellPricePerSqm.setScale(4, RoundingMode.HALF_UP),
+                landedCostPerSqm.multiply(sqmPerPiece).setScale(4, RoundingMode.HALF_UP),
+                sellPricePerSqm.multiply(sqmPerPiece).setScale(2, RoundingMode.HALF_UP),
+                config.version()
+            ));
+        }
+        return result;
     }
 }

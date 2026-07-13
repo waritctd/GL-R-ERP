@@ -127,4 +127,20 @@ public class DepositNoticeController {
         var ticket = service.requestRevision(ticketId, req, user);
         return Map.of("ticket", ticket);
     }
+
+    // Remaining invoice download (ข้อ 13.5)
+    @GetMapping("/tickets/{ticketId}/remaining-invoice/file")
+    ResponseEntity<byte[]> remainingInvoiceFile(
+        @PathVariable long ticketId,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        byte[] bytes = service.getRemainingInvoiceXlsx(ticketId, user);
+        String filename = "remaining-invoice-" + ticketId + ".xlsx";
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+            .contentType(MediaType.parseMediaType(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+            .body(bytes);
+    }
 }

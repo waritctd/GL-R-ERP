@@ -211,7 +211,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = (doc.docNumber ?? 'draft') + '.' + extension;
+      const ext = blob.type.startsWith('text/html') ? 'html' : extension;
+      a.download = (doc.docNumber ?? 'draft') + '.' + ext;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {

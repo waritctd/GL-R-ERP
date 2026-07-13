@@ -31,7 +31,8 @@ public class TicketRepository {
                t.note,
                t.created_at, t.updated_at, t.closed_at,
                COUNT(ti.item_id) AS item_count,
-               t.has_edits
+               t.has_edits,
+               t.payment_status, t.fulfillment_status
           FROM sales.ticket t
           JOIN hr.employee ec ON ec.employee_id = t.created_by
           LEFT JOIN hr.employee ea ON ea.employee_id = t.assigned_to
@@ -268,9 +269,10 @@ public class TicketRepository {
     private List<TicketItemDto> findItemsByTicketId(long ticketId) {
         return jdbc.query("""
             SELECT item_id, ticket_id, brand, model, color, texture, size, factory,
-                   qty, qty_sqm, raw_price, raw_currency, raw_unit,
+                   qty, qty_sqm, unit_basis, raw_price, raw_currency, raw_unit,
                    proposed_price, approved_price, currency, sort_order,
-                   calced_cost, calced_price, calc_config_version
+                   calced_cost, calced_price, calc_config_version,
+                   manual_price, manual_override_reason
               FROM sales.ticket_item
              WHERE ticket_id = :id
              ORDER BY sort_order, item_id
@@ -299,7 +301,10 @@ public class TicketRepository {
                     rs.getInt("sort_order"),
                     rs.getBigDecimal("calced_cost"),
                     rs.getBigDecimal("calced_price"),
-                    calcConfigVersion
+                    calcConfigVersion,
+                    rs.getString("unit_basis"),
+                    rs.getBigDecimal("manual_price"),
+                    rs.getString("manual_override_reason")
                 );
             });
     }
@@ -384,6 +389,8 @@ public class TicketRepository {
         for (int i = 0; i < items.size(); i++) {
             TicketItemRequest item = items.get(i);
             String currency = (item.currency() != null && !item.currency().isBlank()) ? item.currency() : "THB";
+            String unitBasis = (item.unitBasis() != null && !item.unitBasis().isBlank())
+                ? item.unitBasis() : "PIECE";
             batch[i] = new MapSqlParameterSource()
                 .addValue("ticketId", ticketId)
                 .addValue("brand", item.brand())
@@ -394,6 +401,7 @@ public class TicketRepository {
                 .addValue("factory", item.factory())
                 .addValue("qty", item.qty())
                 .addValue("qtySqm", item.qtySqm())
+                .addValue("unitBasis", unitBasis)
                 .addValue("rawPrice", item.rawPrice())
                 .addValue("rawCurrency", item.rawCurrency())
                 .addValue("rawUnit", item.rawUnit())
@@ -404,10 +412,10 @@ public class TicketRepository {
         jdbc.batchUpdate("""
             INSERT INTO sales.ticket_item
                 (ticket_id, brand, model, color, texture, size, factory,
-                 qty, qty_sqm, raw_price, raw_currency, raw_unit,
+                 qty, qty_sqm, unit_basis, raw_price, raw_currency, raw_unit,
                  proposed_price, currency, sort_order)
             VALUES (:ticketId, :brand, :model, :color, :texture, :size, :factory,
-                    :qty, :qtySqm, :rawPrice, :rawCurrency, :rawUnit,
+                    :qty, :qtySqm, :unitBasis, :rawPrice, :rawCurrency, :rawUnit,
                     :proposedPrice, :currency, :sortOrder)
             """, batch);
     }
@@ -444,8 +452,36 @@ public class TicketRepository {
             rs.getTimestamp("updated_at").toInstant(),
             closedAt != null ? closedAt.toInstant() : null,
             rs.getInt("item_count"),
-            rs.getBoolean("has_edits")
+            rs.getBoolean("has_edits"),
+            rs.getString("payment_status"),
+            rs.getString("fulfillment_status")
         );
+    }
+
+    public void updatePaymentStatus(long ticketId, String paymentStatus) {
+        jdbc.update(
+            "UPDATE sales.ticket SET payment_status = :s WHERE ticket_id = :id",
+            new MapSqlParameterSource().addValue("s", paymentStatus).addValue("id", ticketId));
+    }
+
+    public void updateFulfillmentStatus(long ticketId, String fulfillmentStatus) {
+        jdbc.update(
+            "UPDATE sales.ticket SET fulfillment_status = :s WHERE ticket_id = :id",
+            new MapSqlParameterSource().addValue("s", fulfillmentStatus).addValue("id", ticketId));
+    }
+
+    public void updateItemManualPrice(long itemId, BigDecimal manualPrice, String reason) {
+        jdbc.update("""
+            UPDATE sales.ticket_item
+               SET manual_price           = :manualPrice,
+                   manual_override_reason = :reason,
+                   proposed_price         = :manualPrice
+             WHERE item_id = :id
+            """,
+            new MapSqlParameterSource()
+                .addValue("manualPrice", manualPrice)
+                .addValue("reason", reason)
+                .addValue("id", itemId));
     }
 
     public void setHasEdits(long ticketId, boolean value) {

@@ -9,5 +9,7 @@ public record FxRateDto(
     String currency,
     BigDecimal rateToThb,
     LocalDate effectiveDate,
-    Instant updatedAt
+    Instant updatedAt,
+    String source,
+    Instant fetchedAt
 ) {}

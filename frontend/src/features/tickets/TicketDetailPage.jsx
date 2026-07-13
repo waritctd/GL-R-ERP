@@ -17,6 +17,7 @@ const EVENT_KIND_LABEL = {
   APPROVED:           'อนุมัติ',
   REJECTED:           'ปฏิเสธ',
   DOCUMENT_ISSUED:    'ออกใบแจ้งยอดมัดจำ',
+  PRICE_REVISED:      'แก้ไขราคาที่เสนอ',
   REVISION_REQUESTED: 'ขอแก้ไข',
   CLOSED:             'ปิดเรื่อง',
   CANCELLED:          'ยกเลิก',
@@ -67,8 +68,12 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
 
-  // R4: CEO price calculation
+  // D7/D9/D10: CEO price calculation + breakdown + override
   const [calcLoading, setCalcLoading] = useState(false);
+  const [priceBreakdown, setPriceBreakdown] = useState([]); // PriceBreakdownItemDto[]
+  const [showBreakdown, setShowBreakdown] = useState(false);
+  const [overrideDraft, setOverrideDraft] = useState({}); // itemId → { price: string, reason: string }
+  const [overrideLoading, setOverrideLoading] = useState({});
 
   // R5: Attachments
   const [attachments, setAttachments] = useState([]);
@@ -195,6 +200,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const isOwner = user.id === summary.createdById;
 
   const showProposed = ROLE_PERMISSIONS.canProposePrices.includes(role) || ROLE_PERMISSIONS.canApproveReject.includes(role);
+  // ข้อ 10.1: Import sees only rawPrice + proposedPrice — NOT approvedPrice or CEO-set prices
+  const showApproved = ROLE_PERMISSIONS.canApproveReject.includes(role) || ROLE_PERMISSIONS.canCreateTickets.includes(role);
   const showCalcBreakdown = ROLE_PERMISSIONS.canApproveReject.includes(role) && items.some((it) => it.calcedCost != null);
   const itemsGridCols = showCalcBreakdown
     ? 'minmax(0,1.4fr) minmax(0,1fr) minmax(0,0.5fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.9fr)'
@@ -202,23 +209,40 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       ? 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr) minmax(0,1.1fr)'
       : 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr)';
 
+  const ps = summary.paymentStatus;
+  const fs = summary.fulfillmentStatus;
+  const isSales  = ROLE_PERMISSIONS.canCreateTickets.includes(role) || role === 'admin';
+  const isImport = ROLE_PERMISSIONS.canPickupTickets.includes(role) || role === 'admin';
+  const dualTrackDone = ps === 'FULLY_PAID' && fs === 'GOODS_RECEIVED';
+
   const EDITABLE_STATUSES = ['submitted', 'in_review', 'price_proposed'];
   const can = {
     pickup:            st === 'submitted'       && ROLE_PERMISSIONS.canPickupTickets.includes(role),
-    propose:           st === 'in_review'       && ROLE_PERMISSIONS.canProposePrices.includes(role),
+    propose:           ['in_review', 'price_proposed', 'approved'].includes(st) && ROLE_PERMISSIONS.canProposePrices.includes(role),
     calculatePrices:   st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
+    overridePrice:     st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
     approve:           st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
     reject:            st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
     generateQuotation: (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canGenerateQuotation.includes(role) && (isOwner || role === 'admin'),
     generateDocument:  (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
     revise:            (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
-    close:            st === 'document_issued' && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
+    close:            (st === 'document_issued' || (st === 'quotation_issued' && dualTrackDone)) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
     cancel:           !TERMINAL.includes(st)   && (isOwner || role === 'admin'),
     comment:          !TERMINAL.includes(st),
     editItems: EDITABLE_STATUSES.includes(st) && (
       (ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner) ||
-      (ROLE_PERMISSIONS.canPickupTickets.includes(role))
+      role === 'admin'
     ),
+    // Dual-track (ข้อ 13)
+    confirmCustomer:    st === 'quotation_issued' && ps == null && isSales,
+    issueDepositNotice: st === 'quotation_issued' && ps === 'CUSTOMER_CONFIRMED' && isSales,
+    confirmDepositPaid: st === 'quotation_issued' && ps === 'DEPOSIT_NOTICE_ISSUED' && isSales,
+    issueImportRequest: st === 'quotation_issued' && ps === 'DEPOSIT_NOTICE_ISSUED' && isImport,
+    markIrSent:         st === 'quotation_issued' && fs === 'IR_ISSUED' && isImport,
+    markShipping:       st === 'quotation_issued' && fs === 'IR_SENT' && isImport,
+    markGoodsReceived:  st === 'quotation_issued' && fs === 'SHIPPING' && isImport,
+    confirmFinalPayment:st === 'quotation_issued' && ps === 'AWAITING_FINAL_PAYMENT' && isSales,
+    downloadRemainingInvoice: st === 'quotation_issued' && fs === 'GOODS_RECEIVED' && isSales,
   };
 
   const hasActions = Object.values(can).some(Boolean);
@@ -297,15 +321,18 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     const currency = fc.currency ?? 'THB';
     const unit = fc.unit ?? 'piece';
     const unitLabel = unit === 'sqm' ? 'ตร.ม.' : 'แผ่น';
+    const today = new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' });
     const itemLines = groupItems.map((item, i) => {
-      const qty = unit === 'sqm' ? (item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : `${item.qty} แผ่น`) : `${item.qty} แผ่น`;
-      return `${i + 1}. ${item.brand} ${item.model} ${item.color} ${item.texture} ${item.size} — ${qty}`;
+      const qtyDisplay = item.unitBasis === 'SQM' && item.qtySqm != null
+        ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.`
+        : `${item.qty} แผ่น`;
+      return `    ${i + 1}. ${item.brand} ${item.model} ${item.color} ${item.texture} ${item.size} — ${qtyDisplay}`;
     }).join('\n');
     return {
       factory,
       to: fc.email ?? '',
-      subject: `ขอราคาสินค้า — ${summary.code} — ${factory}`,
-      body: `เรียน ${factory}\n\nทางบริษัท จี แอล แอนด์ อาร์ จำกัด ขอทราบราคาสินค้าดังต่อไปนี้\n\nใบขอราคาเลขที่: ${summary.code}\nลูกค้า: ${summary.customerName || summary.title}\n\nรายการสินค้า:\n${itemLines}\n\nกรุณาตอบกลับราคาสินค้าในสกุลเงิน ${currency} ต่อ ${unitLabel}\n\nขอบคุณครับ/ค่ะ\nฝ่ายนำเข้า\nบริษัท จี แอล แอนด์ อาร์ จำกัด`,
+      subject: `ขอทราบราคาสินค้า — ${factory}`,
+      body: `วันที่ ${today}\n\nเรียน ทีมขาย ${factory}\n\nด้วยบริษัท จี แอล แอนด์ อาร์ จำกัด มีความประสงค์จะขอทราบราคาสินค้าดังต่อไปนี้\n\nรายการสินค้า:\n${itemLines}\n\nกรุณาแจ้งราคาสินค้าเป็นสกุลเงิน ${currency} ต่อ ${unitLabel} พร้อมระยะเวลาจัดส่ง\n\nจึงเรียนมาเพื่อโปรดพิจารณา\n\nขอแสดงความนับถือ\nฝ่ายนำเข้า\nบริษัท จี แอล แอนด์ อาร์ จำกัด\nโทร. 02-xxx-xxxx`,
     };
   }
 
@@ -328,11 +355,35 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     try {
       const response = await api.tickets.calculatePrices(ticketId);
       setTicket(response.ticket);
-      showToast('success', 'คำนวณราคาเรียบร้อย — ตรวจสอบราคาแล้วกดอนุมัติได้เลย');
+      setPriceBreakdown(response.breakdown ?? []);
+      setShowBreakdown(true);
+      showToast('success', 'คำนวณราคาเรียบร้อย — ตรวจสอบรายละเอียดสูตรด้านล่าง แล้วกดอนุมัติได้เลย');
     } catch (error) {
       showToast('error', error.message || 'คำนวณราคาไม่สำเร็จ');
     } finally {
       setCalcLoading(false);
+    }
+  }
+
+  async function handleOverridePrice(itemId) {
+    const draft = overrideDraft[itemId];
+    if (!draft?.price || isNaN(Number(draft.price)) || Number(draft.price) <= 0) {
+      showToast('error', 'กรุณากรอกราคา override ที่ถูกต้อง');
+      return;
+    }
+    setOverrideLoading((p) => ({ ...p, [itemId]: true }));
+    try {
+      const res = await api.tickets.overrideItemPrice(ticketId, itemId, {
+        manualPrice: Number(draft.price),
+        reason: draft.reason || null,
+      });
+      setTicket(res.ticket);
+      setOverrideDraft((p) => { const n = { ...p }; delete n[itemId]; return n; });
+      showToast('success', 'บันทึกราคา override แล้ว');
+    } catch (err) {
+      showToast('error', err.message || 'บันทึกไม่สำเร็จ');
+    } finally {
+      setOverrideLoading((p) => ({ ...p, [itemId]: false }));
     }
   }
 
@@ -379,7 +430,23 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = (number ?? 'quotation') + '.' + format;
+      // In mock mode the PDF handler returns text/html so browsers can render it
+      const ext = blob.type.startsWith('text/html') ? 'html' : format;
+      a.download = (number ?? 'quotation') + '.' + ext;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      showToast('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
+    }
+  }
+
+  async function handleDownloadRemainingInvoice() {
+    try {
+      const blob = await api.tickets.downloadRemainingInvoice(ticketId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `remaining-invoice-${ticketId}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -435,9 +502,17 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             )}
 
             {can.propose && !proposeMode && (
-              <button type="button" className="primary-button" disabled={actionLoading} onClick={initPropose}>
+              <button
+                type="button"
+                className={st === 'approved' ? 'secondary-button' : 'primary-button'}
+                style={st === 'approved' ? { borderColor: '#fbbf24', color: '#92400e', background: '#fffbeb' } : {}}
+                disabled={actionLoading}
+                onClick={initPropose}
+              >
                 <Icon name="pencil" size={14} />
-                เสนอราคาสินค้า
+                {st === 'in_review' && 'เสนอราคาสินค้า'}
+                {st === 'price_proposed' && 'แก้ไขราคาที่เสนอ'}
+                {st === 'approved' && 'แก้ไขราคา (ต้องอนุมัติใหม่)'}
               </button>
             )}
 
@@ -447,6 +522,13 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 style={{ background: '#eff6ff', borderColor: '#93c5fd', color: '#1d4ed8' }}>
                 <Icon name="calculator" size={14} />
                 {calcLoading ? 'กำลังคำนวณ...' : 'คำนวณราคา (CIF)'}
+              </button>
+            )}
+            {priceBreakdown.length > 0 && (
+              <button type="button" className="secondary-button"
+                style={{ fontSize: 12 }}
+                onClick={() => setShowBreakdown((v) => !v)}>
+                {showBreakdown ? 'ซ่อนรายละเอียดสูตร' : 'ดูรายละเอียดสูตร'}
               </button>
             )}
 
@@ -496,6 +578,61 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 onClick={() => doAction(() => api.tickets.close(ticketId), 'ปิดใบขอราคาแล้ว')}>
                 <Icon name="check" size={14} />
                 ปิดเรื่อง
+              </button>
+            )}
+
+            {can.confirmCustomer && (
+              <button type="button" className="primary-button" disabled={actionLoading}
+                onClick={() => doAction(() => api.tickets.confirmCustomer(ticketId), 'ลูกค้ายืนยันแล้ว')}>
+                ลูกค้ายืนยัน
+              </button>
+            )}
+            {can.issueDepositNotice && (
+              <button type="button" className="primary-button" disabled={actionLoading}
+                onClick={() => doAction(() => api.tickets.issueDepositNotice(ticketId), 'ออกใบแจ้งมัดจำแล้ว')}>
+                ออกใบแจ้งมัดจำ
+              </button>
+            )}
+            {can.confirmDepositPaid && (
+              <button type="button" className="primary-button" disabled={actionLoading}
+                onClick={() => doAction(() => api.tickets.confirmDepositPaid(ticketId), 'ยืนยันรับมัดจำแล้ว')}>
+                ยืนยันรับมัดจำ
+              </button>
+            )}
+            {can.issueImportRequest && (
+              <button type="button" className="primary-button" disabled={actionLoading}
+                onClick={() => doAction(() => api.tickets.issueImportRequest(ticketId), 'ออก IR แล้ว')}>
+                ออก Import Request (IR)
+              </button>
+            )}
+            {can.markIrSent && (
+              <button type="button" className="primary-button" disabled={actionLoading}
+                onClick={() => doAction(() => api.tickets.markIrSent(ticketId), 'ส่ง IR แล้ว')}>
+                ส่ง IR แล้ว
+              </button>
+            )}
+            {can.markShipping && (
+              <button type="button" className="primary-button" disabled={actionLoading}
+                onClick={() => doAction(() => api.tickets.markShipping(ticketId), 'สินค้าอยู่ระหว่างขนส่ง')}>
+                สินค้าออกเดินทาง (Shipping)
+              </button>
+            )}
+            {can.markGoodsReceived && (
+              <button type="button" className="primary-button" disabled={actionLoading}
+                onClick={() => doAction(() => api.tickets.markGoodsReceived(ticketId), 'รับสินค้าแล้ว')}>
+                รับสินค้าแล้ว (Goods Received)
+              </button>
+            )}
+            {can.confirmFinalPayment && (
+              <button type="button" className="primary-button" disabled={actionLoading}
+                onClick={() => doAction(() => api.tickets.confirmFinalPayment(ticketId), 'ชำระครบแล้ว')}>
+                ยืนยันชำระครบ (Final Payment)
+              </button>
+            )}
+            {can.downloadRemainingInvoice && (
+              <button type="button" className="secondary-button"
+                onClick={handleDownloadRemainingInvoice}>
+                ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ
               </button>
             )}
 
@@ -552,7 +689,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   <input type="radio" name="reviseScope" value={opt.value}
                     checked={reviseScope === opt.value}
                     onChange={() => setReviseScope(opt.value)}
-                    style={{ marginTop: 3, flexShrink: 0 }} />
+                    style={{ marginTop: 2, flexShrink: 0, width: 16, height: 16, accentColor: '#1e40af', cursor: 'pointer' }} />
                   <span>
                     <strong>{opt.label}</strong>
                     <span style={{ display: 'block', fontSize: 12, color: '#64748b' }}>{opt.sub}</span>
@@ -579,6 +716,63 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               </div>
             </div>
           )}
+        </section>
+      )}
+
+      {st === 'quotation_issued' && (
+        <section className="panel" style={{ marginBottom: 0 }}>
+          <div className="panel-header"><h2>สถานะหลังออกใบเสนอราคา</h2></div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, padding: '12px 18px 18px' }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginBottom: 6 }}>Track P — การชำระเงิน</div>
+              {[
+                { key: 'CUSTOMER_CONFIRMED',    label: 'ลูกค้ายืนยัน' },
+                { key: 'DEPOSIT_NOTICE_ISSUED', label: 'ออกใบแจ้งมัดจำ' },
+                { key: 'DEPOSIT_PAID',          label: 'รับมัดจำแล้ว' },
+                { key: 'AWAITING_FINAL_PAYMENT',label: 'รอชำระส่วนที่เหลือ' },
+                { key: 'FULLY_PAID',            label: 'ชำระครบแล้ว' },
+              ].map((step, idx, arr) => {
+                const stepKeys = arr.map((s) => s.key);
+                const curIdx = stepKeys.indexOf(ps);
+                const done = curIdx >= idx;
+                const active = curIdx === idx;
+                return (
+                  <div key={step.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+                    <span style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700,
+                      background: done ? (active ? '#1e40af' : '#bfdbfe') : '#e2e8f0',
+                      color: done ? (active ? '#fff' : '#1e40af') : '#94a3b8' }}>
+                      {done && !active ? '✓' : idx + 1}
+                    </span>
+                    <span style={{ fontSize: 13, color: active ? '#1e40af' : done ? '#374151' : '#94a3b8', fontWeight: active ? 600 : 400 }}>{step.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginBottom: 6 }}>Track F — การนำเข้า/จัดส่ง</div>
+              {[
+                { key: 'IR_ISSUED',      label: 'ออก Import Request' },
+                { key: 'IR_SENT',        label: 'ส่ง IR แล้ว' },
+                { key: 'SHIPPING',       label: 'สินค้าอยู่ระหว่างขนส่ง' },
+                { key: 'GOODS_RECEIVED', label: 'รับสินค้าแล้ว' },
+              ].map((step, idx, arr) => {
+                const stepKeys = arr.map((s) => s.key);
+                const curIdx = stepKeys.indexOf(fs);
+                const done = curIdx >= idx;
+                const active = curIdx === idx;
+                return (
+                  <div key={step.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+                    <span style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700,
+                      background: done ? (active ? '#059669' : '#a7f3d0') : '#e2e8f0',
+                      color: done ? (active ? '#fff' : '#059669') : '#94a3b8' }}>
+                      {done && !active ? '✓' : idx + 1}
+                    </span>
+                    <span style={{ fontSize: 13, color: active ? '#059669' : done ? '#374151' : '#94a3b8', fontWeight: active ? 600 : 400 }}>{step.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </section>
       )}
 
@@ -632,11 +826,73 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                             onChange={(e) => setEditDraft((d) => d.map((r, i) => i === index ? { ...r, [key]: e.target.value } : r))} />
                         </label>
                       ))}
-                      <label style={{ margin: 0 }}>
-                        <span style={{ fontSize: 12 }}>จำนวน</span>
-                        <input type="number" min="1" value={item.qty || 1}
-                          onChange={(e) => setEditDraft((d) => d.map((r, i) => i === index ? { ...r, qty: e.target.value } : r))} />
-                      </label>
+                      {/* Unit basis toggle */}
+                      <div style={{ margin: 0, gridColumn: '1 / -1' }}>
+                        <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>หน่วยที่ใช้สั่ง</span>
+                        <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+                          {[{ value: 'PIECE', label: 'แผ่น' }, { value: 'SQM', label: 'ตร.ม.' }].map((opt) => (
+                            <label key={opt.value} style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer', fontSize: 13 }}>
+                              <input type="radio" name={`editUnitBasis-${index}`} value={opt.value}
+                                checked={(item.unitBasis || 'PIECE') === opt.value}
+                                onChange={() => setEditDraft((d) => d.map((r, ri) => {
+                                  if (ri !== index) return r;
+                                  const u = { ...r, unitBasis: opt.value };
+                                  if (r.sqmPerPiece) {
+                                    if (opt.value === 'SQM' && r.qty) u.qtySqm = (Number(r.qty) * r.sqmPerPiece).toFixed(3);
+                                    if (opt.value === 'PIECE' && r.qtySqm) u.qty = Math.ceil(Number(r.qtySqm) / r.sqmPerPiece);
+                                  }
+                                  return u;
+                                }))}
+                                style={{ width: 16, height: 16, accentColor: '#1e40af', cursor: 'pointer' }} />
+                              <strong>{opt.label}</strong>
+                            </label>
+                          ))}
+                          {item.sqmPerPiece && (
+                            <span style={{ fontSize: 11, color: '#64748b' }}>· 1 แผ่น = {item.sqmPerPiece} ตร.ม.</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Qty inputs */}
+                      {(item.unitBasis || 'PIECE') === 'PIECE' ? (
+                        <>
+                          <label style={{ margin: 0 }}>
+                            <span style={{ fontSize: 12 }}>จำนวน (แผ่น)</span>
+                            <input type="number" value={item.qty ?? ''} step="1"
+                              onChange={(e) => setEditDraft((d) => d.map((r, ri) => {
+                                if (ri !== index) return r;
+                                const u = { ...r, qty: e.target.value };
+                                if (r.sqmPerPiece && e.target.value) u.qtySqm = (Number(e.target.value) * r.sqmPerPiece).toFixed(3);
+                                return u;
+                              }))} />
+                          </label>
+                          <div style={{ margin: 0 }}>
+                            <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>พื้นที่รวม (ตร.ม.)</span>
+                            <div style={{ padding: '7px 10px', border: '1px solid #e2e8f0', borderRadius: 6, background: '#f8fafc', fontSize: 13, color: item.qtySqm ? '#475569' : '#94a3b8' }}>
+                              {item.qtySqm ? `${Number(item.qtySqm).toFixed(3)} ตร.ม.` : '—'}
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <label style={{ margin: 0 }}>
+                            <span style={{ fontSize: 12 }}>พื้นที่ (ตร.ม.)</span>
+                            <input type="number" value={item.qtySqm ?? ''} min="0" step="0.001"
+                              onChange={(e) => setEditDraft((d) => d.map((r, ri) => {
+                                if (ri !== index) return r;
+                                const u = { ...r, qtySqm: e.target.value };
+                                if (r.sqmPerPiece && e.target.value) u.qty = Math.ceil(Number(e.target.value) / r.sqmPerPiece);
+                                return u;
+                              }))} />
+                          </label>
+                          <div style={{ margin: 0 }}>
+                            <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>จำนวน (แผ่น)</span>
+                            <div style={{ padding: '7px 10px', border: '1px solid #e2e8f0', borderRadius: 6, background: '#f8fafc', fontSize: 13, color: item.qty ? '#475569' : '#94a3b8' }}>
+                              {item.qty ? `${item.qty} แผ่น` : '—'}
+                            </div>
+                          </div>
+                        </>
+                      )}
                       {ROLE_PERMISSIONS.canProposePrices.includes(role) && (
                         <label style={{ margin: 0, gridColumn: '1 / -1' }}>
                           <span style={{ fontSize: 12 }}>ราคาที่เสนอ (บาท)</span>
@@ -660,17 +916,25 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 </label>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button type="button" className="primary-button" disabled={actionLoading}
-                    onClick={() => doAction(() => api.tickets.editItems(ticketId, {
-                      items: editDraft.map((item) => ({
-                        brand: item.brand, model: item.model, color: item.color,
-                        texture: item.texture, size: item.size,
-                        factory: item.factory || null,
-                        qty: Number(item.qty) || 1,
-                        proposedPrice: item.proposedPrice != null && item.proposedPrice !== '' ? Number(item.proposedPrice) : null,
-                        currency: item.currency ?? 'THB',
-                      })),
-                      note: editNote.trim() || null,
-                    }), 'บันทึกการแก้ไขแล้ว')}>
+                    onClick={() => {
+                      if (editDraft.some((item) => !item.qty || Number(item.qty) <= 0)) {
+                        showToast('error', 'กรุณากรอกจำนวนสินค้าให้ครบทุกรายการ');
+                        return;
+                      }
+                      doAction(() => api.tickets.editItems(ticketId, {
+                        items: editDraft.map((item) => ({
+                          brand: item.brand, model: item.model, color: item.color,
+                          texture: item.texture, size: item.size,
+                          factory: item.factory || null,
+                          unitBasis: item.unitBasis || 'PIECE',
+                          qty: Number(item.qty) || 0,
+                          qtySqm: item.qtySqm != null && item.qtySqm !== '' ? Number(item.qtySqm) : null,
+                          proposedPrice: item.proposedPrice != null && item.proposedPrice !== '' ? Number(item.proposedPrice) : null,
+                          currency: item.currency ?? 'THB',
+                        })),
+                        note: editNote.trim() || null,
+                      }), 'บันทึกการแก้ไขแล้ว');
+                    }}>
                     บันทึกการแก้ไข
                   </button>
                   <button type="button" className="secondary-button" disabled={actionLoading}
@@ -714,34 +978,37 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                           <span>{factory}</span>
                           <span style={{ fontWeight: 400, color: '#64748b' }}>({groupItems.length} รายการ)</span>
                           {fc?.email && <span style={{ fontWeight: 400, color: '#94a3b8', fontSize: 11 }}>· {fc.email}</span>}
-                          {/* สกุลเงิน/หน่วย selector */}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 4 }}>
-                            <span style={{ fontWeight: 400, color: '#64748b', fontSize: 11 }}>ราคาต่อ:</span>
-                            <InfoTip
-                              label="สกุลเงินและหน่วยนับ"
-                              text="เลือกครั้งเดียวต่อโรงงาน และใช้กับทุกรายการของโรงงานนี้"
-                            />
+                          <button type="button" className="secondary-button"
+                            style={{ marginLeft: 'auto', fontSize: 12, padding: '4px 12px' }}
+                            onClick={() => setEmailDraft(isDraftOpen ? null : buildEmailDraft(factory, groupItems))}>
+                            <Icon name="fileText" size={13} />
+                            {isDraftOpen ? 'ปิดร่างอีเมล' : 'ร่างอีเมล'}
+                          </button>
+                        </div>
+
+                        {/* Currency/unit settings bar */}
+                        <div style={{ padding: '10px 18px', background: '#f8fafc', borderTop: '1px solid #e6eaf0', display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <span style={{ fontSize: 13, color: '#475569', fontWeight: 600, whiteSpace: 'nowrap' }}>สกุลเงิน</span>
+                            <InfoTip label="สกุลเงินและหน่วยนับ" text="เลือกครั้งเดียวต่อโรงงาน ใช้กับทุกรายการของโรงงานนี้" />
                             <select
                               value={draftFactoryCurr[factory]?.currency ?? 'THB'}
                               onChange={(e) => setDraftFactoryCurr((p) => ({ ...p, [factory]: { ...p[factory], currency: e.target.value } }))}
-                              style={{ fontSize: 11, padding: '2px 4px', border: '1px solid #cbd5e1', borderRadius: 4, background: '#fff', cursor: 'pointer' }}>
+                              style={{ fontSize: 14, padding: '5px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', cursor: 'pointer', fontWeight: 600, color: '#1e40af' }}>
                               {['THB','EUR','USD','JPY','CNY','GBP'].map((c) => <option key={c}>{c}</option>)}
                             </select>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <span style={{ fontSize: 13, color: '#475569', fontWeight: 600, whiteSpace: 'nowrap' }}>หน่วยราคา</span>
                             <select
                               value={draftFactoryCurr[factory]?.unit ?? 'piece'}
                               onChange={(e) => setDraftFactoryCurr((p) => ({ ...p, [factory]: { ...p[factory], unit: e.target.value } }))}
-                              style={{ fontSize: 11, padding: '2px 4px', border: '1px solid #cbd5e1', borderRadius: 4, background: '#fff', cursor: 'pointer' }}>
-                              <option value="piece">แผ่น</option>
-                              <option value="sqm">ตร.ม.</option>
-                              <option value="box">กล่อง</option>
+                              style={{ fontSize: 14, padding: '5px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', cursor: 'pointer', fontWeight: 600, color: '#1e40af' }}>
+                              <option value="piece">/ แผ่น</option>
+                              <option value="sqm">/ ตร.ม.</option>
+                              <option value="box">/ กล่อง</option>
                             </select>
                           </div>
-                          <button type="button" className="secondary-button"
-                            style={{ marginLeft: 'auto', fontSize: 11, padding: '2px 10px' }}
-                            onClick={() => setEmailDraft(isDraftOpen ? null : buildEmailDraft(factory, groupItems))}>
-                            <Icon name="fileText" size={12} />
-                            {isDraftOpen ? 'ปิดร่างอีเมล' : 'ร่างอีเมล'}
-                          </button>
                         </div>
 
                         {/* Email draft panel */}
@@ -786,8 +1053,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                                 {item.size && <small style={{ color: '#94a3b8' }}>{item.size}</small>}
                               </span>
                               <span>
-                                {item.qty} แผ่น
-                                {item.qtySqm != null && <small style={{ display: 'block', color: '#94a3b8' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}
+                                {item.unitBasis === 'SQM'
+                                  ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small style={{ display: 'block', color: '#94a3b8' }}>{item.qty} แผ่น</small></>
+                                  : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: '#94a3b8' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
+                                }
                               </span>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                                 <input type="number" min="0" step="0.0001"
@@ -818,8 +1087,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                       {item.size && <small style={{ color: '#94a3b8' }}>{item.size}</small>}
                     </span>
                     <span>
-                      {item.qty} แผ่น
-                      {item.qtySqm != null && <small style={{ display: 'block', color: '#94a3b8' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}
+                      {item.unitBasis === 'SQM'
+                        ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small style={{ display: 'block', color: '#94a3b8' }}>{item.qty} แผ่น</small></>
+                        : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: '#94a3b8' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
+                      }
                     </span>
                     {showCalcBreakdown ? (
                       <>
@@ -830,12 +1101,51 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                           {item.calcConfigVersion && <small style={{ display: 'block', color: '#94a3b8', fontSize: 10 }}>config v{item.calcConfigVersion}</small>}
                         </span>
                         <code style={{ color: '#0369a1' }}>{item.calcedCost != null ? formatMoney(item.calcedCost) : '—'}</code>
-                        <code style={{ color: '#059669', fontWeight: 700 }}>{item.calcedPrice != null ? formatMoney(item.calcedPrice) : '—'}</code>
+                        <span>
+                          <code style={{ color: item.manualPrice != null ? '#7c3aed' : '#059669', fontWeight: 700 }}>
+                            {item.manualPrice != null ? formatMoney(item.manualPrice) : item.calcedPrice != null ? formatMoney(item.calcedPrice) : '—'}
+                          </code>
+                          {item.manualPrice != null && <small style={{ display: 'block', color: '#7c3aed', fontSize: 10 }}>override</small>}
+                          {can.overridePrice && (
+                            overrideDraft[item.id] !== undefined ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+                                <input type="number" step="0.01" min="0"
+                                  placeholder="ราคา override"
+                                  value={overrideDraft[item.id]?.price ?? ''}
+                                  onChange={(e) => setOverrideDraft((p) => ({ ...p, [item.id]: { ...p[item.id], price: e.target.value } }))}
+                                  style={{ width: 90, padding: '2px 6px', fontSize: 12, border: '1px solid #a78bfa', borderRadius: 4 }} />
+                                <input type="text" placeholder="เหตุผล (ถ้ามี)"
+                                  value={overrideDraft[item.id]?.reason ?? ''}
+                                  onChange={(e) => setOverrideDraft((p) => ({ ...p, [item.id]: { ...p[item.id], reason: e.target.value } }))}
+                                  style={{ width: 90, padding: '2px 6px', fontSize: 11, border: '1px solid #d8b4fe', borderRadius: 4 }} />
+                                <div style={{ display: 'flex', gap: 4 }}>
+                                  <button type="button" className="primary-button"
+                                    style={{ fontSize: 10, padding: '2px 8px', background: '#7c3aed', borderColor: '#7c3aed' }}
+                                    disabled={overrideLoading[item.id]}
+                                    onClick={() => handleOverridePrice(item.id)}>
+                                    {overrideLoading[item.id] ? '...' : 'บันทึก'}
+                                  </button>
+                                  <button type="button" className="secondary-button"
+                                    style={{ fontSize: 10, padding: '2px 6px' }}
+                                    onClick={() => setOverrideDraft((p) => { const n = { ...p }; delete n[item.id]; return n; })}>
+                                    ✕
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <button type="button" className="secondary-button"
+                                style={{ fontSize: 10, padding: '2px 8px', marginTop: 4, display: 'block' }}
+                                onClick={() => setOverrideDraft((p) => ({ ...p, [item.id]: { price: item.calcedPrice != null ? String(item.calcedPrice) : '', reason: '' } }))}>
+                                override
+                              </button>
+                            )
+                          )}
+                        </span>
                       </>
                     ) : (
                       <>
                         {showProposed && <code>{formatMoney(item.proposedPrice)}</code>}
-                        <code>{formatMoney(item.approvedPrice)}</code>
+                        {showApproved && <code>{formatMoney(item.approvedPrice)}</code>}
                       </>
                     )}
                   </div>
@@ -843,6 +1153,12 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
                 {proposeMode && (
                   <div style={{ padding: '12px 18px', display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid #e6eaf0' }}>
+                    {st === 'approved' && (
+                      <div style={{ padding: '10px 14px', borderRadius: 8, background: '#fffbeb', border: '1px solid #fbbf24', fontSize: 13, color: '#92400e', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                        <span style={{ fontWeight: 700, flexShrink: 0 }}>⚠</span>
+                        <span>การแก้ไขราคาจะ<strong>ยกเลิกการอนุมัติ</strong> และสถานะจะย้อนกลับเป็น &ldquo;รอการอนุมัติ&rdquo; — CEO และ Sales จะได้รับแจ้งทันที</span>
+                      </div>
+                    )}
                     <label style={{ fontSize: 13 }}>
                       หมายเหตุราคา
                       <input value={proposeNote} onChange={(e) => setProposeNote(e.target.value)}
@@ -850,7 +1166,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                     </label>
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button type="button" className="primary-button" onClick={handleProposePrice} disabled={actionLoading}>
-                        ยืนยันราคาเสนอ
+                        {st === 'approved' ? 'ยืนยันแก้ไขราคา (รออนุมัติใหม่)' : 'ยืนยันราคาเสนอ'}
                       </button>
                       <button type="button" className="secondary-button"
                         onClick={() => { setProposeMode(false); setDraftRaw({}); setDraftFactoryCurr({}); setProposeNote(''); setEmailDraft(null); }} disabled={actionLoading}>
@@ -862,6 +1178,53 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               </>
             )}
           </section>
+
+          {/* D9: Price formula breakdown */}
+          {showBreakdown && priceBreakdown.length > 0 && (
+            <section className="panel">
+              <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h2>รายละเอียดสูตรคำนวณราคา</h2>
+                <button type="button" className="secondary-button" style={{ fontSize: 11, padding: '3px 8px' }}
+                  onClick={() => setShowBreakdown(false)}>ซ่อน</button>
+              </div>
+              <div style={{ overflowX: 'auto', padding: '0 0 8px' }}>
+                {priceBreakdown.map((b) => (
+                  <div key={b.itemId} style={{ marginBottom: 16, padding: '12px 18px', borderBottom: '1px solid #f1f5f9' }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>
+                      {b.brand} {b.model && <span style={{ fontWeight: 400, color: '#64748b' }}>({b.model})</span>}
+                      {b.factory && <small style={{ color: '#94a3b8', marginLeft: 8 }}>{b.factory}</small>}
+                    </div>
+                    <table style={{ fontSize: 11, borderCollapse: 'collapse', width: '100%', maxWidth: 520 }}>
+                      <tbody>
+                        {[
+                          ['ต้นทุนสินค้า (THB/ตร.ม.)', b.goodsCostPerSqm, `อัตราแลกเปลี่ยน ${b.rawCurrency}: ${b.fxRate}`],
+                          ['+ ค่าเรือ (THB/ตร.ม.)', b.freightPerSqm, null],
+                          ['+ ประกัน (THB/ตร.ม.)', b.insurancePerSqm, null],
+                          ['= CIF (THB/ตร.ม.)', b.cifPerSqm, null],
+                          ['+ ภาษีนำเข้า (THB/ตร.ม.)', b.importDutyPerSqm, null],
+                          ['+ ขนส่งภายใน (THB/ตร.ม.)', b.inlandPerSqm, null],
+                          ['= ต้นทุน Landed (THB/ตร.ม.)', b.landedCostPerSqm, null],
+                          [`+ Margin ${b.marginPct != null ? `${(Number(b.marginPct) * 100).toFixed(1)}%` : ''}`, null, null],
+                          ['= ราคาขาย (THB/ตร.ม.)', b.sellPricePerSqm, null],
+                          ['sqm/แผ่น', b.sqmPerPiece, null],
+                          ['ต้นทุน/แผ่น', b.calcedCostPerPiece, `config v${b.configVersion}`],
+                          ['ราคาขาย/แผ่น', b.calcedPricePerPiece, null],
+                        ].map(([label, value, note]) => (
+                          <tr key={label} style={{ borderBottom: '1px solid #f8fafc' }}>
+                            <td style={{ padding: '3px 10px 3px 0', color: '#475569', whiteSpace: 'nowrap' }}>{label}</td>
+                            <td style={{ padding: '3px 0', fontWeight: 600, textAlign: 'right', minWidth: 80 }}>
+                              {value != null ? Number(value).toLocaleString('th-TH', { minimumFractionDigits: 4 }) : ''}
+                            </td>
+                            <td style={{ padding: '3px 0 3px 10px', color: '#94a3b8', fontSize: 10 }}>{note}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           {/* R5: Attachments */}
           <section className="panel">

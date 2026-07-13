@@ -230,7 +230,7 @@ class TicketServiceTest {
     void generateQuotation_approvedByOwner_createsQuotationAndTransitions() {
         TicketItemDto item = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
             "pcs", null, new BigDecimal("2"), null, null, null, null, null,
-            new BigDecimal("100.00"), "THB", 0, null, null, null);
+            new BigDecimal("100.00"), "THB", 0, null, null, null, "PIECE", null, null);
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(item));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0001");
 
@@ -274,13 +274,13 @@ class TicketServiceTest {
     void generateQuotation_sumsMultipleItemsIncludingFractionalQuantities() {
         TicketItemDto item1 = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
             "pcs", null, new BigDecimal("2"), null, null, null, null, null,
-            new BigDecimal("100.00"), "THB", 0, null, null, null);
+            new BigDecimal("100.00"), "THB", 0, null, null, null, "PIECE", null, null);
         TicketItemDto item2 = new TicketItemDto(2L, 10L, "PC002", "Product B", null, null,
             "pcs", null, new BigDecimal("3"), null, null, null, null, null,
-            new BigDecimal("50.00"), "THB", 1, null, null, null);
+            new BigDecimal("50.00"), "THB", 1, null, null, null, "PIECE", null, null);
         TicketItemDto item3 = new TicketItemDto(3L, 10L, "PC003", "Product C", null, null,
             "sqm", null, new BigDecimal("1.5"), null, null, null, null, null,
-            new BigDecimal("10.00"), "THB", 2, null, null, null);
+            new BigDecimal("10.00"), "THB", 2, null, null, null, "SQM", null, null);
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(item1, item2, item3));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0004");
 
@@ -297,10 +297,10 @@ class TicketServiceTest {
     void generateQuotation_treatsUnpricedItemAsZeroNotError() {
         TicketItemDto priced = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
             "pcs", null, new BigDecimal("2"), null, null, null, null, null,
-            new BigDecimal("100.00"), "THB", 0, null, null, null);
+            new BigDecimal("100.00"), "THB", 0, null, null, null, "PIECE", null, null);
         TicketItemDto unpriced = new TicketItemDto(2L, 10L, "PC002", "Product B", null, null,
             "pcs", null, new BigDecimal("5"), null, null, null, null, null,
-            null, "THB", 1, null, null, null);
+            null, "THB", 1, null, null, null, "PIECE", null, null);
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(priced, unpriced));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0005");
 
@@ -387,10 +387,11 @@ class TicketServiceTest {
     void calculatePrices_priceProposedByCeoDelegatesToPricingEngine() {
         TicketDto calculated = stubTicket(10L, 1L, TicketStatus.PRICE_PROPOSED);
         when(priceCalcService.calculateForTicket(10L)).thenReturn(calculated);
+        when(priceCalcService.calculateBreakdown(10L)).thenReturn(List.of());
 
-        TicketDto result = service.calculatePrices(10L, ceoActor);
+        TicketService.CalculatePricesResult result = service.calculatePrices(10L, ceoActor);
 
-        assertThat(result).isEqualTo(calculated);
+        assertThat(result.ticket()).isEqualTo(calculated);
         verify(priceCalcService).calculateForTicket(10L);
     }
 
@@ -442,7 +443,7 @@ class TicketServiceTest {
         TicketSummaryDto summary = new TicketSummaryDto(
             ticketId, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", status, "NORMAL",
             createdById, "Sales User", null, null, "Test Customer", null, null, null, null, null, null,
-            Instant.now(), Instant.now(), null, items.size(), false);
+            Instant.now(), Instant.now(), null, items.size(), false, null, null);
         TicketDto ticket = new TicketDto(summary, items, List.of(), null, List.of());
         when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
         return ticket;

@@ -112,10 +112,14 @@ export function CeoSettingsPage({ showToast }) {
         <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid #e6eaf0' }}>
           <h2>อัตราแลกเปลี่ยน (1 หน่วย = ? บาท)</h2>
         </div>
+        <div style={{ padding: '8px 18px', fontSize: 11, color: '#64748b', borderBottom: '1px solid #f1f5f9', display: 'flex', gap: 12 }}>
+          <span>ดึงอัตโนมัติจาก BOT API ทุกวัน 18:00 (เวลาไทย)</span>
+          <span style={{ color: '#94a3b8' }}>• ตั้งค่า BOT_API_TOKEN เพื่อเปิดใช้งาน</span>
+        </div>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ background: '#f8fafc' }}>
-              {['สกุลเงิน', 'อัตรา (THB)', 'วันที่มีผล', 'แก้ไข'].map((h) => (
+              {['สกุลเงิน', 'อัตรา (THB)', 'วันที่มีผล', 'แหล่งข้อมูล', 'แก้ไข (Manual)'].map((h) => (
                 <th key={h} style={{ padding: '8px 16px', textAlign: 'left', fontWeight: 600, color: '#475569', borderBottom: '1px solid #e6eaf0' }}>{h}</th>
               ))}
             </tr>
@@ -123,6 +127,7 @@ export function CeoSettingsPage({ showToast }) {
           <tbody>
             {fxRates.map((fx) => {
               const isEditing = editFx[fx.currency] !== undefined;
+              const isBot = fx.source === 'BOT';
               return (
                 <tr key={fx.currency} style={{ borderBottom: '1px solid #f1f5f9' }}>
                   <td style={{ padding: '8px 16px', fontWeight: 700 }}>
@@ -155,11 +160,17 @@ export function CeoSettingsPage({ showToast }) {
                   </td>
                   <td style={{ padding: '8px 16px', color: '#64748b', fontSize: 12 }}>{fx.effectiveDate}</td>
                   <td style={{ padding: '8px 16px' }}>
+                    {isBot
+                      ? <span style={{ background: '#dbeafe', color: '#1d4ed8', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600 }}>BOT อัตโนมัติ</span>
+                      : <span style={{ background: '#f1f5f9', color: '#64748b', padding: '2px 8px', borderRadius: 10, fontSize: 11 }}>กรอกเอง</span>
+                    }
+                  </td>
+                  <td style={{ padding: '8px 16px' }}>
                     {fx.currency !== 'THB' && !isEditing && (
                       <button type="button" className="secondary-button"
                         style={{ fontSize: 11, padding: '3px 8px' }}
                         onClick={() => setEditFx((p) => ({ ...p, [fx.currency]: String(fx.rateToThb) }))}>
-                        แก้ไข
+                        Override
                       </button>
                     )}
                   </td>

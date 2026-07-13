@@ -26,13 +26,16 @@ public class DepositNoticeService {
     private final TicketRepository   tickets;
     private final NotificationRepository notifications;
     private final DepositNoticeRenderer renderer;
+    private final RemainingInvoiceRenderer remainingRenderer;
 
     public DepositNoticeService(DepositNoticeRepository docs, TicketRepository tickets,
-                           NotificationRepository notifications, DepositNoticeRenderer renderer) {
-        this.docs          = docs;
-        this.tickets       = tickets;
-        this.notifications = notifications;
-        this.renderer      = renderer;
+                           NotificationRepository notifications, DepositNoticeRenderer renderer,
+                           RemainingInvoiceRenderer remainingRenderer) {
+        this.docs              = docs;
+        this.tickets           = tickets;
+        this.notifications     = notifications;
+        this.renderer          = renderer;
+        this.remainingRenderer = remainingRenderer;
     }
 
     public List<DocumentNoteTemplateDto> getNoteTemplates() {
@@ -142,6 +145,76 @@ public class DepositNoticeService {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "PDF render failed: " + e.getMessage());
         }
     }
+
+    // ── Remaining Invoice (ข้อ 13.5) ─────────────────────────────────────────
+
+    public byte[] getRemainingInvoiceXlsx(long ticketId, UserPrincipal actor) {
+        TicketDto ticket = tickets.findById(ticketId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+        TicketSummaryDto s = ticket.summary();
+        if (!"quotation_issued".equals(s.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "Remaining invoice only available for quotation_issued tickets");
+        }
+
+        // Find issued deposit notice to get deposit amount and reference
+        BigDecimal depositAmount = BigDecimal.ZERO;
+        String depositRef = null;
+        List<DepositNoticeDto> notices = docs.findByTicket(ticketId);
+        DepositNoticeDto issued = notices.stream()
+            .filter(n -> "ISSUED".equals(n.status()))
+            .findFirst()
+            .orElse(null);
+        if (issued != null) {
+            depositAmount = issued.depositAmount() != null ? issued.depositAmount() : BigDecimal.ZERO;
+            depositRef = issued.docNumber();
+        }
+
+        // Build items from approved ticket items
+        int[] seq = {1};
+        List<RemainingInvoiceItemDto> items = ticket.items().stream()
+            .filter(it -> it.approvedPrice() != null)
+            .map(it -> {
+                String desc = java.util.stream.Stream.of(
+                    it.brand(), it.model(), it.color(), it.texture(), it.size()
+                ).filter(v -> v != null && !v.isBlank())
+                 .reduce((a, b) -> a + " " + b).orElse(nullSafe(it.brand()));
+                String unit = "SQM".equals(it.unitBasis()) ? "ตร.ม." : "แผ่น";
+                BigDecimal qty = "SQM".equals(it.unitBasis()) && it.qtySqm() != null
+                    ? it.qtySqm() : (it.qty() != null ? it.qty() : BigDecimal.ZERO);
+                return new RemainingInvoiceItemDto(seq[0]++, desc, qty, unit, it.approvedPrice());
+            })
+            .toList();
+
+        // Build a running doc number (GLR + thai year 2 digits + running — sequential per ticket for now)
+        int thaiYear = java.time.Year.now().getValue() + 543;
+        String docNumber = "GLR" + (thaiYear % 100) + String.format("%03d", ticketId);
+
+        // Get quotation reference
+        String quotationRef = depositRef;
+        if (quotationRef == null && !notices.isEmpty()) {
+            quotationRef = notices.get(0).reference();
+        }
+
+        RemainingInvoiceDto doc = new RemainingInvoiceDto(
+            docNumber,
+            java.time.LocalDate.now(),
+            quotationRef,
+            nullSafe(s.customerName()),
+            "",   // address not in TicketSummaryDto — left blank
+            "",
+            nullSafe(s.projectName()),
+            depositAmount,
+            items
+        );
+
+        try {
+            return remainingRenderer.toXlsx(doc);
+        } catch (Exception e) {
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Excel render failed: " + e.getMessage());
+        }
+    }
+
+    private String nullSafe(String s) { return s != null ? s : ""; }
 
     // Revision flow (Part A of plan)
     @Transactional

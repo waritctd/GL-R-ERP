@@ -1,0 +1,15 @@
+-- Dual-track post-quotation status (ข้อ 13)
+ALTER TABLE sales.ticket
+    ADD COLUMN IF NOT EXISTS payment_status     VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS fulfillment_status VARCHAR(40);
+
+-- Allow new event kinds for both tracks
+ALTER TABLE sales.ticket_event DROP CONSTRAINT IF EXISTS chk_event_kind;
+ALTER TABLE sales.ticket_event ADD CONSTRAINT chk_event_kind CHECK (kind IN (
+    'CREATED','SUBMITTED','PICKED_UP','PRICE_PROPOSED','APPROVED','REJECTED',
+    'QUOTATION_ISSUED','COMMENTED','CLOSED','CANCELLED','EDITED',
+    'DOCUMENT_ISSUED','REVISION_REQUESTED','PRICE_REVISED',
+    'CUSTOMER_CONFIRMED','DEPOSIT_NOTICE_ISSUED','DEPOSIT_PAID',
+    'IR_ISSUED','IR_SENT','SHIPPING','GOODS_RECEIVED',
+    'AWAITING_FINAL_PAYMENT','FULLY_PAID'
+));

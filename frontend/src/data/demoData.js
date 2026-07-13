@@ -233,9 +233,9 @@ export function createDemoDatabase() {
       note: 'ต้องการราคาพิเศษ Summer 2026',
       createdAt: iso(2026, 6, 14), updatedAt: iso(2026, 6, 18), closedAt: null,
       items: [
-        { id: 1, ticketId: 1, brand: 'SCG', model: 'Premium Matte', color: 'ขาว', texture: 'ด้าน', size: '60x60 ซม.', factory: 'SCG Ceramics', qty: 200, proposedPrice: 185, approvedPrice: 185, currency: 'THB', sortOrder: 0 },
-        { id: 2, ticketId: 1, brand: 'SCG', model: 'Premium Matte', color: 'ดำ', texture: 'ด้าน', size: '60x60 ซม.', factory: 'SCG Ceramics', qty: 150, proposedPrice: 185, approvedPrice: 185, currency: 'THB', sortOrder: 1 },
-        { id: 3, ticketId: 1, brand: 'Cotto', model: 'Stone Series', color: 'กากี', texture: 'หยาบ', size: '30x60 ซม.', factory: 'Cotto Industry', qty: 100, proposedPrice: 320, approvedPrice: 320, currency: 'THB', sortOrder: 2 },
+        { id: 1, ticketId: 1, brand: 'SCG', model: 'Premium Matte', color: 'ขาว', texture: 'ด้าน', size: '60x60 ซม.', factory: 'SCG Ceramics', qty: 200, qtySqm: 72, rawPrice: 130, rawCurrency: 'THB', rawUnit: 'piece', proposedPrice: 185, approvedPrice: 185, currency: 'THB', sortOrder: 0 },
+        { id: 2, ticketId: 1, brand: 'SCG', model: 'Premium Matte', color: 'ดำ', texture: 'ด้าน', size: '60x60 ซม.', factory: 'SCG Ceramics', qty: 150, qtySqm: 54, rawPrice: 130, rawCurrency: 'THB', rawUnit: 'piece', proposedPrice: 185, approvedPrice: 185, currency: 'THB', sortOrder: 1 },
+        { id: 3, ticketId: 1, brand: 'Cotto', model: 'Stone Series', color: 'กากี', texture: 'หยาบ', size: '30x60 ซม.', factory: 'Cotto Industry', qty: 100, qtySqm: 18, rawPrice: 250, rawCurrency: 'THB', rawUnit: 'piece', proposedPrice: 320, approvedPrice: 320, currency: 'THB', sortOrder: 2 },
       ],
       events: [
         { id: 1, ticketId: 1, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: iso(2026, 6, 14) + 'T09:00:00Z' },
@@ -255,7 +255,7 @@ export function createDemoDatabase() {
       customerName: 'ABC Corporation', note: null,
       createdAt: iso(2026, 6, 16), updatedAt: iso(2026, 6, 18), closedAt: null,
       items: [
-        { id: 4, ticketId: 2, brand: 'Cotto', model: 'Floral Gloss', color: 'ลายดอกไม้', texture: 'มัน', size: '30x30 ซม.', factory: 'Cotto Industry', qty: 500, proposedPrice: 95, approvedPrice: null, currency: 'THB', sortOrder: 0 },
+        { id: 4, ticketId: 2, brand: 'Cotto', model: 'Floral Gloss', color: 'ลายดอกไม้', texture: 'มัน', size: '30x30 ซม.', factory: 'Cotto Industry', qty: 500, qtySqm: 45, rawPrice: 75, rawCurrency: 'THB', rawUnit: 'piece', proposedPrice: 95, approvedPrice: null, currency: 'THB', sortOrder: 0 },
       ],
       events: [
         { id: 6, ticketId: 2, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: iso(2026, 6, 16) + 'T10:00:00Z' },
@@ -325,9 +325,10 @@ export function createDemoDatabase() {
       createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
       assignedToId: 7, assignedToName: 'คุณนำเข้า พานิช',
       customerName: 'EU Trading Co.', note: null,
+      paymentStatus: null, fulfillmentStatus: null,
       createdAt: iso(2026, 6, 9), updatedAt: iso(2026, 6, 16), closedAt: null,
       items: [
-        { id: 9, ticketId: 6, brand: 'Duragres', model: 'Gold Series', color: 'ทอง', texture: 'มัน', size: '60x120 ซม.', factory: 'Duragres Thailand', qty: 200, proposedPrice: 1200, approvedPrice: 1200, currency: 'THB', sortOrder: 0 },
+        { id: 9, ticketId: 6, brand: 'Duragres', model: 'Gold Series', color: 'ทอง', texture: 'มัน', size: '60x120 ซม.', factory: 'Duragres Thailand', qty: 200, qtySqm: 144, rawPrice: 900, rawCurrency: 'THB', rawUnit: 'piece', proposedPrice: 1200, approvedPrice: 1200, currency: 'THB', sortOrder: 0 },
       ],
       events: [
         { id: 16, ticketId: 6, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: iso(2026, 6, 9) + 'T09:00:00Z' },
@@ -338,6 +339,216 @@ export function createDemoDatabase() {
         { id: 21, ticketId: 6, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'QUOTATION_ISSUED', fromStatus: 'approved', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 6, 16) + 'T09:00:00Z' },
       ],
       quotation: { id: 1, ticketId: 6, number: 'QT-2026-0001', issuedById: 6, issuedByName: 'คุณสมหมาย ขายดี', issuedAt: iso(2026, 6, 16) + 'T09:00:00Z', pdfPath: null, totalAmount: 240000, currency: 'THB' },
+    },
+
+    // ── Ticket 7: draft ─────────────────────────────────────────────────────
+    {
+      id: 7, code: 'PR-2026-0007', type: 'PRICE_REQUEST',
+      title: 'สยามพารากอน',
+      status: 'draft', priority: 'NORMAL',
+      createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+      assignedToId: null, assignedToName: null,
+      customerName: 'สยามพารากอน', note: 'ร่างรายการสินค้า ยังไม่ส่ง',
+      paymentStatus: null, fulfillmentStatus: null,
+      createdAt: iso(2026, 7, 10), updatedAt: iso(2026, 7, 10), closedAt: null,
+      items: [
+        { id: 10, ticketId: 7, brand: 'SCG', model: 'Metro White', color: 'ขาว', texture: 'ด้าน', size: '60x60 ซม.', factory: 'SCG Ceramics', qty: 400, proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 0 },
+      ],
+      events: [
+        { id: 22, ticketId: 7, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: iso(2026, 7, 10) + 'T09:00:00Z' },
+      ],
+      quotation: null,
+    },
+
+    // ── Ticket 8: document_issued (old flow) ─────────────────────────────────
+    {
+      id: 8, code: 'PR-2026-0008', type: 'PRICE_REQUEST',
+      title: 'Siam Mall Co., Ltd.',
+      status: 'document_issued', priority: 'NORMAL',
+      createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+      assignedToId: 7, assignedToName: 'คุณนำเข้า พานิช',
+      customerName: 'Siam Mall Co., Ltd.', note: null,
+      paymentStatus: null, fulfillmentStatus: null,
+      createdAt: iso(2026, 5, 1), updatedAt: iso(2026, 5, 15), closedAt: null,
+      items: [
+        { id: 11, ticketId: 8, brand: 'Cotto', model: 'Basic White', color: 'ขาว', texture: 'ด้าน', size: '30x30 ซม.', factory: 'Cotto Industry', qty: 800, qtySqm: 72, rawPrice: 50, rawCurrency: 'THB', rawUnit: 'piece', proposedPrice: 65, approvedPrice: 65, currency: 'THB', sortOrder: 0 },
+      ],
+      events: [
+        { id: 23, ticketId: 8, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED',          fromStatus: null,              toStatus: 'draft',            message: null,             createdAt: iso(2026, 5, 1)  + 'T09:00:00Z' },
+        { id: 24, ticketId: 8, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'SUBMITTED',        fromStatus: 'draft',           toStatus: 'submitted',        message: null,             createdAt: iso(2026, 5, 1)  + 'T09:30:00Z' },
+        { id: 25, ticketId: 8, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'PICKED_UP',        fromStatus: 'submitted',       toStatus: 'in_review',        message: null,             createdAt: iso(2026, 5, 2)  + 'T08:00:00Z' },
+        { id: 26, ticketId: 8, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'PRICE_PROPOSED',   fromStatus: 'in_review',       toStatus: 'price_proposed',   message: null,             createdAt: iso(2026, 5, 6)  + 'T14:00:00Z' },
+        { id: 27, ticketId: 8, actorId: 8, actorName: 'คุณวิชัย ธนาคาร', kind: 'APPROVED',         fromStatus: 'price_proposed',  toStatus: 'approved',         message: null,             createdAt: iso(2026, 5, 7)  + 'T10:00:00Z' },
+        { id: 28, ticketId: 8, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'QUOTATION_ISSUED', fromStatus: 'approved',        toStatus: 'quotation_issued', message: null,             createdAt: iso(2026, 5, 8)  + 'T09:00:00Z' },
+        { id: 29, ticketId: 8, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'DOCUMENT_ISSUED',  fromStatus: 'quotation_issued',toStatus: 'document_issued',  message: 'DN-2026-0001',   createdAt: iso(2026, 5, 15) + 'T10:00:00Z' },
+      ],
+      quotation: { id: 2, ticketId: 8, number: 'QT-2026-0002', issuedById: 6, issuedByName: 'คุณสมหมาย ขายดี', issuedAt: iso(2026, 5, 8) + 'T09:00:00Z', pdfPath: null, totalAmount: 52000, currency: 'THB' },
+    },
+
+    // ── Ticket 9: closed (old flow via document_issued) ──────────────────────
+    {
+      id: 9, code: 'PR-2026-0009', type: 'PRICE_REQUEST',
+      title: 'เทพสตูดิโอ ดีไซน์',
+      status: 'closed', priority: 'HIGH',
+      createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+      assignedToId: 7, assignedToName: 'คุณนำเข้า พานิช',
+      customerName: 'เทพสตูดิโอ ดีไซน์', note: null,
+      paymentStatus: null, fulfillmentStatus: null,
+      createdAt: iso(2026, 4, 1), updatedAt: iso(2026, 4, 20), closedAt: iso(2026, 4, 20),
+      items: [
+        { id: 12, ticketId: 9, brand: 'Duragres', model: 'Cement Series', color: 'เทา', texture: 'ด้าน', size: '60x60 ซม.', factory: 'Duragres Thailand', qty: 600, qtySqm: 216, rawPrice: 120, rawCurrency: 'THB', rawUnit: 'piece', proposedPrice: 160, approvedPrice: 160, currency: 'THB', sortOrder: 0 },
+      ],
+      events: [
+        { id: 30, ticketId: 9, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED',          fromStatus: null,              toStatus: 'draft',            message: null,           createdAt: iso(2026, 4, 1)  + 'T09:00:00Z' },
+        { id: 31, ticketId: 9, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'SUBMITTED',        fromStatus: 'draft',           toStatus: 'submitted',        message: null,           createdAt: iso(2026, 4, 1)  + 'T09:30:00Z' },
+        { id: 32, ticketId: 9, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'PICKED_UP',        fromStatus: 'submitted',       toStatus: 'in_review',        message: null,           createdAt: iso(2026, 4, 2)  + 'T08:00:00Z' },
+        { id: 33, ticketId: 9, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'PRICE_PROPOSED',   fromStatus: 'in_review',       toStatus: 'price_proposed',   message: null,           createdAt: iso(2026, 4, 5)  + 'T14:00:00Z' },
+        { id: 34, ticketId: 9, actorId: 8, actorName: 'คุณวิชัย ธนาคาร', kind: 'APPROVED',         fromStatus: 'price_proposed',  toStatus: 'approved',         message: null,           createdAt: iso(2026, 4, 7)  + 'T10:00:00Z' },
+        { id: 35, ticketId: 9, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'QUOTATION_ISSUED', fromStatus: 'approved',        toStatus: 'quotation_issued', message: null,           createdAt: iso(2026, 4, 8)  + 'T09:00:00Z' },
+        { id: 36, ticketId: 9, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'DOCUMENT_ISSUED',  fromStatus: 'quotation_issued',toStatus: 'document_issued',  message: 'DN-2026-0000', createdAt: iso(2026, 4, 14) + 'T10:00:00Z' },
+        { id: 37, ticketId: 9, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CLOSED',           fromStatus: 'document_issued', toStatus: 'closed',           message: null,           createdAt: iso(2026, 4, 20) + 'T11:00:00Z' },
+      ],
+      quotation: { id: 3, ticketId: 9, number: 'QT-2026-0003', issuedById: 6, issuedByName: 'คุณสมหมาย ขายดี', issuedAt: iso(2026, 4, 8) + 'T09:00:00Z', pdfPath: null, totalAmount: 96000, currency: 'THB' },
+    },
+
+    // ── Ticket 10: cancelled ─────────────────────────────────────────────────
+    {
+      id: 10, code: 'PR-2026-0010', type: 'PRICE_REQUEST',
+      title: 'บริษัท ยกเลิก จำกัด',
+      status: 'cancelled', priority: 'LOW',
+      createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+      assignedToId: 7, assignedToName: 'คุณนำเข้า พานิช',
+      customerName: 'บริษัท ยกเลิก จำกัด', note: 'ลูกค้าแจ้งยกเลิกโปรเจกต์',
+      paymentStatus: null, fulfillmentStatus: null,
+      createdAt: iso(2026, 3, 15), updatedAt: iso(2026, 3, 20), closedAt: iso(2026, 3, 20),
+      items: [
+        { id: 13, ticketId: 10, brand: 'SCG', model: 'Wood Look', color: 'น้ำตาล', texture: 'ลายไม้', size: '20x120 ซม.', factory: 'SCG Ceramics', qty: 200, proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: 0 },
+      ],
+      events: [
+        { id: 38, ticketId: 10, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED',   fromStatus: null,        toStatus: 'draft',      message: null,                 createdAt: iso(2026, 3, 15) + 'T09:00:00Z' },
+        { id: 39, ticketId: 10, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'SUBMITTED', fromStatus: 'draft',     toStatus: 'submitted',  message: null,                 createdAt: iso(2026, 3, 15) + 'T09:30:00Z' },
+        { id: 40, ticketId: 10, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'PICKED_UP', fromStatus: 'submitted', toStatus: 'in_review',  message: null,                 createdAt: iso(2026, 3, 16) + 'T08:00:00Z' },
+        { id: 41, ticketId: 10, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CANCELLED', fromStatus: 'in_review', toStatus: 'cancelled',  message: 'ลูกค้าแจ้งยกเลิก', createdAt: iso(2026, 3, 20) + 'T14:00:00Z' },
+      ],
+      quotation: null,
+    },
+
+    // ── Ticket 11: quotation_issued + CUSTOMER_CONFIRMED ────────────────────
+    {
+      id: 11, code: 'PR-2026-0011', type: 'PRICE_REQUEST',
+      title: 'The Emporium Co.',
+      status: 'quotation_issued', priority: 'NORMAL',
+      createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+      assignedToId: 7, assignedToName: 'คุณนำเข้า พานิช',
+      customerName: 'The Emporium Co.', note: null,
+      paymentStatus: 'CUSTOMER_CONFIRMED', fulfillmentStatus: null,
+      createdAt: iso(2026, 6, 20), updatedAt: iso(2026, 7, 1), closedAt: null,
+      items: [
+        { id: 14, ticketId: 11, brand: 'Cotto', model: 'Marble Series', color: 'ขาว', texture: 'มัน', size: '60x120 ซม.', factory: 'Cotto Industry', qty: 300, qtySqm: 216, rawPrice: 450, rawCurrency: 'THB', rawUnit: 'piece', proposedPrice: 580, approvedPrice: 580, currency: 'THB', sortOrder: 0 },
+      ],
+      events: [
+        { id: 42, ticketId: 11, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED',            fromStatus: null,              toStatus: 'draft',            message: null, createdAt: iso(2026, 6, 20) + 'T09:00:00Z' },
+        { id: 43, ticketId: 11, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'SUBMITTED',          fromStatus: 'draft',           toStatus: 'submitted',        message: null, createdAt: iso(2026, 6, 20) + 'T09:30:00Z' },
+        { id: 44, ticketId: 11, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'PICKED_UP',          fromStatus: 'submitted',       toStatus: 'in_review',        message: null, createdAt: iso(2026, 6, 21) + 'T08:00:00Z' },
+        { id: 45, ticketId: 11, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'PRICE_PROPOSED',     fromStatus: 'in_review',       toStatus: 'price_proposed',   message: null, createdAt: iso(2026, 6, 23) + 'T14:00:00Z' },
+        { id: 46, ticketId: 11, actorId: 8, actorName: 'คุณวิชัย ธนาคาร', kind: 'APPROVED',           fromStatus: 'price_proposed',  toStatus: 'approved',         message: null, createdAt: iso(2026, 6, 24) + 'T10:00:00Z' },
+        { id: 47, ticketId: 11, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'QUOTATION_ISSUED',   fromStatus: 'approved',        toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 6, 25) + 'T09:00:00Z' },
+        { id: 48, ticketId: 11, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CUSTOMER_CONFIRMED', fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 7, 1)  + 'T11:00:00Z' },
+      ],
+      quotation: { id: 4, ticketId: 11, number: 'QT-2026-0004', issuedById: 6, issuedByName: 'คุณสมหมาย ขายดี', issuedAt: iso(2026, 6, 25) + 'T09:00:00Z', pdfPath: null, totalAmount: 174000, currency: 'THB' },
+    },
+
+    // ── Ticket 12: quotation_issued + DEPOSIT_PAID + IR_ISSUED ───────────────
+    {
+      id: 12, code: 'PR-2026-0012', type: 'PRICE_REQUEST',
+      title: 'Terminal 21 Property',
+      status: 'quotation_issued', priority: 'HIGH',
+      createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+      assignedToId: 7, assignedToName: 'คุณนำเข้า พานิช',
+      customerName: 'Terminal 21 Property', note: null,
+      paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: 'IR_ISSUED',
+      createdAt: iso(2026, 6, 1), updatedAt: iso(2026, 6, 25), closedAt: null,
+      items: [
+        { id: 15, ticketId: 12, brand: 'SCG', model: 'Granite Beige', color: 'เบจ', texture: 'หยาบ', size: '60x60 ซม.', factory: 'SCG Ceramics', qty: 1000, qtySqm: 360, rawPrice: 95, rawCurrency: 'THB', rawUnit: 'piece', proposedPrice: 130, approvedPrice: 130, currency: 'THB', sortOrder: 0 },
+      ],
+      events: [
+        { id: 49, ticketId: 12, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED',               fromStatus: null,               toStatus: 'draft',            message: null, createdAt: iso(2026, 6, 1)  + 'T09:00:00Z' },
+        { id: 50, ticketId: 12, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'SUBMITTED',             fromStatus: 'draft',            toStatus: 'submitted',        message: null, createdAt: iso(2026, 6, 1)  + 'T09:30:00Z' },
+        { id: 51, ticketId: 12, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'PICKED_UP',             fromStatus: 'submitted',        toStatus: 'in_review',        message: null, createdAt: iso(2026, 6, 2)  + 'T08:00:00Z' },
+        { id: 52, ticketId: 12, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'PRICE_PROPOSED',        fromStatus: 'in_review',        toStatus: 'price_proposed',   message: null, createdAt: iso(2026, 6, 5)  + 'T14:00:00Z' },
+        { id: 53, ticketId: 12, actorId: 8, actorName: 'คุณวิชัย ธนาคาร', kind: 'APPROVED',              fromStatus: 'price_proposed',   toStatus: 'approved',         message: null, createdAt: iso(2026, 6, 7)  + 'T10:00:00Z' },
+        { id: 54, ticketId: 12, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'QUOTATION_ISSUED',      fromStatus: 'approved',         toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 6, 9)  + 'T09:00:00Z' },
+        { id: 55, ticketId: 12, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CUSTOMER_CONFIRMED',    fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 6, 12) + 'T11:00:00Z' },
+        { id: 56, ticketId: 12, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'DEPOSIT_NOTICE_ISSUED', fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 6, 14) + 'T10:00:00Z' },
+        { id: 57, ticketId: 12, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'DEPOSIT_PAID',          fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 6, 18) + 'T15:00:00Z' },
+        { id: 58, ticketId: 12, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'IR_ISSUED',             fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 6, 25) + 'T09:00:00Z' },
+      ],
+      quotation: { id: 5, ticketId: 12, number: 'QT-2026-0005', issuedById: 6, issuedByName: 'คุณสมหมาย ขายดี', issuedAt: iso(2026, 6, 9) + 'T09:00:00Z', pdfPath: null, totalAmount: 130000, currency: 'THB' },
+    },
+
+    // ── Ticket 13: quotation_issued + AWAITING_FINAL_PAYMENT + GOODS_RECEIVED ─
+    {
+      id: 13, code: 'PR-2026-0013', type: 'PRICE_REQUEST',
+      title: 'Mega Bangna Retail',
+      status: 'quotation_issued', priority: 'HIGH',
+      createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+      assignedToId: 7, assignedToName: 'คุณนำเข้า พานิช',
+      customerName: 'Mega Bangna Retail', note: null,
+      paymentStatus: 'AWAITING_FINAL_PAYMENT', fulfillmentStatus: 'GOODS_RECEIVED',
+      createdAt: iso(2026, 5, 15), updatedAt: iso(2026, 6, 20), closedAt: null,
+      items: [
+        { id: 16, ticketId: 13, brand: 'Duragres', model: 'Forest Brown', color: 'น้ำตาล', texture: 'ลายไม้', size: '20x100 ซม.', factory: 'Duragres Thailand', qty: 500, qtySqm: 100, rawPrice: 200, rawCurrency: 'THB', rawUnit: 'piece', proposedPrice: 265, approvedPrice: 265, currency: 'THB', sortOrder: 0 },
+      ],
+      events: [
+        { id: 59, ticketId: 13, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED',               fromStatus: null,               toStatus: 'draft',            message: null, createdAt: iso(2026, 5, 15) + 'T09:00:00Z' },
+        { id: 60, ticketId: 13, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'SUBMITTED',             fromStatus: 'draft',            toStatus: 'submitted',        message: null, createdAt: iso(2026, 5, 15) + 'T09:30:00Z' },
+        { id: 61, ticketId: 13, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'PICKED_UP',             fromStatus: 'submitted',        toStatus: 'in_review',        message: null, createdAt: iso(2026, 5, 16) + 'T08:00:00Z' },
+        { id: 62, ticketId: 13, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'PRICE_PROPOSED',        fromStatus: 'in_review',        toStatus: 'price_proposed',   message: null, createdAt: iso(2026, 5, 20) + 'T14:00:00Z' },
+        { id: 63, ticketId: 13, actorId: 8, actorName: 'คุณวิชัย ธนาคาร', kind: 'APPROVED',              fromStatus: 'price_proposed',   toStatus: 'approved',         message: null, createdAt: iso(2026, 5, 22) + 'T10:00:00Z' },
+        { id: 64, ticketId: 13, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'QUOTATION_ISSUED',      fromStatus: 'approved',         toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 5, 23) + 'T09:00:00Z' },
+        { id: 65, ticketId: 13, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CUSTOMER_CONFIRMED',    fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 5, 26) + 'T11:00:00Z' },
+        { id: 66, ticketId: 13, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'DEPOSIT_NOTICE_ISSUED', fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 5, 28) + 'T10:00:00Z' },
+        { id: 67, ticketId: 13, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'DEPOSIT_PAID',          fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 6, 2)  + 'T15:00:00Z' },
+        { id: 68, ticketId: 13, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'IR_ISSUED',             fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 6, 5)  + 'T09:00:00Z' },
+        { id: 69, ticketId: 13, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'IR_SENT',               fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 6, 7)  + 'T09:00:00Z' },
+        { id: 70, ticketId: 13, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'SHIPPING',              fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 6, 10) + 'T08:00:00Z' },
+        { id: 71, ticketId: 13, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'GOODS_RECEIVED',        fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 6, 18) + 'T14:00:00Z' },
+        { id: 72, ticketId: 13, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'AWAITING_FINAL_PAYMENT',fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 6, 20) + 'T09:00:00Z' },
+      ],
+      quotation: { id: 6, ticketId: 13, number: 'QT-2026-0006', issuedById: 6, issuedByName: 'คุณสมหมาย ขายดี', issuedAt: iso(2026, 5, 23) + 'T09:00:00Z', pdfPath: null, totalAmount: 132500, currency: 'THB' },
+    },
+
+    // ── Ticket 14: quotation_issued + FULLY_PAID + GOODS_RECEIVED (พร้อมปิด) ─
+    {
+      id: 14, code: 'PR-2026-0014', type: 'PRICE_REQUEST',
+      title: 'IconSiam Riverside',
+      status: 'quotation_issued', priority: 'HIGH',
+      createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+      assignedToId: 7, assignedToName: 'คุณนำเข้า พานิช',
+      customerName: 'IconSiam Riverside', note: null,
+      paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'GOODS_RECEIVED',
+      createdAt: iso(2026, 5, 1), updatedAt: iso(2026, 7, 5), closedAt: null,
+      items: [
+        { id: 17, ticketId: 14, brand: 'Cotto', model: 'Luxury Gold', color: 'ทอง', texture: 'มัน', size: '60x120 ซม.', factory: 'Cotto Industry', qty: 800, qtySqm: 576, rawPrice: 600, rawCurrency: 'THB', rawUnit: 'piece', proposedPrice: 780, approvedPrice: 780, currency: 'THB', sortOrder: 0 },
+      ],
+      events: [
+        { id: 73, ticketId: 14, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED',               fromStatus: null,               toStatus: 'draft',            message: null, createdAt: iso(2026, 5, 1)  + 'T09:00:00Z' },
+        { id: 74, ticketId: 14, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'SUBMITTED',             fromStatus: 'draft',            toStatus: 'submitted',        message: null, createdAt: iso(2026, 5, 1)  + 'T09:30:00Z' },
+        { id: 75, ticketId: 14, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'PICKED_UP',             fromStatus: 'submitted',        toStatus: 'in_review',        message: null, createdAt: iso(2026, 5, 2)  + 'T08:00:00Z' },
+        { id: 76, ticketId: 14, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'PRICE_PROPOSED',        fromStatus: 'in_review',        toStatus: 'price_proposed',   message: null, createdAt: iso(2026, 5, 6)  + 'T14:00:00Z' },
+        { id: 77, ticketId: 14, actorId: 8, actorName: 'คุณวิชัย ธนาคาร', kind: 'APPROVED',              fromStatus: 'price_proposed',   toStatus: 'approved',         message: null, createdAt: iso(2026, 5, 8)  + 'T10:00:00Z' },
+        { id: 78, ticketId: 14, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'QUOTATION_ISSUED',      fromStatus: 'approved',         toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 5, 9)  + 'T09:00:00Z' },
+        { id: 79, ticketId: 14, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CUSTOMER_CONFIRMED',    fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 5, 13) + 'T11:00:00Z' },
+        { id: 80, ticketId: 14, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'DEPOSIT_NOTICE_ISSUED', fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 5, 15) + 'T10:00:00Z' },
+        { id: 81, ticketId: 14, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'DEPOSIT_PAID',          fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 5, 20) + 'T15:00:00Z' },
+        { id: 82, ticketId: 14, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'IR_ISSUED',             fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 5, 22) + 'T09:00:00Z' },
+        { id: 83, ticketId: 14, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'IR_SENT',               fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 5, 24) + 'T09:00:00Z' },
+        { id: 84, ticketId: 14, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'SHIPPING',              fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 5, 27) + 'T08:00:00Z' },
+        { id: 85, ticketId: 14, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'GOODS_RECEIVED',        fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 6, 5)  + 'T14:00:00Z' },
+        { id: 86, ticketId: 14, actorId: 7, actorName: 'คุณนำเข้า พานิช', kind: 'AWAITING_FINAL_PAYMENT',fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 6, 6)  + 'T09:00:00Z' },
+        { id: 87, ticketId: 14, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'FULLY_PAID',            fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 7, 5)  + 'T10:00:00Z' },
+      ],
+      quotation: { id: 7, ticketId: 14, number: 'QT-2026-0007', issuedById: 6, issuedByName: 'คุณสมหมาย ขายดี', issuedAt: iso(2026, 5, 9) + 'T09:00:00Z', pdfPath: null, totalAmount: 624000, currency: 'THB' },
     },
   ];
 

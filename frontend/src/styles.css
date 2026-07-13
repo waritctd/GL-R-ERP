@@ -1107,6 +1107,18 @@ textarea:focus {
   grid-template-columns: 2fr 1fr;
   gap: 16px;
   align-items: start;
+  min-width: 0;
+}
+
+.ticket-detail-grid > * {
+  min-width: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  .ticket-detail-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .employee-cell {
