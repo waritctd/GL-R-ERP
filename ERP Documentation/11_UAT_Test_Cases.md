@@ -6,7 +6,7 @@
 | **Version** | 1.0 · 2 July 2026 |
 | **Audience** | QA, business testers |
 | **How to run** | Execute each case in order; record Pass/Fail and notes. Preferred environment: the **hosted UAT stack** (`gl-r-erp-uat` Render service on the `uat` branch, `SPRING_PROFILES_ACTIVE=uat`), which auto-seeds the realistic dataset + the **9 `@uat.glr` accounts** — see `UAT Deliverables/UAT_Accounts.md`. The public demo (`Demo@2026`) may be used for a quick smoke only, never for sign-off. |
-| **Baseline** | Reflects current `main` (Flyway head **V36**): 3-step overtime approval, dual manager+CEO commission approval, in-app **and email** notifications, and Thai **PDF** document export are all live. |
+| **Baseline** | Reflects the `uat` branch (Flyway head **V39**): 3-step overtime approval, dual manager+CEO commission approval, in-app **and email** notifications, and Thai **PDF** document export are all live. Also live: the **post-quotation dual-track sales flow** — independent `paymentStatus` (customer confirmation → deposit notice → deposit paid → final payment) and `fulfillmentStatus` (import request → IR sent → shipping → goods received) tracks on a `quotation_issued` ticket, the **remaining-invoice** document (deposit-notice-adjacent, downloadable once a ticket reaches `quotation_issued`), **CEO manual price override** per ticket item (with a required reason), and **unit-basis PIECE vs SQM** on ticket items. |
 
 ---
 
@@ -31,7 +31,7 @@
 
 - **Roles under test:** `employee`, division manager, `hr`, `sales`, `sales_manager`, `ceo`, `import`.
 - **Pass criteria:** actual result matches expected; no error dialog; audit entries written where noted.
-- **Priority:** 🔴 must-pass for go-live · 🟡 should-pass.
+- **Priority:** 🔴 must-pass for go-live · 🟡 should-pass · ⚙️ manual/config (needs an external system or scheduled job, not click-testable on demand — see TKT-19).
 
 ## 2. Authentication & Access
 
@@ -106,6 +106,21 @@
 | TKT-07 | 🔴 | Open a revision on an issued document | `revision_no` increments; original retained |
 | TKT-08 | 🟡 | Add a comment to a ticket | Comment recorded as an event |
 | TKT-09 | 🔴 | Close the ticket | Status `closed` |
+| TKT-10 | 🔴 | Sales confirms customer acceptance on a `quotation_issued` ticket | `paymentStatus` → `CUSTOMER_CONFIRMED`; event logged |
+| TKT-11 | 🔴 | Sales issues a deposit notice (payment track) once `paymentStatus=CUSTOMER_CONFIRMED` | `paymentStatus` → `DEPOSIT_NOTICE_ISSUED`; a deposit-notice document exists for the ticket |
+| TKT-12 | 🔴 | Sales confirms the deposit was paid, once `paymentStatus=DEPOSIT_NOTICE_ISSUED` | `paymentStatus` → `DEPOSIT_PAID` |
+| TKT-13 | 🔴 | Import issues an import request (fulfillment track), requires `quotation_issued` + `paymentStatus=DEPOSIT_NOTICE_ISSUED` | `fulfillmentStatus` → `IR_ISSUED` |
+| TKT-14 | 🔴 | Import walks the fulfillment track forward: IR sent → shipping → goods received | `fulfillmentStatus` → `IR_SENT` → `SHIPPING` → `GOODS_RECEIVED`; if `paymentStatus=DEPOSIT_PAID` when goods are received, it auto-flips to `AWAITING_FINAL_PAYMENT` |
+| TKT-15 | 🔴 | Sales confirms final payment once `paymentStatus=AWAITING_FINAL_PAYMENT` | `paymentStatus` → `FULLY_PAID`; ticket is now eligible to `close()` once `fulfillmentStatus=GOODS_RECEIVED` |
+| TKT-16 | 🔴 | Download the remaining invoice for a `quotation_issued` ticket | File downloads (XLSX); reflects deposit amount already paid vs. balance due |
+| TKT-17 | 🔴 | CEO applies a manual price override on a ticket item while the ticket is `price_proposed`, with a reason | Item's effective price reflects the manual override; `manual_override_reason` stored; attempting this outside `price_proposed` is rejected (409) |
+| TKT-18 | 🟡 | Create/propose a ticket item with `unitBasis=SQM` (vs. the default `PIECE`) | Item round-trips with `unitBasis=SQM` and `qtySqm` populated; quantity displays/calculates off `qtySqm` instead of `qty` |
+
+**BOT FX auto-fetch — manual/config test, not click-testable on demand:**
+
+| ID | Priority | Steps | Expected result |
+|---|---|---|---|
+| TKT-19 | ⚙️ manual/config | Requires `BOT_API_TOKEN` configured, network access to the Bank of Thailand API, and the `@Scheduled` daily cron firing (not triggerable from the UI or via a button click) | `sales.fx_rates` gains a row with `source='BOT'` and `fetched_at` set, once per day. **On-demand alternative for UAT sign-off:** use the CEO manual price override (TKT-17) or the CEO manual FX-rate entry in CEO Settings (`source='MANUAL'`) instead of waiting for the cron — both are click-testable today. |
 
 ## 8. Commission
 
