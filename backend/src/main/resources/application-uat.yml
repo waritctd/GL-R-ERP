@@ -25,3 +25,12 @@ spring:
     connect-retries: 3
     connect-retries-interval: 5
     locations: classpath:db/migration,classpath:db/migration-uat
+    # The UAT DB already has db/migration-uat V900-V904 applied. main's newer real migrations
+    # (V37-V39, from the post-quotation sales flow merge) land BELOW that version, so on the next
+    # deploy Flyway would see them as "new migrations below the current schema version" and fail
+    # validate() with default out-of-order=false. Safe here because V37-V39 are purely additive
+    # (V37 adds unit_basis NOT NULL DEFAULT 'PIECE' with a backfill; V38/V39 add nullable columns)
+    # and V903's seed data predates and never references these columns (grepped clean). On a fresh
+    # DB migrations still apply in numeric order (V1..V39 then V900..V904); only an already-seeded
+    # UAT DB takes the out-of-order path.
+    out-of-order: true
