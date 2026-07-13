@@ -17,13 +17,21 @@ one commit's sales-stack delta was cherry-picked.
 `f655b77` (main tip at start of this task — PR #162 merge)
 
 ## Current Commit
-`cb99680` (3 commits on the branch, not pushed, not merged)
+`8d4ccf4` (5 commits on the branch, not pushed, not merged)
 
 ```
-cb99680 fix(sales): keep xlsx dependency — mockApi.js imports it at runtime
+8d4ccf4 security(sales): drop xlsx dep, stub mock-mode doc downloads to placeholder blobs
+e0c962b docs(handoffs): add handoff for feat/sales-post-quotation-flow
+cb99680 fix(sales): keep xlsx dependency — mockApi.js imports it at runtime   (superseded by 8d4ccf4)
 116705b fix(sales): repair cherry-pick fallout in TicketStatus and BotFxFetchService
 a466e43 :Fix flow for sales and add flow after generate quotation   (cherry-pick of d9bedef)
 ```
+
+> **Post-review follow-up (commit `8d4ccf4`):** Opus reviewed the port and approved it, but flagged
+> that `frontend-ci.yml` runs `npm audit --audit-level=moderate` as a hard gate, so keeping the
+> high-severity `xlsx` dependency would turn `main`'s CI red. Per the user's decision, `xlsx` was
+> **removed** (see the updated xlsx section below). Commit `cb99680`'s "keep xlsx" decision is
+> therefore superseded — it is left in history for traceability but its conclusion no longer holds.
 
 ## Agent / Model Used
 Claude Opus (orchestrator prompt) running as Sonnet 4.5 implementation agent, plus one
@@ -123,21 +131,41 @@ The cherry-pick applied but did not build cleanly. Three real issues were found 
 
 All three fixes are isolated in commit `116705b` (backend) and `cb99680` (frontend dep).
 
-## xlsx dependency decision (corrected from initial assumption)
+## xlsx dependency decision — FINAL: removed client-side, mock downloads stubbed
 
-**Keep it.** It is used at runtime by `frontend/src/api/mockApi.js` (client-side mock/demo xlsx
-rendering), not just by the backend's Apache POI renderers. `npm audit` reports:
+**Removed (commit `8d4ccf4`).** `xlsx` (SheetJS) carries an unpatched high-severity npm advisory:
 ```
 xlsx  *
 Severity: high
 Prototype Pollution in sheetJS - GHSA-4r6h-8v6p-xvw6
 SheetJS ReDoS - GHSA-5pgg-2g8v-p4x9
-No fix available
+No fix available (npm registry; patched build only on SheetJS's own CDN)
 ```
-This is a known, pre-existing SheetJS npm-registry issue (the patched version is only distributed
-via SheetJS's own CDN, not npm) — carried over from upstream `yang/ticket`, not introduced by this
-branch. Flagging for the reviewer; not fixed here (out of scope, no fix available on npm, and the
-mock/demo path is never active in production per `frontend/src/api/index.js`'s runtime guard).
+`frontend-ci.yml` runs `npm audit --audit-level=moderate` as a **hard CI gate**, so keeping the
+dependency would have turned `main`'s CI red on merge.
+
+xlsx was used **only** by `frontend/src/api/mockApi.js` to render quotation / remaining-invoice /
+deposit-notice files client-side in mock/demo mode (`VITE_USE_MOCKS=true`). The real, production
+flow downloads the backend Apache POI-rendered file
+(`QuotationRenderer` / `RemainingInvoiceRenderer` / `DepositNoticeRenderer`), so the client-side
+xlsx rendering was demo-only and non-load-bearing.
+
+**What changed:**
+- Removed `import * as XLSX from 'xlsx'` and the SheetJS-based helpers (`mockSetCell`,
+  `loadXlsxTemplate`, `xlsxBlob`) from `mockApi.js`.
+- Replaced the three mock download producers (`buildMockQuotationXlsx`,
+  `buildMockRemainingInvoiceXlsx`, and the deposit-notice `downloadXlsx`) with a lightweight
+  `text/plain` placeholder `Blob` (`mockDocPlaceholderBlob`) that summarizes the document
+  (doc number, date, customer, line items). Each producer keeps its **signature, existence checks,
+  and Blob return type** so callers are unaffected — a demo download still yields a valid,
+  downloadable file, just a plaintext placeholder instead of a real spreadsheet.
+- The unrelated `buildMockQuotationHtml` "PDF preview" producer was untouched (it never used xlsx).
+- Removed `xlsx` from `package.json`, regenerated `package-lock.json` (9 packages removed).
+
+**Result:** `npm audit --audit-level=moderate` now exits **0** (`found 0 vulnerabilities`). CI's
+audit gate passes. No frontend test asserted on xlsx blob content/type (verified via grep), so no
+test needed adjusting; the suite stays green (17 files / 84 tests). The production spreadsheet path
+is entirely backend/POI and was never touched by this change.
 
 ## Files Changed
 Cherry-pick commit `a466e43` (47 files, 2248 insertions / 454 deletions) — matches the source
@@ -188,7 +216,9 @@ cd frontend && npm run lint && npm test && npm run build   # run repeatedly acro
 - **Frontend tests (`npm test`):** 17 files, 84 tests, all passing (~2.6s).
 - **Frontend build (`npm run build`):** succeeds, 1980 modules transformed, all chunks emitted
   including `TicketDetailPage`, `TicketListPage`, `DepositNoticePage`, `CeoSettingsPage`.
-- **`npm audit`:** 1 high-severity finding (`xlsx`, no fix available) — see xlsx section above.
+- **`npm audit --audit-level=moderate`:** exit 0, `found 0 vulnerabilities` after the `xlsx`
+  removal (commit `8d4ccf4`). The CI audit gate in `frontend-ci.yml` now passes. (Before removal it
+  reported 1 high-severity `xlsx` finding with no fix available — see xlsx section above.)
 
 Note on flakiness during this session: the very first few `npm test` / `npm run build` attempts
 hung or produced truncated output due to a large pile of stray/zombie processes on the machine
@@ -199,10 +229,12 @@ Confirmed by: (a) running with `--no-file-parallelism`, which passed cleanly eve
 quickly on repeated clean runs.
 
 ## Known Risks
-1. **`xlsx@0.18.5` has an unpatched high-severity npm advisory** (prototype pollution + ReDoS, no
-   fix on the npm registry). Pre-existing from upstream, used only in the mock/demo code path.
-   Reviewer should decide whether to accept, pin to a patched SheetJS CDN tarball, or replace the
-   mock-mode xlsx rendering with something else in a follow-up — out of scope to fix here.
+1. ~~**`xlsx@0.18.5` has an unpatched high-severity npm advisory.**~~ **RESOLVED** in commit
+   `8d4ccf4`: `xlsx` removed, mock-mode downloads stubbed to placeholder blobs, real path uses the
+   backend POI renderers. `npm audit --audit-level=moderate` now clean (0 vulnerabilities). See the
+   "xlsx dependency decision — FINAL" section above. Residual note: mock/demo document downloads now
+   produce a plaintext placeholder rather than a real spreadsheet — acceptable, as this path only
+   runs under `VITE_USE_MOCKS=true` (never in production, per `frontend/src/api/index.js`'s guard).
 2. **`OvertimeServiceTest.employeesCanSubmitOwnOvertime` is flaky-by-date** and already fails on a
    clean `main` (confirmed via `git worktree`), independent of this branch. Flagged as a separate
    background task (not part of this branch's diff) rather than fixed here, to keep this PR's diff
@@ -225,14 +257,15 @@ quickly on repeated clean runs.
 ## Recommended Next Agent
 Claude Opus (reviewer) — review the diff for: (a) the dual-track lifecycle's business-rule
 correctness (payment/fulfillment state machine, especially the `close()` dual-path condition),
-(b) the xlsx security-risk decision, (c) whether the `TicketDetailPage.jsx` inline-style patches
-should be tokenized now or deferred, (d) whether `BotFxFetchService`'s `RestClient.builder().build()`
-(vs. an injected/shared bean) is acceptable long-term or should be revisited if more HTTP-calling
-services are added later.
+(b) whether the `TicketDetailPage.jsx` inline-style patches should be tokenized now or deferred,
+(c) whether `BotFxFetchService`'s `RestClient.builder().build()` (vs. an injected/shared bean) is
+acceptable long-term or should be revisited if more HTTP-calling services are added later. The xlsx
+security-risk item is already **resolved** (dependency removed, commit `8d4ccf4`) — no longer an
+open question.
 
 ## Exact Next Prompt
 ```text
-Repo GL-R-ERP, branch feat/sales-post-quotation-flow (3 commits on top of main f655b77, NOT pushed,
+Repo GL-R-ERP, branch feat/sales-post-quotation-flow (5 commits on top of main f655b77, NOT pushed,
 NOT merged). Read docs/agent-handoffs/00_MASTER_CONTEXT.md, CLAUDE.md, and
 docs/agent-handoffs/39_feat-sales-post-quotation-flow.md first.
 
@@ -241,8 +274,9 @@ beyond tiny safe fixes. Focus on:
 1. TicketService.close()'s dual-path status logic (legacy DOCUMENT_ISSUED vs. dual-track
    QUOTATION_ISSUED+FULLY_PAID+GOODS_RECEIVED) — is the business rule correct and are there gaps
    (e.g. can a ticket get stuck between tracks)?
-2. The xlsx@0.18.5 high-severity npm advisory (no fix available) — accept as-is, pin an alternate
-   source, or replace the mock-mode renderer in a follow-up?
+2. The mock-mode xlsx removal (commit 8d4ccf4): confirm the three placeholder producers in
+   mockApi.js still return valid Blobs, callers are unaffected, and nothing else in frontend/src
+   still depends on SheetJS. `npm audit --audit-level=moderate` should be clean.
 3. TicketDetailPage.jsx's remaining inline styles for the new dual-track/override UI — tokenize now
    or defer?
 4. Whether BotFxFetchService building its own RestClient (not injecting a shared bean) is the right
