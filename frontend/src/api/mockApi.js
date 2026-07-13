@@ -1,4 +1,3 @@
-import * as XLSX from 'xlsx';
 import { createDemoDatabase } from '../data/demoData.js';
 
 const db = createDemoDatabase();
@@ -308,64 +307,36 @@ function mockItemDesc(it) {
   return [it.brand, it.model, it.color, it.texture, it.size].filter(Boolean).join(' ');
 }
 
-// Set a cell value, preserving template styles. Clears formula so value is used as-is.
-function mockSetCell(ws, r, c, v) {
-  const addr = XLSX.utils.encode_cell({ r, c });
-  const existing = ws[addr] || {};
-  // Spread existing (keeps style object 's'), override value/type, clear formula+cache
-  ws[addr] = { ...existing, v, t: typeof v === 'number' ? 'n' : 's', f: undefined, w: undefined };
+// Demo-mode placeholder blob. The real xlsx is rendered server-side by Apache POI
+// (QuotationRenderer/RemainingInvoiceRenderer/DepositNoticeRenderer) and streamed to the
+// client; mock mode only needs to return a valid Blob so download callers stay happy without
+// pulling in the SheetJS (`xlsx`) dependency, which carries an unpatched high-severity advisory.
+function mockDocPlaceholderBlob(lines) {
+  const body = ['⚠ Demo Mode — ไฟล์จริงสร้างจาก template บน server (Apache POI)', '', ...lines].join('\n');
+  return new Blob([body], { type: 'text/plain;charset=utf-8' });
 }
 
-async function loadXlsxTemplate(publicPath) {
-  const res = await fetch(publicPath);
-  if (!res.ok) throw new Error(`Template not found: ${publicPath}`);
-  const buf = await res.arrayBuffer();
-  return XLSX.read(new Uint8Array(buf), { type: 'array', cellStyles: true });
-}
-
-function xlsxBlob(wb) {
-  const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
-  return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-}
-
-// ── Quotation XLSX — mirrors QuotationRenderer.java exactly ─────────────────
+// ── Quotation XLSX (demo placeholder) — real file from QuotationRenderer.java ───
 async function buildMockQuotationXlsx(ticketId, quotationId) {
   const ticket = findTicketRaw(Number(ticketId));
   const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
   if (!quotation) fail('Quotation not found', 404);
 
-  const wb = await loadXlsxTemplate('/templates/quotation_template.xlsx');
-  const ws = wb.Sheets['Update'] || wb.Sheets[wb.SheetNames[0]];
-
   const issueDate = quotation.issuedAt ? new Date(quotation.issuedAt) : new Date();
-
-  // Header cells (row/col 0-based — same indices as QuotationRenderer.java)
-  mockSetCell(ws, 3, 1, mockThaiDate(issueDate));      // B4 = วันที่
-  mockSetCell(ws, 3, 8, quotation.number ?? '');        // I4 = เลขที่
-  mockSetCell(ws, 4, 1, ticket.customerName ?? '');     // B5 = ลูกค้า
-  if (ticket.projectName) {
-    mockSetCell(ws, 7, 1, 'Project : ' + ticket.projectName); // B8 = project
-  }
-
-  // Item rows: ITEM_START_ROW = 7 (0-based), cols A–E
   const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
-  let subtotal = 0;
-  priceItems.forEach((it, i) => {
-    const qty   = Number(it.qty) || 0;
-    const price = Number(it.approvedPrice) || 0;
-    subtotal += qty * price;
-    const r = 7 + i;
-    mockSetCell(ws, r, 0, i + 1);              // A = ลำดับ
-    mockSetCell(ws, r, 1, mockItemDesc(it));   // B = รายละเอียด
-    mockSetCell(ws, r, 2, qty);               // C = จำนวน
-    mockSetCell(ws, r, 3, it.rawUnit ?? 'แผ่น'); // D = หน่วย
-    mockSetCell(ws, r, 4, price);             // E = ราคา/หน่วย
-    // H/I formula cols untouched — Excel recalculates on open
-  });
-
-  mockSetCell(ws, 37, 8, subtotal);  // I38 = รวม (I39/I40 are formula → auto)
-
-  return xlsxBlob(wb);
+  const lines = [
+    `ใบเสนอราคา  เลขที่ ${quotation.number ?? ''}`,
+    `วันที่: ${mockThaiDate(issueDate)}`,
+    `ลูกค้า: ${ticket.customerName ?? ''}`,
+    ...(ticket.projectName ? [`Project: ${ticket.projectName}`] : []),
+    '',
+    ...priceItems.map((it, i) => {
+      const qty = Number(it.qty) || 0;
+      const price = Number(it.approvedPrice) || 0;
+      return `${i + 1}. ${mockItemDesc(it)} — ${qty} ${it.rawUnit ?? 'แผ่น'} × ${price}`;
+    }),
+  ];
+  return mockDocPlaceholderBlob(lines);
 }
 
 // ── Quotation HTML preview — shown when "PDF" is clicked in demo mode ────────
@@ -398,49 +369,30 @@ td{border:1px solid #e2e8f0;padding:8px 10px;font-size:13px}
   return new Blob([html], { type: 'text/html;charset=utf-8' });
 }
 
-// ── Remaining invoice XLSX — mirrors RemainingInvoiceRenderer.java exactly ───
+// ── Remaining invoice XLSX (demo placeholder) — real file from RemainingInvoiceRenderer.java ─
 async function buildMockRemainingInvoiceXlsx(ticketId) {
   const ticket = findTicketRaw(Number(ticketId));
   if (!ticket) fail('Ticket not found', 404);
 
-  const wb = await loadXlsxTemplate('/templates/remaining_invoice_template.xlsx');
-  const ws = wb.Sheets['Update'] || wb.Sheets[wb.SheetNames[0]];
-
   const today = new Date();
   const thaiYear2 = String(today.getFullYear() + 543).slice(-2);
   const docNumber = `GLR${thaiYear2}${String(ticketId).padStart(3, '0')}`;
-
-  // Header block (same indices as RemainingInvoiceRenderer.java)
-  mockSetCell(ws, 6, 7, mockThaiDate(today));       // H7 = วันที่
-  mockSetCell(ws, 6, 1, ticket.customerName ?? ''); // B7 = ลูกค้า
-  mockSetCell(ws, 7, 7, docNumber);                 // H8 = เลขที่
-  // B8 = ที่อยู่ (not in demo data — leave template default)
-  // H9 = อ้างอิง — try to pull from first quotation
   const firstQ = (ticket.quotations ?? [])[0];
-  if (firstQ) mockSetCell(ws, 8, 7, firstQ.number); // H9 = อ้างอิง QN
-  if (ticket.projectName) {
-    mockSetCell(ws, 10, 1, 'Project : ' + ticket.projectName); // B11
-  }
-
-  // Item rows: ITEM_START_ROW = 12 (0-based), cols A–E
   const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
-  priceItems.forEach((it, i) => {
-    const r = 12 + i;
-    const qty = Number(it.qty) || 0;
-    mockSetCell(ws, r, 0, i + 1);
-    mockSetCell(ws, r, 1, mockItemDesc(it));
-    mockSetCell(ws, r, 2, qty);
-    mockSetCell(ws, r, 3, it.rawUnit ?? 'แผ่น');
-    mockSetCell(ws, r, 4, Number(it.approvedPrice) || 0);
-  });
-
-  // Deposit deduction row (deposit amount not stored in demo data — use 0 placeholder)
-  const depositRow = 12 + priceItems.length;
-  mockSetCell(ws, depositRow, 1, 'หัก  มัดจำ' + (firstQ ? '  ' + firstQ.number : ''));
-  mockSetCell(ws, depositRow, 2, -1);
-  mockSetCell(ws, depositRow, 4, 0); // real app fills deposit amount here
-
-  return xlsxBlob(wb);
+  const lines = [
+    `ใบแจ้งหนี้ส่วนที่เหลือ  เลขที่ ${docNumber}`,
+    `วันที่: ${mockThaiDate(today)}`,
+    `ลูกค้า: ${ticket.customerName ?? ''}`,
+    ...(firstQ ? [`อ้างอิง: ${firstQ.number}`] : []),
+    ...(ticket.projectName ? [`Project: ${ticket.projectName}`] : []),
+    '',
+    ...priceItems.map((it, i) => {
+      const qty = Number(it.qty) || 0;
+      return `${i + 1}. ${mockItemDesc(it)} — ${qty} ${it.rawUnit ?? 'แผ่น'} × ${Number(it.approvedPrice) || 0}`;
+    }),
+    `หัก  มัดจำ${firstQ ? '  ' + firstQ.number : ''}`,
+  ];
+  return mockDocPlaceholderBlob(lines);
 }
 
 function pushEvent(ticket, actor, kind, fromStatus, toStatus, message, itemSnapshot = null) {
@@ -2292,47 +2244,27 @@ export const api = {
       if (!rawDoc) fail('Deposit notice not found', 404);
       const doc = buildMockDoc(rawDoc);
 
-      const wb = await loadXlsxTemplate('/templates/deposit_notice_template.xlsx');
-      const ws = wb.Sheets['Update'] || wb.Sheets[wb.SheetNames[0]];
-
-      // Customer block (same indices as DepositNoticeRenderer.java)
-      mockSetCell(ws, 6, 0, 'เรียน ' + (doc.customerName ?? '')); // A7
-      mockSetCell(ws, 6, 7, mockThaiDate(doc.issueDate ? new Date(doc.issueDate) : new Date())); // H7
-      mockSetCell(ws, 7, 0, doc.customerAddress ?? '');            // A8
-      mockSetCell(ws, 7, 7, doc.docNumber ?? 'DRAFT');             // H8
-      if (doc.reference) mockSetCell(ws, 8, 7, doc.reference);    // H9
-      mockSetCell(ws, 10, 1, doc.projectName ?? '');               // B11
-
-      // Item rows (row 12 = 0-based)
-      (doc.items ?? []).forEach((it, i) => {
-        const r = 12 + i;
+      // Demo placeholder — real xlsx from DepositNoticeRenderer.java (server, Apache POI)
+      const items = (doc.items ?? []).map((it, i) => {
         const net = Number(it.netUnitPrice ?? it.unitPrice) || 0;
         const qty = Number(it.qty) || 0;
-        mockSetCell(ws, r, 0, i + 1);
-        mockSetCell(ws, r, 1, it.description ?? '');
-        mockSetCell(ws, r, 2, qty);
-        mockSetCell(ws, r, 3, it.unit ?? 'แผ่น');
-        mockSetCell(ws, r, 4, Number(it.unitPrice) || 0);
-        mockSetCell(ws, r, 5, it.discountLabel ?? '');
-        mockSetCell(ws, r, 6, net);
-        mockSetCell(ws, r, 8, net * qty);
+        return `${i + 1}. ${it.description ?? ''} — ${qty} ${it.unit ?? 'แผ่น'} × ${Number(it.unitPrice) || 0} = ${net * qty}`;
       });
-
-      // Summary block (rows 43-46 = I44-I47 in 1-based)
-      mockSetCell(ws, 43, 8, doc.subtotal ?? 0);
-      mockSetCell(ws, 44, 7, (doc.depositPercent ?? 0.5) * 100);
-      mockSetCell(ws, 44, 8, doc.depositAmount ?? 0);
-      mockSetCell(ws, 45, 7, 7);
-      mockSetCell(ws, 45, 8, doc.vatAmount ?? 0);
-      mockSetCell(ws, 46, 8, doc.totalPayable ?? 0);
-
-      // Notes (rows 36-42, col 1)
-      (doc.notes ?? []).slice(0, 7).forEach((note, i) => {
-        mockSetCell(ws, 36 + i, 1, `${i + 1}. ${note}`);
-      });
-      mockSetCell(ws, 47, 1, 'จินตนา หาญมนตรี'); // preparer
-
-      return xlsxBlob(wb);
+      const lines = [
+        `ใบแจ้งยอดมัดจำ  เลขที่ ${doc.docNumber ?? 'DRAFT'}`,
+        `วันที่: ${mockThaiDate(doc.issueDate ? new Date(doc.issueDate) : new Date())}`,
+        `เรียน ${doc.customerName ?? ''}`,
+        ...(doc.reference ? [`อ้างอิง: ${doc.reference}`] : []),
+        ...(doc.projectName ? [`Project: ${doc.projectName}`] : []),
+        '',
+        ...items,
+        '',
+        `ยอดก่อนภาษี: ${doc.subtotal ?? 0}`,
+        `มัดจำ ${((doc.depositPercent ?? 0.5) * 100)}%: ${doc.depositAmount ?? 0}`,
+        `ภาษี 7%: ${doc.vatAmount ?? 0}`,
+        `ยอดชำระ: ${doc.totalPayable ?? 0}`,
+      ];
+      return mockDocPlaceholderBlob(lines);
     },
 
     async downloadPdf(docId) {
