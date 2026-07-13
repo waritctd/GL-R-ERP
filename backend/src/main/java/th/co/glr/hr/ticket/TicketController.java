@@ -19,6 +19,8 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.Page;
 import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.factory.FactoryEmailService;
+import org.springframework.web.bind.annotation.PutMapping;
+import th.co.glr.hr.ticket.TicketResponses.CalculatePricesResponse;
 import th.co.glr.hr.ticket.TicketResponses.TicketDetailResponse;
 import th.co.glr.hr.ticket.TicketResponses.TicketListResponse;
 
@@ -151,9 +153,21 @@ public class TicketController {
     }
 
     @PostMapping("/{id}/calculate-prices")
-    TicketDetailResponse calculatePrices(@PathVariable long id, HttpSession session) {
+    CalculatePricesResponse calculatePrices(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.calculatePrices(id, user));
+        TicketService.CalculatePricesResult result = ticketService.calculatePrices(id, user);
+        return new CalculatePricesResponse(result.ticket(), result.breakdown());
+    }
+
+    @PutMapping("/{id}/items/{itemId}/price-override")
+    TicketDetailResponse overrideItemPrice(
+        @PathVariable long id,
+        @PathVariable long itemId,
+        @Valid @RequestBody OverridePriceRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.overrideItemPrice(id, itemId, request, user));
     }
 
     @PatchMapping("/{id}/items")
@@ -174,5 +188,55 @@ public class TicketController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         return new TicketDetailResponse(ticketService.comment(id, request, user));
+    }
+
+    // ── Dual-track post-quotation endpoints (ข้อ 13) ─────────────────────────
+
+    @PostMapping("/{id}/confirm-customer")
+    TicketDetailResponse confirmCustomer(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.confirmCustomer(id, user));
+    }
+
+    @PostMapping("/{id}/deposit-notice")
+    TicketDetailResponse issueDepositNotice(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.issueDepositNotice(id, user));
+    }
+
+    @PostMapping("/{id}/deposit-paid")
+    TicketDetailResponse confirmDepositPaid(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.confirmDepositPaid(id, user));
+    }
+
+    @PostMapping("/{id}/import-request")
+    TicketDetailResponse issueImportRequest(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.issueImportRequest(id, user));
+    }
+
+    @PostMapping("/{id}/ir-sent")
+    TicketDetailResponse markIrSent(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.markIrSent(id, user));
+    }
+
+    @PostMapping("/{id}/shipping")
+    TicketDetailResponse markShipping(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.markShipping(id, user));
+    }
+
+    @PostMapping("/{id}/goods-received")
+    TicketDetailResponse markGoodsReceived(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.markGoodsReceived(id, user));
+    }
+
+    @PostMapping("/{id}/final-payment")
+    TicketDetailResponse confirmFinalPayment(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.confirmFinalPayment(id, user));
     }
 }

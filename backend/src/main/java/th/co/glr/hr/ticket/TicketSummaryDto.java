@@ -24,5 +24,7 @@ public record TicketSummaryDto(
     Instant updatedAt,
     Instant closedAt,
     int itemCount,
-    boolean hasEdits
+    boolean hasEdits,
+    String paymentStatus,
+    String fulfillmentStatus
 ) {}

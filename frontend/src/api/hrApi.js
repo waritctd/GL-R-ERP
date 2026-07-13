@@ -87,9 +87,23 @@ export const api = {
     cancel: (id) => apiRequest(API_ROUTES.tickets.action(id, 'cancel'), { method: 'POST' }),
     editItems: (id, payload) => apiRequest(API_ROUTES.tickets.editItems(id), { method: 'PATCH', body: payload }),
     comment: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'comments'), { method: 'POST', body: payload }),
+    overrideItemPrice: (id, itemId, payload) => apiRequest(`/api/tickets/${id}/items/${itemId}/price-override`, { method: 'PUT', body: payload }),
     createDocDraft: (id, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(id), { method: 'POST', body: payload }),
     listDocs: (id) => apiRequest(API_ROUTES.tickets.listDocs(id)),
     revision: (id, payload) => apiRequest(API_ROUTES.tickets.revision(id), { method: 'POST', body: payload }),
+    downloadRemainingInvoice: async (id) => {
+      const res = await fetch(API_ROUTES.depositNotices.remainingInvoiceFile(id), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    confirmCustomer: (id) => apiRequest(API_ROUTES.tickets.action(id, 'confirm-customer'), { method: 'POST' }),
+    issueDepositNotice: (id) => apiRequest(API_ROUTES.tickets.action(id, 'deposit-notice'), { method: 'POST' }),
+    confirmDepositPaid: (id) => apiRequest(API_ROUTES.tickets.action(id, 'deposit-paid'), { method: 'POST' }),
+    issueImportRequest: (id) => apiRequest(API_ROUTES.tickets.action(id, 'import-request'), { method: 'POST' }),
+    markIrSent: (id) => apiRequest(API_ROUTES.tickets.action(id, 'ir-sent'), { method: 'POST' }),
+    markShipping: (id) => apiRequest(API_ROUTES.tickets.action(id, 'shipping'), { method: 'POST' }),
+    markGoodsReceived: (id) => apiRequest(API_ROUTES.tickets.action(id, 'goods-received'), { method: 'POST' }),
+    confirmFinalPayment: (id) => apiRequest(API_ROUTES.tickets.action(id, 'final-payment'), { method: 'POST' }),
     downloadQuotationXlsx: async (id, quotationId) => {
       const res = await fetch(API_ROUTES.tickets.quotationFile(id, quotationId, 'xlsx'), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');
