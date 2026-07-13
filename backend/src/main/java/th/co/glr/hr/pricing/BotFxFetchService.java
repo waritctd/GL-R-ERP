@@ -31,11 +31,13 @@ public class BotFxFetchService {
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
 
-    public BotFxFetchService(FxRateRepository fxRates, AppProperties props,
-                              RestClient.Builder restClientBuilder, ObjectMapper objectMapper) {
+    // Built directly (not injected) so this service doesn't depend on a RestClient.Builder
+    // bean being auto-configured — that autoconfiguration moved/changed shape across Spring
+    // Boot's recent module split, and no other part of this codebase needs an HTTP client bean.
+    public BotFxFetchService(FxRateRepository fxRates, AppProperties props, ObjectMapper objectMapper) {
         this.fxRates      = fxRates;
         this.props        = props;
-        this.restClient   = restClientBuilder.build();
+        this.restClient   = RestClient.builder().build();
         this.objectMapper = objectMapper;
     }
 

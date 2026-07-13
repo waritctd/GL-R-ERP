@@ -9,6 +9,7 @@ public final class TicketStatus {
     public static final String QUOTATION_ISSUED = "quotation_issued";
     public static final String CLOSED           = "closed";
     public static final String CANCELLED        = "cancelled";
+    public static final String DOCUMENT_ISSUED  = "document_issued";
 
     private TicketStatus() {}
 }
