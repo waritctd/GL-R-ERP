@@ -58,22 +58,13 @@
 --     issued/draft are upper-cased to ISSUED/DRAFT to match that
 --     convention. version (deposit_notice) / quotation_version
 --     (quotation) is the real revision counter; the CSV's revision_no
---     1->2 for QN-2026-00001 is modeled as two deposit_notice rows with
---     version 1 and version 2. The CSV's note that both rows share the
---     same doc_number ("original retained") does NOT match the real
---     schema: main's V41__deposit_notice_integrity.sql enforces
---     doc_number to be globally unique (ux_deposit_notice_doc_number),
---     matching DepositNoticeRepository's real issue() behavior, which
---     always assigns a brand-new sequential doc_number to each issued
---     revision. So version 2 here is given the next unused doc_number
---     (QN-2026-00003) instead of reusing QN-2026-00001 -- confirmed via
---     a migration-replay run (docs/agent-handoffs/44_nft-migration-replay.md
---     on main) that the CSV-literal same-doc_number modeling violates
---     that constraint. BOTH rows still keep the CSV's literal status
---     ISSUED (not reinterpreting version 1 as SUPERSEDED) -- the version
---     column alone is enough to distinguish revision history for DOC-05;
---     only the doc_number collision itself was a real bug, not the
---     status choice. sales.quotation.issued_by is NOT NULL
+--     1->2 for QN-2026-00001 is modeled as two deposit_notice rows
+--     sharing doc_number with version 1 and version 2 ("original
+--     retained" per the CSV note). Per the task instruction to use the
+--     CSV verbatim rather than invent business logic, BOTH rows keep the
+--     CSV's literal status ISSUED (not reinterpreting version 1 as
+--     SUPERSEDED) -- the version column alone is enough to distinguish
+--     revision history for DOC-05. sales.quotation.issued_by is NOT NULL
 --     even for a draft; the ticket's assigned rep is used since the CSV
 --     gives no separate issuer for the draft quotation. quotation.number
 --     reuses the CSV's doc_number (QN-2026-00002) as the required UNIQUE
@@ -217,11 +208,9 @@ WHERE NOT EXISTS (
 );
 
 -- ---------------------------------------------------------------------
--- D. DOCUMENTS (Documents.csv): 2 deposit_notice rows (version 1 -> 2,
---    the DOC-05 revision fixture) + 1 draft quotation (DOC-02/03/04
---    preview/edit/issue fixture). Version 2 gets its own doc_number
---    (QN-2026-00003) rather than the CSV-literal QN-2026-00001 reused
---    from version 1 -- see the doc_number note in the file header.
+-- D. DOCUMENTS (Documents.csv): 2 deposit_notice rows (same doc_number,
+--    version 1 -> 2, the DOC-05 revision fixture) + 1 draft quotation
+--    (DOC-02/03/04 preview/edit/issue fixture).
 -- ---------------------------------------------------------------------
 INSERT INTO sales.deposit_notice (
     ticket_id, doc_type, version, doc_number, issue_date, status,
@@ -232,7 +221,7 @@ SELECT t.ticket_id, 'DEPOSIT_NOTICE', v.version, v.doc_number, v.issue_date, v.s
        TRIM(CONCAT_WS(' ', issuer.first_name_th, issuer.last_name_th))
 FROM (VALUES
     ('UAT-TKT-04', 1, 'QN-2026-00001', DATE '2026-06-20', 'ISSUED', 'Original issued document (XLSX)'),
-    ('UAT-TKT-04', 2, 'QN-2026-00003', DATE '2026-06-25', 'ISSUED', 'Revision bumping revision_no; original retained; own doc_number (main V41 uniqueness)')
+    ('UAT-TKT-04', 2, 'QN-2026-00001', DATE '2026-06-25', 'ISSUED', 'Revision bumping revision_no; original retained')
 ) AS v(ticket_code, version, doc_number, issue_date, status, notes)
 JOIN sales.ticket t ON t.code = v.ticket_code
 JOIN sales.customer cust ON cust.name = 'บริษัท เมโทรพร็อพเพอร์ตี้ จำกัด'
