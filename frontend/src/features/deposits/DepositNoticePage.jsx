@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
@@ -40,47 +40,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     items: [],
   });
 
-  useEffect(() => {
-    async function init() {
-      setLoading(true);
-      try {
-        const [templatesRes, customersRes] = await Promise.all([
-          api.depositNotices.noteTemplates(),
-          api.customers.search(''),
-        ]);
-        setTemplates(templatesRes.templates ?? []);
-        setCustomers(customersRes.customers ?? []);
-
-        const docsRes = await api.depositNotices.listByTicket(ticketId);
-        const draft = (docsRes.depositNotices ?? []).find((d) => d.status === 'DRAFT');
-
-        let docData;
-        if (draft) {
-          docData = draft;
-        } else {
-          const defaultNotes = (templatesRes.templates ?? [])
-            .filter((t) => t.defaultSelected)
-            .map((t) => t.text);
-          const created = await api.depositNotices.createDraft(ticketId, {
-            notes: defaultNotes,
-            depositPercent: 0.5,
-          });
-          docData = created.depositNotice;
-        }
-
-        setDoc(docData);
-        // Try to match customerName against master to auto-fill taxId + address
-        populateForm(docData, customersRes.customers ?? []);
-      } catch (err) {
-        showToast('error', err.message || 'โหลดไม่สำเร็จ');
-      } finally {
-        setLoading(false);
-      }
-    }
-    init();
-  }, [ticketId]);
-
-  function populateForm(d, customerList = []) {
+  const populateForm = useCallback((d, customerList = []) => {
     // If taxId/address already saved in draft, use them directly
     // Otherwise try to match customerName against master
     let taxId   = d.customerTaxId   ?? '';
@@ -104,7 +64,48 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
       notes:           d.notes         ?? [],
       items:           (d.items ?? []).map((it) => ({ ...it })),
     });
-  }
+  }, []);
+
+  const init = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [templatesRes, customersRes] = await Promise.all([
+        api.depositNotices.noteTemplates(),
+        api.customers.search(''),
+      ]);
+      setTemplates(templatesRes.templates ?? []);
+      setCustomers(customersRes.customers ?? []);
+
+      const docsRes = await api.depositNotices.listByTicket(ticketId);
+      const draft = (docsRes.depositNotices ?? []).find((d) => d.status === 'DRAFT');
+
+      let docData;
+      if (draft) {
+        docData = draft;
+      } else {
+        const defaultNotes = (templatesRes.templates ?? [])
+          .filter((t) => t.defaultSelected)
+          .map((t) => t.text);
+        const created = await api.depositNotices.createDraft(ticketId, {
+          notes: defaultNotes,
+          depositPercent: 0.5,
+        });
+        docData = created.depositNotice;
+      }
+
+      setDoc(docData);
+      // Try to match customerName against master to auto-fill taxId + address
+      populateForm(docData, customersRes.customers ?? []);
+    } catch (err) {
+      showToast('error', err.message || 'โหลดไม่สำเร็จ');
+    } finally {
+      setLoading(false);
+    }
+  }, [populateForm, showToast, ticketId]);
+
+  useEffect(() => {
+    init();
+  }, [init]);
 
   function setField(key, value) {
     setForm((f) => ({ ...f, [key]: value }));

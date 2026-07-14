@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import imageCompression from 'browser-image-compression';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
@@ -67,7 +67,7 @@ export function CommissionPage({ user, showToast }) {
   const payrollOnly = ROLE_PERMISSIONS.canViewPayrollCommissions.includes(user.role) && !canSubmit && !canApprove;
   const salesReadOnlyDeductions = user.role === 'sales';
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       if (payrollOnly) {
@@ -84,9 +84,9 @@ export function CommissionPage({ user, showToast }) {
     } finally {
       setLoading(false);
     }
-  }
+  }, [month, payrollOnly, showToast]);
 
-  useEffect(() => { load(); }, [month, payrollOnly]);
+  useEffect(() => { load(); }, [load]);
 
   const totals = useMemo(() => {
     const base = records.reduce((sum, item) => sum + Number(item.commissionableBase || 0), 0);
@@ -108,7 +108,7 @@ export function CommissionPage({ user, showToast }) {
     return canManagerReview(record) || canCeoReview(record);
   }
 
-  const commissionColumns = useMemo(() => [
+  const commissionColumns = [
     {
       key: 'invoiceNumber',
       header: 'Invoice',
@@ -207,7 +207,7 @@ export function CommissionPage({ user, showToast }) {
         </span>
       ),
     },
-  ], [canApprove, saving, user.role]);
+  ];
 
   function updateForm(field, value) {
     setForm((current) => ({ ...current, [field]: value }));

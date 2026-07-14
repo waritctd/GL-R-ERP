@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { api } from './api/index.js';
 import { AppShell } from './components/layout/AppShell.jsx';
@@ -68,6 +68,7 @@ function DepositNoticeRoute({ user, showToast }) {
 
 export function App() {
   const [user, setUser] = useState(null);
+  const [authRestoring, setAuthRestoring] = useState(true);
   const [loading, setLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
@@ -103,6 +104,8 @@ export function App() {
         setUser(response.user);
       } catch {
         if (alive) setUser(null);
+      } finally {
+        if (alive) setAuthRestoring(false);
       }
     }
     restoreSession();
@@ -115,6 +118,7 @@ export function App() {
     try {
       const response = await api.auth.login(payload);
       setUser(response.user);
+      setAuthRestoring(false);
       showToast('success', 'เข้าสู่ระบบสำเร็จ');
     } catch (error) {
       setLoginError(error.message || 'เข้าสู่ระบบไม่สำเร็จ');
@@ -137,8 +141,18 @@ export function App() {
   async function handleLogout() {
     await api.auth.logout();
     setUser(null);
+    setAuthRestoring(false);
     resetData();
     navigate('/');
+  }
+
+  if (authRestoring) {
+    return (
+      <>
+        <RouteFallback />
+        <Toast toast={toast} onDismiss={dismissToast} />
+      </>
+    );
   }
 
   if (!user) {

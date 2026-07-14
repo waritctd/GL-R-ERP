@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { DataTable } from '../../components/common/DataTable.jsx';
@@ -64,7 +64,7 @@ export function TicketListPage({ user, showToast }) {
 
   const canCreate = ROLE_PERMISSIONS.canCreateTickets.includes(user.role);
 
-  async function loadTickets(status = statusFilter) {
+  const loadTickets = useCallback(async (status = statusFilter) => {
     setLoading(true);
     try {
       const params = status ? { status } : {};
@@ -75,11 +75,11 @@ export function TicketListPage({ user, showToast }) {
     } finally {
       setLoading(false);
     }
-  }
+  }, [showToast, statusFilter]);
 
   useEffect(() => {
     loadTickets(statusFilter);
-  }, [statusFilter]);
+  }, [loadTickets, statusFilter]);
 
   async function handleCreate(payload) {
     await api.tickets.create(payload);

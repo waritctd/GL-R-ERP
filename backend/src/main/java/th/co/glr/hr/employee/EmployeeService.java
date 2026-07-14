@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -89,7 +90,12 @@ public class EmployeeService {
 
     @Transactional
     public EmployeeDto create(UpsertEmployeeRequest request, UserPrincipal user) {
-        long id = employees.create(request);
+        long id;
+        try {
+            id = employees.create(request);
+        } catch (DuplicateKeyException exception) {
+            throw new ApiException(HttpStatus.CONFLICT, "Employee code already exists");
+        }
         EmployeeDto created = get(id, user);
         auditService.record(user, "CREATE_EMPLOYEE", "employee", id, null, created);
         return created;

@@ -17,8 +17,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
@@ -175,6 +176,23 @@ class EmployeeServiceTest {
         assertThat(result.bankAccount()).isEqualTo("123-4-56789-0");
         assertThat(result.payType()).isEqualTo("รายเดือน");
         assertThat(result.sensitive().nationalId()).isEqualTo("1101700000005");
+    }
+
+    @Test
+    void duplicateEmployeeCodeReturnsConflictInsteadOfUnexpectedServerError() {
+        UpsertEmployeeRequest request = new UpsertEmployeeRequest(
+            "GLR-10001", null, "พนักงานซ้ำ", "Duplicate Employee", null, null, null, null, null, null,
+            "duplicate@glr.co.th", null, "HR", "HR Division", "แผนกทดสอบ",
+            null, null, null, "ACT", BigDecimal.ZERO, null, null, null, null, null, null);
+        when(employees.create(request)).thenThrow(new DuplicateKeyException("duplicate employee_code"));
+
+        assertThatThrownBy(() -> service.create(request, hrUser()))
+            .isInstanceOfSatisfying(ApiException.class, exception -> {
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(exception.getMessage()).isEqualTo("Employee code already exists");
+            });
+
+        verifyNoInteractions(auditService);
     }
 
     private ListAppender<ILoggingEvent> attachAuditAppender() {

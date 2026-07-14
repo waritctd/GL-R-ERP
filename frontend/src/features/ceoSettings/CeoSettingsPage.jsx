@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../api/index.js';
 
 function pctDisplay(val) {
@@ -23,7 +23,7 @@ export function CeoSettingsPage({ showToast }) {
   const [configDraft, setConfigDraft] = useState({});
   const [savingConfig, setSavingConfig] = useState(false);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const [fxRes, cfgRes] = await Promise.all([
@@ -37,9 +37,9 @@ export function CeoSettingsPage({ showToast }) {
     } finally {
       setLoading(false);
     }
-  }
+  }, [showToast]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [load]);
 
   async function saveFxRate(currency) {
     const val = editFx[currency];

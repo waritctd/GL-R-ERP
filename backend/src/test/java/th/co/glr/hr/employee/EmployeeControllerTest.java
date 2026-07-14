@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -87,6 +88,18 @@ class EmployeeControllerTest {
             .andExpect(jsonPath("$.temporaryPassword").value("Temp-Abcd2345"));
 
         verify(employeeService).resetPassword(eq(10L), any(UserPrincipal.class));
+    }
+
+    @Test
+    void unsupportedEmployeeUpdateMethodReturnsMethodNotAllowed() throws Exception {
+        mvc.perform(put("/api/employees/10")
+                .session(sessionFor("hr"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"nameTh\":\"ทดสอบ\"}"))
+            .andExpect(status().isMethodNotAllowed())
+            .andExpect(jsonPath("$.message").value("Method not allowed"));
+
+        verifyNoInteractions(employeeService);
     }
 
     @Test

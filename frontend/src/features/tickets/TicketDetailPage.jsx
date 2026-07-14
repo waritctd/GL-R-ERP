@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
@@ -93,7 +93,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // Confirmation dialogs (state-driven, replaces native browser confirm)
   const [confirm, setConfirm] = useState(null); // { kind: 'deleteAttachment', id, name } | { kind: 'cancelTicket' } | null
 
-  async function loadTicket() {
+  const loadTicket = useCallback(async () => {
     setLoading(true);
     try {
       const response = await api.tickets.get(ticketId);
@@ -103,9 +103,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     } finally {
       setLoading(false);
     }
-  }
+  }, [showToast, ticketId]);
 
-  async function loadAttachments() {
+  const loadAttachments = useCallback(async () => {
     setAttachLoading(true);
     try {
       const res = await api.attachments.list(ticketId);
@@ -113,14 +113,14 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     } catch { /* non-critical */ } finally {
       setAttachLoading(false);
     }
-  }
+  }, [ticketId]);
 
   useEffect(() => {
     if (ticketId) {
       loadTicket();
       loadAttachments();
     }
-  }, [ticketId]);
+  }, [loadAttachments, loadTicket, ticketId]);
 
   async function doAction(fn, successMsg) {
     setActionLoading(true);
