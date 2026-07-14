@@ -17,6 +17,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -72,6 +73,17 @@ public class ApiExceptionHandler {
         return ResponseEntity
             .status(HttpStatus.METHOD_NOT_ALLOWED)
             .body(new ErrorResponse("Method not allowed", HttpStatus.METHOD_NOT_ALLOWED.value()));
+    }
+
+    // Thrown when a multipart upload exceeds spring.servlet.multipart.max-file-size /
+    // max-request-size (already enforced). Without this handler it falls into handleUnexpected
+    // below and gets misreported as a 500; this only normalizes the response status/body for an
+    // already-enforced limit — the configured size limits themselves are unchanged.
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    ResponseEntity<ErrorResponse> handleMaxUploadSizeExceeded(MaxUploadSizeExceededException exception) {
+        return ResponseEntity
+            .status(HttpStatus.PAYLOAD_TOO_LARGE)
+            .body(new ErrorResponse("Uploaded file is too large", HttpStatus.PAYLOAD_TOO_LARGE.value()));
     }
 
     // Thrown for any request path with no matching controller or static resource (e.g. GET / on
