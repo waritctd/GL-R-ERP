@@ -15,6 +15,11 @@ services:
     envVars:
       - key: SPRING_PROFILES_ACTIVE
         value: prod,demo
+      # The hosted Render service uses a database that already has demo migrations
+      # in flyway_schema_history. Keep the location explicit so deploys still
+      # resolve V21/V32 even if dashboard profile settings drift.
+      - key: SPRING_FLYWAY_LOCATIONS
+        value: classpath:db/migration,classpath:db/migration-demo
       - key: APP_FLYWAY_ENABLED
         value: "true"
       # Frontend origin is only needed as a CORS fallback; the Vercel proxy keeps calls
