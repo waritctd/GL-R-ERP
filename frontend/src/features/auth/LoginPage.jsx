@@ -74,7 +74,7 @@ export function LoginPage({ onLogin, loading, error }) {
             </span>
           </label>
 
-          {error ? <div className="form-error">{error}</div> : null}
+          {error ? <div className="form-error" role="alert">{error}</div> : null}
 
           <Button type="submit" disabled={loading}>
             <Icon name="check" />

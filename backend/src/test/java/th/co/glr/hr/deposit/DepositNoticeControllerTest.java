@@ -32,7 +32,7 @@ class DepositNoticeControllerTest {
 
     @Test
     void fileDefaultsToPdfForIssuedDocument() throws Exception {
-        when(service.getById(99L)).thenReturn(document());
+        when(service.getById(eq(99L), any(UserPrincipal.class))).thenReturn(document());
         when(service.getPdf(eq(99L), any(UserPrincipal.class))).thenReturn("%PDF-1.4\n".getBytes());
 
         mvc.perform(get("/api/deposit-notices/99/file").session(session()))
@@ -44,7 +44,7 @@ class DepositNoticeControllerTest {
 
     @Test
     void fileStillSupportsExplicitXlsxDownload() throws Exception {
-        when(service.getById(99L)).thenReturn(document());
+        when(service.getById(eq(99L), any(UserPrincipal.class))).thenReturn(document());
         when(service.getXlsx(eq(99L), any(UserPrincipal.class))).thenReturn(new byte[] {'P', 'K', 3, 4});
 
         mvc.perform(get("/api/deposit-notices/99/file?format=xlsx").session(session()))

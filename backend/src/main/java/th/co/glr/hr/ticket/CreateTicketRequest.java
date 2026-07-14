@@ -13,5 +13,5 @@ public record CreateTicketRequest(
     Long projectId,
     Long contactId,
     String note,
-    @NotEmpty @Valid List<TicketItemRequest> items
+    @NotEmpty List<@Valid TicketItemRequest> items
 ) {}

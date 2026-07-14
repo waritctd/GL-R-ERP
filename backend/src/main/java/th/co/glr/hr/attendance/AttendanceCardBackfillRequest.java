@@ -14,8 +14,7 @@ import java.util.List;
 public record AttendanceCardBackfillRequest(
     @JsonProperty("mappings")
     @NotEmpty
-    @Valid
-    List<CardMapping> mappings
+    List<@Valid CardMapping> mappings
 ) {
     public record CardMapping(
         @JsonProperty("employee_code")

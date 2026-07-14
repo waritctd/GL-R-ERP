@@ -7,6 +7,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.AnonymousAuthenticationFilter;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
@@ -35,5 +37,12 @@ public class SecurityConfig {
                 .anyRequest().authenticated())
             .addFilterBefore(sessionSecurityFilter, AnonymousAuthenticationFilter.class);
         return http.build();
+    }
+
+    @Bean
+    UserDetailsService userDetailsService() {
+        return username -> {
+            throw new UsernameNotFoundException("GL-R uses session principals created by AuthService");
+        };
     }
 }

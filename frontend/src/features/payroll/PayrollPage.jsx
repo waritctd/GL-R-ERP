@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
@@ -164,8 +166,6 @@ export function PayrollPage({ showToast }) {
   const [period, setPeriod] = useState(null);
   const [adjustments, setAdjustments] = useState({});
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [confirmProcess, setConfirmProcess] = useState(false);
 
   const selectedLine = useMemo(
@@ -176,18 +176,6 @@ export function PayrollPage({ showToast }) {
     ? adjustments[selectedLine.employeeId] || adjustmentFromLine(selectedLine)
     : null;
   const status = statusInfo(period?.status);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const response = await api.payroll.current({ payrollMonth: month });
-      applyPeriod(response.period, { applyUatDefaults: true });
-    } catch (error) {
-      showToast('error', error.message || 'โหลดเงินเดือนไม่สำเร็จ');
-    } finally {
-      setLoading(false);
-    }
-  }
 
   function applyPeriod(nextPeriod, { applyUatDefaults = false } = {}) {
     setPeriod(nextPeriod);
@@ -200,10 +188,26 @@ export function PayrollPage({ showToast }) {
     setSelectedEmployeeId((current) => current || nextPeriod?.lines?.[0]?.employeeId || null);
   }
 
+  // --- Read (TanStack Query) ---
+  const currentQuery = useQuery({
+    queryKey: queryKeys.payrollCurrent(month),
+    queryFn: () => api.payroll.current({ payrollMonth: month }).then((response) => response.period),
+  });
+  const loading = currentQuery.isLoading || currentQuery.isFetching;
+
   useEffect(() => {
     setSelectedEmployeeId(null);
-    load();
   }, [month]);
+
+  // Every fresh `current` fetch (mount, month change, manual refresh) re-derives
+  // `period`/`adjustments` with UAT defaults — mirrors the old `load()`'s behavior.
+  useEffect(() => {
+    if (currentQuery.data !== undefined) applyPeriod(currentQuery.data, { applyUatDefaults: true });
+  }, [currentQuery.data]);
+
+  useEffect(() => {
+    if (currentQuery.error) showToast('error', currentQuery.error.message || 'โหลดเงินเดือนไม่สำเร็จ');
+  }, [currentQuery.error, showToast]);
 
   function payload() {
     return {
@@ -212,42 +216,29 @@ export function PayrollPage({ showToast }) {
     };
   }
 
-  async function preview() {
-    setSaving(true);
-    try {
-      const response = await api.payroll.preview(payload());
-      applyPeriod(response.period);
+  // --- Writes (TanStack Query mutations) ---
+  const previewMutation = useMutation({
+    mutationFn: (payload) => api.payroll.preview(payload).then((response) => response.period),
+    onSuccess: (nextPeriod) => {
+      applyPeriod(nextPeriod);
       showToast('success', 'คำนวณตัวอย่างเงินเดือนแล้ว');
-    } catch (error) {
-      showToast('error', error.message || 'คำนวณเงินเดือนไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-    }
-  }
+    },
+    onError: (error) => showToast('error', error.message || 'คำนวณเงินเดือนไม่สำเร็จ'),
+  });
 
-  function process() {
-    setConfirmProcess(true);
-  }
-
-  async function confirmProcessPayroll() {
-    setSaving(true);
-    try {
-      const response = await api.payroll.process(payload());
-      applyPeriod(response.period);
+  const processMutation = useMutation({
+    mutationFn: (payload) => api.payroll.process(payload).then((response) => response.period),
+    onSuccess: (nextPeriod) => {
+      applyPeriod(nextPeriod);
       showToast('success', 'ประมวลผลเงินเดือนเรียบร้อย');
       setConfirmProcess(false);
-    } catch (error) {
-      showToast('error', error.message || 'ประมวลผลเงินเดือนไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-    }
-  }
+    },
+    onError: (error) => showToast('error', error.message || 'ประมวลผลเงินเดือนไม่สำเร็จ'),
+  });
 
-  async function exportBankFile() {
-    if (!period?.id) return;
-    setSaving(true);
-    try {
-      const text = await api.payroll.bankExport(period.id);
+  const bankExportMutation = useMutation({
+    mutationFn: (periodId) => api.payroll.bankExport(periodId),
+    onSuccess: (text) => {
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
@@ -256,11 +247,27 @@ export function PayrollPage({ showToast }) {
       anchor.click();
       URL.revokeObjectURL(url);
       showToast('success', 'ดาวน์โหลดไฟล์โอนเงินแล้ว');
-    } catch (error) {
-      showToast('error', error.message || 'ดาวน์โหลดไฟล์ไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-    }
+    },
+    onError: (error) => showToast('error', error.message || 'ดาวน์โหลดไฟล์ไม่สำเร็จ'),
+  });
+
+  const saving = previewMutation.isPending || processMutation.isPending || bankExportMutation.isPending;
+
+  function preview() {
+    previewMutation.mutate(payload());
+  }
+
+  function process() {
+    setConfirmProcess(true);
+  }
+
+  function confirmProcessPayroll() {
+    processMutation.mutate(payload());
+  }
+
+  function exportBankFile() {
+    if (!period?.id) return;
+    bankExportMutation.mutate(period.id);
   }
 
   function updateAdjustment(field, value) {
@@ -286,7 +293,7 @@ export function PayrollPage({ showToast }) {
               รอบเดือน
               <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
             </label>
-            <Button type="button" variant="secondary" onClick={load} disabled={loading || saving}>
+            <Button type="button" variant="secondary" onClick={() => currentQuery.refetch()} disabled={loading || saving}>
               <Icon name="refresh" />
               รีเฟรช
             </Button>

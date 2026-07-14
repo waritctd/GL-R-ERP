@@ -5,6 +5,6 @@ import jakarta.validation.constraints.NotEmpty;
 import java.util.List;
 
 public record EditItemsRequest(
-    @NotEmpty @Valid List<TicketItemRequest> items,
+    @NotEmpty List<@Valid TicketItemRequest> items,
     String note
 ) {}

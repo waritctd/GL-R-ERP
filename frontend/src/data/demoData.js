@@ -210,7 +210,6 @@ export function createDemoDatabase() {
   });
 
   const users = [
-    { id: 1, email: 'admin@glr.co.th', password: 'demo1234', name: 'ระบบผู้ดูแล', role: 'admin', employeeId: employees[20].id, active: true, createdAt: iso(2025, 1, 5) },
     { id: 2, email: 'hr@glr.co.th', password: 'demo1234', name: employees[20].nameTh, role: 'hr', employeeId: employees[20].id, active: true, createdAt: iso(2025, 1, 5) },
     { id: 3, email: 'director@glr.co.th', password: 'demo1234', name: 'คุณวิชัย ธนาคาร', role: 'director', employeeId: employees[0].id, active: true, createdAt: iso(2025, 1, 5) },
     { id: 4, email: 'employee@glr.co.th', password: 'demo1234', name: employees[8].nameTh, role: 'employee', employeeId: employees[8].id, active: true, createdAt: iso(2025, 2, 11) },

@@ -13,4 +13,7 @@ export const queryKeys = {
   leaveTypes: () => ['leave', 'types'],
   overtimeRequests: (filters = {}) => ['overtime', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   overtimeEmployees: () => ['overtime', 'employees'],
+  attendancePunches: (filters = {}) => ['attendance', 'punches', filters.from, filters.to, filters.employeeId, filters.limit],
+  attendanceDevices: () => ['attendance', 'devices'],
+  payrollCurrent: (payrollMonth) => ['payroll', 'current', payrollMonth],
 };

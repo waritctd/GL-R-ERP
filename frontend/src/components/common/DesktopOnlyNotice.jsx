@@ -1,4 +1,4 @@
-// Payroll processing and attendance import are desktop-first admin flows: they still
+// Payroll processing and attendance import are desktop-first HR/finance flows: they still
 // reflow to cards on mobile, but nothing else says so. This is a small, non-blocking
 // heads-up — it never disables or hides any functionality.
 //

@@ -22,6 +22,7 @@ public class TicketService {
     private static final Set<String> SALES_ROLES  = Set.of("sales");
     private static final Set<String> IMPORT_ROLES = Set.of("import");
     private static final Set<String> CEO_ROLES    = Set.of("ceo");
+    private static final Set<String> TICKET_ACCESS_ROLES = Set.of("import", "ceo", "hr", "sales_manager");
     private static final Set<String> QUOTATION_ALLOWED_STATUSES =
         Set.of(TicketStatus.APPROVED, TicketStatus.QUOTATION_ISSUED);
     private static final Set<String> PROPOSE_ALLOWED_STATUSES =
@@ -46,12 +47,11 @@ public class TicketService {
     }
 
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
-        Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
-        return tickets.findSummaries(status, createdByFilter);
+        return tickets.findSummaries(status, createdByFilterForList(actor));
     }
 
     public Page<TicketSummaryDto> listPage(String status, UserPrincipal actor, PageRequest page) {
-        Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
+        Long createdByFilter = createdByFilterForList(actor);
         List<TicketSummaryDto> rows = tickets.findSummaries(status, createdByFilter, page);
         // Skip the COUNT round-trip when the whole result set fits on page 0.
         int total = (page.page() == 0 && rows.size() < page.size())
@@ -62,10 +62,33 @@ public class TicketService {
 
     public TicketDto get(long id, UserPrincipal actor) {
         TicketDto ticket = requireTicket(id);
-        if ("sales".equals(actor.role()) && ticket.summary().createdById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
-        }
+        requireTicketAccess(ticket.summary(), actor);
         return ticket;
+    }
+
+    public void requireTicketAccess(long ticketId, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireTicketAccess(s, actor);
+    }
+
+    private void requireTicketAccess(TicketSummaryDto summary, UserPrincipal actor) {
+        if ("sales".equals(actor.role()) && summary.createdById() == actor.id()) {
+            return;
+        }
+        if (TICKET_ACCESS_ROLES.contains(actor.role())) {
+            return;
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+    }
+
+    private Long createdByFilterForList(UserPrincipal actor) {
+        if ("sales".equals(actor.role())) {
+            return actor.id();
+        }
+        if (TICKET_ACCESS_ROLES.contains(actor.role())) {
+            return null;
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
     }
 
     @Transactional
@@ -107,9 +130,7 @@ public class TicketService {
 
     @Transactional
     public TicketDto proposePrice(long ticketId, ProposePriceRequest request, UserPrincipal actor) {
-        if (!IMPORT_ROLES.contains(actor.role()) && !isAdmin(actor)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
-        }
+        requireRole(actor, IMPORT_ROLES);
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
         String currentStatus = s.status();
@@ -208,9 +229,7 @@ public class TicketService {
 
     private QuotationRenderContext loadQuotationContext(long ticketId, long quotationId, UserPrincipal actor) {
         TicketDto ticket = requireTicket(ticketId);
-        if ("sales".equals(actor.role()) && ticket.summary().createdById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
-        }
+        requireTicketAccess(ticket.summary(), actor);
         QuotationDto quotation = ticket.quotations().stream()
             .filter(q -> q.id() == quotationId)
             .findFirst()
@@ -224,7 +243,7 @@ public class TicketService {
     @Transactional
     public TicketDto close(long ticketId, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
-        if (s.createdById() != actor.id() && !isAdmin(actor)) {
+        if (s.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
         String st = s.status();
@@ -249,6 +268,7 @@ public class TicketService {
     public TicketDto confirmCustomer(long ticketId, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
+        requireTicketOwner(s, actor, "Only the ticket owner can confirm the customer");
         tickets.updatePaymentStatus(ticketId, "CUSTOMER_CONFIRMED");
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CUSTOMER_CONFIRMED, s.status(), s.status(), null);
@@ -259,6 +279,7 @@ public class TicketService {
     public TicketDto issueDepositNotice(long ticketId, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireTicketOwner(s, actor, "Only the ticket owner can issue the deposit notice");
         if (!TicketStatus.QUOTATION_ISSUED.equals(s.status())
                 || !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -274,6 +295,7 @@ public class TicketService {
     public TicketDto confirmDepositPaid(long ticketId, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireTicketOwner(s, actor, "Only the ticket owner can confirm deposit payment");
         if (!"DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "Expected paymentStatus=DEPOSIT_NOTICE_ISSUED");
         }
@@ -287,10 +309,12 @@ public class TicketService {
     public TicketDto issueImportRequest(long ticketId, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
+        boolean paymentReadyForImport = "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
+            || "DEPOSIT_PAID".equals(s.paymentStatus());
         if (!TicketStatus.QUOTATION_ISSUED.equals(s.status())
-                || !"DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
+                || !paymentReadyForImport) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "IR requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED");
+                "IR requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED or DEPOSIT_PAID");
         }
         tickets.updateFulfillmentStatus(ticketId, "IR_ISSUED");
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -326,9 +350,7 @@ public class TicketService {
 
     @Transactional
     public TicketDto markGoodsReceived(long ticketId, UserPrincipal actor) {
-        if (!IMPORT_ROLES.contains(actor.role()) && !isAdmin(actor)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
-        }
+        requireRole(actor, IMPORT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         if (!"SHIPPING".equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "Expected fulfillmentStatus=SHIPPING");
@@ -349,6 +371,7 @@ public class TicketService {
     public TicketDto confirmFinalPayment(long ticketId, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireTicketOwner(s, actor, "Only the ticket owner can confirm final payment");
         if (!"AWAITING_FINAL_PAYMENT".equals(s.paymentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "Expected paymentStatus=AWAITING_FINAL_PAYMENT");
         }
@@ -382,10 +405,8 @@ public class TicketService {
 
         boolean salesCanEdit = SALES_ROLES.contains(actor.role()) && isOwner
             && Set.of(TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED).contains(st);
-        boolean adminCanEdit = isAdmin(actor)
-            && Set.of(TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED).contains(st);
 
-        if (!salesCanEdit && !adminCanEdit) {
+        if (!salesCanEdit) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้");
         }
         tickets.replaceItems(ticketId, request.items());
@@ -397,9 +418,7 @@ public class TicketService {
 
     @Transactional
     public TicketDto comment(long ticketId, CommentRequest request, UserPrincipal actor) {
-        if (!tickets.existsById(ticketId)) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "Ticket not found");
-        }
+        requireTicketAccess(ticketId, actor);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.COMMENTED, null, null, request.message());
         return requireTicket(ticketId);
@@ -459,7 +478,10 @@ public class TicketService {
         }
     }
 
-    private boolean isAdmin(UserPrincipal actor) {
-        return "admin".equals(actor.role());
+    private void requireTicketOwner(TicketSummaryDto summary, UserPrincipal actor, String message) {
+        if (summary.createdById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, message);
+        }
     }
+
 }

@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
@@ -18,6 +19,18 @@ import th.co.glr.hr.common.ApiException;
 
 @Service
 public class FileStorageService {
+    public static final Set<String> BUSINESS_ATTACHMENT_MIME_TYPES = Set.of(
+        "application/pdf",
+        "image/jpeg",
+        "image/png",
+        "text/csv",
+        "text/plain",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+
     private final Path uploadsDir;
 
     public FileStorageService(@Value("${app.uploads-dir:./uploads}") String uploadsDir) {
@@ -35,8 +48,11 @@ public class FileStorageService {
         if (mime == null || mime.isBlank()) {
             mime = URLConnection.guessContentTypeFromName(originalName);
         }
+        if (mime != null) {
+            mime = mime.toLowerCase(Locale.ROOT);
+        }
         if (allowedMimeTypes != null && !allowedMimeTypes.isEmpty() && !allowedMimeTypes.contains(mime)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "รองรับเฉพาะไฟล์ PDF, JPG หรือ PNG");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Unsupported file type");
         }
 
         String extension = originalName.contains(".")

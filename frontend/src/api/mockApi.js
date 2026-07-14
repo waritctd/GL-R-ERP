@@ -503,7 +503,7 @@ function dashboardDivisionId(user) {
 
 function dashboardEmployeeScope(user) {
   const employee = employeeForUser(user);
-  if (['hr', 'admin', 'ceo'].includes(user.role)) return { label: 'all', employees: db.employees };
+  if (['hr', 'ceo'].includes(user.role)) return { label: 'all', employees: db.employees };
   if (dashboardManager(user) && dashboardDivisionId(user)) {
     return {
       label: 'division',
@@ -514,7 +514,7 @@ function dashboardEmployeeScope(user) {
 }
 
 function dashboardHeadcount(user) {
-  const company = ['hr', 'ceo', 'admin'].includes(user.role);
+  const company = ['hr', 'ceo'].includes(user.role);
   const manager = dashboardManager(user);
   const divisionId = dashboardDivisionId(user);
   const employees = company
@@ -551,7 +551,7 @@ function dashboardHeadcount(user) {
 }
 
 function dashboardTickets(user) {
-  const allVisible = ['import', 'ceo', 'admin'].includes(user.role);
+  const allVisible = ['import', 'ceo'].includes(user.role);
   const ownVisible = user.role === 'sales';
   const list = allVisible
     ? db.tickets
@@ -585,19 +585,19 @@ function dashboardPending(user, ticketSummary) {
   const employeeIds = new Set(employeeScope.employees.map((employee) => employee.id));
   const employeeSelf = employeeScope.label === 'self';
   const manager = employeeScope.label === 'division';
-  const hrOrAdmin = ['hr', 'admin'].includes(user.role);
-  const profileRequests = hrOrAdmin || employeeSelf
+  const hrCanReview = user.role === 'hr';
+  const profileRequests = hrCanReview || employeeSelf
     ? db.profileRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'pending').length
     : 0;
-  const leave = hrOrAdmin || manager || employeeSelf
+  const leave = hrCanReview || manager || employeeSelf
     ? db.leaveRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'SUBMITTED').length
     : 0;
-  const commissions = ['sales_manager', 'ceo', 'admin'].includes(user.role)
+  const commissions = ['sales_manager', 'ceo'].includes(user.role)
     ? db.commissions.filter((record) => ['SUBMITTED', 'MANAGER_APPROVED'].includes(record.status)).length
     : user.role === 'sales'
       ? db.commissions.filter((record) => record.salesRepId === user.id && record.status === 'SUBMITTED').length
       : 0;
-  const tickets = ['sales', 'import', 'ceo', 'admin'].includes(user.role)
+  const tickets = ['sales', 'import', 'ceo'].includes(user.role)
     ? ticketSummary.submitted + ticketSummary.inReview + ticketSummary.priceProposed
     : 0;
   return {
@@ -612,7 +612,7 @@ function dashboardPending(user, ticketSummary) {
 }
 
 function dashboardAttendance(user) {
-  if (['hr', 'ceo', 'admin'].includes(user.role)) {
+  if (['hr', 'ceo'].includes(user.role)) {
     return { scope: 'all', todayPresent: 0, lateToday: 0, missingCheckout: 0, punchCountToday: 0, monthlyAttendanceDays: 0 };
   }
   if (dashboardManager(user) && dashboardDivisionId(user)) {
@@ -637,7 +637,7 @@ function managerIdForEmployee(employee) {
 }
 
 function canReviewLeave(user, employeeId) {
-  if (['hr', 'admin'].includes(user.role)) return true;
+  if (['hr'].includes(user.role)) return true;
   const employee = findEmployee(employeeId);
   return user.employeeId && managerIdForEmployee(employee) === user.employeeId;
 }
@@ -861,7 +861,7 @@ export const api = {
   },
   employees: {
     async list(params = {}) {
-      hasRole('hr', 'director', 'admin');
+      hasRole('hr', 'director');
       let employees = db.employees.map(employeeWithRequestMeta);
       if (params.search) {
         const query = params.search.toLowerCase();
@@ -880,7 +880,7 @@ export const api = {
       return delay({ employees });
     },
     async create(payload) {
-      hasRole('hr', 'admin');
+      hasRole('hr');
       const employee = createEmployeeRecord(payload);
       db.employees.unshift(employee);
       return delay({ employee });
@@ -893,7 +893,7 @@ export const api = {
       return delay({ employee: employeeWithRequestMeta(employee) });
     },
     async update(id, payload) {
-      hasRole('hr', 'admin');
+      hasRole('hr');
       const employee = findEmployee(id);
       Object.assign(employee, payload);
       if (payload.statusId) {
@@ -910,7 +910,7 @@ export const api = {
   profileRequests: {
     async list() {
       const user = requireSession();
-      const rows = user.role === 'hr' || user.role === 'admin'
+      const rows = user.role === 'hr'
         ? db.profileRequests
         : db.profileRequests.filter((request) => request.employeeId === user.employeeId);
       const profileRequests = rows.map((request) => ({
@@ -948,11 +948,11 @@ export const api = {
   },
   users: {
     async list() {
-      hasRole('admin');
+      hasRole('hr');
       return delay({ users: db.users.map(publicUser) });
     },
     async create(payload) {
-      hasRole('admin');
+      hasRole('hr');
       const employee = payload.employeeId ? findEmployee(payload.employeeId) : null;
       const user = {
         id: Math.max(...db.users.map((item) => item.id)) + 1,
@@ -968,7 +968,7 @@ export const api = {
       return delay({ user: publicUser(user) });
     },
     async update(id, payload) {
-      hasRole('admin');
+      hasRole('hr');
       const user = db.users.find((item) => item.id === Number(id));
       if (!user) fail('User not found', 404);
       Object.assign(user, payload);
@@ -979,7 +979,7 @@ export const api = {
   tickets: {
     async list(params = {}) {
       const user = requireSession();
-      if (!['sales', 'import', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'import', 'ceo'].includes(user.role)) fail('Forbidden', 403);
       let list = structuredClone(db.tickets);
       if (user.role === 'sales') list = list.filter((t) => t.createdById === user.id);
       if (params.status) list = list.filter((t) => t.status === params.status);
@@ -999,7 +999,7 @@ export const api = {
 
     async get(id) {
       const user = requireSession();
-      if (!['sales', 'import', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'import', 'ceo'].includes(user.role)) fail('Forbidden', 403);
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
       if (!ticket) fail('Ticket not found', 404);
       if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
@@ -1007,7 +1007,7 @@ export const api = {
     },
 
     async create(payload) {
-      const user = hasRole('sales', 'admin');
+      const user = hasRole('sales');
       const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
       const code = `PR-2026-${String(nextId).padStart(4, '0')}`;
       const now = new Date().toISOString();
@@ -1040,12 +1040,12 @@ export const api = {
     },
 
     async submit(id) {
-      const user = hasRole('sales', 'admin');
+      const user = hasRole('sales');
       return delay(doTransition(Number(id), 'draft', 'submitted', 'SUBMITTED', user, null));
     },
 
     async pickup(id) {
-      const user = hasRole('import', 'admin');
+      const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       verifyStatus(ticket, 'submitted');
       ticket.status = 'in_review';
@@ -1057,7 +1057,7 @@ export const api = {
     },
 
     async proposePrice(id, payload) {
-      const user = hasRole('import', 'admin');
+      const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       verifyStatus(ticket, 'in_review');
       ticket.items = (payload.items || []).map((item, i) => ({
@@ -1081,9 +1081,9 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       const st = ticket.status;
       const isOwner = user.id === ticket.createdById;
-      const salesCanEdit = ['sales', 'admin'].includes(user.role) && isOwner
+      const salesCanEdit = ['sales'].includes(user.role) && isOwner
         && ['submitted', 'in_review', 'price_proposed'].includes(st);
-      const importCanEdit = ['import', 'admin'].includes(user.role)
+      const importCanEdit = ['import'].includes(user.role)
         && ['in_review', 'price_proposed'].includes(st);
       if (!salesCanEdit && !importCanEdit) fail('ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้', 403);
       ticket.items = (payload.items || []).map((item, i) => ({
@@ -1106,7 +1106,7 @@ export const api = {
     },
 
     async calculatePrices(id) {
-      hasRole('ceo', 'admin');
+      hasRole('ceo');
       const ticket = findTicketRaw(Number(id));
       verifyStatus(ticket, 'price_proposed');
 
@@ -1170,7 +1170,7 @@ export const api = {
     },
 
     async overrideItemPrice(ticketId, itemId, payload) {
-      hasRole('ceo', 'admin');
+      hasRole('ceo');
       const ticket = findTicketRaw(Number(ticketId));
       verifyStatus(ticket, 'price_proposed');
       const item = ticket.items.find((it) => it.id === Number(itemId));
@@ -1183,7 +1183,7 @@ export const api = {
     },
 
     async approve(id) {
-      const user = hasRole('ceo', 'admin');
+      const user = hasRole('ceo');
       const ticket = findTicketRaw(Number(id));
       verifyStatus(ticket, 'price_proposed');
       ticket.items = ticket.items.map((item) => ({ ...item, approvedPrice: item.proposedPrice }));
@@ -1196,7 +1196,7 @@ export const api = {
     },
 
     async reject(id, payload) {
-      const user = hasRole('ceo', 'admin');
+      const user = hasRole('ceo');
       const ticket = findTicketRaw(Number(id));
       verifyStatus(ticket, 'price_proposed');
       ticket.status = 'in_review';
@@ -1207,13 +1207,13 @@ export const api = {
     },
 
     async quotation(id) {
-      const user = hasRole('sales', 'admin');
+      const user = hasRole('sales');
       const ticket = findTicketRaw(Number(id));
       if (ticket.status !== 'approved' && ticket.status !== 'quotation_issued') {
         fail(`Expected status 'approved' or 'quotation_issued' but ticket is '${ticket.status}'`, 409);
       }
       const fromStatus = ticket.status;
-      if (ticket.createdById !== user.id && user.role !== 'admin') fail('Forbidden', 403);
+      if (ticket.createdById !== user.id) fail('Forbidden', 403);
       const total = ticket.items.reduce((sum, item) => sum + (item.approvedPrice || 0) * item.qty, 0);
 
       // init quotations array if not present
@@ -1308,7 +1308,7 @@ export const api = {
     },
 
     async confirmCustomer(id) {
-      const user = hasRole('sales', 'admin');
+      const user = hasRole('sales');
       const ticket = findTicketRaw(Number(id));
       if (ticket.status !== 'quotation_issued') fail('Expected quotation_issued', 409);
       ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
@@ -1318,7 +1318,7 @@ export const api = {
     },
 
     async issueDepositNotice(id) {
-      const user = hasRole('sales', 'admin');
+      const user = hasRole('sales');
       const ticket = findTicketRaw(Number(id));
       if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
         fail('Requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED', 409);
@@ -1330,7 +1330,7 @@ export const api = {
     },
 
     async confirmDepositPaid(id) {
-      const user = hasRole('sales', 'admin');
+      const user = hasRole('sales');
       const ticket = findTicketRaw(Number(id));
       if (ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') fail('Expected paymentStatus=DEPOSIT_NOTICE_ISSUED', 409);
       ticket.paymentStatus = 'DEPOSIT_PAID';
@@ -1340,10 +1340,11 @@ export const api = {
     },
 
     async issueImportRequest(id) {
-      const user = hasRole('import', 'admin');
+      const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
-      if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') {
-        fail('Requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED', 409);
+      const paymentReadyForImport = ['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'].includes(ticket.paymentStatus);
+      if (ticket.status !== 'quotation_issued' || !paymentReadyForImport) {
+        fail('Requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED or DEPOSIT_PAID', 409);
       }
       ticket.fulfillmentStatus = 'IR_ISSUED';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -1352,7 +1353,7 @@ export const api = {
     },
 
     async markIrSent(id) {
-      const user = hasRole('import', 'admin');
+      const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       if (ticket.fulfillmentStatus !== 'IR_ISSUED') fail('Expected fulfillmentStatus=IR_ISSUED', 409);
       ticket.fulfillmentStatus = 'IR_SENT';
@@ -1362,7 +1363,7 @@ export const api = {
     },
 
     async markShipping(id) {
-      const user = hasRole('import', 'admin');
+      const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       if (ticket.fulfillmentStatus !== 'IR_SENT') fail('Expected fulfillmentStatus=IR_SENT', 409);
       ticket.fulfillmentStatus = 'SHIPPING';
@@ -1372,7 +1373,7 @@ export const api = {
     },
 
     async markGoodsReceived(id) {
-      const user = hasRole('import', 'admin');
+      const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       if (ticket.fulfillmentStatus !== 'SHIPPING') fail('Expected fulfillmentStatus=SHIPPING', 409);
       ticket.fulfillmentStatus = 'GOODS_RECEIVED';
@@ -1386,7 +1387,7 @@ export const api = {
     },
 
     async confirmFinalPayment(id) {
-      const user = hasRole('sales', 'admin');
+      const user = hasRole('sales');
       const ticket = findTicketRaw(Number(id));
       if (ticket.paymentStatus !== 'AWAITING_FINAL_PAYMENT') fail('Expected paymentStatus=AWAITING_FINAL_PAYMENT', 409);
       ticket.paymentStatus = 'FULLY_PAID';
@@ -1399,7 +1400,7 @@ export const api = {
   leave: {
     async employees() {
       const user = requireSession();
-      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
+      const includeAll = ['hr', 'ceo'].includes(user.role);
       const rows = db.employees
         .filter((employee) => employee.active)
         .filter((employee) => includeAll || employee.id === user.employeeId || managerIdForEmployee(employee) === user.employeeId)
@@ -1423,7 +1424,7 @@ export const api = {
       const user = requireSession();
       const employeeId = params.employeeId ? Number(params.employeeId) : user.employeeId;
       if (!employeeId) fail('User is not linked to an employee', 400);
-      if (!['hr', 'ceo', 'admin'].includes(user.role) && employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
+      if (!['hr', 'ceo'].includes(user.role) && employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
       findEmployee(employeeId);
       const year = Number(params.year || new Date().getFullYear());
       return delay({ balances: db.leaveTypes.map((type) => leaveBalance(employeeId, type, year)) });
@@ -1432,7 +1433,7 @@ export const api = {
     async list(params = {}) {
       const user = requireSession();
       let list = db.leaveRequests;
-      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
+      const includeAll = ['hr', 'ceo'].includes(user.role);
       if (!includeAll) list = list.filter((item) => item.employeeId === user.employeeId || canReviewLeave(user, item.employeeId));
       if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
       if (params.status) list = list.filter((item) => item.status === params.status);
@@ -1552,7 +1553,7 @@ export const api = {
   overtime: {
     async employees() {
       const user = requireSession();
-      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
+      const includeAll = ['hr', 'ceo'].includes(user.role);
       const rows = db.employees
         .filter((employee) => employee.active)
         .filter((employee) => includeAll || employee.id === user.employeeId || managerIdForEmployee(employee) === user.employeeId)
@@ -1570,7 +1571,7 @@ export const api = {
     async list(params = {}) {
       const user = requireSession();
       let list = db.overtimeRequests;
-      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
+      const includeAll = ['hr', 'ceo'].includes(user.role);
       if (!includeAll) list = list.filter((item) => item.employeeId === user.employeeId || canReviewLeave(user, item.employeeId));
       if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
       if (params.status) list = list.filter((item) => item.status === params.status);
@@ -1703,7 +1704,7 @@ export const api = {
   commissions: {
     async list(params = {}) {
       const user = requireSession();
-      if (!['sales', 'sales_manager', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('Forbidden', 403);
       let list = db.commissions;
       if (user.role === 'sales') list = list.filter((item) => item.salesRepId === user.id);
       if (params.payrollMonth) list = list.filter((item) => commissionMonth(item.payrollMonth) === params.payrollMonth.slice(0, 7));
@@ -1711,7 +1712,7 @@ export const api = {
     },
 
     async create(payload) {
-      const user = hasRole('sales', 'sales_manager', 'ceo', 'admin');
+      const user = hasRole('sales', 'sales_manager', 'ceo');
       if (user.role === 'sales' && (Number(payload.transportFee || 0) > 0 || Number(payload.cutFee || 0) > 0 || Number(payload.shortfall || 0) > 0)) {
         fail('Sales cannot edit deduction fields', 403);
       }
@@ -1775,7 +1776,7 @@ export const api = {
     },
 
     async updateDeductions(id, payload) {
-      hasRole('sales_manager', 'ceo', 'admin');
+      hasRole('sales_manager', 'ceo');
       const record = db.commissions.find((item) => item.id === Number(id));
       if (!record) fail('Commission record not found', 404);
       Object.assign(record.invoiceDetails, {
@@ -1796,7 +1797,7 @@ export const api = {
     },
 
     async approve(id) {
-      const user = hasRole('sales_manager', 'ceo', 'admin');
+      const user = hasRole('sales_manager', 'ceo');
       const record = db.commissions.find((item) => item.id === Number(id));
       if (!record) fail('Commission record not found', 404);
       const now = new Date().toISOString();
@@ -1826,7 +1827,7 @@ export const api = {
     },
 
     async reject(id, payload = {}) {
-      const user = hasRole('sales_manager', 'ceo', 'admin');
+      const user = hasRole('sales_manager', 'ceo');
       const record = db.commissions.find((item) => item.id === Number(id));
       if (!record) fail('Commission record not found', 404);
       const now = new Date().toISOString();
@@ -1849,7 +1850,7 @@ export const api = {
     },
 
     async clawback(id, payload) {
-      const user = hasRole('sales_manager', 'ceo', 'admin');
+      const user = hasRole('sales_manager', 'ceo');
       const original = db.commissions.find((item) => item.id === Number(id));
       if (!original) fail('Commission record not found', 404);
       if (original.kind !== 'SALE' || original.status !== 'APPROVED') fail('Only approved sale commissions can be clawed back', 409);
@@ -1877,7 +1878,7 @@ export const api = {
 
     async simulate(payload) {
       const user = requireSession();
-      if (!['sales', 'sales_manager', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('Forbidden', 403);
       if (user.role === 'sales' && (Number(payload.transportFee || 0) > 0 || Number(payload.cutFee || 0) > 0 || Number(payload.shortfall || 0) > 0)) {
         fail('Sales cannot edit deduction fields', 403);
       }
@@ -1911,7 +1912,7 @@ export const api = {
     },
 
     async payrollReady(params = {}) {
-      hasRole('hr', 'admin');
+      hasRole('hr');
       const month = commissionMonth(params.payrollMonth || new Date().toISOString());
       const approved = db.commissions.filter((item) => item.status === 'APPROVED' && commissionMonth(item.payrollMonth) === month);
       const reps = new Map();
@@ -1934,6 +1935,49 @@ export const api = {
           salesReps,
         },
       });
+    },
+  },
+
+  // No seeded payroll-period data yet — `current` returns an empty period so
+  // PayrollPage degrades to its built-in empty state; the mutating actions
+  // (preview/process/bankExport) are explicit user-triggered calculations that
+  // would require reproducing real payroll/tax logic to fake convincingly, so
+  // they surface a clear "not supported in mock mode" error instead of
+  // fabricating financial figures (real backend implementation is in hrApi.js).
+  payroll: {
+    async current() {
+      requireSession();
+      return delay({ period: null });
+    },
+    async preview() {
+      requireSession();
+      throw new Error('คำนวณเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async process() {
+      requireSession();
+      throw new Error('ประมวลผลเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async bankExport() {
+      requireSession();
+      throw new Error('ดาวน์โหลดไฟล์โอนเงินไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+  },
+
+  // No seeded punch/device data yet — these return empty results so HR-core
+  // pages degrade to their built-in empty state instead of crashing on the
+  // missing namespace (real backend implementation is in hrApi.js).
+  attendance: {
+    async list() {
+      requireSession();
+      return delay({ punches: [] });
+    },
+    async devices() {
+      requireSession();
+      return delay({ devices: [] });
+    },
+    async importDat() {
+      requireSession();
+      throw new Error('นำเข้าข้อมูลจากเครื่องสแกนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
   },
 
@@ -2006,9 +2050,8 @@ export const api = {
       requireSession();
       return delay({ factories: mockFactoryConfigs });
     },
-    async sendEmail(ticketId, payload) {
+    async sendEmail() {
       requireSession();
-      console.log(`[mock] Factory email sent | ticket=${ticketId} factory=${payload.factory} to=${payload.to}`);
       return delay({ status: 'sent' });
     },
   },
@@ -2019,7 +2062,7 @@ export const api = {
       return delay({ fxRates: structuredClone(mockFxRates) });
     },
     async upsert(currency, payload) {
-      hasRole('ceo', 'admin');
+      hasRole('ceo');
       const existing = mockFxRates.find((r) => r.currency === currency.toUpperCase());
       if (existing) {
         existing.rateToThb = payload.rateToThb;
@@ -2047,7 +2090,7 @@ export const api = {
       return delay({ configs: structuredClone(mockPriceCalcConfigs.filter((c) => c.isCurrent)) });
     },
     async update(payload) {
-      hasRole('ceo', 'admin');
+      hasRole('ceo');
       // mark old current as not current
       mockPriceCalcConfigs
         .filter((c) => c.country === payload.country && c.isCurrent)

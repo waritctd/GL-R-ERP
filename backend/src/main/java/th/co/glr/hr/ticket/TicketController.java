@@ -147,7 +147,8 @@ public class TicketController {
         @Valid @RequestBody SendFactoryEmailRequest request,
         HttpSession session
     ) {
-        sessions.requireUser(session);
+        UserPrincipal user = sessions.requireUser(session);
+        ticketService.requireTicketAccess(id, user);
         factoryEmail.send(id, request.factory(), request.to(), request.subject(), request.body());
         return Map.of("status", "sent");
     }

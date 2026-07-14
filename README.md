@@ -83,4 +83,4 @@ If the Vercel project Root Directory is set to `frontend`, the matching `fronten
 
 ## Production Shape
 
-For production/on-prem, use the same backend and schema migrations with the target PostgreSQL datasource. Authentication uses employee email from `hr.employee`; the temporary password is the employee code.
+For production/on-prem, run the backend with `SPRING_PROFILES_ACTIVE=prod`, the target PostgreSQL datasource, and an absolute persistent `APP_UPLOADS_DIR` path (local disk, SAN/NAS mount, or other backed-up on-prem storage). The `demo` profile is only for seeded showcase data and must not be enabled against a real production database. Authentication uses employee email from `hr.employee`; initial passwords should be issued through the HR reset-password flow, not seeded from employee codes.

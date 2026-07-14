@@ -228,7 +228,7 @@ class AuthServiceTest {
         return switch ((int) divisionId) {
             case 17 -> "HR";   // HR-บุคคล
             case 9 -> "SA";    // SA-ฝ่ายขาย
-            case 16 -> "MN";   // MN-บริหาร (administration; not an elevated role on its own)
+            case 16 -> "MN";   // MN-บริหาร (management division; not an elevated role on its own)
             default -> null;
         };
     }

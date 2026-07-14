@@ -21,6 +21,8 @@ public class DepositNoticeService {
     private static final java.util.Set<String> SALES_ROLES  = java.util.Set.of("sales");
     private static final java.util.Set<String> CEO_ROLES    = java.util.Set.of("ceo");
     private static final java.util.Set<String> IMPORT_ROLES = java.util.Set.of("import");
+    private static final java.util.Set<String> DOCUMENT_ACCESS_ROLES =
+        java.util.Set.of("import", "ceo", "hr", "sales_manager");
 
     private final DepositNoticeRepository docs;
     private final TicketRepository   tickets;
@@ -46,9 +48,20 @@ public class DepositNoticeService {
         return docs.findByTicket(ticketId);
     }
 
+    public List<DepositNoticeDto> listByTicket(long ticketId, UserPrincipal actor) {
+        requireTicketAccess(ticketId, actor);
+        return listByTicket(ticketId);
+    }
+
     public DepositNoticeDto getById(long docId) {
         return docs.findById(docId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found"));
+    }
+
+    public DepositNoticeDto getById(long docId, UserPrincipal actor) {
+        DepositNoticeDto doc = getById(docId);
+        requireTicketAccess(doc.ticketId(), actor);
+        return doc;
     }
 
     // Create a DRAFT from approved ticket items
@@ -56,6 +69,7 @@ public class DepositNoticeService {
     public DepositNoticeDto createDraft(long ticketId, DepositNoticeDraftRequest req, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
+        requireTicketOwner(s, actor);
 
         // Auto-populate items from approved ticket items if not provided
         List<DepositNoticeItemRequest> items = buildItemsFromRequest(req, ticketId);
@@ -87,7 +101,7 @@ public class DepositNoticeService {
 
     // Returns HTML preview (PDF requires LibreOffice — mock for now)
     public String preview(long docId, UserPrincipal actor) {
-        DepositNoticeDto doc = docs.findById(docId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found"));
+        DepositNoticeDto doc = getById(docId, actor);
         try {
             return renderer.toPreviewHtml(doc);
         } catch (Exception e) {
@@ -127,8 +141,7 @@ public class DepositNoticeService {
 
     // Download Excel bytes
     public byte[] getXlsx(long docId, UserPrincipal actor) {
-        DepositNoticeDto doc = docs.findById(docId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found"));
+        DepositNoticeDto doc = getById(docId, actor);
         try {
             return renderer.toXlsx(doc);
         } catch (Exception e) {
@@ -137,8 +150,7 @@ public class DepositNoticeService {
     }
 
     public byte[] getPdf(long docId, UserPrincipal actor) {
-        DepositNoticeDto doc = docs.findById(docId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found"));
+        DepositNoticeDto doc = getById(docId, actor);
         try {
             return renderer.toPdf(doc);
         } catch (Exception e) {
@@ -152,6 +164,7 @@ public class DepositNoticeService {
         TicketDto ticket = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
         TicketSummaryDto s = ticket.summary();
+        requireTicketAccess(s, actor);
         if (!"quotation_issued".equals(s.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "Remaining invoice only available for quotation_issued tickets");
         }
@@ -278,7 +291,27 @@ public class DepositNoticeService {
     private void requireTicketOwner(long ticketId, UserPrincipal actor) {
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
-        if (t.summary().createdById() != actor.id()) {
+        requireTicketOwner(t.summary(), actor);
+    }
+
+    private void requireTicketOwner(TicketSummaryDto summary, UserPrincipal actor) {
+        if (summary.createdById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+    }
+
+    private void requireTicketAccess(long ticketId, UserPrincipal actor) {
+        TicketDto t = tickets.findById(ticketId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+        requireTicketAccess(t.summary(), actor);
+    }
+
+    private void requireTicketAccess(TicketSummaryDto summary, UserPrincipal actor) {
+        if ("sales".equals(actor.role())) {
+            requireTicketOwner(summary, actor);
+            return;
+        }
+        if (!DOCUMENT_ACCESS_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
     }

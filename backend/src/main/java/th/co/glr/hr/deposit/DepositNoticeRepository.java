@@ -16,8 +16,10 @@ import java.util.Optional;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.common.ApiException;
 
 @Repository
 public class DepositNoticeRepository {
@@ -91,6 +93,7 @@ public class DepositNoticeRepository {
 
     @Transactional
     public long createDraft(long ticketId, DepositNoticeDraftRequest req, List<DepositNoticeItemRequest> items) {
+        lockTicket(ticketId);
         BigDecimal depositPct = req.depositPercent() != null ? req.depositPercent() : new BigDecimal("0.50");
         BigDecimal vatPct = new BigDecimal("0.07");
 
@@ -140,9 +143,19 @@ public class DepositNoticeRepository {
 
     @Transactional
     public void update(long docId, DepositNoticeDraftRequest req) {
-        BigDecimal depositPct = req.depositPercent() != null ? req.depositPercent() : new BigDecimal("0.50");
+        DepositNoticeDto current = findById(docId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found"));
+        BigDecimal depositPct = req.depositPercent() != null
+            ? req.depositPercent()
+            : (current.depositPercent() != null ? current.depositPercent() : new BigDecimal("0.50"));
         BigDecimal vatPct = new BigDecimal("0.07");
-        List<DepositNoticeItemRequest> items = req.items() != null ? req.items() : List.of();
+        List<DepositNoticeItemRequest> items = req.items() != null
+            ? req.items()
+            : current.items().stream()
+                .map(it -> new DepositNoticeItemRequest(
+                    it.seq(), it.description(), it.qty(), it.unit(),
+                    it.unitPrice(), it.discountLabel(), it.netUnitPrice()))
+                .toList();
 
         BigDecimal subtotal = items.stream()
             .map(it -> it.netUnitPrice().multiply(it.qty()))
@@ -152,9 +165,10 @@ public class DepositNoticeRepository {
         BigDecimal vat = deposit.multiply(vatPct).setScale(2, RoundingMode.HALF_UP);
         BigDecimal total = deposit.add(vat).setScale(2, RoundingMode.HALF_UP);
 
-        String[] notesArr = req.notes() != null ? req.notes().toArray(String[]::new) : new String[0];
+        List<String> notes = req.notes() != null ? req.notes() : current.notes();
+        String[] notesArr = notes != null ? notes.toArray(String[]::new) : new String[0];
 
-        jdbc.update("""
+        int updated = jdbc.update("""
             UPDATE sales.deposit_notice SET
                 customer_name    = :customerName,
                 customer_tax_id  = :customerTaxId,
@@ -184,7 +198,10 @@ public class DepositNoticeRepository {
                 .addValue("totalPayable",    total)
                 .addValue("notes",           notesArr)
         );
-        if (!items.isEmpty()) {
+        if (updated != 1) {
+            throw new ApiException(HttpStatus.CONFLICT, "Deposit notice draft is no longer editable");
+        }
+        if (req.items() != null) {
             jdbc.update("DELETE FROM sales.deposit_notice_item WHERE deposit_notice_id = :id", Map.of("id", docId));
             insertItems(docId, items);
         }
@@ -192,10 +209,11 @@ public class DepositNoticeRepository {
 
     @Transactional
     public String issue(long docId, long actorId, String actorName) {
+        requireDraftForIssue(docId);
         int thaiYear = Year.now().getValue() + 543;
         String docNumber = nextDocNumber("DEPOSIT_NOTICE", thaiYear);
 
-        jdbc.update("""
+        int updated = jdbc.update("""
             UPDATE sales.deposit_notice SET
                 doc_number     = :num,
                 issue_date     = CURRENT_DATE,
@@ -203,9 +221,12 @@ public class DepositNoticeRepository {
                 issued_by_id   = :actorId,
                 issued_by_name = :actorName,
                 updated_at     = now()
-             WHERE deposit_notice_id = :id
+             WHERE deposit_notice_id = :id AND status = 'DRAFT'
             """,
             Map.of("num", docNumber, "actorId", actorId, "actorName", actorName, "id", docId));
+        if (updated != 1) {
+            throw new ApiException(HttpStatus.CONFLICT, "Deposit notice is no longer issuable");
+        }
 
         // Supersede all older versions for same ticket
         jdbc.update("""
@@ -226,6 +247,26 @@ public class DepositNoticeRepository {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private void lockTicket(long ticketId) {
+        jdbc.queryForObject(
+            "SELECT ticket_id FROM sales.ticket WHERE ticket_id = :ticketId FOR UPDATE",
+            Map.of("ticketId", ticketId), Long.class);
+    }
+
+    private void requireDraftForIssue(long docId) {
+        List<String> statuses = jdbc.query(
+            "SELECT status FROM sales.deposit_notice WHERE deposit_notice_id = :id FOR UPDATE",
+            Map.of("id", docId),
+            (rs, i) -> rs.getString("status")
+        );
+        if (statuses.isEmpty()) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found");
+        }
+        if (!"DRAFT".equals(statuses.get(0))) {
+            throw new ApiException(HttpStatus.CONFLICT, "Deposit notice is no longer issuable");
+        }
+    }
 
     private int nextVersion(long ticketId) {
         Integer max = jdbc.queryForObject(

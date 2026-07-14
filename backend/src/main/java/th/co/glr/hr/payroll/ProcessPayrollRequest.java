@@ -7,5 +7,5 @@ import java.util.List;
 
 public record ProcessPayrollRequest(
     @NotNull LocalDate payrollMonth,
-    @Valid List<PayrollEmployeeInputRequest> inputs
+    List<@Valid PayrollEmployeeInputRequest> inputs
 ) {}

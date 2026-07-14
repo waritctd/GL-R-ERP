@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from './Icon.jsx';
 
 const TYPE_ICON = {
@@ -22,24 +24,25 @@ function timeAgo(iso) {
 }
 
 export function NotificationBell({ onNavigate }) {
-  const [items, setItems] = useState([]);
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
+  const queryClient = useQueryClient();
 
-  async function load() {
-    try {
-      const res = await api.notifications.list();
-      setItems(Array.isArray(res.notifications) ? res.notifications : []);
-    } catch {
-      setItems([]);
-    }
-  }
+  const notificationsQuery = useQuery({
+    queryKey: queryKeys.notifications(),
+    queryFn: () => api.notifications.list().then((res) => (Array.isArray(res.notifications) ? res.notifications : [])),
+    refetchInterval: 30000,
+  });
+  const items = notificationsQuery.data ?? [];
 
-  useEffect(() => {
-    load();
-    const interval = setInterval(load, 30000);
-    return () => clearInterval(interval);
-  }, []);
+  const markReadMutation = useMutation({
+    mutationFn: (id) => api.notifications.markRead(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.notifications() }),
+  });
+  const markAllReadMutation = useMutation({
+    mutationFn: (unreadIds) => Promise.all(unreadIds.map((id) => api.notifications.markRead(id))),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.notifications() }),
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -50,19 +53,15 @@ export function NotificationBell({ onNavigate }) {
     return () => document.removeEventListener('mousedown', handleClick);
   }, [open]);
 
-  async function handleClick(item) {
-    if (!item.read) {
-      await api.notifications.markRead(item.id);
-      setItems((prev) => prev.map((n) => n.id === item.id ? { ...n, read: true } : n));
-    }
+  function handleClick(item) {
+    if (!item.read) markReadMutation.mutate(item.id);
     setOpen(false);
     if (item.link) onNavigate(item.link);
   }
 
-  async function markAllRead() {
-    const unread = items.filter((n) => !n.read);
-    await Promise.all(unread.map((n) => api.notifications.markRead(n.id)));
-    setItems((prev) => prev.map((n) => ({ ...n, read: true })));
+  function markAllRead() {
+    const unreadIds = items.filter((n) => !n.read).map((n) => n.id);
+    if (unreadIds.length > 0) markAllReadMutation.mutate(unreadIds);
   }
 
   const unreadCount = items.filter((n) => !n.read).length;

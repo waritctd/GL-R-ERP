@@ -19,13 +19,12 @@ function readCookie(name) {
 
 export async function apiRequest(path, options = {}) {
   const { method = 'GET', body, headers, signal } = options;
-  const csrfToken = SAFE_METHODS.has(method.toUpperCase()) ? null : readCookie('XSRF-TOKEN');
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method,
     credentials: 'include',
     headers: {
       ...(body ? { 'Content-Type': 'application/json' } : {}),
-      ...(csrfToken ? { 'X-XSRF-TOKEN': csrfToken } : {}),
+      ...csrfHeaders(method),
       ...headers,
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -43,4 +42,9 @@ export async function apiRequest(path, options = {}) {
   }
 
   return payload;
+}
+
+export function csrfHeaders(method = 'POST') {
+  const csrfToken = SAFE_METHODS.has(method.toUpperCase()) ? null : readCookie('XSRF-TOKEN');
+  return csrfToken ? { 'X-XSRF-TOKEN': csrfToken } : {};
 }

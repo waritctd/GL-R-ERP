@@ -19,7 +19,7 @@ function GreetingSubtitle({ role }) {
   return 'ภาพรวมใบขอราคา';
 }
 
-const SHOW_SALES_ROLES = ['import', 'ceo', 'admin'];
+const SHOW_SALES_ROLES = ['import', 'ceo'];
 
 export function TicketDashboard({ user, employee, showToast }) {
   const navigate = useNavigate();

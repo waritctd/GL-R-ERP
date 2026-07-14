@@ -45,14 +45,9 @@ class FlywayMigrationTest {
     }
 
     /**
-     * Mirrors {@code application-prod.yml}'s {@code spring.flyway.locations}, which appends
-     * {@code db/migration-demo} on top of the normal migrations for the Render demo deploy. Flyway
-     * validates version numbers across ALL configured locations combined, not per-folder — a
-     * {@code db/migration-demo} file numbered against only its own folder's history can collide with
-     * an unrelated {@code db/migration} file of the same version and crash-loop the deploy at
-     * startup (happened twice: PR #115 for V31, and again for V32 — see the fix that renumbered
-     * {@code V32__hr_notification_schema.sql} to V36). This test only default-location tests above
-     * cannot catch, since they never scan {@code db/migration-demo}.
+     * Mirrors {@code application-demo.yml}'s {@code spring.flyway.locations}, which appends
+     * {@code db/migration-demo} on top of the normal migrations for the showcase deploy. Flyway
+     * validates version numbers across ALL configured locations combined, not per-folder.
      */
     @Test
     void demoProfileCombinedLocationsApplyToACleanDatabase() {

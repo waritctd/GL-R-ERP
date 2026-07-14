@@ -15,5 +15,5 @@ public record DepositNoticeDraftRequest(
     @Size(max = 255) String reference,
     @DecimalMin("0") @DecimalMax("1") BigDecimal depositPercent,
     List<String> notes,
-    @Valid List<DepositNoticeItemRequest> items
+    List<@Valid DepositNoticeItemRequest> items
 ) {}

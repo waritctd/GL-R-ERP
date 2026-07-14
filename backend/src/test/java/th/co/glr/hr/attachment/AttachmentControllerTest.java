@@ -1,13 +1,17 @@
 package th.co.glr.hr.attachment;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Instant;
@@ -15,37 +19,34 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.ApiExceptionHandler;
-import th.co.glr.hr.ticket.QuotationDto;
-import th.co.glr.hr.ticket.TicketDto;
-import th.co.glr.hr.ticket.TicketEventDto;
-import th.co.glr.hr.ticket.TicketItemDto;
-import th.co.glr.hr.ticket.TicketRepository;
-import th.co.glr.hr.ticket.TicketSummaryDto;
+import th.co.glr.hr.ticket.TicketService;
 
 class AttachmentControllerTest {
     private static final long TICKET_ID = 10L;
     private static final long ATTACHMENT_ID = 99L;
     private static final long UPLOADER_ID = 1L;
     private static final long CREATOR_ID = 2L;
-    private static final long ASSIGNEE_ID = 3L;
     private static final long STRANGER_ID = 4L;
     private static final long HR_ID = 5L;
 
     private final AttachmentRepository attachmentRepository = mock(AttachmentRepository.class);
-    private final TicketRepository ticketRepository = mock(TicketRepository.class);
+    private final TicketService ticketService = mock(TicketService.class);
     private final AuditService auditService = mock(AuditService.class);
     private final FileStorageService fileStorageService = mock(FileStorageService.class);
 
     private final MockMvc mvc = MockMvcBuilders
         .standaloneSetup(new AttachmentController(
-            attachmentRepository, new SessionContext(), ticketRepository, auditService, fileStorageService))
+            attachmentRepository, new SessionContext(), ticketService, auditService, fileStorageService))
         .setControllerAdvice(new ApiExceptionHandler())
         .build();
 
@@ -75,41 +76,39 @@ class AttachmentControllerTest {
         // uploader is not the ticket creator/assignee and ticket lookup is never needed for them
         mvc.perform(get("/api/attachments/{id}/file", ATTACHMENT_ID).session(session(UPLOADER_ID, "sales")))
             .andExpect(status().isNotFound()); // file missing on disk, but access check passed (not 403)
+
+        verify(ticketService, never()).requireTicketAccess(anyLong(), any(UserPrincipal.class));
     }
 
     @Test
     void ticketCreatorCanDownload() throws Exception {
         when(attachmentRepository.findById(ATTACHMENT_ID)).thenReturn(Optional.of(attachment()));
         when(attachmentRepository.findFilePathById(ATTACHMENT_ID)).thenReturn(missingFilePath());
-        when(ticketRepository.findById(TICKET_ID)).thenReturn(Optional.of(ticket()));
 
         mvc.perform(get("/api/attachments/{id}/file", ATTACHMENT_ID).session(session(CREATOR_ID, "sales")))
             .andExpect(status().isNotFound()); // access check passed; 404 is from missing file on disk
     }
 
     @Test
-    void ticketAssigneeCanDownload() throws Exception {
+    void importRoleCanDownloadWhenTicketPolicyAllows() throws Exception {
         when(attachmentRepository.findById(ATTACHMENT_ID)).thenReturn(Optional.of(attachment()));
         when(attachmentRepository.findFilePathById(ATTACHMENT_ID)).thenReturn(missingFilePath());
-        when(ticketRepository.findById(TICKET_ID)).thenReturn(Optional.of(ticket()));
 
-        mvc.perform(get("/api/attachments/{id}/file", ATTACHMENT_ID).session(session(ASSIGNEE_ID, "sales")))
+        mvc.perform(get("/api/attachments/{id}/file", ATTACHMENT_ID).session(session(3L, "import")))
             .andExpect(status().isNotFound());
     }
 
     @Test
-    void managerRoleBypassesOwnershipOnDownload() throws Exception {
+    void managerRoleCanDownloadWhenTicketPolicyAllows() throws Exception {
         when(attachmentRepository.findById(ATTACHMENT_ID)).thenReturn(Optional.of(attachment()));
         when(attachmentRepository.findFilePathById(ATTACHMENT_ID)).thenReturn(missingFilePath());
-        when(ticketRepository.findById(TICKET_ID)).thenReturn(Optional.of(ticket()));
 
         mvc.perform(get("/api/attachments/{id}/file", ATTACHMENT_ID).session(session(HR_ID, "hr")))
             .andExpect(status().isNotFound());
     }
 
     @Test
-    void managerRoleBypassesOwnershipOnList() throws Exception {
-        when(ticketRepository.findById(TICKET_ID)).thenReturn(Optional.of(ticket()));
+    void managerRoleCanListWhenTicketPolicyAllows() throws Exception {
         when(attachmentRepository.findByTicketId(TICKET_ID)).thenReturn(List.of(attachment()));
 
         mvc.perform(get("/api/tickets/{ticketId}/attachments", TICKET_ID).session(session(HR_ID, "ceo")))
@@ -120,7 +119,6 @@ class AttachmentControllerTest {
     void ceoRoleCanDownload() throws Exception {
         when(attachmentRepository.findById(ATTACHMENT_ID)).thenReturn(Optional.of(attachment()));
         when(attachmentRepository.findFilePathById(ATTACHMENT_ID)).thenReturn(missingFilePath());
-        when(ticketRepository.findById(TICKET_ID)).thenReturn(Optional.of(ticket()));
 
         mvc.perform(get("/api/attachments/{id}/file", ATTACHMENT_ID).session(session(HR_ID, "ceo")))
             .andExpect(status().isNotFound());
@@ -129,7 +127,7 @@ class AttachmentControllerTest {
     @Test
     void strangerWithSalesRoleForbiddenOnDownload() throws Exception {
         when(attachmentRepository.findById(ATTACHMENT_ID)).thenReturn(Optional.of(attachment()));
-        when(ticketRepository.findById(TICKET_ID)).thenReturn(Optional.of(ticket()));
+        denyTicketAccess();
 
         mvc.perform(get("/api/attachments/{id}/file", ATTACHMENT_ID).session(session(STRANGER_ID, "sales")))
             .andExpect(status().isForbidden());
@@ -138,7 +136,7 @@ class AttachmentControllerTest {
     @Test
     void strangerWithSalesRoleForbiddenOnDelete() throws Exception {
         when(attachmentRepository.findById(ATTACHMENT_ID)).thenReturn(Optional.of(attachment()));
-        when(ticketRepository.findById(TICKET_ID)).thenReturn(Optional.of(ticket()));
+        denyTicketAccess();
 
         mvc.perform(delete("/api/attachments/{id}", ATTACHMENT_ID).session(session(STRANGER_ID, "sales")))
             .andExpect(status().isForbidden());
@@ -146,10 +144,24 @@ class AttachmentControllerTest {
 
     @Test
     void strangerWithSalesRoleForbiddenOnList() throws Exception {
-        when(ticketRepository.findById(TICKET_ID)).thenReturn(Optional.of(ticket()));
+        denyTicketAccess();
 
         mvc.perform(get("/api/tickets/{ticketId}/attachments", TICKET_ID).session(session(STRANGER_ID, "sales")))
             .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void strangerWithSalesRoleForbiddenOnUpload() throws Exception {
+        denyTicketAccess();
+        MockMultipartFile file = new MockMultipartFile(
+            "file", "po.pdf", "application/pdf", "content".getBytes());
+
+        mvc.perform(multipart("/api/tickets/{ticketId}/attachments", TICKET_ID)
+                .file(file)
+                .session(session(STRANGER_ID, "sales")))
+            .andExpect(status().isForbidden());
+
+        verify(fileStorageService, never()).store(any(), anyLong(), any(), any());
     }
 
     @Test
@@ -171,7 +183,8 @@ class AttachmentControllerTest {
 
     @Test
     void listOnMissingTicketReturns404NotServerError() throws Exception {
-        when(ticketRepository.findById(TICKET_ID)).thenReturn(Optional.empty());
+        doThrow(new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"))
+            .when(ticketService).requireTicketAccess(eq(TICKET_ID), any(UserPrincipal.class));
 
         mvc.perform(get("/api/tickets/{ticketId}/attachments", TICKET_ID).session(session(STRANGER_ID, "sales")))
             .andExpect(status().isNotFound());
@@ -189,21 +202,9 @@ class AttachmentControllerTest {
         return "/nonexistent/path/does-not-exist.pdf";
     }
 
-    private TicketDto ticket() {
-        TicketSummaryDto summary = new TicketSummaryDto(
-            TICKET_ID, "PR-2026-0001", "SALES", "Ticket title", "approved", "NORMAL",
-            CREATOR_ID, "Creator Name",
-            ASSIGNEE_ID, "Assignee Name",
-            "Customer", null, null, null, null, null,
-            null,
-            Instant.parse("2026-07-01T00:00:00Z"),
-            Instant.parse("2026-07-01T00:00:00Z"),
-            null,
-            0, false, null, null);
-        List<TicketItemDto> items = List.of();
-        List<TicketEventDto> events = List.of();
-        List<QuotationDto> quotations = List.of();
-        return new TicketDto(summary, items, events, null, quotations);
+    private void denyTicketAccess() {
+        doThrow(new ApiException(HttpStatus.FORBIDDEN, "Forbidden"))
+            .when(ticketService).requireTicketAccess(eq(TICKET_ID), any(UserPrincipal.class));
     }
 
     private MockHttpSession session(long userId, String role) {

@@ -37,7 +37,6 @@ export function roleLabel(role) {
     sales_manager: 'SALES MANAGER',
     import: 'IMPORT',
     ceo: 'CEO',
-    admin: 'ADMIN',
   };
   return labels[role] ?? role?.toUpperCase() ?? '-';
 }

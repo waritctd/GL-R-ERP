@@ -55,6 +55,11 @@ class TicketServiceTest {
         verify(ticketRepo).findSummaries(null, null);
     }
 
+    @Test
+    void list_employeeRoleCannotSeeTickets() {
+        assertForbidden(() -> service.list(null, actor(5L, "employee")));
+    }
+
     // ── get ───────────────────────────────────────────────────────────────
 
     @Test
@@ -73,6 +78,12 @@ class TicketServiceTest {
     void get_importCanViewAnyTicket() {
         TicketDto ticket = stubTicket(10L, 99L, TicketStatus.SUBMITTED);
         assertThat(service.get(10L, importActor)).isEqualTo(ticket);
+    }
+
+    @Test
+    void get_employeeRoleCannotViewTickets() {
+        stubTicket(10L, 1L, TicketStatus.SUBMITTED);
+        assertForbidden(() -> service.get(10L, actor(5L, "employee")));
     }
 
     // ── submit ────────────────────────────────────────────────────────────
@@ -313,6 +324,16 @@ class TicketServiceTest {
         assertThat(total.getValue()).isEqualByComparingTo(new BigDecimal("200.00"));
     }
 
+    @Test
+    void downloadQuotation_rejectsEmployeeRole() {
+        stubTicketWithQuotations(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(
+            new QuotationDto(77L, 10L, "QT-2026-0001", 1L, "Sales User",
+                Instant.now(), null, BigDecimal.TEN, "THB", 1, "ISSUED")
+        ));
+
+        assertForbidden(() -> service.getQuotationPdf(10L, 77L, actor(5L, "employee")));
+    }
+
     // ── close ─────────────────────────────────────────────────────────────
 
     @Test
@@ -335,6 +356,35 @@ class TicketServiceTest {
     void close_rejectsWrongStatus() {
         stubTicket(10L, 1L, TicketStatus.APPROVED);
         assertConflict(() -> service.close(10L, salesActor));
+    }
+
+    @Test
+    void confirmCustomer_rejectsNonOwnerSales() {
+        stubTicket(10L, 1L, TicketStatus.QUOTATION_ISSUED);
+        assertForbidden(() -> service.confirmCustomer(10L, otherSales));
+    }
+
+    @Test
+    void confirmDepositPaid_rejectsNonOwnerSales() {
+        stubTicketWithPayment(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
+        assertForbidden(() -> service.confirmDepositPaid(10L, otherSales));
+    }
+
+    @Test
+    void issueImportRequest_allowsDepositPaidPaymentStatus() {
+        stubTicketWithPayment(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", null);
+
+        service.issueImportRequest(10L, importActor);
+
+        verify(ticketRepo).updateFulfillmentStatus(10L, "IR_ISSUED");
+        verify(ticketRepo).addEvent(eq(10L), eq(3L), anyString(),
+            eq(TicketEventKind.IR_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), isNull());
+    }
+
+    @Test
+    void confirmFinalPayment_rejectsNonOwnerSales() {
+        stubTicketWithPayment(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
+        assertForbidden(() -> service.confirmFinalPayment(10L, otherSales));
     }
 
     // ── cancel ────────────────────────────────────────────────────────────
@@ -422,11 +472,15 @@ class TicketServiceTest {
 
     @Test
     void comment_rejectsNonExistentTicket() {
-        when(ticketRepo.existsById(99L)).thenReturn(false);
-
         assertThatThrownBy(() -> service.comment(99L, new CommentRequest("hi"), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    @Test
+    void comment_rejectsNonOwnerSales() {
+        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
+        assertForbidden(() -> service.comment(10L, new CommentRequest("hi"), otherSales));
     }
 
     // ── helpers ───────────────────────────────────────────────────────────
@@ -440,10 +494,32 @@ class TicketServiceTest {
     }
 
     private TicketDto stubTicketWithItems(long ticketId, long createdById, String status, List<TicketItemDto> items) {
+        return stubTicket(ticketId, createdById, status, items, null, null);
+    }
+
+    private TicketDto stubTicketWithQuotations(
+            long ticketId, long createdById, String status, List<QuotationDto> quotations) {
         TicketSummaryDto summary = new TicketSummaryDto(
             ticketId, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", status, "NORMAL",
             createdById, "Sales User", null, null, "Test Customer", null, null, null, null, null, null,
-            Instant.now(), Instant.now(), null, items.size(), false, null, null);
+            Instant.now(), Instant.now(), null, 0, false, null, null);
+        TicketDto ticket = new TicketDto(summary, List.of(), List.of(), null, quotations);
+        when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
+        return ticket;
+    }
+
+    private TicketDto stubTicketWithPayment(
+            long ticketId, long createdById, String status, String paymentStatus, String fulfillmentStatus) {
+        return stubTicket(ticketId, createdById, status, List.of(), paymentStatus, fulfillmentStatus);
+    }
+
+    private TicketDto stubTicket(
+            long ticketId, long createdById, String status, List<TicketItemDto> items,
+            String paymentStatus, String fulfillmentStatus) {
+        TicketSummaryDto summary = new TicketSummaryDto(
+            ticketId, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", status, "NORMAL",
+            createdById, "Sales User", null, null, "Test Customer", null, null, null, null, null, null,
+            Instant.now(), Instant.now(), null, items.size(), false, paymentStatus, fulfillmentStatus);
         TicketDto ticket = new TicketDto(summary, items, List.of(), null, List.of());
         when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
         return ticket;

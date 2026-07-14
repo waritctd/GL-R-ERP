@@ -1,0 +1,9 @@
+# Demo/showcase-only overrides. Use with SPRING_PROFILES_ACTIVE=prod,demo for the hosted demo.
+spring:
+  flyway:
+    # Demo login/seed data lives outside real production. Flyway validates version numbers across
+    # all configured locations combined, so migration-demo versions must stay globally unique.
+    locations: classpath:db/migration,classpath:db/migration-demo
+
+app:
+  uploads-dir: ${APP_UPLOADS_DIR:./uploads}

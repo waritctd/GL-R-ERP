@@ -285,7 +285,7 @@ export function App() {
             path="/attendance"
             element={<AttendancePage user={user} employees={employees} showToast={showToast} />}
           />
-          {/* /ceo-settings had no allowedRoute guard historically (nav-gated only). */}
+          {/* /ceo-settings is nav-gated only — not in PATH_GUARDS (see permissions.js). */}
           {SALES_ENABLED && (
             <Route path="/ceo-settings" element={<CeoSettingsPage showToast={showToast} />} />
           )}

@@ -1,4 +1,4 @@
-import { apiRequest } from './client.js';
+import { apiRequest, csrfHeaders } from './client.js';
 import { API_ROUTES } from './routes.js';
 
 function withQuery(path, params = {}) {
@@ -60,6 +60,7 @@ export const api = {
       const res = await fetch(API_ROUTES.leave.create, {
         method: 'POST',
         credentials: 'include',
+        headers: csrfHeaders('POST'),
         body: formData,
       });
       if (!res.ok) {
@@ -166,7 +167,7 @@ export const api = {
       formData.append('attachType', attachType || 'OTHER');
       if (quotationId) formData.append('quotationId', String(quotationId));
       const res = await fetch(API_ROUTES.attachments.upload(ticketId), {
-        method: 'POST', credentials: 'include', body: formData,
+        method: 'POST', credentials: 'include', headers: csrfHeaders('POST'), body: formData,
       });
       if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || 'Upload failed'); }
       return res.json();
@@ -207,6 +208,7 @@ export const api = {
       const res = await fetch(API_ROUTES.commissions.create, {
         method: 'POST',
         credentials: 'include',
+        headers: csrfHeaders('POST'),
         body: formData,
       });
       if (!res.ok) {
