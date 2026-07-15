@@ -37,7 +37,7 @@ public abstract class AbstractPostgresIntegrationTest {
         }
         Flyway flyway = Flyway.configure()
             .dataSource(dataSource)
-            .schemas("hr", "hr_restricted", "sales")
+            .schemas("hr", "hr_restricted", "sales", "customers", "price_catalog")
             .defaultSchema("hr")
             .cleanDisabled(false)
             .load();
