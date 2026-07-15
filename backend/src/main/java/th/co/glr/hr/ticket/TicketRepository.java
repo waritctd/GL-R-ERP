@@ -37,8 +37,8 @@ public class TicketRepository {
           JOIN hr.employee ec ON ec.employee_id = t.created_by
           LEFT JOIN hr.employee ea ON ea.employee_id = t.assigned_to
           LEFT JOIN sales.ticket_item ti ON ti.ticket_id = t.ticket_id
-          LEFT JOIN sales.project p ON p.project_id = t.project_id
-          LEFT JOIN sales.contact ct ON ct.contact_id = t.contact_id
+          LEFT JOIN customers.project p ON p.project_id = t.project_id
+          LEFT JOIN customers.contact ct ON ct.contact_id = t.contact_id
         """;
 
     private final NamedParameterJdbcTemplate jdbc;

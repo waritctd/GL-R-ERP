@@ -56,9 +56,9 @@ public class CatalogRepository {
                    pp.product_code, pp.grade, pp.collection, pp.product_name,
                    pp.color, pp.surface, pp.size_raw,
                    pp.price, pp.currency, pp.price_unit, pp.sqm_per_piece
-              FROM sales.product_prices pp
-              JOIN sales.price_list_versions plv ON plv.version_id = pp.version_id
-              JOIN sales.factories           f   ON f.factory_id   = pp.factory_id
+              FROM price_catalog.product_prices pp
+              JOIN price_catalog.price_list_versions plv ON plv.version_id = pp.version_id
+              JOIN price_catalog.factories           f   ON f.factory_id   = pp.factory_id
              WHERE plv.status = 'ACTIVE'
                %s
                AND (

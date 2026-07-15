@@ -76,7 +76,7 @@ public class PriceImportService {
         String json;
         try {
             json = jdbc.queryForObject(
-                "SELECT config FROM sales.import_profiles WHERE factory_id = :fid",
+                "SELECT config FROM price_catalog.import_profiles WHERE factory_id = :fid",
                 Map.of("fid", factoryId),
                 String.class
             );
@@ -102,7 +102,7 @@ public class PriceImportService {
         var holder = new GeneratedKeyHolder();
         jdbc.update(
             """
-            INSERT INTO sales.price_list_versions
+            INSERT INTO price_catalog.price_list_versions
                 (factory_id, label, source_file, status, uploaded_by, uploaded_at, row_count, error_count)
             VALUES
                 (:fid, :label, :sf, 'DRAFT', :by, :now, :rc, :ec)
@@ -125,7 +125,7 @@ public class PriceImportService {
         long versionId, long factoryId, List<PriceRow> rows, UUID sessionId
     ) {
         String sql = """
-            INSERT INTO sales.product_price_staging (
+            INSERT INTO price_catalog.product_price_staging (
                 factory_id, version_id, product_code, grade, collection, product_name,
                 color, surface, size_raw, width_mm, height_mm, thickness_mm,
                 price, currency, price_unit, sqm_per_piece,
@@ -180,13 +180,13 @@ public class PriceImportService {
 
         // reset previous errors (re-validate idempotent)
         jdbc.update(
-            "UPDATE sales.product_price_staging SET import_error = NULL WHERE version_id = :vid",
+            "UPDATE price_catalog.product_price_staging SET import_error = NULL WHERE version_id = :vid",
             Map.of("vid", versionId)
         );
 
         // mark duplicate rows within the same version (keep first by rowid, flag rest)
         jdbc.update("""
-            UPDATE sales.product_price_staging s
+            UPDATE price_catalog.product_price_staging s
                SET import_error = 'รหัสซ้ำในไฟล์'
               FROM (
                 SELECT price_id FROM (
@@ -199,7 +199,7 @@ public class PriceImportService {
                                             coalesce(surface,'')
                                ORDER BY price_id
                            ) rn
-                      FROM sales.product_price_staging
+                      FROM price_catalog.product_price_staging
                      WHERE version_id = :vid
                 ) t WHERE rn > 1
               ) dups
@@ -219,7 +219,7 @@ public class PriceImportService {
                 count(*)                                    AS total,
                 count(*) FILTER (WHERE import_error IS NULL)  AS valid,
                 count(*) FILTER (WHERE import_error IS NOT NULL) AS invalid
-              FROM sales.product_price_staging
+              FROM price_catalog.product_price_staging
              WHERE version_id = :vid
             """,
             Map.of("vid", versionId)
@@ -229,8 +229,8 @@ public class PriceImportService {
         Long prevVersionId = jdbc.query(
             """
             SELECT v2.version_id
-              FROM sales.price_list_versions v1
-              JOIN sales.price_list_versions v2
+              FROM price_catalog.price_list_versions v1
+              JOIN price_catalog.price_list_versions v2
                 ON v2.factory_id = v1.factory_id
                AND v2.status = 'ACTIVE'
              WHERE v1.version_id = :vid
@@ -246,11 +246,11 @@ public class PriceImportService {
             long prev = prevVersionId;
             newProducts = countDiff("""
                 SELECT count(DISTINCT coalesce(s.product_code,'__null__'||s.price_id::text))
-                  FROM sales.product_price_staging s
+                  FROM price_catalog.product_price_staging s
                  WHERE s.version_id = :vid
                    AND s.import_error IS NULL
                    AND NOT EXISTS (
-                       SELECT 1 FROM sales.product_prices p
+                       SELECT 1 FROM price_catalog.product_prices p
                         WHERE p.version_id = :prev
                           AND p.product_code IS NOT DISTINCT FROM s.product_code
                           AND p.grade        IS NOT DISTINCT FROM s.grade
@@ -259,10 +259,10 @@ public class PriceImportService {
 
             removedProducts = countDiff("""
                 SELECT count(DISTINCT coalesce(p.product_code,'__null__'||p.price_id::text))
-                  FROM sales.product_prices p
+                  FROM price_catalog.product_prices p
                  WHERE p.version_id = :prev
                    AND NOT EXISTS (
-                       SELECT 1 FROM sales.product_price_staging s
+                       SELECT 1 FROM price_catalog.product_price_staging s
                         WHERE s.version_id = :vid
                           AND s.import_error IS NULL
                           AND s.product_code IS NOT DISTINCT FROM p.product_code
@@ -272,8 +272,8 @@ public class PriceImportService {
 
             priceChanged = countDiff("""
                 SELECT count(*)
-                  FROM sales.product_price_staging s
-                  JOIN sales.product_prices p
+                  FROM price_catalog.product_price_staging s
+                  JOIN price_catalog.product_prices p
                     ON p.version_id = :prev
                    AND p.product_code IS NOT DISTINCT FROM s.product_code
                    AND p.grade        IS NOT DISTINCT FROM s.grade
@@ -287,7 +287,7 @@ public class PriceImportService {
         List<String> sampleErrors = jdbc.query(
             """
             SELECT DISTINCT import_error
-              FROM sales.product_price_staging
+              FROM price_catalog.product_price_staging
              WHERE version_id = :vid AND import_error IS NOT NULL
              LIMIT 20
             """,
@@ -319,7 +319,7 @@ public class PriceImportService {
         requireDraft(versionId);
 
         Integer valid = jdbc.queryForObject(
-            "SELECT count(*) FROM sales.product_price_staging WHERE version_id = :vid AND import_error IS NULL",
+            "SELECT count(*) FROM price_catalog.product_price_staging WHERE version_id = :vid AND import_error IS NULL",
             Map.of("vid", versionId), Integer.class
         );
         if (valid == null || valid == 0)
@@ -328,8 +328,8 @@ public class PriceImportService {
         // find current ACTIVE version for this factory (for incremental merge)
         Long prevVersionId = jdbc.query("""
             SELECT v2.version_id
-              FROM sales.price_list_versions v1
-              JOIN sales.price_list_versions v2
+              FROM price_catalog.price_list_versions v1
+              JOIN price_catalog.price_list_versions v2
                 ON v2.factory_id = v1.factory_id AND v2.status = 'ACTIVE'
              WHERE v1.version_id = :vid
              LIMIT 1
@@ -340,7 +340,7 @@ public class PriceImportService {
 
         // 1. copy valid staging rows → product_prices
         int inserted = jdbc.update("""
-            INSERT INTO sales.product_prices (
+            INSERT INTO price_catalog.product_prices (
                 factory_id, version_id, product_code, grade, collection, product_name,
                 color, surface, size_raw, width_mm, height_mm, thickness_mm,
                 price, currency, price_unit, sqm_per_piece,
@@ -353,7 +353,7 @@ public class PriceImportService {
                 price, currency, price_unit, sqm_per_piece,
                 pcs_per_box, sqm_per_box, kg_per_box,
                 price_variants, attributes, source_sheet, source_row
-              FROM sales.product_price_staging
+              FROM price_catalog.product_price_staging
              WHERE version_id = :vid
                AND import_error IS NULL
             ON CONFLICT ON CONSTRAINT uq_price DO UPDATE
@@ -378,7 +378,7 @@ public class PriceImportService {
         int retained = 0;
         if (prevVersionId != null) {
             retained = jdbc.update("""
-                INSERT INTO sales.product_prices (
+                INSERT INTO price_catalog.product_prices (
                     factory_id, version_id, product_code, grade, collection, product_name,
                     color, surface, size_raw, width_mm, height_mm, thickness_mm,
                     price, currency, price_unit, sqm_per_piece,
@@ -391,10 +391,10 @@ public class PriceImportService {
                     p.price, p.currency, p.price_unit, p.sqm_per_piece,
                     p.pcs_per_box, p.sqm_per_box, p.kg_per_box,
                     p.price_variants, p.attributes, p.source_sheet, p.source_row
-                  FROM sales.product_prices p
+                  FROM price_catalog.product_prices p
                  WHERE p.version_id = :prevVid
                    AND NOT EXISTS (
-                       SELECT 1 FROM sales.product_price_staging s
+                       SELECT 1 FROM price_catalog.product_price_staging s
                         WHERE s.version_id = :vid
                           AND s.import_error IS NULL
                           AND (
@@ -411,18 +411,18 @@ public class PriceImportService {
 
         // 3. activate this version
         jdbc.update(
-            "UPDATE sales.price_list_versions SET status = 'ACTIVE' WHERE version_id = :vid",
+            "UPDATE price_catalog.price_list_versions SET status = 'ACTIVE' WHERE version_id = :vid",
             Map.of("vid", versionId)
         );
 
         // 4. archive previous ACTIVE versions of the same factory
         int archived = jdbc.update("""
-            UPDATE sales.price_list_versions
+            UPDATE price_catalog.price_list_versions
                SET status = 'ARCHIVED'
              WHERE status = 'ACTIVE'
                AND version_id <> :vid
                AND factory_id = (
-                   SELECT factory_id FROM sales.price_list_versions WHERE version_id = :vid
+                   SELECT factory_id FROM price_catalog.price_list_versions WHERE version_id = :vid
                )
             """,
             Map.of("vid", versionId)
@@ -430,7 +430,7 @@ public class PriceImportService {
 
         // 5. delete staging (keep only error rows for audit)
         jdbc.update(
-            "DELETE FROM sales.product_price_staging WHERE version_id = :vid AND import_error IS NULL",
+            "DELETE FROM price_catalog.product_price_staging WHERE version_id = :vid AND import_error IS NULL",
             Map.of("vid", versionId)
         );
 
@@ -445,8 +445,8 @@ public class PriceImportService {
             SELECT v.version_id, v.label, v.source_file, v.status,
                    v.effective_from, v.uploaded_at, v.row_count, v.error_count,
                    f.name AS factory_name
-              FROM sales.price_list_versions v
-              JOIN sales.factories f USING (factory_id)
+              FROM price_catalog.price_list_versions v
+              JOIN price_catalog.factories f USING (factory_id)
              WHERE v.factory_id = :fid
              ORDER BY v.uploaded_at DESC
             """,
@@ -471,7 +471,7 @@ public class PriceImportService {
 
     private void requireDraft(long versionId) {
         String status = jdbc.queryForObject(
-            "SELECT status FROM sales.price_list_versions WHERE version_id = :vid",
+            "SELECT status FROM price_catalog.price_list_versions WHERE version_id = :vid",
             Map.of("vid", versionId), String.class
         );
         if (!"DRAFT".equals(status))
@@ -502,7 +502,7 @@ public class PriceImportService {
 
     public List<Map<String, Object>> listFactories() {
         return jdbc.query(
-            "SELECT factory_id, name, country, default_currency FROM sales.factories ORDER BY name",
+            "SELECT factory_id, name, country, default_currency FROM price_catalog.factories ORDER BY name",
             Map.of(),
             (rs, i) -> {
                 Map<String, Object> m = new HashMap<>();
@@ -519,7 +519,7 @@ public class PriceImportService {
 
     public String getRawProfile(long factoryId) {
         return jdbc.queryForObject(
-            "SELECT config FROM sales.import_profiles WHERE factory_id = :fid",
+            "SELECT config FROM price_catalog.import_profiles WHERE factory_id = :fid",
             Map.of("fid", factoryId), String.class
         );
     }
@@ -532,7 +532,7 @@ public class PriceImportService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid profile JSON: " + e.getMessage());
         }
         int updated = jdbc.update(
-            "UPDATE sales.import_profiles SET config = :cfg::jsonb, updated_at = now() WHERE factory_id = :fid",
+            "UPDATE price_catalog.import_profiles SET config = :cfg::jsonb, updated_at = now() WHERE factory_id = :fid",
             Map.of("cfg", configJson, "fid", factoryId)
         );
         if (updated == 0)
@@ -564,7 +564,7 @@ public class PriceImportService {
 
         var holder = new GeneratedKeyHolder();
         jdbc.update(
-            "INSERT INTO sales.factories (name, country, default_currency) VALUES (:name, :country, :cur)",
+            "INSERT INTO price_catalog.factories (name, country, default_currency) VALUES (:name, :country, :cur)",
             new MapSqlParameterSource()
                 .addValue("name",    name.strip())
                 .addValue("country", cty)
@@ -576,7 +576,7 @@ public class PriceImportService {
         String blankCfg = String.format(
             "{\"number_format\":\"eu\",\"sheets\":[],\"columns\":{},\"defaults\":{\"currency\":\"%s\"}}", cur);
         jdbc.update(
-            "INSERT INTO sales.import_profiles (factory_id, config) VALUES (:fid, CAST(:cfg AS jsonb))",
+            "INSERT INTO price_catalog.import_profiles (factory_id, config) VALUES (:fid, CAST(:cfg AS jsonb))",
             Map.of("fid", factoryId, "cfg", blankCfg)
         );
 
@@ -628,7 +628,7 @@ public class PriceImportService {
     private long findOrCreateManualVersion(long factoryId) {
         List<Long> active = jdbc.query(
             """
-            SELECT version_id FROM sales.price_list_versions
+            SELECT version_id FROM price_catalog.price_list_versions
              WHERE factory_id = :fid AND status = 'ACTIVE'
              ORDER BY uploaded_at DESC LIMIT 1
             """,
@@ -640,7 +640,7 @@ public class PriceImportService {
         var holder = new GeneratedKeyHolder();
         jdbc.update(
             """
-            INSERT INTO sales.price_list_versions
+            INSERT INTO price_catalog.price_list_versions
                 (factory_id, label, status, uploaded_at, row_count, error_count)
             VALUES (:fid, 'ป้อนด้วยตนเอง', 'ACTIVE', :now, 0, 0)
             """,
@@ -656,7 +656,7 @@ public class PriceImportService {
         long versionId = findOrCreateManualVersion(factoryId);
         Long priceId = jdbc.queryForObject(
             """
-            INSERT INTO sales.product_prices (
+            INSERT INTO price_catalog.product_prices (
                 factory_id, version_id, product_code, grade, collection, product_name,
                 color, surface, size_raw, price, currency, price_unit
             ) VALUES (
@@ -691,7 +691,7 @@ public class PriceImportService {
     public void updateProduct(long priceId, ProductPriceInput in) {
         int updated = jdbc.update(
             """
-            UPDATE sales.product_prices SET
+            UPDATE price_catalog.product_prices SET
                 product_code = :code,   grade        = :grade, collection   = :col,
                 product_name = :name,   color        = :color, surface      = :surf,
                 size_raw     = :sizeRaw, price       = :price, currency     = :cur,
@@ -717,7 +717,7 @@ public class PriceImportService {
 
     public void deleteProduct(long priceId) {
         int deleted = jdbc.update(
-            "DELETE FROM sales.product_prices WHERE price_id = :pid",
+            "DELETE FROM price_catalog.product_prices WHERE price_id = :pid",
             Map.of("pid", priceId)
         );
         if (deleted == 0)
