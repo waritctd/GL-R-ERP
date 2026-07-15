@@ -6,6 +6,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { ProductFormModal } from './ProductFormModal.jsx';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -169,6 +170,47 @@ function UploadResultCard({ result }) {
   );
 }
 
+// ── ProductCard (mobile) ──────────────────────────────────────────────────────
+// Same 8-column desktop table as CatalogSearchPage, minus the factory column
+// (already filtered to one factory here) — reflowed by hand since this is a
+// plain `<table>`, not DataTable.
+function ProductCard({ product, onEdit, onDelete }) {
+  return (
+    <div className="mt-2.5 flex w-full min-w-0 flex-col items-stretch gap-2 rounded-md border border-solid border-border bg-surface p-4 first:mt-0">
+      {/* This list is already scoped to one selected factory, so collection is the
+          identity anchor here (it leads the desktop table); productName is often
+          empty in real price-list rows and would collapse the line to a dash. */}
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <strong className="min-w-0 truncate text-md font-extrabold text-text">
+          {product.collection || product.productName || '—'}
+        </strong>
+        <code className="shrink-0 text-2xs text-text-muted">{product.productCode}</code>
+      </div>
+
+      <span className="min-w-0 truncate text-xs text-text-muted">
+        {[product.productName, product.color, product.surface, product.sizeRaw]
+          .filter(Boolean)
+          .join(' · ')}
+      </span>
+
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-md font-extrabold text-primary">
+          {priceDisplay(product.price, product.currency)}
+          <span className="ml-1 text-xs font-normal text-muted">/ {unitLabel(product.priceUnit)}</span>
+        </span>
+        <div className="flex gap-1">
+          <Button size="sm" variant="secondary" onClick={() => onEdit(product)}>
+            แก้ไข
+          </Button>
+          <Button size="sm" variant="danger" onClick={() => onDelete(product)}>
+            ลบ
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── VersionsPanel ─────────────────────────────────────────────────────────────
 
 function VersionsPanel({ versions, currentVersionId }) {
@@ -202,6 +244,7 @@ function VersionsPanel({ versions, currentVersionId }) {
 // ── main page ─────────────────────────────────────────────────────────────────
 
 export function PriceImportPage({ showToast }) {
+  const isMobile = useIsMobile();
   const [factories, setFactories]             = useState([]);
   const [factoryId, setFactoryId]             = useState('');
   const [versions, setVersions]               = useState([]);
@@ -416,6 +459,17 @@ export function PriceImportPage({ showToast }) {
             <p className="text-sm text-muted py-6 text-center">
               ยังไม่มีสินค้าสำหรับโรงงานนี้ — อัปโหลดไฟล์หรือเพิ่มสินค้าด้วยตนเอง
             </p>
+          ) : isMobile ? (
+            <div className="flex flex-col">
+              {products.map((p) => (
+                <ProductCard
+                  key={p.priceId}
+                  product={p}
+                  onEdit={setEditingProduct}
+                  onDelete={handleDeleteProduct}
+                />
+              ))}
+            </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm border-collapse">

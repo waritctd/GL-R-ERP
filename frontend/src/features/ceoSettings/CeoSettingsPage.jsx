@@ -116,6 +116,7 @@ export function CeoSettingsPage({ showToast }) {
           <span>ดึงอัตโนมัติจาก BOT API ทุกวัน 18:00 (เวลาไทย)</span>
           <span style={{ color: '#94a3b8' }}>• ตั้งค่า BOT_API_TOKEN เพื่อเปิดใช้งาน</span>
         </div>
+        <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ background: '#f8fafc' }}>
@@ -179,6 +180,7 @@ export function CeoSettingsPage({ showToast }) {
             })}
           </tbody>
         </table>
+        </div>
       </section>
 
       {/* Price Calc Config */}
