@@ -2509,10 +2509,12 @@ export const api = {
     },
     async getProfile(factoryId) {
       requireSession();
+      void factoryId;
       return delay(JSON.stringify({ number_format: 'eu', sheets: [{ name: 'Sheet1', header_row: 1 }], columns: {} }));
     },
     async updateProfile(factoryId, json) {
       requireSession();
+      void json;
       return delay({ status: 'updated', factoryId: Number(factoryId) });
     },
   },

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { api } from './api/index.js';
 import { AppShell } from './components/layout/AppShell.jsx';
@@ -70,6 +70,7 @@ function DepositNoticeRoute({ user, showToast }) {
 
 export function App() {
   const [user, setUser] = useState(null);
+  const [restoringSession, setRestoringSession] = useState(true);
   const [loading, setLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
@@ -104,6 +105,8 @@ export function App() {
         setUser(response.user);
       } catch {
         if (alive) setUser(null);
+      } finally {
+        if (alive) setRestoringSession(false);
       }
     }
     restoreSession();
@@ -140,6 +143,10 @@ export function App() {
     setUser(null);
     resetData();
     navigate('/');
+  }
+
+  if (restoringSession) {
+    return <RouteFallback />;
   }
 
   if (!user) {

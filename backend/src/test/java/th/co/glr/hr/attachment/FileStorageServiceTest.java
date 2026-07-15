@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.file.Path;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.HttpStatus;
@@ -11,6 +12,12 @@ import org.springframework.mock.web.MockMultipartFile;
 import th.co.glr.hr.common.ApiException;
 
 class FileStorageServiceTest {
+    private static final Set<String> BUSINESS_ATTACHMENT_MIME_TYPES = Set.of(
+        "application/pdf",
+        "image/jpeg",
+        "image/png"
+    );
+
     @TempDir
     Path uploadsDir;
 
@@ -21,7 +28,7 @@ class FileStorageServiceTest {
             "file", "quote.pdf", "APPLICATION/PDF", "pdf".getBytes());
 
         FileStorageService.StoredFile stored = service.store(
-            "tickets", 10L, file, FileStorageService.BUSINESS_ATTACHMENT_MIME_TYPES);
+            "tickets", 10L, file, BUSINESS_ATTACHMENT_MIME_TYPES);
 
         assertThat(stored.fileName()).isEqualTo("quote.pdf");
         assertThat(stored.mimeType()).isEqualTo("application/pdf");
@@ -35,7 +42,7 @@ class FileStorageServiceTest {
             "file", "payload.html", "text/html", "<script>alert(1)</script>".getBytes());
 
         assertThatThrownBy(() -> service.store(
-                "tickets", 10L, file, FileStorageService.BUSINESS_ATTACHMENT_MIME_TYPES))
+                "tickets", 10L, file, BUSINESS_ATTACHMENT_MIME_TYPES))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.BAD_REQUEST);

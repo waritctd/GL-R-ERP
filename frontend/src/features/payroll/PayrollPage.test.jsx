@@ -67,6 +67,10 @@ function previewPeriod(overrides = {}) {
   };
 }
 
+function renderPayrollPage() {
+  return render(<PayrollPage showToast={vi.fn()} />);
+}
+
 describe('PayrollPage adjustment inputs', () => {
   beforeEach(() => {
     vi.clearAllMocks();
