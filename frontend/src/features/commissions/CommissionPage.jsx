@@ -42,6 +42,39 @@ function kindLabel(kind) {
   return kind === 'CLAWBACK' ? 'คืน/ยกเลิก' : 'ขาย';
 }
 
+/**
+ * Mobile record card for a commission record. `.commission-table` is
+ * intentionally excluded from the CSS reflow-cards path (styles.css ~L1938)
+ * because six columns of amounts/status can't reflow into readable stacked
+ * rows — it just scrolls horizontally, and with 0 rows the bare table-head
+ * (min-width: 900px at <=1040px, styles.css ~L1795) still overflows
+ * `.content-scroll`. Supplying `mobileCard` here bypasses the grid/table-head
+ * markup below 720px entirely (DataTable's `asCards` path), which removes
+ * that overflow and shows only what's needed to identify the record.
+ */
+function CommissionCard({ record }) {
+  const status = statusInfo(record.status);
+  return (
+    <>
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <strong className="min-w-0 truncate text-sm font-extrabold text-text">
+          {record.invoiceDetails.invoiceNumber}
+        </strong>
+        <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+      </div>
+
+      <span className="min-w-0 truncate text-xs text-text-muted">
+        {record.salesRepName || record.salesRepId}
+      </span>
+
+      <span className="flex min-w-0 items-baseline gap-2">
+        <strong className="text-md font-extrabold text-text">{formatMoney(record.actualReceived)}</strong>
+        <span className="text-2xs text-text-muted">ฐาน {formatMoney(record.commissionableBase)}</span>
+      </span>
+    </>
+  );
+}
+
 function numberOrNull(value) {
   if (value === '' || value === null || value === undefined) return null;
   return Number(value);
@@ -449,6 +482,7 @@ export function CommissionPage({ user, showToast }) {
             rows={records}
             getRowKey={(record) => record.id}
             gridClassName="commission-table"
+            mobileCard={(record) => <CommissionCard record={record} />}
             pageSize={20}
             searchable
             searchPlaceholder="ค้นหาเลขที่ใบกำกับ / ชื่อ Sales"

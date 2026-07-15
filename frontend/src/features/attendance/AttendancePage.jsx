@@ -22,6 +22,38 @@ const monthStartIso = () => {
 const FILTER_BAR_CLASS =
   'flex flex-wrap gap-[10px] items-center bg-surface border border-border rounded-md p-[14px]';
 
+/**
+ * Mobile record card for a punch record. The desktop grid's 6 columns
+ * (`reflow-cards` today stacks every column as its own labeled row, which is
+ * usable but noisy for a scan-history list). This keeps only what identifies
+ * the punch and lets someone spot a mismapped scan at a glance: who, when,
+ * employee code, and where it came from.
+ */
+function AttendanceCard({ punch }) {
+  return (
+    <>
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <strong className="min-w-0 truncate text-sm font-extrabold text-text">
+          {punch.employee_name || 'ยังไม่แมปพนักงาน'}
+        </strong>
+        <span className="shrink-0 text-right text-xs text-text-muted">
+          {formatPunchDateTime(punch.punch_time)}
+        </span>
+      </div>
+
+      <span className="min-w-0 truncate text-xs text-text-muted">
+        {[punch.employee_code, punch.site_code || punch.device_name || punch.device_code]
+          .filter(Boolean)
+          .join(' · ')}
+      </span>
+
+      {punch.position_th ? (
+        <span className="min-w-0 truncate text-2xs text-text-muted">{punch.position_th}</span>
+      ) : null}
+    </>
+  );
+}
+
 export function AttendancePage({ user, employees, showToast }) {
   const isMobile = useIsMobile();
   // HR/executives see everyone; ฝ่าย managers get the same view scoped to their division
@@ -236,6 +268,7 @@ export function AttendancePage({ user, employees, showToast }) {
         rows={punches}
         getRowKey={(punch) => punch.punch_id}
         gridClassName="grid-cols-[1.35fr_1.5fr_0.8fr_1.2fr_0.8fr_1.15fr] max-[1040px]:min-w-[900px] reflow-cards"
+        mobileCard={(punch) => <AttendanceCard punch={punch} />}
         pageSize={50}
         searchable
         searchPlaceholder="ค้นหาพนักงาน / รหัส / ชื่อเล่น"

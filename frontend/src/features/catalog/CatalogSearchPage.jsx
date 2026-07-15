@@ -4,6 +4,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
+import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { ProductFormModal } from './ProductFormModal.jsx';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -28,9 +29,47 @@ function debounce(fn, ms) {
   _debounce = setTimeout(fn, ms);
 }
 
+// ── mobile card ───────────────────────────────────────────────────────────────
+// The desktop table has 9 columns (factory/code/collection/name/color/surface/
+// size/price/edit); below 720px that crushes to unreadable stubs. This plain
+// `<table>` doesn't go through DataTable's mobileCard mechanism, so the
+// reflow is done by hand here, matching the same record-card styling.
+function ProductCard({ product, onEdit }) {
+  return (
+    <div className="mt-2.5 flex w-full min-w-0 flex-col items-stretch gap-2 rounded-md border border-solid border-border bg-surface p-4 first:mt-0">
+      {/* Factory is the identity anchor (it leads the desktop table and is always
+          present); productName is frequently empty in real price-list data, so
+          leading with it collapses the card's primary line to a dash. */}
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <strong className="min-w-0 truncate text-md font-extrabold text-text">
+          {product.factoryName || product.productName || '—'}
+        </strong>
+        <code className="shrink-0 text-2xs text-text-muted">{product.productCode}</code>
+      </div>
+
+      <span className="min-w-0 truncate text-xs text-text-muted">
+        {[product.collection, product.productName, product.color, product.surface, product.sizeRaw]
+          .filter(Boolean)
+          .join(' · ')}
+      </span>
+
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-md font-extrabold text-primary">
+          {priceDisplay(product.price, product.currency)}
+          <span className="ml-1 text-xs font-normal text-text-muted">/ {unitLabel(product.priceUnit)}</span>
+        </span>
+        <Button size="sm" variant="secondary" onClick={() => onEdit(product)}>
+          แก้ไข
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // ── main page ─────────────────────────────────────────────────────────────────
 
 export function CatalogSearchPage({ showToast }) {
+  const isMobile = useIsMobile();
   const [query, setQuery]         = useState('');
   const [factoryId, setFactoryId] = useState('');
   const [factories, setFactories] = useState([]);
@@ -141,50 +180,58 @@ export function CatalogSearchPage({ showToast }) {
           <p className="text-xs text-muted mb-2">
             พบ {items.length} รายการ{items.length >= 50 ? ' (แสดงสูงสุด 50)' : ''}
           </p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm border-collapse">
-              <thead className="border-b-2 border-border">
-                <tr>
-                  <th className="text-left px-3 py-2 text-muted font-medium">โรงงาน</th>
-                  <th className="text-left px-3 py-2 text-muted font-medium">รหัส</th>
-                  <th className="text-left px-3 py-2 text-muted font-medium">Collection</th>
-                  <th className="text-left px-3 py-2 text-muted font-medium">ชื่อ</th>
-                  <th className="text-left px-3 py-2 text-muted font-medium">สี</th>
-                  <th className="text-left px-3 py-2 text-muted font-medium">ผิว</th>
-                  <th className="text-left px-3 py-2 text-muted font-medium">ขนาด</th>
-                  <th className="text-right px-3 py-2 text-muted font-medium">ราคา</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((p) => (
-                  <tr
-                    key={p.priceId}
-                    className="border-b border-border hover:bg-surface-alt transition-colors"
-                  >
-                    <td className="px-3 py-2 font-medium">{p.factoryName}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{p.productCode || '—'}</td>
-                    <td className="px-3 py-2">{p.collection || '—'}</td>
-                    <td className="px-3 py-2">{p.productName || '—'}</td>
-                    <td className="px-3 py-2">{p.color || '—'}</td>
-                    <td className="px-3 py-2">{p.surface || '—'}</td>
-                    <td className="px-3 py-2">{p.sizeRaw || '—'}</td>
-                    <td className="px-3 py-2 text-right whitespace-nowrap font-bold text-primary">
-                      {priceDisplay(p.price, p.currency)}
-                      <span className="text-xs font-normal text-muted ml-1">
-                        / {unitLabel(p.priceUnit)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2">
-                      <Button size="sm" variant="secondary" onClick={() => setEditingProduct(p)}>
-                        แก้ไข
-                      </Button>
-                    </td>
+          {isMobile ? (
+            <div className="flex flex-col">
+              {items.map((p) => (
+                <ProductCard key={p.priceId} product={p} onEdit={setEditingProduct} />
+              ))}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead className="border-b-2 border-border">
+                  <tr>
+                    <th className="text-left px-3 py-2 text-muted font-medium">โรงงาน</th>
+                    <th className="text-left px-3 py-2 text-muted font-medium">รหัส</th>
+                    <th className="text-left px-3 py-2 text-muted font-medium">Collection</th>
+                    <th className="text-left px-3 py-2 text-muted font-medium">ชื่อ</th>
+                    <th className="text-left px-3 py-2 text-muted font-medium">สี</th>
+                    <th className="text-left px-3 py-2 text-muted font-medium">ผิว</th>
+                    <th className="text-left px-3 py-2 text-muted font-medium">ขนาด</th>
+                    <th className="text-right px-3 py-2 text-muted font-medium">ราคา</th>
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {items.map((p) => (
+                    <tr
+                      key={p.priceId}
+                      className="border-b border-border hover:bg-surface-alt transition-colors"
+                    >
+                      <td className="px-3 py-2 font-medium">{p.factoryName}</td>
+                      <td className="px-3 py-2 font-mono text-xs">{p.productCode || '—'}</td>
+                      <td className="px-3 py-2">{p.collection || '—'}</td>
+                      <td className="px-3 py-2">{p.productName || '—'}</td>
+                      <td className="px-3 py-2">{p.color || '—'}</td>
+                      <td className="px-3 py-2">{p.surface || '—'}</td>
+                      <td className="px-3 py-2">{p.sizeRaw || '—'}</td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap font-bold text-primary">
+                        {priceDisplay(p.price, p.currency)}
+                        <span className="text-xs font-normal text-muted ml-1">
+                          / {unitLabel(p.priceUnit)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <Button size="sm" variant="secondary" onClick={() => setEditingProduct(p)}>
+                          แก้ไข
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </>
       )}
 

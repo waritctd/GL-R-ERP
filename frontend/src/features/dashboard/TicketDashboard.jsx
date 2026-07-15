@@ -5,12 +5,8 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Skeleton, SkeletonCard } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
-
-const TONE_DOT = {
-  neutral: '#94a3b8', warning: '#f59e0b',
-  info: '#3b82f6', success: '#22c55e', danger: '#ef4444',
-};
 
 function GreetingSubtitle({ role }) {
   if (role === 'sales') return 'ภาพรวมใบขอราคาของคุณ';
@@ -21,8 +17,35 @@ function GreetingSubtitle({ role }) {
 
 const SHOW_SALES_ROLES = ['import', 'ceo', 'admin'];
 
+/**
+ * Mobile record card for the "recent tickets" strip. The desktop 5-column
+ * grid (เลขที่ / บริษัท / ผู้ขาย / สถานะ / วันที่) crushes to unreadable stubs
+ * below 720px, same failure mode as the full ticket list — reuses the same
+ * minimal fields: code, customer, status badge, owner · date.
+ */
+function RecentTicketCard({ ticket, showOwner }) {
+  const status = ticketStatusLabel(ticket.status);
+  return (
+    <>
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <code className="min-w-0 truncate text-xs text-text-muted">{ticket.code}</code>
+        <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+      </div>
+
+      <strong className="min-w-0 truncate text-md leading-snug font-extrabold text-text">
+        {ticket.customerName || ticket.title}
+      </strong>
+
+      <span className="min-w-0 truncate text-xs text-text-muted">
+        {[showOwner ? ticket.createdByName : null, formatThaiDate(ticket.createdAt)].filter(Boolean).join(' · ')}
+      </span>
+    </>
+  );
+}
+
 export function TicketDashboard({ user, employee, showToast }) {
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const [summary, setSummary] = useState(null);
   const [recent, setRecent] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -105,50 +128,66 @@ export function TicketDashboard({ user, employee, showToast }) {
               <div className="panel-header" style={{ padding: '14px 18px' }}>
                 <h2>ใบขอราคาล่าสุด</h2>
               </div>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'minmax(0,0.9fr) minmax(0,2.2fr) minmax(0,1.4fr) minmax(0,1.3fr) minmax(0,1fr)',
-                gap: 12, padding: '6px 18px 6px 22px',
-                borderBottom: '1px solid #e6eaf0',
-                background: '#f8fafc',
-                fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em',
-              }}>
-                <span>เลขที่</span>
-                <span>บริษัท / โครงการ</span>
-                <span>{SHOW_SALES_ROLES.includes(user.role) ? 'ผู้ขาย' : ''}</span>
-                <span>สถานะ</span>
-                <span>วันที่สร้าง</span>
-              </div>
-              {recent.map((ticket) => {
-                const st = ticketStatusLabel(ticket.status);
-                return (
-                  <button
-                    key={ticket.id}
-                    type="button"
-                    onClick={() => navigate(`/tickets/${ticket.id}`)}
-                    style={{
-                      width: '100%', display: 'grid',
-                      gridTemplateColumns: 'minmax(0,0.9fr) minmax(0,2.2fr) minmax(0,1.4fr) minmax(0,1.3fr) minmax(0,1fr)',
-                      gap: 12, alignItems: 'center',
-                      padding: '12px 18px', border: 'none', borderBottom: '1px solid #f1f5f9',
-                      background: '#fff', cursor: 'pointer', textAlign: 'left', color: '#334155',
-                      borderLeft: `4px solid ${TONE_DOT[st.tone] ?? '#94a3b8'}`,
-                    }}
-                  >
-                    <code style={{ fontSize: 12 }}>{ticket.code}</code>
-                    <span style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                      <strong style={{ display: 'block', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{ticket.customerName || ticket.title}</strong>
-                    </span>
-                    <span style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', fontSize: 13, color: '#64748b' }}>
-                      {SHOW_SALES_ROLES.includes(user.role) ? (ticket.createdByName || '—') : ''}
-                    </span>
-                    <StatusBadge tone={st.tone}>{st.label}</StatusBadge>
-                    <span style={{ fontSize: 13, color: '#94a3b8', whiteSpace: 'nowrap' }}>
-                      {formatThaiDate(ticket.createdAt)}
-                    </span>
-                  </button>
-                );
-              })}
+              {isMobile ? (
+                <div className="flex flex-col gap-2.5 p-3">
+                  {recent.map((ticket) => (
+                    <button
+                      key={ticket.id}
+                      type="button"
+                      onClick={() => navigate(`/tickets/${ticket.id}`)}
+                      className="flex w-full min-w-0 flex-col items-stretch gap-2 rounded-md border border-solid border-border bg-surface p-4 text-left cursor-pointer hover:bg-surface-hover"
+                    >
+                      <RecentTicketCard ticket={ticket} showOwner={SHOW_SALES_ROLES.includes(user.role)} />
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <>
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0,0.9fr) minmax(0,2.2fr) minmax(0,1.4fr) minmax(0,1.3fr) minmax(0,1fr)',
+                    gap: 12, padding: '6px 18px 6px 22px',
+                    borderBottom: '1px solid #e6eaf0',
+                    background: '#f8fafc',
+                    fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em',
+                  }}>
+                    <span>เลขที่</span>
+                    <span>บริษัท / โครงการ</span>
+                    <span>{SHOW_SALES_ROLES.includes(user.role) ? 'ผู้ขาย' : ''}</span>
+                    <span>สถานะ</span>
+                    <span>วันที่สร้าง</span>
+                  </div>
+                  {recent.map((ticket) => {
+                    const st = ticketStatusLabel(ticket.status);
+                    return (
+                      <button
+                        key={ticket.id}
+                        type="button"
+                        onClick={() => navigate(`/tickets/${ticket.id}`)}
+                        style={{
+                          width: '100%', display: 'grid',
+                          gridTemplateColumns: 'minmax(0,0.9fr) minmax(0,2.2fr) minmax(0,1.4fr) minmax(0,1.3fr) minmax(0,1fr)',
+                          gap: 12, alignItems: 'center',
+                          padding: '12px 18px', border: 'none', borderBottom: '1px solid #f1f5f9',
+                          background: '#fff', cursor: 'pointer', textAlign: 'left', color: '#334155',
+                        }}
+                      >
+                        <code style={{ fontSize: 12 }}>{ticket.code}</code>
+                        <span style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                          <strong style={{ display: 'block', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{ticket.customerName || ticket.title}</strong>
+                        </span>
+                        <span style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', fontSize: 13, color: '#64748b' }}>
+                          {SHOW_SALES_ROLES.includes(user.role) ? (ticket.createdByName || '—') : ''}
+                        </span>
+                        <StatusBadge tone={st.tone}>{st.label}</StatusBadge>
+                        <span style={{ fontSize: 13, color: '#94a3b8', whiteSpace: 'nowrap' }}>
+                          {formatThaiDate(ticket.createdAt)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </>
+              )}
             </section>
           )}
         </>
