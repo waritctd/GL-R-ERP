@@ -38,8 +38,36 @@ public class PriceImportController {
 
     @GetMapping("/factories")
     List<Map<String, Object>> factories(HttpSession session) {
-        sessions.requireUser(session); // auth check
+        sessions.requireUser(session);
         return svc.listFactories();
+    }
+
+    @PostMapping("/factories")
+    Map<String, Object> createFactory(@RequestBody Map<String, String> body, HttpSession session) {
+        sessions.requireUser(session);
+        String name = body.get("name");
+        if (name == null || name.isBlank())
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ชื่อโรงงานห้ามว่าง");
+        return svc.createFactory(name, body.get("country"), body.get("defaultCurrency"));
+    }
+
+    @PostMapping(value = "/upload-commit", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    PriceImportService.UploadCommitResult uploadAndCommit(
+        @RequestParam("factoryId") long factoryId,
+        @RequestParam("file") MultipartFile file,
+        @RequestParam(value = "label", required = false) String label,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        if (file.isEmpty())
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไฟล์ว่างเปล่า");
+        String effectiveLabel = (label != null && !label.isBlank()) ? label : file.getOriginalFilename();
+        try {
+            return svc.uploadAndCommit(factoryId, file.getOriginalFilename(),
+                file.getInputStream(), effectiveLabel, user.id());
+        } catch (IOException e) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "อ่านไฟล์ไม่ได้: " + e.getMessage());
+        }
     }
 
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

@@ -5,6 +5,7 @@ import jakarta.servlet.http.HttpSession;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -74,6 +75,16 @@ public class ApiExceptionHandler {
         return ResponseEntity
             .status(HttpStatus.NOT_FOUND)
             .body(new ErrorResponse("Not found", HttpStatus.NOT_FOUND.value()));
+    }
+
+    @ExceptionHandler(DataAccessException.class)
+    ResponseEntity<ErrorResponse> handleDataAccess(DataAccessException exception, HttpServletRequest request) {
+        log.error("Database error method={} path={} userId={}",
+            request.getMethod(), request.getRequestURI(), currentUserId(request), exception);
+        String msg = exception.getMostSpecificCause().getMessage();
+        return ResponseEntity
+            .status(HttpStatus.INTERNAL_SERVER_ERROR)
+            .body(new ErrorResponse("Database error: " + msg, HttpStatus.INTERNAL_SERVER_ERROR.value()));
     }
 
     @ExceptionHandler(Exception.class)

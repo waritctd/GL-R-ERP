@@ -153,28 +153,37 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     setItems((cur) => cur.map((item, i) => {
       if (i !== index) return item;
       const newQtySqm = item.qty && cat.sqmPerPiece ? (Number(item.qty) * cat.sqmPerPiece).toFixed(3) : '';
+      // support both old catalog (brand/size) and new price catalog (factoryName/sizeRaw)
       return {
         ...item,
-        brand: cat.brand, model: cat.collection || '', color: cat.color || '',
-        texture: cat.surface || '', size: cat.size || '', factory: cat.factory || '',
-        sqmPerPiece: cat.sqmPerPiece || null, qtySqm: newQtySqm,
+        brand:       cat.factoryName  || cat.brand    || '',
+        model:       cat.collection   || cat.productName || cat.productCode || '',
+        color:       cat.color        || '',
+        texture:     cat.surface      || '',
+        size:        cat.sizeRaw      || cat.size      || '',
+        factory:     cat.factoryName  || cat.factory   || '',
+        sqmPerPiece: cat.sqmPerPiece  || null,
+        qtySqm:      newQtySqm,
       };
     }));
     setCatalogResults([]);
     setCatalogFocusIdx(null);
   }
 
-  function onBrandInput(index, value) {
-    updateItem(index, 'brand', value);
+  function onCatalogInput(index, field, value) {
+    updateItem(index, field, value);
     setCatalogFocusIdx(index);
     debouncedCatalogSearch(value, async (q) => {
       if (!q.trim()) { setCatalogResults([]); return; }
       try {
-        const res = await api.catalog.search(q);
+        const res = await api.catalog.prices(q, undefined, 20);
         setCatalogResults(res.items ?? []);
       } catch { /* ignore */ }
     });
   }
+
+  function onBrandInput(index, value) { onCatalogInput(index, 'brand', value); }
+  function onModelInput(index, value) { onCatalogInput(index, 'model', value); }
 
   async function handleCreateProject() {
     if (!newProjectName.trim()) return;
@@ -485,24 +494,63 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                     <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 60, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.12)', maxHeight: 200, overflowY: 'auto' }}>
                       {catalogResults.map((cat) => (
                         // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- autocomplete option row; onMouseDown (not click) preserves input focus for typeahead
-                        <div key={cat.id} onMouseDown={() => applyCatalogItem(index, cat)}
+                        <div key={cat.priceId ?? cat.id} onMouseDown={() => applyCatalogItem(index, cat)}
                           style={{ padding: '7px 10px', fontSize: 12, cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}
                           onMouseEnter={(e) => e.currentTarget.style.background = '#f0f9ff'}
                           onMouseLeave={(e) => e.currentTarget.style.background = ''}
                         >
-                          <strong>{cat.brand}</strong> — {cat.collection}
-                          <span style={{ color: '#64748b', marginLeft: 4 }}>{cat.color} · {cat.size}</span>
-                          {cat.factory && <span style={{ color: '#94a3b8', fontSize: 11, marginLeft: 4 }}>({cat.factory})</span>}
+                          <strong>{cat.factoryName || cat.brand}</strong>
+                          {' — '}
+                          {cat.collection || cat.productName || cat.productCode || '—'}
+                          <span style={{ color: '#64748b', marginLeft: 4 }}>
+                            {[cat.color, cat.sizeRaw || cat.size].filter(Boolean).join(' · ')}
+                          </span>
+                          {cat.price && (
+                            <span style={{ color: '#2563eb', fontSize: 11, marginLeft: 6, fontWeight: 600 }}>
+                              {Number(cat.price).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {cat.currency}
+                            </span>
+                          )}
                         </div>
                       ))}
                     </div>
                   )}
                 </div>
 
-                <label style={{ margin: 0 }}>
-                  <span style={{ fontSize: 12 }}>ชื่อรุ่น *</span>
-                  <input value={item.model} onChange={(e) => updateItem(index, 'model', e.target.value)} placeholder="เช่น Elegance Series" required />
-                </label>
+                <div style={{ position: 'relative', margin: 0 }}>
+                  <span style={{ fontSize: 12, display: 'block', marginBottom: 3 }}>ชื่อรุ่น / Collection *</span>
+                  <input
+                    value={item.model}
+                    onChange={(e) => onModelInput(index, e.target.value)}
+                    onFocus={() => { setCatalogFocusIdx(index); if (item.model) onModelInput(index, item.model); }}
+                    onBlur={() => setTimeout(() => setCatalogFocusIdx(null), 180)}
+                    placeholder="เช่น Stone, Elegance, L-Trim..."
+                    required
+                  />
+                  {catalogFocusIdx === index && catalogResults.length > 0 && (
+                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 60, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.12)', maxHeight: 200, overflowY: 'auto' }}>
+                      {catalogResults.map((cat) => (
+                        // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- autocomplete option row; onMouseDown (not click) preserves input focus for typeahead
+                        <div key={cat.priceId ?? cat.id} onMouseDown={() => applyCatalogItem(index, cat)}
+                          style={{ padding: '7px 10px', fontSize: 12, cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = '#f0f9ff'}
+                          onMouseLeave={(e) => e.currentTarget.style.background = ''}
+                        >
+                          <strong>{cat.factoryName || cat.brand}</strong>
+                          {' — '}
+                          {cat.collection || cat.productName || cat.productCode || '—'}
+                          <span style={{ color: '#64748b', marginLeft: 4 }}>
+                            {[cat.color, cat.sizeRaw || cat.size].filter(Boolean).join(' · ')}
+                          </span>
+                          {cat.price && (
+                            <span style={{ color: '#2563eb', fontSize: 11, marginLeft: 6, fontWeight: 600 }}>
+                              {Number(cat.price).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {cat.currency}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <label style={{ margin: 0 }}>
                   <span style={{ fontSize: 12 }}>สี *</span>
                   <input value={item.color} onChange={(e) => updateItem(index, 'color', e.target.value)} placeholder="เช่น ขาว, เทา, ครีม" required />

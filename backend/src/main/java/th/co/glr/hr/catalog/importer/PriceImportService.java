@@ -4,17 +4,20 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.InputStream;
-import java.sql.Types;
+import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.catalog.ProductPriceInput;
 import th.co.glr.hr.common.ApiException;
 import org.springframework.http.HttpStatus;
 
@@ -70,11 +73,17 @@ public class PriceImportService {
     // ── DB helpers ────────────────────────────────────────────────────────────
 
     public ImportProfile loadProfile(long factoryId) {
-        String json = jdbc.queryForObject(
-            "SELECT config FROM sales.import_profiles WHERE factory_id = :fid",
-            Map.of("fid", factoryId),
-            String.class
-        );
+        String json;
+        try {
+            json = jdbc.queryForObject(
+                "SELECT config FROM sales.import_profiles WHERE factory_id = :fid",
+                Map.of("fid", factoryId),
+                String.class
+            );
+        } catch (EmptyResultDataAccessException e) {
+            throw new ApiException(HttpStatus.NOT_FOUND,
+                "ไม่พบ import profile สำหรับ factory id=" + factoryId);
+        }
         if (json == null)
             throw new ApiException(HttpStatus.NOT_FOUND,
                 "ไม่พบ import profile สำหรับ factory id=" + factoryId);
@@ -103,7 +112,7 @@ public class PriceImportService {
                 .addValue("label", label)
                 .addValue("sf",    sourceFile)
                 .addValue("by",    uploadedBy)
-                .addValue("now",   Instant.now())
+                .addValue("now",   Timestamp.from(Instant.now()))
                 .addValue("rc",    rowCount)
                 .addValue("ec",    errorCount),
             holder,
@@ -127,7 +136,7 @@ public class PriceImportService {
                 :color, :surf, :sizeRaw, :w, :h, :t,
                 :price, :cur, :unit, :sqmPc,
                 :pcs, :sqmBox, :kg,
-                :variants::jsonb, :attrs::jsonb, :sheet, :row, :sid
+                CAST(:variants AS jsonb), CAST(:attrs AS jsonb), :sheet, :row, :sid
             )
             """;
 
@@ -316,6 +325,19 @@ public class PriceImportService {
         if (valid == null || valid == 0)
             throw new ApiException(HttpStatus.CONFLICT, "ไม่มีแถวที่ valid — ไม่สามารถ commit ได้");
 
+        // find current ACTIVE version for this factory (for incremental merge)
+        Long prevVersionId = jdbc.query("""
+            SELECT v2.version_id
+              FROM sales.price_list_versions v1
+              JOIN sales.price_list_versions v2
+                ON v2.factory_id = v1.factory_id AND v2.status = 'ACTIVE'
+             WHERE v1.version_id = :vid
+             LIMIT 1
+            """,
+            Map.of("vid", versionId),
+            (rs, i) -> rs.getLong("version_id")
+        ).stream().findFirst().orElse(null);
+
         // 1. copy valid staging rows → product_prices
         int inserted = jdbc.update("""
             INSERT INTO sales.product_prices (
@@ -352,13 +374,48 @@ public class PriceImportService {
             Map.of("vid", versionId)
         );
 
-        // 2. activate this version
+        // 2. incremental merge: copy old products not matched by any new-file row
+        int retained = 0;
+        if (prevVersionId != null) {
+            retained = jdbc.update("""
+                INSERT INTO sales.product_prices (
+                    factory_id, version_id, product_code, grade, collection, product_name,
+                    color, surface, size_raw, width_mm, height_mm, thickness_mm,
+                    price, currency, price_unit, sqm_per_piece,
+                    pcs_per_box, sqm_per_box, kg_per_box,
+                    price_variants, attributes, source_sheet, source_row
+                )
+                SELECT
+                    p.factory_id, :vid, p.product_code, p.grade, p.collection, p.product_name,
+                    p.color, p.surface, p.size_raw, p.width_mm, p.height_mm, p.thickness_mm,
+                    p.price, p.currency, p.price_unit, p.sqm_per_piece,
+                    p.pcs_per_box, p.sqm_per_box, p.kg_per_box,
+                    p.price_variants, p.attributes, p.source_sheet, p.source_row
+                  FROM sales.product_prices p
+                 WHERE p.version_id = :prevVid
+                   AND NOT EXISTS (
+                       SELECT 1 FROM sales.product_price_staging s
+                        WHERE s.version_id = :vid
+                          AND s.import_error IS NULL
+                          AND (
+                              (p.product_code IS NOT NULL AND s.product_code = p.product_code)
+                              OR (p.product_code IS NULL AND p.product_name IS NOT NULL
+                                  AND s.product_name = p.product_name)
+                          )
+                   )
+                ON CONFLICT ON CONSTRAINT uq_price DO NOTHING
+                """,
+                Map.of("vid", versionId, "prevVid", prevVersionId)
+            );
+        }
+
+        // 3. activate this version
         jdbc.update(
             "UPDATE sales.price_list_versions SET status = 'ACTIVE' WHERE version_id = :vid",
             Map.of("vid", versionId)
         );
 
-        // 3. archive previous ACTIVE versions of the same factory
+        // 4. archive previous ACTIVE versions of the same factory
         int archived = jdbc.update("""
             UPDATE sales.price_list_versions
                SET status = 'ARCHIVED'
@@ -371,13 +428,13 @@ public class PriceImportService {
             Map.of("vid", versionId)
         );
 
-        // 4. delete staging (keep only error rows for audit)
+        // 5. delete staging (keep only error rows for audit)
         jdbc.update(
             "DELETE FROM sales.product_price_staging WHERE version_id = :vid AND import_error IS NULL",
             Map.of("vid", versionId)
         );
 
-        return new CommitResult(versionId, inserted, archived);
+        return new CommitResult(versionId, inserted, retained, archived);
     }
 
     // ── C3: version list ──────────────────────────────────────────────────────
@@ -439,6 +496,7 @@ public class PriceImportService {
     public record CommitResult(
         long versionId,
         int committed,
+        int retained,
         int versionsArchived
     ) {}
 
@@ -496,4 +554,173 @@ public class PriceImportService {
         int errorCount,
         List<String> errors
     ) {}
+
+    // ── C5: create factory ────────────────────────────────────────────────────
+
+    public Map<String, Object> createFactory(String name, String country, String defaultCurrency) {
+        String cur = defaultCurrency != null && !defaultCurrency.isBlank()
+            ? defaultCurrency.strip().toUpperCase() : "EUR";
+        String cty = country != null && !country.isBlank() ? country.strip().toUpperCase() : null;
+
+        var holder = new GeneratedKeyHolder();
+        jdbc.update(
+            "INSERT INTO sales.factories (name, country, default_currency) VALUES (:name, :country, :cur)",
+            new MapSqlParameterSource()
+                .addValue("name",    name.strip())
+                .addValue("country", cty)
+                .addValue("cur",     cur),
+            holder, new String[]{"factory_id"}
+        );
+        long factoryId = ((Number) holder.getKeys().get("factory_id")).longValue();
+
+        String blankCfg = String.format(
+            "{\"number_format\":\"eu\",\"sheets\":[],\"columns\":{},\"defaults\":{\"currency\":\"%s\"}}", cur);
+        jdbc.update(
+            "INSERT INTO sales.import_profiles (factory_id, config) VALUES (:fid, CAST(:cfg AS jsonb))",
+            Map.of("fid", factoryId, "cfg", blankCfg)
+        );
+
+        Map<String, Object> m = new HashMap<>();
+        m.put("factoryId",       factoryId);
+        m.put("name",            name.strip());
+        m.put("country",         cty);
+        m.put("defaultCurrency", cur);
+        return m;
+    }
+
+    // ── C5: upload + auto commit ──────────────────────────────────────────────
+
+    @Transactional
+    public UploadCommitResult uploadAndCommit(
+        long factoryId, String originalFilename,
+        InputStream fileStream, String label, long uploadedBy
+    ) {
+        ImportProfile prof = loadProfile(factoryId);
+        ImportResult result;
+        try {
+            result = engine.parse(fileStream, prof, factoryId);
+        } catch (Exception e) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "parse failed: " + e.getMessage());
+        }
+
+        long versionId = createDraftVersion(factoryId, label, originalFilename,
+            uploadedBy, result.rows().size(), result.errors().size());
+        UUID sessionId = UUID.randomUUID();
+        bulkInsertStaging(versionId, factoryId, result.rows(), sessionId);
+        validate(versionId);
+
+        CommitResult cr = commit(versionId, uploadedBy);
+
+        List<String> errors = new ArrayList<>(result.errors());
+        int skipped = result.rows().size() - cr.committed();
+        if (skipped > 0) errors.add(skipped + " แถวถูกข้ามเพราะรหัสซ้ำ");
+
+        return new UploadCommitResult(versionId, result.rows().size(), cr.committed(),
+            cr.retained(), result.errors().size() + skipped, errors);
+    }
+
+    public record UploadCommitResult(
+        long versionId, int parsedRows, int committedRows, int retainedRows, int errorCount, List<String> errors
+    ) {}
+
+    // ── C5: product CRUD ──────────────────────────────────────────────────────
+
+    private long findOrCreateManualVersion(long factoryId) {
+        List<Long> active = jdbc.query(
+            """
+            SELECT version_id FROM sales.price_list_versions
+             WHERE factory_id = :fid AND status = 'ACTIVE'
+             ORDER BY uploaded_at DESC LIMIT 1
+            """,
+            Map.of("fid", factoryId),
+            (rs, i) -> rs.getLong("version_id")
+        );
+        if (!active.isEmpty()) return active.get(0);
+
+        var holder = new GeneratedKeyHolder();
+        jdbc.update(
+            """
+            INSERT INTO sales.price_list_versions
+                (factory_id, label, status, uploaded_at, row_count, error_count)
+            VALUES (:fid, 'ป้อนด้วยตนเอง', 'ACTIVE', :now, 0, 0)
+            """,
+            new MapSqlParameterSource()
+                .addValue("fid", factoryId)
+                .addValue("now", Timestamp.from(Instant.now())),
+            holder, new String[]{"version_id"}
+        );
+        return ((Number) holder.getKeys().get("version_id")).longValue();
+    }
+
+    public long addProductManual(long factoryId, ProductPriceInput in) {
+        long versionId = findOrCreateManualVersion(factoryId);
+        Long priceId = jdbc.queryForObject(
+            """
+            INSERT INTO sales.product_prices (
+                factory_id, version_id, product_code, grade, collection, product_name,
+                color, surface, size_raw, price, currency, price_unit
+            ) VALUES (
+                :fid, :vid, :code, :grade, :col, :name,
+                :color, :surf, :sizeRaw, :price, :cur, :unit
+            )
+            ON CONFLICT ON CONSTRAINT uq_price DO UPDATE
+                SET price        = EXCLUDED.price,
+                    product_name = COALESCE(EXCLUDED.product_name, product_prices.product_name),
+                    collection   = COALESCE(EXCLUDED.collection,   product_prices.collection),
+                    color        = COALESCE(EXCLUDED.color,        product_prices.color)
+            RETURNING price_id
+            """,
+            new MapSqlParameterSource()
+                .addValue("fid",     factoryId)
+                .addValue("vid",     versionId)
+                .addValue("code",    in.productCode())
+                .addValue("grade",   in.grade())
+                .addValue("col",     in.collection())
+                .addValue("name",    in.productName())
+                .addValue("color",   in.color())
+                .addValue("surf",    in.surface())
+                .addValue("sizeRaw", in.sizeRaw())
+                .addValue("price",   in.price())
+                .addValue("cur",     in.currency() != null ? in.currency() : "EUR")
+                .addValue("unit",    in.priceUnit() != null ? in.priceUnit() : "per_sqm"),
+            Long.class
+        );
+        return priceId != null ? priceId : -1L;
+    }
+
+    public void updateProduct(long priceId, ProductPriceInput in) {
+        int updated = jdbc.update(
+            """
+            UPDATE sales.product_prices SET
+                product_code = :code,   grade        = :grade, collection   = :col,
+                product_name = :name,   color        = :color, surface      = :surf,
+                size_raw     = :sizeRaw, price       = :price, currency     = :cur,
+                price_unit   = :unit
+            WHERE price_id = :pid
+            """,
+            new MapSqlParameterSource()
+                .addValue("pid",     priceId)
+                .addValue("code",    in.productCode())
+                .addValue("grade",   in.grade())
+                .addValue("col",     in.collection())
+                .addValue("name",    in.productName())
+                .addValue("color",   in.color())
+                .addValue("surf",    in.surface())
+                .addValue("sizeRaw", in.sizeRaw())
+                .addValue("price",   in.price())
+                .addValue("cur",     in.currency())
+                .addValue("unit",    in.priceUnit())
+        );
+        if (updated == 0)
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบสินค้า price_id=" + priceId);
+    }
+
+    public void deleteProduct(long priceId) {
+        int deleted = jdbc.update(
+            "DELETE FROM sales.product_prices WHERE price_id = :pid",
+            Map.of("pid", priceId)
+        );
+        if (deleted == 0)
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบสินค้า price_id=" + priceId);
+    }
 }

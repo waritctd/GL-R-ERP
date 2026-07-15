@@ -1,18 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
-import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
-import { TicketCreateModal } from '../tickets/TicketCreateModal.jsx';
+import { ProductFormModal } from './ProductFormModal.jsx';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 function unitLabel(unit) {
-  if (unit === 'per_sqm')     return 'ม²';
-  if (unit === 'per_piece')   return 'แผ่น';
-  if (unit === 'per_box')     return 'กล่อง';
+  if (unit === 'per_sqm')      return 'ม²';
+  if (unit === 'per_piece')    return 'แผ่น';
+  if (unit === 'per_box')      return 'กล่อง';
   if (unit === 'per_linear_m') return 'ม.';
   return unit ?? '';
 }
@@ -23,100 +22,23 @@ function priceDisplay(price, currency) {
   return `${n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency ?? ''}`;
 }
 
-function productToTicketItem(p) {
-  return {
-    brand:       p.factoryName ?? '',
-    model:       p.collection  ?? p.productName ?? '',
-    color:       p.color       ?? '',
-    texture:     p.surface     ?? '',
-    size:        p.sizeRaw     ?? '',
-    factory:     p.factoryName ?? '',
-    unitBasis:   p.priceUnit === 'per_sqm' ? 'SQM' : 'PIECE',
-    qty:         1,
-    qtySqm:      '',
-    sqmPerPiece: p.sqmPerPiece ?? null,
-  };
-}
-
 let _debounce = null;
 function debounce(fn, ms) {
   clearTimeout(_debounce);
   _debounce = setTimeout(fn, ms);
 }
 
-// ── result card ───────────────────────────────────────────────────────────────
-
-function ProductCard({ product, onRequestQuote }) {
-  return (
-    <div className="bg-surface border border-border rounded-md p-4 flex flex-col gap-2 hover:border-primary transition-colors">
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex-1 min-w-0">
-          <p className="font-semibold text-sm truncate">
-            {product.collection || product.productName || product.productCode || '—'}
-          </p>
-          <p className="text-xs text-muted">{product.factoryName}</p>
-        </div>
-        {product.grade && (
-          <span className="shrink-0 text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium">
-            {product.grade}
-          </span>
-        )}
-      </div>
-
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-        {product.productCode && (
-          <>
-            <span className="text-muted">รหัส</span>
-            <span className="font-mono">{product.productCode}</span>
-          </>
-        )}
-        {product.color && (
-          <>
-            <span className="text-muted">สี</span>
-            <span>{product.color}</span>
-          </>
-        )}
-        {product.surface && (
-          <>
-            <span className="text-muted">ผิว</span>
-            <span>{product.surface}</span>
-          </>
-        )}
-        {product.sizeRaw && (
-          <>
-            <span className="text-muted">ขนาด</span>
-            <span>{product.sizeRaw}</span>
-          </>
-        )}
-      </div>
-
-      <div className="flex items-center justify-between mt-1 pt-2 border-t border-border">
-        <span className="text-sm font-bold text-primary">
-          {priceDisplay(product.price, product.currency)}
-          <span className="text-xs font-normal text-muted ml-1">/ {unitLabel(product.priceUnit)}</span>
-        </span>
-        <Button size="sm" variant="secondary" onClick={() => onRequestQuote(product)}>
-          <Icon name="plus" />
-          ขอราคา
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 // ── main page ─────────────────────────────────────────────────────────────────
 
-export function CatalogSearchPage({ user, showToast }) {
-  const canCreateTicket = hasPermission(user?.role, 'canCreateTickets');
-
-  const [query, setQuery]     = useState('');
+export function CatalogSearchPage({ showToast }) {
+  const [query, setQuery]         = useState('');
   const [factoryId, setFactoryId] = useState('');
   const [factories, setFactories] = useState([]);
-  const [items, setItems]     = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [searched, setSearched] = useState(false);
+  const [items, setItems]         = useState([]);
+  const [loading, setLoading]     = useState(false);
+  const [searched, setSearched]   = useState(false);
 
-  const [modalItems, setModalItems] = useState(null); // null = closed
+  const [editingProduct, setEditingProduct] = useState(null);
 
   const inputRef = useRef(null);
 
@@ -155,18 +77,10 @@ export function CatalogSearchPage({ user, showToast }) {
     doSearch(query, factoryId);
   }
 
-  function openQuoteModal(product) {
-    setModalItems([productToTicketItem(product)]);
-  }
-
-  async function handleCreateTicket(payload) {
-    try {
-      await api.tickets.create(payload);
-      setModalItems(null);
-      showToast?.('success', 'สร้างใบขอราคาสำเร็จ');
-    } catch (err) {
-      showToast?.('error', err.message || 'สร้างไม่สำเร็จ');
-    }
+  async function handleProductSaved() {
+    setEditingProduct(null);
+    showToast?.('success', 'บันทึกสินค้าแล้ว');
+    await doSearch(query, factoryId);
   }
 
   return (
@@ -224,15 +138,52 @@ export function CatalogSearchPage({ user, showToast }) {
 
       {!loading && items.length > 0 && (
         <>
-          <p className="text-xs text-muted">พบ {items.length} รายการ{items.length >= 50 ? ' (แสดงสูงสุด 50)' : ''}</p>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {items.map((p) => (
-              <ProductCard
-                key={p.priceId}
-                product={p}
-                onRequestQuote={canCreateTicket ? openQuoteModal : undefined}
-              />
-            ))}
+          <p className="text-xs text-muted mb-2">
+            พบ {items.length} รายการ{items.length >= 50 ? ' (แสดงสูงสุด 50)' : ''}
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead className="border-b-2 border-border">
+                <tr>
+                  <th className="text-left px-3 py-2 text-muted font-medium">โรงงาน</th>
+                  <th className="text-left px-3 py-2 text-muted font-medium">รหัส</th>
+                  <th className="text-left px-3 py-2 text-muted font-medium">Collection</th>
+                  <th className="text-left px-3 py-2 text-muted font-medium">ชื่อ</th>
+                  <th className="text-left px-3 py-2 text-muted font-medium">สี</th>
+                  <th className="text-left px-3 py-2 text-muted font-medium">ผิว</th>
+                  <th className="text-left px-3 py-2 text-muted font-medium">ขนาด</th>
+                  <th className="text-right px-3 py-2 text-muted font-medium">ราคา</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((p) => (
+                  <tr
+                    key={p.priceId}
+                    className="border-b border-border hover:bg-surface-alt transition-colors"
+                  >
+                    <td className="px-3 py-2 font-medium">{p.factoryName}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{p.productCode || '—'}</td>
+                    <td className="px-3 py-2">{p.collection || '—'}</td>
+                    <td className="px-3 py-2">{p.productName || '—'}</td>
+                    <td className="px-3 py-2">{p.color || '—'}</td>
+                    <td className="px-3 py-2">{p.surface || '—'}</td>
+                    <td className="px-3 py-2">{p.sizeRaw || '—'}</td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap font-bold text-primary">
+                      {priceDisplay(p.price, p.currency)}
+                      <span className="text-xs font-normal text-muted ml-1">
+                        / {unitLabel(p.priceUnit)}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Button size="sm" variant="secondary" onClick={() => setEditingProduct(p)}>
+                        แก้ไข
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </>
       )}
@@ -243,12 +194,11 @@ export function CatalogSearchPage({ user, showToast }) {
         </p>
       )}
 
-      {/* Ticket create modal — pre-filled from selected product */}
-      {modalItems && (
-        <TicketCreateModal
-          initialItems={modalItems}
-          onClose={() => setModalItems(null)}
-          onSubmit={handleCreateTicket}
+      {editingProduct && (
+        <ProductFormModal
+          product={editingProduct}
+          onClose={() => setEditingProduct(null)}
+          onSaved={handleProductSaved}
         />
       )}
     </PageStack>
