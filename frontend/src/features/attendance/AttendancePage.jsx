@@ -4,6 +4,7 @@ import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { DesktopOnlyNotice } from '../../components/common/DesktopOnlyNotice.jsx';
+import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageStack, StatGrid } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -250,8 +251,13 @@ export function AttendancePage({ user, employees, showToast }) {
               )}
             </select>
           </label>
-          <input type="file" accept=".dat,text/plain" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} />
-          <Button type="submit" variant="success" className="max-[720px]:w-full" disabled={importing || !selectedFile || !importDeviceCode}>
+          <FileUploadField
+            id="attendance-import-file"
+            accept=".dat,text/plain"
+            onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
+            helperText="ไฟล์ .dat"
+          />
+          <Button type="submit" variant="success" className="max-[720px]:min-h-11 max-[720px]:w-full" disabled={importing || !selectedFile || !importDeviceCode}>
             <Icon name="plus" />
             {importing ? 'กำลังนำเข้า' : 'นำเข้า'}
           </Button>

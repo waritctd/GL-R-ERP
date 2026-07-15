@@ -10,6 +10,7 @@ import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
+import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { formGridSpan2, Panel, PageStack, RowActions, StatGrid } from '../../components/common/Layout.jsx';
@@ -552,14 +553,13 @@ export function LeavePage({ user, currentEmployee, showToast }) {
             />
           </FormField>
           <FormField label="เอกสารแนบ" htmlFor="leave-attachment-file">
-            <input
+            <FileUploadField
               key={fileInputKey}
               id="leave-attachment-file"
-              type="file"
               accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
               onChange={(event) => setAttachmentFile(event.target.files?.[0] || null)}
+              helperText="PDF, JPG หรือ PNG · ลาป่วยต้องแนบใบรับรองแพทย์"
             />
-            <small>{attachmentFile ? attachmentFile.name : 'ลาป่วยต้องแนบใบรับรองแพทย์'}</small>
           </FormField>
           <div className={formGridSpan2}>
             <FormField label="เหตุผลการลา" htmlFor="leave-reason" error={errors.reason?.message}>
@@ -575,7 +575,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
             </FormField>
           </div>
           <RowActions className={formGridSpan2}>
-            <Button type="submit" disabled={saving || startDateInPast}>
+            <Button type="submit" disabled={saving || startDateInPast} className="max-[720px]:min-h-11 max-[720px]:w-full">
               <Icon name="plus" />
               ส่งคำขอ
             </Button>
