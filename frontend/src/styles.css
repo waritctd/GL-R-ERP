@@ -304,11 +304,20 @@ textarea:focus {
 .employee-cell small,
 .topbar-user span,
 .sidebar-account small,
-.stat-helper,
 .request-feed small,
 .table-row small {
   display: block;
   color: var(--color-text-faint);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+/* Stat card captions ("Headcount", "Approvals", …) are data text, not an
+   icon/placeholder, so per DESIGN.md's Muted Floor Rule they must not go
+   below Ink Muted (#64748b) — Ink Faint is reserved for icons/placeholders. */
+.stat-helper {
+  display: block;
+  color: var(--color-text-muted);
   font-size: var(--text-xs);
   font-weight: 500;
 }
@@ -1814,11 +1823,72 @@ a.status-badge {
 
 @media (max-width: 720px) {
   .login-panel,
-  .stat-grid,
   .form-grid,
   .payroll-detail-grid,
   .payroll-special-grid {
     grid-template-columns: 1fr;
+  }
+
+  /* Stat/metric cards: a single stacked column of full-width cards forces
+     the user to scroll past ~2,700px of tiles before reaching real content
+     (dashboard/attendance/commission each render 4-8 of these). A 2-up grid
+     keeps them scannable at a glance instead of one giant list. */
+  .stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .stat-card {
+    padding: 12px;
+  }
+
+  .stat-icon {
+    width: 30px;
+    height: 30px;
+    margin-bottom: 8px;
+  }
+
+  .stat-icon svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .stat-value {
+    font-size: var(--text-xl);
+  }
+
+  .stat-label {
+    margin-top: 3px;
+    font-size: var(--text-xs);
+  }
+
+  .stat-helper {
+    margin-top: 1px;
+    display: block;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  /* `.profile-strip` (dashboard identity card) has the same missing-h2-size
+     gap as `.detail-hero` — on mobile the flex row becomes a column, which
+     exposes the browser's default h2 margins (~20px top+bottom) as dead
+     space between the name and the status badge below it. */
+  .profile-strip {
+    padding: 14px;
+    gap: 10px;
+  }
+
+  .profile-strip h2 {
+    margin: 0;
+    font-size: var(--text-lg);
+    line-height: 1.3;
+  }
+
+  .profile-strip p {
+    margin: 2px 0 0;
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
   }
 
   .login-form {

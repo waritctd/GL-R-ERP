@@ -57,6 +57,12 @@ export function InfoGrid({ two = false, className, children, ...props }) {
  *   ≤720px: flex-direction: column; align-items: flex-start.
  * Expects exactly 2+ children; the 2nd child gets the flex-1/min-w-0 treatment
  * via a wrapper — callers should pass their "main" block as the 2nd child.
+ * Callers (ProfilePage/EmployeeDetailPage) author a plain `<h1>`/`<p>` as the
+ * name/subtitle inside that 2nd child. Neither ever had CSS sizing the `h1` —
+ * it fell back to the browser default (2em + ~0.67em block margins). That's
+ * masked on desktop by `items-center` row alignment, but on mobile the row
+ * becomes a column and the default margins show up as dead vertical space
+ * above the status badge, so this scopes an explicit compact size to ≤720px.
  */
 export function DetailHero({ compact = false, className, children, ...props }) {
   const items = Array.isArray(children) ? children : [children];
@@ -65,7 +71,9 @@ export function DetailHero({ compact = false, className, children, ...props }) {
       className={cn(
         'bg-surface border border-border rounded-md shadow-sm',
         'flex items-center gap-[18px] p-5',
-        'max-[720px]:flex-col max-[720px]:items-start',
+        'max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-2.5 max-[720px]:p-3.5',
+        'max-[720px]:[&_h1]:m-0 max-[720px]:[&_h1]:text-lg max-[720px]:[&_h1]:leading-snug',
+        'max-[720px]:[&_p]:mt-0.5 max-[720px]:[&_p]:text-sm max-[720px]:[&_p]:text-text-muted',
         compact ? 'max-w-[980px]' : '',
         className,
       )}

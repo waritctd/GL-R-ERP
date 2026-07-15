@@ -88,13 +88,16 @@ export const formGridSpan2 = 'col-span-2 max-[720px]:col-span-1';
 /**
  * StatGrid — reproduces `.stat-grid`:
  *   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px;
- *   ≤1040px: repeat(2, minmax(0, 1fr)); ≤720px: 1fr
+ *   ≤1040px: repeat(2, minmax(0, 1fr)); ≤720px: repeat(2, minmax(0, 1fr)) with a
+ *   tighter gap — a single stacked column forced users to scroll past several
+ *   screens of stat tiles before reaching real content (see styles.css's
+ *   ≤720px `.stat-grid`/`.stat-card` rules, which this mirrors).
  */
 export function StatGrid({ className, children, ...props }) {
   return (
     <div
       className={cn(
-        'grid grid-cols-4 gap-[14px] max-[1040px]:grid-cols-2 max-[720px]:grid-cols-1',
+        'grid grid-cols-4 gap-[14px] max-[1040px]:grid-cols-2 max-[720px]:grid-cols-2 max-[720px]:gap-2.5',
         className,
       )}
       {...props}
