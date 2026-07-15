@@ -56,7 +56,7 @@
 --     issued_by_name -- same subset V903 already seeds for UAT-TKT-04.
 --     Mid-flow A's deposit notice models the state after
 --     DepositNoticeService.issue() (status ISSUED, doc_number assigned).
---   * No sales.catalog / sales.project / sales.contact rows are needed --
+--   * No sales.catalog / customers.project / customers.contact rows are needed --
 --     ticket_item has no catalog_id FK (per V903's note) and
 --     project_id/contact_id are nullable optional FKs on sales.ticket
 --     (V23), left NULL here exactly as V903 leaves them for its own rows.
@@ -71,13 +71,13 @@ SET search_path = sales, hr, public;
 -- ---------------------------------------------------------------------
 -- A. CUSTOMERS (2 new, distinct from V16's 4 samples and V903's 8 rows).
 -- ---------------------------------------------------------------------
-INSERT INTO sales.customer (name, address, phone, branch)
+INSERT INTO customers.customer (name, address, phone, branch)
 SELECT v.name, v.address, v.phone, 'สำนักงานใหญ่'
 FROM (VALUES
     ('บริษัท ดวงตะวัน พร็อพเพอร์ตี้ จำกัด', '15 ถ.บางนา-ตราด กรุงเทพฯ',  '081-234-5679'),
     ('หจก. อีสเทิร์นวิลล่า',                  '27 ถ.สุขาภิบาล 2 กรุงเทพฯ',  '081-234-5680')
 ) AS v(name, address, phone)
-WHERE NOT EXISTS (SELECT 1 FROM sales.customer c WHERE c.name = v.name);
+WHERE NOT EXISTS (SELECT 1 FROM customers.customer c WHERE c.name = v.name);
 
 -- ---------------------------------------------------------------------
 -- B. TICKETS (3 new: entry-point, mid-flow A, mid-flow B). All reach
@@ -109,7 +109,7 @@ FROM (VALUES
        payment_status, fulfillment_status)
 JOIN hr.employee creator ON creator.employee_code = v.created_by_code
 LEFT JOIN hr.employee assignee ON assignee.employee_code = v.assigned_to_code
-JOIN sales.customer cust ON cust.name = v.customer_name
+JOIN customers.customer cust ON cust.name = v.customer_name
 WHERE NOT EXISTS (SELECT 1 FROM sales.ticket t WHERE t.code = v.code);
 
 -- ---------------------------------------------------------------------
@@ -186,7 +186,7 @@ SELECT t.ticket_id, 'DEPOSIT_NOTICE', 1, 'DN-2026-00005', DATE '2026-07-01', 'IS
        cust.name, 82500.00::numeric, issuer.employee_id,
        TRIM(CONCAT_WS(' ', issuer.first_name_th, issuer.last_name_th))
 FROM sales.ticket t
-JOIN sales.customer cust ON cust.name = 'หจก. อีสเทิร์นวิลล่า'
+JOIN customers.customer cust ON cust.name = 'หจก. อีสเทิร์นวิลล่า'
 JOIN hr.employee issuer ON issuer.employee_code = 'GLR-0004'
 WHERE t.code = 'UAT-TKT-07'
 AND NOT EXISTS (

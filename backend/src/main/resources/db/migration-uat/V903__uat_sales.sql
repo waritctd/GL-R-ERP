@@ -27,7 +27,7 @@
 -- Schema notes / simplifications (see docs/decisions/quotation-deposit-
 -- invoice-model.md and the V6/V16/V17/V29/V35 migrations for the full
 -- DDL this was checked against):
---   * sales.customer (V16) has NO customer_code business-key column --
+--   * customers.customer (V16) has NO customer_code business-key column --
 --     only customer_id/name/tax_id/address/branch/phone, and no UNIQUE
 --     constraint on name. The CSV's CUST-00N codes are therefore a
 --     CSV-authoring convenience only; this migration resolves customers
@@ -58,10 +58,12 @@
 --     issued/draft are upper-cased to ISSUED/DRAFT to match that
 --     convention. version (deposit_notice) / quotation_version
 --     (quotation) is the real revision counter; the CSV's revision_no
---     1->2 for QN-2026-00001 is modeled as two deposit_notice rows
---     sharing doc_number with version 1 and version 2 ("original
---     retained" per the CSV note). Per the task instruction to use the
---     CSV verbatim rather than invent business logic, BOTH rows keep the
+--     1->2 for QN-2026-00001 is modeled as two deposit_notice rows,
+--     version 1 and version 2 ("original retained" per the CSV note).
+--     The rows cannot share a doc_number -- V45 made doc_number globally
+--     unique -- so the version-2 row carries QN-2026-00003. Per the task
+--     instruction to use the CSV verbatim rather than invent business
+--     logic, BOTH rows keep the
 --     CSV's literal status ISSUED (not reinterpreting version 1 as
 --     SUPERSEDED) -- the version column alone is enough to distinguish
 --     revision history for DOC-05. sales.quotation.issued_by is NOT NULL
@@ -132,7 +134,7 @@ SET search_path = sales, hr, public;
 -- A. CUSTOMERS (8 rows, Customers.csv). No customer_code column exists
 --    (see note above) -- resolved elsewhere in this file by exact name.
 -- ---------------------------------------------------------------------
-INSERT INTO sales.customer (name, address, phone, branch)
+INSERT INTO customers.customer (name, address, phone, branch)
 SELECT v.name, v.address, v.phone, 'สำนักงานใหญ่'
 FROM (VALUES
     ('บริษัท สยามคอนสตรัคชั่น จำกัด',       '123 ถ.สุขุมวิท กรุงเทพฯ',              '081-234-5671'),
@@ -144,13 +146,13 @@ FROM (VALUES
     ('บริษัท แกรนด์วิลเลจ จำกัด',            '56 ถ.เกษตร-นวมินทร์ กรุงเทพฯ',          '081-234-5677'),
     ('บริษัท ไทยรีสอร์ท แอนด์ สปา จำกัด',    '8 หาดจอมเทียน ชลบุรี',                 '081-234-5678')
 ) AS v(name, address, phone)
-WHERE NOT EXISTS (SELECT 1 FROM sales.customer c WHERE c.name = v.name);
--- name/address/phone map directly to sales.customer columns. contact_name/
--- email from the CSV are NOT modeled here: sales.customer has no such
--- columns -- those live on sales.contact (V23), which is a separate
+WHERE NOT EXISTS (SELECT 1 FROM customers.customer c WHERE c.name = v.name);
+-- name/address/phone map directly to customers.customer columns. contact_name/
+-- email from the CSV are NOT modeled here: customers.customer has no such
+-- columns -- those live on customers.contact (V23), which is a separate
 -- customer_id-keyed table not populated by this migration, to keep this
--- seed to the columns the CSV actually authors against sales.customer
--- itself. The notes column likewise has no target field on sales.customer
+-- seed to the columns the CSV actually authors against customers.customer
+-- itself. The notes column likewise has no target field on customers.customer
 -- and is intentionally dropped, matching the "closest faithful subset"
 -- guidance rather than inventing a notes column.
 
@@ -180,7 +182,7 @@ FROM (VALUES
 ) AS v(code, title, status, priority, created_by_code, assigned_to_code, customer_name, notes)
 JOIN hr.employee creator ON creator.employee_code = v.created_by_code
 LEFT JOIN hr.employee assignee ON assignee.employee_code = v.assigned_to_code
-JOIN sales.customer cust ON cust.name = v.customer_name
+JOIN customers.customer cust ON cust.name = v.customer_name
 WHERE NOT EXISTS (SELECT 1 FROM sales.ticket t WHERE t.code = v.code);
 
 -- ---------------------------------------------------------------------
@@ -221,10 +223,13 @@ SELECT t.ticket_id, 'DEPOSIT_NOTICE', v.version, v.doc_number, v.issue_date, v.s
        TRIM(CONCAT_WS(' ', issuer.first_name_th, issuer.last_name_th))
 FROM (VALUES
     ('UAT-TKT-04', 1, 'QN-2026-00001', DATE '2026-06-20', 'ISSUED', 'Original issued document (XLSX)'),
-    ('UAT-TKT-04', 2, 'QN-2026-00001', DATE '2026-06-25', 'ISSUED', 'Revision bumping revision_no; original retained')
+    -- V45's ux_deposit_notice_doc_number makes doc_number globally unique, so the
+    -- revision carries its own number. V906 applies the same correction to UAT DBs
+    -- that were seeded before that constraint existed.
+    ('UAT-TKT-04', 2, 'QN-2026-00003', DATE '2026-06-25', 'ISSUED', 'Revision bumping revision_no; original retained')
 ) AS v(ticket_code, version, doc_number, issue_date, status, notes)
 JOIN sales.ticket t ON t.code = v.ticket_code
-JOIN sales.customer cust ON cust.name = 'บริษัท เมโทรพร็อพเพอร์ตี้ จำกัด'
+JOIN customers.customer cust ON cust.name = 'บริษัท เมโทรพร็อพเพอร์ตี้ จำกัด'
 JOIN hr.employee issuer ON issuer.employee_code = 'GLR-0004'
 WHERE NOT EXISTS (
     SELECT 1 FROM sales.deposit_notice dn
