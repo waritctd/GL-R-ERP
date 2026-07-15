@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { UAT_QUICK_LOGIN_ENABLED } from '../../app/features.js';
+import { UAT_PASSWORD, uatAccounts } from './uatQuickLogin.js';
 
 const quickAccounts = [
   { role: 'hr', label: 'HR', helper: 'พนักงานทั้งหมด · อนุมัติคำขอ', icon: 'badgeCheck' },
@@ -93,6 +95,30 @@ export function LoginPage({ onLogin, loading, error }) {
                     className="justify-start gap-[10px] py-[6px] px-3"
                     disabled={loading}
                     onClick={() => onLogin({ role: account.role })}
+                  >
+                    <Icon name={account.icon} size={15} />
+                    <span>
+                      <strong className="text-sm">{account.label}</strong>
+                      <small className="block text-text-faint text-2xs">{account.helper}</small>
+                    </span>
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {UAT_QUICK_LOGIN_ENABLED && (
+            <div className="border-t border-border pt-[14px]">
+              <p className="!m-0 !mb-[10px] text-xs !text-text-faint font-semibold">UAT — เข้าสู่ระบบด่วน</p>
+              <div className="grid gap-[6px]">
+                {uatAccounts.map((account) => (
+                  <Button
+                    key={account.email}
+                    type="button"
+                    variant="secondary"
+                    className="justify-start gap-[10px] py-[6px] px-3"
+                    disabled={loading}
+                    onClick={() => onLogin({ email: account.email, password: UAT_PASSWORD })}
                   >
                     <Icon name={account.icon} size={15} />
                     <span>
