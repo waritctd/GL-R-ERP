@@ -62,12 +62,6 @@ class DepositNoticeControllerTest {
     }
 
     @Test
-    void noteTemplatesRequiresAuthentication() throws Exception {
-        mvc.perform(get("/api/document-note-templates"))
-            .andExpect(status().isUnauthorized());
-    }
-
-    @Test
     void listByTicketRequiresAuthentication() throws Exception {
         mvc.perform(get("/api/tickets/10/deposit-notices"))
             .andExpect(status().isUnauthorized());

@@ -188,7 +188,7 @@ class AuthServiceTest {
     }
 
     private EmployeeLoginRecord employee(long divisionId) {
-        return employee(divisionId, null, false);
+        return employee(divisionId, (String) null);
     }
 
     private EmployeeLoginRecord employee(long divisionId, String positionName) {
