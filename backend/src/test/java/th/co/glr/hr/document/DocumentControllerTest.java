@@ -43,6 +43,50 @@ class DocumentControllerTest {
             .andExpect(jsonPath("$.templates[0].text").value("ชำระมัดจำ"));
     }
 
+    @Test
+    void listByTicketRequiresAuthentication() throws Exception {
+        mvc.perform(get("/api/tickets/1/documents"))
+            .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void listByTicketReturnsDocumentsForAuthenticatedUser() throws Exception {
+        when(service.listByTicket(1L)).thenReturn(List.of(doc(10L, 1L)));
+
+        mvc.perform(get("/api/tickets/1/documents").session(session()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.documents[0].id").value(10))
+            .andExpect(jsonPath("$.documents[0].customerName").value("ลูกค้า"));
+    }
+
+    @Test
+    void getDocRequiresAuthentication() throws Exception {
+        mvc.perform(get("/api/documents/10"))
+            .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void getDocReturnsDocumentForAuthenticatedUser() throws Exception {
+        when(service.getById(10L)).thenReturn(doc(10L, 1L));
+
+        mvc.perform(get("/api/documents/10").session(session()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.document.id").value(10))
+            .andExpect(jsonPath("$.document.customerTaxId").value("0105500000001"));
+    }
+
+    private DocumentDto doc(long id, long ticketId) {
+        return new DocumentDto(
+            id, ticketId, "QUOTATION", 1, "QT-2026-001", LocalDate.of(2026, 1, 1), "DRAFT",
+            "ลูกค้า", "0105500000001", "กรุงเทพฯ", "Project", "REF-1", "THB",
+            null, null, null, null, null, null,
+            List.of(), false, false, null, "Sales", null, null, List.of());
+    }
+
     private MockHttpSession session() {
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionContext.SESSION_USER_KEY,

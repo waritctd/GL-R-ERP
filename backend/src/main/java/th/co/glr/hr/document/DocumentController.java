@@ -49,13 +49,15 @@ public class DocumentController {
 
     // List documents for a ticket
     @GetMapping("/tickets/{ticketId}/documents")
-    Map<String, List<DocumentDto>> listByTicket(@PathVariable long ticketId) {
+    Map<String, List<DocumentDto>> listByTicket(@PathVariable long ticketId, HttpSession session) {
+        sessions.requireUser(session);
         return Map.of("documents", service.listByTicket(ticketId));
     }
 
     // Get single document
     @GetMapping("/documents/{docId}")
-    Map<String, DocumentDto> getDoc(@PathVariable long docId) {
+    Map<String, DocumentDto> getDoc(@PathVariable long docId, HttpSession session) {
+        sessions.requireUser(session);
         return Map.of("document", service.getById(docId));
     }
 
