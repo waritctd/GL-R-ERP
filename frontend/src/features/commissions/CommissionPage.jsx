@@ -4,6 +4,7 @@ import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
+import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { SkeletonCard } from '../../components/common/Skeleton.jsx';
@@ -414,17 +415,17 @@ export function CommissionPage({ user, showToast }) {
                   Invoice Number *
                   <input value={form.invoiceNumber} onChange={(event) => updateForm('invoiceNumber', event.target.value)} required />
                 </label>
-                <label>
-                  Tax Invoice File *
-                  <input
+                <div className="grid gap-[7px]">
+                  <label htmlFor="commission-invoice-file">Tax Invoice File *</label>
+                  <FileUploadField
+                    id="commission-invoice-file"
                     key={fileInputKey}
-                    type="file"
                     accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
                     onChange={(event) => updateForm('invoiceAttachment', event.target.files?.[0] || null)}
                     required
+                    helperText="PDF, JPG หรือ PNG"
                   />
-                  <small>{form.invoiceAttachment ? form.invoiceAttachment.name : 'PDF, JPG หรือ PNG'}</small>
-                </label>
+                </div>
                 <label>
                   Invoice Date *
                   <input type="date" value={form.invoiceDate} onChange={(event) => updateForm('invoiceDate', event.target.value)} required />
@@ -463,12 +464,17 @@ export function CommissionPage({ user, showToast }) {
                   </div>
                 )}
 
-                <div className="span-2" style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-                  <button type="button" className="secondary-button" onClick={runSimulation} disabled={saving || !form.grossAmount}>
+                <div className="span-2 flex flex-wrap justify-end gap-[10px] max-[720px]:flex-col-reverse">
+                  <button
+                    type="button"
+                    className="secondary-button max-[720px]:!min-h-11 max-[720px]:!w-full"
+                    onClick={runSimulation}
+                    disabled={saving || !form.grossAmount}
+                  >
                     <Icon name="badge" size={14} />
                     Simulator
                   </button>
-                  <button type="submit" className="primary-button" disabled={saving}>
+                  <button type="submit" className="primary-button max-[720px]:!min-h-11 max-[720px]:!w-full" disabled={saving}>
                     <Icon name="check" size={14} />
                     บันทึก
                   </button>

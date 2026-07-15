@@ -504,7 +504,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
             </FormField>
           </div>
           <RowActions className={formGridSpan2}>
-            <Button type="submit" disabled={saving || hasTimeRangeError}>
+            <Button type="submit" disabled={saving || hasTimeRangeError} className="max-[720px]:min-h-11 max-[720px]:w-full">
               <Icon name="plus" />
               ส่งคำขอ
             </Button>

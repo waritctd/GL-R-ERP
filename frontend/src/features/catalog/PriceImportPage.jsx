@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
+import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -418,15 +419,20 @@ export function PriceImportPage({ showToast }) {
               onChange={(e) => setLabel(e.target.value)}
             />
           </div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <input
+          <div className="flex items-start gap-3 flex-wrap max-[720px]:flex-col">
+            <FileUploadField
               ref={fileRef}
-              type="file"
               accept=".xlsx,.xls"
-              className="text-sm"
               onChange={handleFileChange}
+              helperText="Excel (.xlsx, .xls)"
+              className="max-w-md"
             />
-            <Button variant="primary" onClick={handleUpload} disabled={!file || uploading}>
+            <Button
+              variant="primary"
+              onClick={handleUpload}
+              disabled={!file || uploading}
+              className="max-[720px]:min-h-11 max-[720px]:w-full"
+            >
               <Icon name="upload" />
               {uploading ? 'กำลังอัปโหลด…' : 'อัปโหลดและ Commit'}
             </Button>

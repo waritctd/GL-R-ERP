@@ -1231,12 +1231,22 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h2>ไฟล์แนบ (PO / ใบเซ็น)</h2>
               {!TERMINAL.includes(st) && (
-                <label style={{ cursor: 'pointer' }}>
-                  <input type="file" style={{ display: 'none' }} onChange={handleUploadAttachment}
-                    accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" />
-                  <span className="secondary-button" style={{ fontSize: 12, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-attachment-file">
+                  <input
+                    id="ticket-attachment-file"
+                    type="file"
+                    // See FileUploadField: unlayered global `input` rules beat
+                    // sr-only's geometry, leaving a full-width box past the viewport.
+                    className="sr-only !h-px !min-h-0 !w-px !border-0 !p-0"
+                    onChange={handleUploadAttachment}
+                    accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
+                  />
+                  <span
+                    className="secondary-button max-[720px]:min-h-11 max-[720px]:w-full"
+                    style={{ fontSize: 12, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                  >
                     <Icon name="upload" size={13} />
-                    {uploadingFile ? 'กำลังอัปโหลด...' : 'แนบไฟล์'}
+                    {uploadingFile ? 'กำลังอัปโหลด...' : 'แนบไฟล์ (PDF/JPG/PNG/Excel)'}
                   </span>
                 </label>
               )}
