@@ -1961,6 +1961,18 @@ export const api = {
       requireSession();
       throw new Error('ดาวน์โหลดไฟล์โอนเงินไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
+    async downloadPayslip() {
+      requireSession();
+      throw new Error('ดาวน์โหลดสลิปเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async downloadOwnPayslip() {
+      requireSession();
+      throw new Error('ดาวน์โหลดสลิปเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async distributePayslips() {
+      requireSession();
+      throw new Error('ส่งอีเมลสลิปเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
   },
 
   // No seeded punch/device data yet — these return empty results so HR-core
@@ -1997,6 +2009,7 @@ export const api = {
           headcount: dashboardHeadcount(user),
           pendingApprovals,
           attendance: dashboardAttendance(user),
+          latestPayrollPeriodId: null,
           tickets,
           notifications,
           totalOpen: tickets.totalOpen,

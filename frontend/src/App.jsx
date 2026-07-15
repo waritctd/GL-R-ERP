@@ -201,6 +201,7 @@ export function App() {
                 employee={currentEmployee}
                 profileRequests={dashboardRequests}
                 dashboardSummary={dashboardSummary}
+                showToast={showToast}
               />
             )}
           />

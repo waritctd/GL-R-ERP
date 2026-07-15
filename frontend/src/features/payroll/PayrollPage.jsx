@@ -160,6 +160,15 @@ function statusInfo(status) {
   return map[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 export function PayrollPage({ showToast }) {
   const isMobile = useIsMobile();
   const [month, setMonth] = useState(thisMonth);
@@ -240,18 +249,53 @@ export function PayrollPage({ showToast }) {
     mutationFn: (periodId) => api.payroll.bankExport(periodId),
     onSuccess: (text) => {
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `glr-payroll-${month}.txt`;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `glr-payroll-${month}.txt`);
       showToast('success', 'ดาวน์โหลดไฟล์โอนเงินแล้ว');
     },
     onError: (error) => showToast('error', error.message || 'ดาวน์โหลดไฟล์ไม่สำเร็จ'),
   });
 
-  const saving = previewMutation.isPending || processMutation.isPending || bankExportMutation.isPending;
+  const payslipMutation = useMutation({
+    mutationFn: (line) => api.payroll.downloadPayslip(period.id, line.id).then((blob) => ({ blob, line })),
+    onSuccess: ({ blob, line }) => {
+      downloadBlob(blob, `glr-payslip-${month}-${line.employeeCode}.pdf`);
+      showToast('success', 'ดาวน์โหลดสลิปเงินเดือนแล้ว');
+    },
+    onError: (error) => showToast('error', error.message || 'ดาวน์โหลดสลิปเงินเดือนไม่สำเร็จ'),
+  });
+
+  const distributeMutation = useMutation({
+    mutationFn: (periodId) => api.payroll.distributePayslips(periodId),
+    onSuccess: (response) => {
+      showToast('success', `เริ่มส่งอีเมลสลิปเงินเดือนแล้ว (${response.queued || 0} รายการ, ส่งแล้ว ${response.alreadySent || 0})`);
+    },
+    onError: (error) => showToast('error', error.message || 'ส่งอีเมลสลิปเงินเดือนไม่สำเร็จ'),
+  });
+
+  const saving = previewMutation.isPending
+    || processMutation.isPending
+    || bankExportMutation.isPending
+    || payslipMutation.isPending
+    || distributeMutation.isPending;
+
+  const columns = [
+    ...payrollColumns,
+    {
+      key: 'actions',
+      header: 'เอกสาร',
+      render: (line) => (
+        <span className="row-actions">
+          <Button type="button" variant="text" onClick={() => setSelectedEmployeeId(line.employeeId)}>
+            รายละเอียด
+          </Button>
+          <Button type="button" variant="secondary" onClick={() => downloadPayslip(line)} disabled={!period?.id || !line.id || payslipMutation.isPending}>
+            <Icon name="fileText" />
+            Download payslip
+          </Button>
+        </span>
+      ),
+    },
+  ];
 
   function preview() {
     previewMutation.mutate(payload());
@@ -268,6 +312,16 @@ export function PayrollPage({ showToast }) {
   function exportBankFile() {
     if (!period?.id) return;
     bankExportMutation.mutate(period.id);
+  }
+
+  function downloadPayslip(line) {
+    if (!period?.id || !line?.id) return;
+    payslipMutation.mutate(line);
+  }
+
+  function distributePayslips() {
+    if (!period?.id) return;
+    distributeMutation.mutate(period.id);
   }
 
   function updateAdjustment(field, value) {
@@ -326,18 +380,21 @@ export function PayrollPage({ showToast }) {
           <Icon name="fileText" />
           Bank file
         </Button>
+        <Button type="button" variant="secondary" onClick={distributePayslips} disabled={!period?.id || saving}>
+          <Icon name="mail" />
+          Email payslips
+        </Button>
       </FilterBar>
 
       <section className="payroll-workspace">
         <DataTable
-          columns={payrollColumns}
+          columns={columns}
           rows={period?.lines || []}
           getRowKey={(line) => line.employeeId}
           gridClassName="payroll-table"
           pageSize={25}
           searchable
           searchPlaceholder="ค้นหาพนักงาน"
-          onRowClick={(line) => setSelectedEmployeeId(line.employeeId)}
           rowClassName={(line) => `payroll-row${Number(line.employeeId) === Number(selectedLine?.employeeId) ? ' active' : ''}`}
           loading={loading}
           emptyState={{

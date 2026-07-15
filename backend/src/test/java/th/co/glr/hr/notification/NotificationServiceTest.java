@@ -7,8 +7,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
+import java.util.Properties;
 import java.util.Optional;
 import java.util.concurrent.Executor;
+import jakarta.mail.Session;
+import jakarta.mail.internet.MimeMessage;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.annotation.Bean;
@@ -32,6 +35,9 @@ class NotificationServiceTest {
 
     @jakarta.annotation.Resource
     private JavaMailSender mailer;
+
+    @jakarta.annotation.Resource
+    private NotificationEmailService emailService;
 
     @Test
     void notifyWritesInAppRowAndAttemptsEmailSynchronouslyInTest() {
@@ -67,6 +73,23 @@ class NotificationServiceTest {
         assertThat(message.getValue().getTo()).containsExactly("employee@glr.co.th");
         assertThat(message.getValue().getSubject()).isEqualTo("Leave submitted");
         assertThat(message.getValue().getText()).isEqualTo("Your leave request was submitted.");
+    }
+
+    @Test
+    void sendWithAttachmentUsesMimeMessageHelperOnExistingMailer() throws Exception {
+        MimeMessage mimeMessage = new MimeMessage(Session.getInstance(new Properties()));
+        when(mailer.createMimeMessage()).thenReturn(mimeMessage);
+
+        emailService.sendWithAttachment(
+            "employee@glr.co.th",
+            "Payslip",
+            "Attached",
+            "payslip.pdf",
+            "%PDF".getBytes());
+
+        verify(mailer).send(mimeMessage);
+        assertThat(mimeMessage.getSubject()).isEqualTo("Payslip");
+        assertThat(mimeMessage.getAllRecipients()[0].toString()).isEqualTo("employee@glr.co.th");
     }
 
     @Test

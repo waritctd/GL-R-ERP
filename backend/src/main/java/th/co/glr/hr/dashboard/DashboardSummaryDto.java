@@ -13,6 +13,7 @@ public record DashboardSummaryDto(
     HeadcountSummaryDto headcount,
     PendingApprovalsSummaryDto pendingApprovals,
     AttendanceSummaryDto attendance,
+    Long latestPayrollPeriodId,
     TicketSummaryDto tickets,
     NotificationSummaryDto notifications,
     long totalOpen,
@@ -34,6 +35,7 @@ public record DashboardSummaryDto(
         HeadcountSummaryDto headcount,
         PendingApprovalsSummaryDto pendingApprovals,
         AttendanceSummaryDto attendance,
+        Long latestPayrollPeriodId,
         TicketSummaryDto tickets,
         NotificationSummaryDto notifications
     ) {
@@ -46,6 +48,7 @@ public record DashboardSummaryDto(
             headcount,
             pendingApprovals,
             attendance,
+            latestPayrollPeriodId,
             tickets,
             notifications,
             tickets.totalOpen(),

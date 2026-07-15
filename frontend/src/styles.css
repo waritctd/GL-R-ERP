@@ -838,7 +838,7 @@ textarea:focus {
 }
 
 .payroll-table {
-  grid-template-columns: minmax(0,1.6fr) minmax(0,0.9fr) minmax(0,0.8fr) minmax(0,1fr) minmax(0,0.9fr) minmax(0,0.9fr);
+  grid-template-columns: minmax(0,1.5fr) minmax(0,0.85fr) minmax(0,0.75fr) minmax(0,0.95fr) minmax(0,0.85fr) minmax(0,0.85fr) minmax(150px,0.9fr);
 }
 
 .leave-balance-card {
@@ -905,7 +905,7 @@ textarea:focus {
 }
 
 .payroll-row {
-  cursor: pointer;
+  cursor: default;
 }
 
 .payroll-row.active {

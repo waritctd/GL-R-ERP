@@ -14,6 +14,8 @@ vi.mock('../../api/index.js', () => ({
       preview: vi.fn(),
       process: vi.fn(),
       bankExport: vi.fn(),
+      downloadPayslip: vi.fn(),
+      distributePayslips: vi.fn(),
     },
   },
 }));
@@ -25,6 +27,7 @@ const zeroSpecialPays = Array.from({ length: 8 }, (_, index) => ({
 }));
 
 const payrollLine = {
+  id: 55,
   employeeId: 1,
   employeeCode: 'GLR-001',
   employeeName: 'พนักงาน ทดสอบ',
@@ -83,8 +86,12 @@ function renderPayrollPage() {
 describe('PayrollPage adjustment inputs', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    URL.createObjectURL = vi.fn(() => 'blob:payslip');
+    URL.revokeObjectURL = vi.fn();
     api.payroll.current.mockResolvedValue({ period: previewPeriod() });
     api.payroll.preview.mockResolvedValue({ period: previewPeriod() });
+    api.payroll.downloadPayslip.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }));
+    api.payroll.distributePayslips.mockResolvedValue({ periodId: 7, totalLines: 1, alreadySent: 0, queued: 1 });
   });
 
   it('uses Excel-based UAT defaults and shows a Baht prefix on money fields', async () => {
@@ -117,5 +124,26 @@ describe('PayrollPage adjustment inputs', () => {
     await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
     expect(api.payroll.preview.mock.calls[0][0].inputs).toEqual([]);
     expect(screen.getByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/).value).toBe('');
+  });
+
+  it('downloads a saved payslip for the selected payroll line', async () => {
+    const processedPeriod = previewPeriod({ id: 7, status: 'PROCESSED' });
+    api.payroll.current.mockResolvedValue({ period: processedPeriod });
+
+    renderPayrollPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Download payslip/i }));
+
+    await waitFor(() => expect(api.payroll.downloadPayslip).toHaveBeenCalledWith(7, 55));
+  });
+
+  it('starts payslip email distribution for a processed payroll period', async () => {
+    api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
+
+    renderPayrollPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Email payslips/i }));
+
+    await waitFor(() => expect(api.payroll.distributePayslips).toHaveBeenCalledWith(7));
   });
 });

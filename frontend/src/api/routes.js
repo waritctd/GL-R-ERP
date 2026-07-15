@@ -109,6 +109,9 @@ export const API_ROUTES = {
     preview: '/api/payroll/preview',
     process: '/api/payroll/process',
     bankExport: (periodId) => `/api/payroll/${periodId}/bank-export`,
+    payslip: (periodId, lineId) => `/api/payroll/${periodId}/lines/${lineId}/payslip.pdf`,
+    ownPayslip: (periodId) => `/api/payroll/${periodId}/payslip/me`,
+    distribute: (periodId) => `/api/payroll/${periodId}/distribute`,
   },
 };
 

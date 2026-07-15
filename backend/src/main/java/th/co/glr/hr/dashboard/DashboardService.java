@@ -48,6 +48,9 @@ public class DashboardService {
         NotificationSummaryDto notifications = user.employeeId() == null
             ? NotificationSummaryDto.empty()
             : dashboardRepository.notifications(user.employeeId());
+        Long latestPayrollPeriodId = user.employeeId() == null
+            ? null
+            : dashboardRepository.latestPayrollPeriodId(user.employeeId()).orElse(null);
 
         return DashboardSummaryDto.of(
             user.role(),
@@ -58,6 +61,7 @@ public class DashboardService {
             dashboardRepository.headcount(headcountScope),
             dashboardRepository.pendingApprovals(pendingEmployeeScope, pendingVisibility, commissionScope, ticketScope),
             dashboardRepository.attendance(attendanceScope, today, monthStart),
+            latestPayrollPeriodId,
             tickets,
             notifications
         );

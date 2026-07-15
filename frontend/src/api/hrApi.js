@@ -229,5 +229,16 @@ export const api = {
     preview: (payload) => apiRequest(API_ROUTES.payroll.preview, { method: 'POST', body: payload }),
     process: (payload) => apiRequest(API_ROUTES.payroll.process, { method: 'POST', body: payload }),
     bankExport: (periodId) => apiRequest(API_ROUTES.payroll.bankExport(periodId)),
+    downloadPayslip: async (periodId, lineId) => {
+      const res = await fetch(API_ROUTES.payroll.payslip(periodId, lineId), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    downloadOwnPayslip: async (periodId) => {
+      const res = await fetch(API_ROUTES.payroll.ownPayslip(periodId), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    distributePayslips: (periodId) => apiRequest(API_ROUTES.payroll.distribute(periodId), { method: 'POST' }),
   },
 };
