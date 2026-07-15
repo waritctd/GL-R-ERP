@@ -31,7 +31,8 @@ public class DocumentController {
 
     // Note templates
     @GetMapping("/document-note-templates")
-    Map<String, List<DocumentNoteTemplateDto>> noteTemplates() {
+    Map<String, List<DocumentNoteTemplateDto>> noteTemplates(HttpSession session) {
+        sessions.requireUser(session);
         return Map.of("templates", service.getNoteTemplates());
     }
 
@@ -48,13 +49,15 @@ public class DocumentController {
 
     // List documents for a ticket
     @GetMapping("/tickets/{ticketId}/documents")
-    Map<String, List<DocumentDto>> listByTicket(@PathVariable long ticketId) {
+    Map<String, List<DocumentDto>> listByTicket(@PathVariable long ticketId, HttpSession session) {
+        sessions.requireUser(session);
         return Map.of("documents", service.listByTicket(ticketId));
     }
 
     // Get single document
     @GetMapping("/documents/{docId}")
-    Map<String, DocumentDto> getDoc(@PathVariable long docId) {
+    Map<String, DocumentDto> getDoc(@PathVariable long docId, HttpSession session) {
+        sessions.requireUser(session);
         return Map.of("document", service.getById(docId));
     }
 
