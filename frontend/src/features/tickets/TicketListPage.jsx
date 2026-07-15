@@ -8,14 +8,6 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
 
-const TONE_BORDER = {
-  neutral: '#94a3b8',
-  warning: '#f59e0b',
-  info:    '#3b82f6',
-  success: '#22c55e',
-  danger:  '#ef4444',
-};
-
 const TONE_ACTIVE = {
   primary: { bg: '#1e40af', color: '#fff',    border: '#1e40af' },
   neutral: { bg: '#f1f5f9', color: '#475569', border: '#94a3b8' },
@@ -41,6 +33,40 @@ const STATUS_ORDER = [
   'approved', 'quotation_issued', 'document_issued', 'closed', 'cancelled', 'rejected',
 ];
 
+
+/**
+ * Mobile record card for a price request. The desktop grid crushes five columns
+ * into ~34–90px each at 375px, which truncates every field to a stub ("PR-…",
+ * "คุณส…") and clips the status badge. This shows only what a user needs to
+ * identify the record and decide the next step: code, customer, status, owner,
+ * and date. Full detail stays one tap away on the detail page.
+ */
+function TicketCard({ ticket }) {
+  const status = ticketStatusLabel(ticket.status);
+  const subLabel = ticket.status === 'quotation_issued'
+    ? TRACK_LABEL[ticket.paymentStatus] ?? TRACK_LABEL[ticket.fulfillmentStatus] ?? null
+    : null;
+
+  return (
+    <>
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <code className="min-w-0 truncate text-xs text-text-muted">{ticket.code}</code>
+        <span className="flex shrink-0 flex-col items-end gap-1">
+          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+          {subLabel ? <span className="text-2xs text-text-muted">{subLabel}</span> : null}
+        </span>
+      </div>
+
+      <strong className="min-w-0 text-md leading-snug font-extrabold text-text">
+        {ticket.customerName || ticket.title}
+      </strong>
+
+      <span className="min-w-0 truncate text-xs text-text-muted">
+        {[ticket.createdByName, formatThaiDate(ticket.createdAt)].filter(Boolean).join(' · ')}
+      </span>
+    </>
+  );
+}
 
 export function TicketListPage({ user, showToast }) {
   const navigate = useNavigate();
@@ -122,9 +148,7 @@ export function TicketListPage({ user, showToast }) {
         getRowKey={(ticket) => ticket.id}
         gridClassName="ticket-table"
         onRowClick={(ticket) => navigate(`/tickets/${ticket.id}`)}
-        rowStyle={(ticket) => ({
-          borderLeft: `4px solid ${TONE_BORDER[ticketStatusLabel(ticket.status).tone] ?? '#94a3b8'}`,
-        })}
+        mobileCard={(ticket) => <TicketCard ticket={ticket} />}
         searchable
         searchPlaceholder="ค้นหาเลขที่ / บริษัท / ผู้ดูแล"
         initialSort={{ key: 'date', dir: 'desc' }}

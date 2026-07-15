@@ -6,6 +6,8 @@ import {
   getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table';
+import { useIsMobile } from '../../hooks/useIsMobile.js';
+import { cn } from '../../utils/cn.js';
 import { EmptyState } from './EmptyState.jsx';
 import { Icon } from './Icon.jsx';
 import { Skeleton } from './Skeleton.jsx';
@@ -111,7 +113,14 @@ export function DataTable({
   stickyHeader = false,
   exportable = false,
   onExportCsv,
+  mobileCard,
 }) {
+  // Below 720px a dense grid crushes every column into an unreadable stub
+  // (ids as "PR-…", clipped badges). When a page supplies `mobileCard`, render
+  // that instead of the column cells. Search/sort/pagination act on data, not
+  // markup, so they are unaffected.
+  const isMobile = useIsMobile();
+  const asCards = isMobile && typeof mobileCard === 'function';
   const [search, setSearch] = useState('');
   const [sorting, setSorting] = useState(
     initialSort?.key ? [{ id: initialSort.key, desc: initialSort.dir === 'desc' }] : [],
@@ -235,23 +244,25 @@ export function DataTable({
       ) : null}
 
       <section className="table-panel" role="table">
-        <div className={`${gridClassName} table-head${stickyHeader ? ' is-sticky' : ''}`} role="row">
-          {columns.map((column) => (
-            column.sortable ? (
-              <SortHeader
-                key={column.key}
-                label={column.header}
-                active={sortKey === column.key}
-                dir={sortDir}
-                onSort={() => handleSort(column.key)}
-              />
-            ) : (
-              <span key={column.key} role="columnheader">
-                {column.headerNode ?? column.header}
-              </span>
-            )
-          ))}
-        </div>
+        {asCards ? null : (
+          <div className={`${gridClassName} table-head${stickyHeader ? ' is-sticky' : ''}`} role="row">
+            {columns.map((column) => (
+              column.sortable ? (
+                <SortHeader
+                  key={column.key}
+                  label={column.header}
+                  active={sortKey === column.key}
+                  dir={sortDir}
+                  onSort={() => handleSort(column.key)}
+                />
+              ) : (
+                <span key={column.key} role="columnheader">
+                  {column.headerNode ?? column.header}
+                </span>
+              )
+            ))}
+          </div>
+        )}
 
         {loading ? (
           <div aria-busy="true" aria-label="กำลังโหลดข้อมูล">
@@ -274,6 +285,26 @@ export function DataTable({
         ) : pageRows.map((row) => {
           const key = getRowKey(row);
           const extraClassName = rowClassName ? ` ${rowClassName(row)}` : '';
+
+          if (asCards) {
+            return (
+              <RowTag
+                key={key}
+                type={onRowClick ? 'button' : undefined}
+                role="row"
+                className={cn(
+                  'record-card flex w-full min-w-0 flex-col items-stretch gap-2 text-left',
+                  'mt-2.5 first:mt-0 rounded-md border border-solid border-border bg-surface p-4',
+                  onRowClick && 'cursor-pointer hover:bg-surface-hover',
+                  extraClassName,
+                )}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
+              >
+                {mobileCard(row)}
+              </RowTag>
+            );
+          }
+
           const style = rowStyle ? rowStyle(row) : undefined;
           return (
             <RowTag
