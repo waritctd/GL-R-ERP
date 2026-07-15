@@ -31,7 +31,8 @@ public class DocumentController {
 
     // Note templates
     @GetMapping("/document-note-templates")
-    Map<String, List<DocumentNoteTemplateDto>> noteTemplates() {
+    Map<String, List<DocumentNoteTemplateDto>> noteTemplates(HttpSession session) {
+        sessions.requireUser(session);
         return Map.of("templates", service.getNoteTemplates());
     }
 
