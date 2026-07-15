@@ -121,16 +121,6 @@ button:disabled {
   opacity: 0.55;
 }
 
-button:focus-visible,
-a:focus-visible,
-summary:focus-visible,
-[role="tab"]:focus-visible,
-[role="button"]:focus-visible,
-[tabindex]:not([tabindex="-1"]):focus-visible {
-  outline: none;
-  box-shadow: var(--shadow-focus-ring);
-}
-
 code {
   font-family: var(--font-family-mono);
 }
@@ -574,22 +564,6 @@ textarea:focus {
   padding: 0;
 }
 
-/* Touch devices (no reliable mouse/hover): guarantee 44px touch targets
-   regardless of a control's visual density. */
-@media (pointer: coarse) {
-  input,
-  select,
-  textarea,
-  .primary-button,
-  .secondary-button,
-  .success-button,
-  .danger-button,
-  .text-button,
-  .back-button {
-    min-height: 44px;
-  }
-}
-
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -664,11 +638,10 @@ textarea:focus {
   font-size: var(--text-3xl);
   font-weight: 800;
   line-height: 1.1;
-  font-variant-numeric: tabular-nums;
 }
 
 .stat-label {
-  margin-top: var(--space-2);
+  margin-top: 5px;
   font-weight: 700;
 }
 
@@ -696,7 +669,7 @@ textarea:focus {
 .timeline-list,
 .salary-history {
   display: grid;
-  gap: var(--space-3);
+  gap: 10px;
 }
 
 .bar-row {
@@ -840,7 +813,6 @@ textarea:focus {
   font-weight: 800;
   text-align: left;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 .table-head.is-sticky {
@@ -887,7 +859,7 @@ textarea:focus {
 }
 
 .payroll-table {
-  grid-template-columns: minmax(0,1.6fr) minmax(0,0.9fr) minmax(0,0.8fr) minmax(0,1fr) minmax(0,0.9fr) minmax(0,0.9fr);
+  grid-template-columns: minmax(0,1.5fr) minmax(0,0.85fr) minmax(0,0.75fr) minmax(0,0.95fr) minmax(0,0.85fr) minmax(0,0.85fr) minmax(150px,0.9fr);
 }
 
 .leave-balance-card {
@@ -954,7 +926,7 @@ textarea:focus {
 }
 
 .payroll-row {
-  cursor: pointer;
+  cursor: default;
 }
 
 .payroll-row.active {
@@ -1359,7 +1331,6 @@ a.status-badge {
   color: var(--color-surface);
   font-size: var(--text-4xl);
   font-weight: 800;
-  font-variant-numeric: tabular-nums;
 }
 
 .timeline-list > div {
@@ -1589,6 +1560,11 @@ a.status-badge {
   background: var(--color-surface-hover);
 }
 
+.collapsible-header-button:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus-ring);
+}
+
 .collapsible-header-right {
   padding-right: var(--space-4);
 }
@@ -1660,6 +1636,11 @@ a.status-badge {
   background: var(--color-info-bg-alt);
   color: var(--color-info-dark);
   border-color: var(--color-info);
+}
+
+.info-tip-trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus-ring);
 }
 
 .info-tip-bubble {

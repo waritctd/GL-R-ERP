@@ -30,7 +30,7 @@ export function EmployeeDetailPage({ user, onUpdateEmployee }) {
   const [activeTab, setActiveTab] = useState('personal');
   const [editing, setEditing] = useState(false);
   const canManage = hasPermission(user.role, 'canManageEmployees');
-  const canSeeSensitive = user.role === 'hr';
+  const canSeeSensitive = hasPermission(user.role, 'canViewSensitiveEmployeeData');
 
   const onBack = () => navigate('/employees');
 

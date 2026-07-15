@@ -1,5 +1,8 @@
+import { useMutation } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
+import { Icon } from '../../components/common/Icon.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { Avatar } from '../../components/common/Avatar.jsx';
@@ -80,7 +83,16 @@ function dashboardCards(mode, summary, pendingCount) {
   ];
 }
 
-export function EmployeeDashboard({ user, employee, profileRequests = [], dashboardSummary }) {
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+export function EmployeeDashboard({ user, employee, profileRequests = [], dashboardSummary, showToast }) {
   const navigate = useNavigate();
   const pendingCount = profileRequests.filter((request) => request.status === 'pending').length;
   const years = employee?.hireDate ? new Date().getFullYear() - new Date(employee.hireDate).getFullYear() : 0;
@@ -107,10 +119,38 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
       ['/overtime', 'รายการ OT'],
       ['/leave', 'รายการลา'],
     ];
+  const latestPayrollPeriodId = dashboardSummary?.latestPayrollPeriodId;
+  const ownPayslipMutation = useMutation({
+    mutationFn: (periodId) => api.payroll.downloadOwnPayslip(periodId),
+    onSuccess: (blob) => {
+      downloadBlob(blob, `glr-my-payslip-${latestPayrollPeriodId}.pdf`);
+      showToast?.('success', 'ดาวน์โหลดสลิปเงินเดือนแล้ว');
+    },
+    onError: (error) => showToast?.('error', error.message || 'ดาวน์โหลดสลิปเงินเดือนไม่สำเร็จ'),
+  });
+
+  function downloadMyPayslip() {
+    if (!latestPayrollPeriodId) return;
+    ownPayslipMutation.mutate(latestPayrollPeriodId);
+  }
 
   return (
     <PageStack>
-      <PageHeader title={title} subtitle={subtitle} />
+      <PageHeader
+        title={title}
+        subtitle={subtitle}
+        actions={mode === 'employee' ? (
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={downloadMyPayslip}
+            disabled={!latestPayrollPeriodId || ownPayslipMutation.isPending}
+          >
+            <Icon name="fileText" />
+            My payslip
+          </Button>
+        ) : null}
+      />
 
       {employee ? (
         <section className="profile-strip">

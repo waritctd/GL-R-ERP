@@ -22,7 +22,7 @@ public class CustomerRepository {
             CustomerDto customer = jdbc.queryForObject(
                 """
                 SELECT customer_id, name, tax_id, address, branch, phone
-                  FROM sales.customer
+                  FROM customers.customer
                  WHERE customer_id = :id
                 """,
                 Map.of("id", id),
@@ -41,12 +41,13 @@ public class CustomerRepository {
         }
     }
 
+
     public List<CustomerDto> search(String q) {
         String pattern = q == null || q.isBlank() ? "%" : "%" + q.trim() + "%";
         return jdbc.query(
             """
             SELECT customer_id, name, tax_id, address, branch, phone
-              FROM sales.customer
+              FROM customers.customer
              WHERE name ILIKE :q OR tax_id ILIKE :q
              ORDER BY name
              LIMIT 30
@@ -66,7 +67,7 @@ public class CustomerRepository {
     public CustomerDto create(String name, String taxId, String address, String branch, String phone) {
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
-            INSERT INTO sales.customer (name, tax_id, address, branch, phone)
+            INSERT INTO customers.customer (name, tax_id, address, branch, phone)
             VALUES (:name, :taxId, :address, :branch, :phone)
             """,
             new MapSqlParameterSource()

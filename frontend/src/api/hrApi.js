@@ -119,7 +119,6 @@ export const api = {
     noteTemplates: () => apiRequest(API_ROUTES.depositNotices.noteTemplates),
     get: (id) => apiRequest(API_ROUTES.depositNotices.get(id)),
     update: (id, payload) => apiRequest(API_ROUTES.depositNotices.update(id), { method: 'PUT', body: payload }),
-    // preview returns rendered HTML (text); apiRequest handles CSRF + non-JSON bodies
     preview: (id) => apiRequest(API_ROUTES.depositNotices.preview(id), { method: 'POST' }),
     issue: (id) => apiRequest(API_ROUTES.depositNotices.issue(id), { method: 'POST' }),
     downloadXlsx: async (id) => {
@@ -135,8 +134,30 @@ export const api = {
     listByTicket: (ticketId) => apiRequest(API_ROUTES.tickets.listDocs(ticketId)),
     createDraft: (ticketId, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(ticketId), { method: 'POST', body: payload }),
   },
+  documents: {
+    noteTemplates: () => apiRequest(API_ROUTES.documents.noteTemplates),
+    get: (id) => apiRequest(API_ROUTES.documents.get(id)),
+    update: (id, payload) => apiRequest(API_ROUTES.documents.update(id), { method: 'PUT', body: payload }),
+    preview: async (id) => {
+      const res = await fetch(API_ROUTES.documents.preview(id), { method: 'POST', credentials: 'include' });
+      if (!res.ok) throw new Error('Preview failed');
+      return res.text();
+    },
+    issue: (id) => apiRequest(API_ROUTES.documents.issue(id), { method: 'POST' }),
+    downloadXlsx: async (id) => {
+      const res = await fetch(API_ROUTES.documents.file(id, 'xlsx'), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    listByTicket: (ticketId) => apiRequest(API_ROUTES.tickets.listDocs(ticketId)),
+    createDraft: (ticketId, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(ticketId), { method: 'POST', body: payload }),
+  },
   catalog: {
     search: (q) => apiRequest(API_ROUTES.catalog.search(q ?? '')),
+    prices: (q, factoryId, limit) => apiRequest(API_ROUTES.catalog.prices(q, factoryId, limit)),
+    addProduct: (input) => apiRequest(API_ROUTES.catalog.pricesBase, { method: 'POST', body: input }),
+    updateProduct: (priceId, input) => apiRequest(API_ROUTES.catalog.price(priceId), { method: 'PUT', body: input }),
+    deleteProduct: (priceId) => apiRequest(API_ROUTES.catalog.price(priceId), { method: 'DELETE' }),
   },
   factoryConfigs: {
     list: () => apiRequest(API_ROUTES.factoryConfigs.list),
@@ -227,5 +248,72 @@ export const api = {
     preview: (payload) => apiRequest(API_ROUTES.payroll.preview, { method: 'POST', body: payload }),
     process: (payload) => apiRequest(API_ROUTES.payroll.process, { method: 'POST', body: payload }),
     bankExport: (periodId) => apiRequest(API_ROUTES.payroll.bankExport(periodId)),
+    downloadPayslip: async (periodId, lineId) => {
+      const res = await fetch(API_ROUTES.payroll.payslip(periodId, lineId), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    downloadOwnPayslip: async (periodId) => {
+      const res = await fetch(API_ROUTES.payroll.ownPayslip(periodId), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    distributePayslips: (periodId) => apiRequest(API_ROUTES.payroll.distribute(periodId), { method: 'POST' }),
+  },
+  priceImport: {
+    factories: () => apiRequest(API_ROUTES.priceImport.factories),
+    createFactory: (name, country, defaultCurrency) => apiRequest(API_ROUTES.priceImport.factories, {
+      method: 'POST',
+      body: { name, country, defaultCurrency },
+    }),
+    versions: (factoryId) => apiRequest(API_ROUTES.priceImport.versions(factoryId)),
+    upload: async (factoryId, file, label) => {
+      const formData = new FormData();
+      formData.append('factoryId', String(factoryId));
+      formData.append('file', file);
+      if (label) formData.append('label', label);
+      const csrfToken = document.cookie.split('; ')
+        .find((c) => c.startsWith('XSRF-TOKEN='))
+        ?.split('=')[1];
+      const res = await fetch(API_ROUTES.priceImport.upload, {
+        method: 'POST',
+        credentials: 'include',
+        headers: csrfToken ? { 'X-XSRF-TOKEN': csrfToken } : {},
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'อัปโหลดไม่สำเร็จ');
+      }
+      return res.json();
+    },
+    uploadAndCommit: async (factoryId, file, label) => {
+      const formData = new FormData();
+      formData.append('factoryId', String(factoryId));
+      formData.append('file', file);
+      if (label) formData.append('label', label);
+      const csrfToken = document.cookie.split('; ')
+        .find((c) => c.startsWith('XSRF-TOKEN='))
+        ?.split('=')[1];
+      const res = await fetch(API_ROUTES.priceImport.uploadCommit, {
+        method: 'POST',
+        credentials: 'include',
+        headers: csrfToken ? { 'X-XSRF-TOKEN': csrfToken } : {},
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'อัปโหลดไม่สำเร็จ');
+      }
+      return res.json();
+    },
+    validate: (versionId) => apiRequest(API_ROUTES.priceImport.validate(versionId), { method: 'POST' }),
+    staging: (versionId) => apiRequest(API_ROUTES.priceImport.staging(versionId)),
+    commit: (versionId) => apiRequest(API_ROUTES.priceImport.commit(versionId), { method: 'POST' }),
+    getProfile: (factoryId) => apiRequest(API_ROUTES.priceImport.profile(factoryId)),
+    updateProfile: (factoryId, json) => apiRequest(API_ROUTES.priceImport.profile(factoryId), {
+      method: 'PUT',
+      body: JSON.parse(json),
+    }),
   },
 };

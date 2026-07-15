@@ -23,4 +23,11 @@ public interface Mailer {
      *     surface it (e.g. factory emails, which fail loudly today).
      */
     void send(String to, String subject, String body);
+
+    /**
+     * Sends one attachment with a plain-text email body.
+     *
+     * @throws MailSendException if the underlying transport fails.
+     */
+    void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes);
 }

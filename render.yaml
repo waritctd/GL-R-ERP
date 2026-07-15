@@ -14,7 +14,12 @@ services:
     autoDeploy: true
     envVars:
       - key: SPRING_PROFILES_ACTIVE
-        value: prod
+        value: prod,demo
+      # The hosted Render service uses a database that already has demo migrations
+      # in flyway_schema_history. Keep the location explicit so deploys still
+      # resolve V21/V32 even if dashboard profile settings drift.
+      - key: SPRING_FLYWAY_LOCATIONS
+        value: classpath:db/migration,classpath:db/migration-demo
       - key: APP_FLYWAY_ENABLED
         value: "true"
       # Frontend origin is only needed as a CORS fallback; the Vercel proxy keeps calls
@@ -29,6 +34,8 @@ services:
       - key: SPRING_DATASOURCE_PASSWORD
         sync: false
       - key: APP_ATTENDANCE_AGENT_TOKEN
+        sync: false
+      - key: APP_UPLOADS_DIR
         sync: false
 
   # Dedicated UAT stack — separate service, separate DB, auto-deploys from the `uat`
@@ -80,3 +87,5 @@ services:
       # APP_MAIL_FROM defaults to Resend's sandbox sender (onboarding@resend.dev), which can only
       # send to the Resend account's own verified email until a real domain is verified with Resend
       # — fine for this UAT test, revisit once a company domain (e.g. glr.co.th) is verified.
+      - key: APP_UPLOADS_DIR
+        sync: false

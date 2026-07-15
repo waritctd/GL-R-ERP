@@ -19,4 +19,11 @@ public class LogMailer implements Mailer {
     public void send(String to, String subject, String body) {
         log.info("[LogMailer] email NOT sent (provider=log). to={} subject={}", to, subject);
     }
+
+    @Override
+    public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {
+        int byteCount = bytes == null ? 0 : bytes.length;
+        log.info("[LogMailer] email with attachment NOT sent (provider=log). to={} subject={} filename={} bytes={}",
+            to, subject, filename, byteCount);
+    }
 }

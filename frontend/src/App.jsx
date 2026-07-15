@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { api } from './api/index.js';
 import { AppShell } from './components/layout/AppShell.jsx';
@@ -34,6 +34,8 @@ const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.
 const PayrollPage = lazy(() => import('./features/payroll/PayrollPage.jsx').then(toDefault('PayrollPage')));
 const DepositNoticePage = lazy(() => import('./features/deposits/DepositNoticePage.jsx').then(toDefault('DepositNoticePage')));
 const CeoSettingsPage = lazy(() => import('./features/ceoSettings/CeoSettingsPage.jsx').then(toDefault('CeoSettingsPage')));
+const PriceImportPage = lazy(() => import('./features/catalog/PriceImportPage.jsx').then(toDefault('PriceImportPage')));
+const CatalogSearchPage = lazy(() => import('./features/catalog/CatalogSearchPage.jsx').then(toDefault('CatalogSearchPage')));
 
 // Thin wrappers that source the ticket id from the URL for the frozen sales
 // pages (they already fetch by id internally — branch 5 only rewires how the
@@ -68,6 +70,7 @@ function DepositNoticeRoute({ user, showToast }) {
 
 export function App() {
   const [user, setUser] = useState(null);
+  const [restoringSession, setRestoringSession] = useState(true);
   const [loading, setLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
@@ -83,7 +86,6 @@ export function App() {
     updateEmployee,
     createProfileRequest,
     reviewProfileRequest,
-    reviewingProfileRequest,
   } = useHrData({ user, showToast });
 
   const ownRequests = useMemo(
@@ -103,6 +105,8 @@ export function App() {
         setUser(response.user);
       } catch {
         if (alive) setUser(null);
+      } finally {
+        if (alive) setRestoringSession(false);
       }
     }
     restoreSession();
@@ -139,6 +143,10 @@ export function App() {
     setUser(null);
     resetData();
     navigate('/');
+  }
+
+  if (restoringSession) {
+    return <RouteFallback />;
   }
 
   if (!user) {
@@ -187,6 +195,7 @@ export function App() {
                 employee={currentEmployee}
                 profileRequests={dashboardRequests}
                 dashboardSummary={dashboardSummary}
+                showToast={showToast}
               />
             )}
           />
@@ -219,13 +228,7 @@ export function App() {
             />
             <Route
               path="/requests"
-              element={(
-                <ProfileRequestsPage
-                  profileRequests={profileRequests}
-                  onReview={reviewProfileRequest}
-                  reviewing={reviewingProfileRequest}
-                />
-              )}
+              element={<ProfileRequestsPage profileRequests={profileRequests} onReview={reviewProfileRequest} />}
             />
             <Route
               path="/my-requests"
@@ -288,6 +291,12 @@ export function App() {
           {/* /ceo-settings had no allowedRoute guard historically (nav-gated only). */}
           {SALES_ENABLED && (
             <Route path="/ceo-settings" element={<CeoSettingsPage showToast={showToast} />} />
+          )}
+          {SALES_ENABLED && (
+            <Route path="/price-import" element={<PriceImportPage showToast={showToast} />} />
+          )}
+          {SALES_ENABLED && (
+            <Route path="/catalog" element={<CatalogSearchPage user={user} showToast={showToast} />} />
           )}
 
           <Route path="*" element={<Navigate to="/" replace />} />

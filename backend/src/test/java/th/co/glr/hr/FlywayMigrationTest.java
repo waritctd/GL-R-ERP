@@ -30,7 +30,7 @@ class FlywayMigrationTest {
                 PostgresTestSupport.jdbcUrl(),
                 PostgresTestSupport.username(),
                 PostgresTestSupport.password())
-            .schemas("hr", "hr_restricted", "sales")
+            .schemas("hr", "hr_restricted", "sales", "customers", "price_catalog")
             .defaultSchema("hr")
             .cleanDisabled(false)
             .load();
@@ -62,7 +62,7 @@ class FlywayMigrationTest {
                 PostgresTestSupport.username(),
                 PostgresTestSupport.password())
             .locations("classpath:db/migration", "classpath:db/migration-demo")
-            .schemas("hr", "hr_restricted", "sales")
+            .schemas("hr", "hr_restricted", "sales", "customers", "price_catalog")
             .defaultSchema("hr")
             .cleanDisabled(false)
             .load();

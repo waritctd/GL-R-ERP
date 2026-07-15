@@ -53,6 +53,29 @@ public class NotificationEmailService {
         }
     }
 
+    public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {
+        String recipient = overrideTo.isBlank() ? to : overrideTo;
+        if (recipient == null || recipient.isBlank()) {
+            throw new IllegalArgumentException("Email recipient is required");
+        }
+        if (bytes == null || bytes.length == 0) {
+            throw new IllegalArgumentException("Attachment is required");
+        }
+        String finalSubject = subjectPrefix + subject;
+        String finalBody = overrideTo.isBlank()
+            ? clean(body)
+            : clean(body) + "\n\n[Redirected for testing - originally addressed to "
+                + (to == null || to.isBlank() ? "no email on file]" : to + "]");
+        try {
+            mailer.sendWithAttachment(recipient, finalSubject, finalBody, filename, bytes);
+            log.info("Notification email with attachment sent: to={} filename={}", recipient, filename);
+        } catch (Exception exception) {
+            log.error("Failed to send notification email with attachment: to={} filename={} error={}",
+                recipient, filename, exception.getMessage());
+            throw new IllegalStateException("Failed to send email with attachment", exception);
+        }
+    }
+
     private String professionalBody(String recipientName, String body, String link) {
         String greeting = clean(recipientName).isBlank()
             ? "เรียน ท่านผู้ใช้งาน,"

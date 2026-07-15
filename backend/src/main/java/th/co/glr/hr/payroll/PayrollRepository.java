@@ -5,6 +5,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.Collection;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -184,6 +186,112 @@ public class PayrollRepository {
             """,
             Map.of("periodId", periodId),
             (rs, rowNum) -> mapLine(rs));
+    }
+
+    public Map<Long, String> findEmployeeEmailsByIds(Collection<Long> employeeIds) {
+        if (employeeIds == null || employeeIds.isEmpty()) {
+            return Map.of();
+        }
+        return jdbc.query("""
+            SELECT employee_id, NULLIF(BTRIM(email), '') AS email
+              FROM hr.employee
+             WHERE employee_id IN (:employeeIds)
+               AND NULLIF(BTRIM(email), '') IS NOT NULL
+            """,
+            Map.of("employeeIds", employeeIds),
+            (rs, rowNum) -> Map.entry(rs.getLong("employee_id"), rs.getString("email")))
+            .stream()
+            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    public Set<Long> findSentPayslipLineIds(long periodId) {
+        return jdbc.query("""
+            SELECT line_id
+              FROM hr.payroll_payslip_email_delivery
+             WHERE period_id = :periodId
+               AND status = 'SENT'
+            """,
+            Map.of("periodId", periodId),
+            (rs, rowNum) -> rs.getLong("line_id"))
+            .stream()
+            .collect(Collectors.toSet());
+    }
+
+    public boolean markPayslipEmailPending(long periodId, PayrollLineDto line, String recipientEmail) {
+        if (line.id() == null) {
+            return false;
+        }
+        int updated = jdbc.update("""
+            INSERT INTO hr.payroll_payslip_email_delivery
+                (period_id, line_id, employee_id, recipient_email, status, attempt_count, last_error)
+            VALUES
+                (:periodId, :lineId, :employeeId, :recipientEmail, 'PENDING', 1, NULL)
+            ON CONFLICT (period_id, line_id) DO UPDATE
+               SET recipient_email = EXCLUDED.recipient_email,
+                   status = 'PENDING',
+                   attempt_count = hr.payroll_payslip_email_delivery.attempt_count + 1,
+                   last_error = NULL,
+                   updated_at = now()
+             WHERE hr.payroll_payslip_email_delivery.status <> 'SENT'
+               AND (
+                   hr.payroll_payslip_email_delivery.status <> 'PENDING'
+                   OR hr.payroll_payslip_email_delivery.updated_at < now() - interval '15 minutes'
+               )
+            """,
+            new MapSqlParameterSource()
+                .addValue("periodId", periodId)
+                .addValue("lineId", line.id())
+                .addValue("employeeId", line.employeeId())
+                .addValue("recipientEmail", recipientEmail));
+        return updated > 0;
+    }
+
+    public void markPayslipEmailSent(long periodId, PayrollLineDto line, String recipientEmail) {
+        if (line.id() == null) {
+            return;
+        }
+        jdbc.update("""
+            UPDATE hr.payroll_payslip_email_delivery
+               SET recipient_email = :recipientEmail,
+                   status = 'SENT',
+                   last_error = NULL,
+                   sent_at = now(),
+                   updated_at = now()
+             WHERE period_id = :periodId
+               AND line_id = :lineId
+            """,
+            new MapSqlParameterSource()
+                .addValue("periodId", periodId)
+                .addValue("lineId", line.id())
+                .addValue("recipientEmail", recipientEmail));
+    }
+
+    public void markPayslipEmailFailed(long periodId, PayrollLineDto line, String recipientEmail, String error) {
+        if (line.id() == null) {
+            return;
+        }
+        jdbc.update("""
+            INSERT INTO hr.payroll_payslip_email_delivery
+                (period_id, line_id, employee_id, recipient_email, status, attempt_count, last_error)
+            VALUES
+                (:periodId, :lineId, :employeeId, :recipientEmail, 'FAILED', 1, :error)
+            ON CONFLICT (period_id, line_id) DO UPDATE
+               SET recipient_email = EXCLUDED.recipient_email,
+                   status = 'FAILED',
+                   attempt_count = CASE
+                       WHEN hr.payroll_payslip_email_delivery.status = 'PENDING'
+                           THEN hr.payroll_payslip_email_delivery.attempt_count
+                       ELSE hr.payroll_payslip_email_delivery.attempt_count + 1
+                   END,
+                   last_error = EXCLUDED.last_error,
+                   updated_at = now()
+            """,
+            new MapSqlParameterSource()
+                .addValue("periodId", periodId)
+                .addValue("lineId", line.id())
+                .addValue("employeeId", line.employeeId())
+                .addValue("recipientEmail", recipientEmail)
+                .addValue("error", truncate(error)));
     }
 
     private Optional<PayrollPeriodDto> findPeriod(String sql, MapSqlParameterSource params) {
@@ -387,6 +495,13 @@ public class PayrollRepository {
 
     private BigDecimal money(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private String truncate(String value) {
+        if (value == null) {
+            return null;
+        }
+        return value.length() <= 1000 ? value : value.substring(0, 1000);
     }
 
     private Long nullableLong(ResultSet rs, String column) throws SQLException {

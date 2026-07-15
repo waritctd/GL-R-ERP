@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -27,12 +28,14 @@ import th.co.glr.hr.common.ApiException;
 class PayrollServiceTest {
     private final PayrollRepository payrollRepository = mock(PayrollRepository.class);
     private final AuditService auditService = mock(AuditService.class);
+    private final PayslipRenderer payslipRenderer = mock(PayslipRenderer.class);
     private final PayrollService service = new PayrollService(
         payrollRepository,
         mock(PayrollCalculator.class),
         mock(CommissionRepository.class),
         mock(CommissionCalculator.class),
-        auditService
+        auditService,
+        payslipRenderer
     );
 
     @Test
@@ -94,6 +97,50 @@ class PayrollServiceTest {
     }
 
     @Test
+    void payslipPdfRendersRequestedLineAndRecordsAuditTrail() {
+        PayrollPeriodDto period = period();
+        PayrollLineDto line = line();
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period));
+        when(payslipRenderer.toPdf(line, period)).thenReturn("%PDF-line".getBytes());
+        UserPrincipal hr = hrUser();
+
+        byte[] pdf = service.payslipPdf(99L, 123L, hr);
+
+        assertThat(pdf).isEqualTo("%PDF-line".getBytes());
+        verify(payslipRenderer).toPdf(line, period);
+        verify(auditService).record(eq(hr), eq("VIEW_PAYSLIP_PDF"), eq("payroll_line"), eq(123L), eq(null), any());
+    }
+
+    @Test
+    void ownPayslipPdfResolvesOnlyTheSessionEmployeesLine() {
+        PayrollLineDto ownLine = line(123L, 42L, "HR");
+        PayrollPeriodDto period = period(List.of(
+            ownLine,
+            line(124L, 77L, "Other")
+        ));
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period));
+        when(payslipRenderer.toPdf(ownLine, period)).thenReturn("%PDF-own".getBytes());
+        UserPrincipal hr = hrUser();
+
+        byte[] pdf = service.ownPayslipPdf(99L, hr);
+
+        assertThat(pdf).isEqualTo("%PDF-own".getBytes());
+        verify(payslipRenderer).toPdf(ownLine, period);
+        verify(auditService).record(eq(hr), eq("VIEW_OWN_PAYSLIP_PDF"), eq("payroll_line"), eq(123L), eq(null), any());
+    }
+
+    @Test
+    void ownPayslipPdfDoesNotReturnAnotherEmployeesLine() {
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period(List.of(line(124L, 77L, "Other")))));
+
+        assertThatThrownBy(() -> service.ownPayslipPdf(99L, hrUser()))
+            .isInstanceOfSatisfying(ApiException.class, exception ->
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+
+        verifyNoInteractions(payslipRenderer);
+    }
+
+    @Test
     void ceoCannotProcessPayroll() {
         ProcessPayrollRequest request = new ProcessPayrollRequest(LocalDate.of(2026, 6, 1), List.of());
 
@@ -133,6 +180,10 @@ class PayrollServiceTest {
     }
 
     private PayrollPeriodDto period() {
+        return period(List.of(line()));
+    }
+
+    private PayrollPeriodDto period(List<PayrollLineDto> lines) {
         return new PayrollPeriodDto(
             99L,
             LocalDate.of(2026, 6, 1),
@@ -148,16 +199,20 @@ class PayrollServiceTest {
             money("30000.00"),
             money("750.00"),
             money("500.00"),
-            List.of(line())
+            lines
         );
     }
 
     private PayrollLineDto line() {
+        return line(123L, 42L, "HR");
+    }
+
+    private PayrollLineDto line(Long id, long employeeId, String employeeName) {
         return new PayrollLineDto(
-            123L,
-            42L,
+            id,
+            employeeId,
             "GLR-42",
-            "HR",
+            employeeName,
             "บุคคล",
             "ธนาคาร",
             "001-234-5678",

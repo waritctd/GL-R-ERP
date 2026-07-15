@@ -33,19 +33,22 @@ public class PayrollService {
     private final CommissionRepository commissionRepository;
     private final CommissionCalculator commissionCalculator;
     private final AuditService auditService;
+    private final PayslipRenderer payslipRenderer;
 
     public PayrollService(
         PayrollRepository payrollRepository,
         PayrollCalculator payrollCalculator,
         CommissionRepository commissionRepository,
         CommissionCalculator commissionCalculator,
-        AuditService auditService
+        AuditService auditService,
+        PayslipRenderer payslipRenderer
     ) {
         this.payrollRepository = payrollRepository;
         this.payrollCalculator = payrollCalculator;
         this.commissionRepository = commissionRepository;
         this.commissionCalculator = commissionCalculator;
         this.auditService = auditService;
+        this.payslipRenderer = payslipRenderer;
     }
 
     public PayrollPeriodDto currentOrPreview(LocalDate payrollMonth, UserPrincipal actor) {
@@ -99,6 +102,38 @@ public class PayrollService {
         }
         auditPayrollAccess("EXPORT_PAYROLL_BANK_FILE", actor, period, "bank_account,net_pay");
         return builder.toString();
+    }
+
+    public byte[] payslipPdf(long periodId, long lineId, UserPrincipal actor) {
+        requireRole(actor, PAYROLL_VIEW_ROLES);
+        PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
+        PayrollLineDto line = period.lines().stream()
+            .filter(item -> item.id() != null && item.id() == lineId)
+            .findFirst()
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll line not found"));
+        byte[] pdf = payslipRenderer.toPdf(line, period);
+        auditPayrollLineAccess("VIEW_PAYSLIP_PDF", actor, period, line,
+            "earnings,sso,tax,deductions,net_pay,bank_account");
+        auditService.record(actor, "VIEW_PAYSLIP_PDF", "payroll_line", line.id(), null, auditPayload(period, line));
+        return pdf;
+    }
+
+    public byte[] ownPayslipPdf(long periodId, UserPrincipal actor) {
+        if (actor == null || actor.employeeId() == null) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
+        PayrollLineDto line = period.lines().stream()
+            .filter(item -> item.employeeId() == actor.employeeId())
+            .findFirst()
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payslip not found for this payroll period"));
+        byte[] pdf = payslipRenderer.toPdf(line, period);
+        auditPayrollLineAccess("VIEW_OWN_PAYSLIP_PDF", actor, period, line,
+            "earnings,sso,tax,deductions,net_pay,bank_account");
+        auditService.record(actor, "VIEW_OWN_PAYSLIP_PDF", "payroll_line", line.id(), null, auditPayload(period, line));
+        return pdf;
     }
 
     private PayrollPeriodDto preview(LocalDate payrollMonth, List<PayrollEmployeeInputRequest> inputs, UserPrincipal actor) {
@@ -268,6 +303,27 @@ public class PayrollService {
             targetEmployeeIds,
             period.lines().size(),
             fields);
+    }
+
+    private void auditPayrollLineAccess(String action, UserPrincipal actor, PayrollPeriodDto period, PayrollLineDto line, String fields) {
+        AUDIT.info(
+            "sensitive_data_access action={} actorId={} actorEmail=\"{}\" payrollPeriodId={} payrollMonth={} targetEmployeeIds=\"{}\" resultCount={} fields=\"{}\"",
+            action,
+            actor.id(),
+            actor.email(),
+            period.id(),
+            period.payrollMonth(),
+            line.employeeId(),
+            1,
+            fields);
+    }
+
+    private Map<String, Object> auditPayload(PayrollPeriodDto period, PayrollLineDto line) {
+        return Map.of(
+            "periodId", period.id(),
+            "payrollMonth", period.payrollMonth(),
+            "lineId", line.id(),
+            "employeeId", line.employeeId());
     }
 
     private interface MoneyExtractor {

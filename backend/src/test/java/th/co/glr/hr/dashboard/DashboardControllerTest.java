@@ -79,6 +79,7 @@ class DashboardControllerTest {
             ),
             PendingApprovalsSummaryDto.of("all", 1, 2, 3, 0, 4),
             new AttendanceSummaryDto("all", 20L, 3L, 1L, 44L, 100L, null, null, null, null),
+            99L,
             tickets,
             new NotificationSummaryDto(3, 7, 10)
         );

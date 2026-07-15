@@ -5,44 +5,25 @@ import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { cn } from '../../utils/cn.js';
 import { formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
 
-// NOTE: warning/info/danger border tones (#f59e0b, #3b82f6, #ef4444) are not
-// covered by the project's design-token mapping (closest tokens are
-// warning/info/danger at different shades), so they are deliberately left as
-// literals here per the migration's rule 4. See migration report.
 const TONE_BORDER = {
-  neutral: 'border-l-text-faint',
-  warning: 'border-l-[#f59e0b]',
-  info:    'border-l-[#3b82f6]',
-  success: 'border-l-success-soft',
-  danger:  'border-l-[#ef4444]',
+  neutral: '#94a3b8',
+  warning: '#f59e0b',
+  info:    '#3b82f6',
+  success: '#22c55e',
+  danger:  '#ef4444',
 };
 
 const TONE_ACTIVE = {
-  primary: 'bg-info-dot text-surface border-info-dot font-bold',
-  neutral: 'bg-surface-subtle text-icon-muted border-text-faint font-bold',
-  warning: 'bg-warning-bg text-warning border-[#f59e0b] font-bold',
-  info:    'bg-info-bg text-info border-[#3b82f6] font-bold',
-  success: 'bg-success-bg text-success-dark border-success-soft font-bold',
-  danger:  'bg-danger-bg text-danger-dark border-[#ef4444] font-bold',
+  primary: { bg: '#1e40af', color: '#fff',    border: '#1e40af' },
+  neutral: { bg: '#f1f5f9', color: '#475569', border: '#94a3b8' },
+  warning: { bg: '#fef3c7', color: '#b45309', border: '#f59e0b' },
+  info:    { bg: '#dbeafe', color: '#1d4ed8', border: '#3b82f6' },
+  success: { bg: '#dcfce7', color: '#15803d', border: '#22c55e' },
+  danger:  { bg: '#fee2e2', color: '#b91c1c', border: '#ef4444' },
 };
-
-const TONE_DOT_BG = {
-  neutral: 'bg-text-faint',
-  warning: 'bg-[#f59e0b]',
-  info:    'bg-[#3b82f6]',
-  success: 'bg-success-soft',
-  danger:  'bg-[#ef4444]',
-};
-
-const STATUS_ORDER = [
-  'draft', 'submitted', 'in_review', 'price_proposed',
-  'approved', 'rejected', 'quotation_issued', 'document_issued',
-  'closed', 'cancelled',
-];
 
 const STATUS_TABS = [
   { value: '',                 label: 'ทั้งหมด',              tone: 'primary' },
@@ -54,6 +35,12 @@ const STATUS_TABS = [
   { value: 'document_issued',  label: 'ออกใบแจ้งยอดแล้ว',    tone: 'success' },
   { value: 'closed',           label: 'ปิดแล้ว',              tone: 'neutral' },
 ];
+
+const STATUS_ORDER = [
+  'draft', 'submitted', 'in_review', 'price_proposed',
+  'approved', 'quotation_issued', 'document_issued', 'closed', 'cancelled', 'rejected',
+];
+
 
 export function TicketListPage({ user, showToast }) {
   const navigate = useNavigate();
@@ -104,14 +91,19 @@ export function TicketListPage({ user, showToast }) {
       <div className="status-tabs">
         {STATUS_TABS.map((tab) => {
           const isActive = statusFilter === tab.value;
+          const ts = TONE_ACTIVE[tab.tone];
+          const activeStyle = isActive
+            ? { background: ts.bg, color: ts.color, borderColor: ts.border, fontWeight: 700 }
+            : {};
           const dot = tab.tone !== 'primary'
-            ? <span className={cn('inline-block w-2 h-2 rounded-full shrink-0', TONE_DOT_BG[tab.tone])} />
+            ? <span style={{ width: 8, height: 8, borderRadius: '50%', background: ts.border, display: 'inline-block', flexShrink: 0 }} />
             : null;
           return (
             <button
               key={tab.value}
               type="button"
-              className={cn('status-tab', isActive && ['active', TONE_ACTIVE[tab.tone]])}
+              className={`status-tab${isActive ? ' active' : ''}`}
+              style={activeStyle}
               onClick={() => setStatusFilter(tab.value)}
             >
               {dot}
@@ -130,7 +122,9 @@ export function TicketListPage({ user, showToast }) {
         getRowKey={(ticket) => ticket.id}
         gridClassName="ticket-table"
         onRowClick={(ticket) => navigate(`/tickets/${ticket.id}`)}
-        rowClassName={(ticket) => cn('border-l-4', TONE_BORDER[ticketStatusLabel(ticket.status).tone] ?? 'border-l-text-faint')}
+        rowStyle={(ticket) => ({
+          borderLeft: `4px solid ${TONE_BORDER[ticketStatusLabel(ticket.status).tone] ?? '#94a3b8'}`,
+        })}
         searchable
         searchPlaceholder="ค้นหาเลขที่ / บริษัท / ผู้ดูแล"
         initialSort={{ key: 'date', dir: 'desc' }}
@@ -166,7 +160,7 @@ const TICKET_COLUMNS = [
     key: 'code',
     header: 'เลขที่',
     searchAccessor: (ticket) => ticket.code || '',
-    render: (ticket) => <code className="text-xs">{ticket.code}</code>,
+    render: (ticket) => <code style={{ fontSize: 12 }}>{ticket.code}</code>,
   },
   {
     key: 'customer',

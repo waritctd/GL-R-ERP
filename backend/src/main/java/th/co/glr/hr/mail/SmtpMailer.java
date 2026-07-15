@@ -6,9 +6,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
+import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Component;
 
 /**
@@ -79,6 +81,24 @@ public class SmtpMailer implements Mailer {
             log.info("Email sent via SMTP: from={} to={}", fromAddress, to);
         } catch (Exception exception) {
             throw new MailSendException("SMTP send failed to " + to + ": " + exception.getMessage(), exception);
+        }
+    }
+
+    @Override
+    public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {
+        try {
+            var message = sender.createMimeMessage();
+            var helper = new MimeMessageHelper(message, true, "UTF-8");
+            helper.setFrom(fromAddress);
+            helper.setTo(to);
+            helper.setSubject(subject);
+            helper.setText(body, false);
+            helper.addAttachment(filename, new ByteArrayResource(bytes));
+            sender.send(message);
+            log.info("Email with attachment sent via SMTP: from={} to={} filename={}", fromAddress, to, filename);
+        } catch (Exception exception) {
+            throw new MailSendException("SMTP send with attachment failed to " + to + ": "
+                + exception.getMessage(), exception);
         }
     }
 }

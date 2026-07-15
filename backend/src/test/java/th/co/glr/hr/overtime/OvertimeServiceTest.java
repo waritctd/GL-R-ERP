@@ -35,20 +35,12 @@ class OvertimeServiceTest {
         appProperties
     );
 
-    // Work date must stay within the 3-day advance-notice window from "now" (see the
-    // advance-notice check in OvertimeService.submit). Computed relative to today so these
-    // fixtures don't rot into failures as the calendar advances past a hardcoded date.
-    private static final LocalDate WORK_DATE = LocalDate.now().plusDays(10);
-    private static final LocalDate PAYROLL_MONTH = WORK_DATE.withDayOfMonth(1);
-    private static final OffsetDateTime WORK_START = WORK_DATE.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
-    private static final OffsetDateTime WORK_END = WORK_DATE.atTime(20, 0).atOffset(java.time.ZoneOffset.ofHours(7));
-
     @Test
     void employeesCanSubmitOwnOvertime() {
         SubmitOvertimeRequest request = validSubmit(null);
         OvertimeRequestDto created = requestDto(55L, 10L, "SUBMITTED");
         when(overtimeRepository.employeeExists(10L)).thenReturn(true);
-        when(overtimeRepository.create(eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY), eq(PAYROLL_MONTH)))
+        when(overtimeRepository.create(eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY), eq(request.workDate().withDayOfMonth(1))))
             .thenReturn(55L);
         when(overtimeRepository.findById(55L)).thenReturn(Optional.of(created));
         UserPrincipal employee = user("employee", 10L);
@@ -56,7 +48,7 @@ class OvertimeServiceTest {
         OvertimeRequestDto result = overtimeService.submit(request, employee);
 
         assertThat(result.id()).isEqualTo(55L);
-        verify(overtimeRepository).create(eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY), eq(PAYROLL_MONTH));
+        verify(overtimeRepository).create(eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY), eq(request.workDate().withDayOfMonth(1)));
         verify(auditService).record(employee, "SUBMIT_OVERTIME_REQUEST", "overtime_request", 55L, null, created);
         verify(notificationService).notify(eq(10L), eq("OVERTIME_SUBMITTED"), anyString(), anyString(), eq("/overtime"), eq(true));
         verify(notificationService).notify(eq(99L), eq("OVERTIME_PENDING_MANAGER"), anyString(), anyString(), eq("/overtime"), eq(true));
@@ -113,24 +105,26 @@ class OvertimeServiceTest {
 
     @Test
     void directManagersCanSubmitOvertimeForReportsWithAdvanceNotice() {
+        LocalDate workDate = LocalDate.now().plusDays(4);
+        OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
         SubmitOvertimeRequest request = new SubmitOvertimeRequest(
             10L,
-            WORK_DATE,
-            WORK_START,
-            WORK_END,
+            workDate,
+            startAt,
+            startAt.plusHours(2),
             "HOLIDAY",
             "Urgent delivery"
         );
         when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, null, true)));
         when(overtimeRepository.employeeExists(10L)).thenReturn(true);
-        when(overtimeRepository.create(eq(10L), eq(99L), eq(request), eq(120), eq(OvertimeDayType.HOLIDAY), eq(PAYROLL_MONTH)))
+        when(overtimeRepository.create(eq(10L), eq(99L), eq(request), eq(120), eq(OvertimeDayType.HOLIDAY), eq(workDate.withDayOfMonth(1))))
             .thenReturn(56L);
         when(overtimeRepository.findById(56L)).thenReturn(Optional.of(requestDto(56L, 10L, "SUBMITTED")));
 
         OvertimeRequestDto result = overtimeService.submit(request, user("employee", 99L));
 
         assertThat(result.id()).isEqualTo(56L);
-        verify(overtimeRepository).create(eq(10L), eq(99L), eq(request), eq(120), eq(OvertimeDayType.HOLIDAY), eq(PAYROLL_MONTH));
+        verify(overtimeRepository).create(eq(10L), eq(99L), eq(request), eq(120), eq(OvertimeDayType.HOLIDAY), eq(workDate.withDayOfMonth(1)));
     }
 
     @Test
@@ -351,11 +345,13 @@ class OvertimeServiceTest {
     }
 
     private SubmitOvertimeRequest validSubmit(Long employeeId) {
+        LocalDate workDate = LocalDate.now().plusDays(4);
+        OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
         return new SubmitOvertimeRequest(
             employeeId,
-            WORK_DATE,
-            WORK_START,
-            WORK_END,
+            workDate,
+            startAt,
+            startAt.plusHours(2),
             "WORKDAY",
             "Customer shipment"
         );

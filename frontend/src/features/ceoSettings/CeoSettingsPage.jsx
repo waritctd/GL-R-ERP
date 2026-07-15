@@ -98,29 +98,29 @@ export function CeoSettingsPage({ showToast }) {
     }
   }
 
-  if (loading) return <div className="p-[40px] text-text-faint">กำลังโหลด...</div>;
+  if (loading) return <div style={{ padding: 40, color: '#94a3b8' }}>กำลังโหลด...</div>;
 
   return (
     <div className="page-stack">
       <header>
-        <h1 className="m-0 mb-1 text-xl font-extrabold">ตั้งค่าการคำนวณราคา</h1>
-        <p className="m-0 text-text-muted text-sm">CEO สามารถปรับค่าได้ตลอดเวลา — ระบบเก็บประวัติทุก version</p>
+        <h1 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 800 }}>ตั้งค่าการคำนวณราคา</h1>
+        <p style={{ margin: 0, color: '#64748b', fontSize: 13 }}>CEO สามารถปรับค่าได้ตลอดเวลา — ระบบเก็บประวัติทุก version</p>
       </header>
 
       {/* FX Rates */}
       <section className="table-panel">
-        <div className="panel-header px-[18px] py-[14px] border-b border-border">
+        <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid #e6eaf0' }}>
           <h2>อัตราแลกเปลี่ยน (1 หน่วย = ? บาท)</h2>
         </div>
-        <div className="px-[18px] py-2 text-[11px] text-text-muted border-b border-surface-subtle flex gap-3">
+        <div style={{ padding: '8px 18px', fontSize: 11, color: '#64748b', borderBottom: '1px solid #f1f5f9', display: 'flex', gap: 12 }}>
           <span>ดึงอัตโนมัติจาก BOT API ทุกวัน 18:00 (เวลาไทย)</span>
-          <span className="text-icon-faint">• ตั้งค่า BOT_API_TOKEN เพื่อเปิดใช้งาน</span>
+          <span style={{ color: '#94a3b8' }}>• ตั้งค่า BOT_API_TOKEN เพื่อเปิดใช้งาน</span>
         </div>
-        <table className="w-full border-collapse text-sm">
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
-            <tr className="bg-surface-muted">
+            <tr style={{ background: '#f8fafc' }}>
               {['สกุลเงิน', 'อัตรา (THB)', 'วันที่มีผล', 'แหล่งข้อมูล', 'แก้ไข (Manual)'].map((h) => (
-                <th key={h} className="px-4 py-2 text-left font-semibold text-icon-muted border-b border-border">{h}</th>
+                <th key={h} style={{ padding: '8px 16px', textAlign: 'left', fontWeight: 600, color: '#475569', borderBottom: '1px solid #e6eaf0' }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -129,26 +129,27 @@ export function CeoSettingsPage({ showToast }) {
               const isEditing = editFx[fx.currency] !== undefined;
               const isBot = fx.source === 'BOT';
               return (
-                <tr key={fx.currency} className="border-b border-surface-subtle">
-                  <td className="px-4 py-2 font-bold">
-                    <code className="bg-surface-subtle px-[6px] py-0.5 rounded-[4px]">{fx.currency}</code>
+                <tr key={fx.currency} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                  <td style={{ padding: '8px 16px', fontWeight: 700 }}>
+                    <code style={{ background: '#f1f5f9', padding: '2px 6px', borderRadius: 4 }}>{fx.currency}</code>
                   </td>
-                  <td className="px-4 py-2">
+                  <td style={{ padding: '8px 16px' }}>
                     {isEditing ? (
-                      <div className="flex gap-[6px] items-center">
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                         <input
                           type="number" step="0.0001" min="0"
                           value={editFx[fx.currency]}
                           onChange={(e) => setEditFx((p) => ({ ...p, [fx.currency]: e.target.value }))}
-                          className="w-[100px] px-2 py-1 rounded-[4px] text-sm"
-                          style={{ border: '1px solid #93c5fd' }}
+                          style={{ width: 100, padding: '4px 8px', border: '1px solid #93c5fd', borderRadius: 4, fontSize: 13 }}
                         />
-                        <button type="button" className="primary-button text-xs px-[10px] py-1"
+                        <button type="button" className="primary-button"
+                          style={{ fontSize: 12, padding: '4px 10px' }}
                           disabled={savingFx[fx.currency]}
                           onClick={() => saveFxRate(fx.currency)}>
                           {savingFx[fx.currency] ? '...' : 'บันทึก'}
                         </button>
-                        <button type="button" className="secondary-button text-xs px-[10px] py-1"
+                        <button type="button" className="secondary-button"
+                          style={{ fontSize: 12, padding: '4px 10px' }}
                           onClick={() => setEditFx((p) => { const n = { ...p }; delete n[fx.currency]; return n; })}>
                           ยกเลิก
                         </button>
@@ -157,16 +158,17 @@ export function CeoSettingsPage({ showToast }) {
                       <strong>{fx.currency === 'THB' ? '1.0000' : moneyDisplay(fx.rateToThb)}</strong>
                     )}
                   </td>
-                  <td className="px-4 py-2 text-text-muted text-xs">{fx.effectiveDate}</td>
-                  <td className="px-4 py-2">
+                  <td style={{ padding: '8px 16px', color: '#64748b', fontSize: 12 }}>{fx.effectiveDate}</td>
+                  <td style={{ padding: '8px 16px' }}>
                     {isBot
-                      ? <span className="status-badge status-info">BOT อัตโนมัติ</span>
-                      : <span className="status-badge status-neutral">กรอกเอง</span>
+                      ? <span style={{ background: '#dbeafe', color: '#1d4ed8', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600 }}>BOT อัตโนมัติ</span>
+                      : <span style={{ background: '#f1f5f9', color: '#64748b', padding: '2px 8px', borderRadius: 10, fontSize: 11 }}>กรอกเอง</span>
                     }
                   </td>
-                  <td className="px-4 py-2">
+                  <td style={{ padding: '8px 16px' }}>
                     {fx.currency !== 'THB' && !isEditing && (
-                      <button type="button" className="secondary-button text-[11px] px-2 py-[3px]"
+                      <button type="button" className="secondary-button"
+                        style={{ fontSize: 11, padding: '3px 8px' }}
                         onClick={() => setEditFx((p) => ({ ...p, [fx.currency]: String(fx.rateToThb) }))}>
                         Override
                       </button>
@@ -181,31 +183,32 @@ export function CeoSettingsPage({ showToast }) {
 
       {/* Price Calc Config */}
       <section className="table-panel">
-        <div className="panel-header px-[18px] py-[14px] border-b border-border">
+        <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid #e6eaf0' }}>
           <h2>สูตรคำนวณราคา (ต่อ ตร.ม.) แต่ละประเทศ</h2>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-xs">
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
-              <tr className="bg-surface-muted">
+              <tr style={{ background: '#f8fafc' }}>
                 {['ประเทศ', 'Ver', 'ค่าเรือ/ตร.ม.', 'ประกัน/ตร.ม.', 'โรงงาน→ท่าเรือ', 'ท่าเรือ→โกดัง', 'ภาษีนำเข้า', 'Margin', ''].map((h) => (
-                  <th key={h} className="px-[14px] py-2 text-left font-semibold text-icon-muted border-b border-border whitespace-nowrap">{h}</th>
+                  <th key={h} style={{ padding: '8px 14px', textAlign: 'left', fontWeight: 600, color: '#475569', borderBottom: '1px solid #e6eaf0', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {configs.map((cfg) => (
-                <tr key={cfg.configId} className="border-b border-surface-subtle">
-                  <td className="px-[14px] py-2 font-bold">{cfg.country}</td>
-                  <td className="px-[14px] py-2 text-text-muted">v{cfg.version}</td>
-                  <td className="px-[14px] py-2">{moneyDisplay(cfg.freightPerSqm)}</td>
-                  <td className="px-[14px] py-2">{moneyDisplay(cfg.insurancePerSqm)}</td>
-                  <td className="px-[14px] py-2">{moneyDisplay(cfg.inlandFactoryToPortPerSqm)}</td>
-                  <td className="px-[14px] py-2">{moneyDisplay(cfg.inlandPortToWarehousePerSqm)}</td>
-                  <td className="px-[14px] py-2">{pctDisplay(cfg.importDutyPct)}</td>
-                  <td className="px-[14px] py-2 font-semibold text-success">{pctDisplay(cfg.marginPct)}</td>
-                  <td className="px-[14px] py-2">
-                    <button type="button" className="secondary-button text-[11px] px-2 py-[3px]"
+                <tr key={cfg.configId} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                  <td style={{ padding: '8px 14px', fontWeight: 700 }}>{cfg.country}</td>
+                  <td style={{ padding: '8px 14px', color: '#64748b' }}>v{cfg.version}</td>
+                  <td style={{ padding: '8px 14px' }}>{moneyDisplay(cfg.freightPerSqm)}</td>
+                  <td style={{ padding: '8px 14px' }}>{moneyDisplay(cfg.insurancePerSqm)}</td>
+                  <td style={{ padding: '8px 14px' }}>{moneyDisplay(cfg.inlandFactoryToPortPerSqm)}</td>
+                  <td style={{ padding: '8px 14px' }}>{moneyDisplay(cfg.inlandPortToWarehousePerSqm)}</td>
+                  <td style={{ padding: '8px 14px' }}>{pctDisplay(cfg.importDutyPct)}</td>
+                  <td style={{ padding: '8px 14px', fontWeight: 600, color: '#059669' }}>{pctDisplay(cfg.marginPct)}</td>
+                  <td style={{ padding: '8px 14px' }}>
+                    <button type="button" className="secondary-button"
+                      style={{ fontSize: 11, padding: '3px 8px' }}
                       onClick={() => openConfigEdit(cfg)}>
                       แก้ไข
                     </button>
@@ -215,26 +218,20 @@ export function CeoSettingsPage({ showToast }) {
             </tbody>
           </table>
         </div>
-        <div className="px-4 py-[10px] border-t border-surface-subtle text-[11px] text-text-faint">
+        <div style={{ padding: '10px 16px', borderTop: '1px solid #f1f5f9', fontSize: 11, color: '#94a3b8' }}>
           สูตร: CIF = ค่าสินค้า(THB/ตร.ม.) + ค่าเรือ + ประกัน → ต้นทุน = CIF + ภาษี + ขนส่งภายใน → ราคาขาย = ต้นทุน × (1 + Margin)
         </div>
       </section>
 
       {/* Config Edit Modal */}
       {editingConfig && (
-        <div
-          className="fixed inset-0 flex items-center justify-center z-[1000]"
-          style={{ background: 'rgba(0,0,0,0.4)' }}
-        >
-          <div
-            className="bg-surface rounded-[12px] p-6 w-[480px] max-h-[90vh] overflow-y-auto"
-            style={{ boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}
-          >
-            <h3 className="m-0 mb-4 text-[16px] font-bold">
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#fff', borderRadius: 12, padding: 24, width: 480, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <h3 style={{ margin: '0 0 16px', fontSize: 16, fontWeight: 700 }}>
               แก้ไข config — {editingConfig.country}
-              <span className="text-[11px] text-text-faint font-normal ml-2">(จะบันทึกเป็นเวอร์ชันใหม่)</span>
+              <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 400, marginLeft: 8 }}>(จะบันทึกเป็นเวอร์ชันใหม่)</span>
             </h3>
-            <div className="grid gap-3">
+            <div style={{ display: 'grid', gap: 12 }}>
               {[
                 { key: 'freightPerSqm',             label: 'ค่าขนส่งทางเรือ (THB/ตร.ม.)', suffix: 'บาท/ตร.ม.' },
                 { key: 'insurancePerSqm',            label: 'ค่าประกันภัย (THB/ตร.ม.)',     suffix: 'บาท/ตร.ม.' },
@@ -243,21 +240,21 @@ export function CeoSettingsPage({ showToast }) {
                 { key: 'importDutyPct',              label: 'อัตราภาษีนำเข้า (%)',           suffix: '%' },
                 { key: 'marginPct',                  label: 'Margin (%)',                    suffix: '%' },
               ].map(({ key, label, suffix }) => (
-                <label key={key} className="flex flex-col gap-1 text-sm">
-                  <span className="font-semibold">{label}</span>
-                  <div className="flex items-center gap-[6px]">
+                <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ fontWeight: 600 }}>{label}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <input
                       type="number" step="0.01" min="0"
                       value={configDraft[key] ?? ''}
                       onChange={(e) => setConfigDraft((p) => ({ ...p, [key]: e.target.value }))}
-                      className="flex-1"
+                      style={{ flex: 1 }}
                     />
-                    <span className="text-text-muted text-xs min-w-[70px]">{suffix}</span>
+                    <span style={{ color: '#64748b', fontSize: 12, minWidth: 70 }}>{suffix}</span>
                   </div>
                 </label>
               ))}
             </div>
-            <div className="flex gap-2 mt-5">
+            <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
               <button type="button" className="primary-button" disabled={savingConfig} onClick={saveConfig}>
                 {savingConfig ? 'กำลังบันทึก...' : 'บันทึกเวอร์ชันใหม่'}
               </button>

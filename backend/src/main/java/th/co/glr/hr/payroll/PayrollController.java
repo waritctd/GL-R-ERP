@@ -27,10 +27,12 @@ import th.co.glr.hr.payroll.PayrollResponses.PayrollPeriodResponse;
 @RequestMapping("/api/payroll")
 public class PayrollController {
     private final PayrollService payrollService;
+    private final PayslipDistributionService payslipDistributionService;
     private final SessionContext sessions;
 
-    public PayrollController(PayrollService payrollService, SessionContext sessions) {
+    public PayrollController(PayrollService payrollService, PayslipDistributionService payslipDistributionService, SessionContext sessions) {
         this.payrollService = payrollService;
+        this.payslipDistributionService = payslipDistributionService;
         this.sessions = sessions;
     }
 
@@ -66,6 +68,43 @@ public class PayrollController {
                 .build()
                 .toString())
             .contentType(MediaType.TEXT_PLAIN)
+            .body(body);
+    }
+
+    @GetMapping("/{periodId}/lines/{lineId}/payslip.pdf")
+    @PreAuthorize("hasAnyRole('HR','CEO')")
+    public ResponseEntity<byte[]> payslipPdf(@PathVariable long periodId, @PathVariable long lineId, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        byte[] body = payrollService.payslipPdf(periodId, lineId, user);
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                .filename("glr-payslip-" + periodId + "-" + lineId + ".pdf")
+                .build()
+                .toString())
+            .contentType(MediaType.APPLICATION_PDF)
+            .body(body);
+    }
+
+    @PostMapping("/{periodId}/distribute")
+    @PreAuthorize("hasRole('HR')")
+    public ResponseEntity<PayslipDistributionResponse> distributePayslips(@PathVariable long periodId, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        PayslipDistributionResponse response = payslipDistributionService.queueDistribution(periodId, user);
+        payslipDistributionService.sendPayslips(periodId, user);
+        return ResponseEntity.accepted().body(response);
+    }
+
+    @GetMapping("/{periodId}/payslip/me")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<byte[]> ownPayslipPdf(@PathVariable long periodId, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        byte[] body = payrollService.ownPayslipPdf(periodId, user);
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                .filename("glr-my-payslip-" + periodId + ".pdf")
+                .build()
+                .toString())
+            .contentType(MediaType.APPLICATION_PDF)
             .body(body);
     }
 

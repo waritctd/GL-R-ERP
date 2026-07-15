@@ -249,7 +249,8 @@ public class TicketService {
 
     @Transactional
     public TicketDto close(long ticketId, UserPrincipal actor) {
-        TicketSummaryDto s = requireTicket(ticketId).summary();
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
         if (s.createdById() != actor.id() && !isAdmin(actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }

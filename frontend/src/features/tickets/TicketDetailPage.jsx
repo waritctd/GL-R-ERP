@@ -8,7 +8,6 @@ import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
-import { cn } from '../../utils/cn.js';
 
 const EVENT_KIND_LABEL = {
   CREATED:            'สร้างใบขอราคา',
@@ -37,9 +36,9 @@ function eventDotClass(kind) {
 
 function InfoRow({ label, value }) {
   return (
-    <div className="flex gap-2 py-[6px] border-b border-surface-subtle text-[13px]">
-      <span className="text-text-muted min-w-[120px]">{label}</span>
-      <span className="font-semibold text-text">{value || '-'}</span>
+    <div style={{ display: 'flex', gap: 8, padding: '6px 0', borderBottom: '1px solid #f1f5f9', fontSize: 13 }}>
+      <span style={{ color: '#64748b', minWidth: 120 }}>{label}</span>
+      <span style={{ fontWeight: 600, color: '#0f172a' }}>{value || '-'}</span>
     </div>
   );
 }
@@ -81,6 +80,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const [attachLoading, setAttachLoading] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(false);
   const [deletingAttachment, setDeletingAttachment] = useState(false);
+
 
   // Revision form
   const [showReviseForm, setShowReviseForm] = useState(false);
@@ -151,13 +151,13 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   if (loading) {
     return (
       <div className="page-stack" aria-busy="true" aria-label="กำลังโหลดข้อมูลใบขอราคา">
-        <div className="flex items-start gap-4 justify-between">
-          <div className="flex-1">
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between' }}>
+          <div style={{ flex: 1 }}>
             <Skeleton width={80} height={28} radius="var(--radius-md)" className="skeleton" />
-            <div className="mt-3">
+            <div style={{ marginTop: 12 }}>
               <Skeleton width="40%" height={22} />
             </div>
-            <div className="mt-2">
+            <div style={{ marginTop: 8 }}>
               <Skeleton width={220} height={16} />
             </div>
           </div>
@@ -166,7 +166,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           <div className="panel-header">
             <Skeleton width="30%" height={16} />
           </div>
-          <div className="py-[14px] px-[18px]">
+          <div style={{ padding: '14px 18px' }}>
             <SkeletonText lines={4} />
           </div>
         </section>
@@ -174,7 +174,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           <div className="panel-header">
             <Skeleton width="30%" height={16} />
           </div>
-          <div className="py-[14px] px-[18px]">
+          <div style={{ padding: '14px 18px' }}>
             <SkeletonText lines={5} />
           </div>
         </section>
@@ -224,8 +224,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     approve:           st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
     reject:            st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
     generateQuotation: (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canGenerateQuotation.includes(role) && (isOwner || role === 'admin'),
-    generateDocument: (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
-    revise:           (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
+    generateDocument:  (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
+    revise:            (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
     close:            (st === 'document_issued' || (st === 'quotation_issued' && dualTrackDone)) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
     cancel:           !TERMINAL.includes(st)   && (isOwner || role === 'admin'),
     comment:          !TERMINAL.includes(st),
@@ -467,15 +467,15 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   return (
     <div className="page-stack">
       <Breadcrumbs items={[{ label: 'ใบขอราคา', onClick: onBack }, { label: summary.code || summary.customerName || summary.title }]} />
-      <header className="flex items-start gap-4 justify-between">
+      <header style={{ display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between' }}>
         <div>
-          <button type="button" className="secondary-button mb-3" onClick={onBack}>
+          <button type="button" className="secondary-button" onClick={onBack} style={{ marginBottom: 12 }}>
             <Icon name="chevronLeft" size={14} />
             กลับ
           </button>
-          <h1 className="m-0 text-[22px] font-extrabold text-text">{summary.customerName || summary.title}</h1>
-          <div className="flex gap-2 items-center mt-2 flex-wrap">
-            <code className="text-[13px] bg-surface-subtle py-[2px] px-2 rounded-[4px]">{summary.code}</code>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#0f172a' }}>{summary.customerName || summary.title}</h1>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+            <code style={{ fontSize: 13, background: '#f1f5f9', padding: '2px 8px', borderRadius: 4 }}>{summary.code}</code>
             <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
             {summary.hasEdits && (
               <StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge>
@@ -488,11 +488,11 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       </header>
 
       {hasActions && (
-        <section className="panel bg-surface-muted">
+        <section className="panel" style={{ background: '#f8fafc' }}>
           <div className="panel-header">
             <h2>การดำเนินการ</h2>
           </div>
-          <div className="py-3 px-[18px] flex flex-wrap gap-[10px]">
+          <div style={{ padding: '12px 18px', display: 'flex', flexWrap: 'wrap', gap: 10 }}>
             {can.pickup && (
               <button type="button" className="primary-button" disabled={actionLoading}
                 onClick={() => doAction(() => api.tickets.pickup(ticketId), 'รับมอบหมายแล้ว')}>
@@ -517,8 +517,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             )}
 
             {can.calculatePrices && (
-              <button type="button" className={cn('secondary-button', 'bg-info-row-active text-info', 'border-[#93c5fd]')} disabled={calcLoading || actionLoading}
-                onClick={handleCalculatePrices}>
+              <button type="button" className="secondary-button" disabled={calcLoading || actionLoading}
+                onClick={handleCalculatePrices}
+                style={{ background: '#eff6ff', borderColor: '#93c5fd', color: '#1d4ed8' }}>
                 <Icon name="calculator" size={14} />
                 {calcLoading ? 'กำลังคำนวณ...' : 'คำนวณราคา (CIF)'}
               </button>
@@ -540,8 +541,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             )}
 
             {can.reject && !showRejectForm && (
-              <button type="button" className={cn('secondary-button', 'text-danger', 'border-[#fca5a5]')} disabled={actionLoading}
-                onClick={() => setShowRejectForm(true)}>
+              <button type="button" className="secondary-button" disabled={actionLoading}
+                onClick={() => setShowRejectForm(true)}
+                style={{ color: '#dc2626', borderColor: '#fca5a5' }}>
                 <Icon name="close" size={14} />
                 ไม่อนุมัติ
               </button>
@@ -647,7 +649,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             )}
 
             {can.cancel && (
-              <button type="button" className={cn('secondary-button', 'ml-auto text-danger', 'border-[#fca5a5]')} disabled={actionLoading}
+              <button type="button" className="secondary-button" disabled={actionLoading}
+                style={{ marginLeft: 'auto', color: '#dc2626', borderColor: '#fca5a5' }}
                 onClick={() => setConfirm({ kind: 'cancelTicket' })}>
                 ยกเลิก
               </button>
@@ -655,14 +658,15 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           </div>
 
           {showRejectForm && (
-            <div className="px-[18px] pb-[14px] flex flex-col gap-2">
-              <label className="text-[13px] font-semibold">
+            <div style={{ padding: '0 18px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <label style={{ fontSize: 13, fontWeight: 600 }}>
                 เหตุผลในการตีกลับ *
                 <textarea rows={2} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)}
-                  placeholder="ระบุเหตุผล..." className="mt-1" />
+                  placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }} />
               </label>
-              <div className="flex gap-2">
-                <button type="button" className={cn('secondary-button', 'text-danger', 'border-[#fca5a5]')} onClick={handleReject} disabled={actionLoading}>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" className="secondary-button" onClick={handleReject} disabled={actionLoading}
+                  style={{ color: '#dc2626', borderColor: '#fca5a5' }}>
                   ยืนยันไม่อนุมัติ
                 </button>
                 <button type="button" className="secondary-button" onClick={() => { setShowRejectForm(false); setRejectReason(''); }} disabled={actionLoading}>
@@ -673,31 +677,31 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           )}
 
           {showReviseForm && (
-            <div className="px-[18px] pb-[14px] flex flex-col gap-[10px] border-t border-border">
-              <div className="text-[13px] font-semibold pt-3">ประเภทการแก้ไข</div>
+            <div style={{ padding: '0 18px 14px', display: 'flex', flexDirection: 'column', gap: 10, borderTop: '1px solid #e6eaf0' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, paddingTop: 12 }}>ประเภทการแก้ไข</div>
               {[
                 { value: 'QTY_OR_NOTE',  label: 'แก้จำนวน / หมายเหตุ / % มัดจำ', sub: 'ไม่ต้องอนุมัติใหม่ — ออกเอกสาร Rev ใหม่ได้เลย' },
                 { value: 'PRICE_CHANGE', label: 'แก้ราคา / ส่วนลดต่อหน่วย',       sub: 'CEO ต้องอนุมัติใหม่' },
                 { value: 'NEW_ITEM',     label: 'เพิ่มสินค้าใหม่',                sub: 'Import ตั้งราคา → CEO อนุมัติ' },
               ].map((opt) => (
                 // eslint-disable-next-line jsx-a11y/label-has-associated-control -- label nests the radio control; its text is the dynamic opt.label
-                <label key={opt.value} className="flex gap-[10px] items-start cursor-pointer text-[13px]">
+                <label key={opt.value} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer', fontSize: 13 }}>
                   <input type="radio" name="reviseScope" value={opt.value}
                     checked={reviseScope === opt.value}
                     onChange={() => setReviseScope(opt.value)}
-                    className="mt-[3px] shrink-0 w-4 h-4 cursor-pointer" />
+                    style={{ marginTop: 2, flexShrink: 0, width: 16, height: 16, accentColor: '#1e40af', cursor: 'pointer' }} />
                   <span>
                     <strong>{opt.label}</strong>
-                    <span className="block text-xs text-text-muted">{opt.sub}</span>
+                    <span style={{ display: 'block', fontSize: 12, color: '#64748b' }}>{opt.sub}</span>
                   </span>
                 </label>
               ))}
-              <label className="text-[13px] font-semibold">
+              <label style={{ fontSize: 13, fontWeight: 600 }}>
                 เหตุผลการแก้ไข *
                 <textarea rows={2} value={reviseReason} onChange={(e) => setReviseReason(e.target.value)}
-                  placeholder="ระบุเหตุผล..." className="mt-1" />
+                  placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }} />
               </label>
-              <div className="flex gap-2">
+              <div style={{ display: 'flex', gap: 8 }}>
                 <button type="button" className="primary-button" disabled={actionLoading || !reviseReason.trim()}
                   onClick={() => {
                     if (!reviseReason.trim()) { showToast('error', 'กรุณาระบุเหตุผล'); return; }
@@ -773,7 +777,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       )}
 
       <div className="ticket-detail-grid">
-        <div className="flex flex-col gap-4">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <section className="panel">
             <div className="panel-header">
               <h2>ข้อมูลทั่วไป</h2>
@@ -790,24 +794,24 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           </section>
 
           <section className="table-panel">
-            <div className="panel-header py-[14px] px-[18px] border-b border-border flex justify-between items-center">
+            <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid #e6eaf0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h2>รายการสินค้า ({editMode ? editDraft.length : items.length} รายการ)</h2>
             </div>
 
             {editMode ? (
-              <div className="py-[14px] px-[18px]">
+              <div style={{ padding: '14px 18px' }}>
                 {editDraft.map((item, index) => (
-                  <div key={index} className="border border-border-subtle rounded-md py-3 px-[14px] mb-[10px] bg-surface-muted">
-                    <div className="flex justify-between items-center mb-2">
-                      <span className="text-xs font-bold text-text-muted">รายการที่ {index + 1}</span>
+                  <div key={index} style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: '12px 14px', marginBottom: 10, background: '#f8fafc' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: '#64748b' }}>รายการที่ {index + 1}</span>
                       {editDraft.length > 1 && (
-                        <button type="button" className="icon-button text-[#ef4444]" aria-label={`ลบรายการที่ ${index + 1}`}
+                        <button type="button" className="icon-button" style={{ color: '#ef4444' }} aria-label={`ลบรายการที่ ${index + 1}`}
                           onClick={() => setEditDraft((d) => d.filter((_, i) => i !== index))}>
                           <Icon name="close" size={14} />
                         </button>
                       )}
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                       {[
                         { key: 'brand', label: 'ชื่อยี่ห้อ', placeholder: 'เช่น SCG, Cotto' },
                         { key: 'model', label: 'ชื่อรุ่น', placeholder: 'ชื่อรุ่น' },
@@ -816,18 +820,18 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                         { key: 'size', label: 'ขนาด', placeholder: 'เช่น 60x60 ซม.' },
                         { key: 'factory', label: 'โรงงาน', placeholder: 'เช่น SCG Ceramics' },
                       ].map(({ key, label, placeholder }) => (
-                        <label key={key} className="m-0">
-                          <span className="text-xs">{label}</span>
+                        <label key={key} style={{ margin: 0 }}>
+                          <span style={{ fontSize: 12 }}>{label}</span>
                           <input value={item[key] || ''} placeholder={placeholder}
                             onChange={(e) => setEditDraft((d) => d.map((r, i) => i === index ? { ...r, [key]: e.target.value } : r))} />
                         </label>
                       ))}
                       {/* Unit basis toggle */}
-                      <div className="m-0 col-span-2">
-                        <span className="text-xs block mb-1">หน่วยที่ใช้สั่ง</span>
-                        <div className="flex gap-4 items-center flex-wrap">
+                      <div style={{ margin: 0, gridColumn: '1 / -1' }}>
+                        <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>หน่วยที่ใช้สั่ง</span>
+                        <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
                           {[{ value: 'PIECE', label: 'แผ่น' }, { value: 'SQM', label: 'ตร.ม.' }].map((opt) => (
-                            <label key={opt.value} className="flex gap-[6px] items-center cursor-pointer text-[13px] m-0">
+                            <label key={opt.value} style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer', fontSize: 13 }}>
                               <input type="radio" name={`editUnitBasis-${index}`} value={opt.value}
                                 checked={(item.unitBasis || 'PIECE') === opt.value}
                                 onChange={() => setEditDraft((d) => d.map((r, ri) => {
@@ -839,12 +843,12 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                                   }
                                   return u;
                                 }))}
-                                className="w-4 h-4 cursor-pointer" />
+                                style={{ width: 16, height: 16, accentColor: '#1e40af', cursor: 'pointer' }} />
                               <strong>{opt.label}</strong>
                             </label>
                           ))}
                           {item.sqmPerPiece && (
-                            <span className="text-text-muted text-[11px]">· 1 แผ่น = {item.sqmPerPiece} ตร.ม.</span>
+                            <span style={{ fontSize: 11, color: '#64748b' }}>· 1 แผ่น = {item.sqmPerPiece} ตร.ม.</span>
                           )}
                         </div>
                       </div>
@@ -852,8 +856,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                       {/* Qty inputs */}
                       {(item.unitBasis || 'PIECE') === 'PIECE' ? (
                         <>
-                          <label className="m-0">
-                            <span className="text-xs">จำนวน (แผ่น)</span>
+                          <label style={{ margin: 0 }}>
+                            <span style={{ fontSize: 12 }}>จำนวน (แผ่น)</span>
                             <input type="number" value={item.qty ?? ''} step="1"
                               onChange={(e) => setEditDraft((d) => d.map((r, ri) => {
                                 if (ri !== index) return r;
@@ -862,17 +866,17 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                                 return u;
                               }))} />
                           </label>
-                          <div className="m-0">
-                            <span className="text-xs block mb-1">พื้นที่รวม (ตร.ม.)</span>
-                            <div className={`py-[7px] px-[10px] border border-border-subtle rounded-md bg-surface-muted text-sm ${item.qtySqm ? 'text-text-muted' : 'text-text-faint'}`}>
+                          <div style={{ margin: 0 }}>
+                            <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>พื้นที่รวม (ตร.ม.)</span>
+                            <div style={{ padding: '7px 10px', border: '1px solid #e2e8f0', borderRadius: 6, background: '#f8fafc', fontSize: 13, color: item.qtySqm ? '#475569' : '#94a3b8' }}>
                               {item.qtySqm ? `${Number(item.qtySqm).toFixed(3)} ตร.ม.` : '—'}
                             </div>
                           </div>
                         </>
                       ) : (
                         <>
-                          <label className="m-0">
-                            <span className="text-xs">พื้นที่ (ตร.ม.)</span>
+                          <label style={{ margin: 0 }}>
+                            <span style={{ fontSize: 12 }}>พื้นที่ (ตร.ม.)</span>
                             <input type="number" value={item.qtySqm ?? ''} min="0" step="0.001"
                               onChange={(e) => setEditDraft((d) => d.map((r, ri) => {
                                 if (ri !== index) return r;
@@ -881,17 +885,17 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                                 return u;
                               }))} />
                           </label>
-                          <div className="m-0">
-                            <span className="text-xs block mb-1">จำนวน (แผ่น)</span>
-                            <div className={`py-[7px] px-[10px] border border-border-subtle rounded-md bg-surface-muted text-sm ${item.qty ? 'text-text-muted' : 'text-text-faint'}`}>
+                          <div style={{ margin: 0 }}>
+                            <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>จำนวน (แผ่น)</span>
+                            <div style={{ padding: '7px 10px', border: '1px solid #e2e8f0', borderRadius: 6, background: '#f8fafc', fontSize: 13, color: item.qty ? '#475569' : '#94a3b8' }}>
                               {item.qty ? `${item.qty} แผ่น` : '—'}
                             </div>
                           </div>
                         </>
                       )}
                       {ROLE_PERMISSIONS.canProposePrices.includes(role) && (
-                        <label className="m-0 col-[1/-1]">
-                          <span className="text-xs">ราคาที่เสนอ (บาท)</span>
+                        <label style={{ margin: 0, gridColumn: '1 / -1' }}>
+                          <span style={{ fontSize: 12 }}>ราคาที่เสนอ (บาท)</span>
                           <input type="number" min="0" step="0.01"
                             value={item.proposedPrice ?? ''}
                             placeholder="ราคา/หน่วย"
@@ -901,15 +905,16 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                     </div>
                   </div>
                 ))}
-                <button type="button" className="secondary-button mb-3"
-                  onClick={() => setEditDraft((d) => [...d, { brand: '', model: '', color: '', texture: '', size: '', qty: 1, proposedPrice: null }])}>
+                <button type="button" className="secondary-button"
+                  onClick={() => setEditDraft((d) => [...d, { brand: '', model: '', color: '', texture: '', size: '', qty: 1, proposedPrice: null }])}
+                  style={{ marginBottom: 12 }}>
                   <Icon name="plus" size={14} /> เพิ่มรายการ
                 </button>
-                <label className="text-[13px] block mb-[10px]">
+                <label style={{ fontSize: 13, display: 'block', marginBottom: 10 }}>
                   หมายเหตุการแก้ไข
-                  <input value={editNote} onChange={(e) => setEditNote(e.target.value)} placeholder="ระบุสาเหตุที่แก้ไข (ถ้ามี)" className="mt-1" />
+                  <input value={editNote} onChange={(e) => setEditNote(e.target.value)} placeholder="ระบุสาเหตุที่แก้ไข (ถ้ามี)" style={{ marginTop: 4 }} />
                 </label>
-                <div className="flex gap-2">
+                <div style={{ display: 'flex', gap: 8 }}>
                   <button type="button" className="primary-button" disabled={actionLoading}
                     onClick={() => {
                       if (editDraft.some((item) => !item.qty || Number(item.qty) <= 0)) {
@@ -968,63 +973,65 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                     return (
                       <div key={factory}>
                         {/* Factory group header */}
-                        <div className="py-2 px-[18px] bg-surface-subtle text-xs font-bold text-[#1e3a5f] border-t border-border-subtle flex items-center gap-2 flex-wrap">
+                        <div style={{ padding: '8px 18px', background: '#f1f5f9', fontSize: 12, fontWeight: 700, color: '#1e3a5f', borderTop: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                           <Icon name="building" size={13} />
                           <span>{factory}</span>
-                          <span className="font-normal text-text-muted">({groupItems.length} รายการ)</span>
-                          {fc?.email && <span className="font-normal text-text-faint text-[11px]">· {fc.email}</span>}
-                          {/* สกุลเงิน/หน่วย selector */}
-                          <div className="flex items-center gap-1 ml-1">
-                            <span className="font-normal text-text-muted text-[11px]">ราคาต่อ:</span>
-                            <InfoTip
-                              label="สกุลเงินและหน่วยนับ"
-                              text="เลือกครั้งเดียวต่อโรงงาน และใช้กับทุกรายการของโรงงานนี้"
-                            />
-                            <select
-                              value={draftFactoryCurr[factory]?.currency ?? 'THB'}
-                              onChange={(e) => setDraftFactoryCurr((p) => ({ ...p, [factory]: { ...p[factory], currency: e.target.value } }))}
-                              className="text-[11px] py-[2px] px-1 border border-[#cbd5e1] rounded-[4px] bg-surface cursor-pointer">
-                              {['THB','EUR','USD','JPY','CNY','GBP'].map((c) => <option key={c}>{c}</option>)}
-                            </select>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <select
-                              value={draftFactoryCurr[factory]?.unit ?? 'piece'}
-                              onChange={(e) => setDraftFactoryCurr((p) => ({ ...p, [factory]: { ...p[factory], unit: e.target.value } }))}
-                              className="text-[11px] py-[2px] px-1 border border-[#cbd5e1] rounded-[4px] bg-surface cursor-pointer">
-                              <option value="piece">แผ่น</option>
-                              <option value="sqm">ตร.ม.</option>
-                              <option value="box">กล่อง</option>
-                            </select>
-                          </div>
-                          <button type="button" className="secondary-button ml-auto text-[11px] py-[2px] px-[10px]"
+                          <span style={{ fontWeight: 400, color: '#64748b' }}>({groupItems.length} รายการ)</span>
+                          {fc?.email && <span style={{ fontWeight: 400, color: '#94a3b8', fontSize: 11 }}>· {fc.email}</span>}
+                          <button type="button" className="secondary-button"
+                            style={{ marginLeft: 'auto', fontSize: 12, padding: '4px 12px' }}
                             onClick={() => setEmailDraft(isDraftOpen ? null : buildEmailDraft(factory, groupItems))}>
-                            <Icon name="fileText" size={12} />
+                            <Icon name="fileText" size={13} />
                             {isDraftOpen ? 'ปิดร่างอีเมล' : 'ร่างอีเมล'}
                           </button>
                         </div>
 
+                        {/* Currency/unit settings bar */}
+                        <div style={{ padding: '10px 18px', background: '#f8fafc', borderTop: '1px solid #e6eaf0', display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <span style={{ fontSize: 13, color: '#475569', fontWeight: 600, whiteSpace: 'nowrap' }}>สกุลเงิน</span>
+                            <InfoTip label="สกุลเงินและหน่วยนับ" text="เลือกครั้งเดียวต่อโรงงาน ใช้กับทุกรายการของโรงงานนี้" />
+                            <select
+                              value={draftFactoryCurr[factory]?.currency ?? 'THB'}
+                              onChange={(e) => setDraftFactoryCurr((p) => ({ ...p, [factory]: { ...p[factory], currency: e.target.value } }))}
+                              style={{ fontSize: 14, padding: '5px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', cursor: 'pointer', fontWeight: 600, color: '#1e40af' }}>
+                              {['THB','EUR','USD','JPY','CNY','GBP'].map((c) => <option key={c}>{c}</option>)}
+                            </select>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <span style={{ fontSize: 13, color: '#475569', fontWeight: 600, whiteSpace: 'nowrap' }}>หน่วยราคา</span>
+                            <select
+                              value={draftFactoryCurr[factory]?.unit ?? 'piece'}
+                              onChange={(e) => setDraftFactoryCurr((p) => ({ ...p, [factory]: { ...p[factory], unit: e.target.value } }))}
+                              style={{ fontSize: 14, padding: '5px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', cursor: 'pointer', fontWeight: 600, color: '#1e40af' }}>
+                              <option value="piece">/ แผ่น</option>
+                              <option value="sqm">/ ตร.ม.</option>
+                              <option value="box">/ กล่อง</option>
+                            </select>
+                          </div>
+                        </div>
+
                         {/* Email draft panel */}
                         {isDraftOpen && emailDraft && (
-                          <div className="mx-[18px] mb-2 mt-0 p-3 border border-[#bfdbfe] rounded-md bg-info-row-active text-[13px]">
-                            <p className="mt-0 mx-0 mb-2 font-bold text-xs text-info">ร่างอีเมลถึง {factory}</p>
-                            <label className="block mb-[6px]">
-                              <span className="text-[11px] text-text-muted">ถึง (To)</span>
-                              <input value={emailDraft.to} onChange={(e) => setEmailDraft((d) => ({ ...d, to: e.target.value }))} className="mt-[2px]" />
+                          <div style={{ margin: '0 18px 8px', padding: '12px', border: '1px solid #bfdbfe', borderRadius: 8, background: '#eff6ff', fontSize: 13 }}>
+                            <p style={{ margin: '0 0 8px', fontWeight: 700, fontSize: 12, color: '#1d4ed8' }}>ร่างอีเมลถึง {factory}</p>
+                            <label style={{ display: 'block', marginBottom: 6 }}>
+                              <span style={{ fontSize: 11, color: '#64748b' }}>ถึง (To)</span>
+                              <input value={emailDraft.to} onChange={(e) => setEmailDraft((d) => ({ ...d, to: e.target.value }))} style={{ marginTop: 2 }} />
                             </label>
-                            <label className="block mb-[6px]">
-                              <span className="text-[11px] text-text-muted">หัวข้อ (Subject)</span>
-                              <input value={emailDraft.subject} onChange={(e) => setEmailDraft((d) => ({ ...d, subject: e.target.value }))} className="mt-[2px]" />
+                            <label style={{ display: 'block', marginBottom: 6 }}>
+                              <span style={{ fontSize: 11, color: '#64748b' }}>หัวข้อ (Subject)</span>
+                              <input value={emailDraft.subject} onChange={(e) => setEmailDraft((d) => ({ ...d, subject: e.target.value }))} style={{ marginTop: 2 }} />
                             </label>
-                            <label className="block mb-2">
-                              <span className="text-[11px] text-text-muted">เนื้อหา</span>
-                              <textarea rows={8} value={emailDraft.body} onChange={(e) => setEmailDraft((d) => ({ ...d, body: e.target.value }))} className="mt-[2px] font-mono text-xs" />
+                            <label style={{ display: 'block', marginBottom: 8 }}>
+                              <span style={{ fontSize: 11, color: '#64748b' }}>เนื้อหา</span>
+                              <textarea rows={8} value={emailDraft.body} onChange={(e) => setEmailDraft((d) => ({ ...d, body: e.target.value }))} style={{ marginTop: 2, fontFamily: 'monospace', fontSize: 12 }} />
                             </label>
-                            <div className="flex gap-2">
-                              <button type="button" className="primary-button text-xs" disabled={emailSending || !emailDraft.to} onClick={sendFactoryEmail}>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <button type="button" className="primary-button" disabled={emailSending || !emailDraft.to} onClick={sendFactoryEmail} style={{ fontSize: 12 }}>
                                 {emailSending ? 'กำลังส่ง...' : 'ส่งอีเมล'}
                               </button>
-                              <button type="button" className="secondary-button text-xs" onClick={() => setEmailDraft(null)}>ปิด</button>
+                              <button type="button" className="secondary-button" onClick={() => setEmailDraft(null)} style={{ fontSize: 12 }}>ปิด</button>
                             </div>
                           </div>
                         )}
@@ -1038,27 +1045,27 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                             <div key={item.id ?? i} className="ticket-items-table table-row" style={{ gridTemplateColumns: itemsGridCols }}>
                               <span>
                                 <strong>{item.brand}</strong>
-                                {item.model && <small className="text-text-muted">{item.model}</small>}
+                                {item.model && <small style={{ color: '#64748b' }}>{item.model}</small>}
                               </span>
-                              <span className="flex flex-col gap-[2px]">
+                              <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                                 {item.color && <span>{item.color}</span>}
-                                {item.texture && <small className="text-text-muted">{item.texture}</small>}
-                                {item.size && <small className="text-text-faint">{item.size}</small>}
+                                {item.texture && <small style={{ color: '#64748b' }}>{item.texture}</small>}
+                                {item.size && <small style={{ color: '#94a3b8' }}>{item.size}</small>}
                               </span>
                               <span>
                                 {item.unitBasis === 'SQM'
-                                  ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small className="block text-text-faint">{item.qty} แผ่น</small></>
-                                  : <>{item.qty} แผ่น{item.qtySqm != null && <small className="block text-text-faint">{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
+                                  ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small style={{ display: 'block', color: '#94a3b8' }}>{item.qty} แผ่น</small></>
+                                  : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: '#94a3b8' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
                                 }
                               </span>
-                              <div className="flex items-center gap-1">
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                                 <input type="number" min="0" step="0.0001"
                                   value={draftRaw[item.id] ?? ''}
                                   onChange={(e) => setDraftRaw((prev) => ({ ...prev, [item.id]: e.target.value }))}
                                   placeholder={`ราคา/${unitLabel}`}
                                   title="ราคาต่อหน่วยของรายการนี้เท่านั้น (สกุลเงิน/หน่วยนับใช้ค่าที่ตั้งไว้ของโรงงาน)"
-                                  className="w-[110px] py-1 px-2 border border-[#93c5fd] rounded-[4px] text-[13px]" />
-                                <span className="text-[11px] text-indigo-ring whitespace-nowrap">{currLabel}/{unitLabel}</span>
+                                  style={{ width: 110, padding: '4px 8px', border: '1px solid #93c5fd', borderRadius: 4, fontSize: 13 }} />
+                                <span style={{ fontSize: 11, color: '#2563eb', whiteSpace: 'nowrap' }}>{currLabel}/{unitLabel}</span>
                               </div>
                               <code>{formatMoney(item.approvedPrice)}</code>
                             </div>
@@ -1071,60 +1078,63 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   <div key={item.id ?? i} className="ticket-items-table table-row" style={{ gridTemplateColumns: itemsGridCols }}>
                     <span>
                       <strong>{item.brand}</strong>
-                      {item.model && <small className="text-text-muted">{item.model}</small>}
-                      {item.factory && <small className="text-text-faint text-[11px]">{item.factory}</small>}
+                      {item.model && <small style={{ color: '#64748b' }}>{item.model}</small>}
+                      {item.factory && <small style={{ color: '#94a3b8', fontSize: 11 }}>{item.factory}</small>}
                     </span>
-                    <span className="flex flex-col gap-[2px]">
+                    <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                       {item.color && <span>{item.color}</span>}
-                      {item.texture && <small className="text-text-muted">{item.texture}</small>}
-                      {item.size && <small className="text-text-faint">{item.size}</small>}
+                      {item.texture && <small style={{ color: '#64748b' }}>{item.texture}</small>}
+                      {item.size && <small style={{ color: '#94a3b8' }}>{item.size}</small>}
                     </span>
                     <span>
                       {item.unitBasis === 'SQM'
-                        ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small className="block text-text-faint">{item.qty} แผ่น</small></>
-                        : <>{item.qty} แผ่น{item.qtySqm != null && <small className="block text-text-faint">{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
+                        ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small style={{ display: 'block', color: '#94a3b8' }}>{item.qty} แผ่น</small></>
+                        : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: '#94a3b8' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
                       }
                     </span>
                     {showCalcBreakdown ? (
                       <>
-                        <span className="text-xs">
+                        <span style={{ fontSize: 12 }}>
                           {item.rawPrice != null
-                            ? <><strong>{Number(item.rawPrice).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</strong><small className="text-text-faint"> {item.rawCurrency}/{item.rawUnit === 'sqm' ? 'ตร.ม.' : 'แผ่น'}</small></>
-                            : <span className="text-text-faint">-</span>}
-                          {item.calcConfigVersion && <small className="block text-text-faint text-[10px]">config v{item.calcConfigVersion}</small>}
+                            ? <><strong>{Number(item.rawPrice).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</strong><small style={{ color: '#94a3b8' }}> {item.rawCurrency}/{item.rawUnit === 'sqm' ? 'ตร.ม.' : 'แผ่น'}</small></>
+                            : <span style={{ color: '#94a3b8' }}>-</span>}
+                          {item.calcConfigVersion && <small style={{ display: 'block', color: '#94a3b8', fontSize: 10 }}>config v{item.calcConfigVersion}</small>}
                         </span>
-                        <code className="text-[#0369a1]">{item.calcedCost != null ? formatMoney(item.calcedCost) : '—'}</code>
+                        <code style={{ color: '#0369a1' }}>{item.calcedCost != null ? formatMoney(item.calcedCost) : '—'}</code>
                         <span>
-                          <code className={cn('font-bold', item.manualPrice != null ? 'text-[#7c3aed]' : 'text-success')}>
+                          <code style={{ color: item.manualPrice != null ? '#7c3aed' : '#059669', fontWeight: 700 }}>
                             {item.manualPrice != null ? formatMoney(item.manualPrice) : item.calcedPrice != null ? formatMoney(item.calcedPrice) : '—'}
                           </code>
-                          {item.manualPrice != null && <small className="block text-[#7c3aed] text-[10px]">override</small>}
+                          {item.manualPrice != null && <small style={{ display: 'block', color: '#7c3aed', fontSize: 10 }}>override</small>}
                           {can.overridePrice && (
                             overrideDraft[item.id] !== undefined ? (
-                              <div className="flex flex-col gap-1 mt-1">
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
                                 <input type="number" step="0.01" min="0"
                                   placeholder="ราคา override"
                                   value={overrideDraft[item.id]?.price ?? ''}
                                   onChange={(e) => setOverrideDraft((p) => ({ ...p, [item.id]: { ...p[item.id], price: e.target.value } }))}
-                                  className="w-[90px] py-[2px] px-[6px] text-xs border border-[#a78bfa] rounded" />
+                                  style={{ width: 90, padding: '2px 6px', fontSize: 12, border: '1px solid #a78bfa', borderRadius: 4 }} />
                                 <input type="text" placeholder="เหตุผล (ถ้ามี)"
                                   value={overrideDraft[item.id]?.reason ?? ''}
                                   onChange={(e) => setOverrideDraft((p) => ({ ...p, [item.id]: { ...p[item.id], reason: e.target.value } }))}
-                                  className="w-[90px] py-[2px] px-[6px] text-[11px] border border-[#d8b4fe] rounded" />
-                                <div className="flex gap-1">
-                                  <button type="button" className="primary-button text-[10px] py-[2px] px-2 bg-[#7c3aed] border-[#7c3aed]"
+                                  style={{ width: 90, padding: '2px 6px', fontSize: 11, border: '1px solid #d8b4fe', borderRadius: 4 }} />
+                                <div style={{ display: 'flex', gap: 4 }}>
+                                  <button type="button" className="primary-button"
+                                    style={{ fontSize: 10, padding: '2px 8px', background: '#7c3aed', borderColor: '#7c3aed' }}
                                     disabled={overrideLoading[item.id]}
                                     onClick={() => handleOverridePrice(item.id)}>
                                     {overrideLoading[item.id] ? '...' : 'บันทึก'}
                                   </button>
-                                  <button type="button" className="secondary-button text-[10px] py-[2px] px-[6px]"
+                                  <button type="button" className="secondary-button"
+                                    style={{ fontSize: 10, padding: '2px 6px' }}
                                     onClick={() => setOverrideDraft((p) => { const n = { ...p }; delete n[item.id]; return n; })}>
                                     ✕
                                   </button>
                                 </div>
                               </div>
                             ) : (
-                              <button type="button" className="secondary-button text-[10px] py-[2px] px-2 mt-1 block"
+                              <button type="button" className="secondary-button"
+                                style={{ fontSize: 10, padding: '2px 8px', marginTop: 4, display: 'block' }}
                                 onClick={() => setOverrideDraft((p) => ({ ...p, [item.id]: { price: item.calcedPrice != null ? String(item.calcedPrice) : '', reason: '' } }))}>
                                 override
                               </button>
@@ -1142,19 +1152,19 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 ))}
 
                 {proposeMode && (
-                  <div className="py-3 px-[18px] flex flex-col gap-2 border-t border-border">
+                  <div style={{ padding: '12px 18px', display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid #e6eaf0' }}>
                     {st === 'approved' && (
-                      <div className="py-[10px] px-[14px] rounded-lg bg-[#fffbeb] border border-[#fbbf24] text-[13px] text-[#92400e] flex gap-2 items-start">
-                        <span className="font-bold shrink-0">⚠</span>
+                      <div style={{ padding: '10px 14px', borderRadius: 8, background: '#fffbeb', border: '1px solid #fbbf24', fontSize: 13, color: '#92400e', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                        <span style={{ fontWeight: 700, flexShrink: 0 }}>⚠</span>
                         <span>การแก้ไขราคาจะ<strong>ยกเลิกการอนุมัติ</strong> และสถานะจะย้อนกลับเป็น &ldquo;รอการอนุมัติ&rdquo; — CEO และ Sales จะได้รับแจ้งทันที</span>
                       </div>
                     )}
-                    <label className="text-[13px]">
+                    <label style={{ fontSize: 13 }}>
                       หมายเหตุราคา
                       <input value={proposeNote} onChange={(e) => setProposeNote(e.target.value)}
-                        placeholder="ข้อมูลเพิ่มเติมเกี่ยวกับราคา (ถ้ามี)" className="mt-1" />
+                        placeholder="ข้อมูลเพิ่มเติมเกี่ยวกับราคา (ถ้ามี)" style={{ marginTop: 4 }} />
                     </label>
-                    <div className="flex gap-2">
+                    <div style={{ display: 'flex', gap: 8 }}>
                       <button type="button" className="primary-button" onClick={handleProposePrice} disabled={actionLoading}>
                         {st === 'approved' ? 'ยืนยันแก้ไขราคา (รออนุมัติใหม่)' : 'ยืนยันราคาเสนอ'}
                       </button>
@@ -1218,13 +1228,13 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
           {/* R5: Attachments */}
           <section className="panel">
-            <div className="panel-header flex justify-between items-center">
+            <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h2>ไฟล์แนบ (PO / ใบเซ็น)</h2>
               {!TERMINAL.includes(st) && (
-                <label className="cursor-pointer">
-                  <input type="file" className="hidden" onChange={handleUploadAttachment}
+                <label style={{ cursor: 'pointer' }}>
+                  <input type="file" style={{ display: 'none' }} onChange={handleUploadAttachment}
                     accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" />
-                  <span className="secondary-button text-xs py-1 px-[10px] inline-flex items-center gap-1">
+                  <span className="secondary-button" style={{ fontSize: 12, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                     <Icon name="upload" size={13} />
                     {uploadingFile ? 'กำลังอัปโหลด...' : 'แนบไฟล์'}
                   </span>
@@ -1233,12 +1243,12 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             </div>
             {attachLoading ? (
               <div
-                className="py-2 px-[18px] flex flex-col gap-[6px]"
+                style={{ padding: '8px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}
                 aria-busy="true"
                 aria-label="กำลังโหลดไฟล์แนบ"
               >
                 {[0, 1, 2].map((i) => (
-                  <div key={i} className="flex items-center gap-2 py-[6px] px-[10px] bg-surface-muted rounded-[6px] border border-border-subtle">
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#f8fafc', borderRadius: 6, border: '1px solid #e2e8f0' }}>
                     <Skeleton width={13} height={13} radius="var(--radius-sm)" />
                     <Skeleton width="50%" height={13} />
                     <Skeleton width={40} height={16} radius="var(--radius-pill)" />
@@ -1246,22 +1256,23 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 ))}
               </div>
             ) : attachments.length === 0 ? (
-              <p className="py-3 px-[18px] text-text-faint text-[13px]">ยังไม่มีไฟล์แนบ</p>
+              <p style={{ padding: '12px 18px', color: '#94a3b8', fontSize: 13 }}>ยังไม่มีไฟล์แนบ</p>
             ) : (
-              <div className="py-2 px-[18px] flex flex-col gap-[6px]">
+              <div style={{ padding: '8px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {attachments.map((att) => (
-                  <div key={att.id} className="flex items-center gap-2 py-[6px] px-[10px] bg-surface-muted rounded-[6px] border border-border-subtle">
-                    <Icon name="paperclip" size={13} className="text-text-muted shrink-0" />
-                    <span className="flex-1 text-[13px] text-text break-all">{att.fileName}</span>
-                    <span className="text-[11px] text-text-faint whitespace-nowrap bg-surface-subtle py-[1px] px-[6px] rounded-full">
+                  <div key={att.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#f8fafc', borderRadius: 6, border: '1px solid #e2e8f0' }}>
+                    <Icon name="paperclip" size={13} style={{ color: '#64748b', flexShrink: 0 }} />
+                    <span style={{ flex: 1, fontSize: 13, color: '#0f172a', wordBreak: 'break-all' }}>{att.fileName}</span>
+                    <span style={{ fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap', background: '#f1f5f9', padding: '1px 6px', borderRadius: 99 }}>
                       {att.attachType}
                     </span>
                     <a href={api.attachments.fileUrl(att.id)} target="_blank" rel="noreferrer"
-                      className="text-xs text-indigo-ring no-underline whitespace-nowrap">
+                      style={{ fontSize: 12, color: '#2563eb', textDecoration: 'none', whiteSpace: 'nowrap' }}>
                       ดูไฟล์
                     </a>
                     {!TERMINAL.includes(st) && (
-                      <button type="button" className="icon-button text-[#ef4444] shrink-0"
+                      <button type="button" className="icon-button"
+                        style={{ color: '#ef4444', flexShrink: 0 }}
                         onClick={() => handleDeleteAttachment(att.id, att.fileName)}>
                         <Icon name="close" size={13} />
                       </button>
@@ -1278,35 +1289,33 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 <h2>ใบเสนอราคา</h2>
               </div>
               {quotations.map((q) => (
-                <div key={q.id} className="py-[10px] px-[18px] border-b border-surface-subtle flex items-start gap-[10px]">
-                  <div className="shrink-0 mt-[2px]">
-                    <span className={cn(
-                      'text-[11px] font-bold rounded-[4px] py-[2px] px-[7px]',
-                      q.docStatus === 'SUPERSEDED' ? 'bg-surface-subtle text-text-faint'
-                        : q.docStatus === 'ISSUED' ? 'bg-success-bg text-[#16a34a]'
-                        : 'bg-info-row-active text-indigo-ring',
-                    )}>Rev {q.quotationVersion}</span>
+                <div key={q.id} style={{ padding: '10px 18px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                  <div style={{ flexShrink: 0, marginTop: 2 }}>
+                    <span style={{
+                      fontSize: 11, fontWeight: 700, borderRadius: 4, padding: '2px 7px',
+                      background: q.docStatus === 'SUPERSEDED' ? '#f1f5f9' : q.docStatus === 'ISSUED' ? '#dcfce7' : '#eff6ff',
+                      color: q.docStatus === 'SUPERSEDED' ? '#94a3b8' : q.docStatus === 'ISSUED' ? '#16a34a' : '#2563eb',
+                    }}>Rev {q.quotationVersion}</span>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex gap-2 items-center">
-                      <span className="font-semibold text-[13px]">{q.number}</span>
-                      <span className={cn(
-                        'text-[10px] rounded-[3px] py-[1px] px-[5px] font-semibold',
-                        q.docStatus === 'SUPERSEDED' ? 'bg-surface-subtle text-text-faint'
-                          : q.docStatus === 'ISSUED' ? 'bg-success-bg text-[#16a34a]'
-                          : 'bg-info-row-active text-[#3b82f6]',
-                      )}>{q.docStatus}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ fontWeight: 600, fontSize: 13 }}>{q.number}</span>
+                      <span style={{
+                        fontSize: 10, borderRadius: 3, padding: '1px 5px', fontWeight: 600,
+                        background: q.docStatus === 'SUPERSEDED' ? '#f1f5f9' : q.docStatus === 'ISSUED' ? '#dcfce7' : '#eff6ff',
+                        color: q.docStatus === 'SUPERSEDED' ? '#94a3b8' : q.docStatus === 'ISSUED' ? '#16a34a' : '#3b82f6',
+                      }}>{q.docStatus}</span>
                     </div>
-                    <div className="text-xs text-text-secondary mt-[2px]">
+                    <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>
                       ยอดรวม {formatMoney(q.totalAmount)} · ออกโดย {q.issuedByName} · {formatThaiDate(q.issuedAt)}
                     </div>
                   </div>
-                  <div className="flex gap-[6px] shrink-0">
-                    <button type="button" className="secondary-button text-xs py-1 px-[10px]"
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
                       onClick={() => handleDownloadQuotation(q.id, q.number, 'xlsx')}>
                       <Icon name="fileText" size={12} /> Excel
                     </button>
-                    <button type="button" className="secondary-button text-xs py-1 px-[10px]"
+                    <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
                       onClick={() => handleDownloadQuotation(q.id, q.number, 'pdf')}>
                       <Icon name="fileText" size={12} /> PDF
                     </button>
@@ -1323,7 +1332,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           </div>
           <div className="ticket-events">
             {events.length === 0 ? (
-              <p className="text-text-faint text-[13px]">ยังไม่มีประวัติ</p>
+              <p style={{ color: '#94a3b8', fontSize: 13 }}>ยังไม่มีประวัติ</p>
             ) : [...events].reverse().map((event) => {
               let snapItems = null;
               if (event.kind === 'PRICE_PROPOSED' && event.itemSnapshot) {
@@ -1332,24 +1341,24 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               return (
                 <div key={event.id} className="ticket-event">
                   <span className={eventDotClass(event.kind)} />
-                  <div className="flex-1 min-w-0">
-                    <strong className="block text-[13px] text-text">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <strong style={{ display: 'block', fontSize: 13, color: '#0f172a' }}>
                       {EVENT_KIND_LABEL[event.kind] ?? event.kind}
                     </strong>
-                    <span className="text-text-secondary text-xs">{event.actorName}</span>
+                    <span style={{ color: '#475569', fontSize: 12 }}>{event.actorName}</span>
                     {event.message && (
-                      <p className="mt-1 mx-0 mb-0 text-xs text-text-muted bg-surface-muted rounded-[4px] py-1 px-2">
+                      <p style={{ margin: '4px 0 0', fontSize: 12, color: '#64748b', background: '#f8fafc', borderRadius: 4, padding: '4px 8px' }}>
                         {event.message}
                       </p>
                     )}
                     {snapItems && snapItems.length > 0 && (
-                      <div className="mt-[6px] mx-0 mb-0 text-[11px] text-text-secondary bg-surface-muted rounded-[4px] py-[6px] px-[10px] border-l-[3px] border-l-text-faint">
-                        <div className="font-semibold mb-1 text-text-muted">รายการสินค้า ณ เวลาที่เสนอราคา</div>
+                      <div style={{ margin: '6px 0 0', fontSize: 11, color: '#475569', background: '#f8fafc', borderRadius: 4, padding: '6px 10px', borderLeft: '3px solid #94a3b8' }}>
+                        <div style={{ fontWeight: 600, marginBottom: 4, color: '#64748b' }}>รายการสินค้า ณ เวลาที่เสนอราคา</div>
                         {snapItems.map((it, i) => (
-                          <div key={i} className="pb-[2px]">
+                          <div key={i} style={{ paddingBottom: 2 }}>
                             {it.brand} {it.model} — {it.qty} ชิ้น
                             {it.rawPrice != null && (
-                              <span className="text-text-faint ml-1">
+                              <span style={{ color: '#94a3b8', marginLeft: 4 }}>
                                 @ {it.rawPrice} {it.rawCurrency}/{it.rawUnit}
                               </span>
                             )}
@@ -1357,7 +1366,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                         ))}
                       </div>
                     )}
-                    <small className="text-text-faint text-[11px]">{formatThaiDate(event.createdAt)}</small>
+                    <small style={{ color: '#94a3b8', fontSize: 11 }}>{formatThaiDate(event.createdAt)}</small>
                   </div>
                 </div>
               );
@@ -1365,15 +1374,16 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           </div>
 
           {can.comment && (
-            <div className="py-3 px-[18px] border-t border-border flex flex-col gap-2">
+            <div style={{ padding: '12px 18px', borderTop: '1px solid #e6eaf0', display: 'flex', flexDirection: 'column', gap: 8 }}>
               <textarea
                 rows={2}
                 value={commentText}
                 onChange={(e) => setCommentText(e.target.value)}
                 placeholder="เพิ่มความคิดเห็น..."
-                className="resize-y"
+                style={{ resize: 'vertical' }}
               />
-              <button type="button" className="secondary-button self-end" onClick={handleComment} disabled={actionLoading || !commentText.trim()}>
+              <button type="button" className="secondary-button" onClick={handleComment} disabled={actionLoading || !commentText.trim()}
+                style={{ alignSelf: 'flex-end' }}>
                 ส่งความคิดเห็น
               </button>
             </div>

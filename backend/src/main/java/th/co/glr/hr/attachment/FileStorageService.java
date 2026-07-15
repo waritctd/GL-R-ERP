@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
@@ -34,6 +35,9 @@ public class FileStorageService {
         String mime = file.getContentType();
         if (mime == null || mime.isBlank()) {
             mime = URLConnection.guessContentTypeFromName(originalName);
+        }
+        if (mime != null) {
+            mime = mime.toLowerCase(Locale.ROOT);
         }
         if (allowedMimeTypes != null && !allowedMimeTypes.isEmpty() && !allowedMimeTypes.contains(mime)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "รองรับเฉพาะไฟล์ PDF, JPG หรือ PNG");

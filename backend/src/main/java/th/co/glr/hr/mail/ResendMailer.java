@@ -2,8 +2,10 @@ package th.co.glr.hr.mail;
 
 import com.resend.Resend;
 import com.resend.core.exception.ResendException;
+import com.resend.services.emails.model.Attachment;
 import com.resend.services.emails.model.CreateEmailOptions;
 import com.resend.services.emails.model.CreateEmailResponse;
+import java.util.Base64;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -62,7 +64,28 @@ public class ResendMailer implements Mailer {
             .subject(subject)
             .text(body)
             .build();
+        sendWithRetry(request, to);
+    }
 
+    @Override
+    public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {
+        Attachment attachment = Attachment.builder()
+            .fileName(filename)
+            .content(Base64.getEncoder().encodeToString(bytes))
+            .contentType("application/pdf")
+            .build();
+
+        CreateEmailOptions request = CreateEmailOptions.builder()
+            .from(fromAddress)
+            .to(to)
+            .subject(subject)
+            .text(body)
+            .attachments(attachment)
+            .build();
+        sendWithRetry(request, to);
+    }
+
+    private void sendWithRetry(CreateEmailOptions request, String to) {
         ResendException lastFailure = null;
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             try {

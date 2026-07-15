@@ -7,7 +7,7 @@ import { PageStack, RowActions } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
 
-export function ProfileRequestsPage({ profileRequests, onReview, reviewing = false }) {
+export function ProfileRequestsPage({ profileRequests, onReview }) {
   const pendingCount = profileRequests.filter((request) => request.status === 'pending').length;
 
   return (
@@ -46,14 +46,13 @@ export function ProfileRequestsPage({ profileRequests, onReview, reviewing = fal
                     type="button"
                     variant="danger"
                     className="w-9 p-0"
-                    disabled={reviewing}
                     onClick={() => onReview(request.id, 'rejected')}
                     title="ปฏิเสธ"
                     aria-label="ปฏิเสธ"
                   >
                     <Icon name="close" />
                   </Button>
-                  <Button type="button" variant="success" disabled={reviewing} onClick={() => onReview(request.id, 'approved')}>
+                  <Button type="button" variant="success" onClick={() => onReview(request.id, 'approved')}>
                     <Icon name="check" />
                     อนุมัติ
                   </Button>

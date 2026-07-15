@@ -2,6 +2,7 @@ package th.co.glr.hr.notification;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.AdditionalMatchers.aryEq;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -33,6 +34,9 @@ class NotificationServiceTest {
 
     @jakarta.annotation.Resource
     private Mailer mailer;
+
+    @jakarta.annotation.Resource
+    private NotificationEmailService emailService;
 
     @Test
     void notifyWritesInAppRowAndAttemptsEmailSynchronouslyInTest() {
@@ -111,6 +115,23 @@ class NotificationServiceTest {
         service.notifyByRole("unknown-role", "SUBMITTED", "t", "b", "/l", true);
 
         org.mockito.Mockito.verifyNoInteractions(mailer);
+    }
+
+    @Test
+    void sendWithAttachmentDelegatesToConfiguredMailer() {
+        emailService.sendWithAttachment(
+            "employee@glr.co.th",
+            "Payslip",
+            "Attached",
+            "payslip.pdf",
+            "%PDF".getBytes());
+
+        verify(mailer).sendWithAttachment(
+            eq("employee@glr.co.th"),
+            eq("Payslip"),
+            eq("Attached"),
+            eq("payslip.pdf"),
+            aryEq("%PDF".getBytes()));
     }
 
     @Test

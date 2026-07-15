@@ -1,4 +1,4 @@
-import { forwardRef } from 'react';
+import React, { forwardRef } from 'react';
 import { cva } from 'class-variance-authority';
 import { cn } from '../../utils/cn.js';
 
@@ -14,7 +14,6 @@ const buttonVariants = cva(
     'border-transparent',
     '!font-bold',
     'min-h-[38px]',
-    'pointer-coarse:min-h-[44px]',
     'py-0',
   ],
   {
@@ -36,7 +35,7 @@ const buttonVariants = cva(
       {
         variant: 'icon',
         size: 'sm',
-        className: 'w-9 min-h-[36px] p-0 pointer-coarse:w-11',
+        className: 'w-9 min-h-[36px] p-0',
       },
       {
         variant: 'text',

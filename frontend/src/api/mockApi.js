@@ -1,3 +1,4 @@
+import * as XLSX from 'xlsx';
 import { createDemoDatabase } from '../data/demoData.js';
 
 const db = createDemoDatabase();
@@ -204,13 +205,46 @@ const mockCatalog = [
   { id: 14, brand: 'Panaria',  collection: 'Frame',             color: 'Ash',         surface: 'Naturale',     size: '80x80 cm',   factory: 'Panaria SpA',       sqmPerPiece: 0.64 },
 ];
 
+const mockPriceImportFactories = [
+  { factoryId: 1, name: 'Panaria SpA',    country: 'Italy',   numberFormat: 'eu' },
+  { factoryId: 2, name: 'REFIN',          country: 'Italy',   numberFormat: 'eu' },
+  { factoryId: 3, name: 'Equipe',         country: 'Spain',   numberFormat: 'eu' },
+  { factoryId: 4, name: 'Vives',          country: 'Spain',   numberFormat: 'eu' },
+  { factoryId: 5, name: 'Bode',           country: 'Germany', numberFormat: 'us' },
+  { factoryId: 6, name: 'CDE',            country: 'Italy',   numberFormat: 'eu' },
+  { factoryId: 7, name: 'Padana Marmi',   country: 'Italy',   numberFormat: 'eu' },
+  { factoryId: 8, name: 'LEA',            country: 'Italy',   numberFormat: 'eu' },
+  { factoryId: 9, name: 'CITY Ceramica',  country: 'Italy',   numberFormat: 'eu' },
+];
+
+let mockProductPriceSeq = 100;
+const mockProductPrices = [
+  { priceId: 1, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-T600-IVO', grade: null,  collection: 'Trilogy',      productName: 'Ivory Lappato',    color: 'Ivory',   surface: 'Lappato',   sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+  { priceId: 2, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-T600-GRY', grade: null,  collection: 'Trilogy',      productName: 'Grigio Naturale',  color: 'Grigio',  surface: 'Naturale',  sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+  { priceId: 3, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-F800-ASH', grade: null,  collection: 'Frame',        productName: 'Ash',              color: 'Ash',     surface: 'Naturale',  sizeRaw: '80x80',  price: 38.50, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.64 },
+  { priceId: 4, factoryId: 2, factoryName: 'REFIN',        productCode: null,           grade: null,  collection: 'Terraço',      productName: 'L-Trim',           color: null,      surface: null,        sizeRaw: '10x60',  price: 38.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: null },
+  { priceId: 5, factoryId: 2, factoryName: 'REFIN',        productCode: null,           grade: null,  collection: 'Terraço',      productName: 'Corner',           color: null,      surface: null,        sizeRaw: '10x10',  price: 55.00, currency: 'EUR', priceUnit: 'per_piece', sqmPerPiece: null },
+  { priceId: 6, factoryId: 2, factoryName: 'REFIN',        productCode: 'RF-BAL-6060',  grade: null,  collection: 'Balneo',       productName: 'Floor Tile',       color: 'White',   surface: 'Lappato',   sizeRaw: '60x60',  price: 42.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  { priceId: 7, factoryId: 3, factoryName: 'Equipe',       productCode: 'EQ-001',       grade: null,  collection: 'Stromboli',    productName: '1.2X20 Jolly Ash', color: 'Ash',     surface: 'Mate',      sizeRaw: '1.2x20', price: 25.50, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: null },
+  { priceId: 8, factoryId: 4, factoryName: 'Vives',        productCode: 'VV-001',       grade: null,  collection: 'Masia',        productName: 'Tile A',           color: 'Beige',   surface: 'Mate',      sizeRaw: "15'8X31'6", price: 5.50, currency: 'EUR', priceUnit: 'per_piece', sqmPerPiece: 0.05 },
+  { priceId: 9, factoryId: 5, factoryName: 'Bode',         productCode: 'BVLE10426KGA', grade: null,  collection: 'Limestone',    productName: null,               color: null,      surface: 'Honed',     sizeRaw: '600x600',price: 23.50, currency: 'USD', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  { priceId: 10,factoryId: 7, factoryName: 'Padana Marmi', productCode: '0400012',      grade: 'A01', collection: 'Stone',        productName: null,               color: 'Beige',   surface: 'Lucidato',  sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+  { priceId: 11,factoryId: 7, factoryName: 'Padana Marmi', productCode: '0400012',      grade: 'A02', collection: 'Stone',        productName: null,               color: 'Beige',   surface: 'Lucidato',  sizeRaw: '60x120', price: 21.50, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+];
+
+const mockPriceImportVersions = [
+  { versionId: 1, factoryId: 1, label: 'Price List 2026 Q1', status: 'ACTIVE',   createdAt: '2026-01-10T09:00:00Z', uploadedByName: 'Admin' },
+  { versionId: 2, factoryId: 2, label: 'REFIN 2026',         status: 'ACTIVE',   createdAt: '2026-02-01T11:00:00Z', uploadedByName: 'Admin' },
+  { versionId: 3, factoryId: 5, label: 'Bode USD 2026',      status: 'ARCHIVED', createdAt: '2025-12-01T08:00:00Z', uploadedByName: 'Admin' },
+];
+
 const mockNoteTemplates = [
   { id: 1, text: 'ราคารวมค่าขนส่งถึงชั้น 1 ของหน่วยงานในเขต กทม. แต่ไม่รวมค่าตัด/ติดตั้ง', defaultSelected: true, sortOrder: 1 },
   { id: 2, text: 'จ่ายเช็คในนาม บจก. จี แอล แอนด์ อาร์ฯ / โอนเข้า กสิกรไทย 003-1-15914-8 (กระแสรายวัน สาขาสุขุมวิท 33)', defaultSelected: true, sortOrder: 2 },
   { id: 3, text: 'กรณีโอนเงินส่ง Pay-in มาที่ e-mail : info@glr.co.th', defaultSelected: true, sortOrder: 3 },
 ];
 
-const mockDepositNotices = []; // { id, ticketId, docType, version, docNumber, status, customerName, ... items:[], notes:[] }
+const mockDepositNotices = []; // used by both depositNotices and documents API groups
 let mockDocSeq = 1;
 let mockDocNumberSeq = 1;
 
@@ -307,36 +341,64 @@ function mockItemDesc(it) {
   return [it.brand, it.model, it.color, it.texture, it.size].filter(Boolean).join(' ');
 }
 
-// Demo-mode placeholder blob. The real xlsx is rendered server-side by Apache POI
-// (QuotationRenderer/RemainingInvoiceRenderer/DepositNoticeRenderer) and streamed to the
-// client; mock mode only needs to return a valid Blob so download callers stay happy without
-// pulling in the SheetJS (`xlsx`) dependency, which carries an unpatched high-severity advisory.
-function mockDocPlaceholderBlob(lines) {
-  const body = ['⚠ Demo Mode — ไฟล์จริงสร้างจาก template บน server (Apache POI)', '', ...lines].join('\n');
-  return new Blob([body], { type: 'text/plain;charset=utf-8' });
+// Set a cell value, preserving template styles. Clears formula so value is used as-is.
+function mockSetCell(ws, r, c, v) {
+  const addr = XLSX.utils.encode_cell({ r, c });
+  const existing = ws[addr] || {};
+  // Spread existing (keeps style object 's'), override value/type, clear formula+cache
+  ws[addr] = { ...existing, v, t: typeof v === 'number' ? 'n' : 's', f: undefined, w: undefined };
 }
 
-// ── Quotation XLSX (demo placeholder) — real file from QuotationRenderer.java ───
+async function loadXlsxTemplate(publicPath) {
+  const res = await fetch(publicPath);
+  if (!res.ok) throw new Error(`Template not found: ${publicPath}`);
+  const buf = await res.arrayBuffer();
+  return XLSX.read(new Uint8Array(buf), { type: 'array', cellStyles: true });
+}
+
+function xlsxBlob(wb) {
+  const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+  return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+// ── Quotation XLSX — mirrors QuotationRenderer.java exactly ─────────────────
 async function buildMockQuotationXlsx(ticketId, quotationId) {
   const ticket = findTicketRaw(Number(ticketId));
   const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
   if (!quotation) fail('Quotation not found', 404);
 
+  const wb = await loadXlsxTemplate('/templates/quotation_template.xlsx');
+  const ws = wb.Sheets['Update'] || wb.Sheets[wb.SheetNames[0]];
+
   const issueDate = quotation.issuedAt ? new Date(quotation.issuedAt) : new Date();
+
+  // Header cells (row/col 0-based — same indices as QuotationRenderer.java)
+  mockSetCell(ws, 3, 1, mockThaiDate(issueDate));      // B4 = วันที่
+  mockSetCell(ws, 3, 8, quotation.number ?? '');        // I4 = เลขที่
+  mockSetCell(ws, 4, 1, ticket.customerName ?? '');     // B5 = ลูกค้า
+  if (ticket.projectName) {
+    mockSetCell(ws, 7, 1, 'Project : ' + ticket.projectName); // B8 = project
+  }
+
+  // Item rows: ITEM_START_ROW = 7 (0-based), cols A–E
   const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
-  const lines = [
-    `ใบเสนอราคา  เลขที่ ${quotation.number ?? ''}`,
-    `วันที่: ${mockThaiDate(issueDate)}`,
-    `ลูกค้า: ${ticket.customerName ?? ''}`,
-    ...(ticket.projectName ? [`Project: ${ticket.projectName}`] : []),
-    '',
-    ...priceItems.map((it, i) => {
-      const qty = Number(it.qty) || 0;
-      const price = Number(it.approvedPrice) || 0;
-      return `${i + 1}. ${mockItemDesc(it)} — ${qty} ${it.rawUnit ?? 'แผ่น'} × ${price}`;
-    }),
-  ];
-  return mockDocPlaceholderBlob(lines);
+  let subtotal = 0;
+  priceItems.forEach((it, i) => {
+    const qty   = Number(it.qty) || 0;
+    const price = Number(it.approvedPrice) || 0;
+    subtotal += qty * price;
+    const r = 7 + i;
+    mockSetCell(ws, r, 0, i + 1);              // A = ลำดับ
+    mockSetCell(ws, r, 1, mockItemDesc(it));   // B = รายละเอียด
+    mockSetCell(ws, r, 2, qty);               // C = จำนวน
+    mockSetCell(ws, r, 3, it.rawUnit ?? 'แผ่น'); // D = หน่วย
+    mockSetCell(ws, r, 4, price);             // E = ราคา/หน่วย
+    // H/I formula cols untouched — Excel recalculates on open
+  });
+
+  mockSetCell(ws, 37, 8, subtotal);  // I38 = รวม (I39/I40 are formula → auto)
+
+  return xlsxBlob(wb);
 }
 
 // ── Quotation HTML preview — shown when "PDF" is clicked in demo mode ────────
@@ -369,30 +431,49 @@ td{border:1px solid #e2e8f0;padding:8px 10px;font-size:13px}
   return new Blob([html], { type: 'text/html;charset=utf-8' });
 }
 
-// ── Remaining invoice XLSX (demo placeholder) — real file from RemainingInvoiceRenderer.java ─
+// ── Remaining invoice XLSX — mirrors RemainingInvoiceRenderer.java exactly ───
 async function buildMockRemainingInvoiceXlsx(ticketId) {
   const ticket = findTicketRaw(Number(ticketId));
   if (!ticket) fail('Ticket not found', 404);
 
+  const wb = await loadXlsxTemplate('/templates/remaining_invoice_template.xlsx');
+  const ws = wb.Sheets['Update'] || wb.Sheets[wb.SheetNames[0]];
+
   const today = new Date();
   const thaiYear2 = String(today.getFullYear() + 543).slice(-2);
   const docNumber = `GLR${thaiYear2}${String(ticketId).padStart(3, '0')}`;
+
+  // Header block (same indices as RemainingInvoiceRenderer.java)
+  mockSetCell(ws, 6, 7, mockThaiDate(today));       // H7 = วันที่
+  mockSetCell(ws, 6, 1, ticket.customerName ?? ''); // B7 = ลูกค้า
+  mockSetCell(ws, 7, 7, docNumber);                 // H8 = เลขที่
+  // B8 = ที่อยู่ (not in demo data — leave template default)
+  // H9 = อ้างอิง — try to pull from first quotation
   const firstQ = (ticket.quotations ?? [])[0];
+  if (firstQ) mockSetCell(ws, 8, 7, firstQ.number); // H9 = อ้างอิง QN
+  if (ticket.projectName) {
+    mockSetCell(ws, 10, 1, 'Project : ' + ticket.projectName); // B11
+  }
+
+  // Item rows: ITEM_START_ROW = 12 (0-based), cols A–E
   const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
-  const lines = [
-    `ใบแจ้งหนี้ส่วนที่เหลือ  เลขที่ ${docNumber}`,
-    `วันที่: ${mockThaiDate(today)}`,
-    `ลูกค้า: ${ticket.customerName ?? ''}`,
-    ...(firstQ ? [`อ้างอิง: ${firstQ.number}`] : []),
-    ...(ticket.projectName ? [`Project: ${ticket.projectName}`] : []),
-    '',
-    ...priceItems.map((it, i) => {
-      const qty = Number(it.qty) || 0;
-      return `${i + 1}. ${mockItemDesc(it)} — ${qty} ${it.rawUnit ?? 'แผ่น'} × ${Number(it.approvedPrice) || 0}`;
-    }),
-    `หัก  มัดจำ${firstQ ? '  ' + firstQ.number : ''}`,
-  ];
-  return mockDocPlaceholderBlob(lines);
+  priceItems.forEach((it, i) => {
+    const r = 12 + i;
+    const qty = Number(it.qty) || 0;
+    mockSetCell(ws, r, 0, i + 1);
+    mockSetCell(ws, r, 1, mockItemDesc(it));
+    mockSetCell(ws, r, 2, qty);
+    mockSetCell(ws, r, 3, it.rawUnit ?? 'แผ่น');
+    mockSetCell(ws, r, 4, Number(it.approvedPrice) || 0);
+  });
+
+  // Deposit deduction row (deposit amount not stored in demo data — use 0 placeholder)
+  const depositRow = 12 + priceItems.length;
+  mockSetCell(ws, depositRow, 1, 'หัก  มัดจำ' + (firstQ ? '  ' + firstQ.number : ''));
+  mockSetCell(ws, depositRow, 2, -1);
+  mockSetCell(ws, depositRow, 4, 0); // real app fills deposit amount here
+
+  return xlsxBlob(wb);
 }
 
 function pushEvent(ticket, actor, kind, fromStatus, toStatus, message, itemSnapshot = null) {
@@ -1937,6 +2018,61 @@ export const api = {
     },
   },
 
+  // No seeded payroll-period data yet — `current` returns an empty period so
+  // PayrollPage degrades to its built-in empty state; the mutating actions
+  // (preview/process/bankExport) are explicit user-triggered calculations that
+  // would require reproducing real payroll/tax logic to fake convincingly, so
+  // they surface a clear "not supported in mock mode" error instead of
+  // fabricating financial figures (real backend implementation is in hrApi.js).
+  payroll: {
+    async current() {
+      requireSession();
+      return delay({ period: null });
+    },
+    async preview() {
+      requireSession();
+      throw new Error('คำนวณเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async process() {
+      requireSession();
+      throw new Error('ประมวลผลเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async bankExport() {
+      requireSession();
+      throw new Error('ดาวน์โหลดไฟล์โอนเงินไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async downloadPayslip() {
+      requireSession();
+      throw new Error('ดาวน์โหลดสลิปเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async downloadOwnPayslip() {
+      requireSession();
+      throw new Error('ดาวน์โหลดสลิปเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async distributePayslips() {
+      requireSession();
+      throw new Error('ส่งอีเมลสลิปเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+  },
+
+  // No seeded punch/device data yet — these return empty results so HR-core
+  // pages degrade to their built-in empty state instead of crashing on the
+  // missing namespace (real backend implementation is in hrApi.js).
+  attendance: {
+    async list() {
+      requireSession();
+      return delay({ punches: [] });
+    },
+    async devices() {
+      requireSession();
+      return delay({ devices: [] });
+    },
+    async importDat() {
+      requireSession();
+      throw new Error('นำเข้าข้อมูลจากเครื่องสแกนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+  },
+
   dashboard: {
     async summary() {
       const user = requireSession();
@@ -1953,6 +2089,7 @@ export const api = {
           headcount: dashboardHeadcount(user),
           pendingApprovals,
           attendance: dashboardAttendance(user),
+          latestPayrollPeriodId: null,
           tickets,
           notifications,
           totalOpen: tickets.totalOpen,
@@ -1998,6 +2135,24 @@ export const api = {
             (c.factory ?? '').toLowerCase().includes(lower))
         : mockCatalog.slice(0, 30);
       return delay({ items: results });
+    },
+    async prices(q, factoryId) {
+      requireSession();
+      const lower = (q ?? '').toLowerCase();
+      const fid = factoryId ? Number(factoryId) : null;
+      let results = mockProductPrices.filter((p) => {
+        if (fid && p.factoryId !== fid) return false;
+        if (!lower) return true;
+        return (
+          (p.productCode   ?? '').toLowerCase().includes(lower) ||
+          (p.collection    ?? '').toLowerCase().includes(lower) ||
+          (p.productName   ?? '').toLowerCase().includes(lower) ||
+          (p.color         ?? '').toLowerCase().includes(lower) ||
+          (p.surface       ?? '').toLowerCase().includes(lower) ||
+          (p.factoryName   ?? '').toLowerCase().includes(lower)
+        );
+      });
+      return delay({ items: results.slice(0, 50) });
     },
   },
 
@@ -2048,7 +2203,6 @@ export const api = {
     },
     async update(payload) {
       hasRole('ceo', 'admin');
-      // mark old current as not current
       mockPriceCalcConfigs
         .filter((c) => c.country === payload.country && c.isCurrent)
         .forEach((c) => { c.isCurrent = false; });
@@ -2244,27 +2398,47 @@ export const api = {
       if (!rawDoc) fail('Deposit notice not found', 404);
       const doc = buildMockDoc(rawDoc);
 
-      // Demo placeholder — real xlsx from DepositNoticeRenderer.java (server, Apache POI)
-      const items = (doc.items ?? []).map((it, i) => {
+      const wb = await loadXlsxTemplate('/templates/deposit_notice_template.xlsx');
+      const ws = wb.Sheets['Update'] || wb.Sheets[wb.SheetNames[0]];
+
+      // Customer block (same indices as DepositNoticeRenderer.java)
+      mockSetCell(ws, 6, 0, 'เรียน ' + (doc.customerName ?? '')); // A7
+      mockSetCell(ws, 6, 7, mockThaiDate(doc.issueDate ? new Date(doc.issueDate) : new Date())); // H7
+      mockSetCell(ws, 7, 0, doc.customerAddress ?? '');            // A8
+      mockSetCell(ws, 7, 7, doc.docNumber ?? 'DRAFT');             // H8
+      if (doc.reference) mockSetCell(ws, 8, 7, doc.reference);    // H9
+      mockSetCell(ws, 10, 1, doc.projectName ?? '');               // B11
+
+      // Item rows (row 12 = 0-based)
+      (doc.items ?? []).forEach((it, i) => {
+        const r = 12 + i;
         const net = Number(it.netUnitPrice ?? it.unitPrice) || 0;
         const qty = Number(it.qty) || 0;
-        return `${i + 1}. ${it.description ?? ''} — ${qty} ${it.unit ?? 'แผ่น'} × ${Number(it.unitPrice) || 0} = ${net * qty}`;
+        mockSetCell(ws, r, 0, i + 1);
+        mockSetCell(ws, r, 1, it.description ?? '');
+        mockSetCell(ws, r, 2, qty);
+        mockSetCell(ws, r, 3, it.unit ?? 'แผ่น');
+        mockSetCell(ws, r, 4, Number(it.unitPrice) || 0);
+        mockSetCell(ws, r, 5, it.discountLabel ?? '');
+        mockSetCell(ws, r, 6, net);
+        mockSetCell(ws, r, 8, net * qty);
       });
-      const lines = [
-        `ใบแจ้งยอดมัดจำ  เลขที่ ${doc.docNumber ?? 'DRAFT'}`,
-        `วันที่: ${mockThaiDate(doc.issueDate ? new Date(doc.issueDate) : new Date())}`,
-        `เรียน ${doc.customerName ?? ''}`,
-        ...(doc.reference ? [`อ้างอิง: ${doc.reference}`] : []),
-        ...(doc.projectName ? [`Project: ${doc.projectName}`] : []),
-        '',
-        ...items,
-        '',
-        `ยอดก่อนภาษี: ${doc.subtotal ?? 0}`,
-        `มัดจำ ${((doc.depositPercent ?? 0.5) * 100)}%: ${doc.depositAmount ?? 0}`,
-        `ภาษี 7%: ${doc.vatAmount ?? 0}`,
-        `ยอดชำระ: ${doc.totalPayable ?? 0}`,
-      ];
-      return mockDocPlaceholderBlob(lines);
+
+      // Summary block (rows 43-46 = I44-I47 in 1-based)
+      mockSetCell(ws, 43, 8, doc.subtotal ?? 0);
+      mockSetCell(ws, 44, 7, (doc.depositPercent ?? 0.5) * 100);
+      mockSetCell(ws, 44, 8, doc.depositAmount ?? 0);
+      mockSetCell(ws, 45, 7, 7);
+      mockSetCell(ws, 45, 8, doc.vatAmount ?? 0);
+      mockSetCell(ws, 46, 8, doc.totalPayable ?? 0);
+
+      // Notes (rows 36-42, col 1)
+      (doc.notes ?? []).slice(0, 7).forEach((note, i) => {
+        mockSetCell(ws, 36 + i, 1, `${i + 1}. ${note}`);
+      });
+      mockSetCell(ws, 47, 1, 'จินตนา หาญมนตรี'); // preparer
+
+      return xlsxBlob(wb);
     },
 
     async downloadPdf(docId) {
@@ -2273,6 +2447,75 @@ export const api = {
       if (!rawDoc) fail('Deposit notice not found', 404);
       const html = mockPreviewHtml(buildMockDoc(rawDoc));
       return new Blob([html], { type: 'text/html;charset=utf-8' });
+    },
+  },
+
+  priceImport: {
+    async factories() {
+      requireSession();
+      return delay(mockPriceImportFactories);
+    },
+    async versions(factoryId) {
+      requireSession();
+      const fid = Number(factoryId);
+      return delay(mockPriceImportVersions.filter((v) => v.factoryId === fid));
+    },
+    async upload(factoryId, file, label) {
+      requireSession();
+      const fid = Number(factoryId);
+      const versionId = mockProductPriceSeq++;
+      mockPriceImportVersions.push({
+        versionId, factoryId: fid,
+        label: label || file?.name || `Version ${versionId}`,
+        status: 'DRAFT',
+        createdAt: new Date().toISOString(),
+        uploadedByName: 'Admin',
+      });
+      return delay({
+        versionId,
+        parsedRows: 12,
+        stagedRows: 12,
+        parseErrors: [],
+      });
+    },
+    async validate(versionId) {
+      requireSession();
+      return delay({ status: 'validated', versionId: Number(versionId) });
+    },
+    async staging(versionId) {
+      requireSession();
+      return delay({
+        versionId: Number(versionId),
+        totalRows: 12,
+        errorRows: 0,
+        newRows: 10,
+        changedRows: 2,
+        removedRows: 1,
+        unchangedRows: 0,
+      });
+    },
+    async commit(versionId) {
+      requireSession();
+      const vid = Number(versionId);
+      const ver = mockPriceImportVersions.find((v) => v.versionId === vid);
+      if (ver) {
+        const fid = ver.factoryId;
+        mockPriceImportVersions
+          .filter((v) => v.factoryId === fid && v.status === 'ACTIVE')
+          .forEach((v) => { v.status = 'ARCHIVED'; });
+        ver.status = 'ACTIVE';
+      }
+      return delay({ versionId: vid, inserted: 10, updated: 2, archived: 1 });
+    },
+    async getProfile(factoryId) {
+      requireSession();
+      void factoryId;
+      return delay(JSON.stringify({ number_format: 'eu', sheets: [{ name: 'Sheet1', header_row: 1 }], columns: {} }));
+    },
+    async updateProfile(factoryId, json) {
+      requireSession();
+      void json;
+      return delay({ status: 'updated', factoryId: Number(factoryId) });
     },
   },
 

@@ -40,8 +40,9 @@ import th.co.glr.hr.common.ApiExceptionHandler;
  */
 class PayrollControllerTest {
     private final PayrollService payrollService = mock(PayrollService.class);
+    private final PayslipDistributionService payslipDistributionService = mock(PayslipDistributionService.class);
     private final MockMvc mvc = MockMvcBuilders
-        .standaloneSetup(new PayrollController(payrollService, new SessionContext()))
+        .standaloneSetup(new PayrollController(payrollService, payslipDistributionService, new SessionContext()))
         .setControllerAdvice(new ApiExceptionHandler())
         .setValidator(validator())
         .build();
@@ -156,6 +157,57 @@ class PayrollControllerTest {
             .andExpect(content().string("GLR_PAYROLL|2026-07-01|0|0\n"));
 
         verify(payrollService).bankExport(org.mockito.ArgumentMatchers.eq(7L), any(UserPrincipal.class));
+    }
+
+    @Test
+    void payslipPdfSetsAttachmentDispositionAndPdfContentType() throws Exception {
+        when(payrollService.payslipPdf(org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.eq(55L), any(UserPrincipal.class)))
+            .thenReturn("%PDF-test".getBytes());
+
+        mvc.perform(get("/api/payroll/7/lines/55/payslip.pdf").session(sessionFor("hr")))
+            .andExpect(status().isOk())
+            .andExpect(content().contentType(MediaType.APPLICATION_PDF))
+            .andExpect(header().string("Content-Disposition",
+                org.hamcrest.Matchers.allOf(
+                    org.hamcrest.Matchers.containsString("attachment"),
+                    org.hamcrest.Matchers.containsString("glr-payslip-7-55.pdf"))))
+            .andExpect(content().bytes("%PDF-test".getBytes()));
+
+        verify(payrollService).payslipPdf(org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.eq(55L), any(UserPrincipal.class));
+    }
+
+    @Test
+    void ownPayslipPdfDelegatesUsingSessionUserOnly() throws Exception {
+        when(payrollService.ownPayslipPdf(org.mockito.ArgumentMatchers.eq(7L), any(UserPrincipal.class)))
+            .thenReturn("%PDF-own".getBytes());
+
+        mvc.perform(get("/api/payroll/7/payslip/me").session(sessionFor("employee")))
+            .andExpect(status().isOk())
+            .andExpect(content().contentType(MediaType.APPLICATION_PDF))
+            .andExpect(header().string("Content-Disposition",
+                org.hamcrest.Matchers.allOf(
+                    org.hamcrest.Matchers.containsString("attachment"),
+                    org.hamcrest.Matchers.containsString("glr-my-payslip-7.pdf"))))
+            .andExpect(content().bytes("%PDF-own".getBytes()));
+
+        verify(payrollService).ownPayslipPdf(org.mockito.ArgumentMatchers.eq(7L), any(UserPrincipal.class));
+    }
+
+    @Test
+    void distributePayslipsReturnsAcceptedAndStartsAsyncSend() throws Exception {
+        PayslipDistributionResponse response = new PayslipDistributionResponse(7L, 3, 1, 2);
+        when(payslipDistributionService.queueDistribution(org.mockito.ArgumentMatchers.eq(7L), any(UserPrincipal.class)))
+            .thenReturn(response);
+
+        mvc.perform(post("/api/payroll/7/distribute").session(sessionFor("hr")))
+            .andExpect(status().isAccepted())
+            .andExpect(jsonPath("$.periodId").value(7))
+            .andExpect(jsonPath("$.totalLines").value(3))
+            .andExpect(jsonPath("$.alreadySent").value(1))
+            .andExpect(jsonPath("$.queued").value(2));
+
+        verify(payslipDistributionService).queueDistribution(org.mockito.ArgumentMatchers.eq(7L), any(UserPrincipal.class));
+        verify(payslipDistributionService).sendPayslips(org.mockito.ArgumentMatchers.eq(7L), any(UserPrincipal.class));
     }
 
     private static LocalDate eqMonth(LocalDate expected) {

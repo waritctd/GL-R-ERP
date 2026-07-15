@@ -4,6 +4,8 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -180,6 +182,25 @@ public class DashboardRepository {
                 rs.getLong("total")
             ));
         return summary == null ? NotificationSummaryDto.empty() : summary;
+    }
+
+    public Optional<Long> latestPayrollPeriodId(long employeeId) {
+        try {
+            Long periodId = jdbc.queryForObject("""
+                SELECT pp.period_id
+                  FROM hr.payroll_period pp
+                  JOIN hr.payroll_line pl ON pl.period_id = pp.period_id
+                 WHERE pl.employee_id = :employeeId
+                   AND pp.status <> 'VOID'
+                 ORDER BY pp.payroll_month DESC, pp.processed_at DESC NULLS LAST, pp.period_id DESC
+                 LIMIT 1
+                """,
+                Map.of("employeeId", employeeId),
+                Long.class);
+            return Optional.ofNullable(periodId);
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
     }
 
     private AttendanceSummaryDto broadAttendance(DashboardQueryScope scope, LocalDate today, LocalDate monthStart) {
