@@ -85,42 +85,85 @@ cd backend && ./mvnw -B clean verify                      # 380 tests, 0 failure
   `application.yml`. The test's three-schema list was drift, not intent.
 
 ## Known Risks
-- **`V903`/`V905` checksums changed.** Any UAT database that already applied them will fail
-  `validate()` on the next deploy (the uat profile does **not** set `validate-on-migrate: false`).
-  `application-uat.yml` claims "The UAT DB already has db/migration-uat V900-V904 applied", but repo
-  memory records the uat branch and its Render/Supabase services as still unpushed/pending, so it is
-  unclear whether a seeded UAT DB actually exists. **This needs a human decision before deploying:**
-  - If no seeded UAT DB exists → nothing to do; a fresh deploy now works (it previously would have
-    crashed at V903).
-  - If one does exist → run `flyway repair` against it to recompute checksums. Note also that such a
-    DB holds two rows with duplicate `doc_number`, so V45's unique index will fail there until V906's
-    UPDATE is applied first; the ordering (V45 < V906) means this likely needs manual intervention.
-    This pre-existing hazard is independent of this branch's changes.
-  - I could not inspect the hosted UAT DB: the `supabase-uat` MCP server is unauthorized in this
-    session.
+
+### The hosted UAT DB exists and needs a checksum repair (verified 2026-07-15)
+Inspected the live `GL&R's UAT` Supabase project (`wuypxdznuhhluwzncafh`, ap-southeast-2) via the
+Supabase MCP. Findings from `hr.flyway_schema_history`:
+
+- **Applied:** V1–V20, V22–V31, V33–V40, plus V900–V906. `V906` ran 2026-07-14.
+- **NOT yet applied:** **V41–V47** — the real migrations from the main→uat merge are still pending.
+  The DB's newest real migration is V40.
+- `sales.customer` / `sales.contact` / `sales.project` are **still in the `sales` schema** (V41 pending).
+- `UAT-TKT-04` deposit notices are already `v1 = QN-2026-00001`, `v2 = QN-2026-00003` — **V906 has
+  already done its repair, so no duplicate `doc_number` exists.**
+
+**Correction to an earlier draft of this handoff / PR #184's body:** the claim that "V45's unique
+index will fail on the seeded DB because of duplicate doc_number" is **wrong**. V906 ran on 2026-07-14,
+*before* V41–V47 arrived on the branch, so the duplicate was cleared while V45 was still unmerged.
+When V45 finally applies it will succeed. This also explains why the prior agent's forward-only V906
+design was reasonable *for the hosted DB* — the UAT DB receives migrations incrementally as branches
+merge, so V906 legitimately ran ahead of V45. It just cannot work for a fresh DB, where numeric order
+puts V45 before V903.
+
+**The only real problem is the two changed checksums.** The uat profile does not set
+`validate-on-migrate: false`, so the next deploy fails `validate()` unless they are repaired:
+
+| Migration | Stored in UAT DB | New (this branch) |
+|---|---|---|
+| `V903__uat_sales.sql` | `-733748901` | `547934313` |
+| `V905__uat_dual_track_sales.sql` | `-1760552940` | `1498275195` |
+| `V906__...doc_number.sql` | `-1911239188` | `-1911239188` (untouched) |
+
+Checksums were computed with a local reimplementation of Flyway's `ChecksumCalculator` (CRC32 over
+each line's UTF-8 bytes, terminators excluded), **validated by reproducing all three of the DB's
+existing stored values exactly** from the pre-change files.
+
+**Data converges — no data fix is needed.** The end state after V41–V47 apply is identical to what the
+corrected V903/V905 produce on a fresh DB: V41 moves the customer rows into `customers`, and V906 has
+already assigned `QN-2026-00003`.
+
+**⚠️ Sequencing matters.** The repair must land **with or after** PR #184's merge, never before: if the
+stored checksums are updated while `origin/uat` still has the old V903/V905, a deploy from that state
+fails `validate()` in the opposite direction.
+
+Repair options (not yet applied — awaiting a decision):
+1. `flyway repair` against the UAT DB (no `flyway-maven-plugin` in `backend/pom.xml`, and the UAT
+   datasource credentials are not available in this worktree, so this needs the Flyway CLI + the
+   Render env vars).
+2. Equivalent direct SQL via the Supabase MCP (this is exactly what repair does for checksum drift):
+   ```sql
+   UPDATE hr.flyway_schema_history SET checksum = 547934313  WHERE version = '903';
+   UPDATE hr.flyway_schema_history SET checksum = 1498275195 WHERE version = '905';
+   ```
+
+### Other
 - The seed now hard-depends on V41/V42/V45 having run. That is guaranteed by the V900+ numbering.
 
 ## Things Not Finished
-- Not committed or pushed (not requested).
-- The hosted-UAT-DB repair question above.
+- **The UAT DB checksum repair is NOT applied** — see Known Risks for the exact SQL and the
+  sequencing constraint (must land with/after PR #184, not before).
 - Consider adding a note to `application-uat.yml` warning that V900+ seeds run after *all* real
   migrations and must track schema moves — this class of bug will recur on the next `sales` table move.
 
 ## Recommended Next Agent
-Claude Opus review — verify the V903/V905 edits against the intent of `V906`'s immutability comment
-and decide the hosted-UAT-DB repair path.
+Claude Opus review of PR #184, then whoever owns the UAT deploy runs the checksum repair.
 
 ### Exact next prompt
-> On branch `fix/uat-flyway-test-schemas` (off `uat`), review the uncommitted diff in
-> `backend/src/test/java/th/co/glr/hr/FlywayMigrationTest.java` and
-> `backend/src/main/resources/db/migration-uat/V903__uat_sales.sql` + `V905__uat_dual_track_sales.sql`,
-> and read `docs/agent-handoffs/47_fix-uat-flyway-test-schemas.md` first.
-> The test fix alone was insufficient: it unmasked two pre-existing fresh-DB failures in the UAT seed
-> caused by main's V41 (customer moved to the `customers` schema) and V45 (unique index on
-> `deposit_notice.doc_number`) running *before* the V900+ seed. The fix edits V903/V905 in place,
-> which contradicts V906's "keep V903 immutable for Flyway checksum validation" comment — confirm
-> that trade-off is right, given no forward-only migration can prevent V903's INSERT from erroring on
-> a fresh DB. Then decide the hosted UAT DB path (`flyway repair` vs. nothing) — check whether a
-> seeded UAT DB actually exists; the `supabase-uat` MCP server needs authorizing to inspect it.
-> `./mvnw -B clean verify` is green (380 tests, 0 errors). Do not commit without confirming the
-> checksum decision.
+> Review PR #184 (`fix/uat-flyway-test-schemas` → `uat`) and read
+> `docs/agent-handoffs/47_fix-uat-flyway-test-schemas.md` first.
+> The reported one-line test fix was necessary but not sufficient: it unmasked two pre-existing
+> fresh-DB failures in the UAT seed, caused by main's V41 (customer moved to the `customers` schema)
+> and V45 (unique index on `deposit_notice.doc_number`) running *before* the V900+ seed. The fix
+> edits V903/V905 in place, which contradicts V906's "keep V903 immutable for Flyway checksum
+> validation" comment — confirm that trade-off is right, given no forward-only migration can prevent
+> V903's INSERT from erroring on a fresh DB. `./mvnw -B clean verify` is green (380 tests, 0 errors).
+>
+> Then, **with or after the merge (never before)**, repair the live UAT DB's checksums — Supabase
+> project `wuypxdznuhhluwzncafh` (`GL&R's UAT`):
+> ```sql
+> UPDATE hr.flyway_schema_history SET checksum = 547934313  WHERE version = '903';
+> UPDATE hr.flyway_schema_history SET checksum = 1498275195 WHERE version = '905';
+> ```
+> No data fix is needed: V906 already assigned `QN-2026-00003`, and the still-pending V41 will move
+> the customer rows into `customers` on the next deploy. Verify afterwards that a uat deploy passes
+> `validate()` and applies V41–V47.
