@@ -26,6 +26,10 @@ spring:
     # Bounded retry so a momentarily-cold DB doesn't hang the migration step.
     connect-retries: 3
     connect-retries-interval: 5
+    # The hosted Render demo DB has lived through several pre-release migration renumberings and
+    # edited historical SQL files. Keep validation enabled elsewhere; this profile is the public
+    # showcase DB and needs forward-only recovery migrations to run despite that history drift.
+    validate-on-migrate: ${APP_FLYWAY_VALIDATE_ON_MIGRATE:false}
     # gl-r-erp.onrender.com is a demo/showcase deploy (not real prod), so it additionally
     # applies db/migration-demo (demo login/seed data + follow-up fixups) on top of the normal
     # migrations. Kept out of the default location so unit/CI/local runs never seed it.
