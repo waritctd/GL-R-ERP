@@ -98,9 +98,15 @@
   -webkit-font-smoothing: antialiased;
 }
 
+html,
+body,
+#root {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
-  min-width: 320px;
   min-height: 100dvh;
   background: var(--color-bg);
 }
@@ -308,6 +314,8 @@ textarea:focus {
 }
 
 .app-shell {
+  width: 100%;
+  max-width: 100%;
   height: 100dvh;
   display: flex;
   overflow: hidden;
@@ -341,6 +349,7 @@ textarea:focus {
 
 .nav-item {
   width: 100%;
+  min-width: 0;
   display: grid;
   grid-template-columns: 22px 1fr auto;
   align-items: center;
@@ -349,9 +358,16 @@ textarea:focus {
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
-  color: var(--color-text-faint);
+  color: var(--color-sidebar-text);
   padding: 8px 10px;
   text-align: left;
+  text-decoration: none;
+}
+
+/* The Thai label leads; the English helper below it stays muted and smaller. */
+.nav-item > span {
+  min-width: 0;
+  font-weight: 600;
 }
 
 .nav-item.active {
@@ -389,6 +405,7 @@ textarea:focus {
 
 .topbar {
   height: 66px;
+  max-width: 100%;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -399,21 +416,32 @@ textarea:focus {
   background: var(--color-surface);
 }
 
+/* Takes the slack between the menu button and the actions, and truncates
+   rather than forcing the header wider than the viewport. */
 .topbar-title {
+  min-width: 0;
+  flex: 1 1 auto;
   display: grid;
   gap: 2px;
 }
 
 .topbar-title span {
+  overflow: hidden;
   font-weight: 800;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .topbar-title small {
+  overflow: hidden;
   color: var(--color-text-muted);
   font-size: var(--text-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .topbar-user {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -429,6 +457,8 @@ textarea:focus {
 }
 
 .content-scroll {
+  min-width: 0;
+  max-width: 100%;
   flex: 1;
   overflow: auto;
   padding: 28px 32px 42px;
@@ -437,6 +467,7 @@ textarea:focus {
 .page-stack {
   display: grid;
   gap: 18px;
+  min-width: 0;
   max-width: 1320px;
 }
 
@@ -1130,9 +1161,14 @@ textarea:focus {
 
 .employee-cell strong,
 .table-row strong,
-.topbar-user strong,
-.sidebar-account strong {
+.topbar-user strong {
   color: var(--color-text);
+}
+
+/* The account row sits on the dark sidebar, not a white surface — the ink
+   colour above would render it near-invisible (~1.1:1) against the navy. */
+.sidebar-account strong {
+  color: var(--color-surface);
 }
 
 .old-value {
@@ -1727,7 +1763,11 @@ a.status-badge {
   }
 }
 
-@media (max-width: 1040px) {
+/* Desktop icon rail: between 721px and 1040px the persistent sidebar collapses
+   to icons only. Below 721px the sidebar is the mobile drawer, which has room
+   for full labels — this rule must not reach it, or the drawer renders as
+   centred, stacked, label-less icons. */
+@media (min-width: 721px) and (max-width: 1040px) {
   .sidebar {
     width: 86px;
     flex-basis: 86px;
@@ -1743,7 +1783,9 @@ a.status-badge {
     grid-template-columns: 1fr;
     justify-items: center;
   }
+}
 
+@media (max-width: 1040px) {
   .stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1797,6 +1839,7 @@ a.status-badge {
   }
 
   .topbar {
+    gap: 10px;
     padding: 0 16px;
   }
 
@@ -1804,8 +1847,18 @@ a.status-badge {
     display: none;
   }
 
+  /* The drawer's account row already shows who is signed in, so the topbar
+     avatar is redundant here and costs ~48px on a 320px-wide header. */
+  .topbar-user .avatar {
+    display: none;
+  }
+
+  .topbar-user {
+    gap: 4px;
+  }
+
   .content-scroll {
-    padding: 20px 16px 32px;
+    padding: 16px 16px 32px;
   }
 
   .page-heading,
@@ -1860,7 +1913,8 @@ a.status-badge {
     inset: 0 auto 0 0;
     z-index: 40;
     display: flex;
-    width: min(300px, calc(100vw - 56px));
+    /* 280px at a 320px viewport, 300px everywhere above it. */
+    width: min(300px, calc(100vw - 40px));
     max-width: 100%;
     flex-basis: auto;
     overflow-y: auto;
@@ -1876,15 +1930,6 @@ a.status-badge {
     transform: translateX(0);
     visibility: visible;
     transition: transform 180ms ease;
-  }
-
-  /* The 1040px icon-rail rule hides these labels for the collapsed desktop
-     sidebar; that rule still matches here too (375px <= 1040px), so undo it
-     inside the full-width drawer where there is room for text. */
-  .brand span:not(.brand-mark),
-  .nav-item span,
-  .sidebar-account span {
-    display: revert;
   }
 
   /* --- HR-core list card fallback (branch 2) ---
@@ -1958,5 +2003,16 @@ a.status-badge {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+  }
+}
+
+/* The drawer slide and its backdrop fade convey open/closed state, so they
+   resolve instantly rather than disappearing — the drawer still opens, it just
+   does not travel. */
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .sidebar.is-mobile-drawer-open,
+  .mobile-drawer-backdrop {
+    transition: none;
   }
 }
