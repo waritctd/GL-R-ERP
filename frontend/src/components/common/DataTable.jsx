@@ -235,28 +235,26 @@ export function DataTable({
       ) : null}
 
       <section className="table-panel" role="table">
-        <div role="rowgroup">
-          <div className={`${gridClassName} table-head${stickyHeader ? ' is-sticky' : ''}`} role="row">
-            {columns.map((column) => (
-              column.sortable ? (
-                <SortHeader
-                  key={column.key}
-                  label={column.header}
-                  active={sortKey === column.key}
-                  dir={sortDir}
-                  onSort={() => handleSort(column.key)}
-                />
-              ) : (
-                <span key={column.key} role="columnheader">
-                  {column.headerNode ?? column.header}
-                </span>
-              )
-            ))}
-          </div>
+        <div className={`${gridClassName} table-head${stickyHeader ? ' is-sticky' : ''}`} role="row">
+          {columns.map((column) => (
+            column.sortable ? (
+              <SortHeader
+                key={column.key}
+                label={column.header}
+                active={sortKey === column.key}
+                dir={sortDir}
+                onSort={() => handleSort(column.key)}
+              />
+            ) : (
+              <span key={column.key} role="columnheader">
+                {column.headerNode ?? column.header}
+              </span>
+            )
+          ))}
         </div>
 
         {loading ? (
-          <div role="rowgroup" aria-busy="true" aria-label="กำลังโหลดข้อมูล">
+          <div aria-busy="true" aria-label="กำลังโหลดข้อมูล">
             {Array.from({ length: skeletonRowCount }, (_, index) => (
               <div className={`${gridClassName} table-row`} role="row" key={index}>
                 {columns.map((column) => (
@@ -273,35 +271,31 @@ export function DataTable({
             title={emptyState?.title ?? 'ไม่พบข้อมูล'}
             description={emptyState?.description}
           />
-        ) : (
-          <div role="rowgroup">
-            {pageRows.map((row) => {
-              const key = getRowKey(row);
-              const extraClassName = rowClassName ? ` ${rowClassName(row)}` : '';
-              const style = rowStyle ? rowStyle(row) : undefined;
-              return (
-                <RowTag
-                  key={key}
-                  type={onRowClick ? 'button' : undefined}
-                  role="row"
-                  className={`${gridClassName} table-row${extraClassName}`}
-                  style={style}
-                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+        ) : pageRows.map((row) => {
+          const key = getRowKey(row);
+          const extraClassName = rowClassName ? ` ${rowClassName(row)}` : '';
+          const style = rowStyle ? rowStyle(row) : undefined;
+          return (
+            <RowTag
+              key={key}
+              type={onRowClick ? 'button' : undefined}
+              role="row"
+              className={`${gridClassName} table-row${extraClassName}`}
+              style={style}
+              onClick={onRowClick ? () => onRowClick(row) : undefined}
+            >
+              {columns.map((column) => (
+                <span
+                  key={column.key}
+                  role="cell"
+                  data-label={typeof column.header === 'string' ? column.header : undefined}
                 >
-                  {columns.map((column) => (
-                    <span
-                      key={column.key}
-                      role="cell"
-                      data-label={typeof column.header === 'string' ? column.header : undefined}
-                    >
-                      {column.render(row)}
-                    </span>
-                  ))}
-                </RowTag>
-              );
-            })}
-          </div>
-        )}
+                  {column.render(row)}
+                </span>
+              ))}
+            </RowTag>
+          );
+        })}
 
         {!loading && sortedRows.length > 0 && (
           <footer className="pagination">

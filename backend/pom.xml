@@ -19,7 +19,6 @@
 
     <properties>
         <java.version>21</java.version>
-        <argLine></argLine>
     </properties>
 
     <dependencies>
@@ -95,6 +94,12 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-mail</artifactId>
         </dependency>
+        <!-- Apache POI — Excel (xlsx) read (import engine) + write (deposit notices) -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.4.0</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -118,12 +123,6 @@
             <artifactId>testcontainers-junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
-        <!-- Apache POI — Excel (xlsx) generation for deposit notices -->
-        <dependency>
-            <groupId>org.apache.poi</groupId>
-            <artifactId>poi-ooxml</artifactId>
-            <version>5.4.0</version>
-        </dependency>
         <!-- PDFBox — PDF generation with an embedded Thai font (Sarabun), so Thai text
              renders correctly instead of the ASCII-only fallback used previously. -->
         <dependency>
@@ -145,13 +144,6 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <configuration>
-                    <argLine>@{argLine} -javaagent:${settings.localRepository}/org/mockito/mockito-core/${mockito.version}/mockito-core-${mockito.version}.jar</argLine>
-                </configuration>
             </plugin>
             <!-- Coverage ratchet: measures line coverage during `verify` and fails the build if it
                  regresses below the current floor. The minimum is set to the measured coverage

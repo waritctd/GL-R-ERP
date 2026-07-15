@@ -1,3 +1,4 @@
+import * as XLSX from 'xlsx';
 import { createDemoDatabase } from '../data/demoData.js';
 
 const db = createDemoDatabase();
@@ -204,13 +205,46 @@ const mockCatalog = [
   { id: 14, brand: 'Panaria',  collection: 'Frame',             color: 'Ash',         surface: 'Naturale',     size: '80x80 cm',   factory: 'Panaria SpA',       sqmPerPiece: 0.64 },
 ];
 
+const mockPriceImportFactories = [
+  { factoryId: 1, name: 'Panaria SpA',    country: 'Italy',   numberFormat: 'eu' },
+  { factoryId: 2, name: 'REFIN',          country: 'Italy',   numberFormat: 'eu' },
+  { factoryId: 3, name: 'Equipe',         country: 'Spain',   numberFormat: 'eu' },
+  { factoryId: 4, name: 'Vives',          country: 'Spain',   numberFormat: 'eu' },
+  { factoryId: 5, name: 'Bode',           country: 'Germany', numberFormat: 'us' },
+  { factoryId: 6, name: 'CDE',            country: 'Italy',   numberFormat: 'eu' },
+  { factoryId: 7, name: 'Padana Marmi',   country: 'Italy',   numberFormat: 'eu' },
+  { factoryId: 8, name: 'LEA',            country: 'Italy',   numberFormat: 'eu' },
+  { factoryId: 9, name: 'CITY Ceramica',  country: 'Italy',   numberFormat: 'eu' },
+];
+
+let mockProductPriceSeq = 100;
+const mockProductPrices = [
+  { priceId: 1, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-T600-IVO', grade: null,  collection: 'Trilogy',      productName: 'Ivory Lappato',    color: 'Ivory',   surface: 'Lappato',   sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+  { priceId: 2, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-T600-GRY', grade: null,  collection: 'Trilogy',      productName: 'Grigio Naturale',  color: 'Grigio',  surface: 'Naturale',  sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+  { priceId: 3, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-F800-ASH', grade: null,  collection: 'Frame',        productName: 'Ash',              color: 'Ash',     surface: 'Naturale',  sizeRaw: '80x80',  price: 38.50, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.64 },
+  { priceId: 4, factoryId: 2, factoryName: 'REFIN',        productCode: null,           grade: null,  collection: 'Terraço',      productName: 'L-Trim',           color: null,      surface: null,        sizeRaw: '10x60',  price: 38.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: null },
+  { priceId: 5, factoryId: 2, factoryName: 'REFIN',        productCode: null,           grade: null,  collection: 'Terraço',      productName: 'Corner',           color: null,      surface: null,        sizeRaw: '10x10',  price: 55.00, currency: 'EUR', priceUnit: 'per_piece', sqmPerPiece: null },
+  { priceId: 6, factoryId: 2, factoryName: 'REFIN',        productCode: 'RF-BAL-6060',  grade: null,  collection: 'Balneo',       productName: 'Floor Tile',       color: 'White',   surface: 'Lappato',   sizeRaw: '60x60',  price: 42.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  { priceId: 7, factoryId: 3, factoryName: 'Equipe',       productCode: 'EQ-001',       grade: null,  collection: 'Stromboli',    productName: '1.2X20 Jolly Ash', color: 'Ash',     surface: 'Mate',      sizeRaw: '1.2x20', price: 25.50, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: null },
+  { priceId: 8, factoryId: 4, factoryName: 'Vives',        productCode: 'VV-001',       grade: null,  collection: 'Masia',        productName: 'Tile A',           color: 'Beige',   surface: 'Mate',      sizeRaw: "15'8X31'6", price: 5.50, currency: 'EUR', priceUnit: 'per_piece', sqmPerPiece: 0.05 },
+  { priceId: 9, factoryId: 5, factoryName: 'Bode',         productCode: 'BVLE10426KGA', grade: null,  collection: 'Limestone',    productName: null,               color: null,      surface: 'Honed',     sizeRaw: '600x600',price: 23.50, currency: 'USD', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  { priceId: 10,factoryId: 7, factoryName: 'Padana Marmi', productCode: '0400012',      grade: 'A01', collection: 'Stone',        productName: null,               color: 'Beige',   surface: 'Lucidato',  sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+  { priceId: 11,factoryId: 7, factoryName: 'Padana Marmi', productCode: '0400012',      grade: 'A02', collection: 'Stone',        productName: null,               color: 'Beige',   surface: 'Lucidato',  sizeRaw: '60x120', price: 21.50, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+];
+
+const mockPriceImportVersions = [
+  { versionId: 1, factoryId: 1, label: 'Price List 2026 Q1', status: 'ACTIVE',   createdAt: '2026-01-10T09:00:00Z', uploadedByName: 'Admin' },
+  { versionId: 2, factoryId: 2, label: 'REFIN 2026',         status: 'ACTIVE',   createdAt: '2026-02-01T11:00:00Z', uploadedByName: 'Admin' },
+  { versionId: 3, factoryId: 5, label: 'Bode USD 2026',      status: 'ARCHIVED', createdAt: '2025-12-01T08:00:00Z', uploadedByName: 'Admin' },
+];
+
 const mockNoteTemplates = [
   { id: 1, text: 'ราคารวมค่าขนส่งถึงชั้น 1 ของหน่วยงานในเขต กทม. แต่ไม่รวมค่าตัด/ติดตั้ง', defaultSelected: true, sortOrder: 1 },
   { id: 2, text: 'จ่ายเช็คในนาม บจก. จี แอล แอนด์ อาร์ฯ / โอนเข้า กสิกรไทย 003-1-15914-8 (กระแสรายวัน สาขาสุขุมวิท 33)', defaultSelected: true, sortOrder: 2 },
   { id: 3, text: 'กรณีโอนเงินส่ง Pay-in มาที่ e-mail : info@glr.co.th', defaultSelected: true, sortOrder: 3 },
 ];
 
-const mockDepositNotices = []; // { id, ticketId, docType, version, docNumber, status, customerName, ... items:[], notes:[] }
+const mockDepositNotices = []; // used by both depositNotices and documents API groups
 let mockDocSeq = 1;
 let mockDocNumberSeq = 1;
 
@@ -307,36 +341,64 @@ function mockItemDesc(it) {
   return [it.brand, it.model, it.color, it.texture, it.size].filter(Boolean).join(' ');
 }
 
-// Demo-mode placeholder blob. The real xlsx is rendered server-side by Apache POI
-// (QuotationRenderer/RemainingInvoiceRenderer/DepositNoticeRenderer) and streamed to the
-// client; mock mode only needs to return a valid Blob so download callers stay happy without
-// pulling in the SheetJS (`xlsx`) dependency, which carries an unpatched high-severity advisory.
-function mockDocPlaceholderBlob(lines) {
-  const body = ['⚠ Demo Mode — ไฟล์จริงสร้างจาก template บน server (Apache POI)', '', ...lines].join('\n');
-  return new Blob([body], { type: 'text/plain;charset=utf-8' });
+// Set a cell value, preserving template styles. Clears formula so value is used as-is.
+function mockSetCell(ws, r, c, v) {
+  const addr = XLSX.utils.encode_cell({ r, c });
+  const existing = ws[addr] || {};
+  // Spread existing (keeps style object 's'), override value/type, clear formula+cache
+  ws[addr] = { ...existing, v, t: typeof v === 'number' ? 'n' : 's', f: undefined, w: undefined };
 }
 
-// ── Quotation XLSX (demo placeholder) — real file from QuotationRenderer.java ───
+async function loadXlsxTemplate(publicPath) {
+  const res = await fetch(publicPath);
+  if (!res.ok) throw new Error(`Template not found: ${publicPath}`);
+  const buf = await res.arrayBuffer();
+  return XLSX.read(new Uint8Array(buf), { type: 'array', cellStyles: true });
+}
+
+function xlsxBlob(wb) {
+  const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+  return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+// ── Quotation XLSX — mirrors QuotationRenderer.java exactly ─────────────────
 async function buildMockQuotationXlsx(ticketId, quotationId) {
   const ticket = findTicketRaw(Number(ticketId));
   const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
   if (!quotation) fail('Quotation not found', 404);
 
+  const wb = await loadXlsxTemplate('/templates/quotation_template.xlsx');
+  const ws = wb.Sheets['Update'] || wb.Sheets[wb.SheetNames[0]];
+
   const issueDate = quotation.issuedAt ? new Date(quotation.issuedAt) : new Date();
+
+  // Header cells (row/col 0-based — same indices as QuotationRenderer.java)
+  mockSetCell(ws, 3, 1, mockThaiDate(issueDate));      // B4 = วันที่
+  mockSetCell(ws, 3, 8, quotation.number ?? '');        // I4 = เลขที่
+  mockSetCell(ws, 4, 1, ticket.customerName ?? '');     // B5 = ลูกค้า
+  if (ticket.projectName) {
+    mockSetCell(ws, 7, 1, 'Project : ' + ticket.projectName); // B8 = project
+  }
+
+  // Item rows: ITEM_START_ROW = 7 (0-based), cols A–E
   const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
-  const lines = [
-    `ใบเสนอราคา  เลขที่ ${quotation.number ?? ''}`,
-    `วันที่: ${mockThaiDate(issueDate)}`,
-    `ลูกค้า: ${ticket.customerName ?? ''}`,
-    ...(ticket.projectName ? [`Project: ${ticket.projectName}`] : []),
-    '',
-    ...priceItems.map((it, i) => {
-      const qty = Number(it.qty) || 0;
-      const price = Number(it.approvedPrice) || 0;
-      return `${i + 1}. ${mockItemDesc(it)} — ${qty} ${it.rawUnit ?? 'แผ่น'} × ${price}`;
-    }),
-  ];
-  return mockDocPlaceholderBlob(lines);
+  let subtotal = 0;
+  priceItems.forEach((it, i) => {
+    const qty   = Number(it.qty) || 0;
+    const price = Number(it.approvedPrice) || 0;
+    subtotal += qty * price;
+    const r = 7 + i;
+    mockSetCell(ws, r, 0, i + 1);              // A = ลำดับ
+    mockSetCell(ws, r, 1, mockItemDesc(it));   // B = รายละเอียด
+    mockSetCell(ws, r, 2, qty);               // C = จำนวน
+    mockSetCell(ws, r, 3, it.rawUnit ?? 'แผ่น'); // D = หน่วย
+    mockSetCell(ws, r, 4, price);             // E = ราคา/หน่วย
+    // H/I formula cols untouched — Excel recalculates on open
+  });
+
+  mockSetCell(ws, 37, 8, subtotal);  // I38 = รวม (I39/I40 are formula → auto)
+
+  return xlsxBlob(wb);
 }
 
 // ── Quotation HTML preview — shown when "PDF" is clicked in demo mode ────────
@@ -369,30 +431,49 @@ td{border:1px solid #e2e8f0;padding:8px 10px;font-size:13px}
   return new Blob([html], { type: 'text/html;charset=utf-8' });
 }
 
-// ── Remaining invoice XLSX (demo placeholder) — real file from RemainingInvoiceRenderer.java ─
+// ── Remaining invoice XLSX — mirrors RemainingInvoiceRenderer.java exactly ───
 async function buildMockRemainingInvoiceXlsx(ticketId) {
   const ticket = findTicketRaw(Number(ticketId));
   if (!ticket) fail('Ticket not found', 404);
 
+  const wb = await loadXlsxTemplate('/templates/remaining_invoice_template.xlsx');
+  const ws = wb.Sheets['Update'] || wb.Sheets[wb.SheetNames[0]];
+
   const today = new Date();
   const thaiYear2 = String(today.getFullYear() + 543).slice(-2);
   const docNumber = `GLR${thaiYear2}${String(ticketId).padStart(3, '0')}`;
+
+  // Header block (same indices as RemainingInvoiceRenderer.java)
+  mockSetCell(ws, 6, 7, mockThaiDate(today));       // H7 = วันที่
+  mockSetCell(ws, 6, 1, ticket.customerName ?? ''); // B7 = ลูกค้า
+  mockSetCell(ws, 7, 7, docNumber);                 // H8 = เลขที่
+  // B8 = ที่อยู่ (not in demo data — leave template default)
+  // H9 = อ้างอิง — try to pull from first quotation
   const firstQ = (ticket.quotations ?? [])[0];
+  if (firstQ) mockSetCell(ws, 8, 7, firstQ.number); // H9 = อ้างอิง QN
+  if (ticket.projectName) {
+    mockSetCell(ws, 10, 1, 'Project : ' + ticket.projectName); // B11
+  }
+
+  // Item rows: ITEM_START_ROW = 12 (0-based), cols A–E
   const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
-  const lines = [
-    `ใบแจ้งหนี้ส่วนที่เหลือ  เลขที่ ${docNumber}`,
-    `วันที่: ${mockThaiDate(today)}`,
-    `ลูกค้า: ${ticket.customerName ?? ''}`,
-    ...(firstQ ? [`อ้างอิง: ${firstQ.number}`] : []),
-    ...(ticket.projectName ? [`Project: ${ticket.projectName}`] : []),
-    '',
-    ...priceItems.map((it, i) => {
-      const qty = Number(it.qty) || 0;
-      return `${i + 1}. ${mockItemDesc(it)} — ${qty} ${it.rawUnit ?? 'แผ่น'} × ${Number(it.approvedPrice) || 0}`;
-    }),
-    `หัก  มัดจำ${firstQ ? '  ' + firstQ.number : ''}`,
-  ];
-  return mockDocPlaceholderBlob(lines);
+  priceItems.forEach((it, i) => {
+    const r = 12 + i;
+    const qty = Number(it.qty) || 0;
+    mockSetCell(ws, r, 0, i + 1);
+    mockSetCell(ws, r, 1, mockItemDesc(it));
+    mockSetCell(ws, r, 2, qty);
+    mockSetCell(ws, r, 3, it.rawUnit ?? 'แผ่น');
+    mockSetCell(ws, r, 4, Number(it.approvedPrice) || 0);
+  });
+
+  // Deposit deduction row (deposit amount not stored in demo data — use 0 placeholder)
+  const depositRow = 12 + priceItems.length;
+  mockSetCell(ws, depositRow, 1, 'หัก  มัดจำ' + (firstQ ? '  ' + firstQ.number : ''));
+  mockSetCell(ws, depositRow, 2, -1);
+  mockSetCell(ws, depositRow, 4, 0); // real app fills deposit amount here
+
+  return xlsxBlob(wb);
 }
 
 function pushEvent(ticket, actor, kind, fromStatus, toStatus, message, itemSnapshot = null) {
@@ -503,7 +584,7 @@ function dashboardDivisionId(user) {
 
 function dashboardEmployeeScope(user) {
   const employee = employeeForUser(user);
-  if (['hr', 'ceo'].includes(user.role)) return { label: 'all', employees: db.employees };
+  if (['hr', 'admin', 'ceo'].includes(user.role)) return { label: 'all', employees: db.employees };
   if (dashboardManager(user) && dashboardDivisionId(user)) {
     return {
       label: 'division',
@@ -514,7 +595,7 @@ function dashboardEmployeeScope(user) {
 }
 
 function dashboardHeadcount(user) {
-  const company = ['hr', 'ceo'].includes(user.role);
+  const company = ['hr', 'ceo', 'admin'].includes(user.role);
   const manager = dashboardManager(user);
   const divisionId = dashboardDivisionId(user);
   const employees = company
@@ -551,7 +632,7 @@ function dashboardHeadcount(user) {
 }
 
 function dashboardTickets(user) {
-  const allVisible = ['import', 'ceo'].includes(user.role);
+  const allVisible = ['import', 'ceo', 'admin'].includes(user.role);
   const ownVisible = user.role === 'sales';
   const list = allVisible
     ? db.tickets
@@ -585,19 +666,19 @@ function dashboardPending(user, ticketSummary) {
   const employeeIds = new Set(employeeScope.employees.map((employee) => employee.id));
   const employeeSelf = employeeScope.label === 'self';
   const manager = employeeScope.label === 'division';
-  const hrCanReview = user.role === 'hr';
-  const profileRequests = hrCanReview || employeeSelf
+  const hrOrAdmin = ['hr', 'admin'].includes(user.role);
+  const profileRequests = hrOrAdmin || employeeSelf
     ? db.profileRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'pending').length
     : 0;
-  const leave = hrCanReview || manager || employeeSelf
+  const leave = hrOrAdmin || manager || employeeSelf
     ? db.leaveRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'SUBMITTED').length
     : 0;
-  const commissions = ['sales_manager', 'ceo'].includes(user.role)
+  const commissions = ['sales_manager', 'ceo', 'admin'].includes(user.role)
     ? db.commissions.filter((record) => ['SUBMITTED', 'MANAGER_APPROVED'].includes(record.status)).length
     : user.role === 'sales'
       ? db.commissions.filter((record) => record.salesRepId === user.id && record.status === 'SUBMITTED').length
       : 0;
-  const tickets = ['sales', 'import', 'ceo'].includes(user.role)
+  const tickets = ['sales', 'import', 'ceo', 'admin'].includes(user.role)
     ? ticketSummary.submitted + ticketSummary.inReview + ticketSummary.priceProposed
     : 0;
   return {
@@ -612,7 +693,7 @@ function dashboardPending(user, ticketSummary) {
 }
 
 function dashboardAttendance(user) {
-  if (['hr', 'ceo'].includes(user.role)) {
+  if (['hr', 'ceo', 'admin'].includes(user.role)) {
     return { scope: 'all', todayPresent: 0, lateToday: 0, missingCheckout: 0, punchCountToday: 0, monthlyAttendanceDays: 0 };
   }
   if (dashboardManager(user) && dashboardDivisionId(user)) {
@@ -637,7 +718,7 @@ function managerIdForEmployee(employee) {
 }
 
 function canReviewLeave(user, employeeId) {
-  if (['hr'].includes(user.role)) return true;
+  if (['hr', 'admin'].includes(user.role)) return true;
   const employee = findEmployee(employeeId);
   return user.employeeId && managerIdForEmployee(employee) === user.employeeId;
 }
@@ -861,7 +942,7 @@ export const api = {
   },
   employees: {
     async list(params = {}) {
-      hasRole('hr', 'director');
+      hasRole('hr', 'director', 'admin');
       let employees = db.employees.map(employeeWithRequestMeta);
       if (params.search) {
         const query = params.search.toLowerCase();
@@ -880,7 +961,7 @@ export const api = {
       return delay({ employees });
     },
     async create(payload) {
-      hasRole('hr');
+      hasRole('hr', 'admin');
       const employee = createEmployeeRecord(payload);
       db.employees.unshift(employee);
       return delay({ employee });
@@ -893,7 +974,7 @@ export const api = {
       return delay({ employee: employeeWithRequestMeta(employee) });
     },
     async update(id, payload) {
-      hasRole('hr');
+      hasRole('hr', 'admin');
       const employee = findEmployee(id);
       Object.assign(employee, payload);
       if (payload.statusId) {
@@ -910,7 +991,7 @@ export const api = {
   profileRequests: {
     async list() {
       const user = requireSession();
-      const rows = user.role === 'hr'
+      const rows = user.role === 'hr' || user.role === 'admin'
         ? db.profileRequests
         : db.profileRequests.filter((request) => request.employeeId === user.employeeId);
       const profileRequests = rows.map((request) => ({
@@ -948,11 +1029,11 @@ export const api = {
   },
   users: {
     async list() {
-      hasRole('hr');
+      hasRole('admin');
       return delay({ users: db.users.map(publicUser) });
     },
     async create(payload) {
-      hasRole('hr');
+      hasRole('admin');
       const employee = payload.employeeId ? findEmployee(payload.employeeId) : null;
       const user = {
         id: Math.max(...db.users.map((item) => item.id)) + 1,
@@ -968,7 +1049,7 @@ export const api = {
       return delay({ user: publicUser(user) });
     },
     async update(id, payload) {
-      hasRole('hr');
+      hasRole('admin');
       const user = db.users.find((item) => item.id === Number(id));
       if (!user) fail('User not found', 404);
       Object.assign(user, payload);
@@ -979,7 +1060,7 @@ export const api = {
   tickets: {
     async list(params = {}) {
       const user = requireSession();
-      if (!['sales', 'import', 'ceo'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'import', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
       let list = structuredClone(db.tickets);
       if (user.role === 'sales') list = list.filter((t) => t.createdById === user.id);
       if (params.status) list = list.filter((t) => t.status === params.status);
@@ -999,7 +1080,7 @@ export const api = {
 
     async get(id) {
       const user = requireSession();
-      if (!['sales', 'import', 'ceo'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'import', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
       if (!ticket) fail('Ticket not found', 404);
       if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
@@ -1007,7 +1088,7 @@ export const api = {
     },
 
     async create(payload) {
-      const user = hasRole('sales');
+      const user = hasRole('sales', 'admin');
       const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
       const code = `PR-2026-${String(nextId).padStart(4, '0')}`;
       const now = new Date().toISOString();
@@ -1040,12 +1121,12 @@ export const api = {
     },
 
     async submit(id) {
-      const user = hasRole('sales');
+      const user = hasRole('sales', 'admin');
       return delay(doTransition(Number(id), 'draft', 'submitted', 'SUBMITTED', user, null));
     },
 
     async pickup(id) {
-      const user = hasRole('import');
+      const user = hasRole('import', 'admin');
       const ticket = findTicketRaw(Number(id));
       verifyStatus(ticket, 'submitted');
       ticket.status = 'in_review';
@@ -1057,7 +1138,7 @@ export const api = {
     },
 
     async proposePrice(id, payload) {
-      const user = hasRole('import');
+      const user = hasRole('import', 'admin');
       const ticket = findTicketRaw(Number(id));
       verifyStatus(ticket, 'in_review');
       ticket.items = (payload.items || []).map((item, i) => ({
@@ -1081,9 +1162,9 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       const st = ticket.status;
       const isOwner = user.id === ticket.createdById;
-      const salesCanEdit = ['sales'].includes(user.role) && isOwner
+      const salesCanEdit = ['sales', 'admin'].includes(user.role) && isOwner
         && ['submitted', 'in_review', 'price_proposed'].includes(st);
-      const importCanEdit = ['import'].includes(user.role)
+      const importCanEdit = ['import', 'admin'].includes(user.role)
         && ['in_review', 'price_proposed'].includes(st);
       if (!salesCanEdit && !importCanEdit) fail('ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้', 403);
       ticket.items = (payload.items || []).map((item, i) => ({
@@ -1106,7 +1187,7 @@ export const api = {
     },
 
     async calculatePrices(id) {
-      hasRole('ceo');
+      hasRole('ceo', 'admin');
       const ticket = findTicketRaw(Number(id));
       verifyStatus(ticket, 'price_proposed');
 
@@ -1170,7 +1251,7 @@ export const api = {
     },
 
     async overrideItemPrice(ticketId, itemId, payload) {
-      hasRole('ceo');
+      hasRole('ceo', 'admin');
       const ticket = findTicketRaw(Number(ticketId));
       verifyStatus(ticket, 'price_proposed');
       const item = ticket.items.find((it) => it.id === Number(itemId));
@@ -1183,7 +1264,7 @@ export const api = {
     },
 
     async approve(id) {
-      const user = hasRole('ceo');
+      const user = hasRole('ceo', 'admin');
       const ticket = findTicketRaw(Number(id));
       verifyStatus(ticket, 'price_proposed');
       ticket.items = ticket.items.map((item) => ({ ...item, approvedPrice: item.proposedPrice }));
@@ -1196,7 +1277,7 @@ export const api = {
     },
 
     async reject(id, payload) {
-      const user = hasRole('ceo');
+      const user = hasRole('ceo', 'admin');
       const ticket = findTicketRaw(Number(id));
       verifyStatus(ticket, 'price_proposed');
       ticket.status = 'in_review';
@@ -1207,13 +1288,13 @@ export const api = {
     },
 
     async quotation(id) {
-      const user = hasRole('sales');
+      const user = hasRole('sales', 'admin');
       const ticket = findTicketRaw(Number(id));
       if (ticket.status !== 'approved' && ticket.status !== 'quotation_issued') {
         fail(`Expected status 'approved' or 'quotation_issued' but ticket is '${ticket.status}'`, 409);
       }
       const fromStatus = ticket.status;
-      if (ticket.createdById !== user.id) fail('Forbidden', 403);
+      if (ticket.createdById !== user.id && user.role !== 'admin') fail('Forbidden', 403);
       const total = ticket.items.reduce((sum, item) => sum + (item.approvedPrice || 0) * item.qty, 0);
 
       // init quotations array if not present
@@ -1308,7 +1389,7 @@ export const api = {
     },
 
     async confirmCustomer(id) {
-      const user = hasRole('sales');
+      const user = hasRole('sales', 'admin');
       const ticket = findTicketRaw(Number(id));
       if (ticket.status !== 'quotation_issued') fail('Expected quotation_issued', 409);
       ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
@@ -1318,7 +1399,7 @@ export const api = {
     },
 
     async issueDepositNotice(id) {
-      const user = hasRole('sales');
+      const user = hasRole('sales', 'admin');
       const ticket = findTicketRaw(Number(id));
       if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
         fail('Requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED', 409);
@@ -1330,7 +1411,7 @@ export const api = {
     },
 
     async confirmDepositPaid(id) {
-      const user = hasRole('sales');
+      const user = hasRole('sales', 'admin');
       const ticket = findTicketRaw(Number(id));
       if (ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') fail('Expected paymentStatus=DEPOSIT_NOTICE_ISSUED', 409);
       ticket.paymentStatus = 'DEPOSIT_PAID';
@@ -1340,11 +1421,10 @@ export const api = {
     },
 
     async issueImportRequest(id) {
-      const user = hasRole('import');
+      const user = hasRole('import', 'admin');
       const ticket = findTicketRaw(Number(id));
-      const paymentReadyForImport = ['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'].includes(ticket.paymentStatus);
-      if (ticket.status !== 'quotation_issued' || !paymentReadyForImport) {
-        fail('Requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED or DEPOSIT_PAID', 409);
+      if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') {
+        fail('Requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED', 409);
       }
       ticket.fulfillmentStatus = 'IR_ISSUED';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -1353,7 +1433,7 @@ export const api = {
     },
 
     async markIrSent(id) {
-      const user = hasRole('import');
+      const user = hasRole('import', 'admin');
       const ticket = findTicketRaw(Number(id));
       if (ticket.fulfillmentStatus !== 'IR_ISSUED') fail('Expected fulfillmentStatus=IR_ISSUED', 409);
       ticket.fulfillmentStatus = 'IR_SENT';
@@ -1363,7 +1443,7 @@ export const api = {
     },
 
     async markShipping(id) {
-      const user = hasRole('import');
+      const user = hasRole('import', 'admin');
       const ticket = findTicketRaw(Number(id));
       if (ticket.fulfillmentStatus !== 'IR_SENT') fail('Expected fulfillmentStatus=IR_SENT', 409);
       ticket.fulfillmentStatus = 'SHIPPING';
@@ -1373,7 +1453,7 @@ export const api = {
     },
 
     async markGoodsReceived(id) {
-      const user = hasRole('import');
+      const user = hasRole('import', 'admin');
       const ticket = findTicketRaw(Number(id));
       if (ticket.fulfillmentStatus !== 'SHIPPING') fail('Expected fulfillmentStatus=SHIPPING', 409);
       ticket.fulfillmentStatus = 'GOODS_RECEIVED';
@@ -1387,7 +1467,7 @@ export const api = {
     },
 
     async confirmFinalPayment(id) {
-      const user = hasRole('sales');
+      const user = hasRole('sales', 'admin');
       const ticket = findTicketRaw(Number(id));
       if (ticket.paymentStatus !== 'AWAITING_FINAL_PAYMENT') fail('Expected paymentStatus=AWAITING_FINAL_PAYMENT', 409);
       ticket.paymentStatus = 'FULLY_PAID';
@@ -1400,7 +1480,7 @@ export const api = {
   leave: {
     async employees() {
       const user = requireSession();
-      const includeAll = ['hr', 'ceo'].includes(user.role);
+      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
       const rows = db.employees
         .filter((employee) => employee.active)
         .filter((employee) => includeAll || employee.id === user.employeeId || managerIdForEmployee(employee) === user.employeeId)
@@ -1424,7 +1504,7 @@ export const api = {
       const user = requireSession();
       const employeeId = params.employeeId ? Number(params.employeeId) : user.employeeId;
       if (!employeeId) fail('User is not linked to an employee', 400);
-      if (!['hr', 'ceo'].includes(user.role) && employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
+      if (!['hr', 'ceo', 'admin'].includes(user.role) && employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
       findEmployee(employeeId);
       const year = Number(params.year || new Date().getFullYear());
       return delay({ balances: db.leaveTypes.map((type) => leaveBalance(employeeId, type, year)) });
@@ -1433,7 +1513,7 @@ export const api = {
     async list(params = {}) {
       const user = requireSession();
       let list = db.leaveRequests;
-      const includeAll = ['hr', 'ceo'].includes(user.role);
+      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
       if (!includeAll) list = list.filter((item) => item.employeeId === user.employeeId || canReviewLeave(user, item.employeeId));
       if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
       if (params.status) list = list.filter((item) => item.status === params.status);
@@ -1553,7 +1633,7 @@ export const api = {
   overtime: {
     async employees() {
       const user = requireSession();
-      const includeAll = ['hr', 'ceo'].includes(user.role);
+      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
       const rows = db.employees
         .filter((employee) => employee.active)
         .filter((employee) => includeAll || employee.id === user.employeeId || managerIdForEmployee(employee) === user.employeeId)
@@ -1571,7 +1651,7 @@ export const api = {
     async list(params = {}) {
       const user = requireSession();
       let list = db.overtimeRequests;
-      const includeAll = ['hr', 'ceo'].includes(user.role);
+      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
       if (!includeAll) list = list.filter((item) => item.employeeId === user.employeeId || canReviewLeave(user, item.employeeId));
       if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
       if (params.status) list = list.filter((item) => item.status === params.status);
@@ -1704,7 +1784,7 @@ export const api = {
   commissions: {
     async list(params = {}) {
       const user = requireSession();
-      if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'sales_manager', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
       let list = db.commissions;
       if (user.role === 'sales') list = list.filter((item) => item.salesRepId === user.id);
       if (params.payrollMonth) list = list.filter((item) => commissionMonth(item.payrollMonth) === params.payrollMonth.slice(0, 7));
@@ -1712,7 +1792,7 @@ export const api = {
     },
 
     async create(payload) {
-      const user = hasRole('sales', 'sales_manager', 'ceo');
+      const user = hasRole('sales', 'sales_manager', 'ceo', 'admin');
       if (user.role === 'sales' && (Number(payload.transportFee || 0) > 0 || Number(payload.cutFee || 0) > 0 || Number(payload.shortfall || 0) > 0)) {
         fail('Sales cannot edit deduction fields', 403);
       }
@@ -1776,7 +1856,7 @@ export const api = {
     },
 
     async updateDeductions(id, payload) {
-      hasRole('sales_manager', 'ceo');
+      hasRole('sales_manager', 'ceo', 'admin');
       const record = db.commissions.find((item) => item.id === Number(id));
       if (!record) fail('Commission record not found', 404);
       Object.assign(record.invoiceDetails, {
@@ -1797,7 +1877,7 @@ export const api = {
     },
 
     async approve(id) {
-      const user = hasRole('sales_manager', 'ceo');
+      const user = hasRole('sales_manager', 'ceo', 'admin');
       const record = db.commissions.find((item) => item.id === Number(id));
       if (!record) fail('Commission record not found', 404);
       const now = new Date().toISOString();
@@ -1827,7 +1907,7 @@ export const api = {
     },
 
     async reject(id, payload = {}) {
-      const user = hasRole('sales_manager', 'ceo');
+      const user = hasRole('sales_manager', 'ceo', 'admin');
       const record = db.commissions.find((item) => item.id === Number(id));
       if (!record) fail('Commission record not found', 404);
       const now = new Date().toISOString();
@@ -1850,7 +1930,7 @@ export const api = {
     },
 
     async clawback(id, payload) {
-      const user = hasRole('sales_manager', 'ceo');
+      const user = hasRole('sales_manager', 'ceo', 'admin');
       const original = db.commissions.find((item) => item.id === Number(id));
       if (!original) fail('Commission record not found', 404);
       if (original.kind !== 'SALE' || original.status !== 'APPROVED') fail('Only approved sale commissions can be clawed back', 409);
@@ -1878,7 +1958,7 @@ export const api = {
 
     async simulate(payload) {
       const user = requireSession();
-      if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'sales_manager', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
       if (user.role === 'sales' && (Number(payload.transportFee || 0) > 0 || Number(payload.cutFee || 0) > 0 || Number(payload.shortfall || 0) > 0)) {
         fail('Sales cannot edit deduction fields', 403);
       }
@@ -1912,7 +1992,7 @@ export const api = {
     },
 
     async payrollReady(params = {}) {
-      hasRole('hr');
+      hasRole('hr', 'admin');
       const month = commissionMonth(params.payrollMonth || new Date().toISOString());
       const approved = db.commissions.filter((item) => item.status === 'APPROVED' && commissionMonth(item.payrollMonth) === month);
       const reps = new Map();
@@ -2056,6 +2136,24 @@ export const api = {
         : mockCatalog.slice(0, 30);
       return delay({ items: results });
     },
+    async prices(q, factoryId) {
+      requireSession();
+      const lower = (q ?? '').toLowerCase();
+      const fid = factoryId ? Number(factoryId) : null;
+      let results = mockProductPrices.filter((p) => {
+        if (fid && p.factoryId !== fid) return false;
+        if (!lower) return true;
+        return (
+          (p.productCode   ?? '').toLowerCase().includes(lower) ||
+          (p.collection    ?? '').toLowerCase().includes(lower) ||
+          (p.productName   ?? '').toLowerCase().includes(lower) ||
+          (p.color         ?? '').toLowerCase().includes(lower) ||
+          (p.surface       ?? '').toLowerCase().includes(lower) ||
+          (p.factoryName   ?? '').toLowerCase().includes(lower)
+        );
+      });
+      return delay({ items: results.slice(0, 50) });
+    },
   },
 
   factoryConfigs: {
@@ -2063,8 +2161,9 @@ export const api = {
       requireSession();
       return delay({ factories: mockFactoryConfigs });
     },
-    async sendEmail() {
+    async sendEmail(ticketId, payload) {
       requireSession();
+      console.log(`[mock] Factory email sent | ticket=${ticketId} factory=${payload.factory} to=${payload.to}`);
       return delay({ status: 'sent' });
     },
   },
@@ -2075,7 +2174,7 @@ export const api = {
       return delay({ fxRates: structuredClone(mockFxRates) });
     },
     async upsert(currency, payload) {
-      hasRole('ceo');
+      hasRole('ceo', 'admin');
       const existing = mockFxRates.find((r) => r.currency === currency.toUpperCase());
       if (existing) {
         existing.rateToThb = payload.rateToThb;
@@ -2103,8 +2202,7 @@ export const api = {
       return delay({ configs: structuredClone(mockPriceCalcConfigs.filter((c) => c.isCurrent)) });
     },
     async update(payload) {
-      hasRole('ceo');
-      // mark old current as not current
+      hasRole('ceo', 'admin');
       mockPriceCalcConfigs
         .filter((c) => c.country === payload.country && c.isCurrent)
         .forEach((c) => { c.isCurrent = false; });
@@ -2300,27 +2398,47 @@ export const api = {
       if (!rawDoc) fail('Deposit notice not found', 404);
       const doc = buildMockDoc(rawDoc);
 
-      // Demo placeholder — real xlsx from DepositNoticeRenderer.java (server, Apache POI)
-      const items = (doc.items ?? []).map((it, i) => {
+      const wb = await loadXlsxTemplate('/templates/deposit_notice_template.xlsx');
+      const ws = wb.Sheets['Update'] || wb.Sheets[wb.SheetNames[0]];
+
+      // Customer block (same indices as DepositNoticeRenderer.java)
+      mockSetCell(ws, 6, 0, 'เรียน ' + (doc.customerName ?? '')); // A7
+      mockSetCell(ws, 6, 7, mockThaiDate(doc.issueDate ? new Date(doc.issueDate) : new Date())); // H7
+      mockSetCell(ws, 7, 0, doc.customerAddress ?? '');            // A8
+      mockSetCell(ws, 7, 7, doc.docNumber ?? 'DRAFT');             // H8
+      if (doc.reference) mockSetCell(ws, 8, 7, doc.reference);    // H9
+      mockSetCell(ws, 10, 1, doc.projectName ?? '');               // B11
+
+      // Item rows (row 12 = 0-based)
+      (doc.items ?? []).forEach((it, i) => {
+        const r = 12 + i;
         const net = Number(it.netUnitPrice ?? it.unitPrice) || 0;
         const qty = Number(it.qty) || 0;
-        return `${i + 1}. ${it.description ?? ''} — ${qty} ${it.unit ?? 'แผ่น'} × ${Number(it.unitPrice) || 0} = ${net * qty}`;
+        mockSetCell(ws, r, 0, i + 1);
+        mockSetCell(ws, r, 1, it.description ?? '');
+        mockSetCell(ws, r, 2, qty);
+        mockSetCell(ws, r, 3, it.unit ?? 'แผ่น');
+        mockSetCell(ws, r, 4, Number(it.unitPrice) || 0);
+        mockSetCell(ws, r, 5, it.discountLabel ?? '');
+        mockSetCell(ws, r, 6, net);
+        mockSetCell(ws, r, 8, net * qty);
       });
-      const lines = [
-        `ใบแจ้งยอดมัดจำ  เลขที่ ${doc.docNumber ?? 'DRAFT'}`,
-        `วันที่: ${mockThaiDate(doc.issueDate ? new Date(doc.issueDate) : new Date())}`,
-        `เรียน ${doc.customerName ?? ''}`,
-        ...(doc.reference ? [`อ้างอิง: ${doc.reference}`] : []),
-        ...(doc.projectName ? [`Project: ${doc.projectName}`] : []),
-        '',
-        ...items,
-        '',
-        `ยอดก่อนภาษี: ${doc.subtotal ?? 0}`,
-        `มัดจำ ${((doc.depositPercent ?? 0.5) * 100)}%: ${doc.depositAmount ?? 0}`,
-        `ภาษี 7%: ${doc.vatAmount ?? 0}`,
-        `ยอดชำระ: ${doc.totalPayable ?? 0}`,
-      ];
-      return mockDocPlaceholderBlob(lines);
+
+      // Summary block (rows 43-46 = I44-I47 in 1-based)
+      mockSetCell(ws, 43, 8, doc.subtotal ?? 0);
+      mockSetCell(ws, 44, 7, (doc.depositPercent ?? 0.5) * 100);
+      mockSetCell(ws, 44, 8, doc.depositAmount ?? 0);
+      mockSetCell(ws, 45, 7, 7);
+      mockSetCell(ws, 45, 8, doc.vatAmount ?? 0);
+      mockSetCell(ws, 46, 8, doc.totalPayable ?? 0);
+
+      // Notes (rows 36-42, col 1)
+      (doc.notes ?? []).slice(0, 7).forEach((note, i) => {
+        mockSetCell(ws, 36 + i, 1, `${i + 1}. ${note}`);
+      });
+      mockSetCell(ws, 47, 1, 'จินตนา หาญมนตรี'); // preparer
+
+      return xlsxBlob(wb);
     },
 
     async downloadPdf(docId) {
@@ -2329,6 +2447,73 @@ export const api = {
       if (!rawDoc) fail('Deposit notice not found', 404);
       const html = mockPreviewHtml(buildMockDoc(rawDoc));
       return new Blob([html], { type: 'text/html;charset=utf-8' });
+    },
+  },
+
+  priceImport: {
+    async factories() {
+      requireSession();
+      return delay(mockPriceImportFactories);
+    },
+    async versions(factoryId) {
+      requireSession();
+      const fid = Number(factoryId);
+      return delay(mockPriceImportVersions.filter((v) => v.factoryId === fid));
+    },
+    async upload(factoryId, file, label) {
+      requireSession();
+      const fid = Number(factoryId);
+      const versionId = mockProductPriceSeq++;
+      mockPriceImportVersions.push({
+        versionId, factoryId: fid,
+        label: label || file?.name || `Version ${versionId}`,
+        status: 'DRAFT',
+        createdAt: new Date().toISOString(),
+        uploadedByName: 'Admin',
+      });
+      return delay({
+        versionId,
+        parsedRows: 12,
+        stagedRows: 12,
+        parseErrors: [],
+      });
+    },
+    async validate(versionId) {
+      requireSession();
+      return delay({ status: 'validated', versionId: Number(versionId) });
+    },
+    async staging(versionId) {
+      requireSession();
+      return delay({
+        versionId: Number(versionId),
+        totalRows: 12,
+        errorRows: 0,
+        newRows: 10,
+        changedRows: 2,
+        removedRows: 1,
+        unchangedRows: 0,
+      });
+    },
+    async commit(versionId) {
+      requireSession();
+      const vid = Number(versionId);
+      const ver = mockPriceImportVersions.find((v) => v.versionId === vid);
+      if (ver) {
+        const fid = ver.factoryId;
+        mockPriceImportVersions
+          .filter((v) => v.factoryId === fid && v.status === 'ACTIVE')
+          .forEach((v) => { v.status = 'ARCHIVED'; });
+        ver.status = 'ACTIVE';
+      }
+      return delay({ versionId: vid, inserted: 10, updated: 2, archived: 1 });
+    },
+    async getProfile(factoryId) {
+      requireSession();
+      return delay(JSON.stringify({ number_format: 'eu', sheets: [{ name: 'Sheet1', header_row: 1 }], columns: {} }));
+    },
+    async updateProfile(factoryId, json) {
+      requireSession();
+      return delay({ status: 'updated', factoryId: Number(factoryId) });
     },
   },
 

@@ -41,6 +41,15 @@ export function EmployeeDetailPage({ user, onUpdateEmployee }) {
   });
   const employee = employeeQuery.data ?? null;
 
+  const onBack = () => navigate('/employees');
+
+  const employeeQuery = useQuery({
+    queryKey: queryKeys.employeeDetail(id),
+    queryFn: () => api.employees.get(id).then((response) => response.employee),
+    enabled: !!id,
+  });
+  const employee = employeeQuery.data ?? null;
+
   if (!employee) {
     if (employeeQuery.isLoading) {
       return <EmptyState title="กำลังโหลดข้อมูลพนักงาน" />;

@@ -1,5 +1,3 @@
-import React from 'react';
-
 /**
  * Layout-preserving loading placeholders. Purely decorative — always
  * `aria-hidden`. The caller is responsible for labeling the surrounding

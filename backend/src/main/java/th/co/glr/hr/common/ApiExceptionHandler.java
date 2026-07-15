@@ -5,19 +5,18 @@ import jakarta.servlet.http.HttpSession;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.AuthenticationCredentialsNotFoundException;
 import org.springframework.validation.FieldError;
-import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
-import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -68,24 +67,6 @@ public class ApiExceptionHandler {
             .body(new ErrorResponse("Forbidden", HttpStatus.FORBIDDEN.value()));
     }
 
-    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
-    ResponseEntity<ErrorResponse> handleMethodNotSupported(HttpRequestMethodNotSupportedException exception) {
-        return ResponseEntity
-            .status(HttpStatus.METHOD_NOT_ALLOWED)
-            .body(new ErrorResponse("Method not allowed", HttpStatus.METHOD_NOT_ALLOWED.value()));
-    }
-
-    // Thrown when a multipart upload exceeds spring.servlet.multipart.max-file-size /
-    // max-request-size (already enforced). Without this handler it falls into handleUnexpected
-    // below and gets misreported as a 500; this only normalizes the response status/body for an
-    // already-enforced limit — the configured size limits themselves are unchanged.
-    @ExceptionHandler(MaxUploadSizeExceededException.class)
-    ResponseEntity<ErrorResponse> handleMaxUploadSizeExceeded(MaxUploadSizeExceededException exception) {
-        return ResponseEntity
-            .status(HttpStatus.PAYLOAD_TOO_LARGE)
-            .body(new ErrorResponse("Uploaded file is too large", HttpStatus.PAYLOAD_TOO_LARGE.value()));
-    }
-
     // Thrown for any request path with no matching controller or static resource (e.g. GET / on
     // this API-only backend). Without this handler it falls into handleUnexpected below and gets
     // misreported as a 500.
@@ -94,6 +75,16 @@ public class ApiExceptionHandler {
         return ResponseEntity
             .status(HttpStatus.NOT_FOUND)
             .body(new ErrorResponse("Not found", HttpStatus.NOT_FOUND.value()));
+    }
+
+    @ExceptionHandler(DataAccessException.class)
+    ResponseEntity<ErrorResponse> handleDataAccess(DataAccessException exception, HttpServletRequest request) {
+        log.error("Database error method={} path={} userId={}",
+            request.getMethod(), request.getRequestURI(), currentUserId(request), exception);
+        String msg = exception.getMostSpecificCause().getMessage();
+        return ResponseEntity
+            .status(HttpStatus.INTERNAL_SERVER_ERROR)
+            .body(new ErrorResponse("Database error: " + msg, HttpStatus.INTERNAL_SERVER_ERROR.value()));
     }
 
     @ExceptionHandler(Exception.class)

@@ -1,13 +1,7 @@
 @layer theme, utilities;
 
 @import "tailwindcss/theme.css" layer(theme);
-@import "tailwindcss/utilities.css" layer(utilities) source(none);
-@source ".";
-
-/* Touch devices (no reliable mouse/hover): guarantee 44px touch targets
-   regardless of a variant's visual density. See adapt.md's "detect input
-   method, not just screen size" guidance. */
-@custom-variant pointer-coarse (@media (pointer: coarse));
+@import "tailwindcss/utilities.css" layer(utilities);
 
 @theme static {
   /* Typography */

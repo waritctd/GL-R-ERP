@@ -19,7 +19,7 @@ public class ProjectRepository {
         return jdbc.query(
             """
             SELECT project_id, customer_id, name
-              FROM sales.project
+              FROM customers.project
              WHERE customer_id = :customerId
              ORDER BY name
             """,
@@ -31,13 +31,13 @@ public class ProjectRepository {
     public ProjectDto create(long customerId, String name) {
         var kh = new GeneratedKeyHolder();
         jdbc.update(
-            "INSERT INTO sales.project (customer_id, name) VALUES (:customerId, :name)",
+            "INSERT INTO customers.project (customer_id, name) VALUES (:customerId, :name)",
             new MapSqlParameterSource().addValue("customerId", customerId).addValue("name", name),
             kh, new String[]{"project_id"}
         );
         long id = kh.getKey().longValue();
         return jdbc.queryForObject(
-            "SELECT project_id, customer_id, name FROM sales.project WHERE project_id = :id",
+            "SELECT project_id, customer_id, name FROM customers.project WHERE project_id = :id",
             Map.of("id", id),
             (rs, i) -> new ProjectDto(rs.getLong("project_id"), rs.getLong("customer_id"), rs.getString("name"))
         );

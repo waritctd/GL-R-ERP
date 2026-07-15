@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { hasPermission } from '../../app/permissions.js';
 import { Avatar } from '../../components/common/Avatar.jsx';
 import { Button } from '../../components/common/Button.jsx';
 import { DetailHero, InfoGrid } from '../../components/common/FieldList.jsx';
@@ -14,7 +13,7 @@ import { ChangeRequestModal } from './ChangeRequestModal.jsx';
 export function ProfilePage({ user, employee, profileRequests, onCreateRequest }) {
   const navigate = useNavigate();
   const [requestField, setRequestField] = useState(null);
-  const isEmployee = hasPermission(user.role, 'canUseEmployeeExperience');
+  const isEmployee = user.role === 'employee';
   const pendingKeys = useMemo(
     () => new Set(profileRequests.filter((request) => request.status === 'pending').map((request) => request.fieldKey)),
     [profileRequests],

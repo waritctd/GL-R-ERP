@@ -23,7 +23,9 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     { path: '/hr', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', show: hasPermission(user.role, 'canViewEmployees') },
     { path: '/ticket-overview', label: 'ภาพรวมใบขอราคา', helper: 'Ticket overview', icon: 'home', show: hasPermission(user.role, 'canViewTickets') && SALES_ENABLED },
     { path: '/tickets', label: 'ใบขอราคา', helper: 'Price requests', icon: 'fileText', show: hasPermission(user.role, 'canViewTickets') && SALES_ENABLED },
-    { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', show: ['ceo'].includes(user.role) && SALES_ENABLED },
+    { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', show: ['ceo', 'admin'].includes(user.role) && SALES_ENABLED },
+    { path: '/catalog', label: 'แคตตาล็อกสินค้า', helper: 'Product catalog', icon: 'search', show: hasPermission(user.role, 'canViewTickets') && SALES_ENABLED },
+    { path: '/price-import', label: 'นำเข้าราคา', helper: 'Price import', icon: 'upload', show: hasPermission(user.role, 'canManagePriceImport') && SALES_ENABLED },
     { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED },
     { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', show: hasPermission(user.role, 'canManagePayroll') },
     { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', show: hasPermission(user.role, 'canViewEmployees') },
@@ -103,9 +105,6 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
 
   return (
     <div className="app-shell">
-      <a href="#main-content" className="skip-link">
-        ข้ามไปยังเนื้อหาหลัก / Skip to main content
-      </a>
       <Sidebar
         id={drawerId}
         drawerRef={drawerRef}
@@ -152,7 +151,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
             </Button>
           </div>
         </header>
-        <div id="main-content" tabIndex={-1} className="content-scroll"><ErrorBoundary key={location.pathname}><Suspense fallback={<RouteFallback />}><Outlet /></Suspense></ErrorBoundary></div>
+        <div className="content-scroll"><ErrorBoundary key={location.pathname}><Suspense fallback={<RouteFallback />}><Outlet /></Suspense></ErrorBoundary></div>
       </main>
     </div>
   );

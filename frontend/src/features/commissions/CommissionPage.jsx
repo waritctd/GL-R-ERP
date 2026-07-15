@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import imageCompression from 'browser-image-compression';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
@@ -9,7 +9,6 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { SkeletonCard } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { cn } from '../../utils/cn.js';
 import { formatMoney, formatThaiDate } from '../../utils/format.js';
 
 const today = new Date().toISOString().slice(0, 10);
@@ -67,7 +66,7 @@ export function CommissionPage({ user, showToast }) {
   const payrollOnly = ROLE_PERMISSIONS.canViewPayrollCommissions.includes(user.role) && !canSubmit && !canApprove;
   const salesReadOnlyDeductions = user.role === 'sales';
 
-  const load = useCallback(async () => {
+  async function load() {
     setLoading(true);
     try {
       if (payrollOnly) {
@@ -84,9 +83,9 @@ export function CommissionPage({ user, showToast }) {
     } finally {
       setLoading(false);
     }
-  }, [month, payrollOnly, showToast]);
+  }
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [month, payrollOnly]);
 
   const totals = useMemo(() => {
     const base = records.reduce((sum, item) => sum + Number(item.commissionableBase || 0), 0);
@@ -108,7 +107,7 @@ export function CommissionPage({ user, showToast }) {
     return canManagerReview(record) || canCeoReview(record);
   }
 
-  const commissionColumns = [
+  const commissionColumns = useMemo(() => [
     {
       key: 'invoiceNumber',
       header: 'Invoice',
@@ -118,8 +117,8 @@ export function CommissionPage({ user, showToast }) {
       render: (record) => (
         <span>
           <strong>{record.invoiceDetails.invoiceNumber}</strong>
-          <small className="block text-text-muted">{kindLabel(record.kind)} · {formatThaiDate(record.invoiceDetails.invoiceDate)}</small>
-          <small className="block text-text-muted">ไฟล์: {record.invoiceDetails.invoiceAttachmentFileName || '-'}</small>
+          <small style={{ color: '#64748b', display: 'block' }}>{kindLabel(record.kind)} · {formatThaiDate(record.invoiceDetails.invoiceDate)}</small>
+          <small style={{ color: '#64748b', display: 'block' }}>ไฟล์: {record.invoiceDetails.invoiceAttachmentFileName || '-'}</small>
         </span>
       ),
     },
@@ -153,10 +152,10 @@ export function CommissionPage({ user, showToast }) {
         return (
           <span>
             <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-            <small className="mt-1 block text-text-muted">
+            <small style={{ color: '#64748b', display: 'block', marginTop: 4 }}>
               ผู้จัดการ: {record.managerApprovedAt ? `${record.managerApprovedByName || '-'} · ${formatThaiDate(record.managerApprovedAt)}` : '-'}
             </small>
-            <small className="block text-text-muted">
+            <small style={{ color: '#64748b', display: 'block' }}>
               CEO: {record.ceoApprovedAt ? `${record.ceoApprovedByName || '-'} · ${formatThaiDate(record.ceoApprovedAt)}` : '-'}
             </small>
           </span>
@@ -167,7 +166,7 @@ export function CommissionPage({ user, showToast }) {
       key: 'actions',
       header: '',
       render: (record) => (
-        <span className="flex flex-wrap justify-end gap-[6px]">
+        <span style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
           {canApprove && (
             <>
               <button type="button" className="icon-button" title="แก้ไขค่าหัก" aria-label="แก้ไขค่าหัก" onClick={() => beginEdit(record)}>
@@ -207,7 +206,7 @@ export function CommissionPage({ user, showToast }) {
         </span>
       ),
     },
-  ];
+  ], [canApprove, saving, user.role]);
 
   function updateForm(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -348,9 +347,9 @@ export function CommissionPage({ user, showToast }) {
         title="ค่าคอมมิชชัน"
         subtitle="Sales & Commission Management"
         actions={(
-          <label className="inline-flex items-center gap-2 text-[13px] font-bold">
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700 }}>
             รอบเดือน
-            <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="w-[150px]" />
+            <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} style={{ width: 150 }} />
           </label>
         )}
       />
@@ -367,11 +366,11 @@ export function CommissionPage({ user, showToast }) {
           </div>
 
           {canSubmit && (
-            <section className={cn('panel', 'p-0')}>
-              <div className={cn('panel-header', 'px-[18px] py-[14px]')}>
+            <section className="panel" style={{ padding: 0 }}>
+              <div className="panel-header" style={{ padding: '14px 18px' }}>
                 <h2>บันทึกใบกำกับ / ใบเสร็จ</h2>
               </div>
-              <form className={cn('form-grid', 'p-[18px]')} onSubmit={submitCommission}>
+              <form className="form-grid" onSubmit={submitCommission} style={{ padding: 18 }}>
                 {!salesReadOnlyDeductions && (
                   <label>
                     Sales Rep ID
@@ -423,7 +422,7 @@ export function CommissionPage({ user, showToast }) {
                 </label>
 
                 {simulation && (
-                  <div className={cn('span-2', 'grid grid-cols-[repeat(4,minmax(0,1fr))] gap-[10px]')}>
+                  <div className="span-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 10 }}>
                     <MiniMetric label="รับเงินจริง" value={formatMoney(simulation.actualReceived)} />
                     <MiniMetric label="ฐานหลังหัก VAT" value={formatMoney(simulation.commissionableBase)} />
                     <MiniMetric label="ฐานรวมเดือน" value={formatMoney(simulation.projectedMonthlyBase)} />
@@ -431,7 +430,7 @@ export function CommissionPage({ user, showToast }) {
                   </div>
                 )}
 
-                <div className={cn('span-2', 'flex justify-end gap-[10px]')}>
+                <div className="span-2" style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
                   <button type="button" className="secondary-button" onClick={runSimulation} disabled={saving || !form.grossAmount}>
                     <Icon name="badge" size={14} />
                     Simulator
@@ -466,13 +465,13 @@ export function CommissionPage({ user, showToast }) {
             if (!editingRecord) return null;
             return (
               <div className="commission-row-wrap">
-                <div className="grid grid-cols-[repeat(3,minmax(0,1fr))_auto] items-end gap-2 border-b border-border bg-surface-muted px-[18px] py-[10px]">
+                <div style={{ padding: '10px 18px', background: '#f8fafc', borderBottom: '1px solid #e6eaf0', display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr)) auto', gap: 8, alignItems: 'end' }}>
                   {[
                     ['transportFee', 'ค่าขนส่ง'],
                     ['cutFee', 'ค่าตัด'],
                     ['shortfall', 'รับเงินขาด'],
                   ].map(([key, label]) => (
-                    <label key={key} className="m-0 text-xs">
+                    <label key={key} style={{ margin: 0, fontSize: 12 }}>
                       {label}
                       <input
                         type="number"
@@ -480,11 +479,11 @@ export function CommissionPage({ user, showToast }) {
                         step="0.01"
                         value={deductionDraft[key]}
                         onChange={(event) => setDeductionDraft((current) => ({ ...current, [key]: Number(event.target.value) }))}
-                        className="mt-1"
+                        style={{ marginTop: 4 }}
                       />
                     </label>
                   ))}
-                  <div className="flex gap-[6px]">
+                  <div style={{ display: 'flex', gap: 6 }}>
                     <button type="button" className="primary-button" disabled={saving} onClick={() => saveDeductions(editingRecord.id)}>บันทึก</button>
                     <button type="button" className="secondary-button" disabled={saving} onClick={() => setEditingId(null)}>ยกเลิก</button>
                   </div>
@@ -523,9 +522,9 @@ export function CommissionPage({ user, showToast }) {
 
 function MiniMetric({ label, value }) {
   return (
-    <div className="rounded-md border border-border-subtle bg-surface-muted px-3 py-[10px]">
-      <small className="block font-bold text-text-muted">{label}</small>
-      <strong className="mt-1 block text-text">{value}</strong>
+    <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 12px', background: '#f8fafc' }}>
+      <small style={{ display: 'block', color: '#64748b', fontWeight: 700 }}>{label}</small>
+      <strong style={{ display: 'block', color: '#0f172a', marginTop: 4 }}>{value}</strong>
     </div>
   );
 }

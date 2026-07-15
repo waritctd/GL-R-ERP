@@ -1,28 +1,35 @@
-# Production-only overrides. Active when SPRING_PROFILES_ACTIVE=prod.
+# Production-only overrides. Active when SPRING_PROFILES_ACTIVE=prod (set by render.yaml).
+#
+# Why this file exists: on Render's free/throttled instance a cold Spring context init is
+# CPU-bound and can take ~20s+, pushing total startup past 60s. Render scans for an open
+# HTTP port and fails the deploy ("Port scan timeout reached, no open ports detected") if the
+# Tomcat connector hasn't started accepting connections in time. Tomcat only begins accepting
+# at the very end of context refresh, AFTER every singleton bean is built — so the faster the
+# context refreshes, the sooner the port opens.
 spring:
   main:
-    # Defer bean creation until first use so context refresh finishes sooner. Flyway is
-    # force-eager via FlywayEagerInitConfig, so schema migrations still run before traffic.
+    # Defer bean creation until first use so context refresh finishes (and the port opens)
+    # much sooner. Flyway is force-eager via FlywayEagerInitConfig so schema migrations still
+    # run before the app serves any traffic.
     lazy-initialization: true
   datasource:
     url: ${SPRING_DATASOURCE_URL}
     username: ${SPRING_DATASOURCE_USERNAME}
     password: ${SPRING_DATASOURCE_PASSWORD}
     hikari:
-      # Do not pre-open idle connections during startup. Connections are created on demand,
-      # while Flyway still verifies the database during startup.
+      # Don't pre-open idle connections during startup; each one round-trips to the Supabase
+      # DB in Tokyo (~70-90ms). Connections are created on demand instead.
       minimum-idle: 0
-      # Do not block startup waiting on the pool to fill; Flyway still validates DB reachability.
+      # Never block startup waiting on the pool to fill; surface DB errors on first use.
       initialization-fail-timeout: -1
   flyway:
+    # Bounded retry so a momentarily-cold DB doesn't hang the migration step.
     connect-retries: 3
     connect-retries-interval: 5
-
-app:
-  uploads-dir: ${APP_UPLOADS_DIR}
-
-springdoc:
-  api-docs:
-    enabled: false
-  swagger-ui:
-    enabled: false
+    # gl-r-erp.onrender.com is a demo/showcase deploy (not real prod), so it additionally
+    # applies db/migration-demo (demo login/seed data + follow-up fixups) on top of the normal
+    # migrations. Kept out of the default location so unit/CI/local runs never seed it.
+    # NOTE: Flyway validates version numbers across BOTH locations combined, so a migration-demo
+    # file must not reuse a version already used in db/migration (and vice versa) - check both
+    # directories before picking the next number, or the prod-profile deploy fails at validate().
+    locations: classpath:db/migration,classpath:db/migration-demo

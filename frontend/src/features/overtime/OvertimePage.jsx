@@ -5,7 +5,6 @@ import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
-import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
@@ -178,8 +177,8 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
   }, [requestsQuery.error, showToast]);
 
   const submitEmployeeOptions = useMemo(
-    () => employeeOptions.filter((employee) => employee.self || employee.directReport),
-    [employeeOptions],
+    () => employeeOptions.filter((employee) => employee.self || employee.directReport || user.role === 'admin'),
+    [employeeOptions, user.role],
   );
   const canSubmitForTeam = submitEmployeeOptions.some((employee) => employee.directReport);
   const hasMultipleEmployeeOptions = employeeOptions.length > 1;
@@ -334,7 +333,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
   }
 
   function canCeoApprove(request) {
-    return request.status === 'MANAGER_APPROVED' && hasPermission(user.role, 'canFinalApproveOvertime');
+    return request.status === 'MANAGER_APPROVED' && user.role === 'ceo';
   }
 
   function canReviewRequest(request) {
@@ -545,7 +544,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
                 </small>
               </span>
               <span data-label="เหตุผล">
-                <strong title={request.reason}>{request.reason}</strong>
+                <strong>{request.reason}</strong>
                 <small>{request.reviewerNote || request.calculationNote || '-'}</small>
               </span>
               <span data-label="เวลาจริง / จ่ายได้">

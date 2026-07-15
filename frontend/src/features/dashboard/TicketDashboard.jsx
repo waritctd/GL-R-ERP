@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -19,7 +19,7 @@ function GreetingSubtitle({ role }) {
   return 'ภาพรวมใบขอราคา';
 }
 
-const SHOW_SALES_ROLES = ['import', 'ceo'];
+const SHOW_SALES_ROLES = ['import', 'ceo', 'admin'];
 
 export function TicketDashboard({ user, employee, showToast }) {
   const navigate = useNavigate();
@@ -27,27 +27,26 @@ export function TicketDashboard({ user, employee, showToast }) {
   const [recent, setRecent] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [summaryRes, ticketsRes] = await Promise.all([
-        api.dashboard.summary(),
-        api.tickets.list({}),
-      ]);
-      const nextSummary = summaryRes?.summary ?? summaryRes ?? null;
-      setSummary(nextSummary?.tickets ?? nextSummary);
-      const tickets = Array.isArray(ticketsRes) ? ticketsRes : (ticketsRes?.tickets ?? []);
-      setRecent(tickets.slice(0, 6));
-    } catch (err) {
-      showToast('error', err.message || 'โหลดข้อมูลไม่สำเร็จ');
-    } finally {
-      setLoading(false);
-    }
-  }, [showToast]);
-
   useEffect(() => {
+    async function load() {
+      setLoading(true);
+      try {
+        const [summaryRes, ticketsRes] = await Promise.all([
+          api.dashboard.summary(),
+          api.tickets.list({}),
+        ]);
+        const nextSummary = summaryRes?.summary ?? summaryRes ?? null;
+        setSummary(nextSummary?.tickets ?? nextSummary);
+        const tickets = Array.isArray(ticketsRes) ? ticketsRes : (ticketsRes?.tickets ?? []);
+        setRecent(tickets.slice(0, 6));
+      } catch (err) {
+        showToast('error', err.message || 'โหลดข้อมูลไม่สำเร็จ');
+      } finally {
+        setLoading(false);
+      }
+    }
     load();
-  }, [load]);
+  }, []);
 
   const greeting = `สวัสดี, ${employee?.nickName || employee?.nameTh || user.name}`;
 

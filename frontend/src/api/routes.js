@@ -58,8 +58,25 @@ export const API_ROUTES = {
     noteTemplates: '/api/document-note-templates',
     remainingInvoiceFile: (ticketId) => `/api/tickets/${ticketId}/remaining-invoice/file`,
   },
+  documents: {
+    get: (id) => `/api/documents/${id}`,
+    update: (id) => `/api/documents/${id}`,
+    preview: (id) => `/api/documents/${id}/preview`,
+    issue: (id) => `/api/documents/${id}/issue`,
+    file: (id, fmt) => `/api/documents/${id}/file?format=${fmt}`,
+    noteTemplates: '/api/document-note-templates',
+  },
   catalog: {
     search: (q) => `/api/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`,
+    prices: (q, factoryId, limit) => {
+      const p = new URLSearchParams();
+      if (q) p.set('q', q);
+      if (factoryId) p.set('factoryId', factoryId);
+      if (limit) p.set('limit', limit);
+      return `/api/catalog/prices${p.toString() ? `?${p}` : ''}`;
+    },
+    pricesBase: '/api/catalog/prices',
+    price: (priceId) => `/api/catalog/prices/${priceId}`,
   },
   factoryConfigs: {
     list: '/api/factory-configs',
@@ -113,31 +130,40 @@ export const API_ROUTES = {
     ownPayslip: (periodId) => `/api/payroll/${periodId}/payslip/me`,
     distribute: (periodId) => `/api/payroll/${periodId}/distribute`,
   },
+  priceImport: {
+    factories: '/api/price-import/factories',
+    versions: (factoryId) => `/api/price-import/versions?factoryId=${factoryId}`,
+    upload: '/api/price-import/upload',
+    uploadCommit: '/api/price-import/upload-commit',
+    validate: (versionId) => `/api/price-import/validate/${versionId}`,
+    staging: (versionId) => `/api/price-import/staging/${versionId}`,
+    commit: (versionId) => `/api/price-import/commit/${versionId}`,
+    profile: (factoryId) => `/api/price-import/profile/${factoryId}`,
+  },
 };
 
 export const ROLE_PERMISSIONS = {
   canUseEmployeeExperience: ['employee'],
   canSubmitProfileRequests: ['employee'],
-  canViewEmployees: ['hr'],
-  canManageEmployees: ['hr'],
-  canViewSensitiveEmployeeData: ['hr'],
-  canReviewProfileRequests: ['hr'],
+  canViewEmployees: ['hr', 'admin'],
+  canManageEmployees: ['hr', 'admin'],
+  canReviewProfileRequests: ['hr', 'admin'],
   canViewAllAttendance: ['hr', 'ceo'],
   canImportAttendance: ['hr', 'ceo'],
-  canViewAllOvertime: ['hr', 'ceo'],
-  canFinalApproveOvertime: ['ceo'],
-  canViewAllLeave: ['hr', 'ceo'],
-  canReviewLeave: ['hr'],
+  canViewAllOvertime: ['hr', 'ceo', 'admin'],
+  canViewAllLeave: ['hr', 'ceo', 'admin'],
+  canReviewLeave: ['hr', 'admin'],
   // Sales module
-  canViewTickets: ['sales', 'import', 'ceo'],
-  canCreateTickets: ['sales'],
-  canPickupTickets: ['import'],
-  canProposePrices: ['import'],
-  canApproveReject: ['ceo'],
-  canGenerateQuotation: ['sales'],
-  canViewCommissions: ['sales', 'sales_manager', 'ceo', 'hr'],
-  canSubmitCommissions: ['sales', 'sales_manager', 'ceo'],
-  canApproveCommissions: ['sales_manager', 'ceo'],
-  canViewPayrollCommissions: ['hr'],
-  canManagePayroll: ['hr'],
+  canViewTickets: ['sales', 'import', 'ceo', 'admin'],
+  canCreateTickets: ['sales', 'admin'],
+  canPickupTickets: ['import', 'admin'],
+  canProposePrices: ['import', 'admin'],
+  canApproveReject: ['ceo', 'admin'],
+  canGenerateQuotation: ['sales', 'admin'],
+  canViewCommissions: ['sales', 'sales_manager', 'ceo', 'hr', 'admin'],
+  canSubmitCommissions: ['sales', 'sales_manager', 'ceo', 'admin'],
+  canApproveCommissions: ['sales_manager', 'ceo', 'admin'],
+  canViewPayrollCommissions: ['hr', 'admin'],
+  canManagePayroll: ['hr', 'admin'],
+  canManagePriceImport: ['ceo', 'import', 'admin', 'sales', 'sales_manager'],
 };

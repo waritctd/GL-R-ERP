@@ -19,7 +19,7 @@ public class ContactRepository {
         return jdbc.query(
             """
             SELECT contact_id, customer_id, first_name, last_name, position, email, phone
-              FROM sales.contact
+              FROM customers.contact
              WHERE customer_id = :customerId
              ORDER BY first_name
             """,
@@ -33,7 +33,7 @@ public class ContactRepository {
         var kh = new GeneratedKeyHolder();
         jdbc.update(
             """
-            INSERT INTO sales.contact (customer_id, first_name, last_name, position, email, phone)
+            INSERT INTO customers.contact (customer_id, first_name, last_name, position, email, phone)
             VALUES (:customerId, :firstName, :lastName, :position, :email, :phone)
             """,
             new MapSqlParameterSource()
@@ -47,7 +47,7 @@ public class ContactRepository {
         );
         long id = kh.getKey().longValue();
         return jdbc.queryForObject(
-            "SELECT contact_id, customer_id, first_name, last_name, position, email, phone FROM sales.contact WHERE contact_id = :id",
+            "SELECT contact_id, customer_id, first_name, last_name, position, email, phone FROM customers.contact WHERE contact_id = :id",
             Map.of("id", id), (rs, i) -> map(rs)
         );
     }

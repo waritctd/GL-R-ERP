@@ -29,13 +29,6 @@ public class DepositNoticeController {
         this.sessions = sessions;
     }
 
-    // Note templates
-    @GetMapping("/document-note-templates")
-    Map<String, List<DocumentNoteTemplateDto>> noteTemplates(HttpSession session) {
-        sessions.requireUser(session);
-        return Map.of("templates", service.getNoteTemplates());
-    }
-
     // Draft creation from ticket
     @PostMapping("/tickets/{ticketId}/deposit-notice/draft")
     Map<String, DepositNoticeDto> createDraft(
@@ -50,15 +43,15 @@ public class DepositNoticeController {
     // List documents for a ticket
     @GetMapping("/tickets/{ticketId}/deposit-notices")
     Map<String, List<DepositNoticeDto>> listByTicket(@PathVariable long ticketId, HttpSession session) {
-        UserPrincipal user = sessions.requireUser(session);
-        return Map.of("depositNotices", service.listByTicket(ticketId, user));
+        sessions.requireUser(session);
+        return Map.of("depositNotices", service.listByTicket(ticketId));
     }
 
     // Get single document
     @GetMapping("/deposit-notices/{docId}")
     Map<String, DepositNoticeDto> getDoc(@PathVariable long docId, HttpSession session) {
-        UserPrincipal user = sessions.requireUser(session);
-        return Map.of("depositNotice", service.getById(docId, user));
+        sessions.requireUser(session);
+        return Map.of("depositNotice", service.getById(docId));
     }
 
     // Update draft
@@ -97,7 +90,7 @@ public class DepositNoticeController {
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        DepositNoticeDto doc = service.getById(docId, user);
+        DepositNoticeDto doc = service.getById(docId);
         String normalized = format == null ? "pdf" : format.trim().toLowerCase();
         if ("xlsx".equals(normalized)) {
             byte[] bytes = service.getXlsx(docId, user);
@@ -114,18 +107,6 @@ public class DepositNoticeController {
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
             .contentType(MediaType.APPLICATION_PDF)
             .body(bytes);
-    }
-
-    // Revision request (Part A)
-    @PostMapping("/tickets/{ticketId}/revision")
-    Map<String, Object> requestRevision(
-        @PathVariable long ticketId,
-        @Valid @RequestBody RevisionRequest req,
-        HttpSession session
-    ) {
-        UserPrincipal user = sessions.requireUser(session);
-        var ticket = service.requestRevision(ticketId, req, user);
-        return Map.of("ticket", ticket);
     }
 
     // Remaining invoice download (ข้อ 13.5)

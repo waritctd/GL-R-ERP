@@ -2,12 +2,94 @@
   box-sizing: border-box;
 }
 
-/* All design tokens (typography/spacing/radius/shadow/color) live in
-   index.css's `@theme` block, which Tailwind v4 compiles into real `:root`
-   custom properties — these hand-written rules reference the same `var(--x)`
-   names without redeclaring them, so there is one source of truth. */
 :root {
   color-scheme: light;
+
+  /* Typography */
+  --font-family: 'Sarabun', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 22px;
+  --text-2xl: 26px;
+  --text-3xl: 28px;
+  --text-4xl: 34px;
+
+  /* Spacing scale (only used where it matches the original value exactly) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+
+  /* Radius */
+  --radius-sm: 3px;
+  --radius-md: 8px;
+  --radius-lg: 20px;
+  --radius-pill: 999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.03);
+  --shadow-md: 0 18px 44px rgba(2, 6, 23, 0.28);
+  --shadow-lg: 0 24px 70px rgba(2, 6, 23, 0.24);
+  --shadow-lg-heavy: 0 24px 70px rgba(2, 6, 23, 0.28);
+  --shadow-focus-ring: 0 0 0 3px rgba(99, 102, 241, 0.13);
+  --shadow-inset-active: inset 3px 0 0 #2563eb;
+
+  /* Brand / semantic colors */
+  --color-primary: #4f46e5;
+  --color-primary-hover: #6366f1;
+  --color-accent: #14b8a6;
+  --color-accent-dark: #0f766e;
+  --color-success: #059669;
+  --color-success-dark: #15803d;
+  --color-success-bg: #dcfce7;
+  --color-success-soft: #22c55e;
+  --color-success-text: #ecfdf5;
+  --color-warning: #b45309;
+  --color-warning-bg: #fef3c7;
+  --color-danger: #dc2626;
+  --color-danger-dark: #b91c1c;
+  --color-danger-bg: #fee2e2;
+  --color-danger-border: #fecaca;
+  --color-danger-soft: #f87171;
+  --color-info: #1d4ed8;
+  --color-info-dark: #4338ca;
+  --color-info-bg: #dbeafe;
+  --color-info-bg-alt: #eef2ff;
+  --color-info-row-active: #eff6ff;
+  --color-info-dot: #1e40af;
+  --color-indigo-ring: #2563eb;
+  --color-teal-border: #99f6e4;
+  --color-teal-focus: #34d399;
+
+  /* Neutrals / surfaces */
+  --color-bg: #eef1f6;
+  --color-bg-alt: #101827;
+  --color-surface: #fff;
+  --color-surface-muted: #f8fafc;
+  --color-surface-hover: #fbfcff;
+  --color-surface-subtle: #f1f5f9;
+  --color-text: #0f172a;
+  --color-text-secondary: #334155;
+  --color-text-muted: #64748b;
+  --color-text-faint: #94a3b8;
+  --color-icon-muted: #475569;
+  --color-border: #e6eaf0;
+  --color-border-strong: #d9e0ea;
+  --color-border-input: #dfe5ee;
+  --color-border-subtle: #e2e8f0;
+
+  /* Sidebar / dark surfaces */
+  --color-sidebar-bg: #0b1220;
+  --color-sidebar-text: #cbd5e1;
+
   font-family: var(--font-family);
   background: var(--color-bg);
   color: var(--color-text);
@@ -37,49 +119,6 @@ button {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
-}
-
-button:focus-visible,
-a:focus-visible,
-summary:focus-visible,
-[role="tab"]:focus-visible,
-[role="button"]:focus-visible,
-[tabindex]:not([tabindex="-1"]):focus-visible {
-  outline: none;
-  box-shadow: var(--shadow-focus-ring);
-}
-
-/* Skip-to-content link (AppShell.jsx): visually hidden until keyboard-focused.
-   A plain rule instead of Tailwind's `sr-only`/`not-sr-only` pair — the
-   `focus:not-sr-only` variant compiles to an empty rule body in this
-   toolchain, so the reveal-on-focus behavior wouldn't work via utilities. */
-.skip-link {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border-width: 0;
-}
-
-.skip-link:focus {
-  position: fixed;
-  top: 8px;
-  left: 8px;
-  z-index: 50;
-  width: auto;
-  height: auto;
-  padding: 8px 16px;
-  margin: 0;
-  overflow: visible;
-  clip-path: none;
-  white-space: normal;
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  box-shadow: var(--shadow-md);
 }
 
 code {
@@ -525,22 +564,6 @@ textarea:focus {
   padding: 0;
 }
 
-/* Touch devices (no reliable mouse/hover): guarantee 44px touch targets
-   regardless of a control's visual density. */
-@media (pointer: coarse) {
-  input,
-  select,
-  textarea,
-  .primary-button,
-  .secondary-button,
-  .success-button,
-  .danger-button,
-  .text-button,
-  .back-button {
-    min-height: 44px;
-  }
-}
-
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -615,11 +638,10 @@ textarea:focus {
   font-size: var(--text-3xl);
   font-weight: 800;
   line-height: 1.1;
-  font-variant-numeric: tabular-nums;
 }
 
 .stat-label {
-  margin-top: var(--space-2);
+  margin-top: 5px;
   font-weight: 700;
 }
 
@@ -647,7 +669,7 @@ textarea:focus {
 .timeline-list,
 .salary-history {
   display: grid;
-  gap: var(--space-3);
+  gap: 10px;
 }
 
 .bar-row {
@@ -791,7 +813,6 @@ textarea:focus {
   font-weight: 800;
   text-align: left;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 .table-head.is-sticky {
@@ -1310,7 +1331,6 @@ a.status-badge {
   color: var(--color-surface);
   font-size: var(--text-4xl);
   font-weight: 800;
-  font-variant-numeric: tabular-nums;
 }
 
 .timeline-list > div {
@@ -1540,6 +1560,11 @@ a.status-badge {
   background: var(--color-surface-hover);
 }
 
+.collapsible-header-button:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus-ring);
+}
+
 .collapsible-header-right {
   padding-right: var(--space-4);
 }
@@ -1611,6 +1636,11 @@ a.status-badge {
   background: var(--color-info-bg-alt);
   color: var(--color-info-dark);
   border-color: var(--color-info);
+}
+
+.info-tip-trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus-ring);
 }
 
 .info-tip-bubble {

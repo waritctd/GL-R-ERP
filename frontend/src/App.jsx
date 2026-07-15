@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { api } from './api/index.js';
 import { AppShell } from './components/layout/AppShell.jsx';
@@ -34,6 +34,8 @@ const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.
 const PayrollPage = lazy(() => import('./features/payroll/PayrollPage.jsx').then(toDefault('PayrollPage')));
 const DepositNoticePage = lazy(() => import('./features/deposits/DepositNoticePage.jsx').then(toDefault('DepositNoticePage')));
 const CeoSettingsPage = lazy(() => import('./features/ceoSettings/CeoSettingsPage.jsx').then(toDefault('CeoSettingsPage')));
+const PriceImportPage = lazy(() => import('./features/catalog/PriceImportPage.jsx').then(toDefault('PriceImportPage')));
+const CatalogSearchPage = lazy(() => import('./features/catalog/CatalogSearchPage.jsx').then(toDefault('CatalogSearchPage')));
 
 // Thin wrappers that source the ticket id from the URL for the frozen sales
 // pages (they already fetch by id internally — branch 5 only rewires how the
@@ -68,7 +70,6 @@ function DepositNoticeRoute({ user, showToast }) {
 
 export function App() {
   const [user, setUser] = useState(null);
-  const [authRestoring, setAuthRestoring] = useState(true);
   const [loading, setLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
@@ -84,7 +85,6 @@ export function App() {
     updateEmployee,
     createProfileRequest,
     reviewProfileRequest,
-    reviewingProfileRequest,
   } = useHrData({ user, showToast });
 
   const ownRequests = useMemo(
@@ -104,8 +104,6 @@ export function App() {
         setUser(response.user);
       } catch {
         if (alive) setUser(null);
-      } finally {
-        if (alive) setAuthRestoring(false);
       }
     }
     restoreSession();
@@ -118,7 +116,6 @@ export function App() {
     try {
       const response = await api.auth.login(payload);
       setUser(response.user);
-      setAuthRestoring(false);
       showToast('success', 'เข้าสู่ระบบสำเร็จ');
     } catch (error) {
       setLoginError(error.message || 'เข้าสู่ระบบไม่สำเร็จ');
@@ -141,18 +138,8 @@ export function App() {
   async function handleLogout() {
     await api.auth.logout();
     setUser(null);
-    setAuthRestoring(false);
     resetData();
     navigate('/');
-  }
-
-  if (authRestoring) {
-    return (
-      <>
-        <RouteFallback />
-        <Toast toast={toast} onDismiss={dismissToast} />
-      </>
-    );
   }
 
   if (!user) {
@@ -234,13 +221,7 @@ export function App() {
             />
             <Route
               path="/requests"
-              element={(
-                <ProfileRequestsPage
-                  profileRequests={profileRequests}
-                  onReview={reviewProfileRequest}
-                  reviewing={reviewingProfileRequest}
-                />
-              )}
+              element={<ProfileRequestsPage profileRequests={profileRequests} onReview={reviewProfileRequest} />}
             />
             <Route
               path="/my-requests"
@@ -300,9 +281,15 @@ export function App() {
             path="/attendance"
             element={<AttendancePage user={user} employees={employees} showToast={showToast} />}
           />
-          {/* /ceo-settings is nav-gated only — not in PATH_GUARDS (see permissions.js). */}
+          {/* /ceo-settings had no allowedRoute guard historically (nav-gated only). */}
           {SALES_ENABLED && (
             <Route path="/ceo-settings" element={<CeoSettingsPage showToast={showToast} />} />
+          )}
+          {SALES_ENABLED && (
+            <Route path="/price-import" element={<PriceImportPage showToast={showToast} />} />
+          )}
+          {SALES_ENABLED && (
+            <Route path="/catalog" element={<CatalogSearchPage user={user} showToast={showToast} />} />
           )}
 
           <Route path="*" element={<Navigate to="/" replace />} />

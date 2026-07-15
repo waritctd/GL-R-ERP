@@ -1,0 +1,346 @@
+{
+  "_readme": "Seed data สำหรับตาราง import_profiles (JSONB). โรงงานใหม่ให้ผู้ใช้ map เองผ่าน GUI แล้ว save เป็น profile ใหม่ ไม่ต้องแก้โค้ด",
+  "_field_targets": [
+    "product_code",
+    "grade",
+    "collection",
+    "product_name",
+    "color",
+    "surface",
+    "size_raw",
+    "thickness_mm",
+    "price",
+    "currency",
+    "unit",
+    "pcs_per_box",
+    "sqm_per_box",
+    "kg_per_box",
+    "barcode"
+  ],
+  "profiles": [
+    {
+      "factory": "Panaria",
+      "country": "IT",
+      "default_currency": "EUR",
+      "number_format": "eu",
+      "sheets": [
+        {
+          "name": "PAN",
+          "header_row": 2
+        }
+      ],
+      "columns": {
+        "product_code": "CODICE ART",
+        "collection": "SERIE",
+        "product_name": "DESCRIZIONE ART",
+        "color": "COLORE",
+        "surface": "BORDO",
+        "size_raw": "FORMATO",
+        "thickness_mm": "SPESSORE",
+        "price": "PRZ_1SCE_EST",
+        "currency": "DIVISA",
+        "unit": "UM_VEN",
+        "pcs_per_box": "PZ_SCA",
+        "sqm_per_box": "MQ_SCA",
+        "kg_per_box": "KG_SCA",
+        "barcode": "BARCODE"
+      },
+      "notes": "header อยู่แถว 2 (แถว 1 เป็น title). มี DATA PRZ = วันที่ราคา"
+    },
+    {
+      "factory": "LEA",
+      "country": "IT",
+      "default_currency": "EUR",
+      "number_format": "eu",
+      "sheets": [
+        {
+          "name": "LEA",
+          "header_row": 1
+        }
+      ],
+      "columns": {
+        "product_code": "CODICE ART",
+        "collection": "SERIE",
+        "product_name": "DESCRIZIONE ART",
+        "color": "COLORE",
+        "surface": "BORDO",
+        "size_raw": "FORMATO",
+        "thickness_mm": "SPESSORE",
+        "price": "Prezzo Lordo 1°",
+        "unit": "UMV",
+        "pcs_per_box": "PZ_SCA",
+        "sqm_per_box": "MQ_SCA",
+        "kg_per_box": "KG_SCA",
+        "barcode": "BARCODE"
+      },
+      "notes": "ไม่มีคอลัมน์สกุลเงิน -> ใช้ default EUR"
+    },
+    {
+      "factory": "Padana",
+      "country": "IT",
+      "default_currency": "EUR",
+      "number_format": "eu",
+      "sheets": [
+        {
+          "name": "Sheet1",
+          "header_row": 1
+        }
+      ],
+      "columns": {
+        "product_code": "Articolo",
+        "grade": "Scelta",
+        "collection": "Descrizione Serie",
+        "product_name": "Descrizione Articolo",
+        "size_raw": "Formato",
+        "thickness_mm": "Spessore",
+        "price": "Prezzo",
+        "unit": "Unità",
+        "pcs_per_box": "PZ/SC",
+        "sqm_per_box": "MQ/SC",
+        "kg_per_box": "KG/SC",
+        "barcode": "EAN"
+      },
+      "notes": "⚠ Articolo ซ้ำ! ต้องใช้ (Articolo + Scelta) เป็น key. Scelta A01=เกรด1 A02=เกรด2 ราคาต่างกัน. ไฟล์ stylesheet เสีย -> ต้อง re-save ผ่าน LibreOffice ก่อน"
+    },
+    {
+      "factory": "CDE",
+      "country": "IT",
+      "default_currency": "EUR",
+      "number_format": "eu",
+      "sheets": [
+        {
+          "name": "LIST E1_E20 2026",
+          "header_row": 1
+        }
+      ],
+      "columns": {
+        "product_code": "ITEM ",
+        "collection": "RANGE",
+        "product_name": "DESCRIPTION",
+        "color": "COLOR",
+        "surface": "FINISH ",
+        "size_raw": "SIZE",
+        "thickness_mm": "THICKNESS MM",
+        "price": "PRICE ",
+        "currency": "DIVISA",
+        "unit": "UOM",
+        "pcs_per_box": "PCS_BOX",
+        "sqm_per_box": "SQM_BOX",
+        "kg_per_box": "KGS_BOX",
+        "barcode": "BARCODE"
+      },
+      "notes": "ระวังชื่อคอลัมน์มีช่องว่างท้าย ('ITEM ', 'PRICE ', 'FINISH ') -> ต้อง trim ตอน match header"
+    },
+    {
+      "factory": "CITY",
+      "country": "IT",
+      "default_currency": "EUR",
+      "number_format": "eu",
+      "sheets": [
+        {
+          "name": "Contract Solutions",
+          "header_row": 1
+        },
+        {
+          "name": "Outdoor Solutions",
+          "header_row": 1
+        }
+      ],
+      "columns": {
+        "product_code": "Code",
+        "collection": "Collection",
+        "product_name": "Item",
+        "size_raw": "Size (cm)",
+        "thickness_mm": "Thick (mm)",
+        "price": "PRICE 2026",
+        "unit": "Um",
+        "pcs_per_box": "Pcs/Box",
+        "sqm_per_box": "m²/Box",
+        "kg_per_box": "Kg/Box"
+      },
+      "notes": "2 ชีต ใช้ mapping เดียวกันได้"
+    },
+    {
+      "factory": "REFIN",
+      "country": "IT",
+      "default_currency": "EUR",
+      "number_format": "eu",
+      "sheets": [
+        {
+          "name": "Collections",
+          "header_row": 1
+        },
+        {
+          "name": "RELIEFS_recap",
+          "header_row": 1
+        },
+        {
+          "name": "Large-Slabs_recap",
+          "header_row": 1
+        },
+        {
+          "name": "OUT2.0_recap",
+          "header_row": 1
+        },
+        {
+          "name": "OUT2.0_accessories",
+          "header_row": 1
+        },
+        {
+          "name": "Trim-Tiles",
+          "header_row": 1
+        },
+        {
+          "name": "Balneo-Project",
+          "header_row": 1
+        }
+      ],
+      "columns": {
+        "product_code": "Code",
+        "collection": "Collection",
+        "product_name": "Item",
+        "size_raw": "Size (cm)",
+        "thickness_mm": "Thickness (mm)",
+        "price": "PRICE 2025",
+        "unit": "Um",
+        "pcs_per_box": "Pcs/Box",
+        "sqm_per_box": "m²/Box",
+        "kg_per_box": "Kg/Box"
+      },
+      "column_aliases": {
+        "product_code": [
+          "Code",
+          "CODE"
+        ],
+        "collection": [
+          "Collection",
+          "COLLECTION"
+        ],
+        "product_name": [
+          "Item",
+          "ITEM"
+        ],
+        "size_raw": [
+          "Size (cm)",
+          "SIZE (cm)"
+        ],
+        "surface": [
+          "SURFACE"
+        ],
+        "price": [
+          "PRICE 2025",
+          "PRICE 2025 ",
+          "PRICE 2026"
+        ],
+        "unit": [
+          "Um",
+          "UM"
+        ]
+      },
+      "allow_missing_code": true,
+      "notes": "⚠ 7 ชีต หัวตารางไม่เหมือนกัน! Trim-Tiles ไม่มีคอลัมน์ Code, Balneo-Project ใช้ตัวพิมพ์ใหญ่+มี SURFACE, OUT2.0_accessories ไม่มี Size. ใช้ column_aliases + allow_missing_code (สร้าง surrogate key จาก collection+item+size). ⚠ หัวเขียน 'PRICE 2025' แต่เป็นไฟล์ 2026 -> อย่า parse ปีจากชื่อคอลัมน์ ⚠ ชีต Balneo-Project มีเซลล์ COLLECTION/ITEM/SIZE เว้นว่างแบบ merged (แถวต่อเนื่อง) -> ต้อง fill-down เฉพาะชีตนี้ (ดู fill_down_per_sheet). engine ต้องรองรับ fill-down ระดับชีต ไม่ใช่ระดับไฟล์",
+      "fill_down_per_sheet": {
+        "Balneo-Project": [
+          "COLLECTION",
+          "ITEM",
+          "SIZE (cm)"
+        ]
+      }
+    },
+    {
+      "factory": "Equipe",
+      "country": "ES",
+      "default_currency": "EUR",
+      "number_format": "eu",
+      "sheets": [
+        {
+          "name": "EXTRACOMUNITARIOS",
+          "header_row": 1
+        }
+      ],
+      "columns": {
+        "product_code": "Artículo",
+        "collection": "Colección",
+        "product_name": "Descripción",
+        "unit": "Unidad",
+        "pcs_per_box": "PZ / CJ",
+        "sqm_per_box": "M2 / CJ",
+        "kg_per_box": "KG / CJ",
+        "barcode": "EAN13"
+      },
+      "price_column_rule": {
+        "type": "choose",
+        "options": [
+          "Precio Pallet",
+          "Precio Picking",
+          "Precio Sueltas"
+        ],
+        "selected": "Precio Pallet",
+        "keep_all_as": "price_variants"
+      },
+      "size_from": "product_name",
+      "notes": "⚠ ราคา 3 คอลัมน์ (ยกพาเลท/หยิบ/แยกชิ้น) -> CEO เลือกว่าใช้อันไหน, เก็บที่เหลือใน price_variants. ขนาดไม่มีคอลัมน์แยก -> ต้อง parse จาก Descripción (เช่น '1,2X20 JOLLY ALTEA ASH')"
+    },
+    {
+      "factory": "Vives",
+      "country": "ES",
+      "default_currency": "EUR",
+      "number_format": "eu",
+      "sheets": [
+        {
+          "name": "Hoja1",
+          "header_row": 1
+        }
+      ],
+      "columns": {
+        "product_code": "MODELO",
+        "collection": "SERIE",
+        "product_name": "NOMBRE",
+        "size_raw": "FORMATO",
+        "pcs_per_box": "PIEZCAJA",
+        "sqm_per_box": "METROCAJ",
+        "kg_per_box": "PESOCAJA",
+        "barcode": "EAN"
+      },
+      "price_column_rule": {
+        "type": "first_non_empty",
+        "map": {
+          "PREPIEZA": "per_piece",
+          "PREMETRO": "per_sqm"
+        }
+      },
+      "size_format": "apostrophe_decimal",
+      "notes": "⚠ ราคาอยู่ PREPIEZA หรือ PREMETRO อันใดอันหนึ่ง (ไม่เคยมีพร้อมกัน) -> หน่วยราคาตามคอลัมน์ที่มีค่า **อย่าใช้ UMEDIDA ตัดสิน** (ไม่ตรงกัน). ⚠ ขนาดใช้ ' เป็นทศนิยม: 15'8X31'6 = 15.8x31.6 cm. ตัวเลขเป็น string มีเว้นวรรค+comma decimal. CODIGO ซ้ำทุกแถว (เป็นรหัส list) -> ใช้ MODELO เป็นรหัสสินค้า"
+    },
+    {
+      "factory": "Bode",
+      "country": "CN",
+      "default_currency": "USD",
+      "number_format": "us",
+      "sheets": [
+        {
+          "name": "工作表1",
+          "header_row": 11
+        }
+      ],
+      "columns": {
+        "collection": "series",
+        "product_code": "code",
+        "size_raw": "size",
+        "surface": "finish",
+        "price": "USD/M2, FOB WITHOUT ORC/THC"
+      },
+      "defaults": {
+        "unit": "per_sqm",
+        "currency": "USD"
+      },
+      "fill_down": [
+        "series"
+      ],
+      "split_column": {
+        "code": ","
+      },
+      "notes": "⚠ ไม่ใช่ price list มาตรฐาน = quotation sheet (header แถว 11). series เว้นว่างแบบ merged -> fill-down. 1 เซลล์ code มี 2 รหัสคั่น comma -> แตกเป็นหลายแถว. ราคา USD ต่อ M2 (FOB) ไม่ใช่ EUR"
+    }
+  ]
+}

@@ -1,7 +1,6 @@
 // Named imports are lucide-react's stable public API. Earlier this file used deep
 // `lucide-react/dist/esm/icons/*.js` paths, which v1 removed (internal layout change);
 // Vite tree-shakes these named imports so only the icons below ship in the bundle.
-import React from 'react';
 import {
   Badge,
   BadgeDollarSign,

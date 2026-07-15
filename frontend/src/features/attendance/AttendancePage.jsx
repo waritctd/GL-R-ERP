@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
-import { queryKeys } from '../../api/queryKeys.js';
 import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
@@ -26,59 +24,28 @@ const FILTER_BAR_CLASS =
 
 export function AttendancePage({ user, employees, showToast }) {
   const isMobile = useIsMobile();
-  const queryClient = useQueryClient();
   // HR/executives see everyone; ฝ่าย managers get the same view scoped to their division
   // (the backend limits the results to the manager's division).
   const canViewAll = hasPermission(user.role, 'canViewAllAttendance') || Boolean(user.manager);
   const canImport = hasPermission(user.role, 'canImportAttendance');
-  const initialFilters = {
+  const [filters, setFilters] = useState({
     from: monthStartIso(),
     to: todayIso(),
     employeeId: '',
     limit: 500,
-  };
-  const [filters, setFilters] = useState(initialFilters);
-  const [appliedFilters, setAppliedFilters] = useState(initialFilters);
+  });
+  const [punches, setPunches] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
+  const [lastImport, setLastImport] = useState(null);
+  const [devices, setDevices] = useState([]);
   const [importDeviceCode, setImportDeviceCode] = useState('');
 
   const sortedEmployees = useMemo(
     () => [...employees].sort((a, b) => (a.nameTh || '').localeCompare(b.nameTh || '', 'th')),
     [employees],
   );
-
-  const punchesQuery = useQuery({
-    queryKey: queryKeys.attendancePunches(appliedFilters),
-    queryFn: () => api.attendance.list({
-      from: appliedFilters.from,
-      to: appliedFilters.to,
-      limit: appliedFilters.limit,
-      ...(canViewAll && appliedFilters.employeeId ? { employeeId: appliedFilters.employeeId } : {}),
-    }).then((response) => response.punches || []),
-  });
-  const punches = useMemo(() => punchesQuery.data ?? [], [punchesQuery.data]);
-  const loading = punchesQuery.isLoading || punchesQuery.isFetching;
-
-  useEffect(() => {
-    if (punchesQuery.error) showToast('error', punchesQuery.error.message || 'โหลดข้อมูลเวลาทำงานไม่สำเร็จ');
-  }, [punchesQuery.error, showToast]);
-
-  // Load the registered scanners so HR/C-level can attribute an import to the right location.
-  const devicesQuery = useQuery({
-    queryKey: queryKeys.attendanceDevices(),
-    queryFn: () => api.attendance.devices().then((response) => response.devices || []),
-    enabled: canImport,
-  });
-  const devices = useMemo(() => devicesQuery.data ?? [], [devicesQuery.data]);
-
-  // Default the import device once the list lands, without overriding a user pick.
-  useEffect(() => {
-    if (devicesQuery.data && !importDeviceCode) {
-      setImportDeviceCode(devicesQuery.data[0]?.device_code || '');
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mirrors the old effect's "seed once" intent
-  }, [devicesQuery.data]);
-
   const uniqueEmployees = useMemo(() => new Set(punches.map((punch) => punch.employee_id).filter(Boolean)).size, [punches]);
   const unresolvedCount = punches.filter((punch) => !punch.employee_id).length;
   // Multiple scanners/locations feed this table; summarise how many distinct sites appear in the results.
@@ -89,29 +56,55 @@ export function AttendancePage({ user, employees, showToast }) {
     return { value: `${sites.size} สถานที่`, helper: 'หลายเครื่องสแกน' };
   }, [punches]);
 
+  async function loadPunches(nextFilters = filters) {
+    setLoading(true);
+    try {
+      const params = {
+        from: nextFilters.from,
+        to: nextFilters.to,
+        limit: nextFilters.limit,
+        ...(canViewAll && nextFilters.employeeId ? { employeeId: nextFilters.employeeId } : {}),
+      };
+      const response = await api.attendance.list(params);
+      setPunches(response.punches || []);
+    } catch (error) {
+      showToast('error', error.message || 'โหลดข้อมูลเวลาทำงานไม่สำเร็จ');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadPunches();
+  }, []);
+
+  // Load the registered scanners so HR/C-level can attribute an import to the right location.
+  useEffect(() => {
+    if (!canImport) return;
+    let cancelled = false;
+    api.attendance.devices()
+      .then((response) => {
+        if (cancelled) return;
+        const list = response.devices || [];
+        setDevices(list);
+        setImportDeviceCode((current) => current || list[0]?.device_code || '');
+      })
+      .catch(() => {
+        if (!cancelled) setDevices([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canImport]);
+
   function updateFilter(field, value) {
     setFilters((current) => ({ ...current, [field]: value }));
   }
 
-  function submitFilters(event) {
+  async function submitFilters(event) {
     event.preventDefault();
-    setAppliedFilters(filters);
+    await loadPunches(filters);
   }
-
-  const importMutation = useMutation({
-    mutationFn: (vars) => api.attendance.importDat(vars.payload),
-    onSuccess: (response, vars) => {
-      showToast('success', response.status === 'duplicate_file' ? 'ไฟล์นี้เคยนำเข้าแล้ว' : 'นำเข้าไฟล์เวลาเรียบร้อย');
-      const nextFilters = vars.detectedRange
-        ? { ...filters, from: vars.detectedRange.from, to: vars.detectedRange.to, employeeId: '' }
-        : filters;
-      setFilters(nextFilters);
-      setAppliedFilters(nextFilters);
-      queryClient.invalidateQueries({ queryKey: queryKeys.attendancePunches(nextFilters) });
-    },
-    onError: (error) => showToast('error', error.message || 'นำเข้าไฟล์ไม่สำเร็จ'),
-  });
-  const lastImport = importMutation.data ?? null;
 
   async function importFile(event) {
     event.preventDefault();
@@ -124,22 +117,29 @@ export function AttendancePage({ user, employees, showToast }) {
       showToast('error', 'เลือกเครื่องสแกน/สถานที่ก่อนนำเข้า');
       return;
     }
-    let content;
+    setImporting(true);
     try {
-      content = await selectedFile.text();
-    } catch (error) {
-      showToast('error', error.message || 'นำเข้าไฟล์ไม่สำเร็จ');
-      return;
-    }
-    importMutation.mutate({
-      payload: {
+      const content = await selectedFile.text();
+      const detectedRange = dateRangeFromDatContent(content);
+      const response = await api.attendance.importDat({
         site_code: device.site_code,
         device_code: device.device_code,
         file_name: selectedFile.name,
         content,
-      },
-      detectedRange: dateRangeFromDatContent(content),
-    });
+      });
+      setLastImport(response);
+      showToast('success', response.status === 'duplicate_file' ? 'ไฟล์นี้เคยนำเข้าแล้ว' : 'นำเข้าไฟล์เวลาเรียบร้อย');
+
+      const nextFilters = detectedRange
+        ? { ...filters, from: detectedRange.from, to: detectedRange.to, employeeId: '' }
+        : filters;
+      setFilters(nextFilters);
+      await loadPunches(nextFilters);
+    } catch (error) {
+      showToast('error', error.message || 'นำเข้าไฟล์ไม่สำเร็จ');
+    } finally {
+      setImporting(false);
+    }
   }
 
   return (
@@ -149,7 +149,7 @@ export function AttendancePage({ user, employees, showToast }) {
         title="เวลาทำงาน"
         subtitle={canViewAll ? 'ตรวจสอบประวัติการสแกนของพนักงานทุกคน' : 'ตรวจสอบประวัติการสแกนของคุณ'}
         actions={(
-          <Button variant="secondary" onClick={() => punchesQuery.refetch()} disabled={loading}>
+          <Button variant="secondary" onClick={() => loadPunches(filters)} disabled={loading}>
             <Icon name="refresh" />
             รีเฟรช
           </Button>
@@ -219,9 +219,9 @@ export function AttendancePage({ user, employees, showToast }) {
             </select>
           </label>
           <input type="file" accept=".dat,text/plain" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} />
-          <Button type="submit" variant="success" className="max-[720px]:w-full" disabled={importMutation.isPending || !selectedFile || !importDeviceCode}>
+          <Button type="submit" variant="success" className="max-[720px]:w-full" disabled={importing || !selectedFile || !importDeviceCode}>
             <Icon name="plus" />
-            {importMutation.isPending ? 'กำลังนำเข้า' : 'นำเข้า'}
+            {importing ? 'กำลังนำเข้า' : 'นำเข้า'}
           </Button>
           {lastImport ? (
             <span className="attendance-import-result">

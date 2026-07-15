@@ -11,7 +11,7 @@ import org.springframework.http.HttpStatus;
  * Writes append-only audit rows for mutating HR actions (issue #4).
  *
  * <p>Intentionally participates in the caller's transaction: if the audit write fails, the mutation
- * it accompanies is rolled back, so no privileged HR change is ever persisted without an audit trail.
+ * it accompanies is rolled back, so no HR/admin change is ever persisted without an audit trail.
  */
 @Service
 public class AuditService {
