@@ -177,7 +177,6 @@ export function AttendancePage({ user, employees, showToast }) {
 
   return (
     <PageStack>
-      {isMobile && <DesktopOnlyNotice />}
       <PageHeader
         title="เวลาทำงาน"
         subtitle={canViewAll ? 'ตรวจสอบประวัติการสแกนของพนักงานทุกคน' : 'ตรวจสอบประวัติการสแกนของคุณ'}
@@ -188,6 +187,7 @@ export function AttendancePage({ user, employees, showToast }) {
           </Button>
         )}
       />
+      {isMobile && <DesktopOnlyNotice />}
 
       <StatGrid>
         <StatCard label="รายการในช่วงที่เลือก" value={punches.length} helper="Punch records" icon="calendar" tone="indigo" />
