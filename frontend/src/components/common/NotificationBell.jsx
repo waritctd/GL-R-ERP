@@ -101,7 +101,7 @@ export function NotificationBell({ onNavigate }) {
 
           <div className="max-h-[360px] overflow-y-auto">
             {items.length === 0 ? (
-              <div className="py-7 px-4 text-center text-text-faint text-sm">
+              <div className="py-7 px-4 text-center text-text-muted text-sm">
                 ไม่มีการแจ้งเตือน
               </div>
             ) : items.map((item) => {
@@ -123,7 +123,7 @@ export function NotificationBell({ onNavigate }) {
                     <span className="!text-sm block leading-[1.45] !text-text">
                       {item.message}
                     </span>
-                    <span className="!text-2xs !text-text-faint mt-[3px] block">
+                    <span className="!text-2xs !text-text-muted mt-[3px] block">
                       {item.ticketCode && <code className="mr-[6px] text-2xs">{item.ticketCode}</code>}
                       {timeAgo(item.createdAt)}
                     </span>

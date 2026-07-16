@@ -98,7 +98,7 @@ export function CeoSettingsPage({ showToast }) {
     }
   }
 
-  if (loading) return <div style={{ padding: 40, color: '#94a3b8' }}>กำลังโหลด...</div>;
+  if (loading) return <div style={{ padding: 40, color: '#64748b' }}>กำลังโหลด...</div>;
 
   return (
     <div className="page-stack">
@@ -114,7 +114,7 @@ export function CeoSettingsPage({ showToast }) {
         </div>
         <div style={{ padding: '8px 18px', fontSize: 11, color: '#64748b', borderBottom: '1px solid #f1f5f9', display: 'flex', gap: 12 }}>
           <span>ดึงอัตโนมัติจาก BOT API ทุกวัน 18:00 (เวลาไทย)</span>
-          <span style={{ color: '#94a3b8' }}>• ตั้งค่า BOT_API_TOKEN เพื่อเปิดใช้งาน</span>
+          <span style={{ color: '#64748b' }}>• ตั้งค่า BOT_API_TOKEN เพื่อเปิดใช้งาน</span>
         </div>
         <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -220,7 +220,7 @@ export function CeoSettingsPage({ showToast }) {
             </tbody>
           </table>
         </div>
-        <div style={{ padding: '10px 16px', borderTop: '1px solid #f1f5f9', fontSize: 11, color: '#94a3b8' }}>
+        <div style={{ padding: '10px 16px', borderTop: '1px solid #f1f5f9', fontSize: 11, color: '#64748b' }}>
           สูตร: CIF = ค่าสินค้า(THB/ตร.ม.) + ค่าเรือ + ประกัน → ต้นทุน = CIF + ภาษี + ขนส่งภายใน → ราคาขาย = ต้นทุน × (1 + Margin)
         </div>
       </section>
@@ -231,7 +231,7 @@ export function CeoSettingsPage({ showToast }) {
           <div style={{ background: '#fff', borderRadius: 12, padding: 24, width: 480, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
             <h3 style={{ margin: '0 0 16px', fontSize: 16, fontWeight: 700 }}>
               แก้ไข config — {editingConfig.country}
-              <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 400, marginLeft: 8 }}>(จะบันทึกเป็นเวอร์ชันใหม่)</span>
+              <span style={{ fontSize: 11, color: '#64748b', fontWeight: 400, marginLeft: 8 }}>(จะบันทึกเป็นเวอร์ชันใหม่)</span>
             </h3>
             <div style={{ display: 'grid', gap: 12 }}>
               {[

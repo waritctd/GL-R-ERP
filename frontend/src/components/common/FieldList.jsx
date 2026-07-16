@@ -14,8 +14,10 @@ export function FieldList({ columns = 2, className, children, ...props }) {
     <dl
       className={cn(
         'grid gap-x-[18px] gap-y-[15px] mt-4 max-[720px]:grid-cols-1',
-        // dt reproduces the shared `.field-list dt` rule (styles.css:304): block/faint/xs/500.
-        '[&_dt]:m-0 [&_dt]:block [&_dt]:text-text-faint [&_dt]:text-xs [&_dt]:font-medium',
+        // dt: field labels are real data captions the user reads, not icons/
+        // placeholders, so per DESIGN.md's Muted Floor Rule they sit at Ink
+        // Muted (not Ink Faint, which is ~2.6:1 on white).
+        '[&_dt]:m-0 [&_dt]:block [&_dt]:text-text-muted [&_dt]:text-xs [&_dt]:font-medium',
         '[&_dd]:m-0 [&_dd]:mt-[3px] [&_dd]:font-bold [&_dd]:text-text [&_dd]:[overflow-wrap:anywhere]',
         columns === 3 ? 'grid-cols-3' : 'grid-cols-2',
         className,
