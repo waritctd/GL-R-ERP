@@ -42,7 +42,15 @@ function kindLabel(kind) {
  * markup below 720px entirely (DataTable's `asCards` path), which removes
  * that overflow and shows only what's needed to identify the record.
  */
-function CommissionCard({ record }) {
+/**
+ * `canReview`/`onApprove`/`onReject` mirror the exact same `canReviewRecord`
+ * check and `setApproveId`/`reject` handlers used by the desktop table's
+ * action column. Without this, mobile users had no way to approve or reject
+ * a commission at all — DataTable's `mobileCard` path renders only this
+ * component and drops the desktop `actions` column entirely, which silently
+ * broke the "CEO/manager can approve or reject" mobile task.
+ */
+function CommissionCard({ record, canReview, isCeoReview, saving, onApprove, onReject }) {
   const status = statusInfo(record.status);
   return (
     <>
@@ -61,6 +69,31 @@ function CommissionCard({ record }) {
         <strong className="text-md font-extrabold text-text">{formatMoney(record.actualReceived)}</strong>
         <span className="text-2xs text-text-muted">ฐาน {formatMoney(record.commissionableBase)}</span>
       </span>
+
+      {canReview && (
+        <div className="mt-1 flex gap-2">
+          <button
+            type="button"
+            className="secondary-button min-h-11 flex-1"
+            style={{ color: 'var(--color-success)', borderColor: 'var(--color-success)' }}
+            disabled={saving}
+            onClick={(event) => { event.stopPropagation(); onApprove(); }}
+          >
+            <Icon name="check" size={14} />
+            {isCeoReview ? 'CEO อนุมัติ' : 'ผู้จัดการอนุมัติ'}
+          </button>
+          <button
+            type="button"
+            className="secondary-button min-h-11 flex-1"
+            style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger)' }}
+            disabled={saving}
+            onClick={(event) => { event.stopPropagation(); onReject(); }}
+          >
+            <Icon name="close" size={14} />
+            ไม่อนุมัติ
+          </button>
+        </div>
+      )}
     </>
   );
 }
@@ -82,6 +115,7 @@ export function CommissionPage({ user, showToast }) {
   const [saving, setSaving] = useState(false);
   const [clawbackId, setClawbackId] = useState(null); // record id pending clawback reason, or null
   const [rejectId, setRejectId] = useState(null);
+  const [approveId, setApproveId] = useState(null); // record id pending approve confirmation, or null
   const [fileInputKey, setFileInputKey] = useState(0);
 
   const canSubmit = ROLE_PERMISSIONS.canSubmitCommissions.includes(user.role);
@@ -198,21 +232,28 @@ export function CommissionPage({ user, showToast }) {
                 <Icon name="pencil" size={14} />
               </button>
               {canReviewRecord(record) && (
+                // Success-tinted (not just muted-gray) so approve reads as the
+                // positive, serious action — matches DESIGN.md success token.
                 <button
                   type="button"
                   className="icon-button"
+                  style={{ color: 'var(--color-success)', borderColor: 'var(--color-success)' }}
                   title={canCeoReview(record) ? 'CEO อนุมัติ' : 'ผู้จัดการอนุมัติ'}
                   aria-label={canCeoReview(record) ? 'CEO อนุมัติ' : 'ผู้จัดการอนุมัติ'}
                   disabled={saving}
-                  onClick={() => approve(record.id)}
+                  onClick={() => setApproveId(record.id)}
                 >
                   <Icon name="check" size={14} />
                 </button>
               )}
               {canReviewRecord(record) && (
+                // Danger stays outlined per DESIGN.md ("danger is outlined, not
+                // filled") — the icon-button is already an outline shape, so this
+                // just tints the outline/icon danger-red to separate it from approve.
                 <button
                   type="button"
                   className="icon-button"
+                  style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger)' }}
                   title={canCeoReview(record) ? 'CEO ปฏิเสธ' : 'ผู้จัดการปฏิเสธ'}
                   aria-label={canCeoReview(record) ? 'CEO ปฏิเสธ' : 'ผู้จัดการปฏิเสธ'}
                   disabled={saving}
@@ -317,16 +358,17 @@ export function CommissionPage({ user, showToast }) {
     }
   }
 
-  async function approve(id) {
+  async function confirmApprove() {
     setSaving(true);
     try {
-      await api.commissions.approve(id);
+      await api.commissions.approve(approveId);
       showToast('success', 'อนุมัติค่าคอมแล้ว');
       await load();
     } catch (error) {
       showToast('error', error.message || 'อนุมัติไม่สำเร็จ');
     } finally {
       setSaving(false);
+      setApproveId(null);
     }
   }
 
@@ -479,7 +521,16 @@ export function CommissionPage({ user, showToast }) {
             rows={records}
             getRowKey={(record) => record.id}
             gridClassName="commission-table"
-            mobileCard={(record) => <CommissionCard record={record} />}
+            mobileCard={(record) => (
+              <CommissionCard
+                record={record}
+                canReview={canApprove && canReviewRecord(record)}
+                isCeoReview={canCeoReview(record)}
+                saving={saving}
+                onApprove={() => setApproveId(record.id)}
+                onReject={() => reject(record.id)}
+              />
+            )}
             pageSize={20}
             searchable
             searchPlaceholder="ค้นหาเลขที่ใบกำกับ / ชื่อ Sales"
@@ -525,6 +576,41 @@ export function CommissionPage({ user, showToast }) {
         </>
       )}
 
+      <ConfirmDialog
+        open={approveId != null}
+        title="ยืนยันการอนุมัติค่าคอม"
+        message={(() => {
+          const record = records.find((item) => item.id === approveId);
+          if (!record) return 'ยืนยันการอนุมัติค่าคอมมิชชันรายการนี้?';
+          // Status-transition copy quoted from api.commissions.approve
+          // (src/api/mockApi.js ~L1831-1859): SUBMITTED -> MANAGER_APPROVED
+          // when a sales_manager approves; MANAGER_APPROVED -> APPROVED when
+          // the CEO approves a manager-approved record.
+          const nextStep = canCeoReview(record)
+            ? 'สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว" และพร้อมเข้ารอบ Payroll'
+            : 'สถานะจะเปลี่ยนเป็น "รอ CEO" เพื่อรออนุมัติขั้นสุดท้าย';
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <p className="confirm-dialog-message" style={{ margin: 0 }}>
+                ตรวจสอบยอดก่อนอนุมัติใบกำกับ <strong>{record.invoiceDetails.invoiceNumber}</strong> ของ <strong>{record.salesRepName || record.salesRepId}</strong>
+              </p>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid #e6eaf0', paddingTop: 8 }}>
+                <span style={{ color: '#475569' }}>ยอดรับจริง</span>
+                <code className="font-mono">{formatMoney(record.actualReceived)}</code>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700 }}>
+                <span>ฐานค่าคอม</span>
+                <code className="font-mono">{formatMoney(record.commissionableBase)}</code>
+              </div>
+              <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>{nextStep}</p>
+            </div>
+          );
+        })()}
+        confirmLabel="อนุมัติ"
+        busy={saving}
+        onCancel={() => setApproveId(null)}
+        onConfirm={confirmApprove}
+      />
       <ConfirmDialog
         open={clawbackId != null}
         tone="danger"

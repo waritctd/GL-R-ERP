@@ -5,6 +5,7 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { formatThaiDate } from '../../utils/format.js';
 
 const DEPOSIT_OPTIONS = [
   { value: 0.3,  label: '30%' },
@@ -286,11 +287,17 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           { label: 'ใบแจ้งยอดเงินรับมัดจำ' },
         ]}
       />
-      <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+      {/* Mobile overflow fix: this row previously had no flexWrap, so the back
+          button + title + 3 action buttons (บันทึก/Preview/ออกเอกสาร) forced
+          .content-scroll into horizontal scroll at 375px (verified: scrollWidth
+          493 vs clientWidth 375) — burying the primary "ออกเอกสาร" action off
+          the right edge with no visible scrollbar affordance. Wrapping keeps
+          every action reachable without horizontal scrolling. */}
+      <header style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 4, flexWrap: 'wrap' }}>
         <button type="button" className="secondary-button" onClick={onBack}>
           <Icon name="chevronLeft" size={14} /> กลับ
         </button>
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>
             ใบแจ้งยอดเงินรับมัดจำ
             {doc?.version > 1 && (
@@ -307,9 +314,26 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               </StatusBadge>
             </div>
           )}
+          {/* Summary line: who this document is for and who prepared/issued it.
+              Every field below already comes back on `doc` from
+              api.depositNotices.get/createDraft/issue (src/api/mockApi.js
+              ~L2266-2345) — no new API calls, nothing invented. Pieces are
+              omitted individually when the underlying field is empty. */}
+          {doc && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', marginTop: 8, fontSize: 13, color: '#64748b' }}>
+              {doc.customerName && (
+                <span>ลูกค้า <strong style={{ color: '#334155' }}>{doc.customerName}</strong></span>
+              )}
+              {isIssued ? (
+                <span>ออกโดย <strong style={{ color: '#334155' }}>{doc.issuedByName || '-'}</strong> · {formatThaiDate(doc.issueDate)}</span>
+              ) : (
+                doc.preparerName && <span>จัดทำโดย <strong style={{ color: '#334155' }}>{doc.preparerName}</strong></span>
+              )}
+            </div>
+          )}
         </div>
         {!isIssued && (
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button type="button" className="secondary-button" onClick={handleSave} disabled={saving}>
               บันทึก
             </button>
@@ -322,7 +346,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           </div>
         )}
         {isIssued && (
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button type="button" className="secondary-button" onClick={handleDownloadXlsx}>
               <Icon name="fileText" size={14} /> ดาวน์โหลด Excel
             </button>
@@ -399,7 +423,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           <section className="panel">
             <div className="panel-header"><h2>รายการสินค้า ({form.items.length} รายการ)</h2></div>
             <div style={{ padding: '0 18px 14px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) 60px 80px 80px 80px', gap: 6, padding: '8px 0', borderBottom: '1px solid #e6eaf0', fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
+              {/* Muted Floor fix: was Ink Faint (#94a3b8) on a table header label —
+                  DESIGN.md specifies Ink Muted (#64748b) for `.table-head` overline text. */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) 60px 80px 80px 80px', gap: 6, padding: '8px 0', borderBottom: '1px solid #e6eaf0', fontSize: 11, fontWeight: 700, color: '#64748b' }}>
                 <span>รายละเอียด</span><span style={{ textAlign: 'right' }}>จำนวน</span>
                 <span style={{ textAlign: 'right' }}>ราคา/หน่วย</span>
                 <span style={{ textAlign: 'right' }}>ราคาสุทธิ</span>
@@ -492,9 +518,18 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               ].map(({ label, value, bold }) => (
                 <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid #f1f5f9', fontSize: 13 }}>
                   <span style={{ color: '#475569' }}>{label}</span>
-                  <code style={{ fontWeight: bold ? 700 : 400, color: bold ? '#0f172a' : '#334155' }}>{money(value)} บาท</code>
+                  <code className="font-mono" style={{ fontWeight: bold ? 700 : 400, color: bold ? '#0f172a' : '#334155' }}>{money(value)} บาท</code>
                 </div>
               ))}
+              {/* Next-action helper — describes exactly what api.depositNotices.issue
+                  does (src/api/mockApi.js ~L2322-2345): assigns a real docNumber,
+                  flips this document to ISSUED (fields above become read-only via
+                  `isIssued`), and moves the parent ticket to `document_issued`. */}
+              {!isIssued && (
+                <p style={{ margin: '10px 0 0', fontSize: 12, color: '#64748b', lineHeight: 1.6 }}>
+                  กด &quot;ออกเอกสาร&quot; เพื่อออกเลขที่เอกสารอย่างเป็นทางการ — หลังจากนี้จะแก้ไขข้อมูลในเอกสารนี้ไม่ได้อีก และใบขอราคาจะเปลี่ยนสถานะเป็น &quot;ออกใบแจ้งยอดมัดจำแล้ว&quot;
+                </p>
+              )}
             </div>
           </section>
         </div>
@@ -530,13 +565,27 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
 
       <ConfirmDialog
         open={confirmIssue}
-        tone="danger"
         title="ยืนยันการออกเอกสาร"
         message={(
-          <p className="confirm-dialog-message">
-            ยืนยันการออกเอกสาร? <strong>หลังจากนี้จะไม่สามารถแก้ไขได้</strong>
-          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <p className="confirm-dialog-message" style={{ margin: 0 }}>
+              ตรวจสอบยอดเงินก่อนออกเอกสารให้ <strong>{form.customerName || 'ลูกค้า'}</strong> — <strong>หลังจากนี้จะไม่สามารถแก้ไขได้</strong>
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid #e6eaf0', paddingTop: 8 }}>
+              <span style={{ color: '#475569' }}>ขอรับเงินมัดจำ ({Math.round(Number(form.depositPercent) * 100)}%)</span>
+              <code className="font-mono">{money(deposit)} บาท</code>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span style={{ color: '#475569' }}>ภาษีมูลค่าเพิ่ม 7%</span>
+              <code className="font-mono">{money(vat)} บาท</code>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700 }}>
+              <span>รวมเป็นเงินที่ต้องชำระ</span>
+              <code className="font-mono">{money(total)} บาท</code>
+            </div>
+          </div>
         )}
+        confirmLabel="ออกเอกสาร"
         busy={saving}
         onCancel={() => setConfirmIssue(false)}
         onConfirm={confirmIssueDocument}
