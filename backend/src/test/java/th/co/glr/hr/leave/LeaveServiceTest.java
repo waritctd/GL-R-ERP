@@ -9,6 +9,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
@@ -27,6 +29,8 @@ import th.co.glr.hr.notification.NotificationService;
 
 class LeaveServiceTest {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
+    // Wednesday 2026-07-01 09:00 Asia/Bangkok — all leave dates below are fixed relative to this.
+    private static final Instant FIXED_NOW = Instant.parse("2026-07-01T02:00:00Z");
 
     private final LeaveRepository leaveRepository = mock(LeaveRepository.class);
     private final LeaveAttachmentRepository leaveAttachments = mock(LeaveAttachmentRepository.class);
@@ -35,7 +39,8 @@ class LeaveServiceTest {
     private final NotificationService notificationService = mock(NotificationService.class);
     private final AppProperties appProperties = new AppProperties();
     private final LeaveService leaveService = new LeaveService(
-        leaveRepository, leaveAttachments, fileStorage, auditService, notificationService, appProperties);
+        leaveRepository, leaveAttachments, fileStorage, auditService, notificationService, appProperties,
+        Clock.fixed(FIXED_NOW, BUSINESS_ZONE));
 
     @Test
     void submitAutoApprovesWhenQuotaAndAdvanceNoticeAreSatisfied() {
@@ -86,8 +91,8 @@ class LeaveServiceTest {
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null,
             "VACATION",
-            nextWeekdayWithinNotice(),
-            nextWeekdayWithinNotice(),
+            weekdayWithinNotice(),
+            weekdayWithinNotice(),
             "Urgent errand"
         );
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -111,8 +116,8 @@ class LeaveServiceTest {
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null,
             "SICK",
-            nextWeekday(),
-            nextWeekday(),
+            weekdayAfterNotice(),
+            weekdayAfterNotice(),
             "Fever"
         );
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -214,38 +219,24 @@ class LeaveServiceTest {
     }
 
     private SubmitLeaveRequest validSubmit(Long employeeId) {
-        LocalDate startDate = nextWeekdayAfterNotice();
+        // Monday–Tuesday, 12 days after FIXED_NOW: 2 working days, well past the 7-day notice.
         return new SubmitLeaveRequest(
             employeeId,
             "VACATION",
-            startDate,
-            startDate.plusDays(1),
+            LocalDate.parse("2026-07-13"),
+            LocalDate.parse("2026-07-14"),
             "Family trip"
         );
     }
 
-    private LocalDate nextWeekdayAfterNotice() {
-        LocalDate date = LocalDate.now(BUSINESS_ZONE).plusDays(8);
-        while (date.getDayOfWeek().getValue() >= 6) {
-            date = date.plusDays(1);
-        }
-        return date;
+    private LocalDate weekdayWithinNotice() {
+        // Thursday, the day after FIXED_NOW: inside the 7-day advance-notice window.
+        return LocalDate.parse("2026-07-02");
     }
 
-    private LocalDate nextWeekdayWithinNotice() {
-        LocalDate date = LocalDate.now(BUSINESS_ZONE).plusDays(1);
-        while (date.getDayOfWeek().getValue() >= 6) {
-            date = date.plusDays(1);
-        }
-        return date;
-    }
-
-    private LocalDate nextWeekday() {
-        LocalDate date = LocalDate.now(BUSINESS_ZONE);
-        while (date.getDayOfWeek().getValue() >= 6) {
-            date = date.plusDays(1);
-        }
-        return date;
+    private LocalDate weekdayAfterNotice() {
+        // Monday, 12 days after FIXED_NOW: outside the advance-notice window.
+        return LocalDate.parse("2026-07-13");
     }
 
     private LeaveTypeDto vacationType() {

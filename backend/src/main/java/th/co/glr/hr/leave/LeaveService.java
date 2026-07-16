@@ -1,11 +1,13 @@
 package th.co.glr.hr.leave;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,19 +37,33 @@ public class LeaveService {
     private final AuditService auditService;
     private final NotificationService notificationService;
     private final AppProperties appProperties;
+    private final Clock clock;
 
+    @Autowired
     public LeaveService(LeaveRepository leaveRepository,
                         LeaveAttachmentRepository leaveAttachments,
                         FileStorageService fileStorage,
                         AuditService auditService,
                         NotificationService notificationService,
                         AppProperties appProperties) {
+        this(leaveRepository, leaveAttachments, fileStorage, auditService, notificationService, appProperties,
+            Clock.system(BUSINESS_ZONE));
+    }
+
+    LeaveService(LeaveRepository leaveRepository,
+                 LeaveAttachmentRepository leaveAttachments,
+                 FileStorageService fileStorage,
+                 AuditService auditService,
+                 NotificationService notificationService,
+                 AppProperties appProperties,
+                 Clock clock) {
         this.leaveRepository = leaveRepository;
         this.leaveAttachments = leaveAttachments;
         this.fileStorage = fileStorage;
         this.auditService = auditService;
         this.notificationService = notificationService;
         this.appProperties = appProperties;
+        this.clock = clock;
     }
 
     public List<LeaveRequestDto> list(
@@ -56,7 +72,7 @@ public class LeaveService {
             LocalDate toDate,
             Long requestedEmployeeId,
             String requestedStatus) {
-        LocalDate today = LocalDate.now(BUSINESS_ZONE);
+        LocalDate today = LocalDate.now(clock);
         LocalDate effectiveTo = toDate == null ? today.plusMonths(1) : toDate;
         LocalDate effectiveFrom = fromDate == null ? today.withDayOfMonth(1) : fromDate;
         if (effectiveTo.isBefore(effectiveFrom)) {
@@ -97,7 +113,7 @@ public class LeaveService {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
         validateEmployee(employeeId);
-        int year = requestedYear == null ? LocalDate.now(BUSINESS_ZONE).getYear() : requestedYear;
+        int year = requestedYear == null ? LocalDate.now(clock).getYear() : requestedYear;
         return leaveRepository.findLeaveTypes().stream()
             .map(type -> balanceFor(employeeId, year, type))
             .toList();
@@ -255,7 +271,7 @@ public class LeaveService {
             return "Sick leave requires a medical certificate attachment. Attach the certificate or contact HR for help.";
         }
         int noticeDays = Math.max(0, appProperties.getLeave().getAdvanceNoticeDays());
-        LocalDate earliestAllowed = LocalDate.now(BUSINESS_ZONE).plusDays(noticeDays);
+        LocalDate earliestAllowed = LocalDate.now(clock).plusDays(noticeDays);
         if (!"SICK".equals(leaveType.code()) && startDate.isBefore(earliestAllowed)) {
             return "Leave requests must be submitted at least " + noticeDays
                 + " day(s) before the start date. Contact your manager or HR for urgent leave.";
