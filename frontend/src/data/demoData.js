@@ -211,14 +211,13 @@ export function createDemoDatabase() {
 
   const users = [
     { id: 2, email: 'hr@glr.co.th', password: 'demo1234', name: employees[20].nameTh, role: 'hr', employeeId: employees[20].id, active: true, createdAt: iso(2025, 1, 5) },
-    { id: 3, email: 'director@glr.co.th', password: 'demo1234', name: 'คุณวิชัย ธนาคาร', role: 'director', employeeId: employees[0].id, active: true, createdAt: iso(2025, 1, 5) },
     { id: 4, email: 'employee@glr.co.th', password: 'demo1234', name: employees[8].nameTh, role: 'employee', employeeId: employees[8].id, active: true, createdAt: iso(2025, 2, 11) },
-    { id: 5, email: 'supervisor@glr.co.th', password: 'demo1234', name: employees[2].nameTh, role: 'supervisor', employeeId: employees[2].id, active: true, createdAt: iso(2025, 2, 11) },
     // WHL division manager — lets the seeded stage-1 OT approval (OT#1, whose
     // employee reports to this ผู้จัดการฝ่าย) be demoed. role is 'employee' on
     // purpose: a division manager's OT-review authority is derived from the org
     // chart (positionTh 'ผู้จัดการฝ่าย' → publicUser sets manager: true), not from a
-    // special role. Not 'supervisor'/'director' — those are phantom roles #206 removes.
+    // special role — there is no 'supervisor'/'director' role (#206 removed those
+    // phantom personas; ApplicationRoles.java never allowed them).
     { id: 10, email: 'warehouse.manager@glr.co.th', password: 'demo1234', name: employees[5].nameTh, role: 'employee', employeeId: employees[5].id, active: true, createdAt: iso(2025, 2, 11) },
     // Sales module users
     { id: 6, email: 'sales@glr.co.th', password: 'demo1234', name: 'คุณสมหมาย ขายดี', role: 'sales', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },

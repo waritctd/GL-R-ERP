@@ -18,9 +18,9 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
 @Service
 public class DocumentService {
     private static final String PREPARER = "จินตนา หาญมนตรี";
-    private static final java.util.Set<String> SALES_ROLES  = java.util.Set.of("sales","admin");
-    private static final java.util.Set<String> CEO_ROLES    = java.util.Set.of("ceo","admin");
-    private static final java.util.Set<String> IMPORT_ROLES = java.util.Set.of("import","admin");
+    private static final java.util.Set<String> SALES_ROLES  = java.util.Set.of("sales");
+    private static final java.util.Set<String> CEO_ROLES    = java.util.Set.of("ceo");
+    private static final java.util.Set<String> IMPORT_ROLES = java.util.Set.of("import");
 
     private final DocumentRepository docs;
     private final TicketRepository   tickets;
@@ -77,7 +77,7 @@ public class DocumentService {
     @Transactional
     public DocumentDto update(long docId, DocumentDraftRequest req, UserPrincipal actor) {
         DocumentDto doc = requireDraft(docId);
-        requireTicketOwnerOrAdmin(doc.ticketId(), actor);
+        requireTicketOwner(doc.ticketId(), actor);
         docs.update(docId, req);
         return docs.findById(docId).orElseThrow();
     }
@@ -97,7 +97,7 @@ public class DocumentService {
     public DocumentDto issue(long docId, UserPrincipal actor) {
         DocumentDto doc = requireDraft(docId);
         requireRole(actor, SALES_ROLES);
-        requireTicketOwnerOrAdmin(doc.ticketId(), actor);
+        requireTicketOwner(doc.ticketId(), actor);
 
         TicketSummaryDto s = requireApprovedTicket(doc.ticketId(), actor);
 
@@ -143,7 +143,7 @@ public class DocumentService {
         if (!TicketStatus.APPROVED.equals(st) && !TicketStatus.DOCUMENT_ISSUED.equals(st)) {
             throw new ApiException(HttpStatus.CONFLICT, "Revision only allowed from approved or document_issued");
         }
-        if (s.createdById() != actor.id() && !"admin".equals(actor.role())) {
+        if (s.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Only ticket owner can request revision");
         }
 
@@ -189,10 +189,10 @@ public class DocumentService {
         return doc;
     }
 
-    private void requireTicketOwnerOrAdmin(long ticketId, UserPrincipal actor) {
+    private void requireTicketOwner(long ticketId, UserPrincipal actor) {
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
-        if (t.summary().createdById() != actor.id() && !"admin".equals(actor.role())) {
+        if (t.summary().createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
     }
