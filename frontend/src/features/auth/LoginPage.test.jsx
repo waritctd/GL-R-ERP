@@ -37,10 +37,11 @@ describe('LoginPage UAT quick login', () => {
     expect(onLogin).toHaveBeenCalledWith({ email: 'ceo@uat.glr', password: 'Uat@2026' });
   });
 
-  it('offers every persona V900 seeds, each wired to its own account', async () => {
+  it('offers every seeded UAT persona, each wired to its own account', async () => {
     const { onLogin } = await renderLogin({ quickLogin: true });
 
-    const emails = ['ceo', 'hr', 'salesmgr', 'sales', 'import', 'divmgr', 'employee', 'nulldiv', 'admin']
+    // V900's original 9 personas + account@uat.glr (ฝ่ายบัญชี, added in V908).
+    const emails = ['ceo', 'hr', 'salesmgr', 'sales', 'import', 'account', 'divmgr', 'employee', 'nulldiv', 'admin']
       .map((name) => `${name}@uat.glr`);
 
     // The form's own submit button, then one button per persona in seed order. Matching by label

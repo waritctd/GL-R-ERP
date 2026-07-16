@@ -142,7 +142,7 @@ class FlywayMigrationTest {
 
         List<String> personas = List.of(
             "ceo@uat.glr", "hr@uat.glr", "salesmgr@uat.glr", "sales@uat.glr", "import@uat.glr",
-            "divmgr@uat.glr", "employee@uat.glr", "nulldiv@uat.glr", "admin@uat.glr");
+            "account@uat.glr", "divmgr@uat.glr", "employee@uat.glr", "nulldiv@uat.glr", "admin@uat.glr");
         PasswordEncoder encoder = new BCryptPasswordEncoder();
 
         try (Connection connection = DriverManager.getConnection(
