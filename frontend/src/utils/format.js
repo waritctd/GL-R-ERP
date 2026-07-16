@@ -75,3 +75,55 @@ export function requestStatus(status) {
   };
   return map[status] ?? { label: status, tone: 'neutral' };
 }
+
+// Commission approval status -> StatusBadge tone. Canonical source; do not
+// re-add a page-local `statusInfo`/map for commission status elsewhere.
+export function commissionStatusLabel(status) {
+  const map = {
+    SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
+    MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },
+    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
+    REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
+    VOID: { label: 'ยกเลิก', tone: 'danger' },
+  };
+  return map[status] ?? { label: status, tone: 'neutral' };
+}
+
+// Overtime approval status -> StatusBadge tone. Canonical source; do not
+// re-add a page-local `statusInfo`/map for overtime status elsewhere.
+export function overtimeStatusLabel(status) {
+  const map = {
+    SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
+    MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },
+    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
+    REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
+    CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'neutral' },
+  };
+  return map[status] ?? { label: status || '-', tone: 'neutral' };
+}
+
+// Leave request status -> StatusBadge tone. Canonical source; do not
+// re-add a page-local `statusInfo`/map for leave status elsewhere.
+export function leaveStatusLabel(status) {
+  const map = {
+    SUBMITTED: { label: 'รออนุมัติ', tone: 'warning' },
+    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
+    REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
+    CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'neutral' },
+    AUTO_REJECTED: { label: 'โควตาไม่พอ', tone: 'danger' },
+  };
+  return map[status] ?? { label: status || '-', tone: 'neutral' };
+}
+
+// Payroll run status -> StatusBadge tone. Canonical source; do not
+// re-add a page-local `statusInfo`/map for payroll status elsewhere.
+export function payrollStatusLabel(status) {
+  const map = {
+    PREVIEW: { label: 'ตัวอย่าง', tone: 'info' },
+    OPEN: { label: 'เปิดรอบ', tone: 'warning' },
+    PROCESSED: { label: 'ประมวลผลแล้ว', tone: 'success' },
+    CLOSED: { label: 'ปิดรอบ', tone: 'neutral' },
+    VOID: { label: 'ยกเลิก', tone: 'danger' },
+  };
+  return map[status] ?? { label: status || '-', tone: 'neutral' };
+}

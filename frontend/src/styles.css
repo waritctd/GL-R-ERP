@@ -1908,6 +1908,14 @@ a.status-badge {
     display: none;
   }
 
+  /* Status filter chips are a primary mobile interaction (they filter the
+     work queue), but padding alone leaves them 28px tall — well under the
+     touch floor. Desktop keeps its denser 28px chip. */
+  .status-tab {
+    min-height: 44px;
+    padding: 5px 16px;
+  }
+
   .topbar {
     gap: 10px;
     padding: 0 16px;
