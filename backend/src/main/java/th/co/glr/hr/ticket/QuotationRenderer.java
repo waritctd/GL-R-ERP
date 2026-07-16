@@ -106,34 +106,62 @@ public class QuotationRenderer {
         }
     }
 
+    // Item-table column geometry (A4 printable area: x 50..545).
+    // ลำดับ | รายการ (wraps) | จำนวน | หน่วย | ราคา/หน่วย | จำนวนเงิน
+    private static final float COL_SEQ    = 50f;   // left edge, left-aligned
+    private static final float COL_DESC   = 78f;   // left-aligned, wrapped
+    private static final float COL_DESC_W = 205f;  // wrap width for the description
+    private static final float COL_QTY_R  = 330f;  // right-aligned
+    private static final float COL_UNIT   = 340f;  // left-aligned
+    private static final float COL_PRICE_R  = 465f; // right-aligned
+    private static final float COL_AMOUNT_R = 545f; // right-aligned (= right margin)
+
     public byte[] toPdf(TicketDto ticket, QuotationDto quotation, CustomerDto customer) {
         try (PdfDocumentWriter pdf = new PdfDocumentWriter()) {
             PDFont regular = pdf.loadFont(PdfDocumentWriter.FONT_REGULAR);
             PDFont bold = pdf.loadFont(PdfDocumentWriter.FONT_BOLD);
+            TicketSummaryDto s = ticket.summary();
 
-            pdf.text(bold, 15, "บริษัท จี แอล แอนด์ อาร์ จำกัด");
-            pdf.text(regular, 10, "เลขที่ภาษี 0105542026329");
-            pdf.gap(8);
-            pdf.text(bold, 13, "ใบเสนอราคา  " + nullSafe(quotation.number()));
-            pdf.text(regular, 10, "วันที่: " + thaiDate(quotation.issuedAt() != null
+            // ── Company header ────────────────────────────────────────────────
+            pdf.text(bold, 16, "บริษัท จี แอล แอนด์ อาร์ จำกัด");
+            pdf.text(regular, 9, "เลขประจำตัวผู้เสียภาษี 0105542026329");
+            pdf.gap(6);
+
+            // Document title centered, number + date on a right-aligned meta block —
+            // mirrors the xlsx template's header (date B4, number I4).
+            float center = (pdf.left() + pdf.right()) / 2f;
+            String title = "ใบเสนอราคา / QUOTATION";
+            pdf.textAt(bold, 14, center - pdf.width(bold, 14, title) / 2f, title);
+            pdf.newLine(14);
+            pdf.textRight(regular, 10, pdf.right(), "เลขที่ " + nullSafe(quotation.number()));
+            pdf.newLine(10);
+            pdf.textRight(regular, 10, pdf.right(), "วันที่ " + thaiDate(quotation.issuedAt() != null
                 ? quotation.issuedAt().atZone(ZoneId.of("Asia/Bangkok")).toLocalDate()
                 : LocalDate.now()));
-            pdf.gap(10);
+            pdf.newLine(10);
+            pdf.gap(4);
 
-            TicketSummaryDto s = ticket.summary();
+            // ── Customer block ────────────────────────────────────────────────
             pdf.text(regular, 11, "เรียน " + nullSafe(s.customerName()));
             if (customer != null && customer.address() != null && !customer.address().isBlank()) {
-                pdf.text(regular, 10, customer.address());
+                pdf.text(regular, 10, customer.address()); // may be multiline — writer wraps/splits
             }
             if (customer != null && customer.taxId() != null && !customer.taxId().isBlank()) {
                 pdf.text(regular, 10, "เลขประจำตัวผู้เสียภาษี " + customer.taxId());
             }
-            if (s.projectName() != null && !s.projectName().isBlank()) {
-                pdf.text(regular, 10, "โครงการ " + s.projectName());
+            if (customer != null && customer.phone() != null && !customer.phone().isBlank()) {
+                pdf.text(regular, 10, "โทร. " + customer.phone());
             }
-            pdf.gap(10);
+            if (s.projectName() != null && !s.projectName().isBlank()) {
+                pdf.text(regular, 10, "Project : " + s.projectName());
+            }
+            pdf.gap(8);
+            pdf.text(regular, 10,
+                "บริษัทฯ มีความยินดีขอเสนอราคาสินค้าดังรายการต่อไปนี้");
+            pdf.gap(2);
 
-            pdf.text(bold, 11, "รายการ");
+            // ── Items table ───────────────────────────────────────────────────
+            drawItemsHeader(pdf, bold);
             BigDecimal total = BigDecimal.ZERO;
             int seq = 1;
             for (TicketItemDto item : ticket.items()) {
@@ -141,18 +169,43 @@ public class QuotationRenderer {
                 BigDecimal qty = item.qty() != null ? item.qty() : BigDecimal.ONE;
                 BigDecimal amount = item.approvedPrice().multiply(qty);
                 total = total.add(amount);
-                pdf.text(regular, 10, seq++ + ". " + buildDesc(item)
-                    + "  จำนวน " + fmt2(qty) + " " + nullSafe(item.rawUnit(), "แผ่น")
-                    + "  ราคา/หน่วย " + fmt2(item.approvedPrice())
-                    + "  เป็นเงิน " + fmt2(amount));
-            }
-            pdf.gap(10);
 
+                List<String> descLines = pdf.wrap(regular, 10, buildDesc(item), COL_DESC_W);
+                // Keep each item row (all its wrapped lines) on one page; re-draw the
+                // table header after a break so continuation pages stay readable.
+                if (pdf.ensureRoom(descLines.size() * 15f + 20f)) {
+                    drawItemsHeader(pdf, bold);
+                }
+                pdf.textAt(regular, 10, COL_SEQ, String.valueOf(seq++));
+                pdf.textAt(regular, 10, COL_DESC, descLines.get(0));
+                pdf.textRight(regular, 10, COL_QTY_R, fmt2(qty));
+                pdf.textAt(regular, 10, COL_UNIT, nullSafe(item.rawUnit(), "แผ่น"));
+                pdf.textRight(regular, 10, COL_PRICE_R, fmt2(item.approvedPrice()));
+                pdf.textRight(regular, 10, COL_AMOUNT_R, fmt2(amount));
+                pdf.newLine(10);
+                for (int i = 1; i < descLines.size(); i++) {
+                    pdf.textAt(regular, 10, COL_DESC, descLines.get(i));
+                    pdf.newLine(10);
+                }
+            }
+            pdf.rule(pdf.left(), pdf.right());
+            pdf.gap(6);
+
+            // ── Totals (right-aligned block, mirrors xlsx I38..I40) ───────────
             BigDecimal grandTotal = quotation.totalAmount() != null ? quotation.totalAmount() : total;
             BigDecimal vat = grandTotal.multiply(new BigDecimal("0.07")).setScale(2, RoundingMode.HALF_UP);
-            pdf.text(bold, 12, "รวมเป็นเงิน: " + fmt2(grandTotal) + " บาท");
-            pdf.text(regular, 11, "ภาษีมูลค่าเพิ่ม 7%: " + fmt2(vat) + " บาท");
-            pdf.text(bold, 12, "รวมทั้งสิ้น: " + fmt2(grandTotal.add(vat)) + " บาท");
+            pdf.ensureRoom(140f);
+            totalLine(pdf, regular, 11, "รวมเป็นเงิน", fmt2(grandTotal));
+            totalLine(pdf, regular, 11, "ภาษีมูลค่าเพิ่ม 7%", fmt2(vat));
+            totalLine(pdf, bold, 12, "รวมทั้งสิ้น (บาท)", fmt2(grandTotal.add(vat)));
+            pdf.gap(14);
+
+            // ── Terms + signatures ────────────────────────────────────────────
+            pdf.text(regular, 9, "กำหนดยืนราคา 30 วัน นับจากวันที่เสนอราคา · ราคานี้รวมภาษีมูลค่าเพิ่มตามที่ระบุ");
+            pdf.gap(22);
+            pdf.textAt(regular, 10, pdf.left(), "ลงชื่อ .................................................. ผู้เสนอราคา");
+            pdf.textRight(regular, 10, pdf.right(), "ลงชื่อ .................................................. ผู้มีอำนาจอนุมัติ");
+            pdf.newLine(10);
 
             return pdf.toBytes();
         } catch (IOException e) {
@@ -160,11 +213,34 @@ public class QuotationRenderer {
         }
     }
 
+    private void drawItemsHeader(PdfDocumentWriter pdf, PDFont bold) throws IOException {
+        pdf.rule(pdf.left(), pdf.right());
+        pdf.gap(4);
+        pdf.textAt(bold, 10, COL_SEQ, "ลำดับ");
+        pdf.textAt(bold, 10, COL_DESC, "รายการ");
+        pdf.textRight(bold, 10, COL_QTY_R, "จำนวน");
+        pdf.textAt(bold, 10, COL_UNIT, "หน่วย");
+        pdf.textRight(bold, 10, COL_PRICE_R, "ราคา/หน่วย");
+        pdf.textRight(bold, 10, COL_AMOUNT_R, "จำนวนเงิน");
+        pdf.newLine(10);
+        pdf.rule(pdf.left(), pdf.right());
+        pdf.gap(4);
+    }
+
+    private void totalLine(PdfDocumentWriter pdf, PDFont font, float size, String label, String amount)
+            throws IOException {
+        pdf.textRight(font, size, COL_PRICE_R, label);
+        pdf.textRight(font, size, COL_AMOUNT_R, amount);
+        pdf.newLine(size);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private String buildDesc(TicketItemDto item) {
-        return List.of(item.brand(), item.model(), item.color(), item.texture(), item.size())
-            .stream()
+        // Stream.of, not List.of — List.of throws NPE on null elements, and
+        // color/texture/size are nullable columns (any manual item hit this).
+        return java.util.stream.Stream.of(
+                item.brand(), item.model(), item.color(), item.texture(), item.size())
             .filter(v -> v != null && !v.isBlank())
             .reduce((a, b) -> a + " " + b)
             .orElse(nullSafe(item.brand()));
