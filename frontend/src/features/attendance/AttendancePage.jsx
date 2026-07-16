@@ -9,6 +9,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageStack, StatGrid } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
+import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
@@ -31,6 +32,7 @@ const FILTER_BAR_CLASS =
  * employee code, and where it came from.
  */
 function AttendanceCard({ punch }) {
+  const unresolved = !punch.employee_id;
   return (
     <>
       <div className="flex min-w-0 items-start justify-between gap-3">
@@ -42,14 +44,20 @@ function AttendanceCard({ punch }) {
         </span>
       </div>
 
+      {unresolved ? (
+        <StatusBadge tone="warning">รหัส {punch.employee_code || '-'} ไม่ตรงกับพนักงาน</StatusBadge>
+      ) : null}
+
       <span className="min-w-0 truncate text-xs text-text-muted">
         {[punch.employee_code, punch.site_code || punch.device_name || punch.device_code]
           .filter(Boolean)
           .join(' · ')}
       </span>
 
-      {punch.position_th ? (
-        <span className="min-w-0 truncate text-2xs text-text-muted">{punch.position_th}</span>
+      {punch.position_th || punch.nick_name ? (
+        <span className="min-w-0 truncate text-2xs text-text-muted">
+          {[punch.nick_name, punch.position_th].filter(Boolean).join(' · ')}
+        </span>
       ) : null}
     </>
   );
@@ -273,7 +281,7 @@ export function AttendancePage({ user, employees, showToast }) {
         columns={attendanceColumns}
         rows={punches}
         getRowKey={(punch) => punch.punch_id}
-        gridClassName="grid-cols-[1.35fr_1.5fr_0.8fr_1.2fr_0.8fr_1.15fr] max-[1040px]:min-w-[900px] reflow-cards"
+        gridClassName="grid-cols-[1.6fr_1.3fr_0.9fr_1.2fr] max-[900px]:min-w-[780px] reflow-cards"
         mobileCard={(punch) => <AttendanceCard punch={punch} />}
         pageSize={50}
         searchable
@@ -291,6 +299,23 @@ export function AttendancePage({ user, employees, showToast }) {
 
 const attendanceColumns = [
   {
+    key: 'employee_name',
+    header: 'พนักงาน',
+    sortable: true,
+    sortAccessor: (punch) => punch.employee_name || 'ยังไม่แมปพนักงาน',
+    searchAccessor: (punch) => [punch.employee_name, punch.nick_name, punch.position_th].filter(Boolean).join(' '),
+    render: (punch) => (
+      <span>
+        <strong>{punch.employee_name || 'ยังไม่แมปพนักงาน'}</strong>
+        {!punch.employee_id ? (
+          <StatusBadge tone="warning">ไม่พบพนักงาน</StatusBadge>
+        ) : (
+          <small>{[punch.nick_name, punch.position_th].filter(Boolean).join(' · ') || '-'}</small>
+        )}
+      </span>
+    ),
+  },
+  {
     key: 'punch_time',
     header: 'เวลา',
     sortable: true,
@@ -303,29 +328,6 @@ const attendanceColumns = [
     ),
   },
   {
-    key: 'employee_name',
-    header: 'พนักงาน',
-    sortable: true,
-    sortAccessor: (punch) => punch.employee_name || 'ยังไม่แมปพนักงาน',
-    searchAccessor: (punch) => punch.employee_name || '',
-    render: (punch) => (
-      <span>
-        <strong>{punch.employee_name || 'ยังไม่แมปพนักงาน'}</strong>
-      </span>
-    ),
-  },
-  {
-    key: 'nick_name',
-    header: 'ชื่อเล่น',
-    searchAccessor: (punch) => punch.nick_name || '',
-    render: (punch) => punch.nick_name || '-',
-  },
-  {
-    key: 'position_th',
-    header: 'ตำแหน่ง',
-    render: (punch) => punch.position_th || '-',
-  },
-  {
     key: 'employee_code',
     header: 'รหัสพนักงาน',
     searchAccessor: (punch) => punch.employee_code || '',
@@ -336,7 +338,7 @@ const attendanceColumns = [
     header: 'ไซต์ / อุปกรณ์',
     render: (punch) => (
       <span>
-        <strong>{punch.site_code}</strong>
+        <strong>{punch.site_code || '-'}</strong>
         <small>{punch.device_name || punch.device_code || '-'}</small>
       </span>
     ),
