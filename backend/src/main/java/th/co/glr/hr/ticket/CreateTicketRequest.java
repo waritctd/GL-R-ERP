@@ -2,7 +2,7 @@ package th.co.glr.hr.ticket;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import java.util.List;
 
 public record CreateTicketRequest(
@@ -10,8 +10,11 @@ public record CreateTicketRequest(
     String priority,
     String customerName,
     Long customerId,
-    Long projectId,
+    // One deal = one ticket under a โครงการ (V50) — required for every new deal.
+    @NotNull Long projectId,
     Long contactId,
     String note,
-    @NotEmpty List<@Valid TicketItemRequest> items
+    // Optional since V50: a deal may start at the lead stage with no product items
+    // yet (lightweight DRAFT); items arrive later via editItems before submit.
+    List<@Valid TicketItemRequest> items
 ) {}

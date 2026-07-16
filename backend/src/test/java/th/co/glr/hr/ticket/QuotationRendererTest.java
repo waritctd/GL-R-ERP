@@ -126,7 +126,8 @@ class QuotationRendererTest {
             10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.QUOTATION_ISSUED,
             "NORMAL", 1L, "Sales User", null, null, "Test Customer Co., Ltd.", 5L, null,
             "Showroom Renovation", null, null, null, Instant.now(), Instant.now(), null,
-            items.size(), false, null, null);
+            items.size(), false, null, null,
+            "QUOTE_BUYER", null, null, Instant.now());
         return new TicketDto(summary, items, List.of(), null, List.of());
     }
 

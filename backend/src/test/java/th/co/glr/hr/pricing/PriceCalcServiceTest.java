@@ -139,7 +139,8 @@ class PriceCalcServiceTest {
         TicketSummaryDto summary = new TicketSummaryDto(
             ticketId, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.PRICE_PROPOSED,
             "NORMAL", 1L, "Sales User", null, null, "Test Customer", null, null, null, null, null, null,
-            Instant.now(), Instant.now(), null, items.size(), false, null, null);
+            Instant.now(), Instant.now(), null, items.size(), false, null, null,
+            "QUOTE_DESIGN_SIDE", null, null, Instant.now());
         TicketDto ticket = new TicketDto(summary, items, List.of(), null, List.of());
         when(tickets.findById(ticketId)).thenReturn(Optional.of(ticket));
     }

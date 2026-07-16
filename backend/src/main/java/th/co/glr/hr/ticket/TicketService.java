@@ -93,12 +93,22 @@ public class TicketService {
     @Transactional
     public TicketDto create(CreateTicketRequest request, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
+        // V50: every new deal belongs to a โครงการ (one deal = one ticket; a project
+        // can hold many deals over time). Pre-existing project-less tickets stay valid.
+        if (request.projectId() == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องเลือกโครงการก่อนสร้างดีล");
+        }
         String code = tickets.nextTicketCode();
         long id = tickets.create(request, code, actor.id(), actor.name());
-        notifications.notifyByRole("import", id, "SUBMITTED",
-            "Ticket " + code + " รอการรับเรื่อง");
-        notifications.notifyByRole("ceo", id, "SUBMITTED",
-            "Ticket " + code + " ส่งเข้าระบบแล้ว");
+        // A lightweight lead-stage deal (no items yet) is the rep's private draft —
+        // import/CEO are only notified when it actually enters the price-request
+        // flow (created with items, or submitted later).
+        if (request.items() != null && !request.items().isEmpty()) {
+            notifications.notifyByRole("import", id, "SUBMITTED",
+                "Ticket " + code + " รอการรับเรื่อง");
+            notifications.notifyByRole("ceo", id, "SUBMITTED",
+                "Ticket " + code + " ส่งเข้าระบบแล้ว");
+        }
         return requireTicket(id);
     }
 
@@ -108,6 +118,12 @@ public class TicketService {
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.DRAFT);
         if (s.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Only the ticket owner can submit");
+        }
+        // A lightweight lead-stage deal has no items yet — the price-request flow
+        // needs at least one product line before import can price it.
+        if (s.itemCount() == 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ต้องเพิ่มรายการสินค้าอย่างน้อย 1 รายการก่อนส่งขอราคา");
         }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.SUBMITTED, TicketStatus.DRAFT, TicketStatus.SUBMITTED, null);
@@ -292,7 +308,8 @@ public class TicketService {
             customerName, s.customerId(), s.projectId(), projectName,
             s.contactId(), s.contactName(), s.note(),
             s.createdAt(), s.updatedAt(), s.closedAt(), s.itemCount(), s.hasEdits(),
-            s.paymentStatus(), s.fulfillmentStatus());
+            s.paymentStatus(), s.fulfillmentStatus(),
+            s.salesStage(), s.lostReason(), s.lostAt(), s.stageUpdatedAt());
     }
 
     @Transactional
@@ -338,6 +355,8 @@ public class TicketService {
         tickets.updatePaymentStatus(ticketId, "CUSTOMER_CONFIRMED");
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CUSTOMER_CONFIRMED, s.status(), s.status(), null);
+        // Deal pipeline (V50): a confirmed PO advances the deal — guarded no-op inside.
+        autoAdvanceStage(s, DealStage.ORDER_RECEIVED, actor);
         return requireTicket(ticketId);
     }
 
@@ -364,6 +383,8 @@ public class TicketService {
             tickets.addEvent(ticketId, actor.id(), actor.name(),
                 TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
         }
+        // Deal pipeline (V50): deposit received — guarded no-op inside.
+        autoAdvanceStage(s, DealStage.DEPOSIT_RECEIVED, actor);
         return requireTicket(ticketId);
     }
 
@@ -388,6 +409,10 @@ public class TicketService {
         tickets.updateFulfillmentStatus(ticketId, "IR_ISSUED");
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.IR_ISSUED, s.status(), s.status(), null);
+        // Deal pipeline (V50): the whole import journey (IR→warehouse) lives inside
+        // PROCUREMENT — later fulfillment transitions render from fulfillment_status
+        // and need no further stage writes. Guarded no-op inside.
+        autoAdvanceStage(s, DealStage.PROCUREMENT, actor);
         return requireTicket(ticketId);
     }
 
@@ -448,7 +473,138 @@ public class TicketService {
         tickets.updatePaymentStatus(ticketId, "FULLY_PAID");
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.FULLY_PAID, s.status(), s.status(), null);
+        // Deal pipeline (V50): fully paid closes the pipeline — guarded no-op inside.
+        autoAdvanceStage(s, DealStage.CLOSED_PAID, actor);
         return requireTicket(ticketId);
+    }
+
+    // ── Deal pipeline (V50): 14-stage journey on the ticket itself ──────────
+    // NOTE on sales_manager: handoff 58 made it read+comment-only on the ticket's
+    // OPERATIONAL actions, and that stands. The pipeline stage/lost/reopen fields
+    // are the deliberate, user-approved exception — following up the team's deals
+    // is exactly this role's job. Never extend it beyond these three methods.
+
+    /** Stages whose manual fallback belongs to the deal owner / sales_manager / ceo. */
+    private static final Set<String> SALES_TARGET_STAGES = Set.of(
+        DealStage.LEAD_APPROACH, DealStage.PRESENTATION, DealStage.SPEC_APPROVED,
+        DealStage.QUOTE_DESIGN_SIDE, DealStage.OWNER_SIGNOFF, DealStage.AWAITING_BUYER,
+        DealStage.QUOTE_BUYER, DealStage.NEGOTIATION, DealStage.ORDER_RECEIVED,
+        DealStage.DELIVERY_SCHEDULING, DealStage.DELIVERED);
+    /** Money stages — manual fallback for account/ceo (normally auto from payment track). */
+    private static final Set<String> ACCOUNT_TARGET_STAGES = Set.of(
+        DealStage.DEPOSIT_RECEIVED, DealStage.CLOSED_PAID);
+    /** Import stage — manual fallback for import/ceo (normally auto from the IR). */
+    private static final Set<String> IMPORT_TARGET_STAGES = Set.of(
+        DealStage.PROCUREMENT);
+
+    @Transactional
+    public TicketDto updateStage(long ticketId, String targetStage, String note, UserPrincipal actor) {
+        if (!DealStage.isValid(targetStage)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown stage '" + targetStage + "'");
+        }
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireStageWriteAccess(s, targetStage, actor);
+        if (s.lostReason() != null) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ");
+        }
+        if (targetStage.equals(s.salesStage())) {
+            throw new ApiException(HttpStatus.CONFLICT, "Deal is already in stage " + targetStage);
+        }
+        boolean backward = DealStage.indexOf(targetStage) < DealStage.indexOf(s.salesStage());
+        if (backward && (note == null || note.isBlank())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "การย้อนสถานะกลับต้องระบุเหตุผล");
+        }
+        tickets.updateSalesStage(ticketId, targetStage);
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.STAGE_CHANGED, s.salesStage(), targetStage, blankToNull(note));
+        return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto markLost(long ticketId, String reason, String note, UserPrincipal actor) {
+        if (!DealLostReason.isValid(reason)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown lost reason '" + reason + "'");
+        }
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireDealOwnership(s, actor);
+        if (s.lostReason() != null) {
+            throw new ApiException(HttpStatus.CONFLICT, "Deal is already marked lost");
+        }
+        tickets.markDealLost(ticketId, reason);
+        // Stage untouched by design: reopening resumes exactly where the deal was.
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.MARKED_LOST, s.salesStage(), s.salesStage(),
+            "เสียงาน (" + reason + ")" + (note != null && !note.isBlank() ? " — " + note.trim() : ""));
+        return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto reopenDeal(long ticketId, String note, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireDealOwnership(s, actor);
+        if (s.lostReason() == null) {
+            throw new ApiException(HttpStatus.CONFLICT, "Deal is not marked lost");
+        }
+        tickets.clearDealLost(ticketId);
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.REOPENED, s.salesStage(), s.salesStage(), blankToNull(note));
+        return requireTicket(ticketId);
+    }
+
+    /**
+     * Same-transaction stage advance from the deal's own operational transitions.
+     * No-throw by construction: no-op when the deal is lost or the target is not
+     * strictly forward (monotonic — re-running a transition can never regress).
+     */
+    private void autoAdvanceStage(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
+        if (s.lostReason() != null) {
+            return;
+        }
+        if (DealStage.indexOf(targetStage) <= DealStage.indexOf(s.salesStage())) {
+            return;
+        }
+        tickets.updateSalesStage(s.id(), targetStage);
+        tickets.addEvent(s.id(), actor.id(), actor.name(),
+            TicketEventKind.STAGE_CHANGED, s.salesStage(), targetStage, "อัตโนมัติจากขั้นตอนของดีล");
+    }
+
+    private void requireStageWriteAccess(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
+        String role = actor.role();
+        if ("ceo".equals(role)) {
+            return;
+        }
+        if (SALES_TARGET_STAGES.contains(targetStage)) {
+            if ("sales_manager".equals(role)) {
+                return;
+            }
+            if (SALES_ROLES.contains(role) && s.createdById() == actor.id()) {
+                return;
+            }
+        } else if (ACCOUNT_TARGET_STAGES.contains(targetStage)) {
+            if ("account".equals(role)) {
+                return;
+            }
+        } else if (IMPORT_TARGET_STAGES.contains(targetStage)) {
+            if (IMPORT_ROLES.contains(role)) {
+                return;
+            }
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+    }
+
+    /** Lost/reopen belong to the sales side: deal owner, sales_manager, or ceo. */
+    private void requireDealOwnership(TicketSummaryDto s, UserPrincipal actor) {
+        String role = actor.role();
+        boolean isOwner = SALES_ROLES.contains(role) && s.createdById() == actor.id();
+        if (!isOwner && !"sales_manager".equals(role) && !"ceo".equals(role)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s;
     }
 
     @Transactional
@@ -473,8 +629,11 @@ public class TicketService {
         String st = s.status();
         boolean isOwner = actor.id() == s.createdById();
 
+        // DRAFT included since V50: a lightweight lead-stage deal gets its product
+        // items here before submit().
         boolean salesCanEdit = SALES_ROLES.contains(actor.role()) && isOwner
-            && Set.of(TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED).contains(st);
+            && Set.of(TicketStatus.DRAFT, TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW,
+                      TicketStatus.PRICE_PROPOSED).contains(st);
 
         if (!salesCanEdit) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้");

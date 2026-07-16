@@ -32,7 +32,8 @@ public class TicketRepository {
                t.created_at, t.updated_at, t.closed_at,
                COUNT(ti.item_id) AS item_count,
                t.has_edits,
-               t.payment_status, t.fulfillment_status
+               t.payment_status, t.fulfillment_status,
+               t.sales_stage, t.lost_reason, t.lost_at, t.stage_updated_at
           FROM sales.ticket t
           JOIN hr.employee ec ON ec.employee_id = t.created_by
           LEFT JOIN hr.employee ea ON ea.employee_id = t.assigned_to
@@ -115,16 +116,23 @@ public class TicketRepository {
     public long create(CreateTicketRequest request, String code, long actorId, String actorName) {
         String priority = (request.priority() != null && !request.priority().isBlank())
             ? request.priority() : "NORMAL";
+        // V50 lightweight deal start: a deal created without items begins as a DRAFT
+        // at the lead stage — product items and the price-request flow come later
+        // (editItems then submit). A deal created WITH items enters the price-request
+        // flow immediately, exactly as before.
+        boolean hasItems = request.items() != null && !request.items().isEmpty();
+        String status = hasItems ? TicketStatus.SUBMITTED : TicketStatus.DRAFT;
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO sales.ticket
                 (code, title, status, priority, created_by, customer_name, customer_id, project_id, contact_id, note)
             VALUES
-                (:code, :title, 'submitted', :priority, :createdBy, :customerName, :customerId, :projectId, :contactId, :note)
+                (:code, :title, :status, :priority, :createdBy, :customerName, :customerId, :projectId, :contactId, :note)
             """,
             new MapSqlParameterSource()
                 .addValue("code", code)
                 .addValue("title", request.title())
+                .addValue("status", status)
                 .addValue("priority", priority)
                 .addValue("createdBy", actorId)
                 .addValue("customerName", request.customerName())
@@ -134,8 +142,12 @@ public class TicketRepository {
                 .addValue("note", request.note()),
             keyHolder, new String[]{"ticket_id"});
         long ticketId = keyHolder.getKey().longValue();
-        insertItems(ticketId, request.items());
-        addEvent(ticketId, actorId, actorName, TicketEventKind.SUBMITTED, null, TicketStatus.SUBMITTED, null);
+        if (hasItems) {
+            insertItems(ticketId, request.items());
+            addEvent(ticketId, actorId, actorName, TicketEventKind.SUBMITTED, null, TicketStatus.SUBMITTED, null);
+        } else {
+            addEvent(ticketId, actorId, actorName, TicketEventKind.CREATED, null, TicketStatus.DRAFT, null);
+        }
         return ticketId;
     }
 
@@ -630,8 +642,30 @@ public class TicketRepository {
             rs.getInt("item_count"),
             rs.getBoolean("has_edits"),
             rs.getString("payment_status"),
-            rs.getString("fulfillment_status")
+            rs.getString("fulfillment_status"),
+            rs.getString("sales_stage"),
+            rs.getString("lost_reason"),
+            rs.getTimestamp("lost_at") != null ? rs.getTimestamp("lost_at").toInstant() : null,
+            rs.getTimestamp("stage_updated_at").toInstant()
         );
+    }
+
+    public void updateSalesStage(long ticketId, String stage) {
+        jdbc.update(
+            "UPDATE sales.ticket SET sales_stage = :s, stage_updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource().addValue("s", stage).addValue("id", ticketId));
+    }
+
+    public void markDealLost(long ticketId, String reason) {
+        jdbc.update(
+            "UPDATE sales.ticket SET lost_reason = :r, lost_at = now(), stage_updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource().addValue("r", reason).addValue("id", ticketId));
+    }
+
+    public void clearDealLost(long ticketId) {
+        jdbc.update(
+            "UPDATE sales.ticket SET lost_reason = NULL, lost_at = NULL, stage_updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource().addValue("id", ticketId));
     }
 
     public void updatePaymentStatus(long ticketId, String paymentStatus) {
