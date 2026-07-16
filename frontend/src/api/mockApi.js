@@ -1,3 +1,17 @@
+// Mock backend for VITE_USE_MOCKS=true — the default verification surface for the
+// `frontend-mock` launch config that devs, QA and coding agents drive.
+//
+// THE CONTRACT (see CLAUDE.md "Mock API contract", issue #201):
+//   - Endpoints and DTO shapes ARE meant to be a faithful stand-in for the Spring
+//     backend. `contract.test.js` enforces the method surface against hrApi.js.
+//   - Authorization is NOT authoritative. The gates below approximate the Java
+//     services and are known to diverge in places. Never read a permission rule
+//     off this file — verify it against the Java service. A mock more permissive
+//     than production is the dangerous direction: you only find out in prod.
+//
+// Each namespace below names the Java class it mirrors. Keep those pointers
+// accurate when editing — they are how the next reader finds the source of truth.
+
 import { createDemoDatabase } from '../data/demoData.js';
 
 const db = createDemoDatabase();
@@ -204,6 +218,7 @@ const mockCatalog = [
   { id: 14, brand: 'Panaria',  collection: 'Frame',             color: 'Ash',         surface: 'Naturale',     size: '80x80 cm',   factory: 'Panaria SpA',       sqmPerPiece: 0.64 },
 ];
 
+let mockPriceImportFactorySeq = 10;
 const mockPriceImportFactories = [
   { factoryId: 1, name: 'Panaria SpA',    country: 'Italy',   numberFormat: 'eu' },
   { factoryId: 2, name: 'REFIN',          country: 'Italy',   numberFormat: 'eu' },
@@ -216,7 +231,11 @@ const mockPriceImportFactories = [
   { factoryId: 9, name: 'CITY Ceramica',  country: 'Italy',   numberFormat: 'eu' },
 ];
 
+// Two separate ID spaces, deliberately. priceImport.upload() used to mint version
+// IDs from mockProductPriceSeq — the *product price* counter — which collides once
+// catalog.addProduct/priceImport.uploadAndCommit also consume it for real price rows.
 let mockProductPriceSeq = 100;
+let mockPriceVersionSeq = 100;
 const mockProductPrices = [
   { priceId: 1, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-T600-IVO', grade: null,  collection: 'Trilogy',      productName: 'Ivory Lappato',    color: 'Ivory',   surface: 'Lappato',   sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
   { priceId: 2, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-T600-GRY', grade: null,  collection: 'Trilogy',      productName: 'Grigio Naturale',  color: 'Grigio',  surface: 'Naturale',  sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
@@ -675,6 +694,16 @@ function canReviewLeave(user, employeeId) {
   return user.employeeId && managerIdForEmployee(employee) === user.employeeId;
 }
 
+// Mirrors OvertimeService.managesEmployee() — direct report or division manager.
+// Deliberately has NO hr/admin bypass: HR may review leave but never overtime.
+// Overtime must not reuse canReviewLeave() — that was the #199 bug, where the
+// mock let HR approve OT while the real backend returns 403.
+function canReviewOvertime(user, employeeId) {
+  if (!user.employeeId || employeeId === user.employeeId) return false;
+  const employee = findEmployee(employeeId);
+  return managerIdForEmployee(employee) === user.employeeId;
+}
+
 function leaveTypeByCode(code) {
   const type = db.leaveTypes.find((item) => item.code === String(code || '').toUpperCase());
   if (!type) fail('Invalid leave type', 400);
@@ -854,7 +883,29 @@ function createEmployeeRecord(payload) {
   };
 }
 
+// --- price import helpers ---
+
+// Mirrors the version transition in PriceImportService.commit(): the committed
+// version becomes ACTIVE and the factory's previous ACTIVE version is ARCHIVED —
+// kept for history, never deleted. Shared by priceImport.commit and
+// priceImport.uploadAndCommit so the two cannot drift apart.
+// Returns the number of versions archived.
+function activateVersion(versionId) {
+  const version = mockPriceImportVersions.find((item) => item.versionId === versionId);
+  if (!version) return 0;
+  const superseded = mockPriceImportVersions
+    .filter((item) => item.factoryId === version.factoryId && item.status === 'ACTIVE' && item.versionId !== versionId);
+  superseded.forEach((item) => { item.status = 'ARCHIVED'; });
+  version.status = 'ACTIVE';
+  return superseded.length;
+}
+
+function factoryNameFor(factoryId) {
+  return mockPriceImportFactories.find((item) => item.factoryId === factoryId)?.name ?? null;
+}
+
 export const api = {
+  // Mirrors AuthController + AuthService (auth/).
   auth: {
     async login(payload) {
       const email = payload?.email?.trim().toLowerCase();
@@ -892,6 +943,7 @@ export const api = {
       return delay({ user: publicUser(user) });
     },
   },
+  // Mirrors EmployeeController + EmployeeService (employee/).
   employees: {
     async list(params = {}) {
       hasRole('hr', 'director', 'admin');
@@ -940,6 +992,7 @@ export const api = {
       return delay({ employee: employeeWithRequestMeta(employee) });
     },
   },
+  // Mirrors ProfileRequestController + ProfileRequestService (profile/).
   profileRequests: {
     async list() {
       const user = requireSession();
@@ -979,36 +1032,7 @@ export const api = {
       return delay({ profileRequest: { ...request, employee: findEmployee(request.employeeId) } });
     },
   },
-  users: {
-    async list() {
-      hasRole('admin');
-      return delay({ users: db.users.map(publicUser) });
-    },
-    async create(payload) {
-      hasRole('admin');
-      const employee = payload.employeeId ? findEmployee(payload.employeeId) : null;
-      const user = {
-        id: Math.max(...db.users.map((item) => item.id)) + 1,
-        email: payload.email,
-        password: payload.password || 'demo1234',
-        name: employee?.nameTh || payload.name,
-        role: payload.role || 'employee',
-        employeeId: employee?.id ?? payload.employeeId,
-        active: true,
-        createdAt: new Date().toISOString().slice(0, 10),
-      };
-      db.users.unshift(user);
-      return delay({ user: publicUser(user) });
-    },
-    async update(id, payload) {
-      hasRole('admin');
-      const user = db.users.find((item) => item.id === Number(id));
-      if (!user) fail('User not found', 404);
-      Object.assign(user, payload);
-      return delay({ user: publicUser(user) });
-    },
-  },
-
+  // Mirrors TicketController + TicketService (ticket/).
   tickets: {
     async list(params = {}) {
       const user = requireSession();
@@ -1429,6 +1453,7 @@ export const api = {
     },
   },
 
+  // Mirrors LeaveController + LeaveService (leave/).
   leave: {
     async employees() {
       const user = requireSession();
@@ -1582,6 +1607,10 @@ export const api = {
     },
   },
 
+  // Mirrors OvertimeController + OvertimeService (overtime/) — see
+  // requireManager()/managesEmployee() for the review gate, and
+  // submit() -> resolveTargetEmployee() for filing on another employee's behalf.
+  // Neither has an hr/admin bypass; use canReviewOvertime(), never canReviewLeave().
   overtime: {
     async employees() {
       const user = requireSession();
@@ -1604,7 +1633,7 @@ export const api = {
       const user = requireSession();
       let list = db.overtimeRequests;
       const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
-      if (!includeAll) list = list.filter((item) => item.employeeId === user.employeeId || canReviewLeave(user, item.employeeId));
+      if (!includeAll) list = list.filter((item) => item.employeeId === user.employeeId || canReviewOvertime(user, item.employeeId));
       if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
       if (params.status) list = list.filter((item) => item.status === params.status);
       if (params.from) list = list.filter((item) => item.workDate >= params.from);
@@ -1616,7 +1645,11 @@ export const api = {
       const user = requireSession();
       const employeeId = payload.employeeId ? Number(payload.employeeId) : user.employeeId;
       if (!employeeId) fail('User is not linked to an employee', 400);
-      if (employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
+      // Filing OT on another employee's behalf is manager-only, not HR. Verified
+      // against OvertimeService.submit() → resolveTargetEmployee(), which calls the
+      // same managesEmployee() helper as requireManager() and has no hr/admin bypass
+      // ("Employees can only request their own overtime").
+      if (employeeId !== user.employeeId && !canReviewOvertime(user, employeeId)) fail('Forbidden', 403);
       findEmployee(employeeId);
       const plannedMinutes = overtimeMinutesBetween(payload.plannedStartAt, payload.plannedEndAt);
       const id = Math.max(0, ...db.overtimeRequests.map((item) => item.id)) + 1;
@@ -1659,7 +1692,7 @@ export const api = {
       if (!request) fail('Overtime request not found', 404);
       const now = new Date().toISOString();
       if (request.status === 'SUBMITTED') {
-        if (!canReviewLeave(user, request.employeeId)) fail('Forbidden', 403);
+        if (!canReviewOvertime(user, request.employeeId)) fail('Forbidden', 403);
         const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
         request.status = 'MANAGER_APPROVED';
         request.actualMinutes = request.actualMinutes ?? request.plannedMinutes;
@@ -1694,7 +1727,7 @@ export const api = {
       if (!request) fail('Overtime request not found', 404);
       const now = new Date().toISOString();
       if (request.status === 'SUBMITTED') {
-        if (!canReviewLeave(user, request.employeeId)) fail('Forbidden', 403);
+        if (!canReviewOvertime(user, request.employeeId)) fail('Forbidden', 403);
         request.status = 'REJECTED';
         request.reviewedById = user.employeeId;
         request.reviewedByName = user.name;
@@ -1720,7 +1753,7 @@ export const api = {
       const user = requireSession();
       const request = db.overtimeRequests.find((item) => item.id === Number(id));
       if (!request) fail('Overtime request not found', 404);
-      const approver = canReviewLeave(user, request.employeeId);
+      const approver = canReviewOvertime(user, request.employeeId);
       if (!approver && request.employeeId !== user.employeeId) fail('Forbidden', 403);
       if (!approver && request.status !== 'SUBMITTED') fail('Only submitted overtime requests can be cancelled by employees', 409);
       if (!['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'].includes(request.status)) fail('Only active overtime requests can be cancelled', 409);
@@ -1733,6 +1766,7 @@ export const api = {
     },
   },
 
+  // Mirrors CommissionController + CommissionService (commission/).
   commissions: {
     async list(params = {}) {
       const user = requireSession();
@@ -1976,6 +2010,7 @@ export const api = {
   // would require reproducing real payroll/tax logic to fake convincingly, so
   // they surface a clear "not supported in mock mode" error instead of
   // fabricating financial figures (real backend implementation is in hrApi.js).
+  // Mirrors PayrollController + PayrollService (payroll/).
   payroll: {
     async current() {
       requireSession();
@@ -2010,6 +2045,7 @@ export const api = {
   // No seeded punch/device data yet — these return empty results so HR-core
   // pages degrade to their built-in empty state instead of crashing on the
   // missing namespace (real backend implementation is in hrApi.js).
+  // Mirrors AttendanceController + AttendanceService (attendance/).
   attendance: {
     async list() {
       requireSession();
@@ -2025,6 +2061,7 @@ export const api = {
     },
   },
 
+  // Mirrors DashboardController + DashboardService (dashboard/).
   dashboard: {
     async summary() {
       const user = requireSession();
@@ -2058,6 +2095,7 @@ export const api = {
     },
   },
 
+  // Mirrors NotificationController + NotificationService (notification/).
   notifications: {
     async list() {
       const user = requireSession();
@@ -2075,6 +2113,8 @@ export const api = {
     },
   },
 
+  // Mirrors CatalogController (catalog/) — product CRUD delegates to
+  // PriceImportService.addProductManual()/updateProduct()/deleteProduct().
   catalog: {
     async search(q) {
       requireSession();
@@ -2106,8 +2146,68 @@ export const api = {
       });
       return delay({ items: results.slice(0, 50) });
     },
+    // addProduct/updateProduct/deleteProduct are requireSession() only — mirroring
+    // CatalogController as it is TODAY, where every /api/catalog/prices mutation
+    // calls sessions.requireUser(session) with no role gate. Do not tighten these
+    // here: a mock stricter than production is still drift. Mock and backend get
+    // restricted to ceo/import together in a follow-up branch (see #201).
+    async addProduct(input = {}) {
+      requireSession();
+      if (input.factoryId == null) fail('factoryId จำเป็น', 400);
+      if (input.price == null) fail('price จำเป็น', 400);
+      const fid = Number(input.factoryId);
+      const product = {
+        priceId: mockProductPriceSeq++,
+        factoryId: fid,
+        factoryName: factoryNameFor(fid),
+        productCode: input.productCode ?? null,
+        grade: input.grade ?? null,
+        collection: input.collection ?? null,
+        productName: input.productName ?? null,
+        color: input.color ?? null,
+        surface: input.surface ?? null,
+        sizeRaw: input.sizeRaw ?? null,
+        price: Number(input.price),
+        currency: input.currency ?? 'EUR',
+        priceUnit: input.priceUnit ?? 'per_sqm',
+        sqmPerPiece: null,
+      };
+      mockProductPrices.push(product);
+      return delay({ priceId: product.priceId, status: 'added' });
+    },
+    async updateProduct(priceId, input = {}) {
+      requireSession();
+      if (input.price == null) fail('price จำเป็น', 400);
+      const pid = Number(priceId);
+      const product = mockProductPrices.find((p) => p.priceId === pid);
+      if (!product) fail(`ไม่พบสินค้า price_id=${pid}`, 404);
+      // factoryId is deliberately not reassignable — PriceImportService.updateProduct
+      // does not touch it either.
+      Object.assign(product, {
+        productCode: input.productCode ?? null,
+        grade: input.grade ?? null,
+        collection: input.collection ?? null,
+        productName: input.productName ?? null,
+        color: input.color ?? null,
+        surface: input.surface ?? null,
+        sizeRaw: input.sizeRaw ?? null,
+        price: Number(input.price),
+        currency: input.currency ?? null,
+        priceUnit: input.priceUnit ?? null,
+      });
+      return delay({ status: 'updated' });
+    },
+    async deleteProduct(priceId) {
+      requireSession();
+      const pid = Number(priceId);
+      const index = mockProductPrices.findIndex((p) => p.priceId === pid);
+      if (index === -1) fail(`ไม่พบสินค้า price_id=${pid}`, 404);
+      mockProductPrices.splice(index, 1);
+      return delay({ status: 'deleted' });
+    },
   },
 
+  // Mirrors FactoryConfigController + FactoryEmailService (factory/).
   factoryConfigs: {
     async list() {
       requireSession();
@@ -2120,6 +2220,7 @@ export const api = {
     },
   },
 
+  // Mirrors FxRateController + BotFxFetchService (pricing/).
   fxRates: {
     async list() {
       requireSession();
@@ -2148,6 +2249,7 @@ export const api = {
     },
   },
 
+  // Mirrors PriceCalcConfigController + PriceCalcService (pricing/).
   priceCalcConfigs: {
     async list() {
       requireSession();
@@ -2176,6 +2278,7 @@ export const api = {
     },
   },
 
+  // Mirrors AttachmentController + FileStorageService (attachment/).
   attachments: {
     async list(ticketId) {
       requireSession();
@@ -2204,6 +2307,7 @@ export const api = {
     },
   },
 
+  // Mirrors CustomerController (customer/).
   customers: {
     async create(payload) {
       requireSession();
@@ -2241,6 +2345,7 @@ export const api = {
     },
   },
 
+  // Mirrors DepositNoticeController + DepositNoticeService (deposit/).
   depositNotices: {
     async noteTemplates() {
       requireSession();
@@ -2382,20 +2487,96 @@ export const api = {
     },
   },
 
+  // Mirrors PriceImportController + PriceImportService (catalog/importer/).
   priceImport: {
     async factories() {
       requireSession();
       return delay(mockPriceImportFactories);
+    },
+    async createFactory(name, country, defaultCurrency) {
+      // requireSession() only — mirrors PriceImportController.createFactory, which
+      // calls sessions.requireUser(session) and applies no role gate today.
+      requireSession();
+      if (!name || !String(name).trim()) fail('ชื่อโรงงานห้ามว่าง', 400);
+      const factory = {
+        factoryId: mockPriceImportFactorySeq++,
+        name: String(name).trim(),
+        country: country && String(country).trim() ? String(country).trim().toUpperCase() : null,
+        defaultCurrency: defaultCurrency && String(defaultCurrency).trim()
+          ? String(defaultCurrency).trim().toUpperCase()
+          : 'EUR',
+        numberFormat: 'eu',
+      };
+      mockPriceImportFactories.push(factory);
+      return delay(factory);
     },
     async versions(factoryId) {
       requireSession();
       const fid = Number(factoryId);
       return delay(mockPriceImportVersions.filter((v) => v.factoryId === fid));
     },
+    // Mirrors PriceImportService.uploadAndCommit — parse → stage → validate → commit
+    // in one shot, returning UploadCommitResult(versionId, parsedRows, committedRows,
+    // retainedRows, errorCount, errors). requireSession() only, matching
+    // PriceImportController.uploadAndCommit's lack of a role gate today.
+    //
+    // The mock cannot parse a real .xlsx in the browser, so the parsed batch is
+    // fabricated — the same simplification upload() already makes with its fixed
+    // parsedRows: 12. retainedRows counts the factory's pre-existing products, which
+    // is the closest honest stand-in for commit()'s incremental merge (old products
+    // not matched by the new file are carried forward, not dropped).
+    async uploadAndCommit(factoryId, file, label) {
+      requireSession();
+      const fid = Number(factoryId);
+      if (!mockPriceImportFactories.some((f) => f.factoryId === fid)) {
+        fail(`ไม่พบ import profile สำหรับ factory id=${fid}`, 404);
+      }
+
+      const retainedRows = mockProductPrices.filter((p) => p.factoryId === fid).length;
+
+      const versionId = mockPriceVersionSeq++;
+      mockPriceImportVersions.push({
+        versionId,
+        factoryId: fid,
+        label: label || file?.name || `Version ${versionId}`,
+        status: 'DRAFT',
+        createdAt: new Date().toISOString(),
+        uploadedByName: 'Admin',
+      });
+
+      const factoryName = factoryNameFor(fid);
+      const parsed = [
+        { productCode: 'IMP-60120-WHT', collection: 'Imported Series', productName: 'White Lappato', color: 'White', surface: 'Lappato',  sizeRaw: '60x120', price: 41.50, sqmPerPiece: 0.72 },
+        { productCode: 'IMP-60120-GRY', collection: 'Imported Series', productName: 'Grey Naturale', color: 'Grey',  surface: 'Naturale', sizeRaw: '60x120', price: 39.90, sqmPerPiece: 0.72 },
+        { productCode: 'IMP-8080-BEI',  collection: 'Imported Series', productName: 'Beige Matt',    color: 'Beige', surface: 'Matt',     sizeRaw: '80x80',  price: 36.00, sqmPerPiece: 0.64 },
+      ];
+      parsed.forEach((row) => {
+        mockProductPrices.push({
+          priceId: mockProductPriceSeq++,
+          factoryId: fid,
+          factoryName,
+          grade: null,
+          currency: 'EUR',
+          priceUnit: 'per_sqm',
+          ...row,
+        });
+      });
+
+      activateVersion(versionId);
+
+      return delay({
+        versionId,
+        parsedRows: parsed.length,
+        committedRows: parsed.length,
+        retainedRows,
+        errorCount: 0,
+        errors: [],
+      });
+    },
     async upload(factoryId, file, label) {
       requireSession();
       const fid = Number(factoryId);
-      const versionId = mockProductPriceSeq++;
+      const versionId = mockPriceVersionSeq++;
       mockPriceImportVersions.push({
         versionId, factoryId: fid,
         label: label || file?.name || `Version ${versionId}`,
@@ -2429,15 +2610,8 @@ export const api = {
     async commit(versionId) {
       requireSession();
       const vid = Number(versionId);
-      const ver = mockPriceImportVersions.find((v) => v.versionId === vid);
-      if (ver) {
-        const fid = ver.factoryId;
-        mockPriceImportVersions
-          .filter((v) => v.factoryId === fid && v.status === 'ACTIVE')
-          .forEach((v) => { v.status = 'ARCHIVED'; });
-        ver.status = 'ACTIVE';
-      }
-      return delay({ versionId: vid, inserted: 10, updated: 2, archived: 1 });
+      const archived = activateVersion(vid);
+      return delay({ versionId: vid, inserted: 10, updated: 2, archived });
     },
     async getProfile(factoryId) {
       requireSession();
