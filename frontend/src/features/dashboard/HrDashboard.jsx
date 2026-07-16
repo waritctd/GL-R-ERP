@@ -8,6 +8,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
 import { divisions, findDivision } from '../../data/referenceData.js';
+import { ActionQueue } from './ActionQueue.jsx';
 
 /**
  * Reproduces `.dashboard-grid`: grid-template-columns: 1.15fr 0.85fr; gap: 18px;
@@ -72,6 +73,17 @@ export function HrDashboard({ employee, employees, profileRequests, dashboardSum
     };
   }, [employees, profileRequests, dashboardSummary]);
 
+  // /hr is gated to hr/admin (canViewEmployees) — both roles hold
+  // canReviewProfileRequests, canViewAllOvertime, canViewAllLeave, so these
+  // targets are always reachable here (no per-role branching needed, unlike
+  // the shared EmployeeDashboard which every role lands on).
+  const queueItems = [
+    { key: 'profileRequests', label: 'คำขอแก้ไขข้อมูลรออนุมัติ', value: dashboardStats.pendingProfileRequests, to: () => navigate('/requests') },
+    { key: 'overtime', label: 'OT รออนุมัติ', value: dashboardStats.pendingOvertime, to: () => navigate('/overtime') },
+    { key: 'leave', label: 'ลารออนุมัติ', value: dashboardStats.pendingLeave, to: () => navigate('/leave') },
+    { key: 'notifications', label: 'แจ้งเตือนยังไม่อ่าน', value: dashboardStats.unreadNotifications },
+  ];
+
   return (
     <PageStack>
       <PageHeader
@@ -79,17 +91,19 @@ export function HrDashboard({ employee, employees, profileRequests, dashboardSum
         subtitle="ภาพรวมระบบทรัพยากรบุคคล"
       />
 
+      <ActionQueue items={queueItems} />
+
       <StatGrid>
-        <StatCard icon="users" label="พนักงานทั้งหมด" value={dashboardStats.totalCount} helper="Total employees" tone="indigo" />
-        <StatCard icon="badgeCheck" label="ทำงานปกติ" value={dashboardStats.activeCount} helper="Active" tone="teal" />
+        <StatCard icon="users" label="พนักงานทั้งหมด" value={dashboardStats.totalCount} helper="Total employees" tone="indigo" onClick={() => navigate('/employees')} />
+        <StatCard icon="badgeCheck" label="ทำงานปกติ" value={dashboardStats.activeCount} helper="Active" tone="teal" onClick={() => navigate('/employees')} />
         <StatCard icon="clipboard" label="รออนุมัติทั้งหมด" value={dashboardStats.pendingCount} helper="Approvals" tone="rose" />
-        <StatCard icon="badgeCheck" label="มาวันนี้" value={dashboardStats.todayPresent} helper="Attendance" tone="teal" />
+        <StatCard icon="badgeCheck" label="มาวันนี้" value={dashboardStats.todayPresent} helper="Attendance" tone="teal" onClick={() => navigate('/attendance')} />
       </StatGrid>
 
       <StatGrid>
-        <StatCard icon="userCog" label="แก้ไขข้อมูล" value={dashboardStats.pendingProfileRequests} helper="Profile requests" tone="amber" />
-        <StatCard icon="clock" label="OT รออนุมัติ" value={dashboardStats.pendingOvertime} helper="Overtime" tone="blue" />
-        <StatCard icon="calendar" label="ลารออนุมัติ" value={dashboardStats.pendingLeave} helper="Leave" tone="teal" />
+        <StatCard icon="userCog" label="แก้ไขข้อมูล" value={dashboardStats.pendingProfileRequests} helper="Profile requests" tone="amber" onClick={() => navigate('/requests')} />
+        <StatCard icon="clock" label="OT รออนุมัติ" value={dashboardStats.pendingOvertime} helper="Overtime" tone="blue" onClick={() => navigate('/overtime')} />
+        <StatCard icon="calendar" label="ลารออนุมัติ" value={dashboardStats.pendingLeave} helper="Leave" tone="teal" onClick={() => navigate('/leave')} />
         <StatCard icon="bell" label="แจ้งเตือนยังไม่อ่าน" value={dashboardStats.unreadNotifications} helper="Unread" tone="indigo" />
       </StatGrid>
 

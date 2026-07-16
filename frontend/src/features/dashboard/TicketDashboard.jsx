@@ -7,6 +7,8 @@ import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
+import { hasPermission } from '../../app/permissions.js';
+import { ActionQueue } from './ActionQueue.jsx';
 
 function GreetingSubtitle({ role }) {
   if (role === 'sales') return 'ภาพรวมใบขอราคาของคุณ';
@@ -47,6 +49,10 @@ export function TicketDashboard({ user, employee, showToast }) {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [summary, setSummary] = useState(null);
+  // Same api.dashboard.summary() call as `summary` (no extra request) — just
+  // keeping the notifications slice it already returns instead of discarding it,
+  // so the needs-action queue below can show unread count honestly.
+  const [notifications, setNotifications] = useState(null);
   const [recent, setRecent] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -60,6 +66,7 @@ export function TicketDashboard({ user, employee, showToast }) {
         ]);
         const nextSummary = summaryRes?.summary ?? summaryRes ?? null;
         setSummary(nextSummary?.tickets ?? nextSummary);
+        setNotifications(nextSummary?.notifications ?? null);
         const tickets = Array.isArray(ticketsRes) ? ticketsRes : (ticketsRes?.tickets ?? []);
         setRecent(tickets.slice(0, 6));
       } catch (err) {
@@ -72,6 +79,22 @@ export function TicketDashboard({ user, employee, showToast }) {
   }, []);
 
   const greeting = `สวัสดี, ${employee?.nickName || employee?.nameTh || user.name}`;
+
+  // Only the ticket statuses THIS role can act on (permissions.js is the
+  // source of truth): import picks up submitted tickets, ceo/admin approve
+  // prices, sales/admin generate the quotation once approved. A count the
+  // viewer cannot act on (e.g. "submitted" for a sales rep, who is waiting
+  // on Import) is intentionally left non-clickable, not omitted — showing it
+  // as a clickable action would misrepresent whose job it is.
+  const canPickup = hasPermission(user.role, 'canPickupTickets');
+  const canApprove = hasPermission(user.role, 'canApproveReject');
+  const canQuote = hasPermission(user.role, 'canGenerateQuotation');
+  const queueItems = summary ? [
+    { key: 'submitted', label: 'รอรับเรื่อง (Import)', value: summary.submitted, to: canPickup ? () => navigate('/tickets') : undefined },
+    { key: 'priceProposed', label: 'รอการอนุมัติราคา (CEO)', value: summary.priceProposed, to: canApprove ? () => navigate('/tickets') : undefined },
+    { key: 'approved', label: 'อนุมัติแล้ว รอออกใบเสนอราคา', value: summary.approved, to: canQuote ? () => navigate('/tickets') : undefined },
+    { key: 'notifications', label: 'แจ้งเตือนยังไม่อ่าน', value: notifications?.unread ?? 0 },
+  ] : [];
 
   return (
     <div className="page-stack">
@@ -109,18 +132,20 @@ export function TicketDashboard({ user, employee, showToast }) {
         </div>
       ) : summary && (
         <>
+          <ActionQueue items={queueItems} />
+
           <div className="stat-grid">
-            <StatCard icon="fileText"  label="เปิดอยู่ทั้งหมด"   value={summary.totalOpen}       helper="Total open"         tone="indigo" />
-            <StatCard icon="clock"     label="รอรับเรื่อง"         value={summary.submitted}       helper="Submitted"          tone="amber"  />
-            <StatCard icon="users"     label="กำลังดำเนินการ"     value={summary.inReview}        helper="In review"          tone="blue"   />
-            <StatCard icon="clipboard" label="รอการอนุมัติ"        value={summary.priceProposed}   helper="Awaiting approval"  tone="amber"  />
+            <StatCard icon="fileText"  label="เปิดอยู่ทั้งหมด"   value={summary.totalOpen}       helper="Total open"         tone="indigo" onClick={() => navigate('/tickets')} />
+            <StatCard icon="clock"     label="รอรับเรื่อง"         value={summary.submitted}       helper="Submitted"          tone="amber"  onClick={canPickup ? () => navigate('/tickets') : undefined} />
+            <StatCard icon="users"     label="กำลังดำเนินการ"     value={summary.inReview}        helper="In review"          tone="blue"   onClick={() => navigate('/tickets')} />
+            <StatCard icon="clipboard" label="รอการอนุมัติ"        value={summary.priceProposed}   helper="Awaiting approval"  tone="amber"  onClick={canApprove ? () => navigate('/tickets') : undefined} />
           </div>
 
           <div className="stat-grid">
-            <StatCard icon="check"     label="อนุมัติแล้ว"         value={summary.approved}        helper="Approved"           tone="teal"   />
-            <StatCard icon="fileText"  label="ออกใบเสนอราคาแล้ว"  value={summary.quotationIssued} helper="Quotation issued"   tone="teal"   />
-            <StatCard icon="badge"     label="ปิดแล้วเดือนนี้"    value={summary.closedThisMonth} helper="Closed this month"  tone="indigo" />
-            <StatCard icon="close"     label="ยกเลิกเดือนนี้"     value={summary.cancelledThisMonth} helper="Cancelled this month" tone="neutral" />
+            <StatCard icon="check"     label="อนุมัติแล้ว"         value={summary.approved}        helper="Approved"           tone="teal"   onClick={() => navigate('/tickets')} />
+            <StatCard icon="fileText"  label="ออกใบเสนอราคาแล้ว"  value={summary.quotationIssued} helper="Quotation issued"   tone="teal"   onClick={() => navigate('/tickets')} />
+            <StatCard icon="badge"     label="ปิดแล้วเดือนนี้"    value={summary.closedThisMonth} helper="Closed this month"  tone="indigo" onClick={() => navigate('/tickets')} />
+            <StatCard icon="close"     label="ยกเลิกเดือนนี้"     value={summary.cancelledThisMonth} helper="Cancelled this month" tone="neutral" onClick={() => navigate('/tickets')} />
           </div>
 
           {recent.length > 0 && (
