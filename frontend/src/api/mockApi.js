@@ -337,6 +337,15 @@ function hasRole(...roles) {
 
 // --- ticket helpers ---
 
+// Mirrors TicketService.requireViewAccess: viewer role required, sales reps
+// only see their own tickets. Used by every read/render path.
+function requireTicketViewer(id) {
+  const user = hasRole('sales', 'import', 'ceo', 'account');
+  const ticket = findTicketRaw(Number(id));
+  if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
+  return { user, ticket };
+}
+
 function findTicketRaw(id) {
   const ticket = db.tickets.find((t) => t.id === id);
   if (!ticket) fail('Ticket not found', 404);
@@ -1356,8 +1365,9 @@ export const api = {
     },
 
     async comment(id, payload) {
-      const user = requireSession();
-      const ticket = findTicketRaw(Number(id));
+      // Mirrors TicketService.comment: same read gate as get() — commenting
+      // returns the full ticket.
+      const { user, ticket } = requireTicketViewer(id);
       pushEvent(ticket, user, 'COMMENTED', null, null, payload.message);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
@@ -1391,7 +1401,8 @@ export const api = {
     // ── Dual-track post-quotation (ข้อ 13) ──────────────────────────────────
 
     async downloadRemainingInvoice(id) {
-      const ticket = findTicketRaw(Number(id));
+      // Mirrors DepositNoticeService.getRemainingInvoiceXlsx: read gate first.
+      const { ticket } = requireTicketViewer(id);
       if (ticket.status !== 'quotation_issued') fail('Expected quotation_issued', 409);
       return buildMockRemainingInvoiceXlsx(Number(id));
     },
@@ -1399,6 +1410,8 @@ export const api = {
     async confirmCustomer(id) {
       const user = hasRole('sales');
       const ticket = findTicketRaw(Number(id));
+      // Mirrors TicketService.confirmCustomer: owner-only.
+      if (ticket.createdById !== user.id) fail('Forbidden', 403);
       if (ticket.status !== 'quotation_issued') fail('Expected quotation_issued', 409);
       // Never downgrade the payment track (mirrors TicketService.confirmCustomer).
       if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
@@ -1413,6 +1426,8 @@ export const api = {
     async issueDepositNotice(id) {
       const user = hasRole('sales');
       const ticket = findTicketRaw(Number(id));
+      // Mirrors TicketService.issueDepositNotice: owner-only.
+      if (ticket.createdById !== user.id) fail('Forbidden', 403);
       if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
         fail('Requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED', 409);
       }
@@ -2294,7 +2309,9 @@ export const api = {
       return delay({ factories: mockFactoryConfigs });
     },
     async sendEmail(ticketId, payload) {
-      requireSession();
+      // Mirrors TicketService.assertFactoryEmailAllowed: import role + real ticket.
+      hasRole('import');
+      findTicketRaw(Number(ticketId));
       console.log(`[mock] Factory email sent | ticket=${ticketId} factory=${payload.factory} to=${payload.to}`);
       return delay({ status: 'sent' });
     },
@@ -2464,14 +2481,16 @@ export const api = {
     },
 
     async listByTicket(ticketId) {
-      requireSession();
+      // Mirrors DepositNoticeService.listByTicket: viewer role + sales owner scoping.
+      requireTicketViewer(ticketId);
       return delay({ depositNotices: structuredClone(mockDepositNotices.filter((d) => d.ticketId === Number(ticketId))) });
     },
 
     async get(docId) {
-      requireSession();
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!doc) fail('Deposit notice not found', 404);
+      // Mirrors DepositNoticeService.getById: read gate on the owning ticket.
+      requireTicketViewer(doc.ticketId);
       return delay({ depositNotice: structuredClone(doc) });
     },
 
@@ -2497,9 +2516,10 @@ export const api = {
     },
 
     async preview(docId) {
-      requireSession();
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!doc) fail('Deposit notice not found', 404);
+      // Mirrors DepositNoticeService.preview: read gate on the owning ticket.
+      requireTicketViewer(doc.ticketId);
       // Return HTML string directly (not wrapped in JSON)
       return mockPreviewHtml(buildMockDoc(doc));
     },
@@ -2530,9 +2550,10 @@ export const api = {
     },
 
     async downloadXlsx(docId) {
-      requireSession();
       const rawDoc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!rawDoc) fail('Deposit notice not found', 404);
+      // Mirrors DepositNoticeService.getXlsx: read gate on the owning ticket.
+      requireTicketViewer(rawDoc.ticketId);
       const doc = buildMockDoc(rawDoc);
 
       // Demo placeholder — real xlsx from DepositNoticeRenderer.java (server, Apache POI)
@@ -2559,9 +2580,10 @@ export const api = {
     },
 
     async downloadPdf(docId) {
-      requireSession();
       const rawDoc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!rawDoc) fail('Deposit notice not found', 404);
+      // Mirrors DepositNoticeService.getPdf: read gate on the owning ticket.
+      requireTicketViewer(rawDoc.ticketId);
       const html = mockPreviewHtml(buildMockDoc(rawDoc));
       return new Blob([html], { type: 'text/html;charset=utf-8' });
     },

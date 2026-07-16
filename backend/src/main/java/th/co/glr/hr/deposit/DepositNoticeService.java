@@ -21,6 +21,10 @@ public class DepositNoticeService {
     private static final java.util.Set<String> SALES_ROLES  = java.util.Set.of("sales");
     private static final java.util.Set<String> CEO_ROLES    = java.util.Set.of("ceo");
     private static final java.util.Set<String> IMPORT_ROLES = java.util.Set.of("import");
+    // Same read rule as TicketService.VIEWER_ROLES: deposit notices are customer
+    // financial documents — hr/employee have no business downloading them.
+    private static final java.util.Set<String> VIEWER_ROLES =
+        java.util.Set.of("sales", "import", "ceo", "account");
 
     private final DepositNoticeRepository docs;
     private final TicketRepository   tickets;
@@ -42,13 +46,16 @@ public class DepositNoticeService {
         return docs.findNoteTemplates();
     }
 
-    public List<DepositNoticeDto> listByTicket(long ticketId) {
+    public List<DepositNoticeDto> listByTicket(long ticketId, UserPrincipal actor) {
+        requireTicketViewer(ticketId, actor);
         return docs.findByTicket(ticketId);
     }
 
-    public DepositNoticeDto getById(long docId) {
-        return docs.findById(docId)
+    public DepositNoticeDto getById(long docId, UserPrincipal actor) {
+        DepositNoticeDto doc = docs.findById(docId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found"));
+        requireTicketViewer(doc.ticketId(), actor);
+        return doc;
     }
 
     // Create a DRAFT from approved ticket items
@@ -87,7 +94,7 @@ public class DepositNoticeService {
 
     // Returns HTML preview (PDF requires LibreOffice — mock for now)
     public String preview(long docId, UserPrincipal actor) {
-        DepositNoticeDto doc = docs.findById(docId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found"));
+        DepositNoticeDto doc = getById(docId, actor);
         try {
             return renderer.toPreviewHtml(doc);
         } catch (Exception e) {
@@ -127,8 +134,7 @@ public class DepositNoticeService {
 
     // Download Excel bytes
     public byte[] getXlsx(long docId, UserPrincipal actor) {
-        DepositNoticeDto doc = docs.findById(docId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found"));
+        DepositNoticeDto doc = getById(docId, actor);
         try {
             return renderer.toXlsx(doc);
         } catch (Exception e) {
@@ -137,8 +143,7 @@ public class DepositNoticeService {
     }
 
     public byte[] getPdf(long docId, UserPrincipal actor) {
-        DepositNoticeDto doc = docs.findById(docId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found"));
+        DepositNoticeDto doc = getById(docId, actor);
         try {
             return renderer.toPdf(doc);
         } catch (Exception e) {
@@ -149,8 +154,7 @@ public class DepositNoticeService {
     // ── Remaining Invoice (ข้อ 13.5) ─────────────────────────────────────────
 
     public byte[] getRemainingInvoiceXlsx(long ticketId, UserPrincipal actor) {
-        TicketDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+        TicketDto ticket = requireTicketViewer(ticketId, actor);
         TicketSummaryDto s = ticket.summary();
         if (!"quotation_issued".equals(s.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "Remaining invoice only available for quotation_issued tickets");
@@ -273,6 +277,20 @@ public class DepositNoticeService {
             throw new ApiException(HttpStatus.CONFLICT, "Deposit notice is not in DRAFT status");
         }
         return doc;
+    }
+
+    /**
+     * Read gate mirroring TicketService.requireViewAccess: viewer role required,
+     * sales reps only for their own tickets.
+     */
+    private TicketDto requireTicketViewer(long ticketId, UserPrincipal actor) {
+        requireRole(actor, VIEWER_ROLES);
+        TicketDto t = tickets.findById(ticketId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+        if ("sales".equals(actor.role()) && t.summary().createdById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        return t;
     }
 
     private void requireTicketOwner(long ticketId, UserPrincipal actor) {
