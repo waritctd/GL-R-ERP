@@ -430,19 +430,39 @@ class TicketServiceTest {
         assertForbidden(() -> service.confirmCustomer(10L, otherSales));
     }
 
+    // (issueDepositNotice endpoint removed — DepositNoticeService.issue() is now the
+    //  single action that advances the payment track to DEPOSIT_NOTICE_ISSUED.)
+
     @Test
-    void issueDepositNotice_rejectsNonOwnerSales() {
-        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", null);
-        assertForbidden(() -> service.issueDepositNotice(10L, otherSales));
+    void close_legacyDocumentIssuedWithNullPayment_stillCloses() {
+        // Pre-dual-track tickets (paymentStatus never set) keep the legacy close path.
+        stubTicketWithTracks(10L, 1L, TicketStatus.DOCUMENT_ISSUED, null, null);
+
+        service.close(10L, salesActor);
+
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.CLOSED), eq(TicketStatus.DOCUMENT_ISSUED), eq(TicketStatus.CLOSED), isNull());
     }
 
     @Test
-    void issueDepositNotice_customerConfirmedBySales_advancesPayment() {
-        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", null);
+    void close_legacyDocumentIssuedMidPaymentTrack_isRefused() {
+        // The bypass from the audit: a mid-track ticket flipped to document_issued
+        // must not close unpaid.
+        stubTicketWithTracks(10L, 1L, TicketStatus.DOCUMENT_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
+        assertConflict(() -> service.close(10L, salesActor));
 
-        service.issueDepositNotice(10L, salesActor);
+        stubTicketWithTracks(10L, 1L, TicketStatus.DOCUMENT_ISSUED, "DEPOSIT_PAID", "SHIPPING");
+        assertConflict(() -> service.close(10L, salesActor));
+    }
 
-        verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_NOTICE_ISSUED");
+    @Test
+    void close_legacyDocumentIssuedFullyPaid_closes() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.DOCUMENT_ISSUED, "FULLY_PAID", "GOODS_RECEIVED");
+
+        service.close(10L, salesActor);
+
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.CLOSED), eq(TicketStatus.DOCUMENT_ISSUED), eq(TicketStatus.CLOSED), isNull());
     }
 
     @Test

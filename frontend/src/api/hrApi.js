@@ -97,7 +97,6 @@ export const api = {
       return res.blob();
     },
     confirmCustomer: (id) => apiRequest(API_ROUTES.tickets.action(id, 'confirm-customer'), { method: 'POST' }),
-    issueDepositNotice: (id) => apiRequest(API_ROUTES.tickets.action(id, 'deposit-notice'), { method: 'POST' }),
     confirmDepositPaid: (id) => apiRequest(API_ROUTES.tickets.action(id, 'deposit-paid'), { method: 'POST' }),
     issueImportRequest: (id) => apiRequest(API_ROUTES.tickets.action(id, 'import-request'), { method: 'POST' }),
     markIrSent: (id) => apiRequest(API_ROUTES.tickets.action(id, 'ir-sent'), { method: 'POST' }),
