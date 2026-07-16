@@ -134,24 +134,6 @@ export const api = {
     listByTicket: (ticketId) => apiRequest(API_ROUTES.tickets.listDocs(ticketId)),
     createDraft: (ticketId, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(ticketId), { method: 'POST', body: payload }),
   },
-  documents: {
-    noteTemplates: () => apiRequest(API_ROUTES.documents.noteTemplates),
-    get: (id) => apiRequest(API_ROUTES.documents.get(id)),
-    update: (id, payload) => apiRequest(API_ROUTES.documents.update(id), { method: 'PUT', body: payload }),
-    preview: async (id) => {
-      const res = await fetch(API_ROUTES.documents.preview(id), { method: 'POST', credentials: 'include' });
-      if (!res.ok) throw new Error('Preview failed');
-      return res.text();
-    },
-    issue: (id) => apiRequest(API_ROUTES.documents.issue(id), { method: 'POST' }),
-    downloadXlsx: async (id) => {
-      const res = await fetch(API_ROUTES.documents.file(id, 'xlsx'), { credentials: 'include' });
-      if (!res.ok) throw new Error('Download failed');
-      return res.blob();
-    },
-    listByTicket: (ticketId) => apiRequest(API_ROUTES.tickets.listDocs(ticketId)),
-    createDraft: (ticketId, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(ticketId), { method: 'POST', body: payload }),
-  },
   catalog: {
     search: (q) => apiRequest(API_ROUTES.catalog.search(q ?? '')),
     prices: (q, factoryId, limit) => apiRequest(API_ROUTES.catalog.prices(q, factoryId, limit)),

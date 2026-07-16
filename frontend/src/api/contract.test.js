@@ -16,13 +16,9 @@ import { api as mockApi } from './mockApi.js';
 // the Java service. See CLAUDE.md "Mock API contract".
 
 const KNOWN_GAPS = {
-  // The whole `documents` namespace (8 methods) is absent from the mock. Its only
-  // consumer, frontend/src/features/documents/DocumentPage.jsx, is never imported
-  // and never routed — the page is orphaned, so nothing can call these today.
-  // This is a known gap, not an oversight: the moment anyone wires DocumentPage
-  // up, the mock needs these methods or the page breaks in mock mode. Remove this
-  // exemption at that point rather than deleting the assertion.
-  documents: 'DocumentPage.jsx is unrouted and unimported; implement these in mockApi before wiring the page up.',
+  // (empty) The former `documents` exemption is gone: the orphaned DocumentPage.jsx,
+  // its hrApi namespace, and the broken backend document/ module were deleted
+  // together — the deposit-notice stack is the single implementation now.
 };
 
 function methodPaths(apiObject) {
