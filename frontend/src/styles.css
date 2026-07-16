@@ -845,9 +845,17 @@ textarea:focus {
   text-overflow: ellipsis;
 }
 
-.data-row > .status-badge {
+.data-row > .status-badge,
+/* A StatusBadge nested one level deeper, inside a labelled `[data-label]`
+   cell (OT's "ขั้นอนุมัติ" column, Leave's "สถานะ" column — needed so the
+   mobile card gets the label prefix), would otherwise inherit the generic
+   `.data-row > span > span { display: block }` rule below and get stretched
+   into a full-width bar instead of staying a compact pill. `width: fit-content`
+   (not just `auto`) is required here: as a grid item this element stretches
+   to fill its track under the grid's default `justify-items: stretch`. */
+.data-row > span > .status-badge {
   display: flex;
-  width: auto;
+  width: fit-content;
   max-width: 100%;
 }
 
