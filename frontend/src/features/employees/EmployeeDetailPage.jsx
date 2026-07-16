@@ -163,7 +163,7 @@ function EmploymentTab({ employee, canSeeSalary }) {
         <CollapsibleSection title="ค่าตอบแทน">
           {canSeeSalary ? (
             <>
-              <div className="salary-value">{formatMoney(employee.salary)}</div>
+              <div className="mt-4 text-surface text-4xl font-extrabold">{formatMoney(employee.salary)}</div>
               <span>ต่อเดือน · {employee.payType}</span>
             </>
           ) : (

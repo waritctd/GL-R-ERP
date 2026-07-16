@@ -7,7 +7,7 @@
 // rather than pulling in a new lucide-react import for one banner.
 export function DesktopOnlyNotice({ message, children }) {
   return (
-    <div className="desktop-only-notice" role="note">
+    <div className="flex flex-col gap-1 py-3 px-4 border border-info rounded-md bg-info-bg text-info-dark text-sm" role="note">
       {children ?? message ?? (
         <>
           <span>หน้านี้ออกแบบมาสำหรับเดสก์ท็อป — แนะนำให้ใช้งานบนคอมพิวเตอร์</span>
