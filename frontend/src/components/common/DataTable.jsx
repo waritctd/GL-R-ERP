@@ -107,6 +107,8 @@ export function DataTable({
   pageSize = 20,
   searchable = false,
   searchPlaceholder = 'ค้นหา...',
+  searchValue,
+  onSearchChange,
   onRowClick,
   rowClassName,
   rowStyle,
@@ -125,7 +127,14 @@ export function DataTable({
   // markup, so they are unaffected.
   const isMobile = useIsMobile();
   const asCards = isMobile && typeof mobileCard === 'function';
-  const [search, setSearch] = useState('');
+  // Optional controlled search: when the caller passes `searchValue` (and
+  // typically `onSearchChange`, e.g. to mirror it into a URL query param),
+  // this component defers to it instead of owning the text itself. Omitting
+  // both keeps every other caller's existing uncontrolled behavior unchanged.
+  const isControlledSearch = searchValue !== undefined;
+  const [internalSearch, setInternalSearch] = useState('');
+  const search = isControlledSearch ? searchValue : internalSearch;
+  const setSearch = isControlledSearch ? (value) => onSearchChange?.(value) : setInternalSearch;
   const [sorting, setSorting] = useState(
     initialSort?.key ? [{ id: initialSort.key, desc: initialSort.dir === 'desc' }] : [],
   );

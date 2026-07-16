@@ -8,6 +8,7 @@ import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
+import { downloadBlob } from '../../utils/download.js';
 
 const EVENT_KIND_LABEL = {
   CREATED:            'สร้างใบขอราคา',
@@ -16,6 +17,7 @@ const EVENT_KIND_LABEL = {
   PRICE_PROPOSED:     'เสนอราคาสินค้า',
   APPROVED:           'อนุมัติ',
   REJECTED:           'ปฏิเสธ',
+  QUOTATION_ISSUED:   'ออกใบเสนอราคา',
   DOCUMENT_ISSUED:    'ออกใบแจ้งยอดมัดจำ',
   PRICE_REVISED:      'แก้ไขราคาที่เสนอ',
   REVISION_REQUESTED: 'ขอแก้ไข',
@@ -25,7 +27,31 @@ const EVENT_KIND_LABEL = {
   COMMENTED:          'ความคิดเห็น',
   COMMENT:            'ความคิดเห็น',
   PRICE_OVERRIDDEN:   'แก้ไขราคาด้วยตนเอง (CEO)',
+  // Dual-track post-quotation events (see backend TicketEventKind.java) — Track P
+  // (payment) and Track F (fulfillment) labels mirror the stepper wording further
+  // down this page (สถานะหลังออกใบเสนอราคา) so an event and its stepper step read
+  // as the same real-world action.
+  CUSTOMER_CONFIRMED:     'ลูกค้ายืนยันคำสั่งซื้อ',
+  DEPOSIT_NOTICE_ISSUED:  'ออกใบแจ้งมัดจำ',
+  DEPOSIT_PAID:           'รับมัดจำแล้ว',
+  IR_ISSUED:              'ออก Import Request (IR)',
+  IR_SENT:                'ส่ง IR แล้ว',
+  SHIPPING:               'สินค้าออกเดินทาง (Shipping)',
+  GOODS_RECEIVED:         'รับสินค้าแล้ว',
+  AWAITING_FINAL_PAYMENT: 'รอชำระส่วนที่เหลือ',
+  FULLY_PAID:             'ชำระครบแล้ว',
 };
+
+// Track P (payment) events get a success-toned dot, Track F (fulfillment)
+// events get an info-toned dot — mirrors the two colour groups used by the
+// dual-track stepper (สถานะหลังออกใบเสนอราคา) below.
+const PAYMENT_TRACK_KINDS = new Set([
+  'CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID',
+  'AWAITING_FINAL_PAYMENT', 'FULLY_PAID',
+]);
+const FULFILLMENT_TRACK_KINDS = new Set([
+  'IR_ISSUED', 'IR_SENT', 'SHIPPING', 'GOODS_RECEIVED',
+]);
 
 const TERMINAL = ['closed', 'cancelled'];
 
@@ -46,6 +72,8 @@ function docStatusColors(docStatus) {
 function eventDotClass(kind) {
   if (kind === 'CREATED') return 'event-dot created';
   if (kind === 'COMMENTED' || kind === 'COMMENT') return 'event-dot comment';
+  if (PAYMENT_TRACK_KINDS.has(kind)) return 'event-dot success';
+  if (FULFILLMENT_TRACK_KINDS.has(kind)) return 'event-dot transition';
   return 'event-dot transition';
 }
 
@@ -107,6 +135,12 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   // Confirmation dialogs (state-driven, replaces native browser confirm)
   const [confirm, setConfirm] = useState(null); // { kind: 'deleteAttachment', id, name } | { kind: 'cancelTicket' } | null
+
+  // Download busy-state — keyed so each quotation/format pair (and the
+  // remaining-invoice download) gets its own disabled+label state instead of
+  // one shared flag that would disable every download button at once.
+  const [downloadingQuotationKey, setDownloadingQuotationKey] = useState(null); // `${quotationId}-${format}` | null
+  const [downloadingInvoice, setDownloadingInvoice] = useState(false);
 
   async function loadTicket() {
     setLoading(true);
@@ -482,34 +516,29 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   }
 
   async function handleDownloadQuotation(quotationId, number, format) {
+    const key = `${quotationId}-${format}`;
+    setDownloadingQuotationKey(key);
     try {
       const blob = format === 'pdf'
         ? await api.tickets.downloadQuotationPdf(ticketId, quotationId)
         : await api.tickets.downloadQuotationXlsx(ticketId, quotationId);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      // In mock mode the PDF handler returns text/html so browsers can render it
-      const ext = blob.type.startsWith('text/html') ? 'html' : format;
-      a.download = (number ?? 'quotation') + '.' + ext;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, number ?? 'quotation', format);
     } catch (err) {
       showToast('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
+    } finally {
+      setDownloadingQuotationKey((current) => (current === key ? null : current));
     }
   }
 
   async function handleDownloadRemainingInvoice() {
+    setDownloadingInvoice(true);
     try {
       const blob = await api.tickets.downloadRemainingInvoice(ticketId);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `remaining-invoice-${ticketId}.xlsx`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `remaining-invoice-${ticketId}`, 'xlsx');
     } catch (err) {
       showToast('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
+    } finally {
+      setDownloadingInvoice(false);
     }
   }
 
@@ -761,9 +790,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               </button>
             )}
             {can.downloadRemainingInvoice && (
-              <button type="button" className="secondary-button"
+              <button type="button" className="secondary-button" disabled={downloadingInvoice}
                 onClick={handleDownloadRemainingInvoice}>
-                ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ
+                {downloadingInvoice ? 'กำลังดาวน์โหลด...' : 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ'}
               </button>
             )}
 
@@ -1435,12 +1464,14 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   </div>
                   <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                     <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                      disabled={downloadingQuotationKey === `${q.id}-xlsx`}
                       onClick={() => handleDownloadQuotation(q.id, q.number, 'xlsx')}>
-                      <Icon name="fileText" size={12} /> Excel
+                      <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-xlsx` ? 'กำลังดาวน์โหลด...' : 'Excel'}
                     </button>
                     <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                      disabled={downloadingQuotationKey === `${q.id}-pdf`}
                       onClick={() => handleDownloadQuotation(q.id, q.number, 'pdf')}>
-                      <Icon name="fileText" size={12} /> PDF
+                      <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-pdf` ? 'กำลังดาวน์โหลด...' : 'PDF'}
                     </button>
                   </div>
                 </div>

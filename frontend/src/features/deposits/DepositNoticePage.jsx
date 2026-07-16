@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate } from '../../utils/format.js';
+import { downloadBlob } from '../../utils/download.js';
 
 const DEPOSIT_OPTIONS = [
   { value: 0.3,  label: '30%' },
@@ -25,10 +27,13 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   const [customers, setCustomers]   = useState([]);
   const [customerSearch, setCsSearch] = useState('');
   const [loading, setLoading]       = useState(true);
+  const [loadError, setLoadError]   = useState(null);
+  const [creatingDraft, setCreatingDraft] = useState(false);
   const [saving, setSaving]         = useState(false);
   const [previewHtml, setPreview]   = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
   const [confirmIssue, setConfirmIssue] = useState(false);
+  const [downloading, setDownloading] = useState(null); // 'xlsx' | 'pdf' | null
   const iframeRef = useRef(null);
 
   // form state
@@ -40,45 +45,69 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     items: [],
   });
 
-  useEffect(() => {
-    async function init() {
-      setLoading(true);
-      try {
-        const [templatesRes, customersRes] = await Promise.all([
-          api.depositNotices.noteTemplates(),
-          api.customers.search(''),
-        ]);
-        setTemplates(templatesRes.templates ?? []);
-        setCustomers(customersRes.customers ?? []);
+  // Mount effect only LOADS existing documents — it must never create one as a
+  // side effect of navigating here. The previous version unconditionally called
+  // createDraft() whenever no DRAFT was found, which (a) fired twice under React
+  // StrictMode's double-invoke, (b) minted a stray draft every time a user opened
+  // this page and then navigated away without touching it, and (c) minted ANOTHER
+  // new draft (version+1) every time this page was revisited after the document
+  // had already been issued, since an ISSUED doc is never a DRAFT. Now: load the
+  // DRAFT if one exists, else show the most recent ISSUED doc read-only, else
+  // render an explicit empty state — creation only happens on the user's click
+  // (see handleCreateDraft).
+  async function loadDocs() {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [templatesRes, customersRes] = await Promise.all([
+        api.depositNotices.noteTemplates(),
+        api.customers.search(''),
+      ]);
+      setTemplates(templatesRes.templates ?? []);
+      setCustomers(customersRes.customers ?? []);
 
-        const docsRes = await api.depositNotices.listByTicket(ticketId);
-        const draft = (docsRes.depositNotices ?? []).find((d) => d.status === 'DRAFT');
+      const docsRes = await api.depositNotices.listByTicket(ticketId);
+      const docs = docsRes.depositNotices ?? [];
+      const draft = docs.find((d) => d.status === 'DRAFT');
+      const latestIssued = docs
+        .filter((d) => d.status === 'ISSUED')
+        .sort((a, b) => (b.version ?? 0) - (a.version ?? 0))[0];
+      const existing = draft ?? latestIssued ?? null;
 
-        let docData;
-        if (draft) {
-          docData = draft;
-        } else {
-          const defaultNotes = (templatesRes.templates ?? [])
-            .filter((t) => t.defaultSelected)
-            .map((t) => t.text);
-          const created = await api.depositNotices.createDraft(ticketId, {
-            notes: defaultNotes,
-            depositPercent: 0.5,
-          });
-          docData = created.depositNotice;
-        }
-
-        setDoc(docData);
+      setDoc(existing);
+      if (existing) {
         // Try to match customerName against master to auto-fill taxId + address
-        populateForm(docData, customersRes.customers ?? []);
-      } catch (err) {
-        showToast('error', err.message || 'โหลดไม่สำเร็จ');
-      } finally {
-        setLoading(false);
+        populateForm(existing, customersRes.customers ?? []);
       }
+    } catch (err) {
+      setLoadError(err.message || 'โหลดไม่สำเร็จ');
+      showToast('error', err.message || 'โหลดไม่สำเร็จ');
+    } finally {
+      setLoading(false);
     }
-    init();
+  }
+
+  useEffect(() => {
+    loadDocs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadDocs is stable per ticketId; re-declaring it in deps would re-run on every render
   }, [ticketId]);
+
+  async function handleCreateDraft() {
+    setCreatingDraft(true);
+    try {
+      const defaultNotes = noteTemplates.filter((t) => t.defaultSelected).map((t) => t.text);
+      const created = await api.depositNotices.createDraft(ticketId, {
+        notes: defaultNotes,
+        depositPercent: 0.5,
+      });
+      setDoc(created.depositNotice);
+      populateForm(created.depositNotice, customers);
+    } catch (err) {
+      showToast('error', err.message || 'สร้างเอกสารฉบับร่างไม่สำเร็จ');
+    } finally {
+      setCreatingDraft(false);
+    }
+  }
 
   function populateForm(d, customerList = []) {
     // If taxId/address already saved in draft, use them directly
@@ -207,17 +236,14 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
 
   async function download(fetchBlob, extension) {
     if (!doc) return;
+    setDownloading(extension);
     try {
       const blob = await fetchBlob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      const ext = blob.type.startsWith('text/html') ? 'html' : extension;
-      a.download = (doc.docNumber ?? 'draft') + '.' + ext;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, doc.docNumber ?? 'draft', extension);
     } catch (err) {
       showToast('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
+    } finally {
+      setDownloading((current) => (current === extension ? null : current));
     }
   }
 
@@ -332,7 +358,12 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
             </div>
           )}
         </div>
-        {!isIssued && (
+        {/* Save/Preview/ออกเอกสาร only render once a document actually exists —
+            previously these rendered whenever `!isIssued` (true for `doc === null`
+            too), so a failed load or a not-yet-created draft still offered three
+            live-looking buttons whose handlers silently no-op'd on `if (!doc) return;`.
+            No doc now means no action buttons, not dead ones. */}
+        {doc && !isIssued && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button type="button" className="secondary-button" onClick={handleSave} disabled={saving}>
               บันทึก
@@ -345,18 +376,42 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
             </button>
           </div>
         )}
-        {isIssued && (
+        {doc && isIssued && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button type="button" className="secondary-button" onClick={handleDownloadXlsx}>
-              <Icon name="fileText" size={14} /> ดาวน์โหลด Excel
+            <button type="button" className="secondary-button" onClick={handleDownloadXlsx} disabled={downloading === 'xlsx'}>
+              <Icon name="fileText" size={14} /> {downloading === 'xlsx' ? 'กำลังดาวน์โหลด...' : 'ดาวน์โหลด Excel'}
             </button>
-            <button type="button" className="secondary-button" onClick={handleDownloadPdf}>
-              <Icon name="fileText" size={14} /> ดาวน์โหลด PDF
+            <button type="button" className="secondary-button" onClick={handleDownloadPdf} disabled={downloading === 'pdf'}>
+              <Icon name="fileText" size={14} /> {downloading === 'pdf' ? 'กำลังดาวน์โหลด...' : 'ดาวน์โหลด PDF'}
             </button>
           </div>
         )}
       </header>
 
+      {loadError && !doc ? (
+        <section className="panel">
+          <EmptyState icon="fileText" title="โหลดข้อมูลไม่สำเร็จ" description={loadError} />
+          <div style={{ padding: '0 18px 18px', display: 'flex', justifyContent: 'center' }}>
+            <button type="button" className="secondary-button" onClick={loadDocs}>
+              <Icon name="refresh" size={14} /> ลองใหม่
+            </button>
+          </div>
+        </section>
+      ) : !doc ? (
+        <section className="panel">
+          <EmptyState
+            icon="fileText"
+            title="ยังไม่มีใบแจ้งยอดเงินรับมัดจำ"
+            description="สร้างเอกสารฉบับร่างเพื่อเริ่มกรอกรายละเอียดใบแจ้งยอดมัดจำสำหรับใบขอราคานี้"
+          />
+          <div style={{ padding: '0 18px 18px', display: 'flex', justifyContent: 'center' }}>
+            <button type="button" className="primary-button" onClick={handleCreateDraft} disabled={creatingDraft}>
+              <Icon name="plus" size={14} />
+              {creatingDraft ? 'กำลังสร้าง...' : 'สร้างเอกสารฉบับร่าง'}
+            </button>
+          </div>
+        </section>
+      ) : (
       <div style={{ display: 'grid', gridTemplateColumns: previewHtml ? '1fr 1fr' : '1fr', gap: 16 }}>
         {/* ── Left: Form ── */}
         {/* min-width: 0 fix: this flex column is a CSS-grid item (parent grid
@@ -571,6 +626,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           </div>
         )}
       </div>
+      )}
 
       <ConfirmDialog
         open={confirmIssue}

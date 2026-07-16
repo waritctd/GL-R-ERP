@@ -1166,6 +1166,7 @@ textarea:focus {
 .event-dot.transition { background: var(--color-info-dot); }
 .event-dot.comment    { background: var(--color-text-muted); }
 .event-dot.created    { background: var(--color-success-soft); }
+.event-dot.success    { background: var(--color-success); }
 
 .ticket-detail-grid {
   display: grid;
