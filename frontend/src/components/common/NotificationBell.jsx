@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from './Icon.jsx';
 
 const TYPE_ICON = {
@@ -22,24 +24,32 @@ function timeAgo(iso) {
 }
 
 export function NotificationBell({ onNavigate }) {
-  const [items, setItems] = useState([]);
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
-  async function load() {
-    try {
-      const res = await api.notifications.list();
-      setItems(Array.isArray(res.notifications) ? res.notifications : []);
-    } catch {
-      setItems([]);
-    }
-  }
+  // Polling moves from a manual setInterval to refetchInterval — same 30s
+  // cadence, but the cache now lives at queryKeys.notifications() so any
+  // mutation elsewhere (e.g. a ticket action) that invalidates that key also
+  // refreshes this bell immediately instead of waiting up to 30s.
+  const notificationsQuery = useQuery({
+    queryKey: queryKeys.notifications(),
+    queryFn: () => api.notifications.list().then((res) => (Array.isArray(res.notifications) ? res.notifications : [])),
+    refetchInterval: 30_000,
+  });
+  // On error, fall back to an empty list — matches the original load()'s
+  // catch-and-clear behavior (this component has no showToast prop to report through).
+  const items = notificationsQuery.data ?? [];
 
-  useEffect(() => {
-    load();
-    const interval = setInterval(load, 30000);
-    return () => clearInterval(interval);
-  }, []);
+  const markReadMutation = useMutation({
+    mutationFn: (id) => api.notifications.markRead(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.notifications() }),
+  });
+
+  const markAllReadMutation = useMutation({
+    mutationFn: (ids) => Promise.all(ids.map((id) => api.notifications.markRead(id))),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.notifications() }),
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -50,19 +60,18 @@ export function NotificationBell({ onNavigate }) {
     return () => document.removeEventListener('mousedown', handleClick);
   }, [open]);
 
-  async function handleClick(item) {
+  function handleClick(item) {
     if (!item.read) {
-      await api.notifications.markRead(item.id);
-      setItems((prev) => prev.map((n) => n.id === item.id ? { ...n, read: true } : n));
+      markReadMutation.mutate(item.id);
     }
     setOpen(false);
     if (item.link) onNavigate(item.link);
   }
 
-  async function markAllRead() {
-    const unread = items.filter((n) => !n.read);
-    await Promise.all(unread.map((n) => api.notifications.markRead(n.id)));
-    setItems((prev) => prev.map((n) => ({ ...n, read: true })));
+  function markAllRead() {
+    const unread = items.filter((n) => !n.read).map((n) => n.id);
+    if (unread.length === 0) return;
+    markAllReadMutation.mutate(unread);
   }
 
   const unreadCount = items.filter((n) => !n.read).length;

@@ -18,4 +18,10 @@ export const queryKeys = {
   ticketList: (status) => ['tickets', 'list', status ?? ''],
   ticketDetail: (id) => ['tickets', 'detail', id],
   ticketAttachments: (id) => ['tickets', 'attachments', id],
+  // slice C (DepositNoticePage/CeoSettingsPage/NotificationBell)
+  depositNotices: (ticketId) => ['depositNotices', ticketId],
+  depositNoteTemplates: () => ['depositNotices', 'templates'],
+  customersSearch: (q) => ['customers', 'search', q ?? ''],
+  fxRates: () => ['fxRates'],
+  priceCalcConfigs: () => ['priceCalcConfigs'],
 };

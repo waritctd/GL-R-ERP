@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 
 function pctDisplay(val) {
   return val != null ? `${(Number(val) * 100).toFixed(2)}%` : '-';
@@ -10,55 +12,60 @@ function moneyDisplay(val) {
 }
 
 export function CeoSettingsPage({ showToast }) {
-  const [fxRates, setFxRates] = useState([]);
-  const [configs, setConfigs] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
 
   // FX rate inline edit: currency → draftRate string
   const [editFx, setEditFx] = useState({});          // currency → string
-  const [savingFx, setSavingFx] = useState({});       // currency → bool
 
   // Config edit modal state
   const [editingConfig, setEditingConfig] = useState(null);  // PriceCalcConfigDto or null
   const [configDraft, setConfigDraft] = useState({});
-  const [savingConfig, setSavingConfig] = useState(false);
 
-  async function load() {
-    setLoading(true);
-    try {
-      const [fxRes, cfgRes] = await Promise.all([
-        api.fxRates.list(),
-        api.priceCalcConfigs.list(),
-      ]);
-      setFxRates(fxRes.fxRates ?? []);
-      setConfigs(cfgRes.configs ?? []);
-    } catch (e) {
-      showToast('error', e.message || 'โหลดข้อมูลไม่สำเร็จ');
-    } finally {
-      setLoading(false);
-    }
+  const fxRatesQuery = useQuery({
+    queryKey: queryKeys.fxRates(),
+    queryFn: () => api.fxRates.list().then((response) => response.fxRates ?? []),
+  });
+  const fxRates = fxRatesQuery.data ?? [];
+
+  const configsQuery = useQuery({
+    queryKey: queryKeys.priceCalcConfigs(),
+    queryFn: () => api.priceCalcConfigs.list().then((response) => response.configs ?? []),
+  });
+  const configs = configsQuery.data ?? [];
+
+  const loading = fxRatesQuery.isLoading || configsQuery.isLoading;
+
+  useEffect(() => {
+    if (fxRatesQuery.error) showToast('error', fxRatesQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
+  }, [fxRatesQuery.error, showToast]);
+  useEffect(() => {
+    if (configsQuery.error) showToast('error', configsQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
+  }, [configsQuery.error, showToast]);
+
+  const saveFxRateMutation = useMutation({
+    mutationFn: ({ currency, rateToThb }) => api.fxRates.upsert(currency, { rateToThb }),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.fxRates() });
+      setEditFx((p) => { const n = { ...p }; delete n[variables.currency]; return n; });
+      showToast('success', `อัปเดตอัตรา ${variables.currency} แล้ว`);
+    },
+    onError: (e) => showToast('error', e.message || 'บันทึกไม่สำเร็จ'),
+  });
+
+  // A single shared mutation acts on whichever currency row is being saved —
+  // this reads the in-flight variables back out to know which row's button
+  // should show a "..." busy state (there's no per-row mutation instance).
+  function isSavingFx(currency) {
+    return saveFxRateMutation.isPending && saveFxRateMutation.variables?.currency === currency;
   }
 
-  useEffect(() => { load(); }, []);
-
-  async function saveFxRate(currency) {
+  function saveFxRate(currency) {
     const val = editFx[currency];
     if (!val || isNaN(Number(val)) || Number(val) <= 0) {
       showToast('error', 'กรุณากรอกอัตราแลกเปลี่ยนที่ถูกต้อง');
       return;
     }
-    setSavingFx((p) => ({ ...p, [currency]: true }));
-    try {
-      await api.fxRates.upsert(currency, { rateToThb: Number(val) });
-      const fxRes = await api.fxRates.list();
-      setFxRates(fxRes.fxRates ?? []);
-      setEditFx((p) => { const n = { ...p }; delete n[currency]; return n; });
-      showToast('success', `อัปเดตอัตรา ${currency} แล้ว`);
-    } catch (e) {
-      showToast('error', e.message || 'บันทึกไม่สำเร็จ');
-    } finally {
-      setSavingFx((p) => ({ ...p, [currency]: false }));
-    }
+    saveFxRateMutation.mutate({ currency, rateToThb: Number(val) });
   }
 
   function openConfigEdit(cfg) {
@@ -74,29 +81,30 @@ export function CeoSettingsPage({ showToast }) {
     });
   }
 
-  async function saveConfig() {
-    setSavingConfig(true);
-    try {
-      const payload = {
-        country:                    configDraft.country,
-        freightPerSqm:              Number(configDraft.freightPerSqm),
-        insurancePerSqm:            Number(configDraft.insurancePerSqm),
-        inlandFactoryToPortPerSqm:  Number(configDraft.inlandFactoryToPortPerSqm),
-        inlandPortToWarehousePerSqm: Number(configDraft.inlandPortToWarehousePerSqm),
-        importDutyPct:              Number(configDraft.importDutyPct) / 100,
-        marginPct:                  Number(configDraft.marginPct) / 100,
-      };
-      await api.priceCalcConfigs.update(payload);
-      const cfgRes = await api.priceCalcConfigs.list();
-      setConfigs(cfgRes.configs ?? []);
-      setEditingConfig(null);
+  const saveConfigMutation = useMutation({
+    mutationFn: (payload) => api.priceCalcConfigs.update(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.priceCalcConfigs() });
       showToast('success', `บันทึก config ประเทศ ${configDraft.country} (เวอร์ชันใหม่) แล้ว`);
-    } catch (e) {
-      showToast('error', e.message || 'บันทึกไม่สำเร็จ');
-    } finally {
-      setSavingConfig(false);
-    }
+      setEditingConfig(null);
+    },
+    onError: (e) => showToast('error', e.message || 'บันทึกไม่สำเร็จ'),
+  });
+
+  function saveConfig() {
+    const payload = {
+      country:                    configDraft.country,
+      freightPerSqm:              Number(configDraft.freightPerSqm),
+      insurancePerSqm:            Number(configDraft.insurancePerSqm),
+      inlandFactoryToPortPerSqm:  Number(configDraft.inlandFactoryToPortPerSqm),
+      inlandPortToWarehousePerSqm: Number(configDraft.inlandPortToWarehousePerSqm),
+      importDutyPct:              Number(configDraft.importDutyPct) / 100,
+      marginPct:                  Number(configDraft.marginPct) / 100,
+    };
+    saveConfigMutation.mutate(payload);
   }
+
+  const savingConfig = saveConfigMutation.isPending;
 
   if (loading) return <div style={{ padding: 40, color: 'var(--color-text-muted)' }}>กำลังโหลด...</div>;
 
@@ -145,9 +153,9 @@ export function CeoSettingsPage({ showToast }) {
                         />
                         <button type="button" className="primary-button"
                           style={{ fontSize: 12, padding: '4px 10px' }}
-                          disabled={savingFx[fx.currency]}
+                          disabled={isSavingFx(fx.currency)}
                           onClick={() => saveFxRate(fx.currency)}>
-                          {savingFx[fx.currency] ? '...' : 'บันทึก'}
+                          {isSavingFx(fx.currency) ? '...' : 'บันทึก'}
                         </button>
                         <button type="button" className="secondary-button"
                           style={{ fontSize: 12, padding: '4px 10px' }}
