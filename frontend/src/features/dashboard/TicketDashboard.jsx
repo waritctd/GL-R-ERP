@@ -143,19 +143,15 @@ export function TicketDashboard({ user, employee, showToast }) {
                 </div>
               ) : (
                 <>
-                  <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'minmax(0,0.9fr) minmax(0,2.2fr) minmax(0,1.4fr) minmax(0,1.3fr) minmax(0,1fr)',
-                    gap: 12, padding: '6px 18px 6px 22px',
-                    borderBottom: '1px solid #e6eaf0',
-                    background: '#f8fafc',
-                    fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em',
-                  }}>
-                    <span>เลขที่</span>
-                    <span>บริษัท / โครงการ</span>
-                    <span>{SHOW_SALES_ROLES.includes(user.role) ? 'ผู้ขาย' : ''}</span>
-                    <span>สถานะ</span>
-                    <span>วันที่สร้าง</span>
+                  {/* Shares .table-head/.data-row + .ticket-table with TicketListPage
+                      (src/features/tickets/TicketListPage.jsx) so hierarchy, hover,
+                      and column widths stay identical between the two ticket views
+                      instead of drifting via a second hand-rolled inline-style table. */}
+                  <div className="ticket-table table-head" role="row">
+                    <span role="columnheader">บริษัท / โครงการ</span>
+                    <span role="columnheader">{SHOW_SALES_ROLES.includes(user.role) ? 'ผู้ขาย' : ''}</span>
+                    <span role="columnheader">สถานะ</span>
+                    <span role="columnheader">วันที่สร้าง</span>
                   </div>
                   {recent.map((ticket) => {
                     const st = ticketStatusLabel(ticket.status);
@@ -164,25 +160,20 @@ export function TicketDashboard({ user, employee, showToast }) {
                         key={ticket.id}
                         type="button"
                         onClick={() => navigate(`/tickets/${ticket.id}`)}
-                        style={{
-                          width: '100%', display: 'grid',
-                          gridTemplateColumns: 'minmax(0,0.9fr) minmax(0,2.2fr) minmax(0,1.4fr) minmax(0,1.3fr) minmax(0,1fr)',
-                          gap: 12, alignItems: 'center',
-                          padding: '12px 18px', border: 'none', borderBottom: '1px solid #f1f5f9',
-                          background: '#fff', cursor: 'pointer', textAlign: 'left', color: '#334155',
-                        }}
+                        className="ticket-table data-row"
+                        role="row"
                       >
-                        <code style={{ fontSize: 12 }}>{ticket.code}</code>
-                        <span style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                          <strong style={{ display: 'block', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{ticket.customerName || ticket.title}</strong>
+                        <span role="cell" className="flex min-w-0 flex-col gap-0.5">
+                          <strong className="block truncate text-text">{ticket.customerName || ticket.title}</strong>
+                          <code className="block truncate text-2xs text-text-muted">{ticket.code}</code>
                         </span>
-                        <span style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', fontSize: 13, color: '#64748b' }}>
+                        <span role="cell">
                           {SHOW_SALES_ROLES.includes(user.role) ? (ticket.createdByName || '—') : ''}
                         </span>
-                        <StatusBadge tone={st.tone}>{st.label}</StatusBadge>
-                        <span style={{ fontSize: 13, color: '#94a3b8', whiteSpace: 'nowrap' }}>
-                          {formatThaiDate(ticket.createdAt)}
+                        <span role="cell">
+                          <StatusBadge tone={st.tone}>{st.label}</StatusBadge>
                         </span>
+                        <span role="cell">{formatThaiDate(ticket.createdAt)}</span>
                       </button>
                     );
                   })}

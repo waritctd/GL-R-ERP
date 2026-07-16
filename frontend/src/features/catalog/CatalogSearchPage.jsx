@@ -192,7 +192,6 @@ export function CatalogSearchPage({ showToast }) {
                 <thead className="border-b-2 border-border">
                   <tr>
                     <th className="text-left px-3 py-2 text-muted font-medium">โรงงาน</th>
-                    <th className="text-left px-3 py-2 text-muted font-medium">รหัส</th>
                     <th className="text-left px-3 py-2 text-muted font-medium">Collection</th>
                     <th className="text-left px-3 py-2 text-muted font-medium">ชื่อ</th>
                     <th className="text-left px-3 py-2 text-muted font-medium">สี</th>
@@ -206,17 +205,24 @@ export function CatalogSearchPage({ showToast }) {
                   {items.map((p) => (
                     <tr
                       key={p.priceId}
-                      className="border-b border-border hover:bg-surface-alt transition-colors"
+                      className="border-b border-border hover:bg-surface-hover transition-colors"
                     >
-                      <td className="px-3 py-2 font-medium">{p.factoryName}</td>
-                      <td className="px-3 py-2 font-mono text-xs">{p.productCode || '—'}</td>
+                      {/* Factory (primary) + product code (secondary, muted mono)
+                          stacked in one cell — the identity anchor a user scans
+                          for first, per DESIGN.md's Ink Muted floor. */}
+                      <td className="px-3 py-2">
+                        <span className="flex min-w-0 flex-col gap-0.5">
+                          <strong className="block truncate font-medium text-text">{p.factoryName}</strong>
+                          <code className="block truncate text-2xs text-text-muted">{p.productCode || '—'}</code>
+                        </span>
+                      </td>
                       <td className="px-3 py-2">{p.collection || '—'}</td>
                       <td className="px-3 py-2">{p.productName || '—'}</td>
                       <td className="px-3 py-2">{p.color || '—'}</td>
                       <td className="px-3 py-2">{p.surface || '—'}</td>
                       <td className="px-3 py-2">{p.sizeRaw || '—'}</td>
                       <td className="px-3 py-2 text-right whitespace-nowrap font-bold text-primary">
-                        {priceDisplay(p.price, p.currency)}
+                        <span className="font-mono">{priceDisplay(p.price, p.currency)}</span>
                         <span className="text-xs font-normal text-muted ml-1">
                           / {unitLabel(p.priceUnit)}
                         </span>
