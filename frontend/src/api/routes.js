@@ -58,14 +58,6 @@ export const API_ROUTES = {
     noteTemplates: '/api/document-note-templates',
     remainingInvoiceFile: (ticketId) => `/api/tickets/${ticketId}/remaining-invoice/file`,
   },
-  documents: {
-    get: (id) => `/api/documents/${id}`,
-    update: (id) => `/api/documents/${id}`,
-    preview: (id) => `/api/documents/${id}/preview`,
-    issue: (id) => `/api/documents/${id}/issue`,
-    file: (id, fmt) => `/api/documents/${id}/file?format=${fmt}`,
-    noteTemplates: '/api/document-note-templates',
-  },
   catalog: {
     search: (q) => `/api/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`,
     prices: (q, factoryId, limit) => {

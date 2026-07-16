@@ -29,6 +29,27 @@ public class DepositNoticeController {
         this.sessions = sessions;
     }
 
+    // Note templates (route + response key preserved from the retired document/ module;
+    // sales.document_note_template is shared infra that V29 deliberately did not rename)
+    @GetMapping("/document-note-templates")
+    Map<String, List<DocumentNoteTemplateDto>> noteTemplates(HttpSession session) {
+        sessions.requireUser(session);
+        return Map.of("templates", service.getNoteTemplates());
+    }
+
+    // Revision request (moved verbatim from the retired document/ module — the deposit
+    // twin service method was already identical, previously unmapped)
+    @PostMapping("/tickets/{ticketId}/revision")
+    Map<String, Object> requestRevision(
+        @PathVariable long ticketId,
+        @Valid @RequestBody RevisionRequest req,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        var ticket = service.requestRevision(ticketId, req, user);
+        return Map.of("ticket", ticket);
+    }
+
     // Draft creation from ticket
     @PostMapping("/tickets/{ticketId}/deposit-notice/draft")
     Map<String, DepositNoticeDto> createDraft(
