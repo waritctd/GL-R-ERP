@@ -825,10 +825,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   <div key={step.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
                     <span style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700,
                       background: done ? (active ? '#1e40af' : '#bfdbfe') : '#e2e8f0',
-                      color: done ? (active ? '#fff' : '#1e40af') : '#94a3b8' }}>
+                      color: done ? (active ? '#fff' : '#1e40af') : '#64748b' }}>
                       {done && !active ? '✓' : idx + 1}
                     </span>
-                    <span style={{ fontSize: 13, color: active ? '#1e40af' : done ? '#374151' : '#94a3b8', fontWeight: active ? 600 : 400 }}>{step.label}</span>
+                    <span style={{ fontSize: 13, color: active ? '#1e40af' : done ? '#374151' : '#64748b', fontWeight: active ? 600 : 400 }}>{step.label}</span>
                   </div>
                 );
               })}
@@ -849,10 +849,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   <div key={step.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
                     <span style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700,
                       background: done ? (active ? '#059669' : '#a7f3d0') : '#e2e8f0',
-                      color: done ? (active ? '#fff' : '#059669') : '#94a3b8' }}>
+                      color: done ? (active ? '#fff' : '#059669') : '#64748b' }}>
                       {done && !active ? '✓' : idx + 1}
                     </span>
-                    <span style={{ fontSize: 13, color: active ? '#059669' : done ? '#374151' : '#94a3b8', fontWeight: active ? 600 : 400 }}>{step.label}</span>
+                    <span style={{ fontSize: 13, color: active ? '#059669' : done ? '#374151' : '#64748b', fontWeight: active ? 600 : 400 }}>{step.label}</span>
                   </div>
                 );
               })}
@@ -1062,7 +1062,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                           <Icon name="building" size={13} />
                           <span>{factory}</span>
                           <span style={{ fontWeight: 400, color: '#64748b' }}>({groupItems.length} รายการ)</span>
-                          {fc?.email && <span style={{ fontWeight: 400, color: '#94a3b8', fontSize: 11 }}>· {fc.email}</span>}
+                          {fc?.email && <span style={{ fontWeight: 400, color: '#64748b', fontSize: 11 }}>· {fc.email}</span>}
                           <button type="button" className="secondary-button"
                             style={{ marginLeft: 'auto', fontSize: 12, padding: '4px 12px' }}
                             onClick={() => setEmailDraft(isDraftOpen ? null : buildEmailDraft(factory, groupItems))}>
@@ -1128,22 +1128,22 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                           const unitLabel = selectedCurr.unit === 'sqm' ? 'ตร.ม.' : selectedCurr.unit === 'box' ? 'กล่อง' : 'แผ่น';
                           return (
                             <div key={item.id ?? i} className="ticket-items-table data-row" style={{ gridTemplateColumns: itemsGridCols }}>
-                              <span>
+                              <span data-label="ยี่ห้อ / รุ่น">
                                 <strong>{item.brand}</strong>
                                 {item.model && <small style={{ color: '#64748b' }}>{item.model}</small>}
                               </span>
-                              <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                              <span data-label="สี / เนื้อผิว" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                                 {item.color && <span>{item.color}</span>}
                                 {item.texture && <small style={{ color: '#64748b' }}>{item.texture}</small>}
-                                {item.size && <small style={{ color: '#94a3b8' }}>{item.size}</small>}
+                                {item.size && <small style={{ color: '#64748b' }}>{item.size}</small>}
                               </span>
-                              <span>
+                              <span data-label="จำนวน">
                                 {item.unitBasis === 'SQM'
-                                  ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small style={{ display: 'block', color: '#94a3b8' }}>{item.qty} แผ่น</small></>
-                                  : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: '#94a3b8' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
+                                  ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small style={{ display: 'block', color: '#64748b' }}>{item.qty} แผ่น</small></>
+                                  : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: '#64748b' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
                                 }
                               </span>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                              <div data-label="ราคาที่เสนอ (แก้ไข)" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                                 <input type="number" min="0" step="0.0001"
                                   value={draftRaw[item.id] ?? ''}
                                   onChange={(e) => setDraftRaw((prev) => ({ ...prev, [item.id]: e.target.value }))}
@@ -1152,7 +1152,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                                   style={{ width: 110, padding: '4px 8px', border: '1px solid #93c5fd', borderRadius: 4, fontSize: 13 }} />
                                 <span style={{ fontSize: 11, color: '#2563eb', whiteSpace: 'nowrap' }}>{currLabel}/{unitLabel}</span>
                               </div>
-                              <code>{formatMoney(item.approvedPrice)}</code>
+                              <code data-label="ราคาที่อนุมัติ">{formatMoney(item.approvedPrice)}</code>
                             </div>
                           );
                         })}
@@ -1161,32 +1161,32 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   })
                 ) : items.map((item, i) => (
                   <div key={item.id ?? i} className="ticket-items-table data-row" style={{ gridTemplateColumns: itemsGridCols }}>
-                    <span>
+                    <span data-label="ยี่ห้อ / รุ่น">
                       <strong>{item.brand}</strong>
                       {item.model && <small style={{ color: '#64748b' }}>{item.model}</small>}
-                      {item.factory && <small style={{ color: '#94a3b8', fontSize: 11 }}>{item.factory}</small>}
+                      {item.factory && <small style={{ color: '#64748b', fontSize: 11 }}>{item.factory}</small>}
                     </span>
-                    <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <span data-label="สี / เนื้อผิว" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                       {item.color && <span>{item.color}</span>}
                       {item.texture && <small style={{ color: '#64748b' }}>{item.texture}</small>}
-                      {item.size && <small style={{ color: '#94a3b8' }}>{item.size}</small>}
+                      {item.size && <small style={{ color: '#64748b' }}>{item.size}</small>}
                     </span>
-                    <span>
+                    <span data-label="จำนวน">
                       {item.unitBasis === 'SQM'
-                        ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small style={{ display: 'block', color: '#94a3b8' }}>{item.qty} แผ่น</small></>
-                        : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: '#94a3b8' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
+                        ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small style={{ display: 'block', color: '#64748b' }}>{item.qty} แผ่น</small></>
+                        : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: '#64748b' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
                       }
                     </span>
                     {showCalcBreakdown ? (
                       <>
-                        <span style={{ fontSize: 12 }}>
+                        <span data-label="ราคาโรงงาน" style={{ fontSize: 12 }}>
                           {item.rawPrice != null
-                            ? <><strong>{Number(item.rawPrice).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</strong><small style={{ color: '#94a3b8' }}> {item.rawCurrency}/{item.rawUnit === 'sqm' ? 'ตร.ม.' : 'แผ่น'}</small></>
-                            : <span style={{ color: '#94a3b8' }}>-</span>}
-                          {item.calcConfigVersion && <small style={{ display: 'block', color: '#94a3b8', fontSize: 10 }}>config v{item.calcConfigVersion}</small>}
+                            ? <><strong>{Number(item.rawPrice).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</strong><small style={{ color: '#64748b' }}> {item.rawCurrency}/{item.rawUnit === 'sqm' ? 'ตร.ม.' : 'แผ่น'}</small></>
+                            : <span style={{ color: '#64748b' }}>-</span>}
+                          {item.calcConfigVersion && <small style={{ display: 'block', color: '#64748b', fontSize: 10 }}>config v{item.calcConfigVersion}</small>}
                         </span>
-                        <code style={{ color: '#0369a1' }}>{item.calcedCost != null ? formatMoney(item.calcedCost) : '—'}</code>
-                        <span>
+                        <code data-label="ต้นทุน (THB/ชิ้น)" style={{ color: '#0369a1' }}>{item.calcedCost != null ? formatMoney(item.calcedCost) : '—'}</code>
+                        <span data-label="ราคาขาย (THB/ชิ้น)">
                           <code style={{ color: item.manualPrice != null ? '#7c3aed' : '#059669', fontWeight: 700 }}>
                             {item.manualPrice != null ? formatMoney(item.manualPrice) : item.calcedPrice != null ? formatMoney(item.calcedPrice) : '—'}
                           </code>
@@ -1229,8 +1229,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                       </>
                     ) : (
                       <>
-                        {showProposed && <code>{formatMoney(item.proposedPrice)}</code>}
-                        {showApproved && <code>{formatMoney(item.approvedPrice)}</code>}
+                        {showProposed && <code data-label={`ราคาที่เสนอ${proposeMode ? ' (แก้ไข)' : ''}`}>{formatMoney(item.proposedPrice)}</code>}
+                        {showApproved && <code data-label="ราคาที่อนุมัติ">{formatMoney(item.approvedPrice)}</code>}
                       </>
                     )}
                   </div>
@@ -1277,7 +1277,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   <div key={b.itemId} style={{ marginBottom: 16, padding: '12px 18px', borderBottom: '1px solid #f1f5f9' }}>
                     <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>
                       {b.brand} {b.model && <span style={{ fontWeight: 400, color: '#64748b' }}>({b.model})</span>}
-                      {b.factory && <small style={{ color: '#94a3b8', marginLeft: 8 }}>{b.factory}</small>}
+                      {b.factory && <small style={{ color: '#64748b', marginLeft: 8 }}>{b.factory}</small>}
                     </div>
                     <table style={{ fontSize: 11, borderCollapse: 'collapse', width: '100%', maxWidth: 520 }}>
                       <tbody>
@@ -1300,7 +1300,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                             <td style={{ padding: '3px 0', fontWeight: 600, textAlign: 'right', minWidth: 80 }}>
                               {value != null ? Number(value).toLocaleString('th-TH', { minimumFractionDigits: 4 }) : ''}
                             </td>
-                            <td style={{ padding: '3px 0 3px 10px', color: '#94a3b8', fontSize: 10 }}>{note}</td>
+                            <td style={{ padding: '3px 0 3px 10px', color: '#64748b', fontSize: 10 }}>{note}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1361,7 +1361,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   <div key={att.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#f8fafc', borderRadius: 6, border: '1px solid #e2e8f0' }}>
                     <Icon name="paperclip" size={13} style={{ color: '#64748b', flexShrink: 0 }} />
                     <span style={{ flex: 1, fontSize: 13, color: '#0f172a', wordBreak: 'break-all' }}>{att.fileName}</span>
-                    <span style={{ fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap', background: '#f1f5f9', padding: '1px 6px', borderRadius: 99 }}>
+                    <span style={{ fontSize: 11, color: '#64748b', whiteSpace: 'nowrap', background: '#f1f5f9', padding: '1px 6px', borderRadius: 99 }}>
                       {att.attachType}
                     </span>
                     <a href={api.attachments.fileUrl(att.id)} target="_blank" rel="noreferrer"
@@ -1454,7 +1454,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                           <div key={i} style={{ paddingBottom: 2 }}>
                             {it.brand} {it.model} — {it.qty} ชิ้น
                             {it.rawPrice != null && (
-                              <span style={{ color: '#94a3b8', marginLeft: 4 }}>
+                              <span style={{ color: '#64748b', marginLeft: 4 }}>
                                 @ {it.rawPrice} {it.rawCurrency}/{it.rawUnit}
                               </span>
                             )}
@@ -1462,7 +1462,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                         ))}
                       </div>
                     )}
-                    <small style={{ color: '#94a3b8', fontSize: 11 }}>{formatThaiDate(event.createdAt)}</small>
+                    <small style={{ color: '#64748b', fontSize: 11 }}>{formatThaiDate(event.createdAt)}</small>
                   </div>
                 </div>
               );

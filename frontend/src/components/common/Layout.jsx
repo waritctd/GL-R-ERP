@@ -2,11 +2,23 @@ import { cn } from '../../utils/cn.js';
 
 /**
  * PageStack — reproduces `.page-stack`:
- *   display: grid; gap: 18px; max-width: 1320px;
+ *   display: grid; gap: 18px; min-width: 0; max-width: 1320px;
+ * `grid-cols-1` (not bare `grid`) is required: a bare `grid` container has no
+ * explicit column, so the browser sizes its one implicit column to the
+ * *max-content* width of the widest child (e.g. a tablet-only
+ * `min-w-[780px]` DataTable) regardless of viewport — the legacy `.page-stack
+ * > * { min-width: 0 }` rule can't stop that, because min-width:0 on a child
+ * only lets it shrink *within* an already-constrained track; here the track
+ * itself was growing unconstrained. `grid-cols-1` makes the column an
+ * explicit `minmax(0,1fr)` track, which actually fills/shrinks to the
+ * available width — verified fix for a 768px page-level horizontal-scroll
+ * regression on Attendance (content-scroll scrollWidth 814 vs clientWidth
+ * 682, i.e. every sibling row stretched to the table's width, not just the
+ * table).
  */
 export function PageStack({ className, children, ...props }) {
   return (
-    <div className={cn('grid gap-[18px] max-w-[1320px]', className)} {...props}>
+    <div className={cn('grid grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]', className)} {...props}>
       {children}
     </div>
   );

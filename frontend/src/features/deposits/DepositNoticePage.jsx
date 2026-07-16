@@ -359,7 +359,16 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
 
       <div style={{ display: 'grid', gridTemplateColumns: previewHtml ? '1fr 1fr' : '1fr', gap: 16 }}>
         {/* ── Left: Form ── */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {/* min-width: 0 fix: this flex column is a CSS-grid item (parent grid
+            at previewHtml ? '1fr 1fr' : '1fr') and, like all flex/grid items,
+            defaults to min-width: auto — it refuses to shrink below its
+            content's min-content width. Thai has no inter-word spaces, so a
+            long unbreakable label/value run inside the panels below forced
+            this column (and the page) 43px past the viewport at 375px
+            (verified: content-scroll scrollWidth 418 vs clientWidth 375).
+            min-w-0 lets it shrink to the grid track and wrap/truncate
+            normally instead. */}
+        <div className="min-w-0" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
           {/* Customer */}
           <section className="panel">
@@ -425,14 +434,14 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
             <div style={{ padding: '0 18px 14px' }}>
               {/* Muted Floor fix: was Ink Faint (#94a3b8) on a table header label —
                   DESIGN.md specifies Ink Muted (#64748b) for `.table-head` overline text. */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) 60px 80px 80px 80px', gap: 6, padding: '8px 0', borderBottom: '1px solid #e6eaf0', fontSize: 11, fontWeight: 700, color: '#64748b' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) minmax(0,60px) minmax(0,80px) minmax(0,80px) minmax(0,80px)', gap: 6, padding: '8px 0', borderBottom: '1px solid #e6eaf0', fontSize: 11, fontWeight: 700, color: '#64748b' }}>
                 <span>รายละเอียด</span><span style={{ textAlign: 'right' }}>จำนวน</span>
                 <span style={{ textAlign: 'right' }}>ราคา/หน่วย</span>
                 <span style={{ textAlign: 'right' }}>ราคาสุทธิ</span>
                 <span style={{ textAlign: 'right' }}>เป็นเงิน</span>
               </div>
               {form.items.map((it, idx) => (
-                <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) 60px 80px 80px 80px', gap: 6, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f8fafc' }}>
+                <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) minmax(0,60px) minmax(0,80px) minmax(0,80px) minmax(0,80px)', gap: 6, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f8fafc' }}>
                   {isIssued ? (
                     <>
                       <span style={{ fontSize: 13 }}>{it.description}</span>

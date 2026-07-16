@@ -37,8 +37,8 @@ function SearchSelect({ label, value, onSelect, placeholder, options, onSearch, 
           />
           {open && (
             <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.1)', maxHeight: 220, overflowY: 'auto' }}>
-              {loading && <div style={{ padding: '10px 12px', fontSize: 12, color: '#94a3b8' }}>กำลังโหลด...</div>}
-              {!loading && options.length === 0 && <div style={{ padding: '10px 12px', fontSize: 12, color: '#94a3b8' }}>ไม่พบข้อมูล</div>}
+              {loading && <div style={{ padding: '10px 12px', fontSize: 12, color: '#64748b' }}>กำลังโหลด...</div>}
+              {!loading && options.length === 0 && <div style={{ padding: '10px 12px', fontSize: 12, color: '#64748b' }}>ไม่พบข้อมูล</div>}
               {options.map((opt) => (
                 // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- dropdown option row; onMouseDown (not click) preserves input focus for typeahead
                 <div key={opt.id} onMouseDown={() => { onSelect(opt); setOpen(false); }}
@@ -398,7 +398,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                     <strong>{selectedContact.firstName} {selectedContact.lastName}</strong>
                     {selectedContact.position && <span style={{ color: '#64748b', fontSize: 12, marginLeft: 6 }}>{selectedContact.position}</span>}
                     {(selectedContact.email || selectedContact.phone) && (
-                      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+                      <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
                         {selectedContact.email}{selectedContact.email && selectedContact.phone ? ' · ' : ''}{selectedContact.phone}
                       </div>
                     )}

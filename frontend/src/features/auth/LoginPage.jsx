@@ -83,7 +83,7 @@ export function LoginPage({ onLogin, loading, error }) {
 
           {isMock && (
             <div className="border-t border-border pt-[14px]">
-              <p className="!m-0 !mb-[10px] text-xs !text-text-faint font-semibold">DEMO — เข้าสู่ระบบด่วน</p>
+              <p className="!m-0 !mb-[10px] text-xs !text-text-muted font-semibold">DEMO — เข้าสู่ระบบด่วน</p>
               <div className="grid gap-[6px]">
                 {quickAccounts.map((account) => (
                   <Button
@@ -97,7 +97,7 @@ export function LoginPage({ onLogin, loading, error }) {
                     <Icon name={account.icon} size={15} />
                     <span>
                       <strong className="text-sm">{account.label}</strong>
-                      <small className="block text-text-faint text-2xs">{account.helper}</small>
+                      <small className="block text-text-muted text-2xs">{account.helper}</small>
                     </span>
                   </Button>
                 ))}
