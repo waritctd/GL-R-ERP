@@ -25,6 +25,9 @@ public final class TicketEventKind {
     public static final String GOODS_RECEIVED        = "GOODS_RECEIVED";
     public static final String AWAITING_FINAL_PAYMENT = "AWAITING_FINAL_PAYMENT";
     public static final String FULLY_PAID            = "FULLY_PAID";
+    // CEO manual price override on a ticket item (2026-07-16 pricing-integrity audit) —
+    // sales.ticket_event.chk_event_kind was extended for this in V48.
+    public static final String PRICE_OVERRIDDEN      = "PRICE_OVERRIDDEN";
 
     private TicketEventKind() {}
 }

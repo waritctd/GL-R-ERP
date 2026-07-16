@@ -2,6 +2,7 @@ package th.co.glr.hr.ticket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import th.co.glr.hr.pricing.PriceBreakdownItemDto;
@@ -419,11 +420,53 @@ public class TicketService {
         if (!salesCanEdit) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้");
         }
-        tickets.replaceItems(ticketId, request.items());
+        // Sales editing items (brand/model/qty/etc.) must NOT be able to clobber import's
+        // proposed price or CEO's approved/manual price — only proposePrice (import) is
+        // allowed to replace pricing wholesale. Merge request items onto the ticket's
+        // existing items by position (request order = display order); pricing fields
+        // always come from the existing item at that position, never the request.
+        List<TicketItemDto> merged = mergeEditedItemsPreservingPricing(ticketId, ticket.items(), request.items());
+        tickets.replaceItemsPreservingPricing(ticketId, merged);
         tickets.setHasEdits(ticketId, true);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.EDITED, st, st, request.note());
         return requireTicket(ticketId);
+    }
+
+    private List<TicketItemDto> mergeEditedItemsPreservingPricing(
+            long ticketId, List<TicketItemDto> existingItems, List<TicketItemRequest> requestItems) {
+        List<TicketItemDto> merged = new ArrayList<>(requestItems.size());
+        for (int i = 0; i < requestItems.size(); i++) {
+            TicketItemRequest r = requestItems.get(i);
+            TicketItemDto prior = i < existingItems.size() ? existingItems.get(i) : null;
+            String unitBasis = (r.unitBasis() != null && !r.unitBasis().isBlank())
+                ? r.unitBasis() : "PIECE";
+            // "currency" (display currency, distinct from rawCurrency) is pricing-adjacent
+            // metadata, not a descriptive field the request is meant to drive — carry it
+            // over like the other pricing fields, falling back to the request/THB only
+            // for brand-new rows that have no prior item to inherit from.
+            String currency = prior != null
+                ? prior.currency()
+                : ((r.currency() != null && !r.currency().isBlank()) ? r.currency() : "THB");
+            merged.add(new TicketItemDto(
+                prior != null ? prior.id() : 0L,
+                ticketId,
+                r.brand(), r.model(), r.color(), r.texture(), r.size(), r.factory(),
+                r.qty(), r.qtySqm(),
+                r.rawPrice(), r.rawCurrency(), r.rawUnit(),
+                prior != null ? prior.proposedPrice() : null,
+                prior != null ? prior.approvedPrice() : null,
+                currency,
+                i,
+                prior != null ? prior.calcedCost() : null,
+                prior != null ? prior.calcedPrice() : null,
+                prior != null ? prior.calcConfigVersion() : null,
+                unitBasis,
+                prior != null ? prior.manualPrice() : null,
+                prior != null ? prior.manualOverrideReason() : null
+            ));
+        }
+        return merged;
     }
 
     @Transactional
@@ -465,6 +508,12 @@ public class TicketService {
             throw new ApiException(HttpStatus.NOT_FOUND, "Item not found in this ticket");
         }
         tickets.updateItemManualPrice(itemId, request.manualPrice(), request.reason());
+        // Audit trail: an override silently changing an item's price with no ticket_event
+        // was a gap found in the 2026-07-16 pricing-integrity audit (finding #3).
+        String note = "Item #" + itemId + ": ราคา manual override = " + request.manualPrice()
+            + (request.reason() != null && !request.reason().isBlank() ? " — เหตุผล: " + request.reason() : "");
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.PRICE_OVERRIDDEN, s.status(), s.status(), note);
         return requireTicket(ticketId);
     }
 

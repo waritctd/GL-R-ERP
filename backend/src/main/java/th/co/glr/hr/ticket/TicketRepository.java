@@ -203,6 +203,60 @@ public class TicketRepository {
         insertItems(ticketId, items);
     }
 
+    // Used by TicketService.editItems: unlike replaceItems (which is for proposePrice's
+    // intentional wholesale price replacement), this preserves each item's pricing fields
+    // (proposedPrice/approvedPrice/calcedCost/calcedPrice/calcConfigVersion/manualPrice/
+    // manualOverrideReason/currency) exactly as TicketService merged them — sales editing
+    // descriptive fields must never silently discard import's proposed price or CEO's
+    // approved/manual price (2026-07-16 pricing-integrity audit, finding #4).
+    @Transactional
+    public void replaceItemsPreservingPricing(long ticketId, List<TicketItemDto> items) {
+        jdbc.update("DELETE FROM sales.ticket_item WHERE ticket_id = :id", Map.of("id", ticketId));
+        if (items.isEmpty()) {
+            return;
+        }
+        MapSqlParameterSource[] batch = new MapSqlParameterSource[items.size()];
+        for (int i = 0; i < items.size(); i++) {
+            TicketItemDto item = items.get(i);
+            batch[i] = new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("brand", item.brand())
+                .addValue("model", item.model())
+                .addValue("color", item.color())
+                .addValue("texture", item.texture())
+                .addValue("size", item.size())
+                .addValue("factory", item.factory())
+                .addValue("qty", item.qty())
+                .addValue("qtySqm", item.qtySqm())
+                .addValue("unitBasis", item.unitBasis())
+                .addValue("rawPrice", item.rawPrice())
+                .addValue("rawCurrency", item.rawCurrency())
+                .addValue("rawUnit", item.rawUnit())
+                .addValue("proposedPrice", item.proposedPrice())
+                .addValue("approvedPrice", item.approvedPrice())
+                .addValue("currency", item.currency())
+                .addValue("sortOrder", i)
+                .addValue("calcedCost", item.calcedCost())
+                .addValue("calcedPrice", item.calcedPrice())
+                .addValue("calcConfigVersion", item.calcConfigVersion())
+                .addValue("manualPrice", item.manualPrice())
+                .addValue("manualOverrideReason", item.manualOverrideReason());
+        }
+        jdbc.batchUpdate("""
+            INSERT INTO sales.ticket_item
+                (ticket_id, brand, model, color, texture, size, factory,
+                 qty, qty_sqm, unit_basis, raw_price, raw_currency, raw_unit,
+                 proposed_price, approved_price, currency, sort_order,
+                 calced_cost, calced_price, calc_config_version,
+                 manual_price, manual_override_reason)
+            VALUES (:ticketId, :brand, :model, :color, :texture, :size, :factory,
+                    :qty, :qtySqm, :unitBasis, :rawPrice, :rawCurrency, :rawUnit,
+                    :proposedPrice, :approvedPrice, :currency, :sortOrder,
+                    :calcedCost, :calcedPrice, :calcConfigVersion,
+                    :manualPrice, :manualOverrideReason)
+            """, batch);
+    }
+
     public void approveItemPrices(long ticketId) {
         jdbc.update("""
             UPDATE sales.ticket_item
