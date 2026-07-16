@@ -24,6 +24,7 @@ const EVENT_KIND_LABEL = {
   EDITED:             'แก้ไขรายการสินค้า',
   COMMENTED:          'ความคิดเห็น',
   COMMENT:            'ความคิดเห็น',
+  PRICE_OVERRIDDEN:   'แก้ไขราคาด้วยตนเอง (CEO)',
 };
 
 const TERMINAL = ['closed', 'cancelled'];

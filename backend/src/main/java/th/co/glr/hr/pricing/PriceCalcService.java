@@ -53,10 +53,7 @@ public class PriceCalcService {
                     .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
                         "ไม่พบ price config สำหรับประเทศ: " + country)));
 
-            BigDecimal fxRate = fxRates.findByCurrency(
-                    item.rawCurrency() != null ? item.rawCurrency() : "THB")
-                .map(FxRateDto::rateToThb)
-                .orElse(ONE);
+            BigDecimal fxRate = resolveFxRate(item.rawCurrency());
 
             // sqmPerPiece: qtySqm / qty, fallback to 1
             BigDecimal sqmPerPiece = ONE;
@@ -99,10 +96,30 @@ public class PriceCalcService {
             BigDecimal calcedCost  = landedCostPerSqm.multiply(sqmPerPiece).setScale(4, RoundingMode.HALF_UP);
             BigDecimal calcedPrice = sellPricePerSqm.multiply(sqmPerPiece).setScale(2, RoundingMode.HALF_UP);
 
-            tickets.updateItemCalcResults(item.id(), calcedCost, calcedPrice, config.version(), calcedPrice);
+            // A CEO manual price override must survive recalculation: calced_cost/calced_price/
+            // calc_config_version always reflect the fresh calculation, but proposed_price stays
+            // pinned to the manual override rather than being clobbered by calcedPrice (otherwise
+            // approve() would silently approve the calculated price, not the override).
+            BigDecimal proposedPrice = item.manualPrice() != null ? item.manualPrice() : calcedPrice;
+            tickets.updateItemCalcResults(item.id(), calcedCost, calcedPrice, config.version(), proposedPrice);
         }
 
         return tickets.findById(ticketId).orElseThrow();
+    }
+
+    // THB (and a null/blank currency, treated as THB) never needs a lookup — rate is always 1.
+    // Any other currency MUST resolve against sales.fx_rates; silently falling back to 1:1 THB
+    // was a pricing-integrity bug (an unset FX rate made goods look free), so this now fails
+    // loudly instead (2026-07-16 sales-ticket-flow audit).
+    private BigDecimal resolveFxRate(String rawCurrency) {
+        String currency = rawCurrency != null ? rawCurrency : "THB";
+        if ("THB".equals(currency)) {
+            return ONE;
+        }
+        return fxRates.findByCurrency(currency)
+            .map(FxRateDto::rateToThb)
+            .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "ไม่พบอัตราแลกเปลี่ยนสำหรับสกุลเงิน " + currency + " — กรุณาตั้งค่าใน CEO Settings"));
     }
 
     public List<PriceBreakdownItemDto> calculateBreakdown(long ticketId) {
@@ -120,10 +137,7 @@ public class PriceCalcService {
             PriceCalcConfigDto config = priceConfigs.findCurrentByCountry(country)
                 .orElseGet(() -> priceConfigs.findCurrentByCountry("Thailand").orElseThrow());
 
-            BigDecimal fxRate = fxRates.findByCurrency(
-                    item.rawCurrency() != null ? item.rawCurrency() : "THB")
-                .map(FxRateDto::rateToThb)
-                .orElse(ONE);
+            BigDecimal fxRate = resolveFxRate(item.rawCurrency());
 
             BigDecimal sqmPerPiece = ONE;
             if (item.qtySqm() != null && item.qty() != null

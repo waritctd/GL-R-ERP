@@ -678,6 +678,109 @@ class TicketServiceTest {
         assertForbidden(() -> service.cancel(10L, otherSales));
     }
 
+    // ── editItems ─────────────────────────────────────────────────────────
+    // 2026-07-16 pricing-integrity audit, finding #4: sales editing descriptive fields
+    // must never silently discard import's proposed price or CEO's approved/manual price.
+
+    @Test
+    void editItems_preservesExistingPricingAndIgnoresRequestSuppliedPrices() {
+        TicketItemDto existing = new TicketItemDto(
+            101L, 10L, "OldBrand", "OldModel", "White", "Matte", "60x60", "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"),
+            new BigDecimal("50"), "USD", "piece",
+            new BigDecimal("777.00"), new BigDecimal("888.00"), "THB", 0,
+            new BigDecimal("600.0000"), new BigDecimal("777.00"), 3, "PIECE",
+            new BigDecimal("999.00"), "CEO special discount");
+        stubTicketWithItems(10L, 1L, TicketStatus.PRICE_PROPOSED, List.of(existing));
+
+        TicketItemRequest edited = new TicketItemRequest(
+            "NewBrand", "NewModel", "Grey", "Glossy", "80x80", "Cotto",
+            new BigDecimal("7"), new BigDecimal("14"), "PIECE",
+            new BigDecimal("50"), "USD", "piece",
+            new BigDecimal("1"),   // attacker/sales-supplied proposedPrice — must be ignored
+            "THB");
+
+        service.editItems(10L, new EditItemsRequest(List.of(edited), "แก้ไข spec"), salesActor);
+
+        ArgumentCaptor<List<TicketItemDto>> captor = ArgumentCaptor.forClass(List.class);
+        verify(ticketRepo).replaceItemsPreservingPricing(eq(10L), captor.capture());
+        TicketItemDto merged = captor.getValue().get(0);
+
+        assertThat(merged.brand()).isEqualTo("NewBrand");
+        assertThat(merged.model()).isEqualTo("NewModel");
+        assertThat(merged.qty()).isEqualByComparingTo("7");
+        // Pricing fields carried over from the existing item, NOT the request.
+        assertThat(merged.proposedPrice()).isEqualByComparingTo("777.00");
+        assertThat(merged.approvedPrice()).isEqualByComparingTo("888.00");
+        assertThat(merged.calcedCost()).isEqualByComparingTo("600.0000");
+        assertThat(merged.calcedPrice()).isEqualByComparingTo("777.00");
+        assertThat(merged.calcConfigVersion()).isEqualTo(3);
+        assertThat(merged.manualPrice()).isEqualByComparingTo("999.00");
+        assertThat(merged.manualOverrideReason()).isEqualTo("CEO special discount");
+    }
+
+    @Test
+    void editItems_requestOmittingUnitBasisInheritsPriorBasis() {
+        // An API edit that omits unitBasis must not silently flip an SQM item to PIECE.
+        TicketItemDto existing = new TicketItemDto(
+            101L, 10L, "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), null, null, null,
+            null, null, "THB", 0, null, null, null, "SQM", null, null);
+        stubTicketWithItems(10L, 1L, TicketStatus.IN_REVIEW, List.of(existing));
+
+        TicketItemRequest edited = new TicketItemRequest(
+            "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("6"), new BigDecimal("12"), null,   // unitBasis omitted
+            null, null, null, null, null);
+
+        service.editItems(10L, new EditItemsRequest(List.of(edited), null), salesActor);
+
+        ArgumentCaptor<List<TicketItemDto>> captor = ArgumentCaptor.forClass(List.class);
+        verify(ticketRepo).replaceItemsPreservingPricing(eq(10L), captor.capture());
+        assertThat(captor.getValue().get(0).unitBasis()).isEqualTo("SQM");
+    }
+
+    @Test
+    void editItems_newItemBeyondCurrentCountGetsNullPricingFields() {
+        TicketItemDto existing = new TicketItemDto(
+            101L, 10L, "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"),
+            new BigDecimal("50"), "THB", "piece",
+            new BigDecimal("100"), new BigDecimal("100"), "THB", 0,
+            null, null, null, "PIECE", null, null);
+        stubTicketWithItems(10L, 1L, TicketStatus.SUBMITTED, List.of(existing));
+
+        TicketItemRequest first = new TicketItemRequest(
+            "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), "PIECE",
+            new BigDecimal("50"), "THB", "piece", null, "THB");
+        TicketItemRequest brandNew = new TicketItemRequest(
+            "AnotherBrand", "AnotherModel", null, null, null, "Cotto",
+            new BigDecimal("2"), null, "PIECE",
+            new BigDecimal("20"), "THB", "piece", new BigDecimal("999"), "THB");
+
+        service.editItems(10L, new EditItemsRequest(List.of(first, brandNew), null), salesActor);
+
+        ArgumentCaptor<List<TicketItemDto>> captor = ArgumentCaptor.forClass(List.class);
+        verify(ticketRepo).replaceItemsPreservingPricing(eq(10L), captor.capture());
+        TicketItemDto newItem = captor.getValue().get(1);
+
+        assertThat(newItem.brand()).isEqualTo("AnotherBrand");
+        assertThat(newItem.proposedPrice()).isNull();
+        assertThat(newItem.approvedPrice()).isNull();
+        assertThat(newItem.manualPrice()).isNull();
+    }
+
+    @Test
+    void editItems_rejectsNonOwnerSales() {
+        stubTicket(10L, 1L, TicketStatus.SUBMITTED);
+        TicketItemRequest req = new TicketItemRequest(
+            "Brand", "Model", "Color", "Texture", "Size", "Factory",
+            BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB");
+
+        assertForbidden(() -> service.editItems(10L, new EditItemsRequest(List.of(req), null), otherSales));
+    }
+
     // ── calculatePrices ──────────────────────────────────────────────────
 
     @Test
@@ -702,6 +805,37 @@ class TicketServiceTest {
         stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
 
         assertConflict(() -> service.calculatePrices(10L, ceoActor));
+    }
+
+    // ── overrideItemPrice ────────────────────────────────────────────────
+    // 2026-07-16 pricing-integrity audit, finding #3: overriding a price previously left
+    // no audit trail at all.
+
+    @Test
+    void overrideItemPrice_logsPriceOverriddenEventWithItemIdManualPriceAndReason() {
+        TicketItemDto item = new TicketItemDto(
+            101L, 10L, "Brand", "Model", null, null, null, "Cotto",
+            BigDecimal.ONE, null, new BigDecimal("50"), "THB", "piece",
+            new BigDecimal("100"), null, "THB", 0, null, null, null, "PIECE", null, null);
+        stubTicketWithItems(10L, 1L, TicketStatus.PRICE_PROPOSED, List.of(item));
+
+        service.overrideItemPrice(10L, 101L,
+            new OverridePriceRequest(new BigDecimal("777.00"), "ราคาพิเศษลูกค้า VIP"), ceoActor);
+
+        ArgumentCaptor<String> noteCaptor = ArgumentCaptor.forClass(String.class);
+        verify(ticketRepo).addEvent(eq(10L), eq(4L), anyString(),
+            eq(TicketEventKind.PRICE_OVERRIDDEN), eq(TicketStatus.PRICE_PROPOSED),
+            eq(TicketStatus.PRICE_PROPOSED), noteCaptor.capture());
+        assertThat(noteCaptor.getValue()).contains("101").contains("777.00").contains("ราคาพิเศษลูกค้า VIP");
+        verify(ticketRepo).updateItemManualPrice(101L, new BigDecimal("777.00"), "ราคาพิเศษลูกค้า VIP");
+    }
+
+    @Test
+    void overrideItemPrice_rejectsWrongStatus() {
+        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
+
+        assertConflict(() -> service.overrideItemPrice(10L, 101L,
+            new OverridePriceRequest(new BigDecimal("777.00"), null), ceoActor));
     }
 
     // ── comment ───────────────────────────────────────────────────────────

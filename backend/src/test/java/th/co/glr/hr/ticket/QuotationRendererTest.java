@@ -2,13 +2,16 @@ package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.customer.CustomerDto;
 
@@ -84,6 +87,30 @@ class QuotationRendererTest {
         assertThat(text).contains("Brand1 Model1");
         assertThat(text).contains("Brand16 Model16");
         assertThat(text).contains("Brand20 Model20");
+    }
+
+    @Test
+    void xlsxSubtotalCellSumsAllPricedItemsNotJustTheRenderedFifteen() throws Exception {
+        // 2026-07-16 pricing-integrity audit, finding #5: the template only has 15 render
+        // rows, but the I38 subtotal must match TicketService.generateQuotation's
+        // total_amount, which sums ALL priced items — not just the rendered subset.
+        List<TicketItemDto> items = new ArrayList<>();
+        BigDecimal expectedTotal = BigDecimal.ZERO;
+        for (int i = 1; i <= 20; i++) {
+            BigDecimal price = new BigDecimal(i + ".00");
+            items.add(item(i, "Brand" + i, "Model" + i, BigDecimal.ONE, price));
+            expectedTotal = expectedTotal.add(price);
+        }
+
+        byte[] xlsx = renderer.toXlsx(ticket(items), quotation(), customer(null));
+
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            // I38 is 1-based row 38, col I → 0-based row 37, col 8.
+            double subtotalCell = sheet.getRow(37).getCell(8).getNumericCellValue();
+            assertThat(BigDecimal.valueOf(subtotalCell).setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo(expectedTotal.setScale(2, RoundingMode.HALF_UP));
+        }
     }
 
     // ── fixtures ──────────────────────────────────────────────────────────

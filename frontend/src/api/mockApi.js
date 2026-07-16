@@ -1169,6 +1169,11 @@ export const api = {
       const importCanEdit = user.role === 'import'
         && ['in_review', 'price_proposed'].includes(st);
       if (!salesCanEdit && !importCanEdit) fail('ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้', 403);
+      // Mirrors TicketService.editItems: sales/import editing descriptive fields must
+      // never silently overwrite import's proposed price or CEO's approved/manual price —
+      // pricing fields always come from the existing item at this position, never the
+      // request (2026-07-16 pricing-integrity audit, finding #4). Only proposePrice is
+      // allowed to replace proposedPrice wholesale.
       ticket.items = (payload.items || []).map((item, i) => ({
         ...ticket.items[i],
         brand: item.brand, model: item.model,
@@ -1178,7 +1183,7 @@ export const api = {
         rawPrice: item.rawPrice ?? ticket.items[i]?.rawPrice ?? null,
         rawCurrency: item.rawCurrency ?? ticket.items[i]?.rawCurrency ?? null,
         rawUnit: item.rawUnit ?? ticket.items[i]?.rawUnit ?? null,
-        proposedPrice: item.proposedPrice ?? ticket.items[i]?.proposedPrice ?? null,
+        proposedPrice: ticket.items[i]?.proposedPrice ?? null,
         id: ticket.items[i]?.id ?? ticket.id * 100 + i,
         ticketId: ticket.id, sortOrder: i,
       }));
@@ -1204,7 +1209,18 @@ export const api = {
         if (item.rawPrice == null) return item;
         const fc = fcMap[item.factory] ?? { country: 'Thailand' };
         const cfg = cfgMap[fc.country] ?? cfgMap['Thailand'] ?? { freightPerSqm: 0, insurancePerSqm: 0, inlandFactoryToPortPerSqm: 0, inlandPortToWarehousePerSqm: 50, importDutyPct: 0, marginPct: 0.2, version: 1 };
-        const fxRate = fxMap[item.rawCurrency ?? 'THB'] ?? 1;
+        // Mirrors PriceCalcService.resolveFxRate: THB never needs a lookup; any other
+        // currency with no fx_rates row must fail loudly, not silently cost at 1:1 THB
+        // (2026-07-16 pricing-integrity audit, finding #1).
+        const rawCurrency = item.rawCurrency ?? 'THB';
+        let fxRate;
+        if (rawCurrency === 'THB') {
+          fxRate = 1;
+        } else if (fxMap[rawCurrency] != null) {
+          fxRate = fxMap[rawCurrency];
+        } else {
+          fail(`ไม่พบอัตราแลกเปลี่ยนสำหรับสกุลเงิน ${rawCurrency} — กรุณาตั้งค่าใน CEO Settings`, 422);
+        }
 
         const sqmPerPiece = (item.qtySqm && item.qty && item.qty > 0) ? item.qtySqm / item.qty : 1;
 
@@ -1239,7 +1255,12 @@ export const api = {
           calcedPricePerPiece: calcedPrice,
           configVersion: cfg.version,
         };
-        return { ...item, calcedCost, calcedPrice, calcConfigVersion: cfg.version, proposedPrice: calcedPrice };
+        // Mirrors PriceCalcService.calculateForTicket: a CEO manual price override must
+        // survive recalculation — calcedCost/calcedPrice always reflect the fresh
+        // calculation, but proposedPrice stays pinned to the override (2026-07-16
+        // pricing-integrity audit, finding #2).
+        const proposedPrice = item.manualPrice != null ? item.manualPrice : calcedPrice;
+        return { ...item, calcedCost, calcedPrice, calcConfigVersion: cfg.version, proposedPrice };
       });
 
       const breakdown = ticket.items.filter((it) => it._breakdown).map((it) => {
@@ -1253,7 +1274,7 @@ export const api = {
     },
 
     async overrideItemPrice(ticketId, itemId, payload) {
-      hasRole('ceo');
+      const user = hasRole('ceo');
       const ticket = findTicketRaw(Number(ticketId));
       verifyStatus(ticket, 'price_proposed');
       const item = ticket.items.find((it) => it.id === Number(itemId));
@@ -1262,6 +1283,12 @@ export const api = {
       item.manualOverrideReason = payload.reason ?? null;
       item.proposedPrice = payload.manualPrice;
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      // Mirrors TicketService.overrideItemPrice: audit trail for CEO manual price
+      // overrides (2026-07-16 pricing-integrity audit, finding #3 — previously logged
+      // no ticket event at all).
+      const note = `Item #${itemId}: ราคา manual override = ${payload.manualPrice}`
+        + (payload.reason ? ` — เหตุผล: ${payload.reason}` : '');
+      pushEvent(ticket, user, 'PRICE_OVERRIDDEN', ticket.status, ticket.status, note);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 

@@ -74,14 +74,23 @@ public class QuotationRenderer {
                 .filter(it -> it.approvedPrice() != null)
                 .toList();
 
-            BigDecimal subtotal = BigDecimal.ZERO;
+            // Subtotal must reflect ALL priced items, matching TicketService.generateQuotation's
+            // total_amount — not just the ones that fit on the template's fixed 15-row item
+            // table. Rendering itself still caps at MAX_ITEMS (the template has no more rows),
+            // but the printed I38 figure must not silently disagree with the recorded total for
+            // tickets with more than 15 items (2026-07-16 pricing-integrity audit, finding #5).
+            BigDecimal subtotal = priceItems.stream()
+                .map(item -> {
+                    BigDecimal qty = item.qty() != null ? item.qty() : BigDecimal.ONE;
+                    return item.approvedPrice().multiply(qty);
+                })
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
             int seq = 1;
             for (int i = 0; i < priceItems.size() && i < MAX_ITEMS; i++) {
                 TicketItemDto item = priceItems.get(i);
                 BigDecimal qty = item.qty() != null ? item.qty() : BigDecimal.ONE;
                 BigDecimal price = item.approvedPrice();
-                BigDecimal amount = price.multiply(qty);
-                subtotal = subtotal.add(amount);
 
                 int r = ITEM_START_ROW + i;
                 setNum(sh, r, 0, seq++);                        // A: sequence
