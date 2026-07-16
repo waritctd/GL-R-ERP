@@ -199,12 +199,6 @@ public class TicketController {
         return new TicketDetailResponse(ticketService.confirmCustomer(id, user));
     }
 
-    @PostMapping("/{id}/deposit-notice")
-    TicketDetailResponse issueDepositNotice(@PathVariable long id, HttpSession session) {
-        UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.issueDepositNotice(id, user));
-    }
-
     @PostMapping("/{id}/deposit-paid")
     TicketDetailResponse confirmDepositPaid(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);

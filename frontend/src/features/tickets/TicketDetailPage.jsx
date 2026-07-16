@@ -239,15 +239,20 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     approve:           st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
     reject:            st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
     generateQuotation: (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canGenerateQuotation.includes(role) && isOwner,
-    generateDocument:  (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
+    // Issuing the deposit-notice DOCUMENT is the payment-track step (mirrors
+    // DepositNoticeService.issue): customer must have confirmed first, and the
+    // former no-document "ออกใบแจ้งมัดจำ" action is gone.
+    generateDocument:  st === 'quotation_issued' && ps === 'CUSTOMER_CONFIRMED' && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     revise:            (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
-    close:            (st === 'document_issued' || (st === 'quotation_issued' && dualTrackDone)) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
+    // Legacy document_issued close only for pre-dual-track tickets (ps never set)
+    // or fully paid ones — mirrors TicketService.close().
+    close:            ((st === 'document_issued' && (ps == null || ps === 'FULLY_PAID'))
+                        || (st === 'quotation_issued' && dualTrackDone)) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     cancel:           !TERMINAL.includes(st)   && isOwner,
     comment:          !TERMINAL.includes(st),
     editItems: EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     // Dual-track (ข้อ 13)
     confirmCustomer:    st === 'quotation_issued' && ps == null && isSales,
-    issueDepositNotice: st === 'quotation_issued' && ps === 'CUSTOMER_CONFIRMED' && isSales,
     // Money receipts are confirmed by ฝ่ายบัญชี (account role, CEO fallback) —
     // mirrors TicketService.ACCOUNT_ROLES.
     confirmDepositPaid: st === 'quotation_issued' && ps === 'DEPOSIT_NOTICE_ISSUED' && isAccount,
@@ -275,16 +280,18 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     ['approve',          st === 'price_proposed' ? 'ตรวจสอบราคาที่เสนอ แล้วอนุมัติหรือตีกลับให้ Import แก้ไข' : null],
     ['pickup',           'รับมอบหมายใบขอราคานี้เพื่อเริ่มเสนอราคา'],
     ['propose',          st === 'approved' ? 'แก้ไขราคาที่เสนอ (ต้องอนุมัติใหม่)' : 'เสนอราคาสินค้าให้ลูกค้า'],
-    ['generateQuotation','ออกใบเสนอราคาให้ลูกค้า'],
-    ['generateDocument', 'ออกใบแจ้งยอดมัดจำ'],
+    // Dual-track steps come BEFORE generateQuotation: re-issuing a quotation is
+    // always available at quotation_issued, so listing it first used to mask the
+    // real next step (e.g. "ยืนยันลูกค้า") behind a generic re-issue suggestion.
     ['confirmCustomer',  'ยืนยันว่าลูกค้าตกลงคำสั่งซื้อแล้ว'],
-    ['issueDepositNotice','ออกใบแจ้งมัดจำให้ลูกค้า'],
+    ['generateDocument', 'ออกใบแจ้งยอดมัดจำให้ลูกค้า (เริ่มขั้นตอนชำระเงิน)'],
     ['confirmDepositPaid','ยืนยันว่าลูกค้าชำระมัดจำแล้ว'],
     ['issueImportRequest','ออก Import Request (IR) ให้โรงงาน'],
     ['markIrSent',        'บันทึกว่าส่ง IR ให้โรงงานแล้ว'],
     ['markShipping',      'บันทึกว่าสินค้าออกเดินทางแล้ว'],
     ['markGoodsReceived', 'บันทึกว่ารับสินค้าแล้ว'],
     ['confirmFinalPayment','ยืนยันว่าลูกค้าชำระส่วนที่เหลือครบแล้ว'],
+    ['generateQuotation','ออกใบเสนอราคาให้ลูกค้า'],
     ['revise',            'ขอแก้ไขรายละเอียดใบขอราคานี้ได้หากจำเป็น'],
     ['close',             'ปิดเรื่องนี้เมื่อดำเนินการครบถ้วนแล้ว'],
   ];
@@ -714,12 +721,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               <button type="button" className="primary-button" disabled={actionLoading}
                 onClick={() => doAction(() => api.tickets.confirmCustomer(ticketId), 'ลูกค้ายืนยันแล้ว')}>
                 ลูกค้ายืนยัน
-              </button>
-            )}
-            {can.issueDepositNotice && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.issueDepositNotice(ticketId), 'ออกใบแจ้งมัดจำแล้ว')}>
-                ออกใบแจ้งมัดจำ
               </button>
             )}
             {can.confirmDepositPaid && (

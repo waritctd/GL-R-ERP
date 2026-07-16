@@ -243,9 +243,13 @@ public class TicketService {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
         String st = s.status();
-        // Legacy path: status=DOCUMENT_ISSUED
-        // Dual-track path: both tracks complete
-        boolean legacyOk = TicketStatus.DOCUMENT_ISSUED.equals(st);
+        // Legacy path: status=DOCUMENT_ISSUED — only for pre-dual-track tickets
+        // (paymentStatus never set) or fully-paid ones. A mid-track ticket that
+        // reached document_issued must NOT close unpaid (2026-07-16 audit finding #3);
+        // recover it via revision or cancel.
+        // Dual-track path: both tracks complete.
+        boolean legacyOk = TicketStatus.DOCUMENT_ISSUED.equals(st)
+            && (s.paymentStatus() == null || "FULLY_PAID".equals(s.paymentStatus()));
         boolean dualTrackOk = TicketStatus.QUOTATION_ISSUED.equals(st)
             && "FULLY_PAID".equals(s.paymentStatus())
             && "GOODS_RECEIVED".equals(s.fulfillmentStatus());
@@ -277,21 +281,10 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
-    @Transactional
-    public TicketDto issueDepositNotice(long ticketId, UserPrincipal actor) {
-        requireRole(actor, SALES_ROLES);
-        TicketSummaryDto s = requireTicket(ticketId).summary();
-        requireOwner(s, actor);
-        if (!TicketStatus.QUOTATION_ISSUED.equals(s.status())
-                || !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "Deposit notice requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED");
-        }
-        tickets.updatePaymentStatus(ticketId, "DEPOSIT_NOTICE_ISSUED");
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.DEPOSIT_NOTICE_ISSUED, s.status(), s.status(), null);
-        return requireTicket(ticketId);
-    }
+    // NOTE: the former issueDepositNotice endpoint (advance payment track with no
+    // document) was removed — issuing the real deposit-notice document
+    // (DepositNoticeService.issue) is now the single action that sets
+    // paymentStatus=DEPOSIT_NOTICE_ISSUED.
 
     @Transactional
     public TicketDto confirmDepositPaid(long ticketId, UserPrincipal actor) {

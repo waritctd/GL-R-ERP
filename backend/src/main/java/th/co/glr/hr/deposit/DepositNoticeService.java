@@ -109,7 +109,19 @@ public class DepositNoticeService {
         requireRole(actor, SALES_ROLES);
         requireTicketOwner(doc.ticketId(), actor);
 
-        TicketSummaryDto s = requireApprovedTicket(doc.ticketId(), actor);
+        // Issuing the deposit-notice DOCUMENT is the payment-track step: it requires a
+        // customer-confirmed quotation and advances paymentStatus, leaving the main
+        // status at quotation_issued. It no longer flips the ticket to document_issued —
+        // that side effect killed the dual-track UI and let unpaid tickets close
+        // (2026-07-16 audit findings #3/#4).
+        TicketSummaryDto s = tickets.findById(doc.ticketId())
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"))
+            .summary();
+        if (!TicketStatus.QUOTATION_ISSUED.equals(s.status())
+                || !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Deposit notice requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED");
+        }
 
         String docNumber = docs.issue(docId, actor.id(), actor.name());
 
@@ -124,9 +136,10 @@ public class DepositNoticeService {
             // Non-fatal: files can be regenerated on download.
         }
 
+        tickets.updatePaymentStatus(doc.ticketId(), "DEPOSIT_NOTICE_ISSUED");
         tickets.addEvent(doc.ticketId(), actor.id(), actor.name(),
-            TicketEventKind.DOCUMENT_ISSUED,
-            s.status(), TicketStatus.DOCUMENT_ISSUED,
+            TicketEventKind.DEPOSIT_NOTICE_ISSUED,
+            s.status(), s.status(),
             "เอกสาร " + docNumber + " ออกแล้ว");
 
         return docs.findById(docId).orElseThrow();

@@ -1335,9 +1335,11 @@ export const api = {
     async close(id) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      // Mirrors TicketService.close(): legacy document_issued path, or the
-      // dual-track completion (quotation_issued + FULLY_PAID + GOODS_RECEIVED).
-      const legacyOk = ticket.status === 'document_issued';
+      // Mirrors TicketService.close(): legacy document_issued path (pre-dual-track
+      // tickets only, or fully paid), or the dual-track completion
+      // (quotation_issued + FULLY_PAID + GOODS_RECEIVED).
+      const legacyOk = ticket.status === 'document_issued'
+        && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID');
       const dualTrackOk = ticket.status === 'quotation_issued'
         && ticket.paymentStatus === 'FULLY_PAID'
         && ticket.fulfillmentStatus === 'GOODS_RECEIVED';
@@ -1423,19 +1425,8 @@ export const api = {
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
-    async issueDepositNotice(id) {
-      const user = hasRole('sales');
-      const ticket = findTicketRaw(Number(id));
-      // Mirrors TicketService.issueDepositNotice: owner-only.
-      if (ticket.createdById !== user.id) fail('Forbidden', 403);
-      if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
-        fail('Requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED', 409);
-      }
-      ticket.paymentStatus = 'DEPOSIT_NOTICE_ISSUED';
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'DEPOSIT_NOTICE_ISSUED', ticket.status, ticket.status, null);
-      return delay({ ticket: buildTicketDetail(ticket) });
-    },
+    // (issueDepositNotice removed — depositNotices.issue is now the single action
+    //  that advances the payment track to DEPOSIT_NOTICE_ISSUED.)
 
     async confirmDepositPaid(id) {
       // Money receipts are confirmed by ฝ่ายบัญชี (CEO fallback) — mirrors
@@ -2531,6 +2522,13 @@ export const api = {
       if (doc.status !== 'DRAFT') fail('Not a draft', 409);
       const ticket = findTicketRaw(doc.ticketId);
 
+      // Mirrors DepositNoticeService.issue: the document IS the payment-track step.
+      // Requires a customer-confirmed quotation; advances paymentStatus and leaves
+      // the main status at quotation_issued (no more document_issued flip).
+      if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
+        fail('Deposit notice requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED', 409);
+      }
+
       // Supersede previous issued docs
       mockDepositNotices.forEach((d) => { if (d.ticketId === doc.ticketId && d.id !== doc.id && d.status === 'ISSUED') d.status = 'SUPERSEDED'; });
 
@@ -2541,10 +2539,9 @@ export const api = {
       doc.issuedByName = user.name;
       doc.updatedAt = new Date().toISOString();
 
-      // Transition ticket to document_issued
-      ticket.status = 'document_issued';
+      ticket.paymentStatus = 'DEPOSIT_NOTICE_ISSUED';
       ticket.updatedAt = doc.updatedAt;
-      pushEvent(ticket, user, 'DOCUMENT_ISSUED', 'approved', 'document_issued', `เอกสาร ${doc.docNumber} ออกแล้ว`);
+      pushEvent(ticket, user, 'DEPOSIT_NOTICE_ISSUED', ticket.status, ticket.status, `เอกสาร ${doc.docNumber} ออกแล้ว`);
 
       return delay({ depositNotice: structuredClone(doc) });
     },
