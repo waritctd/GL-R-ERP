@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -75,6 +77,7 @@ function TicketCard({ ticket }) {
 
 export function TicketListPage({ user, showToast }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   // Status filter + search text live in the URL (not local state) so that:
   // (a) a dashboard queue card can land here pre-filtered via ?status=..., and
   // (b) list → detail → back preserves whatever filter/search was active,
@@ -83,11 +86,25 @@ export function TicketListPage({ user, showToast }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const statusFilter = searchParams.get('status') ?? '';
   const searchText = searchParams.get('q') ?? '';
-  const [tickets, setTickets] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
 
   const canCreate = ROLE_PERMISSIONS.canCreateTickets.includes(user.role);
+
+  const ticketsQuery = useQuery({
+    queryKey: queryKeys.ticketList(statusFilter),
+    queryFn: () => api.tickets.list(statusFilter ? { status: statusFilter } : {}).then((response) => response.tickets || []),
+  });
+  const tickets = ticketsQuery.data ?? [];
+  const loading = ticketsQuery.isLoading || ticketsQuery.isFetching;
+
+  // Preserve the original error-toast behavior of the imperative loader.
+  useEffect(() => {
+    if (ticketsQuery.error) showToast('error', ticketsQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
+  }, [ticketsQuery.error, showToast]);
+
+  function invalidateTicketsList() {
+    return queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
+  }
 
   function updateParam(key, value) {
     setSearchParams((prev) => {
@@ -105,29 +122,21 @@ export function TicketListPage({ user, showToast }) {
     updateParam('q', value);
   }
 
-  async function loadTickets(status = statusFilter) {
-    setLoading(true);
-    try {
-      const params = status ? { status } : {};
-      const response = await api.tickets.list(params);
-      setTickets(response.tickets);
-    } catch (error) {
-      showToast('error', error.message || 'โหลดข้อมูลไม่สำเร็จ');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    loadTickets(statusFilter);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadTickets closes over statusFilter, which is already the effect's dependency
-  }, [statusFilter]);
+  // No onError toast here: the original imperative handler let a create
+  // failure propagate uncaught to TicketCreateModal's own try/catch, which
+  // shows an inline modal error instead of a toast. mutateAsync preserves
+  // that same propagation.
+  const createMutation = useMutation({
+    mutationFn: (payload) => api.tickets.create(payload),
+    onSuccess: () => {
+      setCreating(false);
+      showToast('success', 'สร้างใบขอราคาเรียบร้อย');
+      invalidateTicketsList();
+    },
+  });
 
   async function handleCreate(payload) {
-    await api.tickets.create(payload);
-    setCreating(false);
-    showToast('success', 'สร้างใบขอราคาเรียบร้อย');
-    loadTickets(statusFilter);
+    await createMutation.mutateAsync(payload);
   }
 
   return (
@@ -166,7 +175,7 @@ export function TicketListPage({ user, showToast }) {
             </button>
           );
         })}
-        <button type="button" className="icon-button" onClick={() => loadTickets(statusFilter)} title="รีเฟรช" aria-label="รีเฟรช">
+        <button type="button" className="icon-button" onClick={invalidateTicketsList} title="รีเฟรช" aria-label="รีเฟรช">
           <Icon name="refresh" />
         </button>
       </div>
