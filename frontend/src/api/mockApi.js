@@ -682,25 +682,43 @@ function dashboardNotifications(user) {
   };
 }
 
+// Reads the stored reports-to link — mirrors hr.employee.reports_to_employee_id
+// (the self-FK), not a live org-chart scan. Division managers carry managerId:
+// null in the seed (no row above them), same as the real NULL-FK state.
 function managerIdForEmployee(employee) {
-  if (!employee || employee.positionTh === 'ผู้จัดการฝ่าย') return null;
-  return db.employees.find((item) => item.divisionId === employee.divisionId && item.positionTh === 'ผู้จัดการฝ่าย')?.id ?? null;
+  return employee?.managerId ?? null;
 }
 
+// Mirrors LeaveService.canReviewEmployee()/isDirectManager() — hr bypass, else
+// stored-FK match on an *active* target employee. No division fallback: unlike
+// overtime, a ฝ่าย manager cannot review a colleague's leave just by sharing a
+// division.
 function canReviewLeave(user, employeeId) {
   if (user.role === 'hr') return true;
   const employee = findEmployee(employeeId);
-  return user.employeeId && managerIdForEmployee(employee) === user.employeeId;
+  return Boolean(employee?.active && user.employeeId
+    && managerIdForEmployee(employee) === user.employeeId);
 }
 
-// Mirrors OvertimeService.managesEmployee() — direct report or division manager.
-// Deliberately has NO hr/admin bypass: HR may review leave but never overtime.
+// Mirrors OvertimeService.managesEmployee() — direct report (stored FK) OR
+// division manager (position-derived user.manager() sharing the employee's
+// division, excluding self). Deliberately has NO hr/admin bypass (HR may review
+// leave but never overtime) and NO active() check (Java has none here either).
 // Overtime must not reuse canReviewLeave() — that was the #199 bug, where the
 // mock let HR approve OT while the real backend returns 403.
+//
+// These two gates look similar but encode genuinely different Java models
+// (active-check + no division term vs. no active-check + division term). Do
+// NOT merge them "for DRY" — that reintroduces exactly the #199 bug class.
 function canReviewOvertime(user, employeeId) {
   if (!user.employeeId || employeeId === user.employeeId) return false;
   const employee = findEmployee(employeeId);
-  return managerIdForEmployee(employee) === user.employeeId;
+  const directReport = managerIdForEmployee(employee) === user.employeeId;
+  const divisionManager = dashboardManager(user)
+    && dashboardDivisionId(user) != null
+    && dashboardDivisionId(user) === employee.divisionId
+    && employeeId !== user.employeeId;
+  return directReport || divisionManager;
 }
 
 function leaveTypeByCode(code) {
@@ -1454,6 +1472,10 @@ export const api = {
 
   // Mirrors LeaveController + LeaveService (leave/).
   leave: {
+    // Mirrors LeaveRepository.findEmployeeOptions() — scope is self + stored-FK
+    // reports only (reports_to_employee_id). Deliberately NO division term:
+    // unlike overtime, a ฝ่าย manager's leave dropdown does not widen to their
+    // whole division.
     async employees() {
       const user = requireSession();
       const includeAll = ['hr', 'ceo'].includes(user.role);
@@ -1611,20 +1633,34 @@ export const api = {
   // submit() -> resolveTargetEmployee() for filing on another employee's behalf.
   // Neither has an hr/admin bypass; use canReviewOvertime(), never canReviewLeave().
   overtime: {
+    // Mirrors OvertimeRepository.findEmployeeOptions() — unlike leave, scope AND
+    // directReport both add a division term (self + FK reports + same-division,
+    // when the actor is a position-derived division manager): a ฝ่าย manager's OT
+    // dropdown flags their whole division as ลูกทีม, matching prod.
     async employees() {
       const user = requireSession();
       const includeAll = ['hr', 'ceo'].includes(user.role);
+      const isManager = dashboardManager(user);
+      const managerDivisionId = isManager ? dashboardDivisionId(user) : null;
       const rows = db.employees
         .filter((employee) => employee.active)
-        .filter((employee) => includeAll || employee.id === user.employeeId || managerIdForEmployee(employee) === user.employeeId)
-        .map((employee) => ({
-          employeeId: employee.id,
-          employeeCode: employee.code,
-          employeeName: employee.nameTh,
-          departmentName: employee.departmentTh,
-          self: employee.id === user.employeeId,
-          directReport: managerIdForEmployee(employee) === user.employeeId,
-        }));
+        .filter((employee) => includeAll
+          || employee.id === user.employeeId
+          || managerIdForEmployee(employee) === user.employeeId
+          || (managerDivisionId != null && employee.divisionId === managerDivisionId))
+        .map((employee) => {
+          const self = employee.id === user.employeeId;
+          const directReport = managerIdForEmployee(employee) === user.employeeId
+            || (managerDivisionId != null && employee.divisionId === managerDivisionId && !self);
+          return {
+            employeeId: employee.id,
+            employeeCode: employee.code,
+            employeeName: employee.nameTh,
+            departmentName: employee.departmentTh,
+            self,
+            directReport,
+          };
+        });
       return delay({ employees: rows });
     },
 

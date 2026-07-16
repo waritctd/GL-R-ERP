@@ -207,6 +207,12 @@ export function createDemoDatabase() {
     employee.reportsTo = employee.positionTh === 'ผู้จัดการฝ่าย'
       ? 'คุณวิชัย ธนาคาร · กรรมการผู้จัดการ'
       : `${employees[divisionManagers[employee.divisionId] - 1].nameTh} · ผู้จัดการฝ่าย`;
+    // Mirrors hr.employee.reports_to_employee_id (the stored self-FK). Division
+    // managers have no row above them in this seed (no MD employee row), so their
+    // FK is null — same as the real NULL-FK state.
+    employee.managerId = employee.positionTh === 'ผู้จัดการฝ่าย'
+      ? null
+      : divisionManagers[employee.divisionId];
   });
 
   const users = [
