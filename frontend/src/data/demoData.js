@@ -214,6 +214,12 @@ export function createDemoDatabase() {
     { id: 3, email: 'director@glr.co.th', password: 'demo1234', name: 'คุณวิชัย ธนาคาร', role: 'director', employeeId: employees[0].id, active: true, createdAt: iso(2025, 1, 5) },
     { id: 4, email: 'employee@glr.co.th', password: 'demo1234', name: employees[8].nameTh, role: 'employee', employeeId: employees[8].id, active: true, createdAt: iso(2025, 2, 11) },
     { id: 5, email: 'supervisor@glr.co.th', password: 'demo1234', name: employees[2].nameTh, role: 'supervisor', employeeId: employees[2].id, active: true, createdAt: iso(2025, 2, 11) },
+    // WHL division manager — lets the seeded stage-1 OT approval (OT#1, whose
+    // employee reports to this ผู้จัดการฝ่าย) be demoed. role is 'employee' on
+    // purpose: a division manager's OT-review authority is derived from the org
+    // chart (positionTh 'ผู้จัดการฝ่าย' → publicUser sets manager: true), not from a
+    // special role. Not 'supervisor'/'director' — those are phantom roles #206 removes.
+    { id: 10, email: 'warehouse.manager@glr.co.th', password: 'demo1234', name: employees[5].nameTh, role: 'employee', employeeId: employees[5].id, active: true, createdAt: iso(2025, 2, 11) },
     // Sales module users
     { id: 6, email: 'sales@glr.co.th', password: 'demo1234', name: 'คุณสมหมาย ขายดี', role: 'sales', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
     { id: 7, email: 'import@glr.co.th', password: 'demo1234', name: 'คุณนำเข้า พานิช', role: 'import', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },

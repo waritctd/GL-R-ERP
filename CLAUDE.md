@@ -18,6 +18,28 @@ The sales/CRM stack (tickets, quotation, deposit, commission, pricing/FX, catalo
 
 `VITE_ENABLE_SALES` still gates sales nav + routes at runtime, but it is now an **off-switch**: sales is enabled unless the var is explicitly `false`. The direction matters — the production build sets no `VITE_` vars (there is no `env` block in `vercel.json` and `.env*` is gitignored), so the previous `=== 'true'` check left sales disabled in production regardless of intent.
 
+## Mock API contract — shapes are faithful, authz is not
+`frontend/src/api/mockApi.js` (`VITE_USE_MOCKS=true`, the `frontend-mock` launch config) is the
+**default verification surface** — it is what devs, QA and coding agents drive. Its contract is now
+explicit:
+
+- **Endpoints and DTO shapes are a faithful stand-in for the Spring backend.** This is enforced:
+  `frontend/src/api/contract.test.js` asserts mockApi's method surface matches `hrApi.js`'s in both
+  directions. If you add a method to `hrApi.js`, add it to `mockApi.js` or the test fails. Genuine
+  exceptions go in that file's `KNOWN_GAPS` with a written reason, not a silent skip.
+- **Authorization is NOT authoritative.** The mock's permission gates approximate the Java services
+  and are known to diverge. **Verify permission behaviour against the Java service, never the mock.**
+  `VITE_USE_MOCKS=true` verification is therefore *incomplete for anything permission-shaped* — say
+  so when reporting, rather than claiming a permission rule was verified.
+
+A mock that is *more permissive* than production is the dangerous direction: you only find out in
+prod. This is not hypothetical — issue #199 was exactly this (mock let HR approve OT; the real
+`OvertimeService` returns 403), and an agent reported "the backend would accept an HR approval"
+because it read the mock's authz as the backend's.
+
+When editing `mockApi.js`, keep each namespace's `// Mirrors <JavaClass>` header accurate — that
+pointer is how the next reader finds the source of truth.
+
 ## Styling direction — Tailwind-first
 The frontend is migrating from the single global `frontend/src/styles.css` to a **Tailwind-first** system. Tailwind 4 is already wired up via `@tailwindcss/vite`, with design tokens in `frontend/src/index.css` (`@theme static`).
 
