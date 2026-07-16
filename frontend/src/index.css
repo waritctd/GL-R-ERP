@@ -1,6 +1,7 @@
-@layer theme, utilities;
+@layer theme, legacy, utilities;
 
 @import "tailwindcss/theme.css" layer(theme);
+@import "./styles.css" layer(legacy);
 @import "tailwindcss/utilities.css" layer(utilities);
 
 @theme static {

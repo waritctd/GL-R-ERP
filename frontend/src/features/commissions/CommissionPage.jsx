@@ -598,7 +598,7 @@ function PayrollSummary({ summary, loading }) {
         {(summary.salesReps ?? []).length === 0 ? (
           <EmptyState icon="badge" title="ไม่มีรายการอนุมัติ" description="ยังไม่มีค่าคอมที่พร้อมเข้า Payroll ในเดือนนี้" />
         ) : summary.salesReps.map((rep) => (
-          <div key={rep.salesRepId} className="commission-payroll-table table-row">
+          <div key={rep.salesRepId} className="commission-payroll-table data-row">
             <strong>{rep.salesRepName || rep.salesRepId}</strong>
             <code>{formatMoney(rep.commissionableBase)}</code>
             <code>{formatMoney(rep.commissionAmount)}</code>

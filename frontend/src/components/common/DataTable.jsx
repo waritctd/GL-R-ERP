@@ -87,7 +87,7 @@ function downloadCsv(csv, filename = 'data-table-export.csv') {
 
 /**
  * Generic, controlled-data table primitive. Keeps emitting the exact
- * `{gridClassName} table-head` / `{gridClassName} table-row` classes the
+ * `{gridClassName} table-head` / `{gridClassName} data-row` classes the
  * per-page `grid-template-columns` CSS keys off, while formalizing sorting,
  * in-table search, client pagination, loading skeletons, and an empty state.
  *
@@ -267,7 +267,7 @@ export function DataTable({
         {loading ? (
           <div aria-busy="true" aria-label="กำลังโหลดข้อมูล">
             {Array.from({ length: skeletonRowCount }, (_, index) => (
-              <div className={`${gridClassName} table-row`} role="row" key={index}>
+              <div className={`${gridClassName} data-row`} role="row" key={index}>
                 {columns.map((column) => (
                   <span key={column.key} role="cell">
                     <Skeleton height={14} />
@@ -311,7 +311,7 @@ export function DataTable({
               key={key}
               type={onRowClick ? 'button' : undefined}
               role="row"
-              className={`${gridClassName} table-row${extraClassName}`}
+              className={`${gridClassName} data-row${extraClassName}`}
               style={style}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
             >

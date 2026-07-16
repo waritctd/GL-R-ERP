@@ -532,7 +532,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
           const canCancel = request.status === 'SUBMITTED' && Number(request.employeeId) === Number(user.employeeId);
           const managerCancellable = canManagerCancel(request);
           return (
-            <div className={`${OVERTIME_TABLE_GRID} table-row`} key={request.id}>
+            <div className={`${OVERTIME_TABLE_GRID} data-row`} key={request.id}>
               <span data-label="วันที่ / พนักงาน">
                 <strong>{formatWorkDate(request.workDate)}</strong>
                 <small>{request.employeeName || request.employeeCode || request.employeeId}</small>

@@ -626,7 +626,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
           const canCancel = request.status === 'SUBMITTED' && Number(request.employeeId) === Number(user.employeeId);
           const managerCancellable = canManagerCancel(request);
           return (
-            <div className={`${LEAVE_TABLE_GRID} table-row`} key={request.id}>
+            <div className={`${LEAVE_TABLE_GRID} data-row`} key={request.id}>
               <span data-label="ช่วงลา / พนักงาน">
                 <strong>{formatDateRange(request.startDate, request.endDate)}</strong>
                 <small>{request.employeeName || request.employeeCode || request.employeeId}</small>

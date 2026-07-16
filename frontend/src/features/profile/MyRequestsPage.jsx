@@ -33,7 +33,7 @@ export function MyRequestsPage({ profileRequests }) {
         ) : profileRequests.map((request) => {
           const status = requestStatus(request.status);
           return (
-            <div className={`${MY_REQUESTS_TABLE_GRID} table-row`} key={request.id}>
+            <div className={`${MY_REQUESTS_TABLE_GRID} data-row`} key={request.id}>
               <StatusBadge tone="indigo">{request.fieldLabel}</StatusBadge>
               <span className="old-value">{request.oldValue}</span>
               <strong>{request.newValue}</strong>
