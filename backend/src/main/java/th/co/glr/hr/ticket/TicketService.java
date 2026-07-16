@@ -439,8 +439,11 @@ public class TicketService {
         for (int i = 0; i < requestItems.size(); i++) {
             TicketItemRequest r = requestItems.get(i);
             TicketItemDto prior = i < existingItems.size() ? existingItems.get(i) : null;
+            // Request wins; a request that omits unitBasis inherits the prior item's
+            // basis (an API edit must not silently flip an SQM item back to PIECE).
             String unitBasis = (r.unitBasis() != null && !r.unitBasis().isBlank())
-                ? r.unitBasis() : "PIECE";
+                ? r.unitBasis()
+                : (prior != null && prior.unitBasis() != null ? prior.unitBasis() : "PIECE");
             // "currency" (display currency, distinct from rawCurrency) is pricing-adjacent
             // metadata, not a descriptive field the request is meant to drive — carry it
             // over like the other pricing fields, falling back to the request/THB only

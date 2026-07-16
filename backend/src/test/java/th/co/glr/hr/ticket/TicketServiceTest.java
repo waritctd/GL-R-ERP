@@ -720,6 +720,27 @@ class TicketServiceTest {
     }
 
     @Test
+    void editItems_requestOmittingUnitBasisInheritsPriorBasis() {
+        // An API edit that omits unitBasis must not silently flip an SQM item to PIECE.
+        TicketItemDto existing = new TicketItemDto(
+            101L, 10L, "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), null, null, null,
+            null, null, "THB", 0, null, null, null, "SQM", null, null);
+        stubTicketWithItems(10L, 1L, TicketStatus.IN_REVIEW, List.of(existing));
+
+        TicketItemRequest edited = new TicketItemRequest(
+            "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("6"), new BigDecimal("12"), null,   // unitBasis omitted
+            null, null, null, null, null);
+
+        service.editItems(10L, new EditItemsRequest(List.of(edited), null), salesActor);
+
+        ArgumentCaptor<List<TicketItemDto>> captor = ArgumentCaptor.forClass(List.class);
+        verify(ticketRepo).replaceItemsPreservingPricing(eq(10L), captor.capture());
+        assertThat(captor.getValue().get(0).unitBasis()).isEqualTo("SQM");
+    }
+
+    @Test
     void editItems_newItemBeyondCurrentCountGetsNullPricingFields() {
         TicketItemDto existing = new TicketItemDto(
             101L, 10L, "Brand", "Model", null, null, null, "Cotto",
