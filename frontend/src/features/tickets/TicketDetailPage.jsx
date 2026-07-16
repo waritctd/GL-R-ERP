@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
@@ -87,9 +89,7 @@ function InfoRow({ label, value }) {
 }
 
 export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showToast }) {
-  const [ticket, setTicket] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState(false);
+  const queryClient = useQueryClient();
 
   // Propose-price mode
   const [proposeMode, setProposeMode] = useState(false);
@@ -97,8 +97,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const [draftFactoryCurr, setDraftFactoryCurr] = useState({}); // factoryName → { currency, unit }
   const [proposeNote, setProposeNote] = useState('');
 
-  // Factory configs + email drafts
-  const [factoryConfigs, setFactoryConfigs] = useState({});   // factoryName → config
+  // Email drafts (factoryConfigs itself is now a query — see below)
   const [emailDraft, setEmailDraft] = useState(null);         // { factory, to, subject, body } | null
   const [emailSending, setEmailSending] = useState(false);
 
@@ -111,19 +110,13 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
 
-  // D7/D9/D10: CEO price calculation + breakdown + override
-  const [calcLoading, setCalcLoading] = useState(false);
+  // D7/D9/D10: CEO price calculation + breakdown + override.
+  // priceBreakdown has no GET endpoint — it only ever comes back as a mutation
+  // result (calculatePrices), so it stays local state fed by that mutation's
+  // onSuccess rather than a query (see handoff 63 for the reasoning).
   const [priceBreakdown, setPriceBreakdown] = useState([]); // PriceBreakdownItemDto[]
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [overrideDraft, setOverrideDraft] = useState({}); // itemId → { price: string, reason: string }
-  const [overrideLoading, setOverrideLoading] = useState({});
-
-  // R5: Attachments
-  const [attachments, setAttachments] = useState([]);
-  const [attachLoading, setAttachLoading] = useState(false);
-  const [uploadingFile, setUploadingFile] = useState(false);
-  const [deletingAttachment, setDeletingAttachment] = useState(false);
-
 
   // Revision form
   const [showReviseForm, setShowReviseForm] = useState(false);
@@ -138,63 +131,167 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   // Download busy-state — keyed so each quotation/format pair (and the
   // remaining-invoice download) gets its own disabled+label state instead of
-  // one shared flag that would disable every download button at once.
+  // one shared flag that would disable every download button at once. Not
+  // server-state mutations (no cache to invalidate), so left as local state.
   const [downloadingQuotationKey, setDownloadingQuotationKey] = useState(null); // `${quotationId}-${format}` | null
   const [downloadingInvoice, setDownloadingInvoice] = useState(false);
 
-  async function loadTicket() {
-    setLoading(true);
-    try {
-      const response = await api.tickets.get(ticketId);
-      setTicket(response.ticket);
-    } catch (error) {
-      showToast('error', error.message || 'โหลดข้อมูลไม่สำเร็จ');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loadAttachments() {
-    setAttachLoading(true);
-    try {
-      const res = await api.attachments.list(ticketId);
-      setAttachments(res.attachments ?? []);
-    } catch { /* non-critical */ } finally {
-      setAttachLoading(false);
-    }
-  }
+  const ticketQuery = useQuery({
+    queryKey: queryKeys.ticketDetail(ticketId),
+    queryFn: () => api.tickets.get(ticketId).then((r) => r.ticket),
+    enabled: !!ticketId,
+  });
+  const ticket = ticketQuery.data ?? null;
+  // isLoading-only (not isFetching): this gate swaps the ENTIRE page for a
+  // full skeleton. Using isFetching too would flash that skeleton on every
+  // quiet background refetch (window refocus, another tab's invalidate) —
+  // same reasoning as TicketDashboard's loading gate in slice A (handoff 62).
+  const loading = ticketQuery.isLoading;
 
   useEffect(() => {
-    if (ticketId) {
-      loadTicket();
-      loadAttachments();
-    }
-  }, [ticketId]);
+    if (ticketQuery.error) showToast('error', ticketQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
+  }, [ticketQuery.error, showToast]);
 
-  async function doAction(fn, successMsg) {
-    setActionLoading(true);
-    try {
-      const response = await fn();
-      setTicket(response.ticket);
+  const attachmentsQuery = useQuery({
+    queryKey: queryKeys.ticketAttachments(ticketId),
+    queryFn: () => api.attachments.list(ticketId).then((r) => r.attachments ?? []),
+    enabled: !!ticketId,
+  });
+  const attachments = attachmentsQuery.data ?? [];
+  // Same isLoading-only reasoning as `loading` above — a re-upload/delete
+  // shouldn't flash the attachment list back to its skeleton rows.
+  const attachLoading = attachmentsQuery.isLoading;
+  // Attachment load failures were silently swallowed before ("non-critical")
+  // — preserved as-is, no error toast wired up here.
+
+  // Factory configs used to be lazily fetched once per page instance inside
+  // initPropose(); now a plain query keyed only by ['factoryConfigs'] (no
+  // ticketId), so the whole app shares one fetch per session instead of one
+  // per ticket-detail visit. staleTime: Infinity because this is config data
+  // that doesn't change during a session — see handoff 63.
+  const factoryConfigsQuery = useQuery({
+    queryKey: ['factoryConfigs'],
+    queryFn: () => api.factoryConfigs.list().then((res) => {
+      const map = {};
+      (res.factories ?? []).forEach((fc) => { map[fc.factoryName] = fc; });
+      return map;
+    }),
+    staleTime: Infinity,
+  });
+  const factoryConfigs = factoryConfigsQuery.data ?? {};
+
+  // Shared post-mutation side effects: the ticket-detail fast path (backend
+  // returns the full ticket, so no refetch needed) plus the deliberate
+  // staleness fix — list/dashboard/notifications went stale after every
+  // action before this slice and nothing refreshed them.
+  function applyTicketUpdate(updatedTicket) {
+    queryClient.setQueryData(queryKeys.ticketDetail(ticketId), updatedTicket);
+    queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
+  }
+
+  // Same UI-draft reset the old doAction ran on every successful action.
+  function resetActionDrafts() {
+    setProposeMode(false);
+    setEditMode(false);
+    setEditDraft([]);
+    setEditNote('');
+    setShowRejectForm(false);
+    setRejectReason('');
+    setShowReviseForm(false);
+    setReviseReason('');
+    setCommentText('');
+    setDraftRaw({});
+    setDraftFactoryCurr({});
+    setProposeNote('');
+    setEmailDraft(null);
+  }
+
+  // Generic action mutation — a drop-in replacement for the old doAction(fn,
+  // successMsg) helper. mutationFn/onSuccess receive the same (fn, successMsg)
+  // pair as variables so every ~17 action call site below is unchanged.
+  const actionMutation = useMutation({
+    mutationFn: ({ fn }) => fn(),
+    onSuccess: (response, { successMsg }) => {
+      applyTicketUpdate(response.ticket);
       showToast('success', successMsg);
-      setProposeMode(false);
-      setEditMode(false);
-      setEditDraft([]);
-      setEditNote('');
-      setShowRejectForm(false);
-      setRejectReason('');
-      setShowReviseForm(false);
-      setReviseReason('');
-      setCommentText('');
-      setDraftRaw({});
-      setDraftFactoryCurr({});
-      setProposeNote('');
-      setEmailDraft(null);
-    } catch (error) {
-      showToast('error', error.message || 'เกิดข้อผิดพลาด');
-    } finally {
-      setActionLoading(false);
-    }
+      resetActionDrafts();
+    },
+    onError: (error) => showToast('error', error.message || 'เกิดข้อผิดพลาด'),
+  });
+  const actionLoading = actionMutation.isPending;
+
+  // doAction swallows its own rejection (mutateAsync always rejects even
+  // after onError runs) so call sites keep firing it without a try/catch,
+  // exactly like the old imperative doAction.
+  async function doAction(fn, successMsg) {
+    try {
+      await actionMutation.mutateAsync({ fn, successMsg });
+    } catch { /* onError above already toasted */ }
+  }
+
+  // D7: CEO price calculation. Kept as its own mutation (not routed through
+  // doAction) because it never reset the propose/edit/reject/revise drafts —
+  // it has its own success side effects (priceBreakdown + showBreakdown) and
+  // its own spinner label ("กำลังคำนวณ...") independent of actionLoading.
+  const calculatePricesMutation = useMutation({
+    mutationFn: () => api.tickets.calculatePrices(ticketId),
+    onSuccess: (response) => {
+      applyTicketUpdate(response.ticket);
+      setPriceBreakdown(response.breakdown ?? []);
+      setShowBreakdown(true);
+      showToast('success', 'คำนวณราคาเรียบร้อย — ตรวจสอบรายละเอียดสูตรด้านล่าง แล้วกดอนุมัติได้เลย');
+    },
+    onError: (error) => showToast('error', error.message || 'คำนวณราคาไม่สำเร็จ'),
+  });
+  const calcLoading = calculatePricesMutation.isPending;
+
+  // D10: CEO per-item manual override. One mutation instance shared by every
+  // item row; `overrideMutation.variables` (the last {itemId, payload} passed
+  // to mutateAsync) lets each row derive its OWN pending flag instead of a
+  // useState map — same per-item granularity as before, without juggling a
+  // dynamic set of mutation hooks.
+  const overrideMutation = useMutation({
+    mutationFn: ({ itemId, payload }) => api.tickets.overrideItemPrice(ticketId, itemId, payload),
+    onSuccess: (response, { itemId }) => {
+      applyTicketUpdate(response.ticket);
+      setOverrideDraft((p) => { const n = { ...p }; delete n[itemId]; return n; });
+      showToast('success', 'บันทึกราคา override แล้ว');
+    },
+    onError: (err) => showToast('error', err.message || 'บันทึกไม่สำเร็จ'),
+  });
+  function isOverridingItem(itemId) {
+    return overrideMutation.isPending && overrideMutation.variables?.itemId === itemId;
+  }
+
+  // R5: Attachments upload/delete — invalidate the attachments query instead
+  // of manually reloading + setting local array state.
+  const uploadAttachmentMutation = useMutation({
+    mutationFn: ({ file, attachType }) => api.attachments.upload(ticketId, file, attachType),
+    onSuccess: (_res, { file }) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketAttachments(ticketId) });
+      showToast('success', `แนบไฟล์ ${file.name} แล้ว`);
+    },
+    onError: (err) => showToast('error', err.message || 'อัปโหลดไม่สำเร็จ'),
+  });
+  const uploadingFile = uploadAttachmentMutation.isPending;
+
+  const deleteAttachmentMutation = useMutation({
+    mutationFn: (id) => api.attachments.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketAttachments(ticketId) });
+      showToast('success', 'ลบไฟล์แล้ว');
+    },
+    onError: (err) => showToast('error', err.message || 'ลบไม่สำเร็จ'),
+  });
+  const deletingAttachment = deleteAttachmentMutation.isPending;
+
+  // Manual refresh — today's fix: refresh both the ticket AND its attachments
+  // (the old button only ever reloaded the ticket).
+  function refreshTicket() {
+    queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.ticketAttachments(ticketId) });
   }
 
   if (loading) {
@@ -347,17 +444,11 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       : null)
     : null;
 
-  async function initPropose() {
-    // load factory configs first so we can init currency defaults
-    let fcMap = factoryConfigs;
-    if (Object.keys(fcMap).length === 0) {
-      try {
-        const res = await api.factoryConfigs.list();
-        fcMap = {};
-        (res.factories ?? []).forEach((fc) => { fcMap[fc.factoryName] = fc; });
-        setFactoryConfigs(fcMap);
-      } catch { /* non-critical */ }
-    }
+  function initPropose() {
+    // Factory configs are now a query (fetched once per session, see above);
+    // use whatever's in cache — same fallback-to-empty-object behavior as the
+    // old lazy fetch if it hasn't resolved yet.
+    const fcMap = factoryConfigs;
 
     // init raw price per item (carry over existing rawPrice if re-opening)
     const rawMap = {};
@@ -449,18 +540,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   }
 
   async function handleCalculatePrices() {
-    setCalcLoading(true);
     try {
-      const response = await api.tickets.calculatePrices(ticketId);
-      setTicket(response.ticket);
-      setPriceBreakdown(response.breakdown ?? []);
-      setShowBreakdown(true);
-      showToast('success', 'คำนวณราคาเรียบร้อย — ตรวจสอบรายละเอียดสูตรด้านล่าง แล้วกดอนุมัติได้เลย');
-    } catch (error) {
-      showToast('error', error.message || 'คำนวณราคาไม่สำเร็จ');
-    } finally {
-      setCalcLoading(false);
-    }
+      await calculatePricesMutation.mutateAsync();
+    } catch { /* onError above already toasted */ }
   }
 
   async function handleOverridePrice(itemId) {
@@ -469,35 +551,21 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       showToast('error', 'กรุณากรอกราคา override ที่ถูกต้อง');
       return;
     }
-    setOverrideLoading((p) => ({ ...p, [itemId]: true }));
     try {
-      const res = await api.tickets.overrideItemPrice(ticketId, itemId, {
-        manualPrice: Number(draft.price),
-        reason: draft.reason || null,
+      await overrideMutation.mutateAsync({
+        itemId,
+        payload: { manualPrice: Number(draft.price), reason: draft.reason || null },
       });
-      setTicket(res.ticket);
-      setOverrideDraft((p) => { const n = { ...p }; delete n[itemId]; return n; });
-      showToast('success', 'บันทึกราคา override แล้ว');
-    } catch (err) {
-      showToast('error', err.message || 'บันทึกไม่สำเร็จ');
-    } finally {
-      setOverrideLoading((p) => ({ ...p, [itemId]: false }));
-    }
+    } catch { /* onError above already toasted */ }
   }
 
   async function handleUploadAttachment(e) {
     const file = e.target.files?.[0];
     if (!file) return;
     const attachType = file.name.toLowerCase().includes('po') ? 'PO' : 'OTHER';
-    setUploadingFile(true);
     try {
-      await api.attachments.upload(ticketId, file, attachType);
-      await loadAttachments();
-      showToast('success', `แนบไฟล์ ${file.name} แล้ว`);
-    } catch (err) {
-      showToast('error', err.message || 'อัปโหลดไม่สำเร็จ');
-    } finally {
-      setUploadingFile(false);
+      await uploadAttachmentMutation.mutateAsync({ file, attachType });
+    } catch { /* onError above already toasted */ } finally {
       e.target.value = '';
     }
   }
@@ -507,15 +575,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   }
 
   async function confirmDeleteAttachment(id) {
-    setDeletingAttachment(true);
     try {
-      await api.attachments.delete(id);
-      setAttachments((prev) => prev.filter((a) => a.id !== id));
-      showToast('success', 'ลบไฟล์แล้ว');
-    } catch (err) {
-      showToast('error', err.message || 'ลบไม่สำเร็จ');
-    } finally {
-      setDeletingAttachment(false);
+      await deleteAttachmentMutation.mutateAsync(id);
+    } catch { /* onError above already toasted */ } finally {
       setConfirm(null);
     }
   }
@@ -583,7 +645,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             )}
           </div>
         </div>
-        <button type="button" className="icon-button" onClick={loadTicket} title="รีเฟรช" aria-label="รีเฟรช">
+        <button type="button" className="icon-button" onClick={refreshTicket} title="รีเฟรช" aria-label="รีเฟรช">
           <Icon name="refresh" />
         </button>
       </header>
@@ -1267,9 +1329,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                                 <div style={{ display: 'flex', gap: 4 }}>
                                   <button type="button" className="primary-button"
                                     style={{ fontSize: 10, padding: '2px 8px', background: 'var(--color-override)', borderColor: 'var(--color-override)' }}
-                                    disabled={overrideLoading[item.id]}
+                                    disabled={isOverridingItem(item.id)}
                                     onClick={() => handleOverridePrice(item.id)}>
-                                    {overrideLoading[item.id] ? '...' : 'บันทึก'}
+                                    {isOverridingItem(item.id) ? '...' : 'บันทึก'}
                                   </button>
                                   <button type="button" className="secondary-button"
                                     style={{ fontSize: 10, padding: '2px 6px' }}
