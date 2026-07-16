@@ -12,17 +12,20 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.assertj.core.api.ThrowableAssert;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
@@ -120,6 +123,103 @@ class TicketServiceTest {
         stubTicket(10L, 1L, TicketStatus.QUOTATION_ISSUED);
         assertForbidden(() -> service.getQuotationXlsx(10L, 1L, hrActor));
         assertForbidden(() -> service.getQuotationPdf(10L, 1L, employeeActor));
+    }
+
+    // ── quotation file downloads: issue-time snapshot vs legacy fallback (V49) ──
+
+    @Test
+    void getQuotationXlsx_rendersFromSnapshotNotLiveEditedItems() throws Exception {
+        // The ticket's LIVE item/customer data has since been edited (a revision after
+        // this quotation was issued) — the render must reflect what was true AT ISSUE
+        // TIME (the snapshot), not these live values.
+        TicketItemDto liveEditedItem = new TicketItemDto(1L, 10L, "EditedBrand", "EditedModel", null, null,
+            null, null, new BigDecimal("9"), null, null, null, null, null,
+            new BigDecimal("999.00"), "THB", 0, null, null, null, "PIECE", null, null);
+        TicketSummaryDto summary = new TicketSummaryDto(
+            10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.QUOTATION_ISSUED, "NORMAL",
+            1L, "Sales User", null, null, "Live Edited Name", null, null, "Live Edited Project",
+            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null);
+        QuotationDto quotation = quotationOf(1L, 10L, "QT-2026-0001");
+        TicketDto ticket = new TicketDto(summary, List.of(liveEditedItem), List.of(), quotation, List.of(quotation));
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
+
+        TicketItemDto snapshotItem = new TicketItemDto(500L, 10L, "IssueTimeBrand", "IssueTimeModel", null, null,
+            null, null, new BigDecimal("2"), null, null, null, "pcs", null,
+            new BigDecimal("100.00"), null, 1, null, null, null, "PIECE", null, null);
+        when(ticketRepo.findQuotationItemsByQuotationId(1L, 10L)).thenReturn(List.of(snapshotItem));
+        when(ticketRepo.findQuotationHeaderSnapshot(1L)).thenReturn(Optional.of(
+            new TicketRepository.QuotationHeaderSnapshot("Issue-Time Customer", "Issue-Time Address",
+                "1111111111111", "02-999-9999", "Issue-Time Project")));
+
+        byte[] xlsx = service.getQuotationXlsx(10L, 1L, salesActor);
+
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            String itemDesc = sheet.getRow(7).getCell(1).getStringCellValue(); // ITEM_START_ROW = 7
+            assertThat(itemDesc).contains("IssueTimeBrand");
+            assertThat(itemDesc).doesNotContain("EditedBrand");
+            assertThat(sheet.getRow(4).getCell(1).getStringCellValue()) // B5: customer name
+                .isEqualTo("Issue-Time Customer");
+        }
+    }
+
+    @Test
+    void getQuotationPdf_rendersFromSnapshotNotLiveEditedItems() throws Exception {
+        TicketItemDto liveEditedItem = new TicketItemDto(1L, 10L, "EditedBrand", "EditedModel", null, null,
+            null, null, new BigDecimal("9"), null, null, null, null, null,
+            new BigDecimal("999.00"), "THB", 0, null, null, null, "PIECE", null, null);
+        TicketSummaryDto summary = new TicketSummaryDto(
+            10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.QUOTATION_ISSUED, "NORMAL",
+            1L, "Sales User", null, null, "Live Edited Name", null, null, "Live Edited Project",
+            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null);
+        QuotationDto quotation = quotationOf(1L, 10L, "QT-2026-0001");
+        TicketDto ticket = new TicketDto(summary, List.of(liveEditedItem), List.of(), quotation, List.of(quotation));
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
+
+        TicketItemDto snapshotItem = new TicketItemDto(500L, 10L, "IssueTimeBrand", "IssueTimeModel", null, null,
+            null, null, new BigDecimal("2"), null, null, null, "pcs", null,
+            new BigDecimal("100.00"), null, 1, null, null, null, "PIECE", null, null);
+        when(ticketRepo.findQuotationItemsByQuotationId(1L, 10L)).thenReturn(List.of(snapshotItem));
+        when(ticketRepo.findQuotationHeaderSnapshot(1L)).thenReturn(Optional.of(
+            new TicketRepository.QuotationHeaderSnapshot("Issue-Time Customer", "Issue-Time Address",
+                "1111111111111", "02-999-9999", "Issue-Time Project")));
+
+        byte[] pdf = service.getQuotationPdf(10L, 1L, salesActor);
+
+        try (var doc = org.apache.pdfbox.Loader.loadPDF(pdf)) {
+            String text = new org.apache.pdfbox.text.PDFTextStripper().getText(doc);
+            assertThat(text).contains("IssueTimeBrand IssueTimeModel");
+            assertThat(text).doesNotContain("EditedBrand");
+            assertThat(text).contains("เรียน Issue-Time Customer");
+            assertThat(text).contains("Project : Issue-Time Project");
+        }
+    }
+
+    @Test
+    void getQuotationXlsx_legacyFallback_rendersLiveDataWhenNoSnapshotRows() throws Exception {
+        // Pre-V49 quotation: no quotation_item rows and no header snapshot. Neither
+        // findQuotationItemsByQuotationId nor findQuotationHeaderSnapshot is stubbed here —
+        // Mockito's default answer returns an empty List / Optional.empty(), exactly what
+        // the repository would return for a real pre-V49 row, so the service must fall
+        // back to live ticket data rather than rendering a blank document.
+        TicketItemDto liveItem = new TicketItemDto(1L, 10L, "LiveBrand", "LiveModel", null, null,
+            null, null, new BigDecimal("3"), null, null, null, null, null,
+            new BigDecimal("50.00"), "THB", 0, null, null, null, "PIECE", null, null);
+        TicketSummaryDto summary = new TicketSummaryDto(
+            10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.QUOTATION_ISSUED, "NORMAL",
+            1L, "Sales User", null, null, "Live Customer Name", null, null, "Live Project",
+            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null);
+        QuotationDto quotation = quotationOf(2L, 10L, "QT-2026-0002");
+        TicketDto ticket = new TicketDto(summary, List.of(liveItem), List.of(), quotation, List.of(quotation));
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
+
+        byte[] xlsx = service.getQuotationXlsx(10L, 2L, salesActor);
+
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            assertThat(sheet.getRow(7).getCell(1).getStringCellValue()).contains("LiveBrand");
+            assertThat(sheet.getRow(4).getCell(1).getStringCellValue()).isEqualTo("Live Customer Name");
+        }
     }
 
     // ── factory email gate ────────────────────────────────────────────────
@@ -303,6 +403,8 @@ class TicketServiceTest {
             new BigDecimal("100.00"), "THB", 0, null, null, null, "PIECE", null, null);
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(item));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0001");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0001"), eq(1L), eq(new BigDecimal("200.00"))))
+            .thenReturn(quotationOf(99L, 10L, "QT-2026-0001"));
 
         service.generateQuotation(10L, salesActor);
 
@@ -332,6 +434,8 @@ class TicketServiceTest {
     void generateQuotation_allowsReissueFromQuotationIssued() {
         stubTicketWithItems(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of());
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0003");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0003"), eq(1L), any(BigDecimal.class)))
+            .thenReturn(quotationOf(100L, 10L, "QT-2026-0003"));
 
         service.generateQuotation(10L, salesActor);
 
@@ -353,6 +457,8 @@ class TicketServiceTest {
             new BigDecimal("10.00"), "THB", 2, null, null, null, "SQM", null, null);
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(item1, item2, item3));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0004");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0004"), eq(1L), any(BigDecimal.class)))
+            .thenReturn(quotationOf(101L, 10L, "QT-2026-0004"));
 
         service.generateQuotation(10L, salesActor);
 
@@ -373,6 +479,8 @@ class TicketServiceTest {
             null, "THB", 1, null, null, null, "PIECE", null, null);
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(priced, unpriced));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0005");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0005"), eq(1L), any(BigDecimal.class)))
+            .thenReturn(quotationOf(102L, 10L, "QT-2026-0005"));
 
         service.generateQuotation(10L, salesActor);
 
@@ -381,6 +489,82 @@ class TicketServiceTest {
         ArgumentCaptor<BigDecimal> total = ArgumentCaptor.forClass(BigDecimal.class);
         verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0005"), eq(1L), total.capture());
         assertThat(total.getValue()).isEqualByComparingTo(new BigDecimal("200.00"));
+    }
+
+    // ── generateQuotation: issue-time snapshot (V49) ──────────────────────
+
+    @Test
+    void generateQuotation_snapshotsOnlyPricedItemsAndCustomerHeaderInSameCall() {
+        TicketItemDto priced = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
+            "pcs", null, new BigDecimal("2"), null, null, null, null, null,
+            new BigDecimal("100.00"), "THB", 0, null, null, null, "PIECE", null, null);
+        TicketItemDto unpriced = new TicketItemDto(2L, 10L, "PC002", "Product B", null, null,
+            "pcs", null, new BigDecimal("5"), null, null, null, null, null,
+            null, "THB", 1, null, null, null, "PIECE", null, null);
+        stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(priced, unpriced));
+        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0006");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0006"), eq(1L), any(BigDecimal.class)))
+            .thenReturn(quotationOf(200L, 10L, "QT-2026-0006"));
+
+        service.generateQuotation(10L, salesActor);
+
+        // insertQuotationItems is handed the FULL item list (priced + unpriced) — the
+        // repository itself is responsible for filtering to approvedPrice != null, mirroring
+        // how the total-amount calculation above already treats unpriced items as excluded.
+        ArgumentCaptor<List<TicketItemDto>> itemsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(ticketRepo).insertQuotationItems(eq(200L), itemsCaptor.capture());
+        assertThat(itemsCaptor.getValue()).containsExactly(priced, unpriced);
+
+        // No customerId on this ticket (stubTicket leaves it null) — falls back to the
+        // ticket's free-text customerName, with no address/tax/phone to snapshot.
+        verify(ticketRepo).updateQuotationHeader(eq(200L), eq("Test Customer"),
+            isNull(), isNull(), isNull(), isNull());
+    }
+
+    @Test
+    void generateQuotation_snapshotsCustomerHeaderFromCustomerRepositoryWhenLinked() {
+        TicketSummaryDto summary = new TicketSummaryDto(
+            10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.APPROVED, "NORMAL",
+            1L, "Sales User", null, null, "Free-text Name", 55L, null, "Renovation Project",
+            null, null, null, Instant.now(), Instant.now(), null, 0, false, null, null);
+        TicketDto ticket = new TicketDto(summary, List.of(), List.of(), null, List.of());
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
+        when(customerRepo.findById(55L)).thenReturn(Optional.of(
+            new CustomerDto(55L, "Real Customer Co., Ltd.", "0105500000000",
+                "123 Real Address", "สำนักงานใหญ่", "02-000-0000")));
+        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0007");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0007"), eq(1L), any(BigDecimal.class)))
+            .thenReturn(quotationOf(201L, 10L, "QT-2026-0007"));
+
+        service.generateQuotation(10L, salesActor);
+
+        // Fidelity rule (Opus review): the frozen NAME is the ticket's display name —
+        // that's what toXlsx/toPdf have always printed — so the snapshot must capture
+        // it, not the master record's name. Address/taxId/phone DO come from the master
+        // record because that's what the live render pulls from CustomerDto.
+        verify(ticketRepo).updateQuotationHeader(eq(201L), eq("Free-text Name"),
+            eq("123 Real Address"), eq("0105500000000"), eq("02-000-0000"), eq("Renovation Project"));
+    }
+
+    @Test
+    void generateQuotation_blankTicketNameFallsBackToMasterCustomerName() {
+        TicketSummaryDto summary = new TicketSummaryDto(
+            10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.APPROVED, "NORMAL",
+            1L, "Sales User", null, null, null, 55L, null, null,
+            null, null, null, Instant.now(), Instant.now(), null, 0, false, null, null);
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(
+            new TicketDto(summary, List.of(), List.of(), null, List.of())));
+        when(customerRepo.findById(55L)).thenReturn(Optional.of(
+            new CustomerDto(55L, "Real Customer Co., Ltd.", "0105500000000",
+                "123 Real Address", "สำนักงานใหญ่", "02-000-0000")));
+        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0008");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0008"), eq(1L), any(BigDecimal.class)))
+            .thenReturn(quotationOf(202L, 10L, "QT-2026-0008"));
+
+        service.generateQuotation(10L, salesActor);
+
+        verify(ticketRepo).updateQuotationHeader(eq(202L), eq("Real Customer Co., Ltd."),
+            eq("123 Real Address"), eq("0105500000000"), eq("02-000-0000"), isNull());
     }
 
     // ── close ─────────────────────────────────────────────────────────────
@@ -1019,6 +1203,13 @@ class TicketServiceTest {
         TicketDto ticket = new TicketDto(summary, items, List.of(), null, List.of());
         when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
         return ticket;
+    }
+
+    // generateQuotation captures createQuotation's return value to snapshot items/header
+    // against the new quotation_id — tests must stub a non-null return or that call NPEs.
+    private static QuotationDto quotationOf(long quotationId, long ticketId, String number) {
+        return new QuotationDto(quotationId, ticketId, number, 1L, "Sales User",
+            Instant.now(), null, null, "THB", 1, "ISSUED");
     }
 
     private static void assertForbidden(ThrowableAssert.ThrowingCallable action) {

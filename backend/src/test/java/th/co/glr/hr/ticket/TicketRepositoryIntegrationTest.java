@@ -1,11 +1,15 @@
 package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
@@ -90,6 +94,94 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
         // the DTO's single `quotation` field mirrors the newest version (backward compat)
         assertThat(tickets.findById(ticketId).orElseThrow().quotation().quotationVersion()).isEqualTo(2);
+    }
+
+    // ── quotation snapshot (V49): item-data freeze at issue time ─────────────
+
+    @Test
+    void insertQuotationItems_snapshotsOnlyPricedItemsWithFrozenUnitPriceAndAmount() {
+        long ticketId = tickets.create(sampleTicket(
+            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        QuotationDto quotation = tickets.createQuotation(ticketId, "QT-2026-0010", actorId, new BigDecimal("200.00"));
+
+        TicketItemDto priced = new TicketItemDto(0L, ticketId, "Toyota", "Hilux", "White", "Matte", "L",
+            null, new BigDecimal("2"), null, null, null, "pcs", null,
+            new BigDecimal("100.00"), "THB", 0, null, null, null, "PIECE", null, null);
+        TicketItemDto unpriced = new TicketItemDto(0L, ticketId, "Honda", "Civic", null, null, null,
+            null, new BigDecimal("5"), null, null, null, null, null,
+            null, "THB", 1, null, null, null, "PIECE", null, null);
+
+        tickets.insertQuotationItems(quotation.id(), List.of(priced, unpriced));
+
+        List<TicketItemDto> snapshot = tickets.findQuotationItemsByQuotationId(quotation.id(), ticketId);
+        assertThat(snapshot).hasSize(1); // the unpriced item is never snapshotted
+        TicketItemDto row = snapshot.get(0);
+        assertThat(row.brand()).isEqualTo("Toyota");
+        assertThat(row.model()).isEqualTo("Hilux");
+        assertThat(row.approvedPrice()).isEqualByComparingTo("100.00");
+        assertThat(row.qty()).isEqualByComparingTo("2");
+
+        // amount = unit_price * qty = 200.00; TicketItemDto has no amount field, so read
+        // the stored column directly to confirm it was computed and frozen at insert time.
+        BigDecimal amount = jdbc.queryForObject(
+            "SELECT amount FROM sales.quotation_item WHERE quotation_id = :id",
+            Map.of("id", quotation.id()), BigDecimal.class);
+        assertThat(amount).isEqualByComparingTo("200.00");
+    }
+
+    @Test
+    void insertQuotationItems_noOpWhenAllItemsUnpriced() {
+        long ticketId = tickets.create(sampleTicket(
+            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        QuotationDto quotation = tickets.createQuotation(ticketId, "QT-2026-0013", actorId, BigDecimal.ZERO);
+
+        TicketItemDto unpriced = new TicketItemDto(0L, ticketId, "Honda", "Civic", null, null, null,
+            null, new BigDecimal("5"), null, null, null, null, null,
+            null, "THB", 0, null, null, null, "PIECE", null, null);
+
+        tickets.insertQuotationItems(quotation.id(), List.of(unpriced));
+
+        assertThat(tickets.findQuotationItemsByQuotationId(quotation.id(), ticketId)).isEmpty();
+    }
+
+    @Test
+    void updateQuotationHeader_persistsCustomerAndProjectSnapshot() {
+        long ticketId = tickets.create(sampleTicket(
+            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        QuotationDto quotation = tickets.createQuotation(ticketId, "QT-2026-0011", actorId, new BigDecimal("100.00"));
+
+        tickets.updateQuotationHeader(quotation.id(), "Frozen Co., Ltd.", "Frozen Address",
+            "0100000000001", "02-111-1111", "Frozen Project");
+
+        TicketRepository.QuotationHeaderSnapshot header =
+            tickets.findQuotationHeaderSnapshot(quotation.id()).orElseThrow();
+        assertThat(header.customerName()).isEqualTo("Frozen Co., Ltd.");
+        assertThat(header.customerAddress()).isEqualTo("Frozen Address");
+        assertThat(header.customerTaxId()).isEqualTo("0100000000001");
+        assertThat(header.customerPhone()).isEqualTo("02-111-1111");
+        assertThat(header.projectName()).isEqualTo("Frozen Project");
+    }
+
+    @Test
+    void uniqueIndex_rejectsDuplicateTicketAndVersionPair() {
+        long ticketId = tickets.create(sampleTicket(
+            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        tickets.createQuotation(ticketId, "QT-2026-0020", actorId, new BigDecimal("100.00"));
+
+        // Simulates the double-click-generate race the V49 unique index guards against:
+        // two concurrent requests both read MAX(quotation_version)=1 and both try to
+        // insert version 2 — ux_quotation_ticket_version must reject the second write.
+        assertThatThrownBy(() -> jdbc.update("""
+            INSERT INTO sales.quotation
+                (ticket_id, number, issued_by, total_amount, currency, quotation_version, doc_status)
+            VALUES (:ticketId, :number, :issuedBy, :total, 'THB', 1, 'ISSUED')
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("number", "QT-2026-0021")
+                .addValue("issuedBy", actorId)
+                .addValue("total", new BigDecimal("100.00"))))
+            .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
