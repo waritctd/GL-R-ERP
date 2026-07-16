@@ -40,8 +40,9 @@ describe('LoginPage UAT quick login', () => {
   it('offers every seeded UAT persona, each wired to its own account', async () => {
     const { onLogin } = await renderLogin({ quickLogin: true });
 
-    // V900's original 9 personas + account@uat.glr (ฝ่ายบัญชี, added in V908).
-    const emails = ['ceo', 'hr', 'salesmgr', 'sales', 'import', 'account', 'divmgr', 'employee', 'nulldiv', 'admin']
+    // V900's personas + account@uat.glr (ฝ่ายบัญชี, V908), minus admin@uat.glr
+    // (no distinct `admin` role — it derived to plain employee, so it was dropped).
+    const emails = ['ceo', 'hr', 'salesmgr', 'sales', 'import', 'account', 'divmgr', 'employee', 'nulldiv']
       .map((name) => `${name}@uat.glr`);
 
     // The form's own submit button, then one button per persona in seed order. Matching by label

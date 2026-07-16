@@ -18,5 +18,9 @@ export const uatAccounts = [
   { email: 'divmgr@uat.glr', label: 'Division Manager', helper: 'ผู้จัดการฝ่ายคลังสินค้า · ทีมของฉัน', icon: 'userCog' },
   { email: 'employee@uat.glr', label: 'Employee', helper: 'โปรไฟล์ของฉัน · ส่งคำขอแก้ไข', icon: 'user' },
   { email: 'nulldiv@uat.glr', label: 'Employee (ไม่มีฝ่าย)', helper: 'ทดสอบ fallback เมื่อ division ว่าง', icon: 'user' },
-  { email: 'admin@uat.glr', label: 'Admin', helper: 'ฝ่าย ADMIN · ได้สิทธิ์เท่า employee', icon: 'setting' },
+  // admin@uat.glr was removed: there is no `admin` role — it derived to plain `employee`
+  // (same as any other employee), so the button tested nothing the personas above don't.
+  // The nulldiv persona above still covers the one distinct employee-fallback path
+  // (null division, PR #55). The seeded admin@uat.glr account is left in the DB (frozen
+  // V900) but is no longer offered as a quick-login.
 ];

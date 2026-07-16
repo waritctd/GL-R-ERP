@@ -140,9 +140,12 @@ class FlywayMigrationTest {
         flyway.clean();
         flyway.migrate();
 
+        // The quick-login personas offered by frontend/src/features/auth/uatQuickLogin.js.
+        // admin@uat.glr is still seeded by V900 but is no longer offered (no distinct role —
+        // it derives to plain employee), so it is not asserted here.
         List<String> personas = List.of(
             "ceo@uat.glr", "hr@uat.glr", "salesmgr@uat.glr", "sales@uat.glr", "import@uat.glr",
-            "account@uat.glr", "divmgr@uat.glr", "employee@uat.glr", "nulldiv@uat.glr", "admin@uat.glr");
+            "account@uat.glr", "divmgr@uat.glr", "employee@uat.glr", "nulldiv@uat.glr");
         PasswordEncoder encoder = new BCryptPasswordEncoder();
 
         try (Connection connection = DriverManager.getConnection(
