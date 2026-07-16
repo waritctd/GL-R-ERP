@@ -480,6 +480,13 @@ textarea:focus {
   max-width: 1320px;
 }
 
+/* Grid items default to min-width:auto, so a child refuses to shrink below its
+   min-content width and silently stretches the page past the viewport — Thai
+   labels have no spaces to break on, so they hit this constantly. */
+.page-stack > * {
+  min-width: 0;
+}
+
 .page-heading {
   display: flex;
   align-items: flex-end;
@@ -1910,6 +1917,17 @@ a.status-badge {
 
   .sidebar {
     display: none;
+  }
+
+  /* Thai has no inter-word spaces, so a long breadcrumb label is a single
+     unbreakable run that stretches the page container past the viewport
+     (43px on the deposit notice). Let the labels wrap instead. */
+  .breadcrumbs,
+  .breadcrumbs li,
+  .breadcrumbs li > span,
+  .breadcrumbs button {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   /* These legacy classes bypass the shared Button component, so the 44px
