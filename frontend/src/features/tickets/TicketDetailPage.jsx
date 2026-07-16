@@ -79,9 +79,9 @@ function eventDotClass(kind) {
 
 function InfoRow({ label, value }) {
   return (
-    <div style={{ display: 'flex', gap: 8, padding: '6px 0', borderBottom: '1px solid #f1f5f9', fontSize: 13 }}>
-      <span style={{ color: '#64748b', minWidth: 120 }}>{label}</span>
-      <span style={{ fontWeight: 600, color: '#0f172a' }}>{value || '-'}</span>
+    <div style={{ display: 'flex', gap: 8, padding: '6px 0', borderBottom: '1px solid var(--color-surface-subtle)', fontSize: 13 }}>
+      <span style={{ color: 'var(--color-text-muted)', minWidth: 120 }}>{label}</span>
+      <span style={{ fontWeight: 600, color: 'var(--color-text)' }}>{value || '-'}</span>
     </div>
   );
 }
@@ -566,9 +566,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             <Icon name="chevronLeft" size={14} />
             กลับ
           </button>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#0f172a' }}>{summary.customerName || summary.title}</h1>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: 'var(--color-text)' }}>{summary.customerName || summary.title}</h1>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
-            <code style={{ fontSize: 13, background: '#f1f5f9', padding: '2px 8px', borderRadius: 4 }}>{summary.code}</code>
+            <code style={{ fontSize: 13, background: 'var(--color-surface-subtle)', padding: '2px 8px', borderRadius: 4 }}>{summary.code}</code>
             <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
             {summary.hasEdits && (
               <StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge>
@@ -576,10 +576,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           </div>
           {/* Summary: who created it, when, and who is currently handling it — all
               fields already fetched on `summary` (no new API calls / no invented owner). */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', marginTop: 10, fontSize: 13, color: '#64748b' }}>
-            <span>สร้างโดย <strong style={{ color: '#334155' }}>{summary.createdByName || '-'}</strong> · {formatThaiDate(summary.createdAt)}</span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', marginTop: 10, fontSize: 13, color: 'var(--color-text-muted)' }}>
+            <span>สร้างโดย <strong style={{ color: 'var(--color-text-secondary)' }}>{summary.createdByName || '-'}</strong> · {formatThaiDate(summary.createdAt)}</span>
             {summary.assignedToName && (
-              <span>เจ้าหน้าที่นำเข้าที่ดูแล <strong style={{ color: '#334155' }}>{summary.assignedToName}</strong></span>
+              <span>เจ้าหน้าที่นำเข้าที่ดูแล <strong style={{ color: 'var(--color-text-secondary)' }}>{summary.assignedToName}</strong></span>
             )}
           </div>
         </div>
@@ -593,7 +593,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       {nextAction && (
         <div style={{
           display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px',
-          borderRadius: 8, border: '1px solid var(--color-info-border, #bfdbfe)',
+          borderRadius: 8, border: '1px solid var(--color-info-border)',
           background: 'var(--color-info-bg)', color: 'var(--color-info)', fontSize: 13,
         }}>
           <Icon name="chevronRight" size={15} style={{ flexShrink: 0, marginTop: 1 }} />
@@ -629,7 +629,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             <h2>การอนุมัติราคา</h2>
           </div>
           <div style={{ padding: '0 18px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <p style={{ margin: 0, fontSize: 13, color: '#475569', lineHeight: 1.6 }}>
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--color-icon-muted)', lineHeight: 1.6 }}>
               ตรวจสอบราคาที่เสนอในรายการสินค้าด้านล่างก่อนตัดสินใจ
               {' — '}<strong>อนุมัติ</strong>จะยืนยันราคาที่เสนอเป็นราคาขายจริง และเปิดให้ฝ่ายขายออกใบเสนอราคาต่อได้
               {' '}<strong>ไม่อนุมัติ</strong>จะส่งใบขอราคากลับไปที่ฝ่าย Import เพื่อเสนอราคาใหม่
@@ -646,7 +646,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 {can.reject && (
                   <button type="button" className="secondary-button" disabled={actionLoading}
                     onClick={() => setShowRejectForm(true)}
-                    style={{ color: '#dc2626', borderColor: '#fca5a5' }}>
+                    style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}>
                     <Icon name="close" size={14} />
                     ไม่อนุมัติ
                   </button>
@@ -662,7 +662,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 </label>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button type="button" className="secondary-button" onClick={handleReject} disabled={actionLoading}
-                    style={{ color: '#dc2626', borderColor: '#fca5a5' }}>
+                    style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}>
                     ยืนยันไม่อนุมัติ
                   </button>
                   <button type="button" className="secondary-button" onClick={() => { setShowRejectForm(false); setRejectReason(''); }} disabled={actionLoading}>
@@ -676,7 +676,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       )}
 
       {hasActions && (
-        <section className="panel" style={{ background: '#f8fafc' }}>
+        <section className="panel" style={{ background: 'var(--color-surface-muted)' }}>
           <div className="panel-header">
             <h2>การดำเนินการอื่น ๆ</h2>
           </div>
@@ -693,7 +693,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               <button
                 type="button"
                 className={st === 'approved' ? 'secondary-button' : 'primary-button'}
-                style={st === 'approved' ? { borderColor: '#fbbf24', color: '#92400e', background: '#fffbeb' } : {}}
+                style={st === 'approved' ? { borderColor: 'var(--color-warning-border)', color: 'var(--color-warning-dark)', background: 'var(--color-warning-bg-soft)' } : {}}
                 disabled={actionLoading}
                 onClick={initPropose}
               >
@@ -707,7 +707,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             {can.calculatePrices && (
               <button type="button" className="secondary-button" disabled={calcLoading || actionLoading}
                 onClick={handleCalculatePrices}
-                style={{ background: '#eff6ff', borderColor: '#93c5fd', color: '#1d4ed8' }}>
+                style={{ background: 'var(--color-info-row-active)', borderColor: 'var(--color-info-border-strong)', color: 'var(--color-info)' }}>
                 <Icon name="calculator" size={14} />
                 {calcLoading ? 'กำลังคำนวณ...' : 'คำนวณราคา (CIF)'}
               </button>
@@ -815,7 +815,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
             {can.cancel && (
               <button type="button" className="secondary-button" disabled={actionLoading}
-                style={{ marginLeft: 'auto', color: '#dc2626', borderColor: '#fca5a5' }}
+                style={{ marginLeft: 'auto', color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}
                 onClick={() => setConfirm({ kind: 'cancelTicket' })}>
                 ยกเลิก
               </button>
@@ -823,7 +823,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           </div>
 
           {showReviseForm && (
-            <div style={{ padding: '0 18px 14px', display: 'flex', flexDirection: 'column', gap: 10, borderTop: '1px solid #e6eaf0' }}>
+            <div style={{ padding: '0 18px 14px', display: 'flex', flexDirection: 'column', gap: 10, borderTop: '1px solid var(--color-border)' }}>
               <div style={{ fontSize: 13, fontWeight: 600, paddingTop: 12 }}>ประเภทการแก้ไข</div>
               {[
                 { value: 'QTY_OR_NOTE',  label: 'แก้จำนวน / หมายเหตุ / % มัดจำ', sub: 'ไม่ต้องอนุมัติใหม่ — ออกเอกสาร Rev ใหม่ได้เลย' },
@@ -835,10 +835,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   <input type="radio" name="reviseScope" value={opt.value}
                     checked={reviseScope === opt.value}
                     onChange={() => setReviseScope(opt.value)}
-                    style={{ marginTop: 2, flexShrink: 0, width: 16, height: 16, accentColor: '#1e40af', cursor: 'pointer' }} />
+                    style={{ marginTop: 2, flexShrink: 0, width: 16, height: 16, accentColor: 'var(--color-info-dot)', cursor: 'pointer' }} />
                   <span>
                     <strong>{opt.label}</strong>
-                    <span style={{ display: 'block', fontSize: 12, color: '#64748b' }}>{opt.sub}</span>
+                    <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>{opt.sub}</span>
                   </span>
                 </label>
               ))}
@@ -870,7 +870,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           <div className="panel-header"><h2>สถานะหลังออกใบเสนอราคา</h2></div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, padding: '12px 18px 18px' }}>
             <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginBottom: 6 }}>Track P — การชำระเงิน</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-muted)', marginBottom: 6 }}>Track P — การชำระเงิน</div>
               {[
                 { key: 'CUSTOMER_CONFIRMED',    label: 'ลูกค้ายืนยัน' },
                 { key: 'DEPOSIT_NOTICE_ISSUED', label: 'ออกใบแจ้งมัดจำ' },
@@ -885,17 +885,17 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 return (
                   <div key={step.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
                     <span style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700,
-                      background: done ? (active ? '#1e40af' : '#bfdbfe') : '#e2e8f0',
-                      color: done ? (active ? '#fff' : '#1e40af') : '#64748b' }}>
+                      background: done ? (active ? 'var(--color-info-dot)' : 'var(--color-info-border)') : 'var(--color-border-subtle)',
+                      color: done ? (active ? 'var(--color-surface)' : 'var(--color-info-dot)') : 'var(--color-text-muted)' }}>
                       {done && !active ? '✓' : idx + 1}
                     </span>
-                    <span style={{ fontSize: 13, color: active ? '#1e40af' : done ? '#374151' : '#64748b', fontWeight: active ? 600 : 400 }}>{step.label}</span>
+                    <span style={{ fontSize: 13, color: active ? 'var(--color-info-dot)' : done ? 'var(--color-text-secondary)' : 'var(--color-text-muted)', fontWeight: active ? 600 : 400 }}>{step.label}</span>
                   </div>
                 );
               })}
             </div>
             <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginBottom: 6 }}>Track F — การนำเข้า/จัดส่ง</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-muted)', marginBottom: 6 }}>Track F — การนำเข้า/จัดส่ง</div>
               {[
                 { key: 'IR_ISSUED',      label: 'ออก Import Request' },
                 { key: 'IR_SENT',        label: 'ส่ง IR แล้ว' },
@@ -909,11 +909,11 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 return (
                   <div key={step.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
                     <span style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700,
-                      background: done ? (active ? '#059669' : '#a7f3d0') : '#e2e8f0',
-                      color: done ? (active ? '#fff' : '#059669') : '#64748b' }}>
+                      background: done ? (active ? 'var(--color-success)' : 'var(--color-success-border)') : 'var(--color-border-subtle)',
+                      color: done ? (active ? 'var(--color-surface)' : 'var(--color-success)') : 'var(--color-text-muted)' }}>
                       {done && !active ? '✓' : idx + 1}
                     </span>
-                    <span style={{ fontSize: 13, color: active ? '#059669' : done ? '#374151' : '#64748b', fontWeight: active ? 600 : 400 }}>{step.label}</span>
+                    <span style={{ fontSize: 13, color: active ? 'var(--color-success)' : done ? 'var(--color-text-secondary)' : 'var(--color-text-muted)', fontWeight: active ? 600 : 400 }}>{step.label}</span>
                   </div>
                 );
               })}
@@ -940,18 +940,18 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           </section>
 
           <section className="table-panel">
-            <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid #e6eaf0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h2>รายการสินค้า ({editMode ? editDraft.length : items.length} รายการ)</h2>
             </div>
 
             {editMode ? (
               <div style={{ padding: '14px 18px' }}>
                 {editDraft.map((item, index) => (
-                  <div key={index} style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: '12px 14px', marginBottom: 10, background: '#f8fafc' }}>
+                  <div key={index} style={{ border: '1px solid var(--color-border-subtle)', borderRadius: 8, padding: '12px 14px', marginBottom: 10, background: 'var(--color-surface-muted)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: '#64748b' }}>รายการที่ {index + 1}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)' }}>รายการที่ {index + 1}</span>
                       {editDraft.length > 1 && (
-                        <button type="button" className="icon-button" style={{ color: '#ef4444' }} aria-label={`ลบรายการที่ ${index + 1}`}
+                        <button type="button" className="icon-button" style={{ color: 'var(--color-danger)' }} aria-label={`ลบรายการที่ ${index + 1}`}
                           onClick={() => setEditDraft((d) => d.filter((_, i) => i !== index))}>
                           <Icon name="close" size={14} />
                         </button>
@@ -989,12 +989,12 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                                   }
                                   return u;
                                 }))}
-                                style={{ width: 16, height: 16, accentColor: '#1e40af', cursor: 'pointer' }} />
+                                style={{ width: 16, height: 16, accentColor: 'var(--color-info-dot)', cursor: 'pointer' }} />
                               <strong>{opt.label}</strong>
                             </label>
                           ))}
                           {item.sqmPerPiece && (
-                            <span style={{ fontSize: 11, color: '#64748b' }}>· 1 แผ่น = {item.sqmPerPiece} ตร.ม.</span>
+                            <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>· 1 แผ่น = {item.sqmPerPiece} ตร.ม.</span>
                           )}
                         </div>
                       </div>
@@ -1014,7 +1014,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                           </label>
                           <div style={{ margin: 0 }}>
                             <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>พื้นที่รวม (ตร.ม.)</span>
-                            <div style={{ padding: '7px 10px', border: '1px solid #e2e8f0', borderRadius: 6, background: '#f8fafc', fontSize: 13, color: item.qtySqm ? '#475569' : '#94a3b8' }}>
+                            <div style={{ padding: '7px 10px', border: '1px solid var(--color-border-subtle)', borderRadius: 6, background: 'var(--color-surface-muted)', fontSize: 13, color: item.qtySqm ? 'var(--color-icon-muted)' : 'var(--color-text-faint)' }}>
                               {item.qtySqm ? `${Number(item.qtySqm).toFixed(3)} ตร.ม.` : '—'}
                             </div>
                           </div>
@@ -1033,7 +1033,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                           </label>
                           <div style={{ margin: 0 }}>
                             <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>จำนวน (แผ่น)</span>
-                            <div style={{ padding: '7px 10px', border: '1px solid #e2e8f0', borderRadius: 6, background: '#f8fafc', fontSize: 13, color: item.qty ? '#475569' : '#94a3b8' }}>
+                            <div style={{ padding: '7px 10px', border: '1px solid var(--color-border-subtle)', borderRadius: 6, background: 'var(--color-surface-muted)', fontSize: 13, color: item.qty ? 'var(--color-icon-muted)' : 'var(--color-text-faint)' }}>
                               {item.qty ? `${item.qty} แผ่น` : '—'}
                             </div>
                           </div>
@@ -1119,11 +1119,11 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                     return (
                       <div key={factory}>
                         {/* Factory group header */}
-                        <div style={{ padding: '8px 18px', background: '#f1f5f9', fontSize: 12, fontWeight: 700, color: '#1e3a5f', borderTop: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <div style={{ padding: '8px 18px', background: 'var(--color-surface-subtle)', fontSize: 12, fontWeight: 700, color: 'var(--color-info-dot)', borderTop: '1px solid var(--color-border-subtle)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                           <Icon name="building" size={13} />
                           <span>{factory}</span>
-                          <span style={{ fontWeight: 400, color: '#64748b' }}>({groupItems.length} รายการ)</span>
-                          {fc?.email && <span style={{ fontWeight: 400, color: '#64748b', fontSize: 11 }}>· {fc.email}</span>}
+                          <span style={{ fontWeight: 400, color: 'var(--color-text-muted)' }}>({groupItems.length} รายการ)</span>
+                          {fc?.email && <span style={{ fontWeight: 400, color: 'var(--color-text-muted)', fontSize: 11 }}>· {fc.email}</span>}
                           <button type="button" className="secondary-button"
                             style={{ marginLeft: 'auto', fontSize: 12, padding: '4px 12px' }}
                             onClick={() => setEmailDraft(isDraftOpen ? null : buildEmailDraft(factory, groupItems))}>
@@ -1133,23 +1133,23 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                         </div>
 
                         {/* Currency/unit settings bar */}
-                        <div style={{ padding: '10px 18px', background: '#f8fafc', borderTop: '1px solid #e6eaf0', display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ padding: '10px 18px', background: 'var(--color-surface-muted)', borderTop: '1px solid var(--color-border)', display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
                           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                            <span style={{ fontSize: 13, color: '#475569', fontWeight: 600, whiteSpace: 'nowrap' }}>สกุลเงิน</span>
+                            <span style={{ fontSize: 13, color: 'var(--color-icon-muted)', fontWeight: 600, whiteSpace: 'nowrap' }}>สกุลเงิน</span>
                             <InfoTip label="สกุลเงินและหน่วยนับ" text="เลือกครั้งเดียวต่อโรงงาน ใช้กับทุกรายการของโรงงานนี้" />
                             <select
                               value={draftFactoryCurr[factory]?.currency ?? 'THB'}
                               onChange={(e) => setDraftFactoryCurr((p) => ({ ...p, [factory]: { ...p[factory], currency: e.target.value } }))}
-                              style={{ fontSize: 14, padding: '5px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', cursor: 'pointer', fontWeight: 600, color: '#1e40af' }}>
+                              style={{ fontSize: 14, padding: '5px 10px', border: '1px solid var(--color-border-muted)', borderRadius: 6, background: 'var(--color-surface)', cursor: 'pointer', fontWeight: 600, color: 'var(--color-info-dot)' }}>
                               {['THB','EUR','USD','JPY','CNY','GBP'].map((c) => <option key={c}>{c}</option>)}
                             </select>
                           </div>
                           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                            <span style={{ fontSize: 13, color: '#475569', fontWeight: 600, whiteSpace: 'nowrap' }}>หน่วยราคา</span>
+                            <span style={{ fontSize: 13, color: 'var(--color-icon-muted)', fontWeight: 600, whiteSpace: 'nowrap' }}>หน่วยราคา</span>
                             <select
                               value={draftFactoryCurr[factory]?.unit ?? 'piece'}
                               onChange={(e) => setDraftFactoryCurr((p) => ({ ...p, [factory]: { ...p[factory], unit: e.target.value } }))}
-                              style={{ fontSize: 14, padding: '5px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', cursor: 'pointer', fontWeight: 600, color: '#1e40af' }}>
+                              style={{ fontSize: 14, padding: '5px 10px', border: '1px solid var(--color-border-muted)', borderRadius: 6, background: 'var(--color-surface)', cursor: 'pointer', fontWeight: 600, color: 'var(--color-info-dot)' }}>
                               <option value="piece">/ แผ่น</option>
                               <option value="sqm">/ ตร.ม.</option>
                               <option value="box">/ กล่อง</option>
@@ -1159,18 +1159,18 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
                         {/* Email draft panel */}
                         {isDraftOpen && emailDraft && (
-                          <div style={{ margin: '0 18px 8px', padding: '12px', border: '1px solid #bfdbfe', borderRadius: 8, background: '#eff6ff', fontSize: 13 }}>
-                            <p style={{ margin: '0 0 8px', fontWeight: 700, fontSize: 12, color: '#1d4ed8' }}>ร่างอีเมลถึง {factory}</p>
+                          <div style={{ margin: '0 18px 8px', padding: '12px', border: '1px solid var(--color-info-border)', borderRadius: 8, background: 'var(--color-info-row-active)', fontSize: 13 }}>
+                            <p style={{ margin: '0 0 8px', fontWeight: 700, fontSize: 12, color: 'var(--color-info)' }}>ร่างอีเมลถึง {factory}</p>
                             <label style={{ display: 'block', marginBottom: 6 }}>
-                              <span style={{ fontSize: 11, color: '#64748b' }}>ถึง (To)</span>
+                              <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>ถึง (To)</span>
                               <input value={emailDraft.to} onChange={(e) => setEmailDraft((d) => ({ ...d, to: e.target.value }))} style={{ marginTop: 2 }} />
                             </label>
                             <label style={{ display: 'block', marginBottom: 6 }}>
-                              <span style={{ fontSize: 11, color: '#64748b' }}>หัวข้อ (Subject)</span>
+                              <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>หัวข้อ (Subject)</span>
                               <input value={emailDraft.subject} onChange={(e) => setEmailDraft((d) => ({ ...d, subject: e.target.value }))} style={{ marginTop: 2 }} />
                             </label>
                             <label style={{ display: 'block', marginBottom: 8 }}>
-                              <span style={{ fontSize: 11, color: '#64748b' }}>เนื้อหา</span>
+                              <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>เนื้อหา</span>
                               <textarea rows={8} value={emailDraft.body} onChange={(e) => setEmailDraft((d) => ({ ...d, body: e.target.value }))} style={{ marginTop: 2, fontFamily: 'monospace', fontSize: 12 }} />
                             </label>
                             <div style={{ display: 'flex', gap: 8 }}>
@@ -1191,17 +1191,17 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                             <div key={item.id ?? i} className="ticket-items-table data-row" style={{ gridTemplateColumns: itemsGridCols }}>
                               <span data-label="ยี่ห้อ / รุ่น">
                                 <strong>{item.brand}</strong>
-                                {item.model && <small style={{ color: '#64748b' }}>{item.model}</small>}
+                                {item.model && <small style={{ color: 'var(--color-text-muted)' }}>{item.model}</small>}
                               </span>
                               <span data-label="สี / เนื้อผิว" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                                 {item.color && <span>{item.color}</span>}
-                                {item.texture && <small style={{ color: '#64748b' }}>{item.texture}</small>}
-                                {item.size && <small style={{ color: '#64748b' }}>{item.size}</small>}
+                                {item.texture && <small style={{ color: 'var(--color-text-muted)' }}>{item.texture}</small>}
+                                {item.size && <small style={{ color: 'var(--color-text-muted)' }}>{item.size}</small>}
                               </span>
                               <span data-label="จำนวน">
                                 {item.unitBasis === 'SQM'
-                                  ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small style={{ display: 'block', color: '#64748b' }}>{item.qty} แผ่น</small></>
-                                  : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: '#64748b' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
+                                  ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small style={{ display: 'block', color: 'var(--color-text-muted)' }}>{item.qty} แผ่น</small></>
+                                  : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
                                 }
                               </span>
                               <div data-label="ราคาที่เสนอ (แก้ไข)" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -1210,8 +1210,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                                   onChange={(e) => setDraftRaw((prev) => ({ ...prev, [item.id]: e.target.value }))}
                                   placeholder={`ราคา/${unitLabel}`}
                                   title="ราคาต่อหน่วยของรายการนี้เท่านั้น (สกุลเงิน/หน่วยนับใช้ค่าที่ตั้งไว้ของโรงงาน)"
-                                  style={{ width: 110, padding: '4px 8px', border: '1px solid #93c5fd', borderRadius: 4, fontSize: 13 }} />
-                                <span style={{ fontSize: 11, color: '#2563eb', whiteSpace: 'nowrap' }}>{currLabel}/{unitLabel}</span>
+                                  style={{ width: 110, padding: '4px 8px', border: '1px solid var(--color-info-border-strong)', borderRadius: 4, fontSize: 13 }} />
+                                <span style={{ fontSize: 11, color: 'var(--color-link)', whiteSpace: 'nowrap' }}>{currLabel}/{unitLabel}</span>
                               </div>
                               <code data-label="ราคาที่อนุมัติ">{formatMoney(item.approvedPrice)}</code>
                             </div>
@@ -1224,34 +1224,34 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   <div key={item.id ?? i} className="ticket-items-table data-row" style={{ gridTemplateColumns: itemsGridCols }}>
                     <span data-label="ยี่ห้อ / รุ่น">
                       <strong>{item.brand}</strong>
-                      {item.model && <small style={{ color: '#64748b' }}>{item.model}</small>}
-                      {item.factory && <small style={{ color: '#64748b', fontSize: 11 }}>{item.factory}</small>}
+                      {item.model && <small style={{ color: 'var(--color-text-muted)' }}>{item.model}</small>}
+                      {item.factory && <small style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>{item.factory}</small>}
                     </span>
                     <span data-label="สี / เนื้อผิว" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                       {item.color && <span>{item.color}</span>}
-                      {item.texture && <small style={{ color: '#64748b' }}>{item.texture}</small>}
-                      {item.size && <small style={{ color: '#64748b' }}>{item.size}</small>}
+                      {item.texture && <small style={{ color: 'var(--color-text-muted)' }}>{item.texture}</small>}
+                      {item.size && <small style={{ color: 'var(--color-text-muted)' }}>{item.size}</small>}
                     </span>
                     <span data-label="จำนวน">
                       {item.unitBasis === 'SQM'
-                        ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small style={{ display: 'block', color: '#64748b' }}>{item.qty} แผ่น</small></>
-                        : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: '#64748b' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
+                        ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small style={{ display: 'block', color: 'var(--color-text-muted)' }}>{item.qty} แผ่น</small></>
+                        : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
                       }
                     </span>
                     {showCalcBreakdown ? (
                       <>
                         <span data-label="ราคาโรงงาน" style={{ fontSize: 12 }}>
                           {item.rawPrice != null
-                            ? <><strong>{Number(item.rawPrice).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</strong><small style={{ color: '#64748b' }}> {item.rawCurrency}/{item.rawUnit === 'sqm' ? 'ตร.ม.' : 'แผ่น'}</small></>
-                            : <span style={{ color: '#64748b' }}>-</span>}
-                          {item.calcConfigVersion && <small style={{ display: 'block', color: '#64748b', fontSize: 10 }}>config v{item.calcConfigVersion}</small>}
+                            ? <><strong>{Number(item.rawPrice).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</strong><small style={{ color: 'var(--color-text-muted)' }}> {item.rawCurrency}/{item.rawUnit === 'sqm' ? 'ตร.ม.' : 'แผ่น'}</small></>
+                            : <span style={{ color: 'var(--color-text-muted)' }}>-</span>}
+                          {item.calcConfigVersion && <small style={{ display: 'block', color: 'var(--color-text-muted)', fontSize: 10 }}>config v{item.calcConfigVersion}</small>}
                         </span>
-                        <code data-label="ต้นทุน (THB/ชิ้น)" style={{ color: '#0369a1' }}>{item.calcedCost != null ? formatMoney(item.calcedCost) : '—'}</code>
+                        <code data-label="ต้นทุน (THB/ชิ้น)" style={{ color: 'var(--color-info)' }}>{item.calcedCost != null ? formatMoney(item.calcedCost) : '—'}</code>
                         <span data-label="ราคาขาย (THB/ชิ้น)">
-                          <code style={{ color: item.manualPrice != null ? '#7c3aed' : '#059669', fontWeight: 700 }}>
+                          <code style={{ color: item.manualPrice != null ? 'var(--color-override)' : 'var(--color-success)', fontWeight: 700 }}>
                             {item.manualPrice != null ? formatMoney(item.manualPrice) : item.calcedPrice != null ? formatMoney(item.calcedPrice) : '—'}
                           </code>
-                          {item.manualPrice != null && <small style={{ display: 'block', color: '#7c3aed', fontSize: 10 }}>override</small>}
+                          {item.manualPrice != null && <small style={{ display: 'block', color: 'var(--color-override)', fontSize: 10 }}>override</small>}
                           {can.overridePrice && (
                             overrideDraft[item.id] !== undefined ? (
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
@@ -1259,14 +1259,14 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                                   placeholder="ราคา override"
                                   value={overrideDraft[item.id]?.price ?? ''}
                                   onChange={(e) => setOverrideDraft((p) => ({ ...p, [item.id]: { ...p[item.id], price: e.target.value } }))}
-                                  style={{ width: 90, padding: '2px 6px', fontSize: 12, border: '1px solid #a78bfa', borderRadius: 4 }} />
+                                  style={{ width: 90, padding: '2px 6px', fontSize: 12, border: '1px solid var(--color-override-border)', borderRadius: 4 }} />
                                 <input type="text" placeholder="เหตุผล (ถ้ามี)"
                                   value={overrideDraft[item.id]?.reason ?? ''}
                                   onChange={(e) => setOverrideDraft((p) => ({ ...p, [item.id]: { ...p[item.id], reason: e.target.value } }))}
-                                  style={{ width: 90, padding: '2px 6px', fontSize: 11, border: '1px solid #d8b4fe', borderRadius: 4 }} />
+                                  style={{ width: 90, padding: '2px 6px', fontSize: 11, border: '1px solid var(--color-override-border)', borderRadius: 4 }} />
                                 <div style={{ display: 'flex', gap: 4 }}>
                                   <button type="button" className="primary-button"
-                                    style={{ fontSize: 10, padding: '2px 8px', background: '#7c3aed', borderColor: '#7c3aed' }}
+                                    style={{ fontSize: 10, padding: '2px 8px', background: 'var(--color-override)', borderColor: 'var(--color-override)' }}
                                     disabled={overrideLoading[item.id]}
                                     onClick={() => handleOverridePrice(item.id)}>
                                     {overrideLoading[item.id] ? '...' : 'บันทึก'}
@@ -1298,9 +1298,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 ))}
 
                 {proposeMode && (
-                  <div style={{ padding: '12px 18px', display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid #e6eaf0' }}>
+                  <div style={{ padding: '12px 18px', display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--color-border)' }}>
                     {st === 'approved' && (
-                      <div style={{ padding: '10px 14px', borderRadius: 8, background: '#fffbeb', border: '1px solid #fbbf24', fontSize: 13, color: '#92400e', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                      <div style={{ padding: '10px 14px', borderRadius: 8, background: 'var(--color-warning-bg-soft)', border: '1px solid var(--color-warning-border)', fontSize: 13, color: 'var(--color-warning-dark)', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                         <span style={{ fontWeight: 700, flexShrink: 0 }}>⚠</span>
                         <span>การแก้ไขราคาจะ<strong>ยกเลิกการอนุมัติ</strong> และสถานะจะย้อนกลับเป็น &ldquo;รอการอนุมัติ&rdquo; — CEO และ Sales จะได้รับแจ้งทันที</span>
                       </div>
@@ -1335,10 +1335,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               </div>
               <div style={{ overflowX: 'auto', padding: '0 0 8px' }}>
                 {priceBreakdown.map((b) => (
-                  <div key={b.itemId} style={{ marginBottom: 16, padding: '12px 18px', borderBottom: '1px solid #f1f5f9' }}>
+                  <div key={b.itemId} style={{ marginBottom: 16, padding: '12px 18px', borderBottom: '1px solid var(--color-surface-subtle)' }}>
                     <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>
-                      {b.brand} {b.model && <span style={{ fontWeight: 400, color: '#64748b' }}>({b.model})</span>}
-                      {b.factory && <small style={{ color: '#64748b', marginLeft: 8 }}>{b.factory}</small>}
+                      {b.brand} {b.model && <span style={{ fontWeight: 400, color: 'var(--color-text-muted)' }}>({b.model})</span>}
+                      {b.factory && <small style={{ color: 'var(--color-text-muted)', marginLeft: 8 }}>{b.factory}</small>}
                     </div>
                     <table style={{ fontSize: 11, borderCollapse: 'collapse', width: '100%', maxWidth: 520 }}>
                       <tbody>
@@ -1356,12 +1356,12 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                           ['ต้นทุน/แผ่น', b.calcedCostPerPiece, `config v${b.configVersion}`],
                           ['ราคาขาย/แผ่น', b.calcedPricePerPiece, null],
                         ].map(([label, value, note]) => (
-                          <tr key={label} style={{ borderBottom: '1px solid #f8fafc' }}>
-                            <td style={{ padding: '3px 10px 3px 0', color: '#475569', whiteSpace: 'nowrap' }}>{label}</td>
+                          <tr key={label} style={{ borderBottom: '1px solid var(--color-surface-muted)' }}>
+                            <td style={{ padding: '3px 10px 3px 0', color: 'var(--color-icon-muted)', whiteSpace: 'nowrap' }}>{label}</td>
                             <td style={{ padding: '3px 0', fontWeight: 600, textAlign: 'right', minWidth: 80 }}>
                               {value != null ? Number(value).toLocaleString('th-TH', { minimumFractionDigits: 4 }) : ''}
                             </td>
-                            <td style={{ padding: '3px 0 3px 10px', color: '#64748b', fontSize: 10 }}>{note}</td>
+                            <td style={{ padding: '3px 0 3px 10px', color: 'var(--color-text-muted)', fontSize: 10 }}>{note}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1405,7 +1405,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 aria-label="กำลังโหลดไฟล์แนบ"
               >
                 {[0, 1, 2].map((i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#f8fafc', borderRadius: 6, border: '1px solid #e2e8f0' }}>
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'var(--color-surface-muted)', borderRadius: 6, border: '1px solid var(--color-border-subtle)' }}>
                     <Skeleton width={13} height={13} radius="var(--radius-sm)" />
                     <Skeleton width="50%" height={13} />
                     <Skeleton width={40} height={16} radius="var(--radius-pill)" />
@@ -1419,19 +1419,19 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             ) : (
               <div style={{ padding: '8px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {attachments.map((att) => (
-                  <div key={att.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#f8fafc', borderRadius: 6, border: '1px solid #e2e8f0' }}>
-                    <Icon name="paperclip" size={13} style={{ color: '#64748b', flexShrink: 0 }} />
-                    <span style={{ flex: 1, fontSize: 13, color: '#0f172a', wordBreak: 'break-all' }}>{att.fileName}</span>
-                    <span style={{ fontSize: 11, color: '#64748b', whiteSpace: 'nowrap', background: '#f1f5f9', padding: '1px 6px', borderRadius: 99 }}>
+                  <div key={att.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'var(--color-surface-muted)', borderRadius: 6, border: '1px solid var(--color-border-subtle)' }}>
+                    <Icon name="paperclip" size={13} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
+                    <span style={{ flex: 1, fontSize: 13, color: 'var(--color-text)', wordBreak: 'break-all' }}>{att.fileName}</span>
+                    <span style={{ fontSize: 11, color: 'var(--color-text-muted)', whiteSpace: 'nowrap', background: 'var(--color-surface-subtle)', padding: '1px 6px', borderRadius: 99 }}>
                       {att.attachType}
                     </span>
                     <a href={api.attachments.fileUrl(att.id)} target="_blank" rel="noreferrer"
-                      style={{ fontSize: 12, color: '#2563eb', textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                      style={{ fontSize: 12, color: 'var(--color-link)', textDecoration: 'none', whiteSpace: 'nowrap' }}>
                       ดูไฟล์
                     </a>
                     {!TERMINAL.includes(st) && (
                       <button type="button" className="icon-button"
-                        style={{ color: '#ef4444', flexShrink: 0 }}
+                        style={{ color: 'var(--color-danger)', flexShrink: 0 }}
                         onClick={() => handleDeleteAttachment(att.id, att.fileName)}>
                         <Icon name="close" size={13} />
                       </button>
@@ -1448,7 +1448,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 <h2>ใบเสนอราคา</h2>
               </div>
               {quotations.map((q) => (
-                <div key={q.id} style={{ padding: '10px 18px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                <div key={q.id} style={{ padding: '10px 18px', borderBottom: '1px solid var(--color-surface-subtle)', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
                   <div style={{ flexShrink: 0, marginTop: 2 }}>
                     <span style={{
                       fontSize: 11, fontWeight: 700, borderRadius: 4, padding: '2px 7px',
@@ -1463,7 +1463,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                         ...docStatusColors(q.docStatus),
                       }}>{q.docStatus}</span>
                     </div>
-                    <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>
+                    <div style={{ fontSize: 12, color: 'var(--color-icon-muted)', marginTop: 2 }}>
                       ยอดรวม {formatMoney(q.totalAmount)} · ออกโดย {q.issuedByName} · {formatThaiDate(q.issuedAt)}
                     </div>
                   </div>
@@ -1501,23 +1501,23 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 <div key={event.id} className="ticket-event">
                   <span className={eventDotClass(event.kind)} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <strong style={{ display: 'block', fontSize: 13, color: '#0f172a' }}>
+                    <strong style={{ display: 'block', fontSize: 13, color: 'var(--color-text)' }}>
                       {EVENT_KIND_LABEL[event.kind] ?? event.kind}
                     </strong>
-                    <span style={{ color: '#475569', fontSize: 12 }}>{event.actorName}</span>
+                    <span style={{ color: 'var(--color-icon-muted)', fontSize: 12 }}>{event.actorName}</span>
                     {event.message && (
-                      <p style={{ margin: '4px 0 0', fontSize: 12, color: '#64748b', background: '#f8fafc', borderRadius: 4, padding: '4px 8px' }}>
+                      <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--color-text-muted)', background: 'var(--color-surface-muted)', borderRadius: 4, padding: '4px 8px' }}>
                         {event.message}
                       </p>
                     )}
                     {snapItems && snapItems.length > 0 && (
-                      <div style={{ margin: '6px 0 0', fontSize: 11, color: '#475569', background: '#f8fafc', borderRadius: 4, padding: '6px 10px' }}>
-                        <div style={{ fontWeight: 600, marginBottom: 4, color: '#64748b' }}>รายการสินค้า ณ เวลาที่เสนอราคา</div>
+                      <div style={{ margin: '6px 0 0', fontSize: 11, color: 'var(--color-icon-muted)', background: 'var(--color-surface-muted)', borderRadius: 4, padding: '6px 10px' }}>
+                        <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--color-text-muted)' }}>รายการสินค้า ณ เวลาที่เสนอราคา</div>
                         {snapItems.map((it, i) => (
                           <div key={i} style={{ paddingBottom: 2 }}>
                             {it.brand} {it.model} — {it.qty} ชิ้น
                             {it.rawPrice != null && (
-                              <span style={{ color: '#64748b', marginLeft: 4 }}>
+                              <span style={{ color: 'var(--color-text-muted)', marginLeft: 4 }}>
                                 @ {it.rawPrice} {it.rawCurrency}/{it.rawUnit}
                               </span>
                             )}
@@ -1525,7 +1525,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                         ))}
                       </div>
                     )}
-                    <small style={{ color: '#64748b', fontSize: 11 }}>{formatThaiDate(event.createdAt)}</small>
+                    <small style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>{formatThaiDate(event.createdAt)}</small>
                   </div>
                 </div>
               );
@@ -1533,7 +1533,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           </div>
 
           {can.comment && (
-            <div style={{ padding: '12px 18px', borderTop: '1px solid #e6eaf0', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ padding: '12px 18px', borderTop: '1px solid var(--color-border)', display: 'flex', flexDirection: 'column', gap: 8 }}>
               <textarea
                 rows={2}
                 value={commentText}

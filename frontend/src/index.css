@@ -57,6 +57,9 @@
   --color-success-text: #ecfdf5;
   --color-warning: #b45309;
   --color-warning-bg: #fef3c7;
+  --color-warning-border: #fbbf24;
+  --color-warning-dark: #92400e;
+  --color-warning-bg-soft: #fffbeb;
   --color-danger: #dc2626;
   --color-danger-dark: #b91c1c;
   --color-danger-bg: #fee2e2;
@@ -68,9 +71,17 @@
   --color-info-bg-alt: #eef2ff;
   --color-info-row-active: #eff6ff;
   --color-info-dot: #1e40af;
+  --color-info-border: #bfdbfe;
+  --color-info-border-strong: #93c5fd;
+  --color-success-border: #a7f3d0;
   --color-indigo-ring: #2563eb;
+  --color-link: #2563eb;
   --color-teal-border: #99f6e4;
   --color-teal-focus: #34d399;
+
+  /* Override — CEO manual price override (deliberately purple; indigo already means "action") */
+  --color-override: #7c3aed;
+  --color-override-border: #a78bfa;
 
   /* Neutrals / surfaces */
   --color-bg: #eef1f6;
@@ -90,6 +101,7 @@
   --color-border-strong: #d9e0ea;
   --color-border-input: #dfe5ee;
   --color-border-subtle: #e2e8f0;
+  --color-border-muted: #cbd5e1;
 
   /* Sidebar / dark surfaces */
   --color-sidebar-bg: #0b1220;

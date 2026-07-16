@@ -10,6 +10,7 @@ colors:
   warning: "#b45309"
   danger: "#dc2626"
   info: "#1d4ed8"
+  override: "#7c3aed"
   workspace: "#eef1f6"
   sidebar: "#0b1220"
   surface: "#ffffff"
@@ -157,17 +158,21 @@ A cool, rationed palette: neutral workspace and white surfaces carry the work, i
 - **Teal** (`#14b8a6`): The "live" accent, used deliberately sparingly (a handful of places across the whole app): the active sidebar item's tint, progress-bar fills, and small count badges. Its rarity is what makes it read as *current*. **Teal Deep** (`#0f766e`) backs the occasional highlight panel.
 
 ### Tertiary — Semantic
-- **Success Green** (`#059669`, bg `#dcfce7`): approvals, paid status, positive confirmations.
-- **Warning Amber** (`#b45309`, bg `#fef3c7`): pending, needs-attention, caution.
-- **Danger Red** (`#dc2626`, bg `#fee2e2`): rejections, destructive actions, errors. Danger buttons are *outlined*, not filled — the weight of the action shouldn't shout until pressed.
-- **Info Blue** (`#1d4ed8`, bg `#dbeafe`): informational status, neutral notices, selected rows.
+- **Success Green** (`#059669`, bg `#dcfce7`, border `#a7f3d0`): approvals, paid status, positive confirmations.
+- **Warning Amber** (`#b45309`, bg `#fef3c7`): pending, needs-attention, caution. The soft warning panel variant (`--color-warning-bg-soft`, `#fffbeb`) pairs with `--color-warning-border` (`#fbbf24`) and `--color-warning-dark` (`#92400e`) text for inline warning callouts (e.g. the ticket "already approved" banner) that need a lighter touch than the amber badge.
+- **Danger Red** (`#dc2626`, bg `#fee2e2`, border `#fecaca`): rejections, destructive actions, errors. Danger buttons are *outlined*, not filled — the weight of the action shouldn't shout until pressed.
+- **Info Blue** (`#1d4ed8`, bg `#dbeafe`): informational status, neutral notices, selected rows. `--color-info-border` (`#bfdbfe`) and `--color-info-border-strong` (`#93c5fd`) are the two info-tinted border weights used on info panels and inline inputs sitting on an info background.
+- **Override Purple** (`--color-override`, `#7c3aed`, border `--color-override-border` `#a78bfa`): reserved for one specific case — a CEO manual price override on a ticket line item. Deliberately purple because indigo is already spoken for as the single action color; this is the only place purple appears.
 
 ### Neutral
 - **Workspace** (`#eef1f6`): the cool off-blue page background everything sits on.
-- **Sidebar Navy** (`#0b1220`): the one dark surface — the navigation rail. Text on it is **Slate** (`#cbd5e1`).
+- **Sidebar Navy** (`#0b1220`): the one dark surface — the navigation rail. Text on it is **Slate** (`#cbd5e1`, also aliased as `--color-border-muted` where it appears as a form-control border rather than sidebar text).
 - **Surface White** (`#ffffff`): panels, cards, tables, inputs. **Surface Muted** (`#f8fafc`) for table headers and inset zones; **Surface Subtle** (`#f1f5f9`) for tracks and dividers.
 - **Ink** (`#0f172a`): primary text. **Ink Secondary** (`#334155`): body/table text. **Ink Muted** (`#64748b`): captions and secondary labels — the floor for text on white. **Ink Faint** (`#94a3b8`): icons and placeholders only, never body copy.
-- **Border** (`#e6eaf0`) for card/panel edges; **Border Input** (`#dfe5ee`) for form controls.
+- **Border** (`#e6eaf0`) for card/panel edges; **Border Input** (`#dfe5ee`) for form controls; **Border Subtle** (`#e2e8f0`) for lighter card/row dividers.
+
+### Aliases
+- **Link** (`--color-link`, `#2563eb`): inline text links (e.g. "view file"). Shares a value with `--color-indigo-ring` today but is named separately because a link's semantic role (navigable text) is distinct from a focus ring's.
 
 ### Named Rules
 **The Rationed Teal Rule.** Teal marks what is *live* and nothing else. If teal appears more than a few times on one screen, it has stopped meaning "current" and become decoration — remove it. Indigo is for action; teal is for state; they are not interchangeable.
