@@ -16,7 +16,7 @@ This repository is a GL&R **HR + Sales/CRM portal** growing into an ERP platform
 ### Sales/CRM stack — UNFROZEN (2026-07-16)
 The sales/CRM stack (tickets, quotation, deposit, commission, pricing/FX, catalog, customer, factory, ceo-settings) **is no longer frozen**. v0.1.0 was the HR-core-only release and is now historical; sales/CRM is part of the current release line and may be repaired, refactored, and improved like any other surface.
 
-`VITE_ENABLE_SALES` still gates sales nav + routes at runtime. It defaults to `false`, so set `VITE_ENABLE_SALES=true` locally when working on or verifying sales pages. Treat flipping the shipped default as a product/deploy decision — confirm before changing it.
+`VITE_ENABLE_SALES` still gates sales nav + routes at runtime, but it is now an **off-switch**: sales is enabled unless the var is explicitly `false`. The direction matters — the production build sets no `VITE_` vars (there is no `env` block in `vercel.json` and `.env*` is gitignored), so the previous `=== 'true'` check left sales disabled in production regardless of intent.
 
 ## Styling direction — Tailwind-first
 The frontend is migrating from the single global `frontend/src/styles.css` to a **Tailwind-first** system. Tailwind 4 is already wired up via `@tailwindcss/vite`, with design tokens in `frontend/src/index.css` (`@theme static`).
