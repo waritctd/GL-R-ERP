@@ -225,8 +225,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   const ps = summary.paymentStatus;
   const fs = summary.fulfillmentStatus;
-  const isSales  = ROLE_PERMISSIONS.canCreateTickets.includes(role);
-  const isImport = ROLE_PERMISSIONS.canPickupTickets.includes(role);
+  const isSales   = ROLE_PERMISSIONS.canCreateTickets.includes(role);
+  const isImport  = ROLE_PERMISSIONS.canPickupTickets.includes(role);
+  const isAccount = ROLE_PERMISSIONS.canConfirmPayments.includes(role);
   const dualTrackDone = ps === 'FULLY_PAID' && fs === 'GOODS_RECEIVED';
 
   const EDITABLE_STATUSES = ['submitted', 'in_review', 'price_proposed'];
@@ -247,12 +248,16 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     // Dual-track (ข้อ 13)
     confirmCustomer:    st === 'quotation_issued' && ps == null && isSales,
     issueDepositNotice: st === 'quotation_issued' && ps === 'CUSTOMER_CONFIRMED' && isSales,
-    confirmDepositPaid: st === 'quotation_issued' && ps === 'DEPOSIT_NOTICE_ISSUED' && isSales,
-    issueImportRequest: st === 'quotation_issued' && ps === 'DEPOSIT_NOTICE_ISSUED' && isImport,
+    // Money receipts are confirmed by ฝ่ายบัญชี (account role, CEO fallback) —
+    // mirrors TicketService.ACCOUNT_ROLES.
+    confirmDepositPaid: st === 'quotation_issued' && ps === 'DEPOSIT_NOTICE_ISSUED' && isAccount,
+    // DEPOSIT_PAID also qualifies: accounting may confirm the deposit before
+    // import gets to the IR (mirrors TicketService.issueImportRequest).
+    issueImportRequest: st === 'quotation_issued' && (ps === 'DEPOSIT_NOTICE_ISSUED' || ps === 'DEPOSIT_PAID') && fs == null && isImport,
     markIrSent:         st === 'quotation_issued' && fs === 'IR_ISSUED' && isImport,
     markShipping:       st === 'quotation_issued' && fs === 'IR_SENT' && isImport,
     markGoodsReceived:  st === 'quotation_issued' && fs === 'SHIPPING' && isImport,
-    confirmFinalPayment:st === 'quotation_issued' && ps === 'AWAITING_FINAL_PAYMENT' && isSales,
+    confirmFinalPayment:st === 'quotation_issued' && ps === 'AWAITING_FINAL_PAYMENT' && isAccount,
     downloadRemainingInvoice: st === 'quotation_issued' && fs === 'GOODS_RECEIVED' && isSales,
   };
 
@@ -284,6 +289,16 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     ['close',             'ปิดเรื่องนี้เมื่อดำเนินการครบถ้วนแล้ว'],
   ];
   const nextAction = NEXT_ACTION_STEPS.find(([key, text]) => can[key] && text)?.[1] ?? null;
+
+  // Passive hint when the payment track waits on ฝ่ายบัญชี — money-receipt
+  // confirmations belong to the account role (CEO fallback), so sales/import
+  // would otherwise see a stalled payment stepper with no explanation. Shown
+  // alongside the personal next-action callout, not instead of it.
+  const waitingHint = (st === 'quotation_issued' && !isAccount)
+    ? (ps === 'DEPOSIT_NOTICE_ISSUED' ? 'รอฝ่ายบัญชียืนยันรับยอดมัดจำ'
+      : ps === 'AWAITING_FINAL_PAYMENT' ? 'รอฝ่ายบัญชียืนยันรับชำระส่วนที่เหลือ'
+      : null)
+    : null;
 
   async function initPropose() {
     // load factory configs first so we can init currency defaults
@@ -541,6 +556,19 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         }}>
           <Icon name="chevronRight" size={15} style={{ flexShrink: 0, marginTop: 1 }} />
           <span><strong>ขั้นตอนถัดไปสำหรับคุณ:</strong> {nextAction}</span>
+        </div>
+      )}
+
+      {/* Passive waiting hint — the next step belongs to another team (ฝ่ายบัญชี /
+          Import), so show who the ticket is waiting on instead of a dead end. */}
+      {waitingHint && (
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px',
+          borderRadius: 8, border: '1px solid var(--color-border)',
+          background: 'var(--color-surface-muted, var(--color-info-bg))', color: 'var(--color-text-muted)', fontSize: 13,
+        }}>
+          <Icon name="clock" size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span><strong>รอดำเนินการ:</strong> {waitingHint}</span>
         </div>
       )}
 

@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -36,10 +37,11 @@ class TicketServiceTest {
     private final TicketService service = new TicketService(
         ticketRepo, notifRepo, priceCalcService, new ObjectMapper(), customerRepo, quotationRenderer);
 
-    private final UserPrincipal salesActor  = actor(1L, "sales");
-    private final UserPrincipal otherSales  = actor(2L, "sales");
-    private final UserPrincipal importActor = actor(3L, "import");
-    private final UserPrincipal ceoActor    = actor(4L, "ceo");
+    private final UserPrincipal salesActor   = actor(1L, "sales");
+    private final UserPrincipal otherSales   = actor(2L, "sales");
+    private final UserPrincipal importActor  = actor(3L, "import");
+    private final UserPrincipal ceoActor     = actor(4L, "ceo");
+    private final UserPrincipal accountActor = actor(5L, "account");
 
     // ── list ──────────────────────────────────────────────────────────────
 
@@ -337,6 +339,203 @@ class TicketServiceTest {
         assertConflict(() -> service.close(10L, salesActor));
     }
 
+    // ── dual-track lifecycle (payment + fulfillment) ──────────────────────
+
+    @Test
+    void confirmCustomer_quotationIssuedBySales_setsCustomerConfirmed() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, null, null);
+
+        service.confirmCustomer(10L, salesActor);
+
+        verify(ticketRepo).updatePaymentStatus(10L, "CUSTOMER_CONFIRMED");
+    }
+
+    @Test
+    void confirmCustomer_refusesDowngradeWhenPaymentTrackAdvanced() {
+        // Re-confirming after the deposit was paid must not reset the payment track —
+        // a reset re-arms the deadlock orderings.
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", null);
+        assertConflict(() -> service.confirmCustomer(10L, salesActor));
+    }
+
+    @Test
+    void issueDepositNotice_customerConfirmedBySales_advancesPayment() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", null);
+
+        service.issueDepositNotice(10L, salesActor);
+
+        verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_NOTICE_ISSUED");
+    }
+
+    @Test
+    void confirmDepositPaid_byAccount_advancesToDepositPaid() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
+
+        service.confirmDepositPaid(10L, accountActor);
+
+        verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_PAID");
+        // Fulfillment hasn't reached GOODS_RECEIVED — no early advance.
+        verify(ticketRepo, never()).updatePaymentStatus(10L, "AWAITING_FINAL_PAYMENT");
+    }
+
+    @Test
+    void confirmDepositPaid_byCeoFallback_isAllowed() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
+        service.confirmDepositPaid(10L, ceoActor);
+        verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_PAID");
+    }
+
+    @Test
+    void confirmDepositPaid_rejectsSalesRole() {
+        // Money-receipt confirmations moved from sales to ฝ่ายบัญชี (account role).
+        assertForbidden(() -> service.confirmDepositPaid(10L, salesActor));
+    }
+
+    @Test
+    void confirmDepositPaid_rejectsImportRole() {
+        assertForbidden(() -> service.confirmDepositPaid(10L, importActor));
+    }
+
+    @Test
+    void confirmDepositPaid_afterGoodsReceived_advancesToAwaitingFinalPayment() {
+        // Goods-first ordering (deadlock B): goods arrived while the deposit was
+        // unconfirmed; confirming the deposit must carry payment forward, otherwise
+        // AWAITING_FINAL_PAYMENT is unreachable and the ticket can never close.
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED,
+            "DEPOSIT_NOTICE_ISSUED", "GOODS_RECEIVED");
+
+        service.confirmDepositPaid(10L, accountActor);
+
+        verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_PAID");
+        verify(ticketRepo).updatePaymentStatus(10L, "AWAITING_FINAL_PAYMENT");
+        verify(ticketRepo).addEvent(eq(10L), eq(5L), anyString(),
+            eq(TicketEventKind.AWAITING_FINAL_PAYMENT), anyString(), anyString(), isNull());
+    }
+
+    @Test
+    void confirmDepositPaid_rejectsWrongPaymentStatus() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", null);
+        assertConflict(() -> service.confirmDepositPaid(10L, accountActor));
+    }
+
+    @Test
+    void issueImportRequest_fromDepositNoticeIssued_startsFulfillment() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
+
+        service.issueImportRequest(10L, importActor);
+
+        verify(ticketRepo).updateFulfillmentStatus(10L, "IR_ISSUED");
+    }
+
+    @Test
+    void issueImportRequest_fromDepositPaid_isAlsoAllowed() {
+        // Deposit-first ordering (deadlock A): the customer often pays before import
+        // gets to the IR — that must not lock the fulfillment track out forever.
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", null);
+
+        service.issueImportRequest(10L, importActor);
+
+        verify(ticketRepo).updateFulfillmentStatus(10L, "IR_ISSUED");
+    }
+
+    @Test
+    void issueImportRequest_rejectsReissueOnceFulfillmentStarted() {
+        // Re-issuing would downgrade an in-flight fulfillment track back to IR_ISSUED.
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "SHIPPING");
+        assertConflict(() -> service.issueImportRequest(10L, importActor));
+    }
+
+    @Test
+    void issueImportRequest_rejectsWhenNoDepositNoticeYet() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", null);
+        assertConflict(() -> service.issueImportRequest(10L, importActor));
+    }
+
+    @Test
+    void issueImportRequest_rejectsSalesRole() {
+        assertForbidden(() -> service.issueImportRequest(10L, salesActor));
+    }
+
+    @Test
+    void markIrSent_thenShipping_walksFulfillmentForward() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "IR_ISSUED");
+        service.markIrSent(10L, importActor);
+        verify(ticketRepo).updateFulfillmentStatus(10L, "IR_SENT");
+
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "IR_SENT");
+        service.markShipping(10L, importActor);
+        verify(ticketRepo).updateFulfillmentStatus(10L, "SHIPPING");
+    }
+
+    @Test
+    void markGoodsReceived_withDepositPaid_advancesBothTracks() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "SHIPPING");
+
+        service.markGoodsReceived(10L, importActor);
+
+        verify(ticketRepo).updateFulfillmentStatus(10L, "GOODS_RECEIVED");
+        verify(ticketRepo).updatePaymentStatus(10L, "AWAITING_FINAL_PAYMENT");
+    }
+
+    @Test
+    void markGoodsReceived_withDepositUnconfirmed_advancesFulfillmentOnly() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", "SHIPPING");
+
+        service.markGoodsReceived(10L, importActor);
+
+        verify(ticketRepo).updateFulfillmentStatus(10L, "GOODS_RECEIVED");
+        verify(ticketRepo, never()).updatePaymentStatus(eq(10L), anyString());
+    }
+
+    @Test
+    void confirmFinalPayment_byAccount_completesPaymentTrack() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
+
+        service.confirmFinalPayment(10L, accountActor);
+
+        verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
+    }
+
+    @Test
+    void confirmFinalPayment_byCeoFallback_isAllowed() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
+        service.confirmFinalPayment(10L, ceoActor);
+        verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
+    }
+
+    @Test
+    void confirmFinalPayment_rejectsSalesRole() {
+        assertForbidden(() -> service.confirmFinalPayment(10L, salesActor));
+    }
+
+    @Test
+    void confirmFinalPayment_rejectsBeforeAwaitingFinalPayment() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "SHIPPING");
+        assertConflict(() -> service.confirmFinalPayment(10L, accountActor));
+    }
+
+    @Test
+    void close_dualTrackComplete_transitionsToClosed() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", "GOODS_RECEIVED");
+
+        service.close(10L, salesActor);
+
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.CLOSED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.CLOSED), isNull());
+    }
+
+    @Test
+    void close_dualTrackRejectsWhenPaymentIncomplete() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
+        assertConflict(() -> service.close(10L, salesActor));
+    }
+
+    @Test
+    void close_dualTrackRejectsWhenFulfillmentIncomplete() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", "SHIPPING");
+        assertConflict(() -> service.close(10L, salesActor));
+    }
+
     // ── cancel ────────────────────────────────────────────────────────────
 
     @Test
@@ -440,10 +639,20 @@ class TicketServiceTest {
     }
 
     private TicketDto stubTicketWithItems(long ticketId, long createdById, String status, List<TicketItemDto> items) {
+        return stubTicket(ticketId, createdById, status, items, null, null);
+    }
+
+    private TicketDto stubTicketWithTracks(long ticketId, long createdById, String status,
+                                           String paymentStatus, String fulfillmentStatus) {
+        return stubTicket(ticketId, createdById, status, List.of(), paymentStatus, fulfillmentStatus);
+    }
+
+    private TicketDto stubTicket(long ticketId, long createdById, String status, List<TicketItemDto> items,
+                                 String paymentStatus, String fulfillmentStatus) {
         TicketSummaryDto summary = new TicketSummaryDto(
             ticketId, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", status, "NORMAL",
             createdById, "Sales User", null, null, "Test Customer", null, null, null, null, null, null,
-            Instant.now(), Instant.now(), null, items.size(), false, null, null);
+            Instant.now(), Instant.now(), null, items.size(), false, paymentStatus, fulfillmentStatus);
         TicketDto ticket = new TicketDto(summary, items, List.of(), null, List.of());
         when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
         return ticket;

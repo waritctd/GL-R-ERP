@@ -11,6 +11,7 @@ class ApplicationRolesTest {
         assertThat(ApplicationRoles.requireAllowed(" HR ")).isEqualTo("hr");
         assertThat(ApplicationRoles.isAllowed("employee")).isTrue();
         assertThat(ApplicationRoles.isAllowed("sales_manager")).isTrue();
+        assertThat(ApplicationRoles.isAllowed("account")).isTrue();
         assertThat(ApplicationRoles.isAllowed("ceo")).isTrue();
         assertThat(ApplicationRoles.isAllowed("director")).isFalse();
         assertThat(ApplicationRoles.isAllowed("owner")).isFalse();

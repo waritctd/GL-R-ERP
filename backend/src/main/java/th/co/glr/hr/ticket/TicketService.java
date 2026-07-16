@@ -22,6 +22,8 @@ public class TicketService {
     private static final Set<String> SALES_ROLES  = Set.of("sales");
     private static final Set<String> IMPORT_ROLES = Set.of("import");
     private static final Set<String> CEO_ROLES    = Set.of("ceo");
+    // Money-receipt confirmations belong to ฝ่ายบัญชี (accounting), with CEO as fallback.
+    private static final Set<String> ACCOUNT_ROLES = Set.of("account", "ceo");
     private static final Set<String> QUOTATION_ALLOWED_STATUSES =
         Set.of(TicketStatus.APPROVED, TicketStatus.QUOTATION_ISSUED);
     private static final Set<String> PROPOSE_ALLOWED_STATUSES =
@@ -250,6 +252,12 @@ public class TicketService {
     public TicketDto confirmCustomer(long ticketId, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
+        // Never downgrade the payment track: once past CUSTOMER_CONFIRMED, re-confirming
+        // would reset paymentStatus and deadlock the later transitions.
+        if (s.paymentStatus() != null && !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Payment track already past CUSTOMER_CONFIRMED");
+        }
         tickets.updatePaymentStatus(ticketId, "CUSTOMER_CONFIRMED");
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CUSTOMER_CONFIRMED, s.status(), s.status(), null);
@@ -273,7 +281,7 @@ public class TicketService {
 
     @Transactional
     public TicketDto confirmDepositPaid(long ticketId, UserPrincipal actor) {
-        requireRole(actor, SALES_ROLES);
+        requireRole(actor, ACCOUNT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         if (!"DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "Expected paymentStatus=DEPOSIT_NOTICE_ISSUED");
@@ -281,6 +289,14 @@ public class TicketService {
         tickets.updatePaymentStatus(ticketId, "DEPOSIT_PAID");
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.DEPOSIT_PAID, s.status(), s.status(), null);
+        // Mirror of markGoodsReceived: if goods already arrived while the deposit was
+        // unconfirmed, advance the payment track now — otherwise AWAITING_FINAL_PAYMENT
+        // is unreachable and the ticket can never be closed.
+        if ("GOODS_RECEIVED".equals(s.fulfillmentStatus())) {
+            tickets.updatePaymentStatus(ticketId, "AWAITING_FINAL_PAYMENT");
+            tickets.addEvent(ticketId, actor.id(), actor.name(),
+                TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
+        }
         return requireTicket(ticketId);
     }
 
@@ -288,10 +304,19 @@ public class TicketService {
     public TicketDto issueImportRequest(long ticketId, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
-        if (!TicketStatus.QUOTATION_ISSUED.equals(s.status())
-                || !"DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
+        // DEPOSIT_PAID is also acceptable: the customer often pays (and accounting
+        // confirms) before import gets to the IR — requiring DEPOSIT_NOTICE_ISSUED
+        // exactly deadlocked the fulfillment track in that ordering.
+        boolean depositReady = "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
+            || "DEPOSIT_PAID".equals(s.paymentStatus());
+        if (!TicketStatus.QUOTATION_ISSUED.equals(s.status()) || !depositReady) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "IR requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED");
+                "IR requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED or DEPOSIT_PAID");
+        }
+        // Never restart an in-flight fulfillment track: re-issuing the IR would
+        // downgrade IR_SENT/SHIPPING/GOODS_RECEIVED back to IR_ISSUED.
+        if (s.fulfillmentStatus() != null) {
+            throw new ApiException(HttpStatus.CONFLICT, "Import request already issued");
         }
         tickets.updateFulfillmentStatus(ticketId, "IR_ISSUED");
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -348,7 +373,7 @@ public class TicketService {
 
     @Transactional
     public TicketDto confirmFinalPayment(long ticketId, UserPrincipal actor) {
-        requireRole(actor, SALES_ROLES);
+        requireRole(actor, ACCOUNT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         if (!"AWAITING_FINAL_PAYMENT".equals(s.paymentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "Expected paymentStatus=AWAITING_FINAL_PAYMENT");
