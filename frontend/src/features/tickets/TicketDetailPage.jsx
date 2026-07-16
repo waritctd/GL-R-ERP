@@ -11,9 +11,13 @@ import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
+import { DealStagePanel } from './DealStagePanel.jsx';
 
 const EVENT_KIND_LABEL = {
-  CREATED:            'สร้างใบขอราคา',
+  CREATED:            'สร้างดีล',
+  STAGE_CHANGED:      'เปลี่ยนสถานะดีล',
+  MARKED_LOST:        'เสียงาน',
+  REOPENED:           'เปิดดีลอีกครั้ง',
   SUBMITTED:          'ส่งเรื่องเข้าระบบ',
   PICKED_UP:          'รับมอบหมาย',
   PRICE_PROPOSED:     'เสนอราคาสินค้า',
@@ -362,8 +366,14 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const isAccount = ROLE_PERMISSIONS.canConfirmPayments.includes(role);
   const dualTrackDone = ps === 'FULLY_PAID' && fs === 'GOODS_RECEIVED';
 
-  const EDITABLE_STATUSES = ['submitted', 'in_review', 'price_proposed'];
+  // 'draft' included since V50: a lightweight lead-stage deal gets its product
+  // items here, then submits into the price-request flow when it reaches the
+  // quote stages.
+  const EDITABLE_STATUSES = ['draft', 'submitted', 'in_review', 'price_proposed'];
   const can = {
+    // Submit is only meaningful once the deal has product lines — the backend
+    // 400s an item-less submit (mirrors TicketService.submit).
+    submit:            st === 'draft' && isOwner && ROLE_PERMISSIONS.canCreateTickets.includes(role) && items.length > 0,
     pickup:            st === 'submitted'       && ROLE_PERMISSIONS.canPickupTickets.includes(role),
     propose:           ['in_review', 'price_proposed', 'approved'].includes(st) && ROLE_PERMISSIONS.canProposePrices.includes(role),
     calculatePrices:   st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
@@ -413,6 +423,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // reject/pickup/... in src/api/mockApi.js) so the wording matches what the
   // button actually does. Never invents an owner or action the data can't support.
   const NEXT_ACTION_STEPS = [
+    ['submit',           'ส่งขอราคา — รายการสินค้าพร้อมแล้ว ส่งให้ฝ่ายนำเข้าเสนอราคาได้เลย'],
     ['reject',           st === 'price_proposed' ? 'ตรวจสอบราคาที่เสนอ แล้วอนุมัติหรือตีกลับให้ Import แก้ไข' : null],
     ['approve',          st === 'price_proposed' ? 'ตรวจสอบราคาที่เสนอ แล้วอนุมัติหรือตีกลับให้ Import แก้ไข' : null],
     ['pickup',           'รับมอบหมายใบขอราคานี้เพื่อเริ่มเสนอราคา'],
@@ -650,6 +661,48 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         </button>
       </header>
 
+      {/* Deal pipeline (V50): the 14-stage journey with stage-gated doc actions.
+          The doc buttons reuse the exact handlers/permissions of the action row —
+          they surface HERE on the stage they belong to. */}
+      <DealStagePanel
+        user={user}
+        summary={summary}
+        actionLoading={actionLoading}
+        onUpdateStage={(payload) => doAction(() => api.tickets.updateStage(ticketId, payload), 'อัปเดตสถานะดีลแล้ว')}
+        onMarkLost={(payload) => doAction(() => api.tickets.markLost(ticketId, payload), 'บันทึกเสียงานแล้ว')}
+        onReopen={() => doAction(() => api.tickets.reopen(ticketId, {}), 'เปิดดีลอีกครั้งแล้ว')}
+        docActions={(can.generateQuotation || can.generateDocument || can.issueImportRequest || can.downloadRemainingInvoice) ? (
+          <>
+            {can.generateQuotation && (
+              <button type="button" className="secondary-button" disabled={actionLoading}
+                onClick={() => doAction(() => api.tickets.quotation(ticketId), 'ออกใบเสนอราคาแล้ว')}>
+                <Icon name="fileText" size={14} />
+                {quotations && quotations.length > 0 ? 'ออกใบเสนอราคาใหม่ (Rev)' : 'ออกใบเสนอราคา'}
+              </button>
+            )}
+            {can.generateDocument && (
+              <button type="button" className="primary-button" disabled={actionLoading}
+                onClick={() => onOpenDocument && onOpenDocument(ticketId)}>
+                <Icon name="fileText" size={14} />
+                ออกใบแจ้งยอดมัดจำ
+              </button>
+            )}
+            {can.issueImportRequest && (
+              <button type="button" className="primary-button" disabled={actionLoading}
+                onClick={() => doAction(() => api.tickets.issueImportRequest(ticketId), 'ออก IR แล้ว')}>
+                ออก Import Request (IR)
+              </button>
+            )}
+            {can.downloadRemainingInvoice && (
+              <button type="button" className="secondary-button" disabled={downloadingInvoice}
+                onClick={handleDownloadRemainingInvoice}>
+                {downloadingInvoice ? 'กำลังดาวน์โหลด...' : 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ'}
+              </button>
+            )}
+          </>
+        ) : null}
+      />
+
       {/* Next-action callout — only rendered when derivable from the real `can`
           permission flags above; otherwise omitted rather than guessed. */}
       {nextAction && (
@@ -743,6 +796,18 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             <h2>การดำเนินการอื่น ๆ</h2>
           </div>
           <div style={{ padding: '12px 18px', display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+            {can.submit && (
+              <button type="button" className="primary-button" disabled={actionLoading}
+                onClick={() => doAction(() => api.tickets.submit(ticketId), 'ส่งขอราคาแล้ว')}>
+                <Icon name="check" size={14} />
+                ส่งขอราคา (เริ่มเสนอราคา)
+              </button>
+            )}
+            {st === 'draft' && isOwner && items.length === 0 && (
+              <span className="rounded-lg border border-border bg-surface-subtle px-3 py-2 text-xs text-text-muted">
+                ดีลนี้ยังไม่มีรายการสินค้า — กด “แก้ไขรายการสินค้า” เพื่อเพิ่มก่อนส่งขอราคา
+              </span>
+            )}
             {can.pickup && (
               <button type="button" className="primary-button" disabled={actionLoading}
                 onClick={() => doAction(() => api.tickets.pickup(ticketId), 'รับมอบหมายแล้ว')}>

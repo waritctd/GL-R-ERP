@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
@@ -6,8 +6,11 @@ import { queryKeys } from '../../api/queryKeys.js';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { SalesTabs } from '../sales/SalesTabs.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
+import { dealLostReasonLabel, dealStageLabel, formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
+import { StageProgressBar } from './DealStageStepper.jsx';
+import { SALES_PHASES, stageMeta } from './stageMeta.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
 
 // Mirrors the StatusBadge tone palette (see src/styles.css .status-* rules) so the
@@ -23,8 +26,11 @@ const TONE_ACTIVE = {
   danger:  { bg: 'var(--color-danger-bg)', color: 'var(--color-danger-dark)', border: '#ef4444' },
 };
 
+// Operational queue filters (secondary row): import/CEO/account work off these,
+// and dashboard queue cards deep-link here via ?status=... — keep them intact.
 const STATUS_TABS = [
   { value: '',                 label: 'ทั้งหมด',              tone: 'primary' },
+  { value: 'draft',            label: 'ดีลเริ่มต้น (ยังไม่ขอราคา)', tone: 'neutral' },
   { value: 'submitted',        label: 'รอรับเรื่อง',          tone: 'warning' },
   { value: 'in_review',        label: 'กำลังดำเนินการ',       tone: 'info'    },
   { value: 'price_proposed',   label: 'รอการอนุมัติ',         tone: 'warning' },
@@ -35,41 +41,64 @@ const STATUS_TABS = [
   { value: 'cancelled',        label: 'ยกเลิกแล้ว',           tone: 'danger'  },
 ];
 
-const STATUS_ORDER = [
-  'draft', 'submitted', 'in_review', 'price_proposed',
-  'approved', 'quotation_issued', 'document_issued', 'closed', 'cancelled', 'rejected',
-];
+const STALE_DAYS = 7;
 
+function daysSince(iso) {
+  if (!iso) return null;
+  const diff = Date.now() - new Date(iso).getTime();
+  return Math.max(0, Math.floor(diff / 86400000));
+}
 
-/**
- * Mobile record card for a price request. The desktop grid crushes five columns
- * into ~34–90px each at 375px, which truncates every field to a stub ("PR-…",
- * "คุณส…") and clips the status badge. This shows only what a user needs to
- * identify the record and decide the next step: code, customer, status, owner,
- * and date. Full detail stays one tap away on the detail page.
- */
-function TicketCard({ ticket }) {
-  const status = ticketStatusLabel(ticket.status);
-  const subLabel = ticket.status === 'quotation_issued'
-    ? TRACK_LABEL[ticket.paymentStatus] ?? TRACK_LABEL[ticket.fulfillmentStatus] ?? null
-    : null;
+function DaysBadge({ stageUpdatedAt }) {
+  const days = daysSince(stageUpdatedAt);
+  if (days == null) return <span>-</span>;
+  const stale = days > STALE_DAYS;
+  return (
+    <span className={`text-xs font-bold ${stale ? 'text-warning' : 'text-text-muted'}`}>
+      {stale ? <Icon name="clock" size={12} /> : null} {days === 0 ? 'วันนี้' : `${days} วัน`}
+    </span>
+  );
+}
 
+function DealStageCell({ deal }) {
+  if (deal.lostReason) {
+    const lost = dealLostReasonLabel(deal.lostReason);
+    return <StatusBadge tone="danger">เสียงาน · {lost.label}</StatusBadge>;
+  }
+  const stage = dealStageLabel(deal.salesStage);
+  const meta = stageMeta(deal.salesStage);
+  const operational = ticketStatusLabel(deal.status);
+  return (
+    <span className="flex min-w-0 flex-col gap-0.5">
+      <StatusBadge tone={stage.tone}>
+        {meta ? `${meta.no}. ` : ''}{stage.label}
+      </StatusBadge>
+      <span className="pl-0.5 text-2xs text-text-muted">{operational.label}</span>
+    </span>
+  );
+}
+
+/** Mobile record card for a deal: identity, stage, progress, owner, freshness. */
+function DealCard({ deal }) {
   return (
     <>
       <div className="flex min-w-0 items-start justify-between gap-3">
-        <code className="min-w-0 truncate text-xs text-text-muted">{ticket.code}</code>
-        <span className="flex shrink-0 flex-col items-end gap-1">
-          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-          {subLabel ? <span className="text-2xs text-text-muted">{subLabel}</span> : null}
-        </span>
+        <code className="min-w-0 truncate text-xs text-text-muted">{deal.code}</code>
+        <DaysBadge stageUpdatedAt={deal.stageUpdatedAt} />
       </div>
 
       <strong className="min-w-0 text-md leading-snug font-extrabold text-text">
-        {ticket.customerName || ticket.title}
+        {deal.customerName || deal.title}
       </strong>
+      {deal.projectName ? (
+        <span className="min-w-0 truncate text-xs text-text-muted">{deal.projectName}</span>
+      ) : null}
+
+      <DealStageCell deal={deal} />
+      <StageProgressBar salesStage={deal.salesStage} lost={!!deal.lostReason} />
 
       <span className="min-w-0 truncate text-xs text-text-muted">
-        {[ticket.createdByName, formatThaiDate(ticket.createdAt)].filter(Boolean).join(' · ')}
+        {[deal.createdByName, formatThaiDate(deal.createdAt)].filter(Boolean).join(' · ')}
       </span>
     </>
   );
@@ -78,13 +107,11 @@ function TicketCard({ ticket }) {
 export function TicketListPage({ user, showToast }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  // Status filter + search text live in the URL (not local state) so that:
-  // (a) a dashboard queue card can land here pre-filtered via ?status=..., and
-  // (b) list → detail → back preserves whatever filter/search was active,
-  // instead of resetting to "ทั้งหมด" every time (previously statusFilter was
-  // plain useState, so onBack navigating to a bare '/tickets' lost it).
+  // Filters + search live in the URL so dashboard queue cards can deep-link via
+  // ?status=..., and list → detail → back keeps the active filters.
   const [searchParams, setSearchParams] = useSearchParams();
   const statusFilter = searchParams.get('status') ?? '';
+  const phaseFilter = searchParams.get('phase') ?? '';
   const searchText = searchParams.get('q') ?? '';
   const [creating, setCreating] = useState(false);
 
@@ -94,13 +121,33 @@ export function TicketListPage({ user, showToast }) {
     queryKey: queryKeys.ticketList(statusFilter),
     queryFn: () => api.tickets.list(statusFilter ? { status: statusFilter } : {}).then((response) => response.tickets || []),
   });
-  const tickets = ticketsQuery.data ?? [];
+  const allDeals = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
   const loading = ticketsQuery.isLoading || ticketsQuery.isFetching;
 
-  // Preserve the original error-toast behavior of the imperative loader.
   useEffect(() => {
     if (ticketsQuery.error) showToast('error', ticketsQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
   }, [ticketsQuery.error, showToast]);
+
+  // Phase summary cards double as filters — never a 14-stage tab bar.
+  // 'lost' is its own bucket; lost deals are excluded from phase counts.
+  const phaseCounts = useMemo(() => {
+    const counts = { lost: 0 };
+    for (const phase of SALES_PHASES) counts[phase.id] = 0;
+    for (const deal of allDeals) {
+      if (deal.lostReason) counts.lost += 1;
+      else {
+        const meta = stageMeta(deal.salesStage);
+        if (meta) counts[meta.phase] += 1;
+      }
+    }
+    return counts;
+  }, [allDeals]);
+
+  const deals = useMemo(() => {
+    if (!phaseFilter) return allDeals;
+    if (phaseFilter === 'lost') return allDeals.filter((d) => d.lostReason);
+    return allDeals.filter((d) => !d.lostReason && stageMeta(d.salesStage)?.phase === Number(phaseFilter));
+  }, [allDeals, phaseFilter]);
 
   function invalidateTicketsList() {
     return queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
@@ -114,23 +161,11 @@ export function TicketListPage({ user, showToast }) {
     }, { replace: true });
   }
 
-  function setStatusFilter(value) {
-    updateParam('status', value);
-  }
-
-  function setSearchText(value) {
-    updateParam('q', value);
-  }
-
-  // No onError toast here: the original imperative handler let a create
-  // failure propagate uncaught to TicketCreateModal's own try/catch, which
-  // shows an inline modal error instead of a toast. mutateAsync preserves
-  // that same propagation.
   const createMutation = useMutation({
     mutationFn: (payload) => api.tickets.create(payload),
     onSuccess: () => {
       setCreating(false);
-      showToast('success', 'สร้างใบขอราคาเรียบร้อย');
+      showToast('success', 'สร้างดีลเรียบร้อย');
       invalidateTicketsList();
     },
   });
@@ -141,16 +176,53 @@ export function TicketListPage({ user, showToast }) {
 
   return (
     <div className="page-stack">
+      <SalesTabs />
       <PageHeader
-        title="ใบขอราคา"
-        subtitle="Price Requests"
+        title="งานขาย"
+        subtitle="ดีลทั้งหมด · 1 ดีล = 1 ใบขอราคา ภายใต้โครงการ"
         actions={canCreate ? (
           <button type="button" className="primary-button" onClick={() => setCreating(true)}>
             <Icon name="plus" />
-            สร้างใบขอราคาใหม่
+            สร้างดีลใหม่
           </button>
         ) : null}
       />
+
+      {/* Phase summary cards double as filters — no 14-stage tab bar. */}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        {SALES_PHASES.map((phase) => {
+          const isActive = phaseFilter === String(phase.id);
+          return (
+            <button
+              key={phase.id}
+              type="button"
+              aria-pressed={isActive}
+              className={`flex flex-col gap-1 rounded-xl border px-3 py-2.5 text-left ${
+                isActive ? 'border-info bg-info-bg-alt' : 'border-border bg-surface'
+              }`}
+              onClick={() => updateParam('phase', isActive ? '' : String(phase.id))}
+            >
+              <span className={`text-xl font-extrabold leading-none ${isActive ? 'text-info' : 'text-text'}`}>
+                {phaseCounts[phase.id]}
+              </span>
+              <span className={`text-2xs font-bold leading-tight ${isActive ? 'text-info' : 'text-text-muted'}`}>
+                เฟส {phase.id} · {phase.name}
+              </span>
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          aria-pressed={phaseFilter === 'lost'}
+          className={`flex flex-col gap-1 rounded-xl border px-3 py-2.5 text-left ${
+            phaseFilter === 'lost' ? 'border-danger bg-danger-bg' : 'border-border bg-surface'
+          }`}
+          onClick={() => updateParam('phase', phaseFilter === 'lost' ? '' : 'lost')}
+        >
+          <span className="text-xl font-extrabold leading-none text-danger-dark">{phaseCounts.lost}</span>
+          <span className="text-2xs font-bold leading-tight text-danger-dark">เสียงาน</span>
+        </button>
+      </div>
 
       <div className="status-tabs">
         {STATUS_TABS.map((tab) => {
@@ -168,7 +240,7 @@ export function TicketListPage({ user, showToast }) {
               type="button"
               className={`status-tab${isActive ? ' active' : ''}`}
               style={activeStyle}
-              onClick={() => setStatusFilter(tab.value)}
+              onClick={() => updateParam('status', tab.value)}
             >
               {dot}
               {tab.label}
@@ -181,22 +253,22 @@ export function TicketListPage({ user, showToast }) {
       </div>
 
       <DataTable
-        columns={TICKET_COLUMNS}
-        rows={tickets}
-        getRowKey={(ticket) => ticket.id}
+        columns={DEAL_COLUMNS}
+        rows={deals}
+        getRowKey={(deal) => deal.id}
         gridClassName="ticket-table"
-        onRowClick={(ticket) => navigate(`/tickets/${ticket.id}`)}
-        mobileCard={(ticket) => <TicketCard ticket={ticket} />}
+        onRowClick={(deal) => navigate(`/tickets/${deal.id}`)}
+        mobileCard={(deal) => <DealCard deal={deal} />}
         searchable
         searchValue={searchText}
-        onSearchChange={setSearchText}
-        searchPlaceholder="ค้นหาเลขที่ / บริษัท / ผู้ดูแล"
+        onSearchChange={(value) => updateParam('q', value)}
+        searchPlaceholder="ค้นหาเลขที่ / บริษัท / โครงการ / ผู้ดูแล"
         initialSort={{ key: 'date', dir: 'desc' }}
         loading={loading}
         emptyState={{
           icon: 'fileText',
-          title: 'ไม่มีใบขอราคา',
-          description: 'ยังไม่มีรายการในสถานะที่เลือก',
+          title: 'ไม่มีดีล',
+          description: 'ยังไม่มีดีลในเงื่อนไขที่เลือก',
         }}
       />
 
@@ -207,65 +279,43 @@ export function TicketListPage({ user, showToast }) {
   );
 }
 
-const TRACK_LABEL = {
-  CUSTOMER_CONFIRMED:     'P: ลูกค้ายืนยันแล้ว',
-  DEPOSIT_NOTICE_ISSUED:  'P: ออกใบแจ้งมัดจำแล้ว',
-  DEPOSIT_PAID:           'P: รับมัดจำแล้ว',
-  AWAITING_FINAL_PAYMENT: 'P: รอชำระส่วนที่เหลือ',
-  FULLY_PAID:             'P: ชำระครบแล้ว',
-  IR_ISSUED:              'F: ออก IR แล้ว',
-  IR_SENT:                'F: ส่ง IR แล้ว',
-  SHIPPING:               'F: กำลังขนส่ง',
-  GOODS_RECEIVED:         'F: รับสินค้าแล้ว',
-};
-
-const TICKET_COLUMNS = [
+const DEAL_COLUMNS = [
   {
     key: 'customer',
-    header: 'บริษัท / โครงการ',
-    searchAccessor: (ticket) => [ticket.code, ticket.customerName, ticket.title].filter(Boolean).join(' '),
-    // Primary entity (company/project) leads, bold and full-size; the request
-    // code is secondary metadata underneath in muted mono — matches the
-    // mobile card's hierarchy (code above title there; company is still the
-    // thing a desktop user scans for first in a wide row).
-    render: (ticket) => (
+    header: 'ดีล / โครงการ',
+    searchAccessor: (deal) => [deal.code, deal.customerName, deal.projectName, deal.title].filter(Boolean).join(' '),
+    render: (deal) => (
       <span className="flex min-w-0 flex-col gap-0.5">
-        <strong className="block truncate text-text">{ticket.customerName || ticket.title}</strong>
-        <code className="block truncate text-2xs text-text-muted">{ticket.code}</code>
+        <strong className="block truncate text-text">{deal.customerName || deal.title}</strong>
+        <span className="block truncate text-2xs text-text-muted">
+          {[deal.projectName, deal.code].filter(Boolean).join(' · ')}
+        </span>
       </span>
     ),
   },
   {
     key: 'createdByName',
     header: 'ผู้ดูแล (Sales)',
-    searchAccessor: (ticket) => ticket.createdByName || '',
-    render: (ticket) => <span>{ticket.createdByName}</span>,
+    searchAccessor: (deal) => deal.createdByName || '',
+    render: (deal) => <span>{deal.createdByName}</span>,
   },
   {
-    key: 'status',
-    header: 'สถานะ',
+    key: 'stage',
+    header: 'สถานะดีล',
     sortable: true,
-    sortAccessor: (ticket) => STATUS_ORDER.indexOf(ticket.status),
-    render: (ticket) => {
-      const status = ticketStatusLabel(ticket.status);
-      const subLabel = ticket.status === 'quotation_issued'
-        ? TRACK_LABEL[ticket.paymentStatus] ?? TRACK_LABEL[ticket.fulfillmentStatus] ?? null
-        : null;
-      return (
-        <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-          {subLabel && (
-            <span style={{ fontSize: 11, color: '#64748b', paddingLeft: 2 }}>{subLabel}</span>
-          )}
-        </span>
-      );
-    },
+    sortAccessor: (deal) => (deal.lostReason ? -1 : stageMeta(deal.salesStage)?.no ?? 0),
+    render: (deal) => <DealStageCell deal={deal} />,
+  },
+  {
+    key: 'progress',
+    header: 'ความคืบหน้า',
+    render: (deal) => <StageProgressBar salesStage={deal.salesStage} lost={!!deal.lostReason} />,
   },
   {
     key: 'date',
-    header: 'วันที่สร้าง',
+    header: 'อัปเดตล่าสุด',
     sortable: true,
-    sortAccessor: (ticket) => new Date(ticket.createdAt),
-    render: (ticket) => <span>{formatThaiDate(ticket.createdAt)}</span>,
+    sortAccessor: (deal) => new Date(deal.stageUpdatedAt ?? deal.updatedAt),
+    render: (deal) => <DaysBadge stageUpdatedAt={deal.stageUpdatedAt ?? deal.updatedAt} />,
   },
 ];

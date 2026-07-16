@@ -72,7 +72,9 @@ function SearchSelect({ label, value, onSelect, placeholder, options, onSearch, 
 
 export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   const [form, setForm] = useState({ note: '' });
-  const [items, setItems] = useState(() => initialItems?.length ? initialItems : [emptyItem()]);
+  // V50: a deal may start with NO items (lightweight lead-stage draft) — the
+  // price-request flow begins later once items are added and submitted.
+  const [items, setItems] = useState(() => initialItems?.length ? initialItems : []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -242,6 +244,8 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   async function submit(event) {
     event.preventDefault();
     if (!selectedCustomer) { setError('กรุณาเลือกบริษัท/ลูกค้า'); return; }
+    // Mirrors TicketService.create: every new deal belongs to a โครงการ.
+    if (!selectedProject) { setError('กรุณาเลือกโครงการ (1 ดีล = 1 ใบขอราคา ภายใต้โครงการ)'); return; }
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       const basis = item.unitBasis || 'PIECE';
@@ -265,7 +269,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         title: selectedCustomer.name,
         customerName: selectedCustomer.name,
         customerId: selectedCustomer.id,
-        projectId: selectedProject?.id ?? null,
+        projectId: selectedProject.id,
         contactId: selectedContact?.id ?? null,
         note: form.note.trim() || null,
         items: items.map((item) => ({
@@ -288,14 +292,15 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
   return (
     <Modal
-      title="สร้างใบขอราคาใหม่"
+      title="สร้างดีลใหม่"
+      subtitle="เริ่มได้ตั้งแต่ขั้นหาทางเข้าพบ — รายการสินค้าเพิ่มทีหลังได้เมื่อถึงขั้นเสนอราคา"
       onClose={onClose}
       footer={(
         <>
           <button type="button" className="secondary-button" onClick={onClose} disabled={loading}>ยกเลิก</button>
           <button type="submit" form="ticket-create-form" className="primary-button" disabled={loading}>
             <Icon name="fileText" />
-            {loading ? 'กำลังสร้าง...' : 'สร้างใบขอราคา'}
+            {loading ? 'กำลังสร้าง...' : 'สร้างดีล'}
           </button>
         </>
       )}
@@ -368,7 +373,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           {/* Project selector */}
           {selectedCustomer && (
             <div>
-              <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>โครงการ</span>
+              <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>โครงการ *</span>
               {selectedProject ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', fontSize: 13 }}>
                   <Icon name="building" size={13} style={{ color: '#64748b' }} />
@@ -478,7 +483,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
         {/* ── Section 2: Items ── */}
         <div className="span-2">
-          <p style={{ margin: '0 0 10px', fontWeight: 700, fontSize: 13 }}>รายการสินค้า *</p>
+          <p style={{ margin: '0 0 10px', fontWeight: 700, fontSize: 13 }}>รายการสินค้า (ไม่บังคับ — เพิ่มทีหลังได้)</p>
           {items.map((item, index) => (
             <div key={index} style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: '12px 14px', marginBottom: 10, background: '#f8fafc', position: 'relative' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>

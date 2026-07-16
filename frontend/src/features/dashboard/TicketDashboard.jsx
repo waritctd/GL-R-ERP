@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { SalesTabs } from '../sales/SalesTabs.jsx';
 import { Skeleton, SkeletonCard } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -112,6 +113,7 @@ export function TicketDashboard({ user, employee, showToast }) {
 
   return (
     <div className="page-stack">
+      <SalesTabs role={user.role} />
       <PageHeader title={greeting} subtitle={<GreetingSubtitle role={user.role} />} />
 
       {loading ? (

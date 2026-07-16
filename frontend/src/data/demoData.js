@@ -454,7 +454,7 @@ export function createDemoDatabase() {
       status: 'quotation_issued', priority: 'NORMAL',
       createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
       assignedToId: 7, assignedToName: 'คุณนำเข้า พานิช',
-      customerName: 'The Emporium Co.', note: null,
+      customerName: 'The Emporium Co.', note: null, projectId: 2,
       paymentStatus: 'CUSTOMER_CONFIRMED', fulfillmentStatus: null,
       createdAt: iso(2026, 6, 20), updatedAt: iso(2026, 7, 1), closedAt: null,
       items: [
@@ -479,7 +479,7 @@ export function createDemoDatabase() {
       status: 'quotation_issued', priority: 'HIGH',
       createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
       assignedToId: 7, assignedToName: 'คุณนำเข้า พานิช',
-      customerName: 'Terminal 21 Property', note: null,
+      customerName: 'Terminal 21 Property', note: null, projectId: 3,
       paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: 'IR_ISSUED',
       createdAt: iso(2026, 6, 1), updatedAt: iso(2026, 6, 25), closedAt: null,
       items: [
@@ -563,6 +563,27 @@ export function createDemoDatabase() {
         { id: 87, ticketId: 14, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'FULLY_PAID',            fromStatus: 'quotation_issued', toStatus: 'quotation_issued', message: null, createdAt: iso(2026, 7, 5)  + 'T10:00:00Z' },
       ],
       quotation: { id: 7, ticketId: 14, number: 'QT-2026-0007', issuedById: 6, issuedByName: 'คุณสมหมาย ขายดี', issuedAt: iso(2026, 5, 9) + 'T09:00:00Z', pdfPath: null, totalAmount: 624000, currency: 'THB' },
+    },
+
+    // ── Ticket 15: lightweight lead-stage deal (V50) — DRAFT, no items yet ───
+    {
+      id: 15, code: 'PR-2026-0015', type: 'PRICE_REQUEST',
+      title: 'โครงการ Central Ladprao ชั้น B1',
+      status: 'draft', priority: 'NORMAL',
+      createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+      assignedToId: null, assignedToName: null,
+      customerName: 'บริษัท ก้าวหน้า คอนสตรัคชั่น จำกัด', note: 'ผู้ออกแบบสนใจรุ่น Marble Look — นัดนำเสนอสัปดาห์หน้า',
+      projectId: 1,
+      paymentStatus: null, fulfillmentStatus: null,
+      salesStage: 'PRESENTATION', lostReason: null, lostAt: null,
+      stageUpdatedAt: iso(2026, 7, 14) + 'T09:00:00Z',
+      createdAt: iso(2026, 7, 10), updatedAt: iso(2026, 7, 14), closedAt: null,
+      items: [],
+      events: [
+        { id: 90, ticketId: 15, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'CREATED',       fromStatus: null,            toStatus: 'draft', message: null, createdAt: iso(2026, 7, 10) + 'T09:00:00Z' },
+        { id: 91, ticketId: 15, actorId: 6, actorName: 'คุณสมหมาย ขายดี', kind: 'STAGE_CHANGED', fromStatus: 'LEAD_APPROACH', toStatus: 'PRESENTATION', message: 'เข้าพบผู้ออกแบบแล้ว เตรียมนำเสนอสินค้า', createdAt: iso(2026, 7, 14) + 'T09:00:00Z' },
+      ],
+      quotation: null,
     },
   ];
 

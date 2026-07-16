@@ -103,6 +103,10 @@ export const api = {
     markShipping: (id) => apiRequest(API_ROUTES.tickets.action(id, 'shipping'), { method: 'POST' }),
     markGoodsReceived: (id) => apiRequest(API_ROUTES.tickets.action(id, 'goods-received'), { method: 'POST' }),
     confirmFinalPayment: (id) => apiRequest(API_ROUTES.tickets.action(id, 'final-payment'), { method: 'POST' }),
+    // Deal pipeline (V50): manual stage change / lost / reopen on the deal itself.
+    updateStage: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'stage'), { method: 'POST', body: payload }),
+    markLost: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'lost'), { method: 'POST', body: payload }),
+    reopen: (id, payload = {}) => apiRequest(API_ROUTES.tickets.action(id, 'reopen'), { method: 'POST', body: payload }),
     downloadQuotationXlsx: async (id, quotationId) => {
       const res = await fetch(API_ROUTES.tickets.quotationFile(id, quotationId, 'xlsx'), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');
