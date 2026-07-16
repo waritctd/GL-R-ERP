@@ -78,7 +78,7 @@ export function NotificationBell({ onNavigate }) {
       >
         <Icon name="bell" />
         {unreadCount > 0 && (
-          <span className="absolute top-[2px] right-[2px] min-w-4 h-4 rounded-md bg-[#ef4444] !text-surface !text-[10px] !font-extrabold !flex items-center justify-center px-[3px] py-0 leading-none pointer-events-none">
+          <span className="absolute top-[2px] right-[2px] min-w-4 h-4 rounded-md bg-danger !text-surface !text-[10px] !font-extrabold !flex items-center justify-center px-[3px] py-0 leading-none pointer-events-none">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
@@ -111,7 +111,7 @@ export function NotificationBell({ onNavigate }) {
                   key={item.id}
                   type="button"
                   onClick={() => handleClick(item)}
-                  className={`w-full flex gap-3 items-start py-3 px-4 border-0 cursor-pointer text-left border-b border-surface-subtle transition-[background] duration-100 ${item.read ? 'bg-surface' : 'bg-[#f0f6ff]'}`}
+                  className={`w-full flex gap-3 items-start py-3 px-4 border-0 cursor-pointer text-left border-b border-surface-subtle transition-[background] duration-100 ${item.read ? 'bg-surface' : 'bg-info-row-active'}`}
                 >
                   <span
                     className="w-8 h-8 rounded-full shrink-0 !flex items-center justify-center mt-px"
@@ -129,7 +129,7 @@ export function NotificationBell({ onNavigate }) {
                     </span>
                   </span>
                   {!item.read && (
-                    <span className="w-2 h-2 rounded-full bg-[#3b82f6] shrink-0 mt-[6px]" />
+                    <span className="w-2 h-2 rounded-full bg-info shrink-0 mt-[6px]" />
                   )}
                 </button>
               );

@@ -327,13 +327,13 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>
             ใบแจ้งยอดเงินรับมัดจำ
             {doc?.version > 1 && (
-              <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 400, color: '#64748b' }}>Rev {doc.version}</span>
+              <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 400, color: 'var(--color-text-muted)' }}>Rev {doc.version}</span>
             )}
           </h1>
           {doc && (
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
               {doc.docNumber && (
-                <code style={{ fontSize: 12, background: '#f1f5f9', padding: '2px 8px', borderRadius: 4 }}>{doc.docNumber}</code>
+                <code style={{ fontSize: 12, background: 'var(--color-surface-subtle)', padding: '2px 8px', borderRadius: 4 }}>{doc.docNumber}</code>
               )}
               <StatusBadge tone={isIssued ? 'success' : 'neutral'}>
                 {isIssued ? 'ออกแล้ว' : 'Draft'}
@@ -346,14 +346,14 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               ~L2266-2345) — no new API calls, nothing invented. Pieces are
               omitted individually when the underlying field is empty. */}
           {doc && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', marginTop: 8, fontSize: 13, color: '#64748b' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', marginTop: 8, fontSize: 13, color: 'var(--color-text-muted)' }}>
               {doc.customerName && (
-                <span>ลูกค้า <strong style={{ color: '#334155' }}>{doc.customerName}</strong></span>
+                <span>ลูกค้า <strong style={{ color: 'var(--color-text-secondary)' }}>{doc.customerName}</strong></span>
               )}
               {isIssued ? (
-                <span>ออกโดย <strong style={{ color: '#334155' }}>{doc.issuedByName || '-'}</strong> · {formatThaiDate(doc.issueDate)}</span>
+                <span>ออกโดย <strong style={{ color: 'var(--color-text-secondary)' }}>{doc.issuedByName || '-'}</strong> · {formatThaiDate(doc.issueDate)}</span>
               ) : (
-                doc.preparerName && <span>จัดทำโดย <strong style={{ color: '#334155' }}>{doc.preparerName}</strong></span>
+                doc.preparerName && <span>จัดทำโดย <strong style={{ color: 'var(--color-text-secondary)' }}>{doc.preparerName}</strong></span>
               )}
             </div>
           )}
@@ -441,13 +441,13 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                   placeholder="ชื่อบริษัท หรือ เลขภาษี..."
                 />
                 {customerSearch && customers.length > 0 && (
-                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, zIndex: 50, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', maxHeight: 180, overflowY: 'auto' }}>
+                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'var(--color-surface)', border: '1px solid var(--color-border-subtle)', borderRadius: 6, zIndex: 50, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', maxHeight: 180, overflowY: 'auto' }}>
                     {customers.map((c) => (
                       <button key={c.id} type="button"
                         onClick={() => selectCustomer(c)}
-                        style={{ width: '100%', padding: '8px 12px', textAlign: 'left', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, borderBottom: '1px solid #f1f5f9' }}>
+                        style={{ width: '100%', padding: '8px 12px', textAlign: 'left', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, borderBottom: '1px solid var(--color-surface-subtle)' }}>
                         <strong style={{ display: 'block' }}>{c.name}</strong>
-                        <span style={{ fontSize: 11, color: '#64748b' }}>{c.taxId} · {c.address}</span>
+                        <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>{c.taxId} · {c.address}</span>
                       </button>
                     ))}
                   </div>
@@ -489,14 +489,14 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
             <div style={{ padding: '0 18px 14px' }}>
               {/* Muted Floor fix: was Ink Faint (#94a3b8) on a table header label —
                   DESIGN.md specifies Ink Muted (#64748b) for `.table-head` overline text. */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) minmax(0,60px) minmax(0,80px) minmax(0,80px) minmax(0,80px)', gap: 6, padding: '8px 0', borderBottom: '1px solid #e6eaf0', fontSize: 11, fontWeight: 700, color: '#64748b' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) minmax(0,60px) minmax(0,80px) minmax(0,80px) minmax(0,80px)', gap: 6, padding: '8px 0', borderBottom: '1px solid var(--color-border)', fontSize: 11, fontWeight: 700, color: 'var(--color-text-muted)' }}>
                 <span>รายละเอียด</span><span style={{ textAlign: 'right' }}>จำนวน</span>
                 <span style={{ textAlign: 'right' }}>ราคา/หน่วย</span>
                 <span style={{ textAlign: 'right' }}>ราคาสุทธิ</span>
                 <span style={{ textAlign: 'right' }}>เป็นเงิน</span>
               </div>
               {form.items.map((it, idx) => (
-                <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) minmax(0,60px) minmax(0,80px) minmax(0,80px) minmax(0,80px)', gap: 6, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f8fafc' }}>
+                <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) minmax(0,60px) minmax(0,80px) minmax(0,80px) minmax(0,80px)', gap: 6, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--color-surface-muted)' }}>
                   {isIssued ? (
                     <>
                       <span style={{ fontSize: 13 }}>{it.description}</span>
@@ -519,7 +519,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                       <input type="number" value={it.netUnitPrice ?? it.unitPrice ?? ''} placeholder="สุทธิ"
                         onChange={(e) => setItemField(idx, 'netUnitPrice', e.target.value)}
                         style={{ fontSize: 12, textAlign: 'right' }} />
-                      <code style={{ fontSize: 12, textAlign: 'right', color: '#334155' }}>
+                      <code style={{ fontSize: 12, textAlign: 'right', color: 'var(--color-text-secondary)' }}>
                         {money(((it.netUnitPrice ?? it.unitPrice) || 0) * (it.qty || 0))}
                       </code>
                     </>
@@ -544,7 +544,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                   <input type="checkbox" disabled={isIssued}
                     checked={form.notes.includes(t.text)}
                     onChange={() => toggleNote(t.text)}
-                    style={{ width: 14, height: 14, marginTop: 3, flexShrink: 0, accentColor: '#1e40af', cursor: isIssued ? 'default' : 'pointer' }} />
+                    style={{ width: 14, height: 14, marginTop: 3, flexShrink: 0, accentColor: 'var(--color-info-dot)', cursor: isIssued ? 'default' : 'pointer' }} />
                   <span style={{ flex: 1, minWidth: 0 }}>{t.text}</span>
                 </label>
               ))}
@@ -564,9 +564,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                         onClick={() => setField('depositPercent', opt.value)}
                         style={{
                           padding: '4px 12px', borderRadius: 6, fontSize: 13, cursor: 'pointer', border: '1px solid',
-                          background: form.depositPercent == opt.value ? '#1e40af' : '#f1f5f9',
-                          color: form.depositPercent == opt.value ? '#fff' : '#334155',
-                          borderColor: form.depositPercent == opt.value ? '#1e40af' : '#cbd5e1',
+                          background: form.depositPercent == opt.value ? 'var(--color-info-dot)' : 'var(--color-surface-subtle)',
+                          color: form.depositPercent == opt.value ? 'var(--color-surface)' : 'var(--color-text-secondary)',
+                          borderColor: form.depositPercent == opt.value ? 'var(--color-info-dot)' : 'var(--color-border-muted)',
                         }}>
                         {opt.label}
                       </button>
@@ -580,9 +580,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                 { label: 'ภาษีมูลค่าเพิ่ม 7% (คิดจากมัดจำ)', value: vat },
                 { label: 'รวมเป็นเงินที่ต้องชำระ', value: total, bold: true },
               ].map(({ label, value, bold }) => (
-                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid #f1f5f9', fontSize: 13 }}>
-                  <span style={{ color: '#475569' }}>{label}</span>
-                  <code className="font-mono" style={{ fontWeight: bold ? 700 : 400, color: bold ? '#0f172a' : '#334155' }}>{money(value)} บาท</code>
+                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--color-surface-subtle)', fontSize: 13 }}>
+                  <span style={{ color: 'var(--color-icon-muted)' }}>{label}</span>
+                  <code className="font-mono" style={{ fontWeight: bold ? 700 : 400, color: bold ? 'var(--color-text)' : 'var(--color-text-secondary)' }}>{money(value)} บาท</code>
                 </div>
               ))}
               {/* Next-action helper — describes exactly what api.depositNotices.issue
@@ -590,7 +590,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                   flips this document to ISSUED (fields above become read-only via
                   `isIssued`), and moves the parent ticket to `document_issued`. */}
               {!isIssued && (
-                <p style={{ margin: '10px 0 0', fontSize: 12, color: '#64748b', lineHeight: 1.6 }}>
+                <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
                   กด &quot;ออกเอกสาร&quot; เพื่อออกเลขที่เอกสารอย่างเป็นทางการ — หลังจากนี้จะแก้ไขข้อมูลในเอกสารนี้ไม่ได้อีก และใบขอราคาจะเปลี่ยนสถานะเป็น &quot;ออกใบแจ้งยอดมัดจำแล้ว&quot;
                 </p>
               )}
@@ -608,7 +608,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
             <iframe
               ref={iframeRef}
               srcDoc={previewHtml}
-              style={{ width: '100%', height: 'calc(100% - 32px)', border: '1px solid #e2e8f0', borderRadius: 8 }}
+              style={{ width: '100%', height: 'calc(100% - 32px)', border: '1px solid var(--color-border-subtle)', borderRadius: 8 }}
               title="Deposit notice preview"
             />
             {previewLoading && (
@@ -636,12 +636,12 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
             <p className="confirm-dialog-message" style={{ margin: 0 }}>
               ตรวจสอบยอดเงินก่อนออกเอกสารให้ <strong>{form.customerName || 'ลูกค้า'}</strong> — <strong>หลังจากนี้จะไม่สามารถแก้ไขได้</strong>
             </p>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid #e6eaf0', paddingTop: 8 }}>
-              <span style={{ color: '#475569' }}>ขอรับเงินมัดจำ ({Math.round(Number(form.depositPercent) * 100)}%)</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid var(--color-border)', paddingTop: 8 }}>
+              <span style={{ color: 'var(--color-icon-muted)' }}>ขอรับเงินมัดจำ ({Math.round(Number(form.depositPercent) * 100)}%)</span>
               <code className="font-mono">{money(deposit)} บาท</code>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-              <span style={{ color: '#475569' }}>ภาษีมูลค่าเพิ่ม 7%</span>
+              <span style={{ color: 'var(--color-icon-muted)' }}>ภาษีมูลค่าเพิ่ม 7%</span>
               <code className="font-mono">{money(vat)} บาท</code>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700 }}>
