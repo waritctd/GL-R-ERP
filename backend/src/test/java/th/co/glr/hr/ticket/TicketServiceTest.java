@@ -538,10 +538,33 @@ class TicketServiceTest {
 
         service.generateQuotation(10L, salesActor);
 
-        // customer name/address/taxId/phone come from CustomerRepository (the linked
-        // customer record), not the ticket's own (possibly stale) customerName field.
-        verify(ticketRepo).updateQuotationHeader(eq(201L), eq("Real Customer Co., Ltd."),
+        // Fidelity rule (Opus review): the frozen NAME is the ticket's display name —
+        // that's what toXlsx/toPdf have always printed — so the snapshot must capture
+        // it, not the master record's name. Address/taxId/phone DO come from the master
+        // record because that's what the live render pulls from CustomerDto.
+        verify(ticketRepo).updateQuotationHeader(eq(201L), eq("Free-text Name"),
             eq("123 Real Address"), eq("0105500000000"), eq("02-000-0000"), eq("Renovation Project"));
+    }
+
+    @Test
+    void generateQuotation_blankTicketNameFallsBackToMasterCustomerName() {
+        TicketSummaryDto summary = new TicketSummaryDto(
+            10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.APPROVED, "NORMAL",
+            1L, "Sales User", null, null, null, 55L, null, null,
+            null, null, null, Instant.now(), Instant.now(), null, 0, false, null, null);
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(
+            new TicketDto(summary, List.of(), List.of(), null, List.of())));
+        when(customerRepo.findById(55L)).thenReturn(Optional.of(
+            new CustomerDto(55L, "Real Customer Co., Ltd.", "0105500000000",
+                "123 Real Address", "สำนักงานใหญ่", "02-000-0000")));
+        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0008");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0008"), eq(1L), any(BigDecimal.class)))
+            .thenReturn(quotationOf(202L, 10L, "QT-2026-0008"));
+
+        service.generateQuotation(10L, salesActor);
+
+        verify(ticketRepo).updateQuotationHeader(eq(202L), eq("Real Customer Co., Ltd."),
+            eq("123 Real Address"), eq("0105500000000"), eq("02-000-0000"), isNull());
     }
 
     // ── close ─────────────────────────────────────────────────────────────

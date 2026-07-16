@@ -1368,7 +1368,9 @@ export const api = {
         quotationVersion: nextVersion, docStatus: 'DRAFT',
         // Snapshot (V49) — undefined/empty on any quotation object built before this change.
         items: priceItems.map((it) => ({ ...it })),
-        customerName: customer ? customer.name : (ticket.customerName ?? null),
+        // Fidelity rule (mirrors TicketService.generateQuotation): freeze the TICKET's
+        // display name — that's what the renderer prints — master name only as fallback.
+        customerName: ticket.customerName ?? (customer ? customer.name : null),
         customerAddress: customer ? customer.address : null,
         customerTaxId: customer ? customer.taxId : null,
         customerPhone: customer ? customer.phone : null,

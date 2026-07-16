@@ -217,8 +217,16 @@ public class TicketService {
         // still show v1's items/prices, not today's).
         tickets.insertQuotationItems(created.id(), full.items());
         CustomerDto customer = s.customerId() != null ? customers.findById(s.customerId()).orElse(null) : null;
+        // Freeze what the renderer would have PRINTED at issue time: the header name is
+        // the TICKET's customer display name (toXlsx/toPdf have always rendered
+        // s.customerName()), with the master record's name only as a fallback;
+        // address/taxId/phone come from the master record because that's what the live
+        // render pulls from CustomerDto.
+        String issuedCustomerName = s.customerName() != null && !s.customerName().isBlank()
+            ? s.customerName()
+            : (customer != null ? customer.name() : null);
         tickets.updateQuotationHeader(created.id(),
-            customer != null ? customer.name() : s.customerName(),
+            issuedCustomerName,
             customer != null ? customer.address() : null,
             customer != null ? customer.taxId() : null,
             customer != null ? customer.phone() : null,
