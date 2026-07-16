@@ -154,7 +154,10 @@ export const ROLE_PERMISSIONS = {
   canViewAllLeave: ['hr', 'ceo'],
   canReviewLeave: ['hr'],
   // Sales module
-  canViewTickets: ['sales', 'import', 'ceo'],
+  canViewTickets: ['sales', 'import', 'ceo', 'account'],
+  // Money-receipt confirmations (รับยอดมัดจำ / รับชำระเต็มจำนวน) belong to
+  // ฝ่ายบัญชี, with CEO as fallback. Mirrors TicketService.ACCOUNT_ROLES.
+  canConfirmPayments: ['account', 'ceo'],
   canCreateTickets: ['sales'],
   canPickupTickets: ['import'],
   canProposePrices: ['import'],

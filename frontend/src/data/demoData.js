@@ -230,6 +230,10 @@ export function createDemoDatabase() {
     { id: 7, email: 'import@glr.co.th', password: 'demo1234', name: 'คุณนำเข้า พานิช', role: 'import', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
     { id: 8, email: 'ceo@glr.co.th', password: 'demo1234', name: 'คุณวิชัย ธนาคาร', role: 'ceo', employeeId: employees[0].id, active: true, createdAt: iso(2025, 6, 1) },
     { id: 9, email: 'sales.manager@glr.co.th', password: 'demo1234', name: 'คุณมณี ผู้จัดการฝ่ายขาย', role: 'sales_manager', employeeId: employees[1].id, active: true, createdAt: iso(2025, 6, 1) },
+    // ฝ่ายบัญชี — confirms money receipts (รับยอดมัดจำ / รับชำระเต็มจำนวน) on
+    // sales tickets. Real role derivation: division AC-ฝ่ายบัญชี → 'account'
+    // (DivisionAccessPolicy), gates mirror TicketService.ACCOUNT_ROLES.
+    { id: 11, email: 'account@glr.co.th', password: 'demo1234', name: 'คุณบัญชี การเงิน', role: 'account', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
   ];
 
   const tickets = [

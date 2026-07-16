@@ -12,6 +12,7 @@ import java.util.Locale;
  *       company-wide access.</li>
  *   <li>HR-บุคคล division → {@code hr}.</li>
  *   <li>PCIM-จัดซื้อต่างประเทศ division → {@code import} (foreign-purchasing price proposals).</li>
+ *   <li>AC-ฝ่ายบัญชี division → {@code account} (money-receipt confirmations on sales tickets).</li>
  *   <li>SA-ฝ่ายขาย division → {@code sales_manager} if the person is a manager, else {@code sales}.</li>
  *   <li>everything else (including null/blank — treated as inactive employees) → {@code employee}.</li>
  * </ol>
@@ -37,6 +38,9 @@ public final class DivisionAccessPolicy {
         }
         if ("pcim".equals(code)) {
             return "import";
+        }
+        if ("ac".equals(code)) {
+            return "account";
         }
         if ("sa".equals(code)) {
             return isManager(employee) ? "sales_manager" : "sales";

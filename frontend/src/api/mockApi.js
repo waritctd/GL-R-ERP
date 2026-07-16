@@ -1053,7 +1053,7 @@ export const api = {
   tickets: {
     async list(params = {}) {
       const user = requireSession();
-      if (!['sales', 'import', 'ceo'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'import', 'ceo', 'account'].includes(user.role)) fail('Forbidden', 403);
       let list = structuredClone(db.tickets);
       if (user.role === 'sales') list = list.filter((t) => t.createdById === user.id);
       if (params.status) list = list.filter((t) => t.status === params.status);
@@ -1073,7 +1073,7 @@ export const api = {
 
     async get(id) {
       const user = requireSession();
-      if (!['sales', 'import', 'ceo'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'import', 'ceo', 'account'].includes(user.role)) fail('Forbidden', 403);
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
       if (!ticket) fail('Ticket not found', 404);
       if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
@@ -1325,7 +1325,22 @@ export const api = {
 
     async close(id) {
       const user = requireSession();
-      return delay(doTransition(Number(id), 'document_issued', 'closed', 'CLOSED', user, null));
+      const ticket = findTicketRaw(Number(id));
+      // Mirrors TicketService.close(): legacy document_issued path, or the
+      // dual-track completion (quotation_issued + FULLY_PAID + GOODS_RECEIVED).
+      const legacyOk = ticket.status === 'document_issued';
+      const dualTrackOk = ticket.status === 'quotation_issued'
+        && ticket.paymentStatus === 'FULLY_PAID'
+        && ticket.fulfillmentStatus === 'GOODS_RECEIVED';
+      if (!legacyOk && !dualTrackOk) {
+        fail('Cannot close: require paymentStatus=FULLY_PAID and fulfillmentStatus=GOODS_RECEIVED', 409);
+      }
+      const prev = ticket.status;
+      ticket.status = 'closed';
+      ticket.closedAt = new Date().toISOString().slice(0, 10);
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'CLOSED', prev, 'closed', null);
+      return delay({ ticket: buildTicketDetail(ticket) });
     },
 
     async cancel(id) {
@@ -1385,6 +1400,10 @@ export const api = {
       const user = hasRole('sales');
       const ticket = findTicketRaw(Number(id));
       if (ticket.status !== 'quotation_issued') fail('Expected quotation_issued', 409);
+      // Never downgrade the payment track (mirrors TicketService.confirmCustomer).
+      if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
+        fail('Payment track already past CUSTOMER_CONFIRMED', 409);
+      }
       ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
@@ -1404,21 +1423,33 @@ export const api = {
     },
 
     async confirmDepositPaid(id) {
-      const user = hasRole('sales');
+      // Money receipts are confirmed by ฝ่ายบัญชี (CEO fallback) — mirrors
+      // TicketService.ACCOUNT_ROLES.
+      const user = hasRole('account', 'ceo');
       const ticket = findTicketRaw(Number(id));
       if (ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') fail('Expected paymentStatus=DEPOSIT_NOTICE_ISSUED', 409);
       ticket.paymentStatus = 'DEPOSIT_PAID';
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'DEPOSIT_PAID', ticket.status, ticket.status, null);
+      // Goods-first ordering: if goods already arrived, carry payment forward
+      // (mirrors TicketService.confirmDepositPaid).
+      if (ticket.fulfillmentStatus === 'GOODS_RECEIVED') {
+        ticket.paymentStatus = 'AWAITING_FINAL_PAYMENT';
+        pushEvent(ticket, user, 'AWAITING_FINAL_PAYMENT', ticket.status, ticket.status, null);
+      }
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
     async issueImportRequest(id) {
       const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
-      if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') {
-        fail('Requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED', 409);
+      // DEPOSIT_PAID also qualifies — the deposit is often confirmed before the IR
+      // (mirrors TicketService.issueImportRequest).
+      if (ticket.status !== 'quotation_issued'
+          || !['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)) {
+        fail('Requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED or DEPOSIT_PAID', 409);
       }
+      if (ticket.fulfillmentStatus != null) fail('Import request already issued', 409);
       ticket.fulfillmentStatus = 'IR_ISSUED';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'IR_ISSUED', ticket.status, ticket.status, null);
@@ -1460,7 +1491,8 @@ export const api = {
     },
 
     async confirmFinalPayment(id) {
-      const user = hasRole('sales');
+      // Mirrors TicketService.ACCOUNT_ROLES (ฝ่ายบัญชี + CEO fallback).
+      const user = hasRole('account', 'ceo');
       const ticket = findTicketRaw(Number(id));
       if (ticket.paymentStatus !== 'AWAITING_FINAL_PAYMENT') fail('Expected paymentStatus=AWAITING_FINAL_PAYMENT', 409);
       ticket.paymentStatus = 'FULLY_PAID';
