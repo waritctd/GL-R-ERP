@@ -38,6 +38,11 @@ class DepositNoticeServiceTest {
 
     private final UserPrincipal owner = new UserPrincipal(
         1L, "sales@glr.co.th", "Sales", "sales", 1L, true, LocalDate.of(2026, 1, 1), false, 1L, false);
+    // sales_manager: read-only oversight of deposit notices — never owns a ticket
+    // (no create access), so every owner-gated write is denied by ownership alone.
+    private final UserPrincipal salesManagerActor = new UserPrincipal(
+        8L, "sales_manager@glr.co.th", "Sales Manager", "sales_manager", 8L, true,
+        LocalDate.of(2026, 1, 1), false, null, false);
 
     // ── issue(): the document IS the payment-track step ─────────────────────
 
@@ -74,6 +79,70 @@ class DepositNoticeServiceTest {
 
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED");
         assertConflict(() -> service.issue(99L, owner));
+    }
+
+    // ── sales_manager oversight (read only, zero write actions) ─────────────
+    // Product decision (2026-07-16): sales_manager is a read+comment-only follow-up
+    // role for the sales team on tickets; the same rule extends to deposit notices
+    // (money-adjacent customer documents). Added to VIEWER_ROLES only.
+
+    @Test
+    void listByTicket_salesManagerCanViewAnyTicketsNotices() {
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
+        when(docs.findByTicket(10L)).thenReturn(List.of());
+
+        service.listByTicket(10L, salesManagerActor); // must not throw
+
+        verify(docs).findByTicket(10L);
+    }
+
+    @Test
+    void getById_salesManagerCanViewAnyonesDocument() {
+        stubDraft(99L, 10L);
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
+
+        DepositNoticeDto doc = service.getById(99L, salesManagerActor); // must not throw
+        assertThat(doc.id()).isEqualTo(99L);
+    }
+
+    @Test
+    void createDraft_rejectsSalesManagerRole() {
+        // Role-gated (SALES_ROLES) as the very first check.
+        assertForbidden(() -> service.createDraft(10L,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null),
+            salesManagerActor));
+    }
+
+    @Test
+    void update_rejectsSalesManagerRole() {
+        // update() has NO role gate — only requireTicketOwner. sales_manager can
+        // never own a ticket, so the ownership check alone denies it.
+        stubDraft(99L, 10L);
+        stubTicket(10L, TicketStatus.APPROVED, null);
+
+        assertForbidden(() -> service.update(99L,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null),
+            salesManagerActor));
+    }
+
+    @Test
+    void issue_rejectsSalesManagerRole() {
+        stubDraft(99L, 10L);
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
+        assertForbidden(() -> service.issue(99L, salesManagerActor));
+    }
+
+    @Test
+    void requestRevision_rejectsSalesManagerRole() {
+        // Role-gated (SALES_ROLES) as the very first check.
+        assertForbidden(() -> service.requestRevision(10L,
+            new RevisionRequest(RevisionScope.QTY_OR_NOTE, "reason"), salesManagerActor));
+    }
+
+    private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable action) {
+        assertThatThrownBy(action)
+            .isInstanceOfSatisfying(ApiException.class, e ->
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
     // ── fixtures ─────────────────────────────────────────────────────────────
