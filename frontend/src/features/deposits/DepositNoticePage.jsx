@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
@@ -22,16 +24,9 @@ function money(v) {
 }
 
 export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToast }) {
-  const [doc, setDoc]               = useState(null);
-  const [noteTemplates, setTemplates] = useState([]);
-  const [customers, setCustomers]   = useState([]);
+  const queryClient = useQueryClient();
   const [customerSearch, setCsSearch] = useState('');
-  const [loading, setLoading]       = useState(true);
-  const [loadError, setLoadError]   = useState(null);
-  const [creatingDraft, setCreatingDraft] = useState(false);
-  const [saving, setSaving]         = useState(false);
   const [previewHtml, setPreview]   = useState('');
-  const [previewLoading, setPreviewLoading] = useState(false);
   const [confirmIssue, setConfirmIssue] = useState(false);
   const [downloading, setDownloading] = useState(null); // 'xlsx' | 'pdf' | null
   const iframeRef = useRef(null);
@@ -45,8 +40,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     items: [],
   });
 
-  // Mount effect only LOADS existing documents — it must never create one as a
-  // side effect of navigating here. The previous version unconditionally called
+  // --- Reads (TanStack Query) ---
+  // Mount only LOADS existing documents — it must never create one as a side
+  // effect of navigating here. The previous version unconditionally called
   // createDraft() whenever no DRAFT was found, which (a) fired twice under React
   // StrictMode's double-invoke, (b) minted a stray draft every time a user opened
   // this page and then navigated away without touching it, and (c) minted ANOTHER
@@ -54,59 +50,60 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   // had already been issued, since an ISSUED doc is never a DRAFT. Now: load the
   // DRAFT if one exists, else show the most recent ISSUED doc read-only, else
   // render an explicit empty state — creation only happens on the user's click
-  // (see handleCreateDraft).
-  async function loadDocs() {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const [templatesRes, customersRes] = await Promise.all([
-        api.depositNotices.noteTemplates(),
-        api.customers.search(''),
-      ]);
-      setTemplates(templatesRes.templates ?? []);
-      setCustomers(customersRes.customers ?? []);
+  // (see handleCreateDraft). None of the queries below ever create anything.
+  const noteTemplatesQuery = useQuery({
+    queryKey: queryKeys.depositNoteTemplates(),
+    queryFn: () => api.depositNotices.noteTemplates().then((response) => response.templates ?? []),
+  });
+  const noteTemplates = noteTemplatesQuery.data ?? [];
 
-      const docsRes = await api.depositNotices.listByTicket(ticketId);
-      const docs = docsRes.depositNotices ?? [];
-      const draft = docs.find((d) => d.status === 'DRAFT');
-      const latestIssued = docs
-        .filter((d) => d.status === 'ISSUED')
-        .sort((a, b) => (b.version ?? 0) - (a.version ?? 0))[0];
-      const existing = draft ?? latestIssued ?? null;
+  // Keyed by the live search text so every keystroke gets its own cache entry
+  // (matches the old onChange's per-keystroke api.customers.search(text) call);
+  // customerSearch === '' is the initial "whole master list" load loadDocs used
+  // to do up front.
+  const customersQuery = useQuery({
+    queryKey: queryKeys.customersSearch(customerSearch),
+    queryFn: () => api.customers.search(customerSearch).then((response) => response.customers ?? []),
+  });
+  const customers = customersQuery.data ?? [];
 
-      setDoc(existing);
-      if (existing) {
-        // Try to match customerName against master to auto-fill taxId + address
-        populateForm(existing, customersRes.customers ?? []);
-      }
-    } catch (err) {
-      setLoadError(err.message || 'โหลดไม่สำเร็จ');
-      showToast('error', err.message || 'โหลดไม่สำเร็จ');
-    } finally {
-      setLoading(false);
-    }
-  }
+  const depositNoticesQuery = useQuery({
+    queryKey: queryKeys.depositNotices(ticketId),
+    queryFn: () => api.depositNotices.listByTicket(ticketId).then((response) => response.depositNotices ?? []),
+  });
+  const doc = useMemo(() => {
+    const docs = depositNoticesQuery.data ?? [];
+    const draft = docs.find((d) => d.status === 'DRAFT');
+    const latestIssued = docs
+      .filter((d) => d.status === 'ISSUED')
+      .sort((a, b) => (b.version ?? 0) - (a.version ?? 0))[0];
+    return draft ?? latestIssued ?? null;
+  }, [depositNoticesQuery.data]);
+
+  // The full-page skeleton only gates on the two loads a first paint actually
+  // needs (doc list + note templates). customersQuery is deliberately excluded:
+  // it's keyed by customerSearch, so every keystroke in the customer-search box
+  // mints a "new" query key with isLoading briefly true for it — including it
+  // here would flash the *entire page* back to a skeleton on every keystroke,
+  // which the original imperative version never did (its onChange fetch had no
+  // loading indicator at all).
+  const loading = depositNoticesQuery.isLoading || noteTemplatesQuery.isLoading;
+
+  // Same reasoning as `loading`: only the doc-list/template load blocks the page
+  // with an error+retry state, matching the original loadDocs try/catch scope.
+  // A failed customer search (mid-session, per keystroke) stays silent, as it
+  // did before (the old onChange handler had its own `.catch(() => {})`).
+  const loadError = depositNoticesQuery.error || noteTemplatesQuery.error;
 
   useEffect(() => {
-    loadDocs();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadDocs is stable per ticketId; re-declaring it in deps would re-run on every render
-  }, [ticketId]);
+    if (loadError) showToast('error', loadError.message || 'โหลดไม่สำเร็จ');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per new error identity, not on every showToast identity change
+  }, [loadError]);
 
-  async function handleCreateDraft() {
-    setCreatingDraft(true);
-    try {
-      const defaultNotes = noteTemplates.filter((t) => t.defaultSelected).map((t) => t.text);
-      const created = await api.depositNotices.createDraft(ticketId, {
-        notes: defaultNotes,
-        depositPercent: 0.5,
-      });
-      setDoc(created.depositNotice);
-      populateForm(created.depositNotice, customers);
-    } catch (err) {
-      showToast('error', err.message || 'สร้างเอกสารฉบับร่างไม่สำเร็จ');
-    } finally {
-      setCreatingDraft(false);
-    }
+  function retryLoad() {
+    depositNoticesQuery.refetch();
+    noteTemplatesQuery.refetch();
+    customersQuery.refetch();
   }
 
   function populateForm(d, customerList = []) {
@@ -134,6 +131,100 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
       items:           (d.items ?? []).map((it) => ({ ...it })),
     });
   }
+
+  // Re-seed the editable `form` whenever the doc's identity/version/status
+  // actually changes (new draft created, or DRAFT -> ISSUED) — not on every
+  // background refetch of the same doc (e.g. a save doesn't bump
+  // version/status, so no reseed fires and in-flight edits aren't clobbered).
+  const docSeedKey = doc ? `${doc.id}:${doc.version}:${doc.status}` : null;
+  useEffect(() => {
+    if (doc) populateForm(doc, customers);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately keyed on docSeedKey only, see comment above
+  }, [docSeedKey]);
+
+  function invalidateDepositNotices() {
+    return queryClient.invalidateQueries({ queryKey: queryKeys.depositNotices(ticketId) });
+  }
+
+  const createDraftMutation = useMutation({
+    mutationFn: () => {
+      const defaultNotes = noteTemplates.filter((t) => t.defaultSelected).map((t) => t.text);
+      return api.depositNotices.createDraft(ticketId, {
+        notes: defaultNotes,
+        depositPercent: 0.5,
+      });
+    },
+    onSuccess: () => invalidateDepositNotices(),
+    onError: (err) => showToast('error', err.message || 'สร้างเอกสารฉบับร่างไม่สำเร็จ'),
+  });
+
+  function handleCreateDraft() {
+    createDraftMutation.mutate();
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: () => api.depositNotices.update(doc.id, buildPayload()),
+    onSuccess: () => {
+      showToast('success', 'บันทึกแล้ว');
+      invalidateDepositNotices();
+    },
+    onError: (err) => showToast('error', err.message || 'บันทึกไม่สำเร็จ'),
+  });
+
+  function handleSave() {
+    if (!doc) return;
+    saveMutation.mutate();
+  }
+
+  const previewMutation = useMutation({
+    mutationFn: async () => {
+      // Save first, then preview.
+      await api.depositNotices.update(doc.id, buildPayload());
+      return api.depositNotices.preview(doc.id);
+    },
+    onSuccess: (html) => {
+      setPreview(html);
+      invalidateDepositNotices();
+    },
+    onError: (err) => showToast('error', err.message || 'Preview ไม่สำเร็จ'),
+  });
+
+  function handlePreview() {
+    if (!doc) return;
+    previewMutation.mutate();
+  }
+
+  function handleIssue() {
+    if (!doc) return;
+    setConfirmIssue(true);
+  }
+
+  const issueMutation = useMutation({
+    mutationFn: async () => {
+      // Save first.
+      await api.depositNotices.update(doc.id, buildPayload());
+      return api.depositNotices.issue(doc.id);
+    },
+    onSuccess: (res) => {
+      showToast('success', `ออกเอกสาร ${res.depositNotice.docNumber} เรียบร้อย`);
+      setConfirmIssue(false);
+      invalidateDepositNotices();
+      // Issuing the deposit notice is the payment-track step that advances the
+      // ticket (see mockApi.depositNotices.issue) — refresh the ticket list +
+      // detail so those views don't show stale paymentStatus.
+      queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
+    },
+    onError: (err) => showToast('error', err.message || 'ออกเอกสารไม่สำเร็จ'),
+  });
+
+  function confirmIssueDocument() {
+    issueMutation.mutate();
+  }
+
+  const creatingDraft = createDraftMutation.isPending;
+  const saving = saveMutation.isPending || previewMutation.isPending || issueMutation.isPending;
+  const previewLoading = previewMutation.isPending;
 
   function setField(key, value) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -170,60 +261,6 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
         return updated;
       }),
     }));
-  }
-
-  async function handleSave() {
-    if (!doc) return;
-    setSaving(true);
-    try {
-      const res = await api.depositNotices.update(doc.id, buildPayload());
-      setDoc(res.depositNotice);
-      populateForm(res.depositNotice);
-      showToast('success', 'บันทึกแล้ว');
-    } catch (err) {
-      showToast('error', err.message || 'บันทึกไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handlePreview() {
-    if (!doc) return;
-    // Save first, then preview
-    setSaving(true);
-    try {
-      const res = await api.depositNotices.update(doc.id, buildPayload());
-      setDoc(res.depositNotice);
-      setPreviewLoading(true);
-      const html = await api.depositNotices.preview(doc.id);
-      setPreview(html);
-    } catch (err) {
-      showToast('error', err.message || 'Preview ไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-      setPreviewLoading(false);
-    }
-  }
-
-  function handleIssue() {
-    if (!doc) return;
-    setConfirmIssue(true);
-  }
-
-  async function confirmIssueDocument() {
-    setSaving(true);
-    try {
-      // Save first
-      await api.depositNotices.update(doc.id, buildPayload());
-      const res = await api.depositNotices.issue(doc.id);
-      setDoc(res.depositNotice);
-      showToast('success', `ออกเอกสาร ${res.depositNotice.docNumber} เรียบร้อย`);
-    } catch (err) {
-      showToast('error', err.message || 'ออกเอกสารไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-      setConfirmIssue(false);
-    }
   }
 
   async function handleDownloadXlsx() {
@@ -390,9 +427,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
 
       {loadError && !doc ? (
         <section className="panel">
-          <EmptyState icon="fileText" title="โหลดข้อมูลไม่สำเร็จ" description={loadError} />
+          <EmptyState icon="fileText" title="โหลดข้อมูลไม่สำเร็จ" description={loadError.message || 'โหลดไม่สำเร็จ'} />
           <div style={{ padding: '0 18px 18px', display: 'flex', justifyContent: 'center' }}>
-            <button type="button" className="secondary-button" onClick={loadDocs}>
+            <button type="button" className="secondary-button" onClick={retryLoad}>
               <Icon name="refresh" size={14} /> ลองใหม่
             </button>
           </div>
@@ -434,10 +471,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                 <input
                   id="doc-customer-search"
                   value={customerSearch}
-                  onChange={(e) => {
-                    setCsSearch(e.target.value);
-                    api.customers.search(e.target.value).then((r) => setCustomers(r.customers ?? [])).catch(() => {});
-                  }}
+                  onChange={(e) => setCsSearch(e.target.value)}
                   placeholder="ชื่อบริษัท หรือ เลขภาษี..."
                 />
                 {customerSearch && customers.length > 0 && (
