@@ -263,6 +263,31 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   const status = ticketStatusLabel(st);
 
+  // Next-action summary for the current viewer only — derived strictly from the
+  // `can` flags above (which already encode real status+role permission checks).
+  // Verified against backend/mock transition handlers (see api.tickets.approve/
+  // reject/pickup/... in src/api/mockApi.js) so the wording matches what the
+  // button actually does. Never invents an owner or action the data can't support.
+  const NEXT_ACTION_STEPS = [
+    ['reject',           st === 'price_proposed' ? 'ตรวจสอบราคาที่เสนอ แล้วอนุมัติหรือตีกลับให้ Import แก้ไข' : null],
+    ['approve',          st === 'price_proposed' ? 'ตรวจสอบราคาที่เสนอ แล้วอนุมัติหรือตีกลับให้ Import แก้ไข' : null],
+    ['pickup',           'รับมอบหมายใบขอราคานี้เพื่อเริ่มเสนอราคา'],
+    ['propose',          st === 'approved' ? 'แก้ไขราคาที่เสนอ (ต้องอนุมัติใหม่)' : 'เสนอราคาสินค้าให้ลูกค้า'],
+    ['generateQuotation','ออกใบเสนอราคาให้ลูกค้า'],
+    ['generateDocument', 'ออกใบแจ้งยอดมัดจำ'],
+    ['confirmCustomer',  'ยืนยันว่าลูกค้าตกลงคำสั่งซื้อแล้ว'],
+    ['issueDepositNotice','ออกใบแจ้งมัดจำให้ลูกค้า'],
+    ['confirmDepositPaid','ยืนยันว่าลูกค้าชำระมัดจำแล้ว'],
+    ['issueImportRequest','ออก Import Request (IR) ให้โรงงาน'],
+    ['markIrSent',        'บันทึกว่าส่ง IR ให้โรงงานแล้ว'],
+    ['markShipping',      'บันทึกว่าสินค้าออกเดินทางแล้ว'],
+    ['markGoodsReceived', 'บันทึกว่ารับสินค้าแล้ว'],
+    ['confirmFinalPayment','ยืนยันว่าลูกค้าชำระส่วนที่เหลือครบแล้ว'],
+    ['revise',            'ขอแก้ไขรายละเอียดใบขอราคานี้ได้หากจำเป็น'],
+    ['close',             'ปิดเรื่องนี้เมื่อดำเนินการครบถ้วนแล้ว'],
+  ];
+  const nextAction = NEXT_ACTION_STEPS.find(([key, text]) => can[key] && text)?.[1] ?? null;
+
   async function initPropose() {
     // load factory configs first so we can init currency defaults
     let fcMap = factoryConfigs;
@@ -482,7 +507,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     <div className="page-stack">
       <Breadcrumbs items={[{ label: 'ใบขอราคา', onClick: onBack }, { label: summary.code || summary.customerName || summary.title }]} />
       <header style={{ display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between' }}>
-        <div>
+        <div style={{ minWidth: 0 }}>
           <button type="button" className="secondary-button" onClick={onBack} style={{ marginBottom: 12 }}>
             <Icon name="chevronLeft" size={14} />
             กลับ
@@ -495,16 +520,98 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               <StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge>
             )}
           </div>
+          {/* Summary: who created it, when, and who is currently handling it — all
+              fields already fetched on `summary` (no new API calls / no invented owner). */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', marginTop: 10, fontSize: 13, color: '#64748b' }}>
+            <span>สร้างโดย <strong style={{ color: '#334155' }}>{summary.createdByName || '-'}</strong> · {formatThaiDate(summary.createdAt)}</span>
+            {summary.assignedToName && (
+              <span>เจ้าหน้าที่นำเข้าที่ดูแล <strong style={{ color: '#334155' }}>{summary.assignedToName}</strong></span>
+            )}
+          </div>
         </div>
         <button type="button" className="icon-button" onClick={loadTicket} title="รีเฟรช" aria-label="รีเฟรช">
           <Icon name="refresh" />
         </button>
       </header>
 
+      {/* Next-action callout — only rendered when derivable from the real `can`
+          permission flags above; otherwise omitted rather than guessed. */}
+      {nextAction && (
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px',
+          borderRadius: 8, border: '1px solid var(--color-info-border, #bfdbfe)',
+          background: 'var(--color-info-bg)', color: 'var(--color-info)', fontSize: 13,
+        }}>
+          <Icon name="chevronRight" size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span><strong>ขั้นตอนถัดไปสำหรับคุณ:</strong> {nextAction}</span>
+        </div>
+      )}
+
+      {/* Contextual decision panel — approve/reject is the one action on this page
+          with real financial and downstream consequences, so it gets its own
+          visually separated, deliberate block instead of sitting in the general
+          action row. Helper text below is quoted from api.tickets.approve/reject
+          in src/api/mockApi.js (lines ~1218-1240): approve copies proposedPrice →
+          approvedPrice and moves price_proposed → approved; reject moves the
+          ticket back to in_review for Import to re-propose. */}
+      {(can.approve || can.reject) && (
+        // Warning token rather than a raw amber: DESIGN.md defines
+        // --color-warning as the caution / needs-a-decision colour.
+        <section className="panel" style={{ borderColor: 'var(--color-warning)', borderWidth: 1.5 }}>
+          <div className="panel-header">
+            <h2>การอนุมัติราคา</h2>
+          </div>
+          <div style={{ padding: '0 18px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <p style={{ margin: 0, fontSize: 13, color: '#475569', lineHeight: 1.6 }}>
+              ตรวจสอบราคาที่เสนอในรายการสินค้าด้านล่างก่อนตัดสินใจ
+              {' — '}<strong>อนุมัติ</strong>จะยืนยันราคาที่เสนอเป็นราคาขายจริง และเปิดให้ฝ่ายขายออกใบเสนอราคาต่อได้
+              {' '}<strong>ไม่อนุมัติ</strong>จะส่งใบขอราคากลับไปที่ฝ่าย Import เพื่อเสนอราคาใหม่
+            </p>
+            {!showRejectForm && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                {can.approve && (
+                  <button type="button" className="primary-button" disabled={actionLoading || calcLoading}
+                    onClick={() => doAction(() => api.tickets.approve(ticketId), 'อนุมัติราคาแล้ว')}>
+                    <Icon name="check" size={14} />
+                    อนุมัติ
+                  </button>
+                )}
+                {can.reject && (
+                  <button type="button" className="secondary-button" disabled={actionLoading}
+                    onClick={() => setShowRejectForm(true)}
+                    style={{ color: '#dc2626', borderColor: '#fca5a5' }}>
+                    <Icon name="close" size={14} />
+                    ไม่อนุมัติ
+                  </button>
+                )}
+              </div>
+            )}
+            {showRejectForm && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>
+                  เหตุผลในการตีกลับ *
+                  <textarea rows={2} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)}
+                    placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }} />
+                </label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button type="button" className="secondary-button" onClick={handleReject} disabled={actionLoading}
+                    style={{ color: '#dc2626', borderColor: '#fca5a5' }}>
+                    ยืนยันไม่อนุมัติ
+                  </button>
+                  <button type="button" className="secondary-button" onClick={() => { setShowRejectForm(false); setRejectReason(''); }} disabled={actionLoading}>
+                    ยกเลิก
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
       {hasActions && (
         <section className="panel" style={{ background: '#f8fafc' }}>
           <div className="panel-header">
-            <h2>การดำเนินการ</h2>
+            <h2>การดำเนินการอื่น ๆ</h2>
           </div>
           <div style={{ padding: '12px 18px', display: 'flex', flexWrap: 'wrap', gap: 10 }}>
             {can.pickup && (
@@ -543,23 +650,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 style={{ fontSize: 12 }}
                 onClick={() => setShowBreakdown((v) => !v)}>
                 {showBreakdown ? 'ซ่อนรายละเอียดสูตร' : 'ดูรายละเอียดสูตร'}
-              </button>
-            )}
-
-            {can.approve && (
-              <button type="button" className="primary-button" disabled={actionLoading || calcLoading}
-                onClick={() => doAction(() => api.tickets.approve(ticketId), 'อนุมัติราคาแล้ว')}>
-                <Icon name="check" size={14} />
-                อนุมัติ
-              </button>
-            )}
-
-            {can.reject && !showRejectForm && (
-              <button type="button" className="secondary-button" disabled={actionLoading}
-                onClick={() => setShowRejectForm(true)}
-                style={{ color: '#dc2626', borderColor: '#fca5a5' }}>
-                <Icon name="close" size={14} />
-                ไม่อนุมัติ
               </button>
             )}
 
@@ -670,25 +760,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               </button>
             )}
           </div>
-
-          {showRejectForm && (
-            <div style={{ padding: '0 18px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <label style={{ fontSize: 13, fontWeight: 600 }}>
-                เหตุผลในการตีกลับ *
-                <textarea rows={2} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)}
-                  placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }} />
-              </label>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button type="button" className="secondary-button" onClick={handleReject} disabled={actionLoading}
-                  style={{ color: '#dc2626', borderColor: '#fca5a5' }}>
-                  ยืนยันไม่อนุมัติ
-                </button>
-                <button type="button" className="secondary-button" onClick={() => { setShowRejectForm(false); setRejectReason(''); }} disabled={actionLoading}>
-                  ยกเลิก
-                </button>
-              </div>
-            </div>
-          )}
 
           {showReviseForm && (
             <div style={{ padding: '0 18px 14px', display: 'flex', flexDirection: 'column', gap: 10, borderTop: '1px solid #e6eaf0' }}>
@@ -1281,7 +1352,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 ))}
               </div>
             ) : attachments.length === 0 ? (
-              <p style={{ padding: '12px 18px', color: '#94a3b8', fontSize: 13 }}>ยังไม่มีไฟล์แนบ</p>
+              <div style={{ padding: '4px 18px 14px' }}>
+                <EmptyState icon="paperclip" title="ยังไม่มีไฟล์แนบ" description="แนบ PO หรือใบเซ็นได้ด้วยปุ่มด้านบน" />
+              </div>
             ) : (
               <div style={{ padding: '8px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {attachments.map((att) => (
@@ -1355,7 +1428,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           </div>
           <div className="ticket-events">
             {events.length === 0 ? (
-              <p style={{ color: '#94a3b8', fontSize: 13 }}>ยังไม่มีประวัติ</p>
+              <EmptyState icon="clock" title="ยังไม่มีประวัติ" description="เหตุการณ์และความคิดเห็นจะปรากฏที่นี่" />
             ) : [...events].reverse().map((event) => {
               let snapItems = null;
               if (event.kind === 'PRICE_PROPOSED' && event.itemSnapshot) {
