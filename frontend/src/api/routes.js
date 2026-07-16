@@ -165,5 +165,6 @@ export const ROLE_PERMISSIONS = {
   canApproveCommissions: ['sales_manager', 'ceo', 'admin'],
   canViewPayrollCommissions: ['hr', 'admin'],
   canManagePayroll: ['hr', 'admin'],
-  canManagePriceImport: ['ceo', 'import', 'admin', 'sales', 'sales_manager'],
+  canManagePriceImport: ['ceo', 'import'],
+  canManageCatalogProducts: ['ceo', 'import'],
 };

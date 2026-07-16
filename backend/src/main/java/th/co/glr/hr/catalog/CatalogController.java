@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
+import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.importer.PriceImportService;
 import th.co.glr.hr.common.ApiException;
 
@@ -28,6 +29,12 @@ public class CatalogController {
         this.catalog     = catalog;
         this.priceImport = priceImport;
         this.sessions    = sessions;
+    }
+
+    private UserPrincipal requireCatalogEditor(HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, "ceo", "import");
+        return user;
     }
 
     @GetMapping
@@ -50,7 +57,7 @@ public class CatalogController {
 
     @PostMapping("/prices")
     Map<String, Object> addProduct(@RequestBody ProductPriceInput input, HttpSession session) {
-        sessions.requireUser(session);
+        requireCatalogEditor(session);
         if (input.factoryId() == null)
             throw new ApiException(HttpStatus.BAD_REQUEST, "factoryId จำเป็น");
         if (input.price() == null)
@@ -65,7 +72,7 @@ public class CatalogController {
         @RequestBody ProductPriceInput input,
         HttpSession session
     ) {
-        sessions.requireUser(session);
+        requireCatalogEditor(session);
         if (input.price() == null)
             throw new ApiException(HttpStatus.BAD_REQUEST, "price จำเป็น");
         priceImport.updateProduct(priceId, input);
@@ -74,7 +81,7 @@ public class CatalogController {
 
     @DeleteMapping("/prices/{priceId}")
     Map<String, String> deleteProduct(@PathVariable long priceId, HttpSession session) {
-        sessions.requireUser(session);
+        requireCatalogEditor(session);
         priceImport.deleteProduct(priceId);
         return Map.of("status", "deleted");
     }

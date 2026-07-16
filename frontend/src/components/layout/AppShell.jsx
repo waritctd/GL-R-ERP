@@ -24,7 +24,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     { path: '/ticket-overview', label: 'ภาพรวมใบขอราคา', helper: 'Ticket overview', icon: 'home', show: hasPermission(user.role, 'canViewTickets') && SALES_ENABLED },
     { path: '/tickets', label: 'ใบขอราคา', helper: 'Price requests', icon: 'fileText', show: hasPermission(user.role, 'canViewTickets') && SALES_ENABLED },
     { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', show: ['ceo', 'admin'].includes(user.role) && SALES_ENABLED },
-    { path: '/catalog', label: 'แคตตาล็อกสินค้า', helper: 'Product catalog', icon: 'search', show: hasPermission(user.role, 'canViewTickets') && SALES_ENABLED },
+    { path: '/catalog', label: 'แคตตาล็อกสินค้า', helper: 'Product catalog', icon: 'search', show: SALES_ENABLED },
     { path: '/price-import', label: 'นำเข้าราคา', helper: 'Price import', icon: 'upload', show: hasPermission(user.role, 'canManagePriceImport') && SALES_ENABLED },
     { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED },
     { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', show: hasPermission(user.role, 'canManagePayroll') },

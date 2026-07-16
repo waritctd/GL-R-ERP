@@ -13,6 +13,21 @@ describe('hasPermission', () => {
   it('returns false for an unknown permission key', () => {
     expect(hasPermission('hr', 'canDoSomethingImaginary')).toBe(false);
   });
+
+  it('scopes price import to ceo/import only (#205)', () => {
+    expect(hasPermission('ceo', 'canManagePriceImport')).toBe(true);
+    expect(hasPermission('import', 'canManagePriceImport')).toBe(true);
+    expect(hasPermission('sales', 'canManagePriceImport')).toBe(false);
+    expect(hasPermission('sales_manager', 'canManagePriceImport')).toBe(false);
+    expect(hasPermission('admin', 'canManagePriceImport')).toBe(false);
+  });
+
+  it('scopes catalog product writes to ceo/import only (#205)', () => {
+    expect(hasPermission('ceo', 'canManageCatalogProducts')).toBe(true);
+    expect(hasPermission('import', 'canManageCatalogProducts')).toBe(true);
+    expect(hasPermission('sales', 'canManageCatalogProducts')).toBe(false);
+    expect(hasPermission('employee', 'canManageCatalogProducts')).toBe(false);
+  });
 });
 
 describe('allowedRoute', () => {
@@ -62,6 +77,8 @@ describe('canAccessPath', () => {
   const hr = { role: 'hr', employeeId: 10 };
   const employee = { role: 'employee', employeeId: 5 };
   const sales = { role: 'sales', employeeId: 9 };
+  const ceo = { role: 'ceo', employeeId: 1 };
+  const importer = { role: 'import', employeeId: 2 };
 
   it('denies every path when there is no user', () => {
     expect(canAccessPath('/employees', null)).toBe(false);
@@ -114,6 +131,14 @@ describe('canAccessPath', () => {
   it('scopes commissions to commission-viewing roles', () => {
     expect(canAccessPath('/commissions', sales)).toBe(true);
     expect(canAccessPath('/commissions', employee)).toBe(false);
+  });
+
+  it('scopes price-import to ceo/import only (#205)', () => {
+    expect(canAccessPath('/price-import', ceo)).toBe(true);
+    expect(canAccessPath('/price-import', importer)).toBe(true);
+    expect(canAccessPath('/price-import', sales)).toBe(false);
+    expect(canAccessPath('/price-import', employee)).toBe(false);
+    expect(canAccessPath('/price-import', hr)).toBe(false);
   });
 
   it('allows unguarded and unknown paths for any authenticated user', () => {

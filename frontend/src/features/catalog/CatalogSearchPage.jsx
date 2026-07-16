@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
+import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -34,7 +35,7 @@ function debounce(fn, ms) {
 // size/price/edit); below 720px that crushes to unreadable stubs. This plain
 // `<table>` doesn't go through DataTable's mobileCard mechanism, so the
 // reflow is done by hand here, matching the same record-card styling.
-function ProductCard({ product, onEdit }) {
+function ProductCard({ product, onEdit, canManage }) {
   return (
     <div className="mt-2.5 flex w-full min-w-0 flex-col items-stretch gap-2 rounded-md border border-solid border-border bg-surface p-4 first:mt-0">
       {/* Factory is the identity anchor (it leads the desktop table and is always
@@ -58,10 +59,12 @@ function ProductCard({ product, onEdit }) {
           {priceDisplay(product.price, product.currency)}
           <span className="ml-1 text-xs font-normal text-text-muted">/ {unitLabel(product.priceUnit)}</span>
         </span>
-        <Button size="sm" variant="secondary" onClick={() => onEdit(product)}>
-          <Icon name="pencil" size={14} />
-          แก้ไข
-        </Button>
+        {canManage && (
+          <Button size="sm" variant="secondary" onClick={() => onEdit(product)}>
+            <Icon name="pencil" size={14} />
+            แก้ไข
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -69,8 +72,9 @@ function ProductCard({ product, onEdit }) {
 
 // ── main page ─────────────────────────────────────────────────────────────────
 
-export function CatalogSearchPage({ showToast }) {
+export function CatalogSearchPage({ user, showToast }) {
   const isMobile = useIsMobile();
+  const canManage = hasPermission(user.role, 'canManageCatalogProducts');
   const [query, setQuery]         = useState('');
   const [factoryId, setFactoryId] = useState('');
   const [factories, setFactories] = useState([]);
@@ -192,7 +196,7 @@ export function CatalogSearchPage({ showToast }) {
           {isMobile ? (
             <div className="flex flex-col">
               {items.map((p) => (
-                <ProductCard key={p.priceId} product={p} onEdit={setEditingProduct} />
+                <ProductCard key={p.priceId} product={p} onEdit={setEditingProduct} canManage={canManage} />
               ))}
             </div>
           ) : (
@@ -237,10 +241,12 @@ export function CatalogSearchPage({ showToast }) {
                         </span>
                       </td>
                       <td className="px-3 py-2">
-                        <Button size="sm" variant="secondary" onClick={() => setEditingProduct(p)}>
-                          <Icon name="pencil" size={14} />
-                          แก้ไข
-                        </Button>
+                        {canManage && (
+                          <Button size="sm" variant="secondary" onClick={() => setEditingProduct(p)}>
+                            <Icon name="pencil" size={14} />
+                            แก้ไข
+                          </Button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -257,7 +263,7 @@ export function CatalogSearchPage({ showToast }) {
         </p>
       )}
 
-      {editingProduct && (
+      {canManage && editingProduct && (
         <ProductFormModal
           product={editingProduct}
           onClose={() => setEditingProduct(null)}
