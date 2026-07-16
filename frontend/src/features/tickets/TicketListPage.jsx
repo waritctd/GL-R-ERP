@@ -8,13 +8,17 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
 
+// Mirrors the StatusBadge tone palette (see src/styles.css .status-* rules) so the
+// filter-tab accent never drifts from the shared status-color tokens. The three
+// `border` accents (f59e0b/3b82f6/ef4444) are dot-accent colors with no existing
+// design token equivalent — left as literals deliberately (see handoff notes).
 const TONE_ACTIVE = {
-  primary: { bg: '#1e40af', color: '#fff',    border: '#1e40af' },
-  neutral: { bg: '#f1f5f9', color: '#475569', border: '#94a3b8' },
-  warning: { bg: '#fef3c7', color: '#b45309', border: '#f59e0b' },
-  info:    { bg: '#dbeafe', color: '#1d4ed8', border: '#3b82f6' },
-  success: { bg: '#dcfce7', color: '#15803d', border: '#22c55e' },
-  danger:  { bg: '#fee2e2', color: '#b91c1c', border: '#ef4444' },
+  primary: { bg: 'var(--color-info-dot)', color: 'var(--color-surface)', border: 'var(--color-info-dot)' },
+  neutral: { bg: 'var(--color-surface-subtle)', color: 'var(--color-icon-muted)', border: 'var(--color-text-faint)' },
+  warning: { bg: 'var(--color-warning-bg)', color: 'var(--color-warning)', border: '#f59e0b' },
+  info:    { bg: 'var(--color-info-bg)', color: 'var(--color-info)', border: '#3b82f6' },
+  success: { bg: 'var(--color-success-bg)', color: 'var(--color-success-dark)', border: 'var(--color-success-soft)' },
+  danger:  { bg: 'var(--color-danger-bg)', color: 'var(--color-danger-dark)', border: '#ef4444' },
 };
 
 const STATUS_TABS = [

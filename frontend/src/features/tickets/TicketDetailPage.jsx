@@ -28,6 +28,20 @@ const EVENT_KIND_LABEL = {
 
 const TERMINAL = ['closed', 'cancelled'];
 
+// Quotation revision docStatus (DRAFT / ISSUED / SUPERSEDED) mapped onto the same
+// success/info/neutral tokens StatusBadge uses, instead of one-off hex per state.
+// Previously SUPERSEDED text used Ink Faint (#94a3b8), below the DESIGN.md Ink Muted
+// contrast floor on a light background — this switches it to --color-icon-muted.
+function docStatusColors(docStatus) {
+  if (docStatus === 'SUPERSEDED') {
+    return { background: 'var(--color-surface-subtle)', color: 'var(--color-icon-muted)' };
+  }
+  if (docStatus === 'ISSUED') {
+    return { background: 'var(--color-success-bg)', color: 'var(--color-success-dark)' };
+  }
+  return { background: 'var(--color-info-bg)', color: 'var(--color-info)' };
+}
+
 function eventDotClass(kind) {
   if (kind === 'CREATED') return 'event-dot created';
   if (kind === 'COMMENTED' || kind === 'COMMENT') return 'event-dot comment';
@@ -1304,8 +1318,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   <div style={{ flexShrink: 0, marginTop: 2 }}>
                     <span style={{
                       fontSize: 11, fontWeight: 700, borderRadius: 4, padding: '2px 7px',
-                      background: q.docStatus === 'SUPERSEDED' ? '#f1f5f9' : q.docStatus === 'ISSUED' ? '#dcfce7' : '#eff6ff',
-                      color: q.docStatus === 'SUPERSEDED' ? '#94a3b8' : q.docStatus === 'ISSUED' ? '#16a34a' : '#2563eb',
+                      ...docStatusColors(q.docStatus),
                     }}>Rev {q.quotationVersion}</span>
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -1313,8 +1326,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                       <span style={{ fontWeight: 600, fontSize: 13 }}>{q.number}</span>
                       <span style={{
                         fontSize: 10, borderRadius: 3, padding: '1px 5px', fontWeight: 600,
-                        background: q.docStatus === 'SUPERSEDED' ? '#f1f5f9' : q.docStatus === 'ISSUED' ? '#dcfce7' : '#eff6ff',
-                        color: q.docStatus === 'SUPERSEDED' ? '#94a3b8' : q.docStatus === 'ISSUED' ? '#16a34a' : '#3b82f6',
+                        ...docStatusColors(q.docStatus),
                       }}>{q.docStatus}</span>
                     </div>
                     <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>
@@ -1363,7 +1375,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                       </p>
                     )}
                     {snapItems && snapItems.length > 0 && (
-                      <div style={{ margin: '6px 0 0', fontSize: 11, color: '#475569', background: '#f8fafc', borderRadius: 4, padding: '6px 10px', borderLeft: '3px solid #94a3b8' }}>
+                      <div style={{ margin: '6px 0 0', fontSize: 11, color: '#475569', background: '#f8fafc', borderRadius: 4, padding: '6px 10px' }}>
                         <div style={{ fontWeight: 600, marginBottom: 4, color: '#64748b' }}>รายการสินค้า ณ เวลาที่เสนอราคา</div>
                         {snapItems.map((it, i) => (
                           <div key={i} style={{ paddingBottom: 2 }}>

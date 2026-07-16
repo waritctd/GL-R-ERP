@@ -17,6 +17,7 @@ import { formGridSpan2, Panel, PageStack, RowActions, StatGrid } from '../../com
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { leaveStatusLabel as statusInfo } from '../../utils/format.js';
 
 const LEAVE_TABLE_GRID = 'grid-cols-[minmax(0,1.35fr)_minmax(0,1.1fr)_minmax(0,1.65fr)_minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,0.8fr)] max-[1040px]:min-w-[900px] reflow-cards';
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
@@ -91,16 +92,6 @@ function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
   });
 }
 
-function statusInfo(status) {
-  const map = {
-    SUBMITTED: { label: 'รออนุมัติ', tone: 'warning' },
-    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
-    REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
-    CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'neutral' },
-    AUTO_REJECTED: { label: 'โควตาไม่พอ', tone: 'danger' },
-  };
-  return map[status] ?? { label: status || '-', tone: 'neutral' };
-}
 
 function formatDate(value) {
   if (!value) return '-';

@@ -14,6 +14,7 @@ import { formGridSpan2, Panel, PageStack, RowActions, StatGrid } from '../../com
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { overtimeStatusLabel as statusInfo } from '../../utils/format.js';
 
 const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,0.75fr)] max-[1040px]:min-w-[940px] reflow-cards';
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
@@ -89,17 +90,6 @@ function createOvertimeFormSchema({ requireEmployeeId }) {
       });
     }
   });
-}
-
-function statusInfo(status) {
-  const map = {
-    SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
-    MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },
-    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
-    REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
-    CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'neutral' },
-  };
-  return map[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
 function apiDateTime(value) {

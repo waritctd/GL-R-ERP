@@ -10,7 +10,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { SkeletonCard } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatMoney, formatThaiDate } from '../../utils/format.js';
+import { commissionStatusLabel as statusInfo, formatMoney, formatThaiDate } from '../../utils/format.js';
 
 const today = new Date().toISOString().slice(0, 10);
 const thisMonth = new Date().toISOString().slice(0, 7);
@@ -27,17 +27,6 @@ const emptyForm = {
   shortfall: '0',
   invoiceAttachment: null,
 };
-
-function statusInfo(status) {
-  const map = {
-    SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
-    MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },
-    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
-    REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
-    VOID: { label: 'ยกเลิก', tone: 'danger' },
-  };
-  return map[status] ?? { label: status, tone: 'neutral' };
-}
 
 function kindLabel(kind) {
   return kind === 'CLAWBACK' ? 'คืน/ยกเลิก' : 'ขาย';
