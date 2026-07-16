@@ -883,7 +883,7 @@ textarea:focus {
 }
 
 .ticket-table {
-  grid-template-columns: minmax(0,0.9fr) minmax(0,2.4fr) minmax(0,1.2fr) minmax(0,1.2fr) minmax(0,1fr);
+  grid-template-columns: minmax(0,2.6fr) minmax(0,1.3fr) minmax(0,1.3fr) minmax(0,1fr);
 }
 
 .ticket-items-table {

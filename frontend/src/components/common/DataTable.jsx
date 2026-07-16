@@ -17,9 +17,13 @@ import { Skeleton } from './Skeleton.jsx';
  * `columnheader` cell for sortable columns. Styled via `.sort-header` /
  * `.is-active` in styles.css (no inline hex).
  */
-function SortHeader({ label, active, dir, onSort }) {
+function SortHeader({ label, active, dir, onSort, align }) {
   return (
-    <span role="columnheader" aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+    <span
+      role="columnheader"
+      aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      className={align === 'right' ? 'flex justify-end' : undefined}
+    >
       <button
         type="button"
         className={`sort-header${active ? ' is-active' : ''}`}
@@ -253,10 +257,11 @@ export function DataTable({
                   label={column.header}
                   active={sortKey === column.key}
                   dir={sortDir}
+                  align={column.align}
                   onSort={() => handleSort(column.key)}
                 />
               ) : (
-                <span key={column.key} role="columnheader">
+                <span key={column.key} role="columnheader" className={column.align === 'right' ? 'text-right' : undefined}>
                   {column.headerNode ?? column.header}
                 </span>
               )
@@ -319,6 +324,7 @@ export function DataTable({
                 <span
                   key={column.key}
                   role="cell"
+                  className={column.align === 'right' ? 'text-right' : undefined}
                   data-label={typeof column.header === 'string' ? column.header : undefined}
                 >
                   {column.render(row)}

@@ -185,16 +185,19 @@ const TRACK_LABEL = {
 
 const TICKET_COLUMNS = [
   {
-    key: 'code',
-    header: 'เลขที่',
-    searchAccessor: (ticket) => ticket.code || '',
-    render: (ticket) => <code style={{ fontSize: 12 }}>{ticket.code}</code>,
-  },
-  {
     key: 'customer',
     header: 'บริษัท / โครงการ',
-    searchAccessor: (ticket) => ticket.customerName || ticket.title || '',
-    render: (ticket) => <span><strong>{ticket.customerName || ticket.title}</strong></span>,
+    searchAccessor: (ticket) => [ticket.code, ticket.customerName, ticket.title].filter(Boolean).join(' '),
+    // Primary entity (company/project) leads, bold and full-size; the request
+    // code is secondary metadata underneath in muted mono — matches the
+    // mobile card's hierarchy (code above title there; company is still the
+    // thing a desktop user scans for first in a wide row).
+    render: (ticket) => (
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <strong className="block truncate text-text">{ticket.customerName || ticket.title}</strong>
+        <code className="block truncate text-2xs text-text-muted">{ticket.code}</code>
+      </span>
+    ),
   },
   {
     key: 'createdByName',

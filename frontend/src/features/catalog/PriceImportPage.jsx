@@ -483,7 +483,6 @@ export function PriceImportPage({ showToast }) {
                   <tr>
                     <th className="text-left px-2 py-2 text-muted font-medium">Collection</th>
                     <th className="text-left px-2 py-2 text-muted font-medium">ชื่อ</th>
-                    <th className="text-left px-2 py-2 text-muted font-medium">รหัส</th>
                     <th className="text-left px-2 py-2 text-muted font-medium">สี</th>
                     <th className="text-left px-2 py-2 text-muted font-medium">ผิว</th>
                     <th className="text-left px-2 py-2 text-muted font-medium">ขนาด</th>
@@ -495,16 +494,24 @@ export function PriceImportPage({ showToast }) {
                   {products.map((p) => (
                     <tr
                       key={p.priceId}
-                      className="border-b border-border hover:bg-surface-alt transition-colors"
+                      className="border-b border-border hover:bg-surface-hover transition-colors"
                     >
-                      <td className="px-2 py-2">{p.collection || '—'}</td>
+                      {/* Collection (primary) + product code (secondary, muted
+                          mono) stacked — this list is already scoped to one
+                          factory, so collection is the identity anchor, same
+                          as the mobile ProductCard above. */}
+                      <td className="px-2 py-2">
+                        <span className="flex min-w-0 flex-col gap-0.5">
+                          <strong className="block truncate font-medium text-text">{p.collection || p.productName || '—'}</strong>
+                          <code className="block truncate text-2xs text-text-muted">{p.productCode || '—'}</code>
+                        </span>
+                      </td>
                       <td className="px-2 py-2">{p.productName || '—'}</td>
-                      <td className="px-2 py-2 font-mono text-xs">{p.productCode || '—'}</td>
                       <td className="px-2 py-2">{p.color || '—'}</td>
                       <td className="px-2 py-2">{p.surface || '—'}</td>
                       <td className="px-2 py-2">{p.sizeRaw || '—'}</td>
                       <td className="px-2 py-2 text-right whitespace-nowrap font-medium">
-                        {priceDisplay(p.price, p.currency)}
+                        <span className="font-mono">{priceDisplay(p.price, p.currency)}</span>
                         <span className="text-xs text-muted ml-1">/ {unitLabel(p.priceUnit)}</span>
                       </td>
                       <td className="px-2 py-2">

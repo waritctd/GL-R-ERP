@@ -156,6 +156,7 @@ export function CommissionPage({ user, showToast }) {
     {
       key: 'actualReceived',
       header: 'ยอดรับจริง',
+      align: 'right',
       sortable: true,
       sortAccessor: (record) => Number(record.actualReceived || 0),
       render: (record) => <code>{formatMoney(record.actualReceived)}</code>,
@@ -163,6 +164,7 @@ export function CommissionPage({ user, showToast }) {
     {
       key: 'commissionableBase',
       header: 'ฐานค่าคอม',
+      align: 'right',
       sortable: true,
       sortAccessor: (record) => Number(record.commissionableBase || 0),
       render: (record) => <code>{formatMoney(record.commissionableBase)}</code>,
