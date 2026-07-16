@@ -107,7 +107,7 @@ public class TicketService {
 
     @Transactional
     public TicketDto proposePrice(long ticketId, ProposePriceRequest request, UserPrincipal actor) {
-        if (!IMPORT_ROLES.contains(actor.role()) && !isAdmin(actor)) {
+        if (!IMPORT_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
         TicketDto ticket = requireTicket(ticketId);
@@ -225,7 +225,7 @@ public class TicketService {
     public TicketDto close(long ticketId, UserPrincipal actor) {
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
-        if (s.createdById() != actor.id() && !isAdmin(actor)) {
+        if (s.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
         String st = s.status();
@@ -327,7 +327,7 @@ public class TicketService {
 
     @Transactional
     public TicketDto markGoodsReceived(long ticketId, UserPrincipal actor) {
-        if (!IMPORT_ROLES.contains(actor.role()) && !isAdmin(actor)) {
+        if (!IMPORT_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
@@ -383,10 +383,8 @@ public class TicketService {
 
         boolean salesCanEdit = SALES_ROLES.contains(actor.role()) && isOwner
             && Set.of(TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED).contains(st);
-        boolean adminCanEdit = isAdmin(actor)
-            && Set.of(TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED).contains(st);
 
-        if (!salesCanEdit && !adminCanEdit) {
+        if (!salesCanEdit) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้");
         }
         tickets.replaceItems(ticketId, request.items());
@@ -458,9 +456,5 @@ public class TicketService {
         if (!allowed.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
-    }
-
-    private boolean isAdmin(UserPrincipal actor) {
-        return "admin".equals(actor.role());
     }
 }

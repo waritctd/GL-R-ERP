@@ -21,7 +21,7 @@ import { ActionQueue } from './ActionQueue.jsx';
  */
 const DASHBOARD_GRID = 'grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] max-[1040px]:grid-cols-2 max-[720px]:grid-cols-1';
 
-const COMPANY_ROLES = ['hr', 'admin', 'ceo'];
+const COMPANY_ROLES = ['hr', 'ceo'];
 
 function numberValue(value) {
   return value ?? 0;

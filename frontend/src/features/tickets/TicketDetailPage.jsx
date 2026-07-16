@@ -225,8 +225,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   const ps = summary.paymentStatus;
   const fs = summary.fulfillmentStatus;
-  const isSales  = ROLE_PERMISSIONS.canCreateTickets.includes(role) || role === 'admin';
-  const isImport = ROLE_PERMISSIONS.canPickupTickets.includes(role) || role === 'admin';
+  const isSales  = ROLE_PERMISSIONS.canCreateTickets.includes(role);
+  const isImport = ROLE_PERMISSIONS.canPickupTickets.includes(role);
   const dualTrackDone = ps === 'FULLY_PAID' && fs === 'GOODS_RECEIVED';
 
   const EDITABLE_STATUSES = ['submitted', 'in_review', 'price_proposed'];
@@ -237,16 +237,13 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     overridePrice:     st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
     approve:           st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
     reject:            st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    generateQuotation: (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canGenerateQuotation.includes(role) && (isOwner || role === 'admin'),
-    generateDocument:  (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
-    revise:            (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
-    close:            (st === 'document_issued' || (st === 'quotation_issued' && dualTrackDone)) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && (isOwner || role === 'admin'),
-    cancel:           !TERMINAL.includes(st)   && (isOwner || role === 'admin'),
+    generateQuotation: (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canGenerateQuotation.includes(role) && isOwner,
+    generateDocument:  (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
+    revise:            (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
+    close:            (st === 'document_issued' || (st === 'quotation_issued' && dualTrackDone)) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
+    cancel:           !TERMINAL.includes(st)   && isOwner,
     comment:          !TERMINAL.includes(st),
-    editItems: EDITABLE_STATUSES.includes(st) && (
-      (ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner) ||
-      role === 'admin'
-    ),
+    editItems: EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     // Dual-track (ข้อ 13)
     confirmCustomer:    st === 'quotation_issued' && ps == null && isSales,
     issueDepositNotice: st === 'quotation_issued' && ps === 'CUSTOMER_CONFIRMED' && isSales,

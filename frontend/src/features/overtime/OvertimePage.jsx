@@ -167,8 +167,8 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
   }, [requestsQuery.error, showToast]);
 
   const submitEmployeeOptions = useMemo(
-    () => employeeOptions.filter((employee) => employee.self || employee.directReport || user.role === 'admin'),
-    [employeeOptions, user.role],
+    () => employeeOptions.filter((employee) => employee.self || employee.directReport),
+    [employeeOptions],
   );
   const canSubmitForTeam = submitEmployeeOptions.some((employee) => employee.directReport);
   const hasMultipleEmployeeOptions = employeeOptions.length > 1;

@@ -17,7 +17,7 @@ function GreetingSubtitle({ role }) {
   return 'ภาพรวมใบขอราคา';
 }
 
-const SHOW_SALES_ROLES = ['import', 'ceo', 'admin'];
+const SHOW_SALES_ROLES = ['import', 'ceo'];
 
 /**
  * Mobile record card for the "recent tickets" strip. The desktop 5-column
@@ -81,8 +81,8 @@ export function TicketDashboard({ user, employee, showToast }) {
   const greeting = `สวัสดี, ${employee?.nickName || employee?.nameTh || user.name}`;
 
   // Only the ticket statuses THIS role can act on (permissions.js is the
-  // source of truth): import picks up submitted tickets, ceo/admin approve
-  // prices, sales/admin generate the quotation once approved. A count the
+  // source of truth): import picks up submitted tickets, ceo approves
+  // prices, sales generates the quotation once approved. A count the
   // viewer cannot act on (e.g. "submitted" for a sales rep, who is waiting
   // on Import) is intentionally left non-clickable, not omitted — showing it
   // as a clickable action would misrepresent whose job it is.
