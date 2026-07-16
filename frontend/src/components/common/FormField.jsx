@@ -40,12 +40,12 @@ export function FormField({ label, htmlFor, id, error, hint, required = false, c
       ) : null}
       {children}
       {hint ? (
-        <p className="field-hint" id={hintId}>
+        <p className="m-0 text-text-muted text-xs font-medium" id={hintId}>
           {hint}
         </p>
       ) : null}
       {error ? (
-        <p className="field-error-text" id={errorId} role="alert">
+        <p className="m-0 text-danger text-xs font-bold" id={errorId} role="alert">
           {error}
         </p>
       ) : null}
