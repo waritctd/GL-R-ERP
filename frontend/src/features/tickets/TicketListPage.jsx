@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -30,6 +30,7 @@ const STATUS_TABS = [
   { value: 'quotation_issued', label: 'ออกใบเสนอราคาแล้ว',   tone: 'success' },
   { value: 'document_issued',  label: 'ออกใบแจ้งยอดแล้ว',    tone: 'success' },
   { value: 'closed',           label: 'ปิดแล้ว',              tone: 'neutral' },
+  { value: 'cancelled',        label: 'ยกเลิกแล้ว',           tone: 'danger'  },
 ];
 
 const STATUS_ORDER = [
@@ -74,12 +75,35 @@ function TicketCard({ ticket }) {
 
 export function TicketListPage({ user, showToast }) {
   const navigate = useNavigate();
+  // Status filter + search text live in the URL (not local state) so that:
+  // (a) a dashboard queue card can land here pre-filtered via ?status=..., and
+  // (b) list → detail → back preserves whatever filter/search was active,
+  // instead of resetting to "ทั้งหมด" every time (previously statusFilter was
+  // plain useState, so onBack navigating to a bare '/tickets' lost it).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const statusFilter = searchParams.get('status') ?? '';
+  const searchText = searchParams.get('q') ?? '';
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState('');
   const [creating, setCreating] = useState(false);
 
   const canCreate = ROLE_PERMISSIONS.canCreateTickets.includes(user.role);
+
+  function updateParam(key, value) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set(key, value); else next.delete(key);
+      return next;
+    }, { replace: true });
+  }
+
+  function setStatusFilter(value) {
+    updateParam('status', value);
+  }
+
+  function setSearchText(value) {
+    updateParam('q', value);
+  }
 
   async function loadTickets(status = statusFilter) {
     setLoading(true);
@@ -96,6 +120,7 @@ export function TicketListPage({ user, showToast }) {
 
   useEffect(() => {
     loadTickets(statusFilter);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadTickets closes over statusFilter, which is already the effect's dependency
   }, [statusFilter]);
 
   async function handleCreate(payload) {
@@ -154,6 +179,8 @@ export function TicketListPage({ user, showToast }) {
         onRowClick={(ticket) => navigate(`/tickets/${ticket.id}`)}
         mobileCard={(ticket) => <TicketCard ticket={ticket} />}
         searchable
+        searchValue={searchText}
+        onSearchChange={setSearchText}
         searchPlaceholder="ค้นหาเลขที่ / บริษัท / ผู้ดูแล"
         initialSort={{ key: 'date', dir: 'desc' }}
         loading={loading}

@@ -91,10 +91,15 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   const [selectedContact, setSelectedContact] = useState(null);
   const [showNewContact, setShowNewContact] = useState(false);
   const [newContact, setNewContact] = useState({ firstName: '', lastName: '', position: '', email: '', phone: '' });
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [creatingContact, setCreatingContact] = useState(false);
 
   // catalog autocomplete
   const [catalogResults, setCatalogResults] = useState([]);
-  const [catalogFocusIdx, setCatalogFocusIdx] = useState(null);
+  // { index, field: 'brand' | 'model' } | null — tracking which field is
+  // focused (not just which item row) so the brand and model inputs for the
+  // same row don't both render the same catalogResults dropdown at once.
+  const [catalogFocus, setCatalogFocus] = useState(null);
 
   // new customer form
   const [showNewCustomer, setShowNewCustomer] = useState(false);
@@ -167,12 +172,12 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       };
     }));
     setCatalogResults([]);
-    setCatalogFocusIdx(null);
+    setCatalogFocus(null);
   }
 
   function onCatalogInput(index, field, value) {
     updateItem(index, field, value);
-    setCatalogFocusIdx(index);
+    setCatalogFocus({ index, field });
     debouncedCatalogSearch(value, async (q) => {
       if (!q.trim()) { setCatalogResults([]); return; }
       try {
@@ -187,12 +192,19 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
   async function handleCreateProject() {
     if (!newProjectName.trim()) return;
-    const res = await api.customers.createProject(selectedCustomer.id, { name: newProjectName.trim() });
-    const proj = res.project;
-    setProjectOptions((prev) => [...prev, proj]);
-    setSelectedProject(proj);
-    setNewProjectName('');
-    setShowNewProject(false);
+    setCreatingProject(true);
+    try {
+      const res = await api.customers.createProject(selectedCustomer.id, { name: newProjectName.trim() });
+      const proj = res.project;
+      setProjectOptions((prev) => [...prev, proj]);
+      setSelectedProject(proj);
+      setNewProjectName('');
+      setShowNewProject(false);
+    } catch (err) {
+      setError(err.message || 'สร้างโครงการไม่สำเร็จ');
+    } finally {
+      setCreatingProject(false);
+    }
   }
 
   async function handleCreateCustomer() {
@@ -212,12 +224,19 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
   async function handleCreateContact() {
     if (!newContact.firstName.trim()) return;
-    const res = await api.customers.createContact(selectedCustomer.id, newContact);
-    const ct = res.contact;
-    setContactOptions((prev) => [...prev, ct]);
-    setSelectedContact(ct);
-    setShowNewContact(false);
-    setNewContact({ firstName: '', lastName: '', position: '', email: '', phone: '' });
+    setCreatingContact(true);
+    try {
+      const res = await api.customers.createContact(selectedCustomer.id, newContact);
+      const ct = res.contact;
+      setContactOptions((prev) => [...prev, ct]);
+      setSelectedContact(ct);
+      setShowNewContact(false);
+      setNewContact({ firstName: '', lastName: '', position: '', email: '', phone: '' });
+    } catch (err) {
+      setError(err.message || 'เพิ่มผู้ติดต่อไม่สำเร็จ');
+    } finally {
+      setCreatingContact(false);
+    }
   }
 
   async function submit(event) {
@@ -378,8 +397,8 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                     <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
                       <input value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)}
                         placeholder="ชื่อโครงการ" style={{ flex: 1 }} />
-                      <button type="button" className="primary-button" onClick={handleCreateProject} style={{ padding: '4px 12px', fontSize: 12 }}>
-                        เพิ่ม
+                      <button type="button" className="primary-button" onClick={handleCreateProject} disabled={creatingProject} style={{ padding: '4px 12px', fontSize: 12 }}>
+                        {creatingProject ? 'กำลังเพิ่ม...' : 'เพิ่ม'}
                       </button>
                     </div>
                   )}
@@ -446,8 +465,8 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                         <span style={{ fontSize: 11 }}>อีเมล</span>
                         <input value={newContact.email} onChange={(e) => setNewContact((p) => ({ ...p, email: e.target.value }))} placeholder="email@company.com" />
                       </label>
-                      <button type="button" className="primary-button" onClick={handleCreateContact} style={{ gridColumn: '1 / -1', fontSize: 12 }}>
-                        เพิ่มผู้ติดต่อ
+                      <button type="button" className="primary-button" onClick={handleCreateContact} disabled={creatingContact} style={{ gridColumn: '1 / -1', fontSize: 12 }}>
+                        {creatingContact ? 'กำลังเพิ่ม...' : 'เพิ่มผู้ติดต่อ'}
                       </button>
                     </div>
                   )}
@@ -485,12 +504,12 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   <input
                     value={item.brand}
                     onChange={(e) => onBrandInput(index, e.target.value)}
-                    onFocus={() => { setCatalogFocusIdx(index); if (item.brand) onBrandInput(index, item.brand); }}
-                    onBlur={() => setTimeout(() => setCatalogFocusIdx(null), 180)}
+                    onFocus={() => { setCatalogFocus({ index, field: 'brand' }); if (item.brand) onBrandInput(index, item.brand); }}
+                    onBlur={() => setTimeout(() => setCatalogFocus(null), 180)}
                     placeholder="เช่น SCG, Cotto, Panaria"
                     required
                   />
-                  {catalogFocusIdx === index && catalogResults.length > 0 && (
+                  {catalogFocus?.index === index && catalogFocus?.field === 'brand' && catalogResults.length > 0 && (
                     <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 60, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.12)', maxHeight: 200, overflowY: 'auto' }}>
                       {catalogResults.map((cat) => (
                         // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- autocomplete option row; onMouseDown (not click) preserves input focus for typeahead
@@ -521,12 +540,12 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   <input
                     value={item.model}
                     onChange={(e) => onModelInput(index, e.target.value)}
-                    onFocus={() => { setCatalogFocusIdx(index); if (item.model) onModelInput(index, item.model); }}
-                    onBlur={() => setTimeout(() => setCatalogFocusIdx(null), 180)}
+                    onFocus={() => { setCatalogFocus({ index, field: 'model' }); if (item.model) onModelInput(index, item.model); }}
+                    onBlur={() => setTimeout(() => setCatalogFocus(null), 180)}
                     placeholder="เช่น Stone, Elegance, L-Trim..."
                     required
                   />
-                  {catalogFocusIdx === index && catalogResults.length > 0 && (
+                  {catalogFocus?.index === index && catalogFocus?.field === 'model' && catalogResults.length > 0 && (
                     <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 60, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.12)', maxHeight: 200, overflowY: 'auto' }}>
                       {catalogResults.map((cat) => (
                         // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- autocomplete option row; onMouseDown (not click) preserves input focus for typeahead

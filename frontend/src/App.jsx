@@ -47,7 +47,10 @@ function TicketDetailRoute({ user, showToast }) {
     <TicketDetailPage
       user={user}
       ticketId={id}
-      onBack={() => navigate('/tickets')}
+      // navigate(-1) (not a fixed '/tickets') so the list's status filter and
+      // search text — now carried in the URL query string, see
+      // TicketListPage.jsx — survive the round trip instead of resetting.
+      onBack={() => navigate(-1)}
       onOpenDocument={(ticketId) => navigate(`/tickets/${ticketId}/deposit`)}
       showToast={showToast}
     />
