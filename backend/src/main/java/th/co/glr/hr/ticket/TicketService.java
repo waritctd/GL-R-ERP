@@ -24,6 +24,9 @@ public class TicketService {
     private static final Set<String> CEO_ROLES    = Set.of("ceo");
     // Money-receipt confirmations belong to ฝ่ายบัญชี (accounting), with CEO as fallback.
     private static final Set<String> ACCOUNT_ROLES = Set.of("account", "ceo");
+    // Who may read tickets at all. Mirrors the frontend's canViewTickets and the mock's
+    // list/get gates — hr/employee have no business reading customer pricing.
+    private static final Set<String> VIEWER_ROLES = Set.of("sales", "import", "ceo", "account");
     private static final Set<String> QUOTATION_ALLOWED_STATUSES =
         Set.of(TicketStatus.APPROVED, TicketStatus.QUOTATION_ISSUED);
     private static final Set<String> PROPOSE_ALLOWED_STATUSES =
@@ -48,11 +51,13 @@ public class TicketService {
     }
 
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
+        requireRole(actor, VIEWER_ROLES);
         Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
         return tickets.findSummaries(status, createdByFilter);
     }
 
     public Page<TicketSummaryDto> listPage(String status, UserPrincipal actor, PageRequest page) {
+        requireRole(actor, VIEWER_ROLES);
         Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
         List<TicketSummaryDto> rows = tickets.findSummaries(status, createdByFilter, page);
         // Skip the COUNT round-trip when the whole result set fits on page 0.
@@ -63,7 +68,17 @@ public class TicketService {
     }
 
     public TicketDto get(long id, UserPrincipal actor) {
-        TicketDto ticket = requireTicket(id);
+        return requireViewAccess(id, actor);
+    }
+
+    /**
+     * The one read-access rule for a single ticket: viewer role required, and sales
+     * reps only see their own tickets. Every endpoint that returns or renders ticket
+     * data must go through this.
+     */
+    private TicketDto requireViewAccess(long ticketId, UserPrincipal actor) {
+        requireRole(actor, VIEWER_ROLES);
+        TicketDto ticket = requireTicket(ticketId);
         if ("sales".equals(actor.role()) && ticket.summary().createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
@@ -209,10 +224,7 @@ public class TicketService {
     private record QuotationRenderContext(TicketDto ticket, QuotationDto quotation, CustomerDto customer) {}
 
     private QuotationRenderContext loadQuotationContext(long ticketId, long quotationId, UserPrincipal actor) {
-        TicketDto ticket = requireTicket(ticketId);
-        if ("sales".equals(actor.role()) && ticket.summary().createdById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
-        }
+        TicketDto ticket = requireViewAccess(ticketId, actor);
         QuotationDto quotation = ticket.quotations().stream()
             .filter(q -> q.id() == quotationId)
             .findFirst()
@@ -252,6 +264,7 @@ public class TicketService {
     public TicketDto confirmCustomer(long ticketId, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
+        requireOwner(s, actor);
         // Never downgrade the payment track: once past CUSTOMER_CONFIRMED, re-confirming
         // would reset paymentStatus and deadlock the later transitions.
         if (s.paymentStatus() != null && !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
@@ -268,6 +281,7 @@ public class TicketService {
     public TicketDto issueDepositNotice(long ticketId, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireOwner(s, actor);
         if (!TicketStatus.QUOTATION_ISSUED.equals(s.status())
                 || !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -421,9 +435,9 @@ public class TicketService {
 
     @Transactional
     public TicketDto comment(long ticketId, CommentRequest request, UserPrincipal actor) {
-        if (!tickets.existsById(ticketId)) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "Ticket not found");
-        }
+        // Same access rule as GET /tickets/{id} — commenting returns the full ticket,
+        // so it must not be a side door around the read scoping.
+        requireViewAccess(ticketId, actor);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.COMMENTED, null, null, request.message());
         return requireTicket(ticketId);
@@ -463,6 +477,16 @@ public class TicketService {
 
     // --- helpers ---
 
+    /**
+     * Gate for POST /tickets/{id}/factory-emails/send. Factory outreach is part of the
+     * import price-proposal flow: import role only, and the ticket must exist — the
+     * endpoint previously required only a session, making it an open mail relay.
+     */
+    public void assertFactoryEmailAllowed(long ticketId, UserPrincipal actor) {
+        requireRole(actor, IMPORT_ROLES);
+        requireTicket(ticketId);
+    }
+
     private TicketDto requireTicket(long id) {
         return tickets.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
@@ -475,6 +499,12 @@ public class TicketService {
                 "Expected status '" + expectedStatus + "' but ticket is '" + s.status() + "'");
         }
         return s;
+    }
+
+    private void requireOwner(TicketSummaryDto summary, UserPrincipal actor) {
+        if (summary.createdById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
     }
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {

@@ -43,15 +43,15 @@ public class DepositNoticeController {
     // List documents for a ticket
     @GetMapping("/tickets/{ticketId}/deposit-notices")
     Map<String, List<DepositNoticeDto>> listByTicket(@PathVariable long ticketId, HttpSession session) {
-        sessions.requireUser(session);
-        return Map.of("depositNotices", service.listByTicket(ticketId));
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("depositNotices", service.listByTicket(ticketId, user));
     }
 
     // Get single document
     @GetMapping("/deposit-notices/{docId}")
     Map<String, DepositNoticeDto> getDoc(@PathVariable long docId, HttpSession session) {
-        sessions.requireUser(session);
-        return Map.of("depositNotice", service.getById(docId));
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("depositNotice", service.getById(docId, user));
     }
 
     // Update draft
@@ -90,7 +90,7 @@ public class DepositNoticeController {
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        DepositNoticeDto doc = service.getById(docId);
+        DepositNoticeDto doc = service.getById(docId, user);
         String normalized = format == null ? "pdf" : format.trim().toLowerCase();
         if ("xlsx".equals(normalized)) {
             byte[] bytes = service.getXlsx(docId, user);

@@ -42,6 +42,8 @@ class TicketServiceTest {
     private final UserPrincipal importActor  = actor(3L, "import");
     private final UserPrincipal ceoActor     = actor(4L, "ceo");
     private final UserPrincipal accountActor = actor(5L, "account");
+    private final UserPrincipal hrActor      = actor(6L, "hr");
+    private final UserPrincipal employeeActor = actor(7L, "employee");
 
     // ── list ──────────────────────────────────────────────────────────────
 
@@ -75,6 +77,68 @@ class TicketServiceTest {
     void get_importCanViewAnyTicket() {
         TicketDto ticket = stubTicket(10L, 99L, TicketStatus.SUBMITTED);
         assertThat(service.get(10L, importActor)).isEqualTo(ticket);
+    }
+
+    // ── read authz (viewer roles) ─────────────────────────────────────────
+
+    @Test
+    void list_rejectsHrAndEmployeeRoles() {
+        // Tickets carry customer pricing — only sales/import/ceo/account may read.
+        assertForbidden(() -> service.list(null, hrActor));
+        assertForbidden(() -> service.list(null, employeeActor));
+    }
+
+    @Test
+    void get_rejectsHrAndEmployeeRoles() {
+        stubTicket(10L, 1L, TicketStatus.SUBMITTED);
+        assertForbidden(() -> service.get(10L, hrActor));
+        assertForbidden(() -> service.get(10L, employeeActor));
+    }
+
+    @Test
+    void get_accountRoleCanViewAnyTicket() {
+        TicketDto ticket = stubTicket(10L, 1L, TicketStatus.QUOTATION_ISSUED);
+        assertThat(service.get(10L, accountActor)).isEqualTo(ticket);
+    }
+
+    @Test
+    void comment_rejectsRolesAndNonOwnersWithoutReadAccess() {
+        // comment() returns the full TicketDto — it must not be a side door around
+        // get()'s scoping (previously any authenticated user could pull any ticket).
+        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
+        assertForbidden(() -> service.comment(10L, new CommentRequest("hi"), hrActor));
+        assertForbidden(() -> service.comment(10L, new CommentRequest("hi"), employeeActor));
+        assertForbidden(() -> service.comment(10L, new CommentRequest("hi"), otherSales));
+    }
+
+    @Test
+    void quotationFile_rejectsRolesWithoutReadAccess() {
+        stubTicket(10L, 1L, TicketStatus.QUOTATION_ISSUED);
+        assertForbidden(() -> service.getQuotationXlsx(10L, 1L, hrActor));
+        assertForbidden(() -> service.getQuotationPdf(10L, 1L, employeeActor));
+    }
+
+    // ── factory email gate ────────────────────────────────────────────────
+
+    @Test
+    void factoryEmail_allowsImportOnExistingTicket() {
+        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
+        service.assertFactoryEmailAllowed(10L, importActor); // must not throw
+    }
+
+    @Test
+    void factoryEmail_rejectsNonImportRoles() {
+        // Previously session-only — an authenticated open mail relay.
+        assertForbidden(() -> service.assertFactoryEmailAllowed(10L, salesActor));
+        assertForbidden(() -> service.assertFactoryEmailAllowed(10L, hrActor));
+        assertForbidden(() -> service.assertFactoryEmailAllowed(10L, employeeActor));
+    }
+
+    @Test
+    void factoryEmail_rejectsNonExistentTicket() {
+        assertThatThrownBy(() -> service.assertFactoryEmailAllowed(99L, importActor))
+            .isInstanceOfSatisfying(ApiException.class, e ->
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
     // ── submit ────────────────────────────────────────────────────────────
@@ -356,6 +420,20 @@ class TicketServiceTest {
         // a reset re-arms the deadlock orderings.
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", null);
         assertConflict(() -> service.confirmCustomer(10L, salesActor));
+    }
+
+    @Test
+    void confirmCustomer_rejectsNonOwnerSales() {
+        // Dual-track transitions had role checks but no ownership checks — any sales
+        // rep could advance a colleague's payment track.
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, null, null);
+        assertForbidden(() -> service.confirmCustomer(10L, otherSales));
+    }
+
+    @Test
+    void issueDepositNotice_rejectsNonOwnerSales() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", null);
+        assertForbidden(() -> service.issueDepositNotice(10L, otherSales));
     }
 
     @Test
