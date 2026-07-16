@@ -2146,13 +2146,11 @@ export const api = {
       });
       return delay({ items: results.slice(0, 50) });
     },
-    // addProduct/updateProduct/deleteProduct are requireSession() only — mirroring
-    // CatalogController as it is TODAY, where every /api/catalog/prices mutation
-    // calls sessions.requireUser(session) with no role gate. Do not tighten these
-    // here: a mock stricter than production is still drift. Mock and backend get
-    // restricted to ceo/import together in a follow-up branch (see #201).
+    // addProduct/updateProduct/deleteProduct are ceo/import only (#205), mirroring
+    // CatalogController.requireCatalogEditor. search/prices above stay requireSession()
+    // only — catalog browsing is open to any logged-in user.
     async addProduct(input = {}) {
-      requireSession();
+      hasRole('ceo', 'import');
       if (input.factoryId == null) fail('factoryId จำเป็น', 400);
       if (input.price == null) fail('price จำเป็น', 400);
       const fid = Number(input.factoryId);
@@ -2176,7 +2174,7 @@ export const api = {
       return delay({ priceId: product.priceId, status: 'added' });
     },
     async updateProduct(priceId, input = {}) {
-      requireSession();
+      hasRole('ceo', 'import');
       if (input.price == null) fail('price จำเป็น', 400);
       const pid = Number(priceId);
       const product = mockProductPrices.find((p) => p.priceId === pid);
@@ -2198,7 +2196,7 @@ export const api = {
       return delay({ status: 'updated' });
     },
     async deleteProduct(priceId) {
-      requireSession();
+      hasRole('ceo', 'import');
       const pid = Number(priceId);
       const index = mockProductPrices.findIndex((p) => p.priceId === pid);
       if (index === -1) fail(`ไม่พบสินค้า price_id=${pid}`, 404);
@@ -2490,13 +2488,13 @@ export const api = {
   // Mirrors PriceImportController + PriceImportService (catalog/importer/).
   priceImport: {
     async factories() {
-      requireSession();
+      hasRole('ceo', 'import');
       return delay(mockPriceImportFactories);
     },
     async createFactory(name, country, defaultCurrency) {
-      // requireSession() only — mirrors PriceImportController.createFactory, which
-      // calls sessions.requireUser(session) and applies no role gate today.
-      requireSession();
+      // #205: PriceImportController now gates every endpoint (including reads) to
+      // ceo/import via requireImporter(session) — mirror that here.
+      hasRole('ceo', 'import');
       if (!name || !String(name).trim()) fail('ชื่อโรงงานห้ามว่าง', 400);
       const factory = {
         factoryId: mockPriceImportFactorySeq++,
@@ -2511,14 +2509,14 @@ export const api = {
       return delay(factory);
     },
     async versions(factoryId) {
-      requireSession();
+      hasRole('ceo', 'import');
       const fid = Number(factoryId);
       return delay(mockPriceImportVersions.filter((v) => v.factoryId === fid));
     },
     // Mirrors PriceImportService.uploadAndCommit — parse → stage → validate → commit
     // in one shot, returning UploadCommitResult(versionId, parsedRows, committedRows,
-    // retainedRows, errorCount, errors). requireSession() only, matching
-    // PriceImportController.uploadAndCommit's lack of a role gate today.
+    // retainedRows, errorCount, errors). Gated ceo/import (#205), matching
+    // PriceImportController.uploadAndCommit's requireImporter(session) gate.
     //
     // The mock cannot parse a real .xlsx in the browser, so the parsed batch is
     // fabricated — the same simplification upload() already makes with its fixed
@@ -2526,7 +2524,7 @@ export const api = {
     // is the closest honest stand-in for commit()'s incremental merge (old products
     // not matched by the new file are carried forward, not dropped).
     async uploadAndCommit(factoryId, file, label) {
-      requireSession();
+      hasRole('ceo', 'import');
       const fid = Number(factoryId);
       if (!mockPriceImportFactories.some((f) => f.factoryId === fid)) {
         fail(`ไม่พบ import profile สำหรับ factory id=${fid}`, 404);
@@ -2574,7 +2572,7 @@ export const api = {
       });
     },
     async upload(factoryId, file, label) {
-      requireSession();
+      hasRole('ceo', 'import');
       const fid = Number(factoryId);
       const versionId = mockPriceVersionSeq++;
       mockPriceImportVersions.push({
@@ -2592,11 +2590,11 @@ export const api = {
       });
     },
     async validate(versionId) {
-      requireSession();
+      hasRole('ceo', 'import');
       return delay({ status: 'validated', versionId: Number(versionId) });
     },
     async staging(versionId) {
-      requireSession();
+      hasRole('ceo', 'import');
       return delay({
         versionId: Number(versionId),
         totalRows: 12,
@@ -2608,18 +2606,18 @@ export const api = {
       });
     },
     async commit(versionId) {
-      requireSession();
+      hasRole('ceo', 'import');
       const vid = Number(versionId);
       const archived = activateVersion(vid);
       return delay({ versionId: vid, inserted: 10, updated: 2, archived });
     },
     async getProfile(factoryId) {
-      requireSession();
+      hasRole('ceo', 'import');
       void factoryId;
       return delay(JSON.stringify({ number_format: 'eu', sheets: [{ name: 'Sheet1', header_row: 1 }], columns: {} }));
     },
     async updateProfile(factoryId, json) {
-      requireSession();
+      hasRole('ceo', 'import');
       void json;
       return delay({ status: 'updated', factoryId: Number(factoryId) });
     },

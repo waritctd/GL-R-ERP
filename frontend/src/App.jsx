@@ -280,6 +280,10 @@ export function App() {
                   path="/commissions"
                   element={<CommissionPage user={user} showToast={showToast} />}
                 />
+                <Route
+                  path="/price-import"
+                  element={<PriceImportPage showToast={showToast} />}
+                />
               </>
             )}
           </Route>
@@ -291,9 +295,6 @@ export function App() {
           {/* /ceo-settings had no allowedRoute guard historically (nav-gated only). */}
           {SALES_ENABLED && (
             <Route path="/ceo-settings" element={<CeoSettingsPage showToast={showToast} />} />
-          )}
-          {SALES_ENABLED && (
-            <Route path="/price-import" element={<PriceImportPage showToast={showToast} />} />
           )}
           {SALES_ENABLED && (
             <Route path="/catalog" element={<CatalogSearchPage user={user} showToast={showToast} />} />

@@ -36,15 +36,21 @@ public class PriceImportController {
         this.sessions = sessions;
     }
 
+    private UserPrincipal requireImporter(HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, "ceo", "import");
+        return user;
+    }
+
     @GetMapping("/factories")
     List<Map<String, Object>> factories(HttpSession session) {
-        sessions.requireUser(session);
+        requireImporter(session);
         return svc.listFactories();
     }
 
     @PostMapping("/factories")
     Map<String, Object> createFactory(@RequestBody Map<String, String> body, HttpSession session) {
-        sessions.requireUser(session);
+        requireImporter(session);
         String name = body.get("name");
         if (name == null || name.isBlank())
             throw new ApiException(HttpStatus.BAD_REQUEST, "ชื่อโรงงานห้ามว่าง");
@@ -58,7 +64,7 @@ public class PriceImportController {
         @RequestParam(value = "label", required = false) String label,
         HttpSession session
     ) {
-        UserPrincipal user = sessions.requireUser(session);
+        UserPrincipal user = requireImporter(session);
         if (file.isEmpty())
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไฟล์ว่างเปล่า");
         String effectiveLabel = (label != null && !label.isBlank()) ? label : file.getOriginalFilename();
@@ -77,7 +83,7 @@ public class PriceImportController {
         @RequestParam(value = "label", required = false) String label,
         HttpSession session
     ) {
-        UserPrincipal user = sessions.requireUser(session);
+        UserPrincipal user = requireImporter(session);
         if (file.isEmpty())
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไฟล์ว่างเปล่า");
 
@@ -101,7 +107,7 @@ public class PriceImportController {
 
     @GetMapping(value = "/profile/{factoryId}", produces = MediaType.APPLICATION_JSON_VALUE)
     String profile(@PathVariable long factoryId, HttpSession session) {
-        sessions.requireUser(session);
+        requireImporter(session);
         return svc.getRawProfile(factoryId);
     }
 
@@ -111,7 +117,7 @@ public class PriceImportController {
         @RequestBody String configJson,
         HttpSession session
     ) {
-        sessions.requireUser(session);
+        requireImporter(session);
         svc.updateProfile(factoryId, configJson);
         return Map.of("status", "updated", "factoryId", String.valueOf(factoryId));
     }
@@ -121,13 +127,13 @@ public class PriceImportController {
         @RequestParam long factoryId,
         HttpSession session
     ) {
-        sessions.requireUser(session);
+        requireImporter(session);
         return svc.listVersions(factoryId);
     }
 
     @PostMapping("/validate/{versionId}")
     Map<String, String> validate(@PathVariable long versionId, HttpSession session) {
-        sessions.requireUser(session);
+        requireImporter(session);
         svc.validate(versionId);
         return Map.of("status", "validated", "versionId", String.valueOf(versionId));
     }
@@ -137,7 +143,7 @@ public class PriceImportController {
         @PathVariable long versionId,
         HttpSession session
     ) {
-        sessions.requireUser(session);
+        requireImporter(session);
         return svc.getStagingReport(versionId);
     }
 
@@ -146,7 +152,7 @@ public class PriceImportController {
         @PathVariable long versionId,
         HttpSession session
     ) {
-        UserPrincipal user = sessions.requireUser(session);
+        UserPrincipal user = requireImporter(session);
         return svc.commit(versionId, user.id());
     }
 }
