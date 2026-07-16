@@ -1,10 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { formatThaiDate } from '../../utils/format.js';
+import { downloadBlob } from '../../utils/download.js';
 
 const DEPOSIT_OPTIONS = [
   { value: 0.3,  label: '30%' },
@@ -19,15 +24,11 @@ function money(v) {
 }
 
 export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToast }) {
-  const [doc, setDoc]               = useState(null);
-  const [noteTemplates, setTemplates] = useState([]);
-  const [customers, setCustomers]   = useState([]);
+  const queryClient = useQueryClient();
   const [customerSearch, setCsSearch] = useState('');
-  const [loading, setLoading]       = useState(true);
-  const [saving, setSaving]         = useState(false);
   const [previewHtml, setPreview]   = useState('');
-  const [previewLoading, setPreviewLoading] = useState(false);
   const [confirmIssue, setConfirmIssue] = useState(false);
+  const [downloading, setDownloading] = useState(null); // 'xlsx' | 'pdf' | null
   const iframeRef = useRef(null);
 
   // form state
@@ -39,45 +40,71 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     items: [],
   });
 
+  // --- Reads (TanStack Query) ---
+  // Mount only LOADS existing documents — it must never create one as a side
+  // effect of navigating here. The previous version unconditionally called
+  // createDraft() whenever no DRAFT was found, which (a) fired twice under React
+  // StrictMode's double-invoke, (b) minted a stray draft every time a user opened
+  // this page and then navigated away without touching it, and (c) minted ANOTHER
+  // new draft (version+1) every time this page was revisited after the document
+  // had already been issued, since an ISSUED doc is never a DRAFT. Now: load the
+  // DRAFT if one exists, else show the most recent ISSUED doc read-only, else
+  // render an explicit empty state — creation only happens on the user's click
+  // (see handleCreateDraft). None of the queries below ever create anything.
+  const noteTemplatesQuery = useQuery({
+    queryKey: queryKeys.depositNoteTemplates(),
+    queryFn: () => api.depositNotices.noteTemplates().then((response) => response.templates ?? []),
+  });
+  const noteTemplates = noteTemplatesQuery.data ?? [];
+
+  // Keyed by the live search text so every keystroke gets its own cache entry
+  // (matches the old onChange's per-keystroke api.customers.search(text) call);
+  // customerSearch === '' is the initial "whole master list" load loadDocs used
+  // to do up front.
+  const customersQuery = useQuery({
+    queryKey: queryKeys.customersSearch(customerSearch),
+    queryFn: () => api.customers.search(customerSearch).then((response) => response.customers ?? []),
+  });
+  const customers = customersQuery.data ?? [];
+
+  const depositNoticesQuery = useQuery({
+    queryKey: queryKeys.depositNotices(ticketId),
+    queryFn: () => api.depositNotices.listByTicket(ticketId).then((response) => response.depositNotices ?? []),
+  });
+  const doc = useMemo(() => {
+    const docs = depositNoticesQuery.data ?? [];
+    const draft = docs.find((d) => d.status === 'DRAFT');
+    const latestIssued = docs
+      .filter((d) => d.status === 'ISSUED')
+      .sort((a, b) => (b.version ?? 0) - (a.version ?? 0))[0];
+    return draft ?? latestIssued ?? null;
+  }, [depositNoticesQuery.data]);
+
+  // The full-page skeleton only gates on the two loads a first paint actually
+  // needs (doc list + note templates). customersQuery is deliberately excluded:
+  // it's keyed by customerSearch, so every keystroke in the customer-search box
+  // mints a "new" query key with isLoading briefly true for it — including it
+  // here would flash the *entire page* back to a skeleton on every keystroke,
+  // which the original imperative version never did (its onChange fetch had no
+  // loading indicator at all).
+  const loading = depositNoticesQuery.isLoading || noteTemplatesQuery.isLoading;
+
+  // Same reasoning as `loading`: only the doc-list/template load blocks the page
+  // with an error+retry state, matching the original loadDocs try/catch scope.
+  // A failed customer search (mid-session, per keystroke) stays silent, as it
+  // did before (the old onChange handler had its own `.catch(() => {})`).
+  const loadError = depositNoticesQuery.error || noteTemplatesQuery.error;
+
   useEffect(() => {
-    async function init() {
-      setLoading(true);
-      try {
-        const [templatesRes, customersRes] = await Promise.all([
-          api.depositNotices.noteTemplates(),
-          api.customers.search(''),
-        ]);
-        setTemplates(templatesRes.templates ?? []);
-        setCustomers(customersRes.customers ?? []);
+    if (loadError) showToast('error', loadError.message || 'โหลดไม่สำเร็จ');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per new error identity, not on every showToast identity change
+  }, [loadError]);
 
-        const docsRes = await api.depositNotices.listByTicket(ticketId);
-        const draft = (docsRes.depositNotices ?? []).find((d) => d.status === 'DRAFT');
-
-        let docData;
-        if (draft) {
-          docData = draft;
-        } else {
-          const defaultNotes = (templatesRes.templates ?? [])
-            .filter((t) => t.defaultSelected)
-            .map((t) => t.text);
-          const created = await api.depositNotices.createDraft(ticketId, {
-            notes: defaultNotes,
-            depositPercent: 0.5,
-          });
-          docData = created.depositNotice;
-        }
-
-        setDoc(docData);
-        // Try to match customerName against master to auto-fill taxId + address
-        populateForm(docData, customersRes.customers ?? []);
-      } catch (err) {
-        showToast('error', err.message || 'โหลดไม่สำเร็จ');
-      } finally {
-        setLoading(false);
-      }
-    }
-    init();
-  }, [ticketId]);
+  function retryLoad() {
+    depositNoticesQuery.refetch();
+    noteTemplatesQuery.refetch();
+    customersQuery.refetch();
+  }
 
   function populateForm(d, customerList = []) {
     // If taxId/address already saved in draft, use them directly
@@ -104,6 +131,100 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
       items:           (d.items ?? []).map((it) => ({ ...it })),
     });
   }
+
+  // Re-seed the editable `form` whenever the doc's identity/version/status
+  // actually changes (new draft created, or DRAFT -> ISSUED) — not on every
+  // background refetch of the same doc (e.g. a save doesn't bump
+  // version/status, so no reseed fires and in-flight edits aren't clobbered).
+  const docSeedKey = doc ? `${doc.id}:${doc.version}:${doc.status}` : null;
+  useEffect(() => {
+    if (doc) populateForm(doc, customers);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately keyed on docSeedKey only, see comment above
+  }, [docSeedKey]);
+
+  function invalidateDepositNotices() {
+    return queryClient.invalidateQueries({ queryKey: queryKeys.depositNotices(ticketId) });
+  }
+
+  const createDraftMutation = useMutation({
+    mutationFn: () => {
+      const defaultNotes = noteTemplates.filter((t) => t.defaultSelected).map((t) => t.text);
+      return api.depositNotices.createDraft(ticketId, {
+        notes: defaultNotes,
+        depositPercent: 0.5,
+      });
+    },
+    onSuccess: () => invalidateDepositNotices(),
+    onError: (err) => showToast('error', err.message || 'สร้างเอกสารฉบับร่างไม่สำเร็จ'),
+  });
+
+  function handleCreateDraft() {
+    createDraftMutation.mutate();
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: () => api.depositNotices.update(doc.id, buildPayload()),
+    onSuccess: () => {
+      showToast('success', 'บันทึกแล้ว');
+      invalidateDepositNotices();
+    },
+    onError: (err) => showToast('error', err.message || 'บันทึกไม่สำเร็จ'),
+  });
+
+  function handleSave() {
+    if (!doc) return;
+    saveMutation.mutate();
+  }
+
+  const previewMutation = useMutation({
+    mutationFn: async () => {
+      // Save first, then preview.
+      await api.depositNotices.update(doc.id, buildPayload());
+      return api.depositNotices.preview(doc.id);
+    },
+    onSuccess: (html) => {
+      setPreview(html);
+      invalidateDepositNotices();
+    },
+    onError: (err) => showToast('error', err.message || 'Preview ไม่สำเร็จ'),
+  });
+
+  function handlePreview() {
+    if (!doc) return;
+    previewMutation.mutate();
+  }
+
+  function handleIssue() {
+    if (!doc) return;
+    setConfirmIssue(true);
+  }
+
+  const issueMutation = useMutation({
+    mutationFn: async () => {
+      // Save first.
+      await api.depositNotices.update(doc.id, buildPayload());
+      return api.depositNotices.issue(doc.id);
+    },
+    onSuccess: (res) => {
+      showToast('success', `ออกเอกสาร ${res.depositNotice.docNumber} เรียบร้อย`);
+      setConfirmIssue(false);
+      invalidateDepositNotices();
+      // Issuing the deposit notice is the payment-track step that advances the
+      // ticket (see mockApi.depositNotices.issue) — refresh the ticket list +
+      // detail so those views don't show stale paymentStatus.
+      queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
+    },
+    onError: (err) => showToast('error', err.message || 'ออกเอกสารไม่สำเร็จ'),
+  });
+
+  function confirmIssueDocument() {
+    issueMutation.mutate();
+  }
+
+  const creatingDraft = createDraftMutation.isPending;
+  const saving = saveMutation.isPending || previewMutation.isPending || issueMutation.isPending;
+  const previewLoading = previewMutation.isPending;
 
   function setField(key, value) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -142,60 +263,6 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     }));
   }
 
-  async function handleSave() {
-    if (!doc) return;
-    setSaving(true);
-    try {
-      const res = await api.depositNotices.update(doc.id, buildPayload());
-      setDoc(res.depositNotice);
-      populateForm(res.depositNotice);
-      showToast('success', 'บันทึกแล้ว');
-    } catch (err) {
-      showToast('error', err.message || 'บันทึกไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handlePreview() {
-    if (!doc) return;
-    // Save first, then preview
-    setSaving(true);
-    try {
-      const res = await api.depositNotices.update(doc.id, buildPayload());
-      setDoc(res.depositNotice);
-      setPreviewLoading(true);
-      const html = await api.depositNotices.preview(doc.id);
-      setPreview(html);
-    } catch (err) {
-      showToast('error', err.message || 'Preview ไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-      setPreviewLoading(false);
-    }
-  }
-
-  function handleIssue() {
-    if (!doc) return;
-    setConfirmIssue(true);
-  }
-
-  async function confirmIssueDocument() {
-    setSaving(true);
-    try {
-      // Save first
-      await api.depositNotices.update(doc.id, buildPayload());
-      const res = await api.depositNotices.issue(doc.id);
-      setDoc(res.depositNotice);
-      showToast('success', `ออกเอกสาร ${res.depositNotice.docNumber} เรียบร้อย`);
-    } catch (err) {
-      showToast('error', err.message || 'ออกเอกสารไม่สำเร็จ');
-    } finally {
-      setSaving(false);
-      setConfirmIssue(false);
-    }
-  }
-
   async function handleDownloadXlsx() {
     await download(() => api.depositNotices.downloadXlsx(doc.id), 'xlsx');
   }
@@ -206,17 +273,14 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
 
   async function download(fetchBlob, extension) {
     if (!doc) return;
+    setDownloading(extension);
     try {
       const blob = await fetchBlob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      const ext = blob.type.startsWith('text/html') ? 'html' : extension;
-      a.download = (doc.docNumber ?? 'draft') + '.' + ext;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, doc.docNumber ?? 'draft', extension);
     } catch (err) {
       showToast('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
+    } finally {
+      setDownloading((current) => (current === extension ? null : current));
     }
   }
 
@@ -286,30 +350,58 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           { label: 'ใบแจ้งยอดเงินรับมัดจำ' },
         ]}
       />
-      <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+      {/* Mobile overflow fix: this row previously had no flexWrap, so the back
+          button + title + 3 action buttons (บันทึก/Preview/ออกเอกสาร) forced
+          .content-scroll into horizontal scroll at 375px (verified: scrollWidth
+          493 vs clientWidth 375) — burying the primary "ออกเอกสาร" action off
+          the right edge with no visible scrollbar affordance. Wrapping keeps
+          every action reachable without horizontal scrolling. */}
+      <header style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 4, flexWrap: 'wrap' }}>
         <button type="button" className="secondary-button" onClick={onBack}>
           <Icon name="chevronLeft" size={14} /> กลับ
         </button>
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>
             ใบแจ้งยอดเงินรับมัดจำ
             {doc?.version > 1 && (
-              <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 400, color: '#64748b' }}>Rev {doc.version}</span>
+              <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 400, color: 'var(--color-text-muted)' }}>Rev {doc.version}</span>
             )}
           </h1>
           {doc && (
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
               {doc.docNumber && (
-                <code style={{ fontSize: 12, background: '#f1f5f9', padding: '2px 8px', borderRadius: 4 }}>{doc.docNumber}</code>
+                <code style={{ fontSize: 12, background: 'var(--color-surface-subtle)', padding: '2px 8px', borderRadius: 4 }}>{doc.docNumber}</code>
               )}
               <StatusBadge tone={isIssued ? 'success' : 'neutral'}>
                 {isIssued ? 'ออกแล้ว' : 'Draft'}
               </StatusBadge>
             </div>
           )}
+          {/* Summary line: who this document is for and who prepared/issued it.
+              Every field below already comes back on `doc` from
+              api.depositNotices.get/createDraft/issue (src/api/mockApi.js
+              ~L2266-2345) — no new API calls, nothing invented. Pieces are
+              omitted individually when the underlying field is empty. */}
+          {doc && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', marginTop: 8, fontSize: 13, color: 'var(--color-text-muted)' }}>
+              {doc.customerName && (
+                <span>ลูกค้า <strong style={{ color: 'var(--color-text-secondary)' }}>{doc.customerName}</strong></span>
+              )}
+              {isIssued ? (
+                <span>ออกโดย <strong style={{ color: 'var(--color-text-secondary)' }}>{doc.issuedByName || '-'}</strong> · {formatThaiDate(doc.issueDate)}</span>
+              ) : (
+                doc.preparerName && <span>จัดทำโดย <strong style={{ color: 'var(--color-text-secondary)' }}>{doc.preparerName}</strong></span>
+              )}
+            </div>
+          )}
         </div>
-        {!isIssued && (
-          <div style={{ display: 'flex', gap: 8 }}>
+        {/* Save/Preview/ออกเอกสาร only render once a document actually exists —
+            previously these rendered whenever `!isIssued` (true for `doc === null`
+            too), so a failed load or a not-yet-created draft still offered three
+            live-looking buttons whose handlers silently no-op'd on `if (!doc) return;`.
+            No doc now means no action buttons, not dead ones. */}
+        {doc && !isIssued && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button type="button" className="secondary-button" onClick={handleSave} disabled={saving}>
               บันทึก
             </button>
@@ -321,21 +413,54 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
             </button>
           </div>
         )}
-        {isIssued && (
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" className="secondary-button" onClick={handleDownloadXlsx}>
-              <Icon name="fileText" size={14} /> ดาวน์โหลด Excel
+        {doc && isIssued && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button type="button" className="secondary-button" onClick={handleDownloadXlsx} disabled={downloading === 'xlsx'}>
+              <Icon name="fileText" size={14} /> {downloading === 'xlsx' ? 'กำลังดาวน์โหลด...' : 'ดาวน์โหลด Excel'}
             </button>
-            <button type="button" className="secondary-button" onClick={handleDownloadPdf}>
-              <Icon name="fileText" size={14} /> ดาวน์โหลด PDF
+            <button type="button" className="secondary-button" onClick={handleDownloadPdf} disabled={downloading === 'pdf'}>
+              <Icon name="fileText" size={14} /> {downloading === 'pdf' ? 'กำลังดาวน์โหลด...' : 'ดาวน์โหลด PDF'}
             </button>
           </div>
         )}
       </header>
 
+      {loadError && !doc ? (
+        <section className="panel">
+          <EmptyState icon="fileText" title="โหลดข้อมูลไม่สำเร็จ" description={loadError.message || 'โหลดไม่สำเร็จ'} />
+          <div style={{ padding: '0 18px 18px', display: 'flex', justifyContent: 'center' }}>
+            <button type="button" className="secondary-button" onClick={retryLoad}>
+              <Icon name="refresh" size={14} /> ลองใหม่
+            </button>
+          </div>
+        </section>
+      ) : !doc ? (
+        <section className="panel">
+          <EmptyState
+            icon="fileText"
+            title="ยังไม่มีใบแจ้งยอดเงินรับมัดจำ"
+            description="สร้างเอกสารฉบับร่างเพื่อเริ่มกรอกรายละเอียดใบแจ้งยอดมัดจำสำหรับใบขอราคานี้"
+          />
+          <div style={{ padding: '0 18px 18px', display: 'flex', justifyContent: 'center' }}>
+            <button type="button" className="primary-button" onClick={handleCreateDraft} disabled={creatingDraft}>
+              <Icon name="plus" size={14} />
+              {creatingDraft ? 'กำลังสร้าง...' : 'สร้างเอกสารฉบับร่าง'}
+            </button>
+          </div>
+        </section>
+      ) : (
       <div style={{ display: 'grid', gridTemplateColumns: previewHtml ? '1fr 1fr' : '1fr', gap: 16 }}>
         {/* ── Left: Form ── */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {/* min-width: 0 fix: this flex column is a CSS-grid item (parent grid
+            at previewHtml ? '1fr 1fr' : '1fr') and, like all flex/grid items,
+            defaults to min-width: auto — it refuses to shrink below its
+            content's min-content width. Thai has no inter-word spaces, so a
+            long unbreakable label/value run inside the panels below forced
+            this column (and the page) 43px past the viewport at 375px
+            (verified: content-scroll scrollWidth 418 vs clientWidth 375).
+            min-w-0 lets it shrink to the grid track and wrap/truncate
+            normally instead. */}
+        <div className="min-w-0" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
           {/* Customer */}
           <section className="panel">
@@ -346,20 +471,17 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                 <input
                   id="doc-customer-search"
                   value={customerSearch}
-                  onChange={(e) => {
-                    setCsSearch(e.target.value);
-                    api.customers.search(e.target.value).then((r) => setCustomers(r.customers ?? [])).catch(() => {});
-                  }}
+                  onChange={(e) => setCsSearch(e.target.value)}
                   placeholder="ชื่อบริษัท หรือ เลขภาษี..."
                 />
                 {customerSearch && customers.length > 0 && (
-                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, zIndex: 50, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', maxHeight: 180, overflowY: 'auto' }}>
+                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'var(--color-surface)', border: '1px solid var(--color-border-subtle)', borderRadius: 6, zIndex: 50, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', maxHeight: 180, overflowY: 'auto' }}>
                     {customers.map((c) => (
                       <button key={c.id} type="button"
                         onClick={() => selectCustomer(c)}
-                        style={{ width: '100%', padding: '8px 12px', textAlign: 'left', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, borderBottom: '1px solid #f1f5f9' }}>
+                        style={{ width: '100%', padding: '8px 12px', textAlign: 'left', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, borderBottom: '1px solid var(--color-surface-subtle)' }}>
                         <strong style={{ display: 'block' }}>{c.name}</strong>
-                        <span style={{ fontSize: 11, color: '#64748b' }}>{c.taxId} · {c.address}</span>
+                        <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>{c.taxId} · {c.address}</span>
                       </button>
                     ))}
                   </div>
@@ -399,14 +521,16 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           <section className="panel">
             <div className="panel-header"><h2>รายการสินค้า ({form.items.length} รายการ)</h2></div>
             <div style={{ padding: '0 18px 14px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) 60px 80px 80px 80px', gap: 6, padding: '8px 0', borderBottom: '1px solid #e6eaf0', fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>
+              {/* Muted Floor fix: was Ink Faint (#94a3b8) on a table header label —
+                  DESIGN.md specifies Ink Muted (#64748b) for `.table-head` overline text. */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) minmax(0,60px) minmax(0,80px) minmax(0,80px) minmax(0,80px)', gap: 6, padding: '8px 0', borderBottom: '1px solid var(--color-border)', fontSize: 11, fontWeight: 700, color: 'var(--color-text-muted)' }}>
                 <span>รายละเอียด</span><span style={{ textAlign: 'right' }}>จำนวน</span>
                 <span style={{ textAlign: 'right' }}>ราคา/หน่วย</span>
                 <span style={{ textAlign: 'right' }}>ราคาสุทธิ</span>
                 <span style={{ textAlign: 'right' }}>เป็นเงิน</span>
               </div>
               {form.items.map((it, idx) => (
-                <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) 60px 80px 80px 80px', gap: 6, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f8fafc' }}>
+                <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) minmax(0,60px) minmax(0,80px) minmax(0,80px) minmax(0,80px)', gap: 6, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--color-surface-muted)' }}>
                   {isIssued ? (
                     <>
                       <span style={{ fontSize: 13 }}>{it.description}</span>
@@ -429,7 +553,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                       <input type="number" value={it.netUnitPrice ?? it.unitPrice ?? ''} placeholder="สุทธิ"
                         onChange={(e) => setItemField(idx, 'netUnitPrice', e.target.value)}
                         style={{ fontSize: 12, textAlign: 'right' }} />
-                      <code style={{ fontSize: 12, textAlign: 'right', color: '#334155' }}>
+                      <code style={{ fontSize: 12, textAlign: 'right', color: 'var(--color-text-secondary)' }}>
                         {money(((it.netUnitPrice ?? it.unitPrice) || 0) * (it.qty || 0))}
                       </code>
                     </>
@@ -454,7 +578,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                   <input type="checkbox" disabled={isIssued}
                     checked={form.notes.includes(t.text)}
                     onChange={() => toggleNote(t.text)}
-                    style={{ width: 14, height: 14, marginTop: 3, flexShrink: 0, accentColor: '#1e40af', cursor: isIssued ? 'default' : 'pointer' }} />
+                    style={{ width: 14, height: 14, marginTop: 3, flexShrink: 0, accentColor: 'var(--color-info-dot)', cursor: isIssued ? 'default' : 'pointer' }} />
                   <span style={{ flex: 1, minWidth: 0 }}>{t.text}</span>
                 </label>
               ))}
@@ -474,9 +598,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                         onClick={() => setField('depositPercent', opt.value)}
                         style={{
                           padding: '4px 12px', borderRadius: 6, fontSize: 13, cursor: 'pointer', border: '1px solid',
-                          background: form.depositPercent == opt.value ? '#1e40af' : '#f1f5f9',
-                          color: form.depositPercent == opt.value ? '#fff' : '#334155',
-                          borderColor: form.depositPercent == opt.value ? '#1e40af' : '#cbd5e1',
+                          background: form.depositPercent == opt.value ? 'var(--color-info-dot)' : 'var(--color-surface-subtle)',
+                          color: form.depositPercent == opt.value ? 'var(--color-surface)' : 'var(--color-text-secondary)',
+                          borderColor: form.depositPercent == opt.value ? 'var(--color-info-dot)' : 'var(--color-border-muted)',
                         }}>
                         {opt.label}
                       </button>
@@ -490,11 +614,20 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                 { label: 'ภาษีมูลค่าเพิ่ม 7% (คิดจากมัดจำ)', value: vat },
                 { label: 'รวมเป็นเงินที่ต้องชำระ', value: total, bold: true },
               ].map(({ label, value, bold }) => (
-                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid #f1f5f9', fontSize: 13 }}>
-                  <span style={{ color: '#475569' }}>{label}</span>
-                  <code style={{ fontWeight: bold ? 700 : 400, color: bold ? '#0f172a' : '#334155' }}>{money(value)} บาท</code>
+                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--color-surface-subtle)', fontSize: 13 }}>
+                  <span style={{ color: 'var(--color-icon-muted)' }}>{label}</span>
+                  <code className="font-mono" style={{ fontWeight: bold ? 700 : 400, color: bold ? 'var(--color-text)' : 'var(--color-text-secondary)' }}>{money(value)} บาท</code>
                 </div>
               ))}
+              {/* Next-action helper — describes exactly what api.depositNotices.issue
+                  does (src/api/mockApi.js ~L2322-2345): assigns a real docNumber,
+                  flips this document to ISSUED (fields above become read-only via
+                  `isIssued`), and moves the parent ticket to `document_issued`. */}
+              {!isIssued && (
+                <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
+                  กด &quot;ออกเอกสาร&quot; เพื่อออกเลขที่เอกสารอย่างเป็นทางการ — หลังจากนี้จะแก้ไขข้อมูลในเอกสารนี้ไม่ได้อีก และใบขอราคาจะเปลี่ยนสถานะเป็น &quot;ออกใบแจ้งยอดมัดจำแล้ว&quot;
+                </p>
+              )}
             </div>
           </section>
         </div>
@@ -509,7 +642,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
             <iframe
               ref={iframeRef}
               srcDoc={previewHtml}
-              style={{ width: '100%', height: 'calc(100% - 32px)', border: '1px solid #e2e8f0', borderRadius: 8 }}
+              style={{ width: '100%', height: 'calc(100% - 32px)', border: '1px solid var(--color-border-subtle)', borderRadius: 8 }}
               title="Deposit notice preview"
             />
             {previewLoading && (
@@ -527,16 +660,31 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           </div>
         )}
       </div>
+      )}
 
       <ConfirmDialog
         open={confirmIssue}
-        tone="danger"
         title="ยืนยันการออกเอกสาร"
         message={(
-          <p className="confirm-dialog-message">
-            ยืนยันการออกเอกสาร? <strong>หลังจากนี้จะไม่สามารถแก้ไขได้</strong>
-          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <p className="confirm-dialog-message" style={{ margin: 0 }}>
+              ตรวจสอบยอดเงินก่อนออกเอกสารให้ <strong>{form.customerName || 'ลูกค้า'}</strong> — <strong>หลังจากนี้จะไม่สามารถแก้ไขได้</strong>
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid var(--color-border)', paddingTop: 8 }}>
+              <span style={{ color: 'var(--color-icon-muted)' }}>ขอรับเงินมัดจำ ({Math.round(Number(form.depositPercent) * 100)}%)</span>
+              <code className="font-mono">{money(deposit)} บาท</code>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span style={{ color: 'var(--color-icon-muted)' }}>ภาษีมูลค่าเพิ่ม 7%</span>
+              <code className="font-mono">{money(vat)} บาท</code>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700 }}>
+              <span>รวมเป็นเงินที่ต้องชำระ</span>
+              <code className="font-mono">{money(total)} บาท</code>
+            </div>
+          </div>
         )}
+        confirmLabel="ออกเอกสาร"
         busy={saving}
         onCancel={() => setConfirmIssue(false)}
         onConfirm={confirmIssueDocument}

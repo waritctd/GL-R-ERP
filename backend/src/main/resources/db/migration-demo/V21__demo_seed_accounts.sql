@@ -1,6 +1,6 @@
 -- =====================================================================
 -- DEMO BRANCH ONLY (demo/all-roles-showcase): seed one login per role
--- (employee / hr / sales / sales_manager / import / ceo / admin) plus
+-- (employee / hr / sales / sales_manager / import / ceo) plus
 -- sample tickets, leave, overtime, and commission records so every role
 -- has something to click through in every module.
 --
@@ -13,9 +13,15 @@
 --     swept into a real payroll batch / KBank export / payslip run.
 --   * Shared password for every demo account: Demo@2026
 --     (BCrypt hash below verified against Spring's BCryptPasswordEncoder.)
---   * 'admin' role is reached via a new ADMIN division (see
---     DivisionAccessPolicy.roleFor) that does not exist in the real org
---     chart, so it cannot collide with any real employee's division.
+--   * Roles resolve from the employee's division via
+--     DivisionAccessPolicy.roleFor (md->ceo, hr->hr, pcim->import,
+--     sa->sales/sales_manager; everything else -> employee). There is NO
+--     'admin' role (ApplicationRoles.java). This file once seeded a
+--     demo.admin persona in a fake ADMIN division, but roleFor never
+--     special-cased it (it silently logged in as a plain employee), so
+--     V46 deleted it from live demo DBs and the seed rows were dropped
+--     from this file (#206). Edit-in-place is safe here: the hosted demo
+--     runs the prod profile with validate-on-migrate=false.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -28,8 +34,7 @@ INSERT INTO hr.division (source_code, name_th) VALUES
     ('MD',   'MD-ผู้บริหารระดับสูง'),
     ('HR',   'HR-บุคคล'),
     ('PCIM', 'PCIM-จัดซื้อต่างประเทศ'),
-    ('SA',   'SA-ฝ่ายขาย'),
-    ('ADMIN','ADMIN-ผู้ดูแลระบบ')
+    ('SA',   'SA-ฝ่ายขาย')
 ON CONFLICT (source_code) DO NOTHING;
 
 INSERT INTO hr.position (source_code, name_th) VALUES
@@ -54,8 +59,7 @@ FROM (VALUES
     ('DEMO-SLS01', '[DEMO]', 'ฝ่ายขาย',             'demo.sales@demo.invalid',         'SA',    'DEMO-STAFF'),
     ('DEMO-MGR01', '[DEMO]', 'ผู้จัดการฝ่ายขาย',    'demo.salesmanager@demo.invalid',  'SA',    'DEMO-MGR'),
     ('DEMO-IMP01', '[DEMO]', 'ฝ่ายจัดซื้อ',         'demo.import@demo.invalid',        'PCIM',  'DEMO-STAFF'),
-    ('DEMO-CEO01', '[DEMO]', 'ผู้บริหาร',           'demo.ceo@demo.invalid',           'MD',    'DEMO-STAFF'),
-    ('DEMO-ADM01', '[DEMO]', 'ผู้ดูแลระบบ',         'demo.admin@demo.invalid',         'ADMIN', 'DEMO-STAFF')
+    ('DEMO-CEO01', '[DEMO]', 'ผู้บริหาร',           'demo.ceo@demo.invalid',           'MD',    'DEMO-STAFF')
 ) AS v(employee_code, first_name_th, last_name_th, email, division_code, position_code)
 LEFT JOIN hr.division d ON d.source_code = v.division_code
 LEFT JOIN hr.position p ON p.source_code = v.position_code

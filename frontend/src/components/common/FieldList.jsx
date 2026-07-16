@@ -14,8 +14,10 @@ export function FieldList({ columns = 2, className, children, ...props }) {
     <dl
       className={cn(
         'grid gap-x-[18px] gap-y-[15px] mt-4 max-[720px]:grid-cols-1',
-        // dt reproduces the shared `.field-list dt` rule (styles.css:304): block/faint/xs/500.
-        '[&_dt]:m-0 [&_dt]:block [&_dt]:text-text-faint [&_dt]:text-xs [&_dt]:font-medium',
+        // dt: field labels are real data captions the user reads, not icons/
+        // placeholders, so per DESIGN.md's Muted Floor Rule they sit at Ink
+        // Muted (not Ink Faint, which is ~2.6:1 on white).
+        '[&_dt]:m-0 [&_dt]:block [&_dt]:text-text-muted [&_dt]:text-xs [&_dt]:font-medium',
         '[&_dd]:m-0 [&_dd]:mt-[3px] [&_dd]:font-bold [&_dd]:text-text [&_dd]:[overflow-wrap:anywhere]',
         columns === 3 ? 'grid-cols-3' : 'grid-cols-2',
         className,
@@ -57,6 +59,12 @@ export function InfoGrid({ two = false, className, children, ...props }) {
  *   ≤720px: flex-direction: column; align-items: flex-start.
  * Expects exactly 2+ children; the 2nd child gets the flex-1/min-w-0 treatment
  * via a wrapper — callers should pass their "main" block as the 2nd child.
+ * Callers (ProfilePage/EmployeeDetailPage) author a plain `<h1>`/`<p>` as the
+ * name/subtitle inside that 2nd child. Neither ever had CSS sizing the `h1` —
+ * it fell back to the browser default (2em + ~0.67em block margins). That's
+ * masked on desktop by `items-center` row alignment, but on mobile the row
+ * becomes a column and the default margins show up as dead vertical space
+ * above the status badge, so this scopes an explicit compact size to ≤720px.
  */
 export function DetailHero({ compact = false, className, children, ...props }) {
   const items = Array.isArray(children) ? children : [children];
@@ -65,7 +73,9 @@ export function DetailHero({ compact = false, className, children, ...props }) {
       className={cn(
         'bg-surface border border-border rounded-md shadow-sm',
         'flex items-center gap-[18px] p-5',
-        'max-[720px]:flex-col max-[720px]:items-start',
+        'max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-2.5 max-[720px]:p-3.5',
+        'max-[720px]:[&_h1]:m-0 max-[720px]:[&_h1]:text-lg max-[720px]:[&_h1]:leading-snug',
+        'max-[720px]:[&_p]:mt-0.5 max-[720px]:[&_p]:text-sm max-[720px]:[&_p]:text-text-muted',
         compact ? 'max-w-[980px]' : '',
         className,
       )}

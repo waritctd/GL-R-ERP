@@ -43,9 +43,19 @@ class DivisionAccessPolicyTest {
     }
 
     @Test
+    void accountingDivisionDerivesAccount() {
+        // AC-ฝ่ายบัญชี confirms money receipts (deposit/final payment) on sales tickets.
+        assertThat(DivisionAccessPolicy.roleFor(record("AC", "AC-ฝ่ายบัญชี", "พนักงาน"))).isEqualTo("account");
+        // Managers in accounting keep the account role; manager power comes from isManager.
+        assertThat(DivisionAccessPolicy.roleFor(record("AC", "AC-บัญชี", "ผู้จัดการฝ่ายบัญชี"))).isEqualTo("account");
+        // Legacy import rows have no source_code — the AC- name prefix must still map.
+        assertThat(DivisionAccessPolicy.roleFor(record(null, "AC-บัญชี", "พนักงาน"))).isEqualTo("account");
+    }
+
+    @Test
     void nonSalesManagerKeepsBaseEmployeeRole() {
-        // A ฝ่าย manager outside sales is an employee by role; manager power comes from isManager.
-        assertThat(DivisionAccessPolicy.roleFor(record("AC", "AC-บัญชี", "ผู้จัดการฝ่ายบัญชี"))).isEqualTo("employee");
+        // A ฝ่าย manager outside sales/accounting is an employee by role; manager power comes from isManager.
+        assertThat(DivisionAccessPolicy.roleFor(record("WH", "WH-คลังสินค้า", "ผู้จัดการฝ่ายคลังสินค้า"))).isEqualTo("employee");
     }
 
     @Test

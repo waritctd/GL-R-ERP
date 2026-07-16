@@ -203,6 +203,60 @@ public class TicketRepository {
         insertItems(ticketId, items);
     }
 
+    // Used by TicketService.editItems: unlike replaceItems (which is for proposePrice's
+    // intentional wholesale price replacement), this preserves each item's pricing fields
+    // (proposedPrice/approvedPrice/calcedCost/calcedPrice/calcConfigVersion/manualPrice/
+    // manualOverrideReason/currency) exactly as TicketService merged them — sales editing
+    // descriptive fields must never silently discard import's proposed price or CEO's
+    // approved/manual price (2026-07-16 pricing-integrity audit, finding #4).
+    @Transactional
+    public void replaceItemsPreservingPricing(long ticketId, List<TicketItemDto> items) {
+        jdbc.update("DELETE FROM sales.ticket_item WHERE ticket_id = :id", Map.of("id", ticketId));
+        if (items.isEmpty()) {
+            return;
+        }
+        MapSqlParameterSource[] batch = new MapSqlParameterSource[items.size()];
+        for (int i = 0; i < items.size(); i++) {
+            TicketItemDto item = items.get(i);
+            batch[i] = new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("brand", item.brand())
+                .addValue("model", item.model())
+                .addValue("color", item.color())
+                .addValue("texture", item.texture())
+                .addValue("size", item.size())
+                .addValue("factory", item.factory())
+                .addValue("qty", item.qty())
+                .addValue("qtySqm", item.qtySqm())
+                .addValue("unitBasis", item.unitBasis())
+                .addValue("rawPrice", item.rawPrice())
+                .addValue("rawCurrency", item.rawCurrency())
+                .addValue("rawUnit", item.rawUnit())
+                .addValue("proposedPrice", item.proposedPrice())
+                .addValue("approvedPrice", item.approvedPrice())
+                .addValue("currency", item.currency())
+                .addValue("sortOrder", i)
+                .addValue("calcedCost", item.calcedCost())
+                .addValue("calcedPrice", item.calcedPrice())
+                .addValue("calcConfigVersion", item.calcConfigVersion())
+                .addValue("manualPrice", item.manualPrice())
+                .addValue("manualOverrideReason", item.manualOverrideReason());
+        }
+        jdbc.batchUpdate("""
+            INSERT INTO sales.ticket_item
+                (ticket_id, brand, model, color, texture, size, factory,
+                 qty, qty_sqm, unit_basis, raw_price, raw_currency, raw_unit,
+                 proposed_price, approved_price, currency, sort_order,
+                 calced_cost, calced_price, calc_config_version,
+                 manual_price, manual_override_reason)
+            VALUES (:ticketId, :brand, :model, :color, :texture, :size, :factory,
+                    :qty, :qtySqm, :unitBasis, :rawPrice, :rawCurrency, :rawUnit,
+                    :proposedPrice, :approvedPrice, :currency, :sortOrder,
+                    :calcedCost, :calcedPrice, :calcConfigVersion,
+                    :manualPrice, :manualOverrideReason)
+            """, batch);
+    }
+
     public void approveItemPrices(long ticketId) {
         jdbc.update("""
             UPDATE sales.ticket_item
@@ -246,6 +300,128 @@ public class TicketRepository {
             .filter(q -> q.quotationVersion() == versionToFind)
             .findFirst()
             .orElseThrow();
+    }
+
+    // --- quotation snapshot (V49: freeze issued quotations at issue time) ---
+
+    // Frozen customer/project header for an issued quotation. All fields nullable —
+    // pre-V49 quotations have no header snapshot and the caller must fall back to a
+    // live customer/ticket lookup.
+    public record QuotationHeaderSnapshot(String customerName, String customerAddress,
+                                          String customerTaxId, String customerPhone,
+                                          String projectName) {}
+
+    // Called once, in the same transaction as createQuotation, from
+    // TicketService.generateQuotation. Only priced items (approvedPrice != null) are
+    // snapshotted — unpriced items never contribute to the rendered quotation, mirroring
+    // the total-amount calculation in TicketService.generateQuotation itself.
+    public void insertQuotationItems(long quotationId, List<TicketItemDto> items) {
+        List<TicketItemDto> priced = items.stream().filter(it -> it.approvedPrice() != null).toList();
+        if (priced.isEmpty()) {
+            return;
+        }
+        MapSqlParameterSource[] batch = new MapSqlParameterSource[priced.size()];
+        for (int i = 0; i < priced.size(); i++) {
+            TicketItemDto item = priced.get(i);
+            BigDecimal qty = item.qty() != null ? item.qty() : BigDecimal.ONE;
+            BigDecimal amount = item.approvedPrice().multiply(qty);
+            batch[i] = new MapSqlParameterSource()
+                .addValue("quotationId", quotationId)
+                .addValue("seq", i + 1)
+                .addValue("brand", item.brand())
+                .addValue("model", item.model())
+                .addValue("color", item.color())
+                .addValue("texture", item.texture())
+                .addValue("size", item.size())
+                .addValue("qty", item.qty())
+                .addValue("qtySqm", item.qtySqm())
+                .addValue("unitBasis", item.unitBasis())
+                .addValue("rawUnit", item.rawUnit())
+                .addValue("unitPrice", item.approvedPrice())
+                .addValue("amount", amount);
+        }
+        jdbc.batchUpdate("""
+            INSERT INTO sales.quotation_item
+                (quotation_id, seq, brand, model, color, texture, size,
+                 qty, qty_sqm, unit_basis, raw_unit, unit_price, amount)
+            VALUES (:quotationId, :seq, :brand, :model, :color, :texture, :size,
+                    :qty, :qtySqm, :unitBasis, :rawUnit, :unitPrice, :amount)
+            """, batch);
+    }
+
+    public void updateQuotationHeader(long quotationId, String customerName, String customerAddress,
+                                      String customerTaxId, String customerPhone, String projectName) {
+        jdbc.update("""
+            UPDATE sales.quotation
+               SET customer_name    = :customerName,
+                   customer_address = :customerAddress,
+                   customer_tax_id  = :customerTaxId,
+                   customer_phone   = :customerPhone,
+                   project_name     = :projectName
+             WHERE quotation_id = :id
+            """,
+            new MapSqlParameterSource()
+                .addValue("customerName", customerName)
+                .addValue("customerAddress", customerAddress)
+                .addValue("customerTaxId", customerTaxId)
+                .addValue("customerPhone", customerPhone)
+                .addValue("projectName", projectName)
+                .addValue("id", quotationId));
+    }
+
+    // Empty list = no snapshot exists for this quotation (either it predates V49, or
+    // generateQuotation ran with zero priced items) — the caller falls back to live data.
+    public List<TicketItemDto> findQuotationItemsByQuotationId(long quotationId, long ticketId) {
+        return jdbc.query("""
+            SELECT quotation_item_id, seq, brand, model, color, texture, size,
+                   qty, qty_sqm, unit_basis, raw_unit, unit_price
+              FROM sales.quotation_item
+             WHERE quotation_id = :id
+             ORDER BY seq
+            """,
+            Map.of("id", quotationId),
+            (rs, rowNum) -> new TicketItemDto(
+                rs.getLong("quotation_item_id"),
+                ticketId,
+                rs.getString("brand"),
+                rs.getString("model"),
+                rs.getString("color"),
+                rs.getString("texture"),
+                rs.getString("size"),
+                null, // factory — not part of the render, not snapshotted
+                rs.getBigDecimal("qty"),
+                rs.getBigDecimal("qty_sqm"),
+                null, null, // rawPrice, rawCurrency — not used by QuotationRenderer
+                rs.getString("raw_unit"),
+                null, // proposedPrice — meaningless post-issue
+                rs.getBigDecimal("unit_price"), // approvedPrice = the frozen unit price
+                null, // currency — not snapshotted (unused by QuotationRenderer)
+                rs.getInt("seq"),
+                null, null, null, // calcedCost, calcedPrice, calcConfigVersion
+                rs.getString("unit_basis"),
+                null, null // manualPrice, manualOverrideReason
+            ));
+    }
+
+    public Optional<QuotationHeaderSnapshot> findQuotationHeaderSnapshot(long quotationId) {
+        try {
+            QuotationHeaderSnapshot snap = jdbc.queryForObject("""
+                SELECT customer_name, customer_address, customer_tax_id, customer_phone, project_name
+                  FROM sales.quotation
+                 WHERE quotation_id = :id
+                """,
+                Map.of("id", quotationId),
+                (rs, rowNum) -> new QuotationHeaderSnapshot(
+                    rs.getString("customer_name"),
+                    rs.getString("customer_address"),
+                    rs.getString("customer_tax_id"),
+                    rs.getString("customer_phone"),
+                    rs.getString("project_name")
+                ));
+            return Optional.ofNullable(snap);
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
     }
 
     // --- private helpers ---

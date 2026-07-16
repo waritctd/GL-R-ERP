@@ -7,21 +7,25 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.assertj.core.api.ThrowableAssert;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.pricing.PriceCalcService;
@@ -36,10 +40,17 @@ class TicketServiceTest {
     private final TicketService service = new TicketService(
         ticketRepo, notificationService, priceCalcService, new ObjectMapper(), customerRepo, quotationRenderer);
 
-    private final UserPrincipal salesActor  = actor(1L, "sales");
-    private final UserPrincipal otherSales  = actor(2L, "sales");
-    private final UserPrincipal importActor = actor(3L, "import");
-    private final UserPrincipal ceoActor    = actor(4L, "ceo");
+    private final UserPrincipal salesActor   = actor(1L, "sales");
+    private final UserPrincipal otherSales   = actor(2L, "sales");
+    private final UserPrincipal importActor  = actor(3L, "import");
+    private final UserPrincipal ceoActor     = actor(4L, "ceo");
+    private final UserPrincipal accountActor = actor(5L, "account");
+    private final UserPrincipal hrActor      = actor(6L, "hr");
+    private final UserPrincipal employeeActor = actor(7L, "employee");
+    // sales_manager: read + comment oversight only — a project-manager-style
+    // follow-up role for the sales team. Never owns a ticket (cannot create one),
+    // so every owner-gated write action denies it via the ownership check alone.
+    private final UserPrincipal salesManagerActor = actor(8L, "sales_manager");
 
     // ── list ──────────────────────────────────────────────────────────────
 
@@ -73,6 +84,165 @@ class TicketServiceTest {
     void get_importCanViewAnyTicket() {
         TicketDto ticket = stubTicket(10L, 99L, TicketStatus.SUBMITTED);
         assertThat(service.get(10L, importActor)).isEqualTo(ticket);
+    }
+
+    // ── read authz (viewer roles) ─────────────────────────────────────────
+
+    @Test
+    void list_rejectsHrAndEmployeeRoles() {
+        // Tickets carry customer pricing — only sales/import/ceo/account may read.
+        assertForbidden(() -> service.list(null, hrActor));
+        assertForbidden(() -> service.list(null, employeeActor));
+    }
+
+    @Test
+    void get_rejectsHrAndEmployeeRoles() {
+        stubTicket(10L, 1L, TicketStatus.SUBMITTED);
+        assertForbidden(() -> service.get(10L, hrActor));
+        assertForbidden(() -> service.get(10L, employeeActor));
+    }
+
+    @Test
+    void get_accountRoleCanViewAnyTicket() {
+        TicketDto ticket = stubTicket(10L, 1L, TicketStatus.QUOTATION_ISSUED);
+        assertThat(service.get(10L, accountActor)).isEqualTo(ticket);
+    }
+
+    @Test
+    void comment_rejectsRolesAndNonOwnersWithoutReadAccess() {
+        // comment() returns the full TicketDto — it must not be a side door around
+        // get()'s scoping (previously any authenticated user could pull any ticket).
+        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
+        assertForbidden(() -> service.comment(10L, new CommentRequest("hi"), hrActor));
+        assertForbidden(() -> service.comment(10L, new CommentRequest("hi"), employeeActor));
+        assertForbidden(() -> service.comment(10L, new CommentRequest("hi"), otherSales));
+    }
+
+    @Test
+    void quotationFile_rejectsRolesWithoutReadAccess() {
+        stubTicket(10L, 1L, TicketStatus.QUOTATION_ISSUED);
+        assertForbidden(() -> service.getQuotationXlsx(10L, 1L, hrActor));
+        assertForbidden(() -> service.getQuotationPdf(10L, 1L, employeeActor));
+    }
+
+    // ── quotation file downloads: issue-time snapshot vs legacy fallback (V49) ──
+
+    @Test
+    void getQuotationXlsx_rendersFromSnapshotNotLiveEditedItems() throws Exception {
+        // The ticket's LIVE item/customer data has since been edited (a revision after
+        // this quotation was issued) — the render must reflect what was true AT ISSUE
+        // TIME (the snapshot), not these live values.
+        TicketItemDto liveEditedItem = new TicketItemDto(1L, 10L, "EditedBrand", "EditedModel", null, null,
+            null, null, new BigDecimal("9"), null, null, null, null, null,
+            new BigDecimal("999.00"), "THB", 0, null, null, null, "PIECE", null, null);
+        TicketSummaryDto summary = new TicketSummaryDto(
+            10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.QUOTATION_ISSUED, "NORMAL",
+            1L, "Sales User", null, null, "Live Edited Name", null, null, "Live Edited Project",
+            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null);
+        QuotationDto quotation = quotationOf(1L, 10L, "QT-2026-0001");
+        TicketDto ticket = new TicketDto(summary, List.of(liveEditedItem), List.of(), quotation, List.of(quotation));
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
+
+        TicketItemDto snapshotItem = new TicketItemDto(500L, 10L, "IssueTimeBrand", "IssueTimeModel", null, null,
+            null, null, new BigDecimal("2"), null, null, null, "pcs", null,
+            new BigDecimal("100.00"), null, 1, null, null, null, "PIECE", null, null);
+        when(ticketRepo.findQuotationItemsByQuotationId(1L, 10L)).thenReturn(List.of(snapshotItem));
+        when(ticketRepo.findQuotationHeaderSnapshot(1L)).thenReturn(Optional.of(
+            new TicketRepository.QuotationHeaderSnapshot("Issue-Time Customer", "Issue-Time Address",
+                "1111111111111", "02-999-9999", "Issue-Time Project")));
+
+        byte[] xlsx = service.getQuotationXlsx(10L, 1L, salesActor);
+
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            String itemDesc = sheet.getRow(7).getCell(1).getStringCellValue(); // ITEM_START_ROW = 7
+            assertThat(itemDesc).contains("IssueTimeBrand");
+            assertThat(itemDesc).doesNotContain("EditedBrand");
+            assertThat(sheet.getRow(4).getCell(1).getStringCellValue()) // B5: customer name
+                .isEqualTo("Issue-Time Customer");
+        }
+    }
+
+    @Test
+    void getQuotationPdf_rendersFromSnapshotNotLiveEditedItems() throws Exception {
+        TicketItemDto liveEditedItem = new TicketItemDto(1L, 10L, "EditedBrand", "EditedModel", null, null,
+            null, null, new BigDecimal("9"), null, null, null, null, null,
+            new BigDecimal("999.00"), "THB", 0, null, null, null, "PIECE", null, null);
+        TicketSummaryDto summary = new TicketSummaryDto(
+            10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.QUOTATION_ISSUED, "NORMAL",
+            1L, "Sales User", null, null, "Live Edited Name", null, null, "Live Edited Project",
+            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null);
+        QuotationDto quotation = quotationOf(1L, 10L, "QT-2026-0001");
+        TicketDto ticket = new TicketDto(summary, List.of(liveEditedItem), List.of(), quotation, List.of(quotation));
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
+
+        TicketItemDto snapshotItem = new TicketItemDto(500L, 10L, "IssueTimeBrand", "IssueTimeModel", null, null,
+            null, null, new BigDecimal("2"), null, null, null, "pcs", null,
+            new BigDecimal("100.00"), null, 1, null, null, null, "PIECE", null, null);
+        when(ticketRepo.findQuotationItemsByQuotationId(1L, 10L)).thenReturn(List.of(snapshotItem));
+        when(ticketRepo.findQuotationHeaderSnapshot(1L)).thenReturn(Optional.of(
+            new TicketRepository.QuotationHeaderSnapshot("Issue-Time Customer", "Issue-Time Address",
+                "1111111111111", "02-999-9999", "Issue-Time Project")));
+
+        byte[] pdf = service.getQuotationPdf(10L, 1L, salesActor);
+
+        try (var doc = org.apache.pdfbox.Loader.loadPDF(pdf)) {
+            String text = new org.apache.pdfbox.text.PDFTextStripper().getText(doc);
+            assertThat(text).contains("IssueTimeBrand IssueTimeModel");
+            assertThat(text).doesNotContain("EditedBrand");
+            assertThat(text).contains("เรียน Issue-Time Customer");
+            assertThat(text).contains("Project : Issue-Time Project");
+        }
+    }
+
+    @Test
+    void getQuotationXlsx_legacyFallback_rendersLiveDataWhenNoSnapshotRows() throws Exception {
+        // Pre-V49 quotation: no quotation_item rows and no header snapshot. Neither
+        // findQuotationItemsByQuotationId nor findQuotationHeaderSnapshot is stubbed here —
+        // Mockito's default answer returns an empty List / Optional.empty(), exactly what
+        // the repository would return for a real pre-V49 row, so the service must fall
+        // back to live ticket data rather than rendering a blank document.
+        TicketItemDto liveItem = new TicketItemDto(1L, 10L, "LiveBrand", "LiveModel", null, null,
+            null, null, new BigDecimal("3"), null, null, null, null, null,
+            new BigDecimal("50.00"), "THB", 0, null, null, null, "PIECE", null, null);
+        TicketSummaryDto summary = new TicketSummaryDto(
+            10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.QUOTATION_ISSUED, "NORMAL",
+            1L, "Sales User", null, null, "Live Customer Name", null, null, "Live Project",
+            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null);
+        QuotationDto quotation = quotationOf(2L, 10L, "QT-2026-0002");
+        TicketDto ticket = new TicketDto(summary, List.of(liveItem), List.of(), quotation, List.of(quotation));
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
+
+        byte[] xlsx = service.getQuotationXlsx(10L, 2L, salesActor);
+
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            assertThat(sheet.getRow(7).getCell(1).getStringCellValue()).contains("LiveBrand");
+            assertThat(sheet.getRow(4).getCell(1).getStringCellValue()).isEqualTo("Live Customer Name");
+        }
+    }
+
+    // ── factory email gate ────────────────────────────────────────────────
+
+    @Test
+    void factoryEmail_allowsImportOnExistingTicket() {
+        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
+        service.assertFactoryEmailAllowed(10L, importActor); // must not throw
+    }
+
+    @Test
+    void factoryEmail_rejectsNonImportRoles() {
+        // Previously session-only — an authenticated open mail relay.
+        assertForbidden(() -> service.assertFactoryEmailAllowed(10L, salesActor));
+        assertForbidden(() -> service.assertFactoryEmailAllowed(10L, hrActor));
+        assertForbidden(() -> service.assertFactoryEmailAllowed(10L, employeeActor));
+    }
+
+    @Test
+    void factoryEmail_rejectsNonExistentTicket() {
+        assertThatThrownBy(() -> service.assertFactoryEmailAllowed(99L, importActor))
+            .isInstanceOfSatisfying(ApiException.class, e ->
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
     // ── submit ────────────────────────────────────────────────────────────
@@ -233,6 +403,8 @@ class TicketServiceTest {
             new BigDecimal("100.00"), "THB", 0, null, null, null, "PIECE", null, null);
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(item));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0001");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0001"), eq(1L), eq(new BigDecimal("200.00"))))
+            .thenReturn(quotationOf(99L, 10L, "QT-2026-0001"));
 
         service.generateQuotation(10L, salesActor);
 
@@ -262,6 +434,8 @@ class TicketServiceTest {
     void generateQuotation_allowsReissueFromQuotationIssued() {
         stubTicketWithItems(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of());
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0003");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0003"), eq(1L), any(BigDecimal.class)))
+            .thenReturn(quotationOf(100L, 10L, "QT-2026-0003"));
 
         service.generateQuotation(10L, salesActor);
 
@@ -283,6 +457,8 @@ class TicketServiceTest {
             new BigDecimal("10.00"), "THB", 2, null, null, null, "SQM", null, null);
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(item1, item2, item3));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0004");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0004"), eq(1L), any(BigDecimal.class)))
+            .thenReturn(quotationOf(101L, 10L, "QT-2026-0004"));
 
         service.generateQuotation(10L, salesActor);
 
@@ -303,6 +479,8 @@ class TicketServiceTest {
             null, "THB", 1, null, null, null, "PIECE", null, null);
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(priced, unpriced));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0005");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0005"), eq(1L), any(BigDecimal.class)))
+            .thenReturn(quotationOf(102L, 10L, "QT-2026-0005"));
 
         service.generateQuotation(10L, salesActor);
 
@@ -311,6 +489,82 @@ class TicketServiceTest {
         ArgumentCaptor<BigDecimal> total = ArgumentCaptor.forClass(BigDecimal.class);
         verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0005"), eq(1L), total.capture());
         assertThat(total.getValue()).isEqualByComparingTo(new BigDecimal("200.00"));
+    }
+
+    // ── generateQuotation: issue-time snapshot (V49) ──────────────────────
+
+    @Test
+    void generateQuotation_snapshotsOnlyPricedItemsAndCustomerHeaderInSameCall() {
+        TicketItemDto priced = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
+            "pcs", null, new BigDecimal("2"), null, null, null, null, null,
+            new BigDecimal("100.00"), "THB", 0, null, null, null, "PIECE", null, null);
+        TicketItemDto unpriced = new TicketItemDto(2L, 10L, "PC002", "Product B", null, null,
+            "pcs", null, new BigDecimal("5"), null, null, null, null, null,
+            null, "THB", 1, null, null, null, "PIECE", null, null);
+        stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(priced, unpriced));
+        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0006");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0006"), eq(1L), any(BigDecimal.class)))
+            .thenReturn(quotationOf(200L, 10L, "QT-2026-0006"));
+
+        service.generateQuotation(10L, salesActor);
+
+        // insertQuotationItems is handed the FULL item list (priced + unpriced) — the
+        // repository itself is responsible for filtering to approvedPrice != null, mirroring
+        // how the total-amount calculation above already treats unpriced items as excluded.
+        ArgumentCaptor<List<TicketItemDto>> itemsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(ticketRepo).insertQuotationItems(eq(200L), itemsCaptor.capture());
+        assertThat(itemsCaptor.getValue()).containsExactly(priced, unpriced);
+
+        // No customerId on this ticket (stubTicket leaves it null) — falls back to the
+        // ticket's free-text customerName, with no address/tax/phone to snapshot.
+        verify(ticketRepo).updateQuotationHeader(eq(200L), eq("Test Customer"),
+            isNull(), isNull(), isNull(), isNull());
+    }
+
+    @Test
+    void generateQuotation_snapshotsCustomerHeaderFromCustomerRepositoryWhenLinked() {
+        TicketSummaryDto summary = new TicketSummaryDto(
+            10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.APPROVED, "NORMAL",
+            1L, "Sales User", null, null, "Free-text Name", 55L, null, "Renovation Project",
+            null, null, null, Instant.now(), Instant.now(), null, 0, false, null, null);
+        TicketDto ticket = new TicketDto(summary, List.of(), List.of(), null, List.of());
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
+        when(customerRepo.findById(55L)).thenReturn(Optional.of(
+            new CustomerDto(55L, "Real Customer Co., Ltd.", "0105500000000",
+                "123 Real Address", "สำนักงานใหญ่", "02-000-0000")));
+        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0007");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0007"), eq(1L), any(BigDecimal.class)))
+            .thenReturn(quotationOf(201L, 10L, "QT-2026-0007"));
+
+        service.generateQuotation(10L, salesActor);
+
+        // Fidelity rule (Opus review): the frozen NAME is the ticket's display name —
+        // that's what toXlsx/toPdf have always printed — so the snapshot must capture
+        // it, not the master record's name. Address/taxId/phone DO come from the master
+        // record because that's what the live render pulls from CustomerDto.
+        verify(ticketRepo).updateQuotationHeader(eq(201L), eq("Free-text Name"),
+            eq("123 Real Address"), eq("0105500000000"), eq("02-000-0000"), eq("Renovation Project"));
+    }
+
+    @Test
+    void generateQuotation_blankTicketNameFallsBackToMasterCustomerName() {
+        TicketSummaryDto summary = new TicketSummaryDto(
+            10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.APPROVED, "NORMAL",
+            1L, "Sales User", null, null, null, 55L, null, null,
+            null, null, null, Instant.now(), Instant.now(), null, 0, false, null, null);
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(
+            new TicketDto(summary, List.of(), List.of(), null, List.of())));
+        when(customerRepo.findById(55L)).thenReturn(Optional.of(
+            new CustomerDto(55L, "Real Customer Co., Ltd.", "0105500000000",
+                "123 Real Address", "สำนักงานใหญ่", "02-000-0000")));
+        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0008");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0008"), eq(1L), any(BigDecimal.class)))
+            .thenReturn(quotationOf(202L, 10L, "QT-2026-0008"));
+
+        service.generateQuotation(10L, salesActor);
+
+        verify(ticketRepo).updateQuotationHeader(eq(202L), eq("Real Customer Co., Ltd."),
+            eq("123 Real Address"), eq("0105500000000"), eq("02-000-0000"), isNull());
     }
 
     // ── close ─────────────────────────────────────────────────────────────
@@ -334,6 +588,237 @@ class TicketServiceTest {
     @Test
     void close_rejectsWrongStatus() {
         stubTicket(10L, 1L, TicketStatus.APPROVED);
+        assertConflict(() -> service.close(10L, salesActor));
+    }
+
+    // ── dual-track lifecycle (payment + fulfillment) ──────────────────────
+
+    @Test
+    void confirmCustomer_quotationIssuedBySales_setsCustomerConfirmed() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, null, null);
+
+        service.confirmCustomer(10L, salesActor);
+
+        verify(ticketRepo).updatePaymentStatus(10L, "CUSTOMER_CONFIRMED");
+    }
+
+    @Test
+    void confirmCustomer_refusesDowngradeWhenPaymentTrackAdvanced() {
+        // Re-confirming after the deposit was paid must not reset the payment track —
+        // a reset re-arms the deadlock orderings.
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", null);
+        assertConflict(() -> service.confirmCustomer(10L, salesActor));
+    }
+
+    @Test
+    void confirmCustomer_rejectsNonOwnerSales() {
+        // Dual-track transitions had role checks but no ownership checks — any sales
+        // rep could advance a colleague's payment track.
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, null, null);
+        assertForbidden(() -> service.confirmCustomer(10L, otherSales));
+    }
+
+    // (issueDepositNotice endpoint removed — DepositNoticeService.issue() is now the
+    //  single action that advances the payment track to DEPOSIT_NOTICE_ISSUED.)
+
+    @Test
+    void close_legacyDocumentIssuedWithNullPayment_stillCloses() {
+        // Pre-dual-track tickets (paymentStatus never set) keep the legacy close path.
+        stubTicketWithTracks(10L, 1L, TicketStatus.DOCUMENT_ISSUED, null, null);
+
+        service.close(10L, salesActor);
+
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.CLOSED), eq(TicketStatus.DOCUMENT_ISSUED), eq(TicketStatus.CLOSED), isNull());
+    }
+
+    @Test
+    void close_legacyDocumentIssuedMidPaymentTrack_isRefused() {
+        // The bypass from the audit: a mid-track ticket flipped to document_issued
+        // must not close unpaid.
+        stubTicketWithTracks(10L, 1L, TicketStatus.DOCUMENT_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
+        assertConflict(() -> service.close(10L, salesActor));
+
+        stubTicketWithTracks(10L, 1L, TicketStatus.DOCUMENT_ISSUED, "DEPOSIT_PAID", "SHIPPING");
+        assertConflict(() -> service.close(10L, salesActor));
+    }
+
+    @Test
+    void close_legacyDocumentIssuedFullyPaid_closes() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.DOCUMENT_ISSUED, "FULLY_PAID", "GOODS_RECEIVED");
+
+        service.close(10L, salesActor);
+
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.CLOSED), eq(TicketStatus.DOCUMENT_ISSUED), eq(TicketStatus.CLOSED), isNull());
+    }
+
+    @Test
+    void confirmDepositPaid_byAccount_advancesToDepositPaid() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
+
+        service.confirmDepositPaid(10L, accountActor);
+
+        verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_PAID");
+        // Fulfillment hasn't reached GOODS_RECEIVED — no early advance.
+        verify(ticketRepo, never()).updatePaymentStatus(10L, "AWAITING_FINAL_PAYMENT");
+    }
+
+    @Test
+    void confirmDepositPaid_byCeoFallback_isAllowed() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
+        service.confirmDepositPaid(10L, ceoActor);
+        verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_PAID");
+    }
+
+    @Test
+    void confirmDepositPaid_rejectsSalesRole() {
+        // Money-receipt confirmations moved from sales to ฝ่ายบัญชี (account role).
+        assertForbidden(() -> service.confirmDepositPaid(10L, salesActor));
+    }
+
+    @Test
+    void confirmDepositPaid_rejectsImportRole() {
+        assertForbidden(() -> service.confirmDepositPaid(10L, importActor));
+    }
+
+    @Test
+    void confirmDepositPaid_afterGoodsReceived_advancesToAwaitingFinalPayment() {
+        // Goods-first ordering (deadlock B): goods arrived while the deposit was
+        // unconfirmed; confirming the deposit must carry payment forward, otherwise
+        // AWAITING_FINAL_PAYMENT is unreachable and the ticket can never close.
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED,
+            "DEPOSIT_NOTICE_ISSUED", "GOODS_RECEIVED");
+
+        service.confirmDepositPaid(10L, accountActor);
+
+        verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_PAID");
+        verify(ticketRepo).updatePaymentStatus(10L, "AWAITING_FINAL_PAYMENT");
+        verify(ticketRepo).addEvent(eq(10L), eq(5L), anyString(),
+            eq(TicketEventKind.AWAITING_FINAL_PAYMENT), anyString(), anyString(), isNull());
+    }
+
+    @Test
+    void confirmDepositPaid_rejectsWrongPaymentStatus() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", null);
+        assertConflict(() -> service.confirmDepositPaid(10L, accountActor));
+    }
+
+    @Test
+    void issueImportRequest_fromDepositNoticeIssued_startsFulfillment() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
+
+        service.issueImportRequest(10L, importActor);
+
+        verify(ticketRepo).updateFulfillmentStatus(10L, "IR_ISSUED");
+    }
+
+    @Test
+    void issueImportRequest_fromDepositPaid_isAlsoAllowed() {
+        // Deposit-first ordering (deadlock A): the customer often pays before import
+        // gets to the IR — that must not lock the fulfillment track out forever.
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", null);
+
+        service.issueImportRequest(10L, importActor);
+
+        verify(ticketRepo).updateFulfillmentStatus(10L, "IR_ISSUED");
+    }
+
+    @Test
+    void issueImportRequest_rejectsReissueOnceFulfillmentStarted() {
+        // Re-issuing would downgrade an in-flight fulfillment track back to IR_ISSUED.
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "SHIPPING");
+        assertConflict(() -> service.issueImportRequest(10L, importActor));
+    }
+
+    @Test
+    void issueImportRequest_rejectsWhenNoDepositNoticeYet() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", null);
+        assertConflict(() -> service.issueImportRequest(10L, importActor));
+    }
+
+    @Test
+    void issueImportRequest_rejectsSalesRole() {
+        assertForbidden(() -> service.issueImportRequest(10L, salesActor));
+    }
+
+    @Test
+    void markIrSent_thenShipping_walksFulfillmentForward() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "IR_ISSUED");
+        service.markIrSent(10L, importActor);
+        verify(ticketRepo).updateFulfillmentStatus(10L, "IR_SENT");
+
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "IR_SENT");
+        service.markShipping(10L, importActor);
+        verify(ticketRepo).updateFulfillmentStatus(10L, "SHIPPING");
+    }
+
+    @Test
+    void markGoodsReceived_withDepositPaid_advancesBothTracks() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "SHIPPING");
+
+        service.markGoodsReceived(10L, importActor);
+
+        verify(ticketRepo).updateFulfillmentStatus(10L, "GOODS_RECEIVED");
+        verify(ticketRepo).updatePaymentStatus(10L, "AWAITING_FINAL_PAYMENT");
+    }
+
+    @Test
+    void markGoodsReceived_withDepositUnconfirmed_advancesFulfillmentOnly() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", "SHIPPING");
+
+        service.markGoodsReceived(10L, importActor);
+
+        verify(ticketRepo).updateFulfillmentStatus(10L, "GOODS_RECEIVED");
+        verify(ticketRepo, never()).updatePaymentStatus(eq(10L), anyString());
+    }
+
+    @Test
+    void confirmFinalPayment_byAccount_completesPaymentTrack() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
+
+        service.confirmFinalPayment(10L, accountActor);
+
+        verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
+    }
+
+    @Test
+    void confirmFinalPayment_byCeoFallback_isAllowed() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
+        service.confirmFinalPayment(10L, ceoActor);
+        verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
+    }
+
+    @Test
+    void confirmFinalPayment_rejectsSalesRole() {
+        assertForbidden(() -> service.confirmFinalPayment(10L, salesActor));
+    }
+
+    @Test
+    void confirmFinalPayment_rejectsBeforeAwaitingFinalPayment() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "SHIPPING");
+        assertConflict(() -> service.confirmFinalPayment(10L, accountActor));
+    }
+
+    @Test
+    void close_dualTrackComplete_transitionsToClosed() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", "GOODS_RECEIVED");
+
+        service.close(10L, salesActor);
+
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.CLOSED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.CLOSED), isNull());
+    }
+
+    @Test
+    void close_dualTrackRejectsWhenPaymentIncomplete() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
+        assertConflict(() -> service.close(10L, salesActor));
+    }
+
+    @Test
+    void close_dualTrackRejectsWhenFulfillmentIncomplete() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", "SHIPPING");
         assertConflict(() -> service.close(10L, salesActor));
     }
 
@@ -381,6 +866,109 @@ class TicketServiceTest {
         assertForbidden(() -> service.cancel(10L, otherSales));
     }
 
+    // ── editItems ─────────────────────────────────────────────────────────
+    // 2026-07-16 pricing-integrity audit, finding #4: sales editing descriptive fields
+    // must never silently discard import's proposed price or CEO's approved/manual price.
+
+    @Test
+    void editItems_preservesExistingPricingAndIgnoresRequestSuppliedPrices() {
+        TicketItemDto existing = new TicketItemDto(
+            101L, 10L, "OldBrand", "OldModel", "White", "Matte", "60x60", "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"),
+            new BigDecimal("50"), "USD", "piece",
+            new BigDecimal("777.00"), new BigDecimal("888.00"), "THB", 0,
+            new BigDecimal("600.0000"), new BigDecimal("777.00"), 3, "PIECE",
+            new BigDecimal("999.00"), "CEO special discount");
+        stubTicketWithItems(10L, 1L, TicketStatus.PRICE_PROPOSED, List.of(existing));
+
+        TicketItemRequest edited = new TicketItemRequest(
+            "NewBrand", "NewModel", "Grey", "Glossy", "80x80", "Cotto",
+            new BigDecimal("7"), new BigDecimal("14"), "PIECE",
+            new BigDecimal("50"), "USD", "piece",
+            new BigDecimal("1"),   // attacker/sales-supplied proposedPrice — must be ignored
+            "THB");
+
+        service.editItems(10L, new EditItemsRequest(List.of(edited), "แก้ไข spec"), salesActor);
+
+        ArgumentCaptor<List<TicketItemDto>> captor = ArgumentCaptor.forClass(List.class);
+        verify(ticketRepo).replaceItemsPreservingPricing(eq(10L), captor.capture());
+        TicketItemDto merged = captor.getValue().get(0);
+
+        assertThat(merged.brand()).isEqualTo("NewBrand");
+        assertThat(merged.model()).isEqualTo("NewModel");
+        assertThat(merged.qty()).isEqualByComparingTo("7");
+        // Pricing fields carried over from the existing item, NOT the request.
+        assertThat(merged.proposedPrice()).isEqualByComparingTo("777.00");
+        assertThat(merged.approvedPrice()).isEqualByComparingTo("888.00");
+        assertThat(merged.calcedCost()).isEqualByComparingTo("600.0000");
+        assertThat(merged.calcedPrice()).isEqualByComparingTo("777.00");
+        assertThat(merged.calcConfigVersion()).isEqualTo(3);
+        assertThat(merged.manualPrice()).isEqualByComparingTo("999.00");
+        assertThat(merged.manualOverrideReason()).isEqualTo("CEO special discount");
+    }
+
+    @Test
+    void editItems_requestOmittingUnitBasisInheritsPriorBasis() {
+        // An API edit that omits unitBasis must not silently flip an SQM item to PIECE.
+        TicketItemDto existing = new TicketItemDto(
+            101L, 10L, "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), null, null, null,
+            null, null, "THB", 0, null, null, null, "SQM", null, null);
+        stubTicketWithItems(10L, 1L, TicketStatus.IN_REVIEW, List.of(existing));
+
+        TicketItemRequest edited = new TicketItemRequest(
+            "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("6"), new BigDecimal("12"), null,   // unitBasis omitted
+            null, null, null, null, null);
+
+        service.editItems(10L, new EditItemsRequest(List.of(edited), null), salesActor);
+
+        ArgumentCaptor<List<TicketItemDto>> captor = ArgumentCaptor.forClass(List.class);
+        verify(ticketRepo).replaceItemsPreservingPricing(eq(10L), captor.capture());
+        assertThat(captor.getValue().get(0).unitBasis()).isEqualTo("SQM");
+    }
+
+    @Test
+    void editItems_newItemBeyondCurrentCountGetsNullPricingFields() {
+        TicketItemDto existing = new TicketItemDto(
+            101L, 10L, "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"),
+            new BigDecimal("50"), "THB", "piece",
+            new BigDecimal("100"), new BigDecimal("100"), "THB", 0,
+            null, null, null, "PIECE", null, null);
+        stubTicketWithItems(10L, 1L, TicketStatus.SUBMITTED, List.of(existing));
+
+        TicketItemRequest first = new TicketItemRequest(
+            "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), "PIECE",
+            new BigDecimal("50"), "THB", "piece", null, "THB");
+        TicketItemRequest brandNew = new TicketItemRequest(
+            "AnotherBrand", "AnotherModel", null, null, null, "Cotto",
+            new BigDecimal("2"), null, "PIECE",
+            new BigDecimal("20"), "THB", "piece", new BigDecimal("999"), "THB");
+
+        service.editItems(10L, new EditItemsRequest(List.of(first, brandNew), null), salesActor);
+
+        ArgumentCaptor<List<TicketItemDto>> captor = ArgumentCaptor.forClass(List.class);
+        verify(ticketRepo).replaceItemsPreservingPricing(eq(10L), captor.capture());
+        TicketItemDto newItem = captor.getValue().get(1);
+
+        assertThat(newItem.brand()).isEqualTo("AnotherBrand");
+        assertThat(newItem.proposedPrice()).isNull();
+        assertThat(newItem.approvedPrice()).isNull();
+        assertThat(newItem.manualPrice()).isNull();
+    }
+
+    @Test
+    void editItems_rejectsNonOwnerSales() {
+        stubTicket(10L, 1L, TicketStatus.SUBMITTED);
+        TicketItemRequest req = new TicketItemRequest(
+            "Brand", "Model", "Color", "Texture", "Size", "Factory",
+            BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB");
+
+        assertForbidden(() -> service.editItems(10L, new EditItemsRequest(List.of(req), null), otherSales));
+    }
+
     // ── calculatePrices ──────────────────────────────────────────────────
 
     @Test
@@ -407,6 +995,37 @@ class TicketServiceTest {
         assertConflict(() -> service.calculatePrices(10L, ceoActor));
     }
 
+    // ── overrideItemPrice ────────────────────────────────────────────────
+    // 2026-07-16 pricing-integrity audit, finding #3: overriding a price previously left
+    // no audit trail at all.
+
+    @Test
+    void overrideItemPrice_logsPriceOverriddenEventWithItemIdManualPriceAndReason() {
+        TicketItemDto item = new TicketItemDto(
+            101L, 10L, "Brand", "Model", null, null, null, "Cotto",
+            BigDecimal.ONE, null, new BigDecimal("50"), "THB", "piece",
+            new BigDecimal("100"), null, "THB", 0, null, null, null, "PIECE", null, null);
+        stubTicketWithItems(10L, 1L, TicketStatus.PRICE_PROPOSED, List.of(item));
+
+        service.overrideItemPrice(10L, 101L,
+            new OverridePriceRequest(new BigDecimal("777.00"), "ราคาพิเศษลูกค้า VIP"), ceoActor);
+
+        ArgumentCaptor<String> noteCaptor = ArgumentCaptor.forClass(String.class);
+        verify(ticketRepo).addEvent(eq(10L), eq(4L), anyString(),
+            eq(TicketEventKind.PRICE_OVERRIDDEN), eq(TicketStatus.PRICE_PROPOSED),
+            eq(TicketStatus.PRICE_PROPOSED), noteCaptor.capture());
+        assertThat(noteCaptor.getValue()).contains("101").contains("777.00").contains("ราคาพิเศษลูกค้า VIP");
+        verify(ticketRepo).updateItemManualPrice(101L, new BigDecimal("777.00"), "ราคาพิเศษลูกค้า VIP");
+    }
+
+    @Test
+    void overrideItemPrice_rejectsWrongStatus() {
+        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
+
+        assertConflict(() -> service.overrideItemPrice(10L, 101L,
+            new OverridePriceRequest(new BigDecimal("777.00"), null), ceoActor));
+    }
+
     // ── comment ───────────────────────────────────────────────────────────
 
     @Test
@@ -429,6 +1048,133 @@ class TicketServiceTest {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
+    // ── sales_manager oversight (read + comment only, zero write actions) ──
+    // Product decision (2026-07-16): sales_manager acts like a project manager for the
+    // sales team — follow up / check up, but never perform the actual work. It was
+    // added to VIEWER_ROLES only; SALES_ROLES/IMPORT_ROLES/CEO_ROLES/ACCOUNT_ROLES are
+    // untouched. Every write test below asserts 403.
+
+    @Test
+    void list_salesManagerSeesAllTicketsUnfiltered() {
+        // Same as any non-sales viewer: no createdBy scoping.
+        service.list(null, salesManagerActor);
+        verify(ticketRepo).findSummaries(null, null);
+    }
+
+    @Test
+    void get_salesManagerCanViewAnyonesTicket() {
+        TicketDto ticket = stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
+        assertThat(service.get(10L, salesManagerActor)).isEqualTo(ticket);
+    }
+
+    @Test
+    void comment_salesManagerCanCommentOnAnyonesTicket() {
+        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
+
+        service.comment(10L, new CommentRequest("ติดตามความคืบหน้าให้ลูกค้าหน่อย"), salesManagerActor);
+
+        verify(ticketRepo).addEvent(eq(10L), eq(8L), anyString(),
+            eq(TicketEventKind.COMMENTED), isNull(), isNull(), eq("ติดตามความคืบหน้าให้ลูกค้าหน่อย"));
+    }
+
+    @Test
+    void submit_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.submit(10L, salesManagerActor));
+    }
+
+    @Test
+    void pickup_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.pickup(10L, salesManagerActor));
+    }
+
+    @Test
+    void proposePrice_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.proposePrice(10L, new ProposePriceRequest(List.of(), null), salesManagerActor));
+    }
+
+    @Test
+    void approve_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.approve(10L, salesManagerActor));
+    }
+
+    @Test
+    void calculatePrices_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.calculatePrices(10L, salesManagerActor));
+    }
+
+    @Test
+    void overrideItemPrice_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.overrideItemPrice(10L, 101L,
+            new OverridePriceRequest(new BigDecimal("777.00"), null), salesManagerActor));
+    }
+
+    @Test
+    void generateQuotation_rejectsSalesManagerRole() {
+        // Role-gated (SALES_ROLES) before the ownership check even runs.
+        assertForbidden(() -> service.generateQuotation(10L, salesManagerActor));
+    }
+
+    @Test
+    void editItems_rejectsSalesManagerRole() {
+        // Not role-gated via requireRole, but salesCanEdit requires SALES_ROLES
+        // membership regardless of ownership — sales_manager fails that check.
+        stubTicket(10L, 1L, TicketStatus.SUBMITTED);
+        TicketItemRequest req = new TicketItemRequest(
+            "Brand", "Model", "Color", "Texture", "Size", "Factory",
+            BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB");
+
+        assertForbidden(() -> service.editItems(10L, new EditItemsRequest(List.of(req), null), salesManagerActor));
+    }
+
+    @Test
+    void close_rejectsSalesManagerRole() {
+        // close() has NO role gate — only ownership. sales_manager can never be the
+        // createdById of any ticket (it has no create access), so the owner check
+        // alone suffices to deny it here; confirmed by stubbing a ticket owned by
+        // someone else and asserting 403.
+        stubTicket(10L, 1L, TicketStatus.DOCUMENT_ISSUED);
+        assertForbidden(() -> service.close(10L, salesManagerActor));
+    }
+
+    @Test
+    void cancel_rejectsSalesManagerRole() {
+        // Same reasoning as close(): cancel() is owner-gated only, and sales_manager
+        // can never own a ticket, so it always 403s here.
+        stubTicket(10L, 1L, TicketStatus.SUBMITTED);
+        assertForbidden(() -> service.cancel(10L, salesManagerActor));
+    }
+
+    @Test
+    void confirmCustomer_rejectsSalesManagerRole() {
+        // Role-gated (SALES_ROLES) before the ownership check.
+        assertForbidden(() -> service.confirmCustomer(10L, salesManagerActor));
+    }
+
+    @Test
+    void confirmDepositPaid_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.confirmDepositPaid(10L, salesManagerActor));
+    }
+
+    @Test
+    void issueImportRequest_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.issueImportRequest(10L, salesManagerActor));
+    }
+
+    @Test
+    void markGoodsReceived_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.markGoodsReceived(10L, salesManagerActor));
+    }
+
+    @Test
+    void confirmFinalPayment_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.confirmFinalPayment(10L, salesManagerActor));
+    }
+
+    @Test
+    void factoryEmail_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.assertFactoryEmailAllowed(10L, salesManagerActor));
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────
 
     private static UserPrincipal actor(long id, String role) {
@@ -440,13 +1186,30 @@ class TicketServiceTest {
     }
 
     private TicketDto stubTicketWithItems(long ticketId, long createdById, String status, List<TicketItemDto> items) {
+        return stubTicket(ticketId, createdById, status, items, null, null);
+    }
+
+    private TicketDto stubTicketWithTracks(long ticketId, long createdById, String status,
+                                           String paymentStatus, String fulfillmentStatus) {
+        return stubTicket(ticketId, createdById, status, List.of(), paymentStatus, fulfillmentStatus);
+    }
+
+    private TicketDto stubTicket(long ticketId, long createdById, String status, List<TicketItemDto> items,
+                                 String paymentStatus, String fulfillmentStatus) {
         TicketSummaryDto summary = new TicketSummaryDto(
             ticketId, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", status, "NORMAL",
             createdById, "Sales User", null, null, "Test Customer", null, null, null, null, null, null,
-            Instant.now(), Instant.now(), null, items.size(), false, null, null);
+            Instant.now(), Instant.now(), null, items.size(), false, paymentStatus, fulfillmentStatus);
         TicketDto ticket = new TicketDto(summary, items, List.of(), null, List.of());
         when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
         return ticket;
+    }
+
+    // generateQuotation captures createQuotation's return value to snapshot items/header
+    // against the new quotation_id — tests must stub a non-null return or that call NPEs.
+    private static QuotationDto quotationOf(long quotationId, long ticketId, String number) {
+        return new QuotationDto(quotationId, ticketId, number, 1L, "Sales User",
+            Instant.now(), null, null, "THB", 1, "ISSUED");
     }
 
     private static void assertForbidden(ThrowableAssert.ThrowingCallable action) {

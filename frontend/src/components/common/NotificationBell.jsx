@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from './Icon.jsx';
 
 const TYPE_ICON = {
@@ -22,24 +24,32 @@ function timeAgo(iso) {
 }
 
 export function NotificationBell({ onNavigate }) {
-  const [items, setItems] = useState([]);
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
-  async function load() {
-    try {
-      const res = await api.notifications.list();
-      setItems(Array.isArray(res.notifications) ? res.notifications : []);
-    } catch {
-      setItems([]);
-    }
-  }
+  // Polling moves from a manual setInterval to refetchInterval — same 30s
+  // cadence, but the cache now lives at queryKeys.notifications() so any
+  // mutation elsewhere (e.g. a ticket action) that invalidates that key also
+  // refreshes this bell immediately instead of waiting up to 30s.
+  const notificationsQuery = useQuery({
+    queryKey: queryKeys.notifications(),
+    queryFn: () => api.notifications.list().then((res) => (Array.isArray(res.notifications) ? res.notifications : [])),
+    refetchInterval: 30_000,
+  });
+  // On error, fall back to an empty list — matches the original load()'s
+  // catch-and-clear behavior (this component has no showToast prop to report through).
+  const items = notificationsQuery.data ?? [];
 
-  useEffect(() => {
-    load();
-    const interval = setInterval(load, 30000);
-    return () => clearInterval(interval);
-  }, []);
+  const markReadMutation = useMutation({
+    mutationFn: (id) => api.notifications.markRead(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.notifications() }),
+  });
+
+  const markAllReadMutation = useMutation({
+    mutationFn: (ids) => Promise.all(ids.map((id) => api.notifications.markRead(id))),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.notifications() }),
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -50,19 +60,18 @@ export function NotificationBell({ onNavigate }) {
     return () => document.removeEventListener('mousedown', handleClick);
   }, [open]);
 
-  async function handleClick(item) {
+  function handleClick(item) {
     if (!item.read) {
-      await api.notifications.markRead(item.id);
-      setItems((prev) => prev.map((n) => n.id === item.id ? { ...n, read: true } : n));
+      markReadMutation.mutate(item.id);
     }
     setOpen(false);
     if (item.link) onNavigate(item.link);
   }
 
-  async function markAllRead() {
-    const unread = items.filter((n) => !n.read);
-    await Promise.all(unread.map((n) => api.notifications.markRead(n.id)));
-    setItems((prev) => prev.map((n) => ({ ...n, read: true })));
+  function markAllRead() {
+    const unread = items.filter((n) => !n.read).map((n) => n.id);
+    if (unread.length === 0) return;
+    markAllReadMutation.mutate(unread);
   }
 
   const unreadCount = items.filter((n) => !n.read).length;
@@ -78,7 +87,7 @@ export function NotificationBell({ onNavigate }) {
       >
         <Icon name="bell" />
         {unreadCount > 0 && (
-          <span className="absolute top-[2px] right-[2px] min-w-4 h-4 rounded-md bg-[#ef4444] !text-surface !text-[10px] !font-extrabold !flex items-center justify-center px-[3px] py-0 leading-none pointer-events-none">
+          <span className="absolute top-[2px] right-[2px] min-w-4 h-4 rounded-md bg-danger !text-surface !text-[10px] !font-extrabold !flex items-center justify-center px-[3px] py-0 leading-none pointer-events-none">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
@@ -101,7 +110,7 @@ export function NotificationBell({ onNavigate }) {
 
           <div className="max-h-[360px] overflow-y-auto">
             {items.length === 0 ? (
-              <div className="py-7 px-4 text-center text-text-faint text-sm">
+              <div className="py-7 px-4 text-center text-text-muted text-sm">
                 ไม่มีการแจ้งเตือน
               </div>
             ) : items.map((item) => {
@@ -111,7 +120,7 @@ export function NotificationBell({ onNavigate }) {
                   key={item.id}
                   type="button"
                   onClick={() => handleClick(item)}
-                  className={`w-full flex gap-3 items-start py-3 px-4 border-0 cursor-pointer text-left border-b border-surface-subtle transition-[background] duration-100 ${item.read ? 'bg-surface' : 'bg-[#f0f6ff]'}`}
+                  className={`w-full flex gap-3 items-start py-3 px-4 border-0 cursor-pointer text-left border-b border-surface-subtle transition-[background] duration-100 ${item.read ? 'bg-surface' : 'bg-info-row-active'}`}
                 >
                   <span
                     className="w-8 h-8 rounded-full shrink-0 !flex items-center justify-center mt-px"
@@ -123,13 +132,13 @@ export function NotificationBell({ onNavigate }) {
                     <span className="!text-sm block leading-[1.45] !text-text">
                       {item.message}
                     </span>
-                    <span className="!text-2xs !text-text-faint mt-[3px] block">
+                    <span className="!text-2xs !text-text-muted mt-[3px] block">
                       {item.ticketCode && <code className="mr-[6px] text-2xs">{item.ticketCode}</code>}
                       {timeAgo(item.createdAt)}
                     </span>
                   </span>
                   {!item.read && (
-                    <span className="w-2 h-2 rounded-full bg-[#3b82f6] shrink-0 mt-[6px]" />
+                    <span className="w-2 h-2 rounded-full bg-info shrink-0 mt-[6px]" />
                   )}
                 </button>
               );

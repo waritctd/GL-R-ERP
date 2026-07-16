@@ -1,3 +1,17 @@
+// Mock backend for VITE_USE_MOCKS=true — the default verification surface for the
+// `frontend-mock` launch config that devs, QA and coding agents drive.
+//
+// THE CONTRACT (see CLAUDE.md "Mock API contract", issue #201):
+//   - Endpoints and DTO shapes ARE meant to be a faithful stand-in for the Spring
+//     backend. `contract.test.js` enforces the method surface against hrApi.js.
+//   - Authorization is NOT authoritative. The gates below approximate the Java
+//     services and are known to diverge in places. Never read a permission rule
+//     off this file — verify it against the Java service. A mock more permissive
+//     than production is the dangerous direction: you only find out in prod.
+//
+// Each namespace below names the Java class it mirrors. Keep those pointers
+// accurate when editing — they are how the next reader finds the source of truth.
+
 import { createDemoDatabase } from '../data/demoData.js';
 
 const db = createDemoDatabase();
@@ -204,6 +218,7 @@ const mockCatalog = [
   { id: 14, brand: 'Panaria',  collection: 'Frame',             color: 'Ash',         surface: 'Naturale',     size: '80x80 cm',   factory: 'Panaria SpA',       sqmPerPiece: 0.64 },
 ];
 
+let mockPriceImportFactorySeq = 10;
 const mockPriceImportFactories = [
   { factoryId: 1, name: 'Panaria SpA',    country: 'Italy',   numberFormat: 'eu' },
   { factoryId: 2, name: 'REFIN',          country: 'Italy',   numberFormat: 'eu' },
@@ -216,7 +231,11 @@ const mockPriceImportFactories = [
   { factoryId: 9, name: 'CITY Ceramica',  country: 'Italy',   numberFormat: 'eu' },
 ];
 
+// Two separate ID spaces, deliberately. priceImport.upload() used to mint version
+// IDs from mockProductPriceSeq — the *product price* counter — which collides once
+// catalog.addProduct/priceImport.uploadAndCommit also consume it for real price rows.
 let mockProductPriceSeq = 100;
+let mockPriceVersionSeq = 100;
 const mockProductPrices = [
   { priceId: 1, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-T600-IVO', grade: null,  collection: 'Trilogy',      productName: 'Ivory Lappato',    color: 'Ivory',   surface: 'Lappato',   sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
   { priceId: 2, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-T600-GRY', grade: null,  collection: 'Trilogy',      productName: 'Grigio Naturale',  color: 'Grigio',  surface: 'Naturale',  sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
@@ -318,6 +337,16 @@ function hasRole(...roles) {
 
 // --- ticket helpers ---
 
+// Mirrors TicketService.requireViewAccess: viewer role required, sales reps
+// only see their own tickets. Used by every read/render path. sales_manager is
+// read+comment-only oversight — never add it to a write-action role list.
+function requireTicketViewer(id) {
+  const user = hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
+  const ticket = findTicketRaw(Number(id));
+  if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
+  return { user, ticket };
+}
+
 function findTicketRaw(id) {
   const ticket = db.tickets.find((t) => t.id === id);
   if (!ticket) fail('Ticket not found', 404);
@@ -350,18 +379,26 @@ function mockDocPlaceholderBlob(lines) {
 }
 
 // ── Quotation XLSX (demo placeholder) — real file from QuotationRenderer.java ───
+// Mirrors TicketService.loadQuotationContext (V49): if this quotation has a snapshot
+// (items + customer/project header frozen at issue time), render from that — never from
+// today's live ticket data. Older mock quotations (created before this change, or a
+// freshly-loaded page that never re-ran quotation()) have no `items` array and fall back
+// to live data, matching the backend's legacy-quotation fallback.
 async function buildMockQuotationXlsx(ticketId, quotationId) {
   const ticket = findTicketRaw(Number(ticketId));
   const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
   if (!quotation) fail('Quotation not found', 404);
 
+  const hasSnapshot = Array.isArray(quotation.items) && quotation.items.length > 0;
   const issueDate = quotation.issuedAt ? new Date(quotation.issuedAt) : new Date();
-  const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
+  const priceItems = hasSnapshot ? quotation.items : ticket.items.filter((it) => it.approvedPrice != null);
+  const customerName = hasSnapshot ? (quotation.customerName ?? '') : (ticket.customerName ?? '');
+  const projectName = hasSnapshot ? quotation.projectName : ticket.projectName;
   const lines = [
     `ใบเสนอราคา  เลขที่ ${quotation.number ?? ''}`,
     `วันที่: ${mockThaiDate(issueDate)}`,
-    `ลูกค้า: ${ticket.customerName ?? ''}`,
-    ...(ticket.projectName ? [`Project: ${ticket.projectName}`] : []),
+    `ลูกค้า: ${customerName}`,
+    ...(projectName ? [`Project: ${projectName}`] : []),
     '',
     ...priceItems.map((it, i) => {
       const qty = Number(it.qty) || 0;
@@ -373,11 +410,14 @@ async function buildMockQuotationXlsx(ticketId, quotationId) {
 }
 
 // ── Quotation HTML preview — shown when "PDF" is clicked in demo mode ────────
+// Same snapshot-first / live-data-fallback rule as buildMockQuotationXlsx above.
 function buildMockQuotationHtml(ticketId, quotationId) {
   const ticket = findTicketRaw(Number(ticketId));
   const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
   if (!quotation) fail('Quotation not found', 404);
-  const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
+  const hasSnapshot = Array.isArray(quotation.items) && quotation.items.length > 0;
+  const priceItems = hasSnapshot ? quotation.items : ticket.items.filter((it) => it.approvedPrice != null);
+  const customerName = hasSnapshot ? (quotation.customerName ?? '') : (ticket.customerName ?? '');
   const fmtNum = (n) => Number(n).toLocaleString('th-TH', { minimumFractionDigits: 2 });
   const rowsHtml = priceItems.map((it, i) => {
     const amt = Number(it.approvedPrice) * Number(it.qty);
@@ -394,7 +434,7 @@ td{border:1px solid #e2e8f0;padding:8px 10px;font-size:13px}
 .total{font-weight:700;font-size:15px;text-align:right;margin-top:16px}</style></head>
 <body><div class="banner">⚠ Demo Mode — PDF จริงสร้างจาก template บน server</div>
 <h2>ใบเสนอราคา</h2>
-<div class="meta">เลขที่: <strong>${quotation.number}</strong> &nbsp;|&nbsp; ลูกค้า: <strong>${ticket.customerName ?? ''}</strong> &nbsp;|&nbsp; วันที่: ${mockThaiDate(new Date(quotation.issuedAt))}</div>
+<div class="meta">เลขที่: <strong>${quotation.number}</strong> &nbsp;|&nbsp; ลูกค้า: <strong>${customerName}</strong> &nbsp;|&nbsp; วันที่: ${mockThaiDate(new Date(quotation.issuedAt))}</div>
 <table><thead><tr><th>#</th><th>รายละเอียด</th><th>จำนวน</th><th>หน่วย</th><th>ราคา/หน่วย</th><th>เป็นเงิน (บาท)</th></tr></thead>
 <tbody>${rowsHtml}</tbody>
 <tfoot><tr><td colspan="5" style="text-align:right;font-weight:700">รวมเป็นเงิน</td><td style="text-align:right;font-weight:700">${total}</td></tr></tfoot></table>
@@ -524,7 +564,6 @@ function dashboardManager(user) {
   const employee = employeeForUser(user);
   return Boolean(
     user?.manager
-    || user?.role === 'supervisor'
     || user?.role === 'sales_manager'
     || employee?.positionTh === 'ผู้จัดการฝ่าย'
   );
@@ -536,7 +575,7 @@ function dashboardDivisionId(user) {
 
 function dashboardEmployeeScope(user) {
   const employee = employeeForUser(user);
-  if (['hr', 'admin', 'ceo'].includes(user.role)) return { label: 'all', employees: db.employees };
+  if (['hr', 'ceo'].includes(user.role)) return { label: 'all', employees: db.employees };
   if (dashboardManager(user) && dashboardDivisionId(user)) {
     return {
       label: 'division',
@@ -547,7 +586,7 @@ function dashboardEmployeeScope(user) {
 }
 
 function dashboardHeadcount(user) {
-  const company = ['hr', 'ceo', 'admin'].includes(user.role);
+  const company = ['hr', 'ceo'].includes(user.role);
   const manager = dashboardManager(user);
   const divisionId = dashboardDivisionId(user);
   const employees = company
@@ -584,7 +623,7 @@ function dashboardHeadcount(user) {
 }
 
 function dashboardTickets(user) {
-  const allVisible = ['import', 'ceo', 'admin'].includes(user.role);
+  const allVisible = ['import', 'ceo'].includes(user.role);
   const ownVisible = user.role === 'sales';
   const list = allVisible
     ? db.tickets
@@ -618,19 +657,19 @@ function dashboardPending(user, ticketSummary) {
   const employeeIds = new Set(employeeScope.employees.map((employee) => employee.id));
   const employeeSelf = employeeScope.label === 'self';
   const manager = employeeScope.label === 'division';
-  const hrOrAdmin = ['hr', 'admin'].includes(user.role);
-  const profileRequests = hrOrAdmin || employeeSelf
+  const isHr = user.role === 'hr';
+  const profileRequests = isHr || employeeSelf
     ? db.profileRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'pending').length
     : 0;
-  const leave = hrOrAdmin || manager || employeeSelf
+  const leave = isHr || manager || employeeSelf
     ? db.leaveRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'SUBMITTED').length
     : 0;
-  const commissions = ['sales_manager', 'ceo', 'admin'].includes(user.role)
+  const commissions = ['sales_manager', 'ceo'].includes(user.role)
     ? db.commissions.filter((record) => ['SUBMITTED', 'MANAGER_APPROVED'].includes(record.status)).length
     : user.role === 'sales'
       ? db.commissions.filter((record) => record.salesRepId === user.id && record.status === 'SUBMITTED').length
       : 0;
-  const tickets = ['sales', 'import', 'ceo', 'admin'].includes(user.role)
+  const tickets = ['sales', 'import', 'ceo'].includes(user.role)
     ? ticketSummary.submitted + ticketSummary.inReview + ticketSummary.priceProposed
     : 0;
   return {
@@ -645,7 +684,7 @@ function dashboardPending(user, ticketSummary) {
 }
 
 function dashboardAttendance(user) {
-  if (['hr', 'ceo', 'admin'].includes(user.role)) {
+  if (['hr', 'ceo'].includes(user.role)) {
     return { scope: 'all', todayPresent: 0, lateToday: 0, missingCheckout: 0, punchCountToday: 0, monthlyAttendanceDays: 0 };
   }
   if (dashboardManager(user) && dashboardDivisionId(user)) {
@@ -664,15 +703,43 @@ function dashboardNotifications(user) {
   };
 }
 
+// Reads the stored reports-to link — mirrors hr.employee.reports_to_employee_id
+// (the self-FK), not a live org-chart scan. Division managers carry managerId:
+// null in the seed (no row above them), same as the real NULL-FK state.
 function managerIdForEmployee(employee) {
-  if (!employee || employee.positionTh === 'ผู้จัดการฝ่าย') return null;
-  return db.employees.find((item) => item.divisionId === employee.divisionId && item.positionTh === 'ผู้จัดการฝ่าย')?.id ?? null;
+  return employee?.managerId ?? null;
 }
 
+// Mirrors LeaveService.canReviewEmployee()/isDirectManager() — hr bypass, else
+// stored-FK match on an *active* target employee. No division fallback: unlike
+// overtime, a ฝ่าย manager cannot review a colleague's leave just by sharing a
+// division.
 function canReviewLeave(user, employeeId) {
-  if (['hr', 'admin'].includes(user.role)) return true;
+  if (user.role === 'hr') return true;
   const employee = findEmployee(employeeId);
-  return user.employeeId && managerIdForEmployee(employee) === user.employeeId;
+  return Boolean(employee?.active && user.employeeId
+    && managerIdForEmployee(employee) === user.employeeId);
+}
+
+// Mirrors OvertimeService.managesEmployee() — direct report (stored FK) OR
+// division manager (position-derived user.manager() sharing the employee's
+// division, excluding self). Deliberately has NO hr/admin bypass (HR may review
+// leave but never overtime) and NO active() check (Java has none here either).
+// Overtime must not reuse canReviewLeave() — that was the #199 bug, where the
+// mock let HR approve OT while the real backend returns 403.
+//
+// These two gates look similar but encode genuinely different Java models
+// (active-check + no division term vs. no active-check + division term). Do
+// NOT merge them "for DRY" — that reintroduces exactly the #199 bug class.
+function canReviewOvertime(user, employeeId) {
+  if (!user.employeeId || employeeId === user.employeeId) return false;
+  const employee = findEmployee(employeeId);
+  const directReport = managerIdForEmployee(employee) === user.employeeId;
+  const divisionManager = dashboardManager(user)
+    && dashboardDivisionId(user) != null
+    && dashboardDivisionId(user) === employee.divisionId
+    && employeeId !== user.employeeId;
+  return directReport || divisionManager;
 }
 
 function leaveTypeByCode(code) {
@@ -854,7 +921,29 @@ function createEmployeeRecord(payload) {
   };
 }
 
+// --- price import helpers ---
+
+// Mirrors the version transition in PriceImportService.commit(): the committed
+// version becomes ACTIVE and the factory's previous ACTIVE version is ARCHIVED —
+// kept for history, never deleted. Shared by priceImport.commit and
+// priceImport.uploadAndCommit so the two cannot drift apart.
+// Returns the number of versions archived.
+function activateVersion(versionId) {
+  const version = mockPriceImportVersions.find((item) => item.versionId === versionId);
+  if (!version) return 0;
+  const superseded = mockPriceImportVersions
+    .filter((item) => item.factoryId === version.factoryId && item.status === 'ACTIVE' && item.versionId !== versionId);
+  superseded.forEach((item) => { item.status = 'ARCHIVED'; });
+  version.status = 'ACTIVE';
+  return superseded.length;
+}
+
+function factoryNameFor(factoryId) {
+  return mockPriceImportFactories.find((item) => item.factoryId === factoryId)?.name ?? null;
+}
+
 export const api = {
+  // Mirrors AuthController + AuthService (auth/).
   auth: {
     async login(payload) {
       const email = payload?.email?.trim().toLowerCase();
@@ -892,9 +981,10 @@ export const api = {
       return delay({ user: publicUser(user) });
     },
   },
+  // Mirrors EmployeeController + EmployeeService (employee/).
   employees: {
     async list(params = {}) {
-      hasRole('hr', 'director', 'admin');
+      hasRole('hr');
       let employees = db.employees.map(employeeWithRequestMeta);
       if (params.search) {
         const query = params.search.toLowerCase();
@@ -913,7 +1003,7 @@ export const api = {
       return delay({ employees });
     },
     async create(payload) {
-      hasRole('hr', 'admin');
+      hasRole('hr');
       const employee = createEmployeeRecord(payload);
       db.employees.unshift(employee);
       return delay({ employee });
@@ -921,12 +1011,12 @@ export const api = {
     async get(id) {
       const user = requireSession();
       const employee = findEmployee(id);
-      if (user.role === 'employee' && user.employeeId !== employee.id) fail('Forbidden', 403);
-      if (user.role === 'supervisor' && user.employeeId !== employee.id) fail('Forbidden', 403);
+      // Mirrors EmployeeService.get(): hr, or the employee viewing themselves — no other role.
+      if (user.role !== 'hr' && user.employeeId !== employee.id) fail('Forbidden', 403);
       return delay({ employee: employeeWithRequestMeta(employee) });
     },
     async update(id, payload) {
-      hasRole('hr', 'admin');
+      hasRole('hr');
       const employee = findEmployee(id);
       Object.assign(employee, payload);
       if (payload.statusId) {
@@ -940,10 +1030,11 @@ export const api = {
       return delay({ employee: employeeWithRequestMeta(employee) });
     },
   },
+  // Mirrors ProfileRequestController + ProfileRequestService (profile/).
   profileRequests: {
     async list() {
       const user = requireSession();
-      const rows = user.role === 'hr' || user.role === 'admin'
+      const rows = user.role === 'hr'
         ? db.profileRequests
         : db.profileRequests.filter((request) => request.employeeId === user.employeeId);
       const profileRequests = rows.map((request) => ({
@@ -979,40 +1070,14 @@ export const api = {
       return delay({ profileRequest: { ...request, employee: findEmployee(request.employeeId) } });
     },
   },
-  users: {
-    async list() {
-      hasRole('admin');
-      return delay({ users: db.users.map(publicUser) });
-    },
-    async create(payload) {
-      hasRole('admin');
-      const employee = payload.employeeId ? findEmployee(payload.employeeId) : null;
-      const user = {
-        id: Math.max(...db.users.map((item) => item.id)) + 1,
-        email: payload.email,
-        password: payload.password || 'demo1234',
-        name: employee?.nameTh || payload.name,
-        role: payload.role || 'employee',
-        employeeId: employee?.id ?? payload.employeeId,
-        active: true,
-        createdAt: new Date().toISOString().slice(0, 10),
-      };
-      db.users.unshift(user);
-      return delay({ user: publicUser(user) });
-    },
-    async update(id, payload) {
-      hasRole('admin');
-      const user = db.users.find((item) => item.id === Number(id));
-      if (!user) fail('User not found', 404);
-      Object.assign(user, payload);
-      return delay({ user: publicUser(user) });
-    },
-  },
-
+  // Mirrors TicketController + TicketService (ticket/).
   tickets: {
     async list(params = {}) {
       const user = requireSession();
-      if (!['sales', 'import', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
+      // sales_manager: read+comment oversight only — kept here (not routed through
+      // requireTicketViewer) to match the existing inline-array pattern; must move
+      // in lockstep with requireTicketViewer/get() and TicketService.VIEWER_ROLES.
+      if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('Forbidden', 403);
       let list = structuredClone(db.tickets);
       if (user.role === 'sales') list = list.filter((t) => t.createdById === user.id);
       if (params.status) list = list.filter((t) => t.status === params.status);
@@ -1032,7 +1097,7 @@ export const api = {
 
     async get(id) {
       const user = requireSession();
-      if (!['sales', 'import', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('Forbidden', 403);
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
       if (!ticket) fail('Ticket not found', 404);
       if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
@@ -1040,7 +1105,7 @@ export const api = {
     },
 
     async create(payload) {
-      const user = hasRole('sales', 'admin');
+      const user = hasRole('sales');
       const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
       const code = `PR-2026-${String(nextId).padStart(4, '0')}`;
       const now = new Date().toISOString();
@@ -1073,12 +1138,12 @@ export const api = {
     },
 
     async submit(id) {
-      const user = hasRole('sales', 'admin');
+      const user = hasRole('sales');
       return delay(doTransition(Number(id), 'draft', 'submitted', 'SUBMITTED', user, null));
     },
 
     async pickup(id) {
-      const user = hasRole('import', 'admin');
+      const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       verifyStatus(ticket, 'submitted');
       ticket.status = 'in_review';
@@ -1090,7 +1155,7 @@ export const api = {
     },
 
     async proposePrice(id, payload) {
-      const user = hasRole('import', 'admin');
+      const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       verifyStatus(ticket, 'in_review');
       ticket.items = (payload.items || []).map((item, i) => ({
@@ -1114,11 +1179,16 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       const st = ticket.status;
       const isOwner = user.id === ticket.createdById;
-      const salesCanEdit = ['sales', 'admin'].includes(user.role) && isOwner
+      const salesCanEdit = user.role === 'sales' && isOwner
         && ['submitted', 'in_review', 'price_proposed'].includes(st);
-      const importCanEdit = ['import', 'admin'].includes(user.role)
+      const importCanEdit = user.role === 'import'
         && ['in_review', 'price_proposed'].includes(st);
       if (!salesCanEdit && !importCanEdit) fail('ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้', 403);
+      // Mirrors TicketService.editItems: sales/import editing descriptive fields must
+      // never silently overwrite import's proposed price or CEO's approved/manual price —
+      // pricing fields always come from the existing item at this position, never the
+      // request (2026-07-16 pricing-integrity audit, finding #4). Only proposePrice is
+      // allowed to replace proposedPrice wholesale.
       ticket.items = (payload.items || []).map((item, i) => ({
         ...ticket.items[i],
         brand: item.brand, model: item.model,
@@ -1128,7 +1198,7 @@ export const api = {
         rawPrice: item.rawPrice ?? ticket.items[i]?.rawPrice ?? null,
         rawCurrency: item.rawCurrency ?? ticket.items[i]?.rawCurrency ?? null,
         rawUnit: item.rawUnit ?? ticket.items[i]?.rawUnit ?? null,
-        proposedPrice: item.proposedPrice ?? ticket.items[i]?.proposedPrice ?? null,
+        proposedPrice: ticket.items[i]?.proposedPrice ?? null,
         id: ticket.items[i]?.id ?? ticket.id * 100 + i,
         ticketId: ticket.id, sortOrder: i,
       }));
@@ -1139,7 +1209,7 @@ export const api = {
     },
 
     async calculatePrices(id) {
-      hasRole('ceo', 'admin');
+      hasRole('ceo');
       const ticket = findTicketRaw(Number(id));
       verifyStatus(ticket, 'price_proposed');
 
@@ -1154,7 +1224,18 @@ export const api = {
         if (item.rawPrice == null) return item;
         const fc = fcMap[item.factory] ?? { country: 'Thailand' };
         const cfg = cfgMap[fc.country] ?? cfgMap['Thailand'] ?? { freightPerSqm: 0, insurancePerSqm: 0, inlandFactoryToPortPerSqm: 0, inlandPortToWarehousePerSqm: 50, importDutyPct: 0, marginPct: 0.2, version: 1 };
-        const fxRate = fxMap[item.rawCurrency ?? 'THB'] ?? 1;
+        // Mirrors PriceCalcService.resolveFxRate: THB never needs a lookup; any other
+        // currency with no fx_rates row must fail loudly, not silently cost at 1:1 THB
+        // (2026-07-16 pricing-integrity audit, finding #1).
+        const rawCurrency = item.rawCurrency ?? 'THB';
+        let fxRate;
+        if (rawCurrency === 'THB') {
+          fxRate = 1;
+        } else if (fxMap[rawCurrency] != null) {
+          fxRate = fxMap[rawCurrency];
+        } else {
+          fail(`ไม่พบอัตราแลกเปลี่ยนสำหรับสกุลเงิน ${rawCurrency} — กรุณาตั้งค่าใน CEO Settings`, 422);
+        }
 
         const sqmPerPiece = (item.qtySqm && item.qty && item.qty > 0) ? item.qtySqm / item.qty : 1;
 
@@ -1189,7 +1270,12 @@ export const api = {
           calcedPricePerPiece: calcedPrice,
           configVersion: cfg.version,
         };
-        return { ...item, calcedCost, calcedPrice, calcConfigVersion: cfg.version, proposedPrice: calcedPrice };
+        // Mirrors PriceCalcService.calculateForTicket: a CEO manual price override must
+        // survive recalculation — calcedCost/calcedPrice always reflect the fresh
+        // calculation, but proposedPrice stays pinned to the override (2026-07-16
+        // pricing-integrity audit, finding #2).
+        const proposedPrice = item.manualPrice != null ? item.manualPrice : calcedPrice;
+        return { ...item, calcedCost, calcedPrice, calcConfigVersion: cfg.version, proposedPrice };
       });
 
       const breakdown = ticket.items.filter((it) => it._breakdown).map((it) => {
@@ -1203,7 +1289,7 @@ export const api = {
     },
 
     async overrideItemPrice(ticketId, itemId, payload) {
-      hasRole('ceo', 'admin');
+      const user = hasRole('ceo');
       const ticket = findTicketRaw(Number(ticketId));
       verifyStatus(ticket, 'price_proposed');
       const item = ticket.items.find((it) => it.id === Number(itemId));
@@ -1212,11 +1298,17 @@ export const api = {
       item.manualOverrideReason = payload.reason ?? null;
       item.proposedPrice = payload.manualPrice;
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      // Mirrors TicketService.overrideItemPrice: audit trail for CEO manual price
+      // overrides (2026-07-16 pricing-integrity audit, finding #3 — previously logged
+      // no ticket event at all).
+      const note = `Item #${itemId}: ราคา manual override = ${payload.manualPrice}`
+        + (payload.reason ? ` — เหตุผล: ${payload.reason}` : '');
+      pushEvent(ticket, user, 'PRICE_OVERRIDDEN', ticket.status, ticket.status, note);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
     async approve(id) {
-      const user = hasRole('ceo', 'admin');
+      const user = hasRole('ceo');
       const ticket = findTicketRaw(Number(id));
       verifyStatus(ticket, 'price_proposed');
       ticket.items = ticket.items.map((item) => ({ ...item, approvedPrice: item.proposedPrice }));
@@ -1229,7 +1321,7 @@ export const api = {
     },
 
     async reject(id, payload) {
-      const user = hasRole('ceo', 'admin');
+      const user = hasRole('ceo');
       const ticket = findTicketRaw(Number(id));
       verifyStatus(ticket, 'price_proposed');
       ticket.status = 'in_review';
@@ -1240,13 +1332,13 @@ export const api = {
     },
 
     async quotation(id) {
-      const user = hasRole('sales', 'admin');
+      const user = hasRole('sales');
       const ticket = findTicketRaw(Number(id));
       if (ticket.status !== 'approved' && ticket.status !== 'quotation_issued') {
         fail(`Expected status 'approved' or 'quotation_issued' but ticket is '${ticket.status}'`, 409);
       }
       const fromStatus = ticket.status;
-      if (ticket.createdById !== user.id && user.role !== 'admin') fail('Forbidden', 403);
+      if (ticket.createdById !== user.id) fail('Forbidden', 403);
       const total = ticket.items.reduce((sum, item) => sum + (item.approvedPrice || 0) * item.qty, 0);
 
       // init quotations array if not present
@@ -1257,6 +1349,16 @@ export const api = {
 
       const nextVersion = ticket.quotations.length + 1;
       const nextQNum = db.tickets.flatMap((t) => t.quotations ?? (t.quotation ? [t.quotation] : [])).length + 1;
+
+      // Freeze this quotation at issue time (mirrors TicketService.generateQuotation +
+      // V49's quotation_item/customer-header columns): deep-copy the priced items and the
+      // customer/project header NOW, so a later ticket edit or customer-record change can
+      // never alter this quotation's downloaded content. customerName/address/taxId/phone
+      // come from the linked customer record (mockCustomers), not the ticket's own
+      // (possibly stale) customerName field — same source-of-truth choice as the backend.
+      const customer = ticket.customerId ? mockCustomers.find((c) => c.id === ticket.customerId) : null;
+      const project = ticket.projectId ? mockProjects.find((p) => p.id === ticket.projectId) : null;
+      const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
       const newQuotation = {
         id: nextQNum, ticketId: ticket.id,
         number: `QT-2026-${String(nextQNum).padStart(4, '0')}`,
@@ -1264,6 +1366,15 @@ export const api = {
         issuedAt: new Date().toISOString(), pdfPath: null,
         totalAmount: total, currency: 'THB',
         quotationVersion: nextVersion, docStatus: 'DRAFT',
+        // Snapshot (V49) — undefined/empty on any quotation object built before this change.
+        items: priceItems.map((it) => ({ ...it })),
+        // Fidelity rule (mirrors TicketService.generateQuotation): freeze the TICKET's
+        // display name — that's what the renderer prints — master name only as fallback.
+        customerName: ticket.customerName ?? (customer ? customer.name : null),
+        customerAddress: customer ? customer.address : null,
+        customerTaxId: customer ? customer.taxId : null,
+        customerPhone: customer ? customer.phone : null,
+        projectName: project ? project.name : null,
       };
       ticket.quotations.unshift(newQuotation); // newest first
       ticket.quotation = newQuotation; // backward compat
@@ -1284,7 +1395,24 @@ export const api = {
 
     async close(id) {
       const user = requireSession();
-      return delay(doTransition(Number(id), 'document_issued', 'closed', 'CLOSED', user, null));
+      const ticket = findTicketRaw(Number(id));
+      // Mirrors TicketService.close(): legacy document_issued path (pre-dual-track
+      // tickets only, or fully paid), or the dual-track completion
+      // (quotation_issued + FULLY_PAID + GOODS_RECEIVED).
+      const legacyOk = ticket.status === 'document_issued'
+        && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID');
+      const dualTrackOk = ticket.status === 'quotation_issued'
+        && ticket.paymentStatus === 'FULLY_PAID'
+        && ticket.fulfillmentStatus === 'GOODS_RECEIVED';
+      if (!legacyOk && !dualTrackOk) {
+        fail('Cannot close: require paymentStatus=FULLY_PAID and fulfillmentStatus=GOODS_RECEIVED', 409);
+      }
+      const prev = ticket.status;
+      ticket.status = 'closed';
+      ticket.closedAt = new Date().toISOString().slice(0, 10);
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'CLOSED', prev, 'closed', null);
+      return delay({ ticket: buildTicketDetail(ticket) });
     },
 
     async cancel(id) {
@@ -1300,8 +1428,9 @@ export const api = {
     },
 
     async comment(id, payload) {
-      const user = requireSession();
-      const ticket = findTicketRaw(Number(id));
+      // Mirrors TicketService.comment: same read gate as get() — commenting
+      // returns the full ticket.
+      const { user, ticket } = requireTicketViewer(id);
       pushEvent(ticket, user, 'COMMENTED', null, null, payload.message);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
@@ -1335,49 +1464,59 @@ export const api = {
     // ── Dual-track post-quotation (ข้อ 13) ──────────────────────────────────
 
     async downloadRemainingInvoice(id) {
-      const ticket = findTicketRaw(Number(id));
+      // Mirrors DepositNoticeService.getRemainingInvoiceXlsx: read gate first.
+      const { ticket } = requireTicketViewer(id);
       if (ticket.status !== 'quotation_issued') fail('Expected quotation_issued', 409);
       return buildMockRemainingInvoiceXlsx(Number(id));
     },
 
     async confirmCustomer(id) {
-      const user = hasRole('sales', 'admin');
+      const user = hasRole('sales');
       const ticket = findTicketRaw(Number(id));
+      // Mirrors TicketService.confirmCustomer: owner-only.
+      if (ticket.createdById !== user.id) fail('Forbidden', 403);
       if (ticket.status !== 'quotation_issued') fail('Expected quotation_issued', 409);
+      // Never downgrade the payment track (mirrors TicketService.confirmCustomer).
+      if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
+        fail('Payment track already past CUSTOMER_CONFIRMED', 409);
+      }
       ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
-    async issueDepositNotice(id) {
-      const user = hasRole('sales', 'admin');
-      const ticket = findTicketRaw(Number(id));
-      if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
-        fail('Requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED', 409);
-      }
-      ticket.paymentStatus = 'DEPOSIT_NOTICE_ISSUED';
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'DEPOSIT_NOTICE_ISSUED', ticket.status, ticket.status, null);
-      return delay({ ticket: buildTicketDetail(ticket) });
-    },
+    // (issueDepositNotice removed — depositNotices.issue is now the single action
+    //  that advances the payment track to DEPOSIT_NOTICE_ISSUED.)
 
     async confirmDepositPaid(id) {
-      const user = hasRole('sales', 'admin');
+      // Money receipts are confirmed by ฝ่ายบัญชี (CEO fallback) — mirrors
+      // TicketService.ACCOUNT_ROLES.
+      const user = hasRole('account', 'ceo');
       const ticket = findTicketRaw(Number(id));
       if (ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') fail('Expected paymentStatus=DEPOSIT_NOTICE_ISSUED', 409);
       ticket.paymentStatus = 'DEPOSIT_PAID';
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'DEPOSIT_PAID', ticket.status, ticket.status, null);
+      // Goods-first ordering: if goods already arrived, carry payment forward
+      // (mirrors TicketService.confirmDepositPaid).
+      if (ticket.fulfillmentStatus === 'GOODS_RECEIVED') {
+        ticket.paymentStatus = 'AWAITING_FINAL_PAYMENT';
+        pushEvent(ticket, user, 'AWAITING_FINAL_PAYMENT', ticket.status, ticket.status, null);
+      }
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
     async issueImportRequest(id) {
-      const user = hasRole('import', 'admin');
+      const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
-      if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') {
-        fail('Requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED', 409);
+      // DEPOSIT_PAID also qualifies — the deposit is often confirmed before the IR
+      // (mirrors TicketService.issueImportRequest).
+      if (ticket.status !== 'quotation_issued'
+          || !['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)) {
+        fail('Requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED or DEPOSIT_PAID', 409);
       }
+      if (ticket.fulfillmentStatus != null) fail('Import request already issued', 409);
       ticket.fulfillmentStatus = 'IR_ISSUED';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'IR_ISSUED', ticket.status, ticket.status, null);
@@ -1385,7 +1524,7 @@ export const api = {
     },
 
     async markIrSent(id) {
-      const user = hasRole('import', 'admin');
+      const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       if (ticket.fulfillmentStatus !== 'IR_ISSUED') fail('Expected fulfillmentStatus=IR_ISSUED', 409);
       ticket.fulfillmentStatus = 'IR_SENT';
@@ -1395,7 +1534,7 @@ export const api = {
     },
 
     async markShipping(id) {
-      const user = hasRole('import', 'admin');
+      const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       if (ticket.fulfillmentStatus !== 'IR_SENT') fail('Expected fulfillmentStatus=IR_SENT', 409);
       ticket.fulfillmentStatus = 'SHIPPING';
@@ -1405,7 +1544,7 @@ export const api = {
     },
 
     async markGoodsReceived(id) {
-      const user = hasRole('import', 'admin');
+      const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       if (ticket.fulfillmentStatus !== 'SHIPPING') fail('Expected fulfillmentStatus=SHIPPING', 409);
       ticket.fulfillmentStatus = 'GOODS_RECEIVED';
@@ -1419,7 +1558,8 @@ export const api = {
     },
 
     async confirmFinalPayment(id) {
-      const user = hasRole('sales', 'admin');
+      // Mirrors TicketService.ACCOUNT_ROLES (ฝ่ายบัญชี + CEO fallback).
+      const user = hasRole('account', 'ceo');
       const ticket = findTicketRaw(Number(id));
       if (ticket.paymentStatus !== 'AWAITING_FINAL_PAYMENT') fail('Expected paymentStatus=AWAITING_FINAL_PAYMENT', 409);
       ticket.paymentStatus = 'FULLY_PAID';
@@ -1429,10 +1569,15 @@ export const api = {
     },
   },
 
+  // Mirrors LeaveController + LeaveService (leave/).
   leave: {
+    // Mirrors LeaveRepository.findEmployeeOptions() — scope is self + stored-FK
+    // reports only (reports_to_employee_id). Deliberately NO division term:
+    // unlike overtime, a ฝ่าย manager's leave dropdown does not widen to their
+    // whole division.
     async employees() {
       const user = requireSession();
-      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
+      const includeAll = ['hr', 'ceo'].includes(user.role);
       const rows = db.employees
         .filter((employee) => employee.active)
         .filter((employee) => includeAll || employee.id === user.employeeId || managerIdForEmployee(employee) === user.employeeId)
@@ -1456,7 +1601,7 @@ export const api = {
       const user = requireSession();
       const employeeId = params.employeeId ? Number(params.employeeId) : user.employeeId;
       if (!employeeId) fail('User is not linked to an employee', 400);
-      if (!['hr', 'ceo', 'admin'].includes(user.role) && employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
+      if (!['hr', 'ceo'].includes(user.role) && employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
       findEmployee(employeeId);
       const year = Number(params.year || new Date().getFullYear());
       return delay({ balances: db.leaveTypes.map((type) => leaveBalance(employeeId, type, year)) });
@@ -1465,7 +1610,7 @@ export const api = {
     async list(params = {}) {
       const user = requireSession();
       let list = db.leaveRequests;
-      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
+      const includeAll = ['hr', 'ceo'].includes(user.role);
       if (!includeAll) list = list.filter((item) => item.employeeId === user.employeeId || canReviewLeave(user, item.employeeId));
       if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
       if (params.status) list = list.filter((item) => item.status === params.status);
@@ -1582,29 +1727,47 @@ export const api = {
     },
   },
 
+  // Mirrors OvertimeController + OvertimeService (overtime/) — see
+  // requireManager()/managesEmployee() for the review gate, and
+  // submit() -> resolveTargetEmployee() for filing on another employee's behalf.
+  // Neither has an hr/admin bypass; use canReviewOvertime(), never canReviewLeave().
   overtime: {
+    // Mirrors OvertimeRepository.findEmployeeOptions() — unlike leave, scope AND
+    // directReport both add a division term (self + FK reports + same-division,
+    // when the actor is a position-derived division manager): a ฝ่าย manager's OT
+    // dropdown flags their whole division as ลูกทีม, matching prod.
     async employees() {
       const user = requireSession();
-      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
+      const includeAll = ['hr', 'ceo'].includes(user.role);
+      const isManager = dashboardManager(user);
+      const managerDivisionId = isManager ? dashboardDivisionId(user) : null;
       const rows = db.employees
         .filter((employee) => employee.active)
-        .filter((employee) => includeAll || employee.id === user.employeeId || managerIdForEmployee(employee) === user.employeeId)
-        .map((employee) => ({
-          employeeId: employee.id,
-          employeeCode: employee.code,
-          employeeName: employee.nameTh,
-          departmentName: employee.departmentTh,
-          self: employee.id === user.employeeId,
-          directReport: managerIdForEmployee(employee) === user.employeeId,
-        }));
+        .filter((employee) => includeAll
+          || employee.id === user.employeeId
+          || managerIdForEmployee(employee) === user.employeeId
+          || (managerDivisionId != null && employee.divisionId === managerDivisionId))
+        .map((employee) => {
+          const self = employee.id === user.employeeId;
+          const directReport = managerIdForEmployee(employee) === user.employeeId
+            || (managerDivisionId != null && employee.divisionId === managerDivisionId && !self);
+          return {
+            employeeId: employee.id,
+            employeeCode: employee.code,
+            employeeName: employee.nameTh,
+            departmentName: employee.departmentTh,
+            self,
+            directReport,
+          };
+        });
       return delay({ employees: rows });
     },
 
     async list(params = {}) {
       const user = requireSession();
       let list = db.overtimeRequests;
-      const includeAll = ['hr', 'ceo', 'admin'].includes(user.role);
-      if (!includeAll) list = list.filter((item) => item.employeeId === user.employeeId || canReviewLeave(user, item.employeeId));
+      const includeAll = ['hr', 'ceo'].includes(user.role);
+      if (!includeAll) list = list.filter((item) => item.employeeId === user.employeeId || canReviewOvertime(user, item.employeeId));
       if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
       if (params.status) list = list.filter((item) => item.status === params.status);
       if (params.from) list = list.filter((item) => item.workDate >= params.from);
@@ -1616,7 +1779,11 @@ export const api = {
       const user = requireSession();
       const employeeId = payload.employeeId ? Number(payload.employeeId) : user.employeeId;
       if (!employeeId) fail('User is not linked to an employee', 400);
-      if (employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
+      // Filing OT on another employee's behalf is manager-only, not HR. Verified
+      // against OvertimeService.submit() → resolveTargetEmployee(), which calls the
+      // same managesEmployee() helper as requireManager() and has no hr/admin bypass
+      // ("Employees can only request their own overtime").
+      if (employeeId !== user.employeeId && !canReviewOvertime(user, employeeId)) fail('Forbidden', 403);
       findEmployee(employeeId);
       const plannedMinutes = overtimeMinutesBetween(payload.plannedStartAt, payload.plannedEndAt);
       const id = Math.max(0, ...db.overtimeRequests.map((item) => item.id)) + 1;
@@ -1659,7 +1826,7 @@ export const api = {
       if (!request) fail('Overtime request not found', 404);
       const now = new Date().toISOString();
       if (request.status === 'SUBMITTED') {
-        if (!canReviewLeave(user, request.employeeId)) fail('Forbidden', 403);
+        if (!canReviewOvertime(user, request.employeeId)) fail('Forbidden', 403);
         const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
         request.status = 'MANAGER_APPROVED';
         request.actualMinutes = request.actualMinutes ?? request.plannedMinutes;
@@ -1694,7 +1861,7 @@ export const api = {
       if (!request) fail('Overtime request not found', 404);
       const now = new Date().toISOString();
       if (request.status === 'SUBMITTED') {
-        if (!canReviewLeave(user, request.employeeId)) fail('Forbidden', 403);
+        if (!canReviewOvertime(user, request.employeeId)) fail('Forbidden', 403);
         request.status = 'REJECTED';
         request.reviewedById = user.employeeId;
         request.reviewedByName = user.name;
@@ -1720,7 +1887,7 @@ export const api = {
       const user = requireSession();
       const request = db.overtimeRequests.find((item) => item.id === Number(id));
       if (!request) fail('Overtime request not found', 404);
-      const approver = canReviewLeave(user, request.employeeId);
+      const approver = canReviewOvertime(user, request.employeeId);
       if (!approver && request.employeeId !== user.employeeId) fail('Forbidden', 403);
       if (!approver && request.status !== 'SUBMITTED') fail('Only submitted overtime requests can be cancelled by employees', 409);
       if (!['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'].includes(request.status)) fail('Only active overtime requests can be cancelled', 409);
@@ -1733,10 +1900,11 @@ export const api = {
     },
   },
 
+  // Mirrors CommissionController + CommissionService (commission/).
   commissions: {
     async list(params = {}) {
       const user = requireSession();
-      if (!['sales', 'sales_manager', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('Forbidden', 403);
       let list = db.commissions;
       if (user.role === 'sales') list = list.filter((item) => item.salesRepId === user.id);
       if (params.payrollMonth) list = list.filter((item) => commissionMonth(item.payrollMonth) === params.payrollMonth.slice(0, 7));
@@ -1744,7 +1912,7 @@ export const api = {
     },
 
     async create(payload) {
-      const user = hasRole('sales', 'sales_manager', 'ceo', 'admin');
+      const user = hasRole('sales', 'sales_manager', 'ceo');
       if (user.role === 'sales' && (Number(payload.transportFee || 0) > 0 || Number(payload.cutFee || 0) > 0 || Number(payload.shortfall || 0) > 0)) {
         fail('Sales cannot edit deduction fields', 403);
       }
@@ -1808,7 +1976,7 @@ export const api = {
     },
 
     async updateDeductions(id, payload) {
-      hasRole('sales_manager', 'ceo', 'admin');
+      hasRole('sales_manager', 'ceo');
       const record = db.commissions.find((item) => item.id === Number(id));
       if (!record) fail('Commission record not found', 404);
       Object.assign(record.invoiceDetails, {
@@ -1829,7 +1997,7 @@ export const api = {
     },
 
     async approve(id) {
-      const user = hasRole('sales_manager', 'ceo', 'admin');
+      const user = hasRole('sales_manager', 'ceo');
       const record = db.commissions.find((item) => item.id === Number(id));
       if (!record) fail('Commission record not found', 404);
       const now = new Date().toISOString();
@@ -1859,7 +2027,7 @@ export const api = {
     },
 
     async reject(id, payload = {}) {
-      const user = hasRole('sales_manager', 'ceo', 'admin');
+      const user = hasRole('sales_manager', 'ceo');
       const record = db.commissions.find((item) => item.id === Number(id));
       if (!record) fail('Commission record not found', 404);
       const now = new Date().toISOString();
@@ -1882,7 +2050,7 @@ export const api = {
     },
 
     async clawback(id, payload) {
-      const user = hasRole('sales_manager', 'ceo', 'admin');
+      const user = hasRole('sales_manager', 'ceo');
       const original = db.commissions.find((item) => item.id === Number(id));
       if (!original) fail('Commission record not found', 404);
       if (original.kind !== 'SALE' || original.status !== 'APPROVED') fail('Only approved sale commissions can be clawed back', 409);
@@ -1910,7 +2078,7 @@ export const api = {
 
     async simulate(payload) {
       const user = requireSession();
-      if (!['sales', 'sales_manager', 'ceo', 'admin'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('Forbidden', 403);
       if (user.role === 'sales' && (Number(payload.transportFee || 0) > 0 || Number(payload.cutFee || 0) > 0 || Number(payload.shortfall || 0) > 0)) {
         fail('Sales cannot edit deduction fields', 403);
       }
@@ -1944,7 +2112,7 @@ export const api = {
     },
 
     async payrollReady(params = {}) {
-      hasRole('hr', 'admin');
+      hasRole('hr');
       const month = commissionMonth(params.payrollMonth || new Date().toISOString());
       const approved = db.commissions.filter((item) => item.status === 'APPROVED' && commissionMonth(item.payrollMonth) === month);
       const reps = new Map();
@@ -1976,25 +2144,29 @@ export const api = {
   // would require reproducing real payroll/tax logic to fake convincingly, so
   // they surface a clear "not supported in mock mode" error instead of
   // fabricating financial figures (real backend implementation is in hrApi.js).
+  // Mirrors PayrollController + PayrollService (payroll/): view/export/payslip
+  // reads are hr/ceo; process + distributePayslips are hr-only; downloadOwnPayslip
+  // stays open to any authenticated user (Java is isAuthenticated()) so the
+  // employee dashboard's "My payslip" button keeps working.
   payroll: {
     async current() {
-      requireSession();
+      hasRole('hr', 'ceo');
       return delay({ period: null });
     },
     async preview() {
-      requireSession();
+      hasRole('hr', 'ceo');
       throw new Error('คำนวณเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
     async process() {
-      requireSession();
+      hasRole('hr');
       throw new Error('ประมวลผลเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
     async bankExport() {
-      requireSession();
+      hasRole('hr', 'ceo');
       throw new Error('ดาวน์โหลดไฟล์โอนเงินไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
     async downloadPayslip() {
-      requireSession();
+      hasRole('hr', 'ceo');
       throw new Error('ดาวน์โหลดสลิปเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
     async downloadOwnPayslip() {
@@ -2002,7 +2174,7 @@ export const api = {
       throw new Error('ดาวน์โหลดสลิปเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
     async distributePayslips() {
-      requireSession();
+      hasRole('hr');
       throw new Error('ส่งอีเมลสลิปเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
   },
@@ -2010,21 +2182,35 @@ export const api = {
   // No seeded punch/device data yet — these return empty results so HR-core
   // pages degrade to their built-in empty state instead of crashing on the
   // missing namespace (real backend implementation is in hrApi.js).
+  // Mirrors AttendanceController + AttendanceService (attendance/): `list` has
+  // no top-level role gate — AttendanceService.listPunches scopes by role
+  // instead (hr/ceo see all; a ฝ่าย manager — dashboardManager() — is scoped to
+  // their division with no 403; everyone else is 403'd for requesting another
+  // employeeId, matching AttendanceService.java:111-121). `devices` and
+  // `importDat` are both hr/ceo-only at the controller
+  // (AttendanceController.java:47-62).
   attendance: {
-    async list() {
-      requireSession();
+    async list(params = {}) {
+      const user = requireSession();
+      if (!['hr', 'ceo'].includes(user.role)) {
+        if (!user.employeeId) fail('User is not linked to an employee', 400);
+        if (!(dashboardManager(user) && dashboardDivisionId(user))) {
+          if (params.employeeId && Number(params.employeeId) !== user.employeeId) fail('Forbidden', 403);
+        }
+      }
       return delay({ punches: [] });
     },
     async devices() {
-      requireSession();
+      hasRole('hr', 'ceo');
       return delay({ devices: [] });
     },
     async importDat() {
-      requireSession();
+      hasRole('hr', 'ceo');
       throw new Error('นำเข้าข้อมูลจากเครื่องสแกนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
   },
 
+  // Mirrors DashboardController + DashboardService (dashboard/).
   dashboard: {
     async summary() {
       const user = requireSession();
@@ -2058,6 +2244,7 @@ export const api = {
     },
   },
 
+  // Mirrors NotificationController + NotificationService (notification/).
   notifications: {
     async list() {
       const user = requireSession();
@@ -2075,6 +2262,8 @@ export const api = {
     },
   },
 
+  // Mirrors CatalogController (catalog/) — product CRUD delegates to
+  // PriceImportService.addProductManual()/updateProduct()/deleteProduct().
   catalog: {
     async search(q) {
       requireSession();
@@ -2106,27 +2295,88 @@ export const api = {
       });
       return delay({ items: results.slice(0, 50) });
     },
+    // addProduct/updateProduct/deleteProduct are ceo/import only (#205), mirroring
+    // CatalogController.requireCatalogEditor. search/prices above stay requireSession()
+    // only — catalog browsing is open to any logged-in user.
+    async addProduct(input = {}) {
+      hasRole('ceo', 'import');
+      if (input.factoryId == null) fail('factoryId จำเป็น', 400);
+      if (input.price == null) fail('price จำเป็น', 400);
+      const fid = Number(input.factoryId);
+      const product = {
+        priceId: mockProductPriceSeq++,
+        factoryId: fid,
+        factoryName: factoryNameFor(fid),
+        productCode: input.productCode ?? null,
+        grade: input.grade ?? null,
+        collection: input.collection ?? null,
+        productName: input.productName ?? null,
+        color: input.color ?? null,
+        surface: input.surface ?? null,
+        sizeRaw: input.sizeRaw ?? null,
+        price: Number(input.price),
+        currency: input.currency ?? 'EUR',
+        priceUnit: input.priceUnit ?? 'per_sqm',
+        sqmPerPiece: null,
+      };
+      mockProductPrices.push(product);
+      return delay({ priceId: product.priceId, status: 'added' });
+    },
+    async updateProduct(priceId, input = {}) {
+      hasRole('ceo', 'import');
+      if (input.price == null) fail('price จำเป็น', 400);
+      const pid = Number(priceId);
+      const product = mockProductPrices.find((p) => p.priceId === pid);
+      if (!product) fail(`ไม่พบสินค้า price_id=${pid}`, 404);
+      // factoryId is deliberately not reassignable — PriceImportService.updateProduct
+      // does not touch it either.
+      Object.assign(product, {
+        productCode: input.productCode ?? null,
+        grade: input.grade ?? null,
+        collection: input.collection ?? null,
+        productName: input.productName ?? null,
+        color: input.color ?? null,
+        surface: input.surface ?? null,
+        sizeRaw: input.sizeRaw ?? null,
+        price: Number(input.price),
+        currency: input.currency ?? null,
+        priceUnit: input.priceUnit ?? null,
+      });
+      return delay({ status: 'updated' });
+    },
+    async deleteProduct(priceId) {
+      hasRole('ceo', 'import');
+      const pid = Number(priceId);
+      const index = mockProductPrices.findIndex((p) => p.priceId === pid);
+      if (index === -1) fail(`ไม่พบสินค้า price_id=${pid}`, 404);
+      mockProductPrices.splice(index, 1);
+      return delay({ status: 'deleted' });
+    },
   },
 
+  // Mirrors FactoryConfigController + FactoryEmailService (factory/).
   factoryConfigs: {
     async list() {
       requireSession();
       return delay({ factories: mockFactoryConfigs });
     },
     async sendEmail(ticketId, payload) {
-      requireSession();
+      // Mirrors TicketService.assertFactoryEmailAllowed: import role + real ticket.
+      hasRole('import');
+      findTicketRaw(Number(ticketId));
       console.log(`[mock] Factory email sent | ticket=${ticketId} factory=${payload.factory} to=${payload.to}`);
       return delay({ status: 'sent' });
     },
   },
 
+  // Mirrors FxRateController + BotFxFetchService (pricing/).
   fxRates: {
     async list() {
       requireSession();
       return delay({ fxRates: structuredClone(mockFxRates) });
     },
     async upsert(currency, payload) {
-      hasRole('ceo', 'admin');
+      hasRole('ceo');
       const existing = mockFxRates.find((r) => r.currency === currency.toUpperCase());
       if (existing) {
         existing.rateToThb = payload.rateToThb;
@@ -2148,13 +2398,14 @@ export const api = {
     },
   },
 
+  // Mirrors PriceCalcConfigController + PriceCalcService (pricing/).
   priceCalcConfigs: {
     async list() {
       requireSession();
       return delay({ configs: structuredClone(mockPriceCalcConfigs.filter((c) => c.isCurrent)) });
     },
     async update(payload) {
-      hasRole('ceo', 'admin');
+      hasRole('ceo');
       mockPriceCalcConfigs
         .filter((c) => c.country === payload.country && c.isCurrent)
         .forEach((c) => { c.isCurrent = false; });
@@ -2176,6 +2427,7 @@ export const api = {
     },
   },
 
+  // Mirrors AttachmentController + FileStorageService (attachment/).
   attachments: {
     async list(ticketId) {
       requireSession();
@@ -2204,6 +2456,7 @@ export const api = {
     },
   },
 
+  // Mirrors CustomerController (customer/).
   customers: {
     async create(payload) {
       requireSession();
@@ -2241,6 +2494,7 @@ export const api = {
     },
   },
 
+  // Mirrors DepositNoticeController + DepositNoticeService (deposit/).
   depositNotices: {
     async noteTemplates() {
       requireSession();
@@ -2279,14 +2533,16 @@ export const api = {
     },
 
     async listByTicket(ticketId) {
-      requireSession();
+      // Mirrors DepositNoticeService.listByTicket: viewer role + sales owner scoping.
+      requireTicketViewer(ticketId);
       return delay({ depositNotices: structuredClone(mockDepositNotices.filter((d) => d.ticketId === Number(ticketId))) });
     },
 
     async get(docId) {
-      requireSession();
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!doc) fail('Deposit notice not found', 404);
+      // Mirrors DepositNoticeService.getById: read gate on the owning ticket.
+      requireTicketViewer(doc.ticketId);
       return delay({ depositNotice: structuredClone(doc) });
     },
 
@@ -2312,9 +2568,10 @@ export const api = {
     },
 
     async preview(docId) {
-      requireSession();
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!doc) fail('Deposit notice not found', 404);
+      // Mirrors DepositNoticeService.preview: read gate on the owning ticket.
+      requireTicketViewer(doc.ticketId);
       // Return HTML string directly (not wrapped in JSON)
       return mockPreviewHtml(buildMockDoc(doc));
     },
@@ -2326,6 +2583,13 @@ export const api = {
       if (doc.status !== 'DRAFT') fail('Not a draft', 409);
       const ticket = findTicketRaw(doc.ticketId);
 
+      // Mirrors DepositNoticeService.issue: the document IS the payment-track step.
+      // Requires a customer-confirmed quotation; advances paymentStatus and leaves
+      // the main status at quotation_issued (no more document_issued flip).
+      if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
+        fail('Deposit notice requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED', 409);
+      }
+
       // Supersede previous issued docs
       mockDepositNotices.forEach((d) => { if (d.ticketId === doc.ticketId && d.id !== doc.id && d.status === 'ISSUED') d.status = 'SUPERSEDED'; });
 
@@ -2336,18 +2600,18 @@ export const api = {
       doc.issuedByName = user.name;
       doc.updatedAt = new Date().toISOString();
 
-      // Transition ticket to document_issued
-      ticket.status = 'document_issued';
+      ticket.paymentStatus = 'DEPOSIT_NOTICE_ISSUED';
       ticket.updatedAt = doc.updatedAt;
-      pushEvent(ticket, user, 'DOCUMENT_ISSUED', 'approved', 'document_issued', `เอกสาร ${doc.docNumber} ออกแล้ว`);
+      pushEvent(ticket, user, 'DEPOSIT_NOTICE_ISSUED', ticket.status, ticket.status, `เอกสาร ${doc.docNumber} ออกแล้ว`);
 
       return delay({ depositNotice: structuredClone(doc) });
     },
 
     async downloadXlsx(docId) {
-      requireSession();
       const rawDoc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!rawDoc) fail('Deposit notice not found', 404);
+      // Mirrors DepositNoticeService.getXlsx: read gate on the owning ticket.
+      requireTicketViewer(rawDoc.ticketId);
       const doc = buildMockDoc(rawDoc);
 
       // Demo placeholder — real xlsx from DepositNoticeRenderer.java (server, Apache POI)
@@ -2374,28 +2638,109 @@ export const api = {
     },
 
     async downloadPdf(docId) {
-      requireSession();
       const rawDoc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!rawDoc) fail('Deposit notice not found', 404);
+      // Mirrors DepositNoticeService.getPdf: read gate on the owning ticket.
+      requireTicketViewer(rawDoc.ticketId);
       const html = mockPreviewHtml(buildMockDoc(rawDoc));
       return new Blob([html], { type: 'text/html;charset=utf-8' });
     },
   },
 
+  // Mirrors PriceImportController + PriceImportService (catalog/importer/).
   priceImport: {
     async factories() {
-      requireSession();
+      hasRole('ceo', 'import');
       return delay(mockPriceImportFactories);
     },
+    async createFactory(name, country, defaultCurrency) {
+      // #205: PriceImportController now gates every endpoint (including reads) to
+      // ceo/import via requireImporter(session) — mirror that here.
+      hasRole('ceo', 'import');
+      if (!name || !String(name).trim()) fail('ชื่อโรงงานห้ามว่าง', 400);
+      const factory = {
+        factoryId: mockPriceImportFactorySeq++,
+        name: String(name).trim(),
+        country: country && String(country).trim() ? String(country).trim().toUpperCase() : null,
+        defaultCurrency: defaultCurrency && String(defaultCurrency).trim()
+          ? String(defaultCurrency).trim().toUpperCase()
+          : 'EUR',
+        numberFormat: 'eu',
+      };
+      mockPriceImportFactories.push(factory);
+      return delay(factory);
+    },
     async versions(factoryId) {
-      requireSession();
+      hasRole('ceo', 'import');
       const fid = Number(factoryId);
       return delay(mockPriceImportVersions.filter((v) => v.factoryId === fid));
     },
-    async upload(factoryId, file, label) {
-      requireSession();
+    // Mirrors PriceImportService.uploadAndCommit — parse → stage → validate → commit
+    // in one shot, returning UploadCommitResult(versionId, parsedRows, committedRows,
+    // retainedRows, errorCount, errors). Gated ceo/import (#205), matching
+    // PriceImportController.uploadAndCommit's requireImporter(session) gate.
+    //
+    // The mock cannot parse a real .xlsx in the browser, so the parsed batch is
+    // fabricated — the same simplification upload() already makes with its fixed
+    // parsedRows: 12. retainedRows counts the factory's pre-existing products, which
+    // is the closest honest stand-in for commit()'s incremental merge (old products
+    // not matched by the new file are carried forward, not dropped).
+    async uploadAndCommit(factoryId, file, label) {
+      hasRole('ceo', 'import');
       const fid = Number(factoryId);
-      const versionId = mockProductPriceSeq++;
+      if (!mockPriceImportFactories.some((f) => f.factoryId === fid)) {
+        fail(`ไม่พบ import profile สำหรับ factory id=${fid}`, 404);
+      }
+
+      const retainedRows = mockProductPrices.filter((p) => p.factoryId === fid).length;
+
+      const versionId = mockPriceVersionSeq++;
+      mockPriceImportVersions.push({
+        versionId,
+        factoryId: fid,
+        label: label || file?.name || `Version ${versionId}`,
+        status: 'DRAFT',
+        createdAt: new Date().toISOString(),
+        uploadedByName: 'Admin',
+      });
+
+      const factoryName = factoryNameFor(fid);
+      const parsed = [
+        { productCode: 'IMP-60120-WHT', collection: 'Imported Series', productName: 'White Lappato', color: 'White', surface: 'Lappato',  sizeRaw: '60x120', price: 41.50, sqmPerPiece: 0.72 },
+        { productCode: 'IMP-60120-GRY', collection: 'Imported Series', productName: 'Grey Naturale', color: 'Grey',  surface: 'Naturale', sizeRaw: '60x120', price: 39.90, sqmPerPiece: 0.72 },
+        { productCode: 'IMP-8080-BEI',  collection: 'Imported Series', productName: 'Beige Matt',    color: 'Beige', surface: 'Matt',     sizeRaw: '80x80',  price: 36.00, sqmPerPiece: 0.64 },
+      ];
+      parsed.forEach((row) => {
+        mockProductPrices.push({
+          priceId: mockProductPriceSeq++,
+          factoryId: fid,
+          factoryName,
+          grade: null,
+          currency: 'EUR',
+          priceUnit: 'per_sqm',
+          ...row,
+        });
+      });
+
+      activateVersion(versionId);
+
+      return delay({
+        versionId,
+        parsedRows: parsed.length,
+        committedRows: parsed.length,
+        retainedRows,
+        errorCount: 0,
+        errors: [],
+      });
+    },
+    // Field names below mirror PriceImportService.UploadReport/StagingReport/CommitResult
+    // exactly (#206) — the mock previously invented stagedRows/parseErrors,
+    // totalRows/errorRows/newRows/changedRows/removedRows/unchangedRows, and
+    // inserted/updated/archived, none of which exist on the real DTOs.
+    async upload(factoryId, file, label) {
+      hasRole('ceo', 'import');
+      const fid = Number(factoryId);
+      const versionId = mockPriceVersionSeq++;
       mockPriceImportVersions.push({
         versionId, factoryId: fid,
         label: label || file?.name || `Version ${versionId}`,
@@ -2405,47 +2750,49 @@ export const api = {
       });
       return delay({
         versionId,
+        sessionId: crypto.randomUUID(),
         parsedRows: 12,
-        stagedRows: 12,
-        parseErrors: [],
+        errorCount: 0,
+        errors: [],
       });
     },
     async validate(versionId) {
-      requireSession();
+      hasRole('ceo', 'import');
       return delay({ status: 'validated', versionId: Number(versionId) });
     },
     async staging(versionId) {
-      requireSession();
+      hasRole('ceo', 'import');
       return delay({
         versionId: Number(versionId),
-        totalRows: 12,
-        errorRows: 0,
-        newRows: 10,
-        changedRows: 2,
-        removedRows: 1,
-        unchangedRows: 0,
+        totalStaged: 12,
+        validCount: 11,
+        invalidCount: 1,
+        newProducts: 10,
+        removedProducts: 1,
+        priceChanged: 2,
+        prevVersionId: null,
+        sampleErrors: [],
       });
     },
     async commit(versionId) {
-      requireSession();
+      hasRole('ceo', 'import');
       const vid = Number(versionId);
-      const ver = mockPriceImportVersions.find((v) => v.versionId === vid);
-      if (ver) {
-        const fid = ver.factoryId;
-        mockPriceImportVersions
-          .filter((v) => v.factoryId === fid && v.status === 'ACTIVE')
-          .forEach((v) => { v.status = 'ARCHIVED'; });
-        ver.status = 'ACTIVE';
+      // Mirrors PriceImportService.commit()'s requireDraft() — re-committing an
+      // already-ACTIVE/ARCHIVED version is a 409, not a silent re-activation.
+      const version = mockPriceImportVersions.find((item) => item.versionId === vid);
+      if (version && version.status !== 'DRAFT') {
+        fail(`version ${vid} สถานะ ${version.status} (ต้อง DRAFT)`, 409);
       }
-      return delay({ versionId: vid, inserted: 10, updated: 2, archived: 1 });
+      const versionsArchived = activateVersion(vid);
+      return delay({ versionId: vid, committed: 10, retained: 2, versionsArchived });
     },
     async getProfile(factoryId) {
-      requireSession();
+      hasRole('ceo', 'import');
       void factoryId;
       return delay(JSON.stringify({ number_format: 'eu', sheets: [{ name: 'Sheet1', header_row: 1 }], columns: {} }));
     },
     async updateProfile(factoryId, json) {
-      requireSession();
+      hasRole('ceo', 'import');
       void json;
       return delay({ status: 'updated', factoryId: Number(factoryId) });
     },

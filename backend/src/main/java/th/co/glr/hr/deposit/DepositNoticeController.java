@@ -29,6 +29,27 @@ public class DepositNoticeController {
         this.sessions = sessions;
     }
 
+    // Note templates (route + response key preserved from the retired document/ module;
+    // sales.document_note_template is shared infra that V29 deliberately did not rename)
+    @GetMapping("/document-note-templates")
+    Map<String, List<DocumentNoteTemplateDto>> noteTemplates(HttpSession session) {
+        sessions.requireUser(session);
+        return Map.of("templates", service.getNoteTemplates());
+    }
+
+    // Revision request (moved verbatim from the retired document/ module — the deposit
+    // twin service method was already identical, previously unmapped)
+    @PostMapping("/tickets/{ticketId}/revision")
+    Map<String, Object> requestRevision(
+        @PathVariable long ticketId,
+        @Valid @RequestBody RevisionRequest req,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        var ticket = service.requestRevision(ticketId, req, user);
+        return Map.of("ticket", ticket);
+    }
+
     // Draft creation from ticket
     @PostMapping("/tickets/{ticketId}/deposit-notice/draft")
     Map<String, DepositNoticeDto> createDraft(
@@ -43,15 +64,15 @@ public class DepositNoticeController {
     // List documents for a ticket
     @GetMapping("/tickets/{ticketId}/deposit-notices")
     Map<String, List<DepositNoticeDto>> listByTicket(@PathVariable long ticketId, HttpSession session) {
-        sessions.requireUser(session);
-        return Map.of("depositNotices", service.listByTicket(ticketId));
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("depositNotices", service.listByTicket(ticketId, user));
     }
 
     // Get single document
     @GetMapping("/deposit-notices/{docId}")
     Map<String, DepositNoticeDto> getDoc(@PathVariable long docId, HttpSession session) {
-        sessions.requireUser(session);
-        return Map.of("depositNotice", service.getById(docId));
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("depositNotice", service.getById(docId, user));
     }
 
     // Update draft
@@ -90,7 +111,7 @@ public class DepositNoticeController {
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        DepositNoticeDto doc = service.getById(docId);
+        DepositNoticeDto doc = service.getById(docId, user);
         String normalized = format == null ? "pdf" : format.trim().toLowerCase();
         if ("xlsx".equals(normalized)) {
             byte[] bytes = service.getXlsx(docId, user);

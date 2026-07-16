@@ -4,10 +4,12 @@ import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { DesktopOnlyNotice } from '../../components/common/DesktopOnlyNotice.jsx';
+import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageStack, StatGrid } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
+import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
@@ -21,6 +23,45 @@ const monthStartIso = () => {
 // OvertimePage/LeavePage (docs/agent-handoffs/29_tw-convert-overtime-leave.md).
 const FILTER_BAR_CLASS =
   'flex flex-wrap gap-[10px] items-center bg-surface border border-border rounded-md p-[14px]';
+
+/**
+ * Mobile record card for a punch record. The desktop grid's 6 columns
+ * (`reflow-cards` today stacks every column as its own labeled row, which is
+ * usable but noisy for a scan-history list). This keeps only what identifies
+ * the punch and lets someone spot a mismapped scan at a glance: who, when,
+ * employee code, and where it came from.
+ */
+function AttendanceCard({ punch }) {
+  const unresolved = !punch.employee_id;
+  return (
+    <>
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <strong className="min-w-0 truncate text-sm font-extrabold text-text">
+          {punch.employee_name || 'ยังไม่แมปพนักงาน'}
+        </strong>
+        <span className="shrink-0 text-right text-xs text-text-muted">
+          {formatPunchDateTime(punch.punch_time)}
+        </span>
+      </div>
+
+      {unresolved ? (
+        <StatusBadge tone="warning">รหัส {punch.employee_code || '-'} ไม่ตรงกับพนักงาน</StatusBadge>
+      ) : null}
+
+      <span className="min-w-0 truncate text-xs text-text-muted">
+        {[punch.employee_code, punch.site_code || punch.device_name || punch.device_code]
+          .filter(Boolean)
+          .join(' · ')}
+      </span>
+
+      {punch.position_th || punch.nick_name ? (
+        <span className="min-w-0 truncate text-2xs text-text-muted">
+          {[punch.nick_name, punch.position_th].filter(Boolean).join(' · ')}
+        </span>
+      ) : null}
+    </>
+  );
+}
 
 export function AttendancePage({ user, employees, showToast }) {
   const isMobile = useIsMobile();
@@ -144,7 +185,6 @@ export function AttendancePage({ user, employees, showToast }) {
 
   return (
     <PageStack>
-      {isMobile && <DesktopOnlyNotice />}
       <PageHeader
         title="เวลาทำงาน"
         subtitle={canViewAll ? 'ตรวจสอบประวัติการสแกนของพนักงานทุกคน' : 'ตรวจสอบประวัติการสแกนของคุณ'}
@@ -155,6 +195,7 @@ export function AttendancePage({ user, employees, showToast }) {
           </Button>
         )}
       />
+      {isMobile && <DesktopOnlyNotice />}
 
       <StatGrid>
         <StatCard label="รายการในช่วงที่เลือก" value={punches.length} helper="Punch records" icon="calendar" tone="indigo" />
@@ -218,8 +259,13 @@ export function AttendancePage({ user, employees, showToast }) {
               )}
             </select>
           </label>
-          <input type="file" accept=".dat,text/plain" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} />
-          <Button type="submit" variant="success" className="max-[720px]:w-full" disabled={importing || !selectedFile || !importDeviceCode}>
+          <FileUploadField
+            id="attendance-import-file"
+            accept=".dat,text/plain"
+            onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
+            helperText="ไฟล์ .dat"
+          />
+          <Button type="submit" variant="success" className="max-[720px]:min-h-11 max-[720px]:w-full" disabled={importing || !selectedFile || !importDeviceCode}>
             <Icon name="plus" />
             {importing ? 'กำลังนำเข้า' : 'นำเข้า'}
           </Button>
@@ -235,7 +281,8 @@ export function AttendancePage({ user, employees, showToast }) {
         columns={attendanceColumns}
         rows={punches}
         getRowKey={(punch) => punch.punch_id}
-        gridClassName="grid-cols-[1.35fr_1.5fr_0.8fr_1.2fr_0.8fr_1.15fr] max-[1040px]:min-w-[900px] reflow-cards"
+        gridClassName="grid-cols-[1.6fr_1.3fr_0.9fr_1.2fr] max-[900px]:min-w-[780px] reflow-cards"
+        mobileCard={(punch) => <AttendanceCard punch={punch} />}
         pageSize={50}
         searchable
         searchPlaceholder="ค้นหาพนักงาน / รหัส / ชื่อเล่น"
@@ -252,6 +299,23 @@ export function AttendancePage({ user, employees, showToast }) {
 
 const attendanceColumns = [
   {
+    key: 'employee_name',
+    header: 'พนักงาน',
+    sortable: true,
+    sortAccessor: (punch) => punch.employee_name || 'ยังไม่แมปพนักงาน',
+    searchAccessor: (punch) => [punch.employee_name, punch.nick_name, punch.position_th].filter(Boolean).join(' '),
+    render: (punch) => (
+      <span>
+        <strong>{punch.employee_name || 'ยังไม่แมปพนักงาน'}</strong>
+        {!punch.employee_id ? (
+          <StatusBadge tone="warning">ไม่พบพนักงาน</StatusBadge>
+        ) : (
+          <small>{[punch.nick_name, punch.position_th].filter(Boolean).join(' · ') || '-'}</small>
+        )}
+      </span>
+    ),
+  },
+  {
     key: 'punch_time',
     header: 'เวลา',
     sortable: true,
@@ -264,29 +328,6 @@ const attendanceColumns = [
     ),
   },
   {
-    key: 'employee_name',
-    header: 'พนักงาน',
-    sortable: true,
-    sortAccessor: (punch) => punch.employee_name || 'ยังไม่แมปพนักงาน',
-    searchAccessor: (punch) => punch.employee_name || '',
-    render: (punch) => (
-      <span>
-        <strong>{punch.employee_name || 'ยังไม่แมปพนักงาน'}</strong>
-      </span>
-    ),
-  },
-  {
-    key: 'nick_name',
-    header: 'ชื่อเล่น',
-    searchAccessor: (punch) => punch.nick_name || '',
-    render: (punch) => punch.nick_name || '-',
-  },
-  {
-    key: 'position_th',
-    header: 'ตำแหน่ง',
-    render: (punch) => punch.position_th || '-',
-  },
-  {
     key: 'employee_code',
     header: 'รหัสพนักงาน',
     searchAccessor: (punch) => punch.employee_code || '',
@@ -297,7 +338,7 @@ const attendanceColumns = [
     header: 'ไซต์ / อุปกรณ์',
     render: (punch) => (
       <span>
-        <strong>{punch.site_code}</strong>
+        <strong>{punch.site_code || '-'}</strong>
         <small>{punch.device_name || punch.device_code || '-'}</small>
       </span>
     ),

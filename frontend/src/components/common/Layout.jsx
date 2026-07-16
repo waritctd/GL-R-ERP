@@ -2,11 +2,23 @@ import { cn } from '../../utils/cn.js';
 
 /**
  * PageStack — reproduces `.page-stack`:
- *   display: grid; gap: 18px; max-width: 1320px;
+ *   display: grid; gap: 18px; min-width: 0; max-width: 1320px;
+ * `grid-cols-1` (not bare `grid`) is required: a bare `grid` container has no
+ * explicit column, so the browser sizes its one implicit column to the
+ * *max-content* width of the widest child (e.g. a tablet-only
+ * `min-w-[780px]` DataTable) regardless of viewport — the legacy `.page-stack
+ * > * { min-width: 0 }` rule can't stop that, because min-width:0 on a child
+ * only lets it shrink *within* an already-constrained track; here the track
+ * itself was growing unconstrained. `grid-cols-1` makes the column an
+ * explicit `minmax(0,1fr)` track, which actually fills/shrinks to the
+ * available width — verified fix for a 768px page-level horizontal-scroll
+ * regression on Attendance (content-scroll scrollWidth 814 vs clientWidth
+ * 682, i.e. every sibling row stretched to the table's width, not just the
+ * table).
  */
 export function PageStack({ className, children, ...props }) {
   return (
-    <div className={cn('grid gap-[18px] max-w-[1320px]', className)} {...props}>
+    <div className={cn('grid grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]', className)} {...props}>
       {children}
     </div>
   );
@@ -88,13 +100,16 @@ export const formGridSpan2 = 'col-span-2 max-[720px]:col-span-1';
 /**
  * StatGrid — reproduces `.stat-grid`:
  *   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px;
- *   ≤1040px: repeat(2, minmax(0, 1fr)); ≤720px: 1fr
+ *   ≤1040px: repeat(2, minmax(0, 1fr)); ≤720px: repeat(2, minmax(0, 1fr)) with a
+ *   tighter gap — a single stacked column forced users to scroll past several
+ *   screens of stat tiles before reaching real content (see styles.css's
+ *   ≤720px `.stat-grid`/`.stat-card` rules, which this mirrors).
  */
 export function StatGrid({ className, children, ...props }) {
   return (
     <div
       className={cn(
-        'grid grid-cols-4 gap-[14px] max-[1040px]:grid-cols-2 max-[720px]:grid-cols-1',
+        'grid grid-cols-4 gap-[14px] max-[1040px]:grid-cols-2 max-[720px]:grid-cols-2 max-[720px]:gap-2.5',
         className,
       )}
       {...props}

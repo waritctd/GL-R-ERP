@@ -45,6 +45,7 @@ const PATH_GUARDS = [
   { test: (p) => p === '/overtime', can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllOvertime') },
   { test: (p) => p === '/leave', can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllLeave') },
   { test: (p) => p === '/profile', can: (u) => !!u.employeeId },
+  { test: (p) => p === '/price-import', can: (u) => hasPermission(u.role, 'canManagePriceImport') },
 ];
 
 export function canAccessPath(path, user) {

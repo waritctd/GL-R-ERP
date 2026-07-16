@@ -14,6 +14,7 @@ import { formGridSpan2, Panel, PageStack, RowActions, StatGrid } from '../../com
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { overtimeStatusLabel as statusInfo } from '../../utils/format.js';
 
 const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,0.75fr)] max-[1040px]:min-w-[940px] reflow-cards';
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
@@ -91,17 +92,6 @@ function createOvertimeFormSchema({ requireEmployeeId }) {
   });
 }
 
-function statusInfo(status) {
-  const map = {
-    SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
-    MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },
-    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
-    REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
-    CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'neutral' },
-  };
-  return map[status] ?? { label: status || '-', tone: 'neutral' };
-}
-
 function apiDateTime(value) {
   return value.length === 16 ? `${value}:00+07:00` : `${value}+07:00`;
 }
@@ -177,8 +167,8 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
   }, [requestsQuery.error, showToast]);
 
   const submitEmployeeOptions = useMemo(
-    () => employeeOptions.filter((employee) => employee.self || employee.directReport || user.role === 'admin'),
-    [employeeOptions, user.role],
+    () => employeeOptions.filter((employee) => employee.self || employee.directReport),
+    [employeeOptions],
   );
   const canSubmitForTeam = submitEmployeeOptions.some((employee) => employee.directReport);
   const hasMultipleEmployeeOptions = employeeOptions.length > 1;
@@ -258,6 +248,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
     mutationFn: (id) => api.overtime.approve(id, {}).then((response) => response.request),
     onSuccess: () => {
       showToast('success', 'อนุมัติ OT แล้ว');
+      setConfirmState(null);
       invalidateOvertime();
     },
     onError: (error) => showToast('error', error.message || 'อนุมัติ OT ไม่สำเร็จ'),
@@ -305,8 +296,15 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
     });
   }
 
+  // Approve now goes through a confirmation step (matches the reference
+  // CommissionPage/TicketDetailPage pattern) instead of firing immediately,
+  // so the reviewer sees what they're approving before committing to it.
   function approve(id) {
-    approveMutation.mutate(id);
+    setConfirmState({ kind: 'approve', id });
+  }
+
+  function confirmApprove() {
+    approveMutation.mutate(confirmState.id);
   }
 
   function reject(id) {
@@ -504,7 +502,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
             </FormField>
           </div>
           <RowActions className={formGridSpan2}>
-            <Button type="submit" disabled={saving || hasTimeRangeError}>
+            <Button type="submit" disabled={saving || hasTimeRangeError} className="max-[720px]:min-h-11 max-[720px]:w-full">
               <Icon name="plus" />
               ส่งคำขอ
             </Button>
@@ -532,37 +530,62 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
           const canCancel = request.status === 'SUBMITTED' && Number(request.employeeId) === Number(user.employeeId);
           const managerCancellable = canManagerCancel(request);
           return (
-            <div className={`${OVERTIME_TABLE_GRID} table-row`} key={request.id}>
-              <span data-label="วันที่ / พนักงาน">
+            <div className={`${OVERTIME_TABLE_GRID} data-row`} key={request.id}>
+              {/* Mobile order (step 8 rule 7 — summary -> actions -> details): this
+                  span is the summary (who/when) and stays first on every viewport. */}
+              <span data-label="วันที่ / พนักงาน" className="max-[720px]:order-1">
                 <strong>{formatWorkDate(request.workDate)}</strong>
                 <small>{request.employeeName || request.employeeCode || request.employeeId}</small>
               </span>
-              <span data-label="แผน OT">
+              <span data-label="แผน OT" className="max-[720px]:order-4">
                 <strong>{formatDateTime(request.plannedStartAt)}</strong>
                 <small>
                   {formatDateTime(request.plannedEndAt)} · {formatMinutes(request.plannedMinutes)} · {request.dayType === 'HOLIDAY' ? '3x' : '1.5x'}
                 </small>
               </span>
-              <span data-label="เหตุผล">
+              <span data-label="เหตุผล" className="max-[720px]:order-5">
                 <strong>{request.reason}</strong>
                 <small>{request.reviewerNote || request.calculationNote || '-'}</small>
               </span>
-              <span data-label="เวลาจริง / จ่ายได้">
-                <strong>{formatMinutes(request.actualMinutes)}</strong>
-                <small>จ่ายได้ {formatMinutes(request.payableMinutes)}</small>
+              {/* Pure-numeric column: right-aligned + mono on desktop so the figures
+                  line up for scanning (DESIGN.md mono is for "figures needing
+                  alignment"). Left on mobile, where it reads as a stacked card. */}
+              <span data-label="เวลาจริง / จ่ายได้" className="max-[720px]:order-6 min-[721px]:text-right">
+                <strong className="font-mono">{formatMinutes(request.actualMinutes)}</strong>
+                <small className="font-mono">จ่ายได้ {formatMinutes(request.payableMinutes)}</small>
               </span>
-              <span data-label="ขั้นอนุมัติ">
+              <span data-label="ขั้นอนุมัติ" className="max-[720px]:order-2">
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
                 <small>ผู้จัดการ: {request.managerApprovedAt ? `${request.managerApprovedByName || '-'} · ${formatDateTime(request.managerApprovedAt)}` : '-'}</small>
                 <small>CEO: {request.ceoApprovedAt ? `${request.ceoApprovedByName || '-'} · ${formatDateTime(request.ceoApprovedAt)}` : '-'}</small>
               </span>
-              <span className="row-actions">
+              {/* Approve/reject visually differentiated per DESIGN.md (danger stays
+                  outlined, not filled) and step 9 rule 2 — mirrors the exact
+                  success/danger icon-button tinting CommissionPage uses for the
+                  same manager/CEO review pattern. */}
+              <span className="row-actions max-[720px]:order-3">
                 {reviewable ? (
                   <>
-                    <Button type="button" variant="icon" title={approveTitle} aria-label={approveTitle} disabled={saving} onClick={() => approve(request.id)}>
+                    <Button
+                      type="button"
+                      variant="icon"
+                      title={approveTitle}
+                      aria-label={approveTitle}
+                      disabled={saving}
+                      style={{ color: 'var(--color-success)', borderColor: 'var(--color-success)' }}
+                      onClick={() => approve(request.id)}
+                    >
                       <Icon name="check" size={14} />
                     </Button>
-                    <Button type="button" variant="icon" title="ปฏิเสธ" aria-label="ปฏิเสธ" disabled={saving} onClick={() => reject(request.id)}>
+                    <Button
+                      type="button"
+                      variant="icon"
+                      title="ปฏิเสธ"
+                      aria-label="ปฏิเสธ"
+                      disabled={saving}
+                      style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger)' }}
+                      onClick={() => reject(request.id)}
+                    >
                       <Icon name="close" size={14} />
                     </Button>
                   </>
@@ -579,9 +602,46 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
       </section>
 
       <ConfirmDialog
+        open={confirmState?.kind === 'approve'}
+        title="ยืนยันการอนุมัติ OT"
+        message={(() => {
+          const request = requests.find((item) => item.id === confirmState?.id);
+          if (!request) return 'ยืนยันการอนุมัติคำขอ OT นี้?';
+          const isCeoStep = canCeoApprove(request);
+          // Next-step copy quoted from api.overtime.approve (src/api/mockApi.js
+          // ~L1656-1689): the SUBMITTED->MANAGER_APPROVED step computes
+          // payableMinutes = round(actualMinutes * multiplier) right there;
+          // the MANAGER_APPROVED->APPROVED (CEO) step only flips status and
+          // keeps the payable minutes already computed by the manager step.
+          const nextStep = isCeoStep
+            ? 'สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว" พร้อมชั่วโมงจ่ายได้ที่คำนวณไว้'
+            : `สถานะจะเปลี่ยนเป็น "รอ CEO" และคำนวณชั่วโมงจ่ายได้ตามอัตรา ${request.dayType === 'HOLIDAY' ? '3x (วันหยุด)' : '1.5x (วันทำงานปกติ)'}`;
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <p className="confirm-dialog-message" style={{ margin: 0 }}>
+                ตรวจสอบแผน OT ของ <strong>{request.employeeName || request.employeeCode || request.employeeId}</strong> ก่อนอนุมัติ
+              </p>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid var(--color-border)', paddingTop: 8 }}>
+                <span style={{ color: 'var(--color-icon-muted)' }}>วันที่ / เวลา</span>
+                <span className="font-mono">{formatDateTime(request.plannedStartAt)}–{formatDateTime(request.plannedEndAt).slice(-5)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700 }}>
+                <span>เวลาที่วางแผน</span>
+                <span className="font-mono">{formatMinutes(request.plannedMinutes)} · {request.dayType === 'HOLIDAY' ? '3x' : '1.5x'}</span>
+              </div>
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--color-icon-muted)' }}>{nextStep}</p>
+            </div>
+          );
+        })()}
+        confirmLabel="อนุมัติ"
+        busy={saving}
+        onConfirm={confirmApprove}
+        onCancel={() => setConfirmState(null)}
+      />
+      <ConfirmDialog
         open={confirmState?.kind === 'reject'}
         title="ปฏิเสธคำขอ OT"
-        message="ยืนยันการปฏิเสธคำขอ OT นี้?"
+        message='ยืนยันการปฏิเสธคำขอ OT นี้? สถานะจะเปลี่ยนเป็น "ปฏิเสธแล้ว" และไม่สามารถอนุมัติย้อนหลังได้'
         confirmLabel="ปฏิเสธคำขอ"
         tone="danger"
         busy={saving}
@@ -593,7 +653,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
       <ConfirmDialog
         open={confirmState?.kind === 'cancel'}
         title="ยกเลิกคำขอ OT"
-        message="ยืนยันการยกเลิกคำขอ OT นี้?"
+        message='ยืนยันการยกเลิกคำขอ OT นี้? สถานะจะเปลี่ยนเป็น "ยกเลิกแล้ว" ถาวร'
         confirmLabel="ยกเลิกคำขอ"
         tone="danger"
         busy={saving}

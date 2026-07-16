@@ -9,6 +9,9 @@ import { Avatar } from '../../components/common/Avatar.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
+import { hasPermission } from '../../app/permissions.js';
+import { SALES_ENABLED } from '../../app/features.js';
+import { ActionQueue } from './ActionQueue.jsx';
 
 /**
  * Reproduces `.dashboard-grid`: grid-template-columns: 1.15fr 0.85fr; gap: 18px;
@@ -18,7 +21,7 @@ import { formatShortDate, requestStatus } from '../../utils/format.js';
  */
 const DASHBOARD_GRID = 'grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] max-[1040px]:grid-cols-2 max-[720px]:grid-cols-1';
 
-const COMPANY_ROLES = ['hr', 'admin', 'ceo'];
+const COMPANY_ROLES = ['hr', 'ceo'];
 
 function numberValue(value) {
   return value ?? 0;
@@ -37,25 +40,45 @@ function dashboardMode(user, summary) {
   return 'employee';
 }
 
-function dashboardCards(mode, summary, pendingCount) {
+// Route access for each card/queue target, derived only from permissions.js
+// (the single source of truth for what a role may open) plus SALES_ENABLED —
+// never invented. `/attendance` has no path guard (any signed-in user may
+// open it), so it is always a valid click target.
+function dashboardAccess(user) {
+  const canOvertime = hasPermission(user?.role, 'canViewAllOvertime') || !!user?.employeeId;
+  const canLeave = hasPermission(user?.role, 'canViewAllLeave') || !!user?.employeeId;
+  return {
+    employees: () => hasPermission(user?.role, 'canViewEmployees'),
+    reviewRequests: () => hasPermission(user?.role, 'canReviewProfileRequests'),
+    myRequests: () => hasPermission(user?.role, 'canSubmitProfileRequests'),
+    overtime: () => canOvertime,
+    leave: () => canLeave,
+    tickets: () => SALES_ENABLED && hasPermission(user?.role, 'canViewTickets'),
+    commissions: () => SALES_ENABLED && hasPermission(user?.role, 'canViewCommissions'),
+    attendance: () => true,
+  };
+}
+
+function dashboardCards(mode, summary, pendingCount, { navigate, access }) {
   const headcount = summary?.headcount ?? {};
   const pending = summary?.pendingApprovals ?? {};
   const attendance = summary?.attendance ?? {};
   const notifications = summary?.notifications ?? {};
   const tickets = summary?.tickets ?? {};
+  const go = (path, allowed) => (allowed ? () => navigate(path) : undefined);
 
   if (mode === 'company') {
     return [
-      { icon: 'users', label: 'พนักงาน Active', value: numberValue(headcount.active), helper: 'Headcount', tone: 'indigo' },
+      { icon: 'users', label: 'พนักงาน Active', value: numberValue(headcount.active), helper: 'Headcount', tone: 'indigo', onClick: go('/employees', access.employees()) },
       { icon: 'clipboard', label: 'รออนุมัติทั้งหมด', value: numberValue(pending.total), helper: 'Approvals', tone: 'rose' },
-      { icon: 'userCog', label: 'แก้ไขข้อมูล', value: numberValue(pending.profileRequests), helper: 'Profile requests', tone: 'amber' },
-      { icon: 'clock', label: 'OT รออนุมัติ', value: numberValue(pending.overtime), helper: 'Overtime', tone: 'blue' },
-      { icon: 'calendar', label: 'ลารออนุมัติ', value: numberValue(pending.leave), helper: 'Leave', tone: 'teal' },
-      { icon: 'badgeCheck', label: 'มาวันนี้', value: numberValue(attendance.todayPresent), helper: 'Attendance', tone: 'teal' },
-      { icon: 'clock', label: 'มาสายวันนี้', value: numberValue(attendance.lateToday), helper: 'Late today', tone: numberValue(attendance.lateToday) > 0 ? 'amber' : 'indigo' },
+      { icon: 'userCog', label: 'แก้ไขข้อมูล', value: numberValue(pending.profileRequests), helper: 'Profile requests', tone: 'amber', onClick: go('/requests', access.reviewRequests()) },
+      { icon: 'clock', label: 'OT รออนุมัติ', value: numberValue(pending.overtime), helper: 'Overtime', tone: 'blue', onClick: go('/overtime', access.overtime()) },
+      { icon: 'calendar', label: 'ลารออนุมัติ', value: numberValue(pending.leave), helper: 'Leave', tone: 'teal', onClick: go('/leave', access.leave()) },
+      { icon: 'badgeCheck', label: 'มาวันนี้', value: numberValue(attendance.todayPresent), helper: 'Attendance', tone: 'teal', onClick: go('/attendance', access.attendance()) },
+      { icon: 'clock', label: 'มาสายวันนี้', value: numberValue(attendance.lateToday), helper: 'Late today', tone: numberValue(attendance.lateToday) > 0 ? 'amber' : 'indigo', onClick: go('/attendance', access.attendance()) },
       { icon: 'bell', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread), helper: 'Unread', tone: 'indigo' },
       ...(tickets.total > 0 ? [
-        { icon: 'fileText', label: 'ใบขอราคาเปิดอยู่', value: numberValue(tickets.totalOpen), helper: 'Tickets', tone: 'blue' },
+        { icon: 'fileText', label: 'ใบขอราคาเปิดอยู่', value: numberValue(tickets.totalOpen), helper: 'Tickets', tone: 'blue', onClick: go('/tickets', access.tickets()) },
       ] : []),
     ];
   }
@@ -63,24 +86,43 @@ function dashboardCards(mode, summary, pendingCount) {
   if (mode === 'manager') {
     return [
       { icon: 'users', label: 'พนักงานในฝ่าย', value: numberValue(headcount.active), helper: 'Active', tone: 'indigo' },
-      { icon: 'clock', label: 'OT รออนุมัติ', value: numberValue(pending.overtime), helper: 'Division', tone: 'amber' },
-      { icon: 'calendar', label: 'ลารออนุมัติ', value: numberValue(pending.leave), helper: 'Division', tone: 'teal' },
-      { icon: 'badgeCheck', label: 'มาวันนี้', value: numberValue(attendance.todayPresent), helper: 'Attendance', tone: 'teal' },
-      { icon: 'clock', label: 'มาสายวันนี้', value: numberValue(attendance.lateToday), helper: 'Late today', tone: numberValue(attendance.lateToday) > 0 ? 'amber' : 'indigo' },
+      { icon: 'clock', label: 'OT รออนุมัติ', value: numberValue(pending.overtime), helper: 'Division', tone: 'amber', onClick: go('/overtime', access.overtime()) },
+      { icon: 'calendar', label: 'ลารออนุมัติ', value: numberValue(pending.leave), helper: 'Division', tone: 'teal', onClick: go('/leave', access.leave()) },
+      { icon: 'badgeCheck', label: 'มาวันนี้', value: numberValue(attendance.todayPresent), helper: 'Attendance', tone: 'teal', onClick: go('/attendance', access.attendance()) },
+      { icon: 'clock', label: 'มาสายวันนี้', value: numberValue(attendance.lateToday), helper: 'Late today', tone: numberValue(attendance.lateToday) > 0 ? 'amber' : 'indigo', onClick: go('/attendance', access.attendance()) },
       { icon: 'bell', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread), helper: 'Unread', tone: 'indigo' },
       ...(tickets.total > 0 ? [
-        { icon: 'fileText', label: 'ใบขอราคาเปิดอยู่', value: numberValue(tickets.totalOpen), helper: 'Tickets', tone: 'blue' },
+        { icon: 'fileText', label: 'ใบขอราคาเปิดอยู่', value: numberValue(tickets.totalOpen), helper: 'Tickets', tone: 'blue', onClick: go('/tickets', access.tickets()) },
       ] : []),
     ];
   }
 
   return [
-    { icon: 'badgeCheck', label: 'สถานะวันนี้', value: attendanceStatus(attendance.todayStatus), helper: 'Attendance', tone: attendance.todayStatus === 'PRESENT' ? 'teal' : 'amber' },
-    { icon: 'clock', label: 'OT ของฉัน', value: numberValue(pending.overtime), helper: 'Pending', tone: 'amber' },
-    { icon: 'calendar', label: 'ลาของฉัน', value: numberValue(pending.leave), helper: 'Pending', tone: 'teal' },
-    { icon: 'clipboard', label: 'คำขอแก้ไขข้อมูล', value: numberValue(pending.profileRequests ?? pendingCount), helper: 'Pending', tone: 'rose' },
+    { icon: 'badgeCheck', label: 'สถานะวันนี้', value: attendanceStatus(attendance.todayStatus), helper: 'Attendance', tone: attendance.todayStatus === 'PRESENT' ? 'teal' : 'amber', onClick: go('/attendance', access.attendance()) },
+    { icon: 'clock', label: 'OT ของฉัน', value: numberValue(pending.overtime), helper: 'Pending', tone: 'amber', onClick: go('/overtime', access.overtime()) },
+    { icon: 'calendar', label: 'ลาของฉัน', value: numberValue(pending.leave), helper: 'Pending', tone: 'teal', onClick: go('/leave', access.leave()) },
+    { icon: 'clipboard', label: 'คำขอแก้ไขข้อมูล', value: numberValue(pending.profileRequests ?? pendingCount), helper: 'Pending', tone: 'rose', onClick: go('/my-requests', access.myRequests()) },
     { icon: 'bell', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread), helper: 'Unread', tone: 'indigo' },
   ];
+}
+
+// The needs-action queue only lists items the *viewer* can act on (approve,
+// review, pick up) — not status of their own already-submitted requests,
+// which is visibility-of-status, not an action for them. That is why this
+// is built only for 'company'/'manager' modes, never 'employee' mode.
+function actionQueueItems(mode, summary, { navigate, access }) {
+  if (mode === 'employee') return [];
+  const pending = summary?.pendingApprovals ?? {};
+  const notifications = summary?.notifications ?? {};
+  const go = (path, allowed) => (allowed ? () => navigate(path) : undefined);
+  const items = [
+    { key: 'profileRequests', label: 'คำขอแก้ไขข้อมูลรออนุมัติ', value: numberValue(pending.profileRequests), to: go('/requests', access.reviewRequests()) },
+    { key: 'overtime', label: 'OT รออนุมัติ', value: numberValue(pending.overtime), to: go('/overtime', access.overtime()) },
+    { key: 'leave', label: 'ลารออนุมัติ', value: numberValue(pending.leave), to: go('/leave', access.leave()) },
+    { key: 'commissions', label: 'ค่าคอมมิชชั่นรออนุมัติ', value: numberValue(pending.commissions), to: go('/commissions', access.commissions()) },
+    { key: 'notifications', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread) },
+  ];
+  return items;
 }
 
 function downloadBlob(blob, filename) {
@@ -97,7 +139,9 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
   const pendingCount = profileRequests.filter((request) => request.status === 'pending').length;
   const years = employee?.hireDate ? new Date().getFullYear() - new Date(employee.hireDate).getFullYear() : 0;
   const mode = dashboardMode(user, dashboardSummary);
-  const cards = dashboardCards(mode, dashboardSummary, pendingCount);
+  const access = dashboardAccess(user);
+  const cards = dashboardCards(mode, dashboardSummary, pendingCount, { navigate, access });
+  const queueItems = actionQueueItems(mode, dashboardSummary, { navigate, access });
   const title = mode === 'company'
     ? `สวัสดี, คุณ${employee?.nickName || employee?.nameTh || user?.name || ''}`
     : `สวัสดี, คุณ${employee?.nickName || employee?.nameTh || user?.name || ''}`;
@@ -151,6 +195,8 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
           </Button>
         ) : null}
       />
+
+      {mode !== 'employee' ? <ActionQueue items={queueItems} /> : null}
 
       {employee ? (
         <section className="profile-strip">

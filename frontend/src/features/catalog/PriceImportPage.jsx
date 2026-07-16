@@ -1,12 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { ProductFormModal } from './ProductFormModal.jsx';
+
+// ── StepLabel ─────────────────────────────────────────────────────────────────
+// This upload flow is a genuine ordered sequence (select factory → upload →
+// commit — there is no separate preview/validate step, see handleUpload),
+// which is exactly the case where a step number carries real information
+// rather than acting as decoration. Kept to plain bold/muted text, no
+// circles or color blocks, per DESIGN.md's overline treatment.
+function StepLabel({ n, children }) {
+  return (
+    <p className="mb-1.5 text-xs font-bold text-text-muted">
+      ขั้นตอนที่ {n} · {children}
+    </p>
+  );
+}
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -169,6 +186,48 @@ function UploadResultCard({ result }) {
   );
 }
 
+// ── ProductCard (mobile) ──────────────────────────────────────────────────────
+// Same 8-column desktop table as CatalogSearchPage, minus the factory column
+// (already filtered to one factory here) — reflowed by hand since this is a
+// plain `<table>`, not DataTable.
+function ProductCard({ product, onEdit, onDelete }) {
+  return (
+    <div className="mt-2.5 flex w-full min-w-0 flex-col items-stretch gap-2 rounded-md border border-solid border-border bg-surface p-4 first:mt-0">
+      {/* This list is already scoped to one selected factory, so collection is the
+          identity anchor here (it leads the desktop table); productName is often
+          empty in real price-list rows and would collapse the line to a dash. */}
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <strong className="min-w-0 truncate text-md font-extrabold text-text">
+          {product.collection || product.productName || '—'}
+        </strong>
+        <code className="shrink-0 text-2xs text-text-muted">{product.productCode}</code>
+      </div>
+
+      <span className="min-w-0 truncate text-xs text-text-muted">
+        {[product.productName, product.color, product.surface, product.sizeRaw]
+          .filter(Boolean)
+          .join(' · ')}
+      </span>
+
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-md font-extrabold text-primary">
+          {priceDisplay(product.price, product.currency)}
+          <span className="ml-1 text-xs font-normal text-muted">/ {unitLabel(product.priceUnit)}</span>
+        </span>
+        <div className="flex gap-1">
+          <Button size="sm" variant="secondary" onClick={() => onEdit(product)}>
+            <Icon name="pencil" size={14} />
+            แก้ไข
+          </Button>
+          <Button size="sm" variant="danger" onClick={() => onDelete(product)}>
+            ลบ
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── VersionsPanel ─────────────────────────────────────────────────────────────
 
 function VersionsPanel({ versions, currentVersionId }) {
@@ -202,6 +261,7 @@ function VersionsPanel({ versions, currentVersionId }) {
 // ── main page ─────────────────────────────────────────────────────────────────
 
 export function PriceImportPage({ showToast }) {
+  const isMobile = useIsMobile();
   const [factories, setFactories]             = useState([]);
   const [factoryId, setFactoryId]             = useState('');
   const [versions, setVersions]               = useState([]);
@@ -217,6 +277,7 @@ export function PriceImportPage({ showToast }) {
 
   const [showFactoryModal, setShowFactoryModal] = useState(false);
   const [editingProduct, setEditingProduct]     = useState(null);
+  const [confirmUpload, setConfirmUpload]       = useState(false);
 
   const fileRef = useRef(null);
 
@@ -274,6 +335,14 @@ export function PriceImportPage({ showToast }) {
     setError('');
   }
 
+  // uploadAndCommit (src/api/hrApi.js) hits POST /api/price-import/upload-commit,
+  // which parses the file then calls PriceImportService.uploadAndCommit —
+  // parse → stage → validate → commit, in one transaction, with no separate
+  // preview step. commit() sets this version ACTIVE, archives the factory's
+  // previous ACTIVE version (kept for history, not deleted), and carries
+  // forward any existing product not matched by a row in the new file. This
+  // same call/args are unchanged; the confirm step below only gates *when*
+  // it fires, not what it does.
   async function handleUpload() {
     if (!factoryId || !file) return;
     setUploading(true);
@@ -294,6 +363,7 @@ export function PriceImportPage({ showToast }) {
       setError(err.message || 'อัปโหลดไม่สำเร็จ');
     } finally {
       setUploading(false);
+      setConfirmUpload(false);
     }
   }
 
@@ -334,7 +404,8 @@ export function PriceImportPage({ showToast }) {
       />
 
       {/* Factory selection */}
-      <Panel title="เลือกโรงงาน">
+      <Panel>
+        <StepLabel n={1}>เลือกโรงงาน</StepLabel>
         <div className="flex gap-3 items-end flex-wrap">
           <div className="flex-1 min-w-[200px]">
             <label htmlFor="factory-select" className="block text-sm font-medium mb-1">
@@ -361,7 +432,8 @@ export function PriceImportPage({ showToast }) {
 
       {/* Upload panel */}
       {factoryId && (
-        <Panel title="อัปโหลด Price List">
+        <Panel>
+          <StepLabel n={2}>อัปโหลด Price List</StepLabel>
           <div className="mb-3">
             <label htmlFor="version-label" className="block text-sm font-medium mb-1">
               Label (ชื่อ version)
@@ -375,19 +447,37 @@ export function PriceImportPage({ showToast }) {
               onChange={(e) => setLabel(e.target.value)}
             />
           </div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".xlsx,.xls"
-              className="text-sm"
-              onChange={handleFileChange}
-            />
-            <Button variant="primary" onClick={handleUpload} disabled={!file || uploading}>
-              <Icon name="upload" />
-              {uploading ? 'กำลังอัปโหลด…' : 'อัปโหลดและ Commit'}
-            </Button>
+          <FileUploadField
+            ref={fileRef}
+            accept=".xlsx,.xls"
+            onChange={handleFileChange}
+            helperText="Excel (.xlsx, .xls)"
+            className="max-w-md mb-4"
+          />
+
+          {/* No preview/validation step exists for this upload path — it parses,
+              stages, validates, and commits in one call (see handleUpload above).
+              Per the plan: "If preview does not exist, add a clear warning/note
+              before commit" instead of fabricating one. */}
+          <div className="max-w-md rounded-md border border-border-input bg-surface-muted p-3 mb-4">
+            <StepLabel n={3}>ไม่มีขั้นตอนแสดงตัวอย่างก่อน Commit</StepLabel>
+            <p className="text-sm text-text-secondary">
+              ระบบนี้จะอ่านไฟล์และตั้งเป็นราคาที่ใช้งานจริง (ACTIVE) ทันทีในขั้นตอนเดียว
+              โดยไม่มีหน้าตรวจสอบก่อน เวอร์ชันราคาเดิมของโรงงานนี้จะถูกเก็บเป็นประวัติ (ARCHIVED)
+              ไม่ถูกลบ และสินค้าที่ไม่มีในไฟล์ใหม่จะยังคงอยู่ในเวอร์ชันใหม่
+            </p>
           </div>
+
+          <StepLabel n={4}>อัปโหลดและ Commit</StepLabel>
+          <Button
+            variant="primary"
+            onClick={() => setConfirmUpload(true)}
+            disabled={!file || uploading}
+            className="max-[720px]:min-h-11 max-[720px]:w-full"
+          >
+            <Icon name="upload" />
+            {uploading ? 'กำลังอัปโหลด…' : 'อัปโหลดและ Commit'}
+          </Button>
         </Panel>
       )}
 
@@ -416,6 +506,17 @@ export function PriceImportPage({ showToast }) {
             <p className="text-sm text-muted py-6 text-center">
               ยังไม่มีสินค้าสำหรับโรงงานนี้ — อัปโหลดไฟล์หรือเพิ่มสินค้าด้วยตนเอง
             </p>
+          ) : isMobile ? (
+            <div className="flex flex-col">
+              {products.map((p) => (
+                <ProductCard
+                  key={p.priceId}
+                  product={p}
+                  onEdit={setEditingProduct}
+                  onDelete={handleDeleteProduct}
+                />
+              ))}
+            </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm border-collapse">
@@ -423,7 +524,6 @@ export function PriceImportPage({ showToast }) {
                   <tr>
                     <th className="text-left px-2 py-2 text-muted font-medium">Collection</th>
                     <th className="text-left px-2 py-2 text-muted font-medium">ชื่อ</th>
-                    <th className="text-left px-2 py-2 text-muted font-medium">รหัส</th>
                     <th className="text-left px-2 py-2 text-muted font-medium">สี</th>
                     <th className="text-left px-2 py-2 text-muted font-medium">ผิว</th>
                     <th className="text-left px-2 py-2 text-muted font-medium">ขนาด</th>
@@ -435,21 +535,30 @@ export function PriceImportPage({ showToast }) {
                   {products.map((p) => (
                     <tr
                       key={p.priceId}
-                      className="border-b border-border hover:bg-surface-alt transition-colors"
+                      className="border-b border-border hover:bg-surface-hover transition-colors"
                     >
-                      <td className="px-2 py-2">{p.collection || '—'}</td>
+                      {/* Collection (primary) + product code (secondary, muted
+                          mono) stacked — this list is already scoped to one
+                          factory, so collection is the identity anchor, same
+                          as the mobile ProductCard above. */}
+                      <td className="px-2 py-2">
+                        <span className="flex min-w-0 flex-col gap-0.5">
+                          <strong className="block truncate font-medium text-text">{p.collection || p.productName || '—'}</strong>
+                          <code className="block truncate text-2xs text-text-muted">{p.productCode || '—'}</code>
+                        </span>
+                      </td>
                       <td className="px-2 py-2">{p.productName || '—'}</td>
-                      <td className="px-2 py-2 font-mono text-xs">{p.productCode || '—'}</td>
                       <td className="px-2 py-2">{p.color || '—'}</td>
                       <td className="px-2 py-2">{p.surface || '—'}</td>
                       <td className="px-2 py-2">{p.sizeRaw || '—'}</td>
                       <td className="px-2 py-2 text-right whitespace-nowrap font-medium">
-                        {priceDisplay(p.price, p.currency)}
+                        <span className="font-mono">{priceDisplay(p.price, p.currency)}</span>
                         <span className="text-xs text-muted ml-1">/ {unitLabel(p.priceUnit)}</span>
                       </td>
                       <td className="px-2 py-2">
                         <div className="flex gap-1 justify-end">
                           <Button size="sm" variant="secondary" onClick={() => setEditingProduct(p)}>
+                            <Icon name="pencil" size={14} />
                             แก้ไข
                           </Button>
                           <Button size="sm" variant="danger" onClick={() => handleDeleteProduct(p)}>
@@ -484,6 +593,18 @@ export function PriceImportPage({ showToast }) {
           onSaved={handleProductSaved}
         />
       )}
+
+      {/* tone stays default (not danger): commit archives the previous version
+          and carries forward unmatched products — it does not delete data. */}
+      <ConfirmDialog
+        open={confirmUpload}
+        title="ยืนยันอัปโหลดและ Commit"
+        message="ราคาที่ Commit จะมีผลใช้งานจริงทันที (ACTIVE) เวอร์ชันเดิมของโรงงานนี้จะถูกเก็บเป็นประวัติ ไม่สามารถย้อนกลับจากหน้านี้ได้"
+        confirmLabel="อัปโหลดและ Commit"
+        busy={uploading}
+        onConfirm={handleUpload}
+        onCancel={() => setConfirmUpload(false)}
+      />
     </PageStack>
   );
 }

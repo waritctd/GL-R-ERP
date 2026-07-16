@@ -58,14 +58,6 @@ export const API_ROUTES = {
     noteTemplates: '/api/document-note-templates',
     remainingInvoiceFile: (ticketId) => `/api/tickets/${ticketId}/remaining-invoice/file`,
   },
-  documents: {
-    get: (id) => `/api/documents/${id}`,
-    update: (id) => `/api/documents/${id}`,
-    preview: (id) => `/api/documents/${id}/preview`,
-    issue: (id) => `/api/documents/${id}/issue`,
-    file: (id, fmt) => `/api/documents/${id}/file?format=${fmt}`,
-    noteTemplates: '/api/document-note-templates',
-  },
   catalog: {
     search: (q) => `/api/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`,
     prices: (q, factoryId, limit) => {
@@ -145,25 +137,33 @@ export const API_ROUTES = {
 export const ROLE_PERMISSIONS = {
   canUseEmployeeExperience: ['employee'],
   canSubmitProfileRequests: ['employee'],
-  canViewEmployees: ['hr', 'admin'],
-  canManageEmployees: ['hr', 'admin'],
-  canReviewProfileRequests: ['hr', 'admin'],
+  canViewEmployees: ['hr'],
+  canManageEmployees: ['hr'],
+  canReviewProfileRequests: ['hr'],
   canViewAllAttendance: ['hr', 'ceo'],
   canImportAttendance: ['hr', 'ceo'],
-  canViewAllOvertime: ['hr', 'ceo', 'admin'],
-  canViewAllLeave: ['hr', 'ceo', 'admin'],
-  canReviewLeave: ['hr', 'admin'],
+  canViewAllOvertime: ['hr', 'ceo'],
+  canViewAllLeave: ['hr', 'ceo'],
+  canReviewLeave: ['hr'],
   // Sales module
-  canViewTickets: ['sales', 'import', 'ceo', 'admin'],
-  canCreateTickets: ['sales', 'admin'],
-  canPickupTickets: ['import', 'admin'],
-  canProposePrices: ['import', 'admin'],
-  canApproveReject: ['ceo', 'admin'],
-  canGenerateQuotation: ['sales', 'admin'],
-  canViewCommissions: ['sales', 'sales_manager', 'ceo', 'hr', 'admin'],
-  canSubmitCommissions: ['sales', 'sales_manager', 'ceo', 'admin'],
-  canApproveCommissions: ['sales_manager', 'ceo', 'admin'],
-  canViewPayrollCommissions: ['hr', 'admin'],
-  canManagePayroll: ['hr', 'admin'],
-  canManagePriceImport: ['ceo', 'import', 'admin', 'sales', 'sales_manager'],
+  // sales_manager is read+comment oversight ONLY (a project-manager-style
+  // follow-up role for the sales team) — it must never be added to
+  // canCreateTickets/canPickupTickets/canProposePrices/canApproveReject/
+  // canGenerateQuotation/canConfirmPayments. Mirrors TicketService.VIEWER_ROLES.
+  canViewTickets: ['sales', 'import', 'ceo', 'account', 'sales_manager'],
+  // Money-receipt confirmations (รับยอดมัดจำ / รับชำระเต็มจำนวน) belong to
+  // ฝ่ายบัญชี, with CEO as fallback. Mirrors TicketService.ACCOUNT_ROLES.
+  canConfirmPayments: ['account', 'ceo'],
+  canCreateTickets: ['sales'],
+  canPickupTickets: ['import'],
+  canProposePrices: ['import'],
+  canApproveReject: ['ceo'],
+  canGenerateQuotation: ['sales'],
+  canViewCommissions: ['sales', 'sales_manager', 'ceo', 'hr'],
+  canSubmitCommissions: ['sales', 'sales_manager', 'ceo'],
+  canApproveCommissions: ['sales_manager', 'ceo'],
+  canViewPayrollCommissions: ['hr'],
+  canManagePayroll: ['hr'],
+  canManagePriceImport: ['ceo', 'import'],
+  canManageCatalogProducts: ['ceo', 'import'],
 };

@@ -28,7 +28,7 @@ export function ProfileRequestsPage({ profileRequests, onReview }) {
         ) : profileRequests.map((request) => {
           const status = requestStatus(request.status);
           return (
-            <div className="request-table table-row" key={request.id}>
+            <div className="request-table data-row" key={request.id}>
               <span className="employee-cell" data-label="พนักงาน">
                 <Avatar employee={request.employee} size="sm" />
                 <span>

@@ -14,7 +14,7 @@ import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { cn } from '../../utils/cn.js';
-import { formatMoney } from '../../utils/format.js';
+import { formatMoney, payrollStatusLabel as statusInfo } from '../../utils/format.js';
 
 // Reproduces `.panel` for the detail sidebar, which must stay a real <aside>
 // element (semantic landmark) — Layout.jsx's Panel always renders a <section>
@@ -147,16 +147,6 @@ function hasPayrollInput(input) {
   return payrollInputKeys.some((key) => parsePayrollNumber(input[key]) > 0);
 }
 
-function statusInfo(status) {
-  const map = {
-    PREVIEW: { label: 'ตัวอย่าง', tone: 'info' },
-    OPEN: { label: 'เปิดรอบ', tone: 'warning' },
-    PROCESSED: { label: 'ประมวลผลแล้ว', tone: 'success' },
-    CLOSED: { label: 'ปิดรอบ', tone: 'neutral' },
-    VOID: { label: 'ยกเลิก', tone: 'danger' },
-  };
-  return map[status] ?? { label: status || '-', tone: 'neutral' };
-}
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);

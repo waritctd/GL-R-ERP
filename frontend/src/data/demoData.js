@@ -207,18 +207,33 @@ export function createDemoDatabase() {
     employee.reportsTo = employee.positionTh === 'ผู้จัดการฝ่าย'
       ? 'คุณวิชัย ธนาคาร · กรรมการผู้จัดการ'
       : `${employees[divisionManagers[employee.divisionId] - 1].nameTh} · ผู้จัดการฝ่าย`;
+    // Mirrors hr.employee.reports_to_employee_id (the stored self-FK). Division
+    // managers have no row above them in this seed (no MD employee row), so their
+    // FK is null — same as the real NULL-FK state.
+    employee.managerId = employee.positionTh === 'ผู้จัดการฝ่าย'
+      ? null
+      : divisionManagers[employee.divisionId];
   });
 
   const users = [
     { id: 2, email: 'hr@glr.co.th', password: 'demo1234', name: employees[20].nameTh, role: 'hr', employeeId: employees[20].id, active: true, createdAt: iso(2025, 1, 5) },
-    { id: 3, email: 'director@glr.co.th', password: 'demo1234', name: 'คุณวิชัย ธนาคาร', role: 'director', employeeId: employees[0].id, active: true, createdAt: iso(2025, 1, 5) },
     { id: 4, email: 'employee@glr.co.th', password: 'demo1234', name: employees[8].nameTh, role: 'employee', employeeId: employees[8].id, active: true, createdAt: iso(2025, 2, 11) },
-    { id: 5, email: 'supervisor@glr.co.th', password: 'demo1234', name: employees[2].nameTh, role: 'supervisor', employeeId: employees[2].id, active: true, createdAt: iso(2025, 2, 11) },
+    // WHL division manager — lets the seeded stage-1 OT approval (OT#1, whose
+    // employee reports to this ผู้จัดการฝ่าย) be demoed. role is 'employee' on
+    // purpose: a division manager's OT-review authority is derived from the org
+    // chart (positionTh 'ผู้จัดการฝ่าย' → publicUser sets manager: true), not from a
+    // special role — there is no 'supervisor'/'director' role (#206 removed those
+    // phantom personas; ApplicationRoles.java never allowed them).
+    { id: 10, email: 'warehouse.manager@glr.co.th', password: 'demo1234', name: employees[5].nameTh, role: 'employee', employeeId: employees[5].id, active: true, createdAt: iso(2025, 2, 11) },
     // Sales module users
     { id: 6, email: 'sales@glr.co.th', password: 'demo1234', name: 'คุณสมหมาย ขายดี', role: 'sales', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
     { id: 7, email: 'import@glr.co.th', password: 'demo1234', name: 'คุณนำเข้า พานิช', role: 'import', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
     { id: 8, email: 'ceo@glr.co.th', password: 'demo1234', name: 'คุณวิชัย ธนาคาร', role: 'ceo', employeeId: employees[0].id, active: true, createdAt: iso(2025, 6, 1) },
     { id: 9, email: 'sales.manager@glr.co.th', password: 'demo1234', name: 'คุณมณี ผู้จัดการฝ่ายขาย', role: 'sales_manager', employeeId: employees[1].id, active: true, createdAt: iso(2025, 6, 1) },
+    // ฝ่ายบัญชี — confirms money receipts (รับยอดมัดจำ / รับชำระเต็มจำนวน) on
+    // sales tickets. Real role derivation: division AC-ฝ่ายบัญชี → 'account'
+    // (DivisionAccessPolicy), gates mirror TicketService.ACCOUNT_ROLES.
+    { id: 11, email: 'account@glr.co.th', password: 'demo1234', name: 'คุณบัญชี การเงิน', role: 'account', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
   ];
 
   const tickets = [

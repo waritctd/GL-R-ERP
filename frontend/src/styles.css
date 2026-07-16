@@ -98,9 +98,15 @@
   -webkit-font-smoothing: antialiased;
 }
 
+html,
+body,
+#root {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
-  min-width: 320px;
   min-height: 100dvh;
   background: var(--color-bg);
 }
@@ -294,20 +300,41 @@ textarea:focus {
   font-size: var(--text-sm);
 }
 
+/* .nav-item small / .sidebar-account small render on the dark sidebar rail
+   (Sidebar Navy #0b1220) where Ink Faint clears ~7.3:1 contrast — verified,
+   not a Muted Floor violation. The rest of this group renders on white
+   surfaces where Faint only clears ~2.6:1, so it is split out below. */
 .nav-item small,
-.employee-cell small,
-.topbar-user span,
-.sidebar-account small,
-.stat-helper,
-.request-feed small,
-.table-row small {
+.sidebar-account small {
   display: block;
   color: var(--color-text-faint);
   font-size: var(--text-xs);
   font-weight: 500;
 }
 
+.employee-cell small,
+.topbar-user span,
+.request-feed small,
+.data-row small {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+/* Stat card captions ("Headcount", "Approvals", …) are data text, not an
+   icon/placeholder, so per DESIGN.md's Muted Floor Rule they must not go
+   below Ink Muted (#64748b) — Ink Faint is reserved for icons/placeholders. */
+.stat-helper {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
 .app-shell {
+  width: 100%;
+  max-width: 100%;
   height: 100dvh;
   display: flex;
   overflow: hidden;
@@ -341,6 +368,7 @@ textarea:focus {
 
 .nav-item {
   width: 100%;
+  min-width: 0;
   display: grid;
   grid-template-columns: 22px 1fr auto;
   align-items: center;
@@ -349,9 +377,16 @@ textarea:focus {
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
-  color: var(--color-text-faint);
+  color: var(--color-sidebar-text);
   padding: 8px 10px;
   text-align: left;
+  text-decoration: none;
+}
+
+/* The Thai label leads; the English helper below it stays muted and smaller. */
+.nav-item > span {
+  min-width: 0;
+  font-weight: 600;
 }
 
 .nav-item.active {
@@ -389,6 +424,7 @@ textarea:focus {
 
 .topbar {
   height: 66px;
+  max-width: 100%;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -399,21 +435,32 @@ textarea:focus {
   background: var(--color-surface);
 }
 
+/* Takes the slack between the menu button and the actions, and truncates
+   rather than forcing the header wider than the viewport. */
 .topbar-title {
+  min-width: 0;
+  flex: 1 1 auto;
   display: grid;
   gap: 2px;
 }
 
 .topbar-title span {
+  overflow: hidden;
   font-weight: 800;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .topbar-title small {
+  overflow: hidden;
   color: var(--color-text-muted);
   font-size: var(--text-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .topbar-user {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -423,12 +470,13 @@ textarea:focus {
   text-align: right;
 }
 
-.icon-button.mobile-nav-toggle,
 .mobile-drawer-backdrop {
   display: none;
 }
 
 .content-scroll {
+  min-width: 0;
+  max-width: 100%;
   flex: 1;
   overflow: auto;
   padding: 28px 32px 42px;
@@ -437,7 +485,15 @@ textarea:focus {
 .page-stack {
   display: grid;
   gap: 18px;
+  min-width: 0;
   max-width: 1320px;
+}
+
+/* Grid items default to min-width:auto, so a child refuses to shrink below its
+   min-content width and silently stretches the page past the viewport — Thai
+   labels have no spaces to break on, so they hit this constantly. */
+.page-stack > * {
+  min-width: 0;
 }
 
 .page-heading {
@@ -455,10 +511,7 @@ textarea:focus {
 
 .primary-button,
 .secondary-button,
-.success-button,
 .danger-button,
-.text-button,
-.back-button,
 .icon-button {
   border-radius: var(--radius-md);
   min-height: 38px;
@@ -483,25 +536,11 @@ textarea:focus {
   padding: 0 13px;
 }
 
-.success-button {
-  background: var(--color-success);
-  color: var(--color-surface);
-  padding: 0 13px;
-}
-
 .danger-button {
   background: var(--color-surface);
   color: var(--color-danger);
   border-color: var(--color-danger-border);
   padding: 0 13px;
-}
-
-.text-button,
-.back-button {
-  border: 0;
-  background: transparent;
-  color: var(--color-primary);
-  padding: 0;
 }
 
 .breadcrumbs {
@@ -551,17 +590,6 @@ textarea:focus {
   background: var(--color-surface);
   color: var(--color-icon-muted);
   border-color: var(--color-border-input);
-}
-
-.icon-button.dark {
-  background: transparent;
-  color: var(--color-text-faint);
-  border-color: transparent;
-}
-
-.icon-only {
-  width: 36px;
-  padding: 0;
 }
 
 .stat-grid {
@@ -732,21 +760,6 @@ textarea:focus {
   padding: 20px;
 }
 
-.hero-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 20px;
-  margin-top: 12px;
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-}
-
-.hero-meta span {
-  display: inline-flex;
-  gap: 7px;
-  align-items: center;
-}
-
 .search-field {
   position: relative;
   flex: 1;
@@ -770,7 +783,7 @@ textarea:focus {
 }
 
 .table-head,
-.table-row {
+.data-row {
   display: grid;
   gap: 12px;
   align-items: center;
@@ -778,29 +791,37 @@ textarea:focus {
 }
 
 .table-head > *,
-.table-row > * {
+.data-row > * {
   min-width: 0;
   overflow: hidden;
 }
 
-.table-row > span,
-.table-row > code {
+.data-row > span,
+.data-row > code {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.table-row > span > strong,
-.table-row > span > small,
-.table-row > span > span {
+.data-row > span > strong,
+.data-row > span > small,
+.data-row > span > span {
   display: block;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.table-row > .status-badge {
+.data-row > .status-badge,
+/* A StatusBadge nested one level deeper, inside a labelled `[data-label]`
+   cell (OT's "ขั้นอนุมัติ" column, Leave's "สถานะ" column — needed so the
+   mobile card gets the label prefix), would otherwise inherit the generic
+   `.data-row > span > span { display: block }` rule below and get stretched
+   into a full-width bar instead of staying a compact pill. `width: fit-content`
+   (not just `auto`) is required here: as a grid item this element stretches
+   to fill its track under the grid's default `justify-items: stretch`. */
+.data-row > span > .status-badge {
   display: flex;
-  width: auto;
+  width: fit-content;
   max-width: 100%;
 }
 
@@ -821,7 +842,7 @@ textarea:focus {
   z-index: 2;
 }
 
-.table-row {
+.data-row {
   border: 0;
   border-bottom: 1px solid var(--color-surface-subtle);
   background: var(--color-surface);
@@ -830,7 +851,7 @@ textarea:focus {
   text-align: left;
 }
 
-.table-row:hover {
+.data-row:hover {
   background: var(--color-surface-hover);
 }
 
@@ -838,12 +859,8 @@ textarea:focus {
   grid-template-columns: minmax(0,1.8fr) minmax(0,1.1fr) minmax(0,1.6fr) minmax(0,1.7fr) minmax(0,0.9fr) minmax(0,1.2fr);
 }
 
-.user-table {
-  grid-template-columns: minmax(0,1.8fr) minmax(0,1.7fr) minmax(0,1fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,1fr);
-}
-
 .ticket-table {
-  grid-template-columns: minmax(0,0.9fr) minmax(0,2.4fr) minmax(0,1.2fr) minmax(0,1.2fr) minmax(0,1fr);
+  grid-template-columns: minmax(0,2.6fr) minmax(0,1.3fr) minmax(0,1.3fr) minmax(0,1fr);
 }
 
 .ticket-items-table {
@@ -954,18 +971,6 @@ textarea:focus {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.payroll-adjustment-group {
-  display: grid;
-  gap: 12px;
-  margin-top: 18px;
-}
-
-.payroll-adjustment-group h3 {
-  margin: 0;
-  color: var(--color-text);
-  font-size: var(--text-md);
-}
-
 .mini-metric {
   display: grid;
   gap: 4px;
@@ -1042,7 +1047,7 @@ textarea:focus {
   border-bottom: 1px solid var(--color-surface-subtle);
 }
 
-.commission-row-wrap .table-row {
+.commission-row-wrap .data-row {
   border-bottom: 0;
 }
 
@@ -1101,6 +1106,7 @@ textarea:focus {
 .event-dot.transition { background: var(--color-info-dot); }
 .event-dot.comment    { background: var(--color-text-muted); }
 .event-dot.created    { background: var(--color-success-soft); }
+.event-dot.success    { background: var(--color-success); }
 
 .ticket-detail-grid {
   display: grid;
@@ -1129,14 +1135,22 @@ textarea:focus {
 }
 
 .employee-cell strong,
-.table-row strong,
-.topbar-user strong,
-.sidebar-account strong {
+.data-row strong,
+.topbar-user strong {
   color: var(--color-text);
 }
 
+/* The account row sits on the dark sidebar, not a white surface — the ink
+   colour above would render it near-invisible (~1.1:1) against the navy. */
+.sidebar-account strong {
+  color: var(--color-surface);
+}
+
 .old-value {
-  color: var(--color-text-faint);
+  /* Muted Floor fix: this renders real "old value" data (profile-change diffs)
+     on a white surface, not an icon/placeholder — Ink Faint (#94a3b8) is
+     ~2.6:1 there. Ink Muted (#64748b) clears 4.5:1. */
+  color: var(--color-text-muted);
   text-decoration: line-through;
 }
 
@@ -1311,11 +1325,6 @@ a.status-badge {
   border-bottom-color: var(--color-primary);
 }
 
-.address-line {
-  line-height: 1.7;
-  color: var(--color-text-secondary);
-}
-
 .highlight-panel {
   background: var(--color-accent-dark);
   color: var(--color-success-text);
@@ -1324,13 +1333,6 @@ a.status-badge {
 .highlight-panel h2,
 .highlight-panel p {
   color: var(--color-surface);
-}
-
-.salary-value {
-  margin-top: 16px;
-  color: var(--color-surface);
-  font-size: var(--text-4xl);
-  font-weight: 800;
 }
 
 .timeline-list > div {
@@ -1358,11 +1360,15 @@ a.status-badge {
   place-items: center;
   align-content: center;
   gap: 8px;
+  /* Icon-only faint color at the container level (DESIGN.md: Ink Faint is for
+     icons/placeholders only). Title and description text below are pinned to
+     Ink Muted so they clear the DESIGN.md text-contrast floor. */
   color: var(--color-text-faint);
   text-align: center;
 }
 
-.empty-state strong {
+.empty-state strong,
+.empty-state span {
   color: var(--color-text-muted);
 }
 
@@ -1422,10 +1428,6 @@ a.status-badge {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
-}
-
-.form-grid.single {
-  grid-template-columns: 1fr;
 }
 
 .span-2 {
@@ -1496,20 +1498,6 @@ a.status-badge {
 .form-field .field-required {
   color: var(--color-danger);
   margin-left: 2px;
-}
-
-.field-hint {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  font-weight: 500;
-}
-
-.field-error-text {
-  margin: 0;
-  color: var(--color-danger);
-  font-size: var(--text-xs);
-  font-weight: 700;
 }
 
 .form-field input.is-invalid,
@@ -1665,19 +1653,6 @@ a.status-badge {
   display: none;
 }
 
-/* Desktop-only notice */
-.desktop-only-notice {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--color-info);
-  border-radius: var(--radius-md);
-  background: var(--color-info-bg);
-  color: var(--color-info-dark);
-  font-size: var(--text-sm);
-}
-
 /* Skeleton */
 .skeleton {
   display: block;
@@ -1727,7 +1702,11 @@ a.status-badge {
   }
 }
 
-@media (max-width: 1040px) {
+/* Desktop icon rail: between 721px and 1040px the persistent sidebar collapses
+   to icons only. Below 721px the sidebar is the mobile drawer, which has room
+   for full labels — this rule must not reach it, or the drawer renders as
+   centred, stacked, label-less icons. */
+@media (min-width: 721px) and (max-width: 1040px) {
   .sidebar {
     width: 86px;
     flex-basis: 86px;
@@ -1743,13 +1722,14 @@ a.status-badge {
     grid-template-columns: 1fr;
     justify-items: center;
   }
+}
 
+@media (max-width: 1040px) {
   .stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .request-table,
-  .user-table,
   .commission-table,
   .commission-payroll-table,
   .payroll-table,
@@ -1768,15 +1748,87 @@ a.status-badge {
   .table-panel {
     overflow-x: auto;
   }
+
+  /* Its 4-column `minmax(180px,1fr) minmax(200px,1fr) minmax(220px,1.2fr)
+     auto` template needs ~713px minimum — wider than a 768px tablet's
+     content column (682px) — so it forced the whole page to horizontal-
+     scroll (verified: content-scroll 760 vs 682 at 768px) until the
+     ≤720px rule below collapsed it to 1fr. Applying that here closes the
+     721–1040px gap the same way `.reflow-cards`/`.stat-grid` already do
+     above. */
+  .attendance-import-panel {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 720px) {
   .login-panel,
-  .stat-grid,
   .form-grid,
   .payroll-detail-grid,
   .payroll-special-grid {
     grid-template-columns: 1fr;
+  }
+
+  /* Stat/metric cards: a single stacked column of full-width cards forces
+     the user to scroll past ~2,700px of tiles before reaching real content
+     (dashboard/attendance/commission each render 4-8 of these). A 2-up grid
+     keeps them scannable at a glance instead of one giant list. */
+  .stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .stat-card {
+    padding: 12px;
+  }
+
+  .stat-icon {
+    width: 30px;
+    height: 30px;
+    margin-bottom: 8px;
+  }
+
+  .stat-icon svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .stat-value {
+    font-size: var(--text-xl);
+  }
+
+  .stat-label {
+    margin-top: 3px;
+    font-size: var(--text-xs);
+  }
+
+  .stat-helper {
+    margin-top: 1px;
+    display: block;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  /* `.profile-strip` (dashboard identity card) has the same missing-h2-size
+     gap as `.detail-hero` — on mobile the flex row becomes a column, which
+     exposes the browser's default h2 margins (~20px top+bottom) as dead
+     space between the name and the status badge below it. */
+  .profile-strip {
+    padding: 14px;
+    gap: 10px;
+  }
+
+  .profile-strip h2 {
+    margin: 0;
+    font-size: var(--text-lg);
+    line-height: 1.3;
+  }
+
+  .profile-strip p {
+    margin: 2px 0 0;
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
   }
 
   .login-form {
@@ -1796,7 +1848,36 @@ a.status-badge {
     display: none;
   }
 
+  /* Thai has no inter-word spaces, so a long breadcrumb label is a single
+     unbreakable run that stretches the page container past the viewport
+     (43px on the deposit notice). Let the labels wrap instead. */
+  .breadcrumbs,
+  .breadcrumbs li,
+  .breadcrumbs li > span,
+  .breadcrumbs button {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  /* These legacy classes bypass the shared Button component, so the 44px
+     mobile floor added there never reached them — including the approve
+     button on the price-approval screen. */
+  .primary-button,
+  .secondary-button,
+  .danger-button {
+    min-height: 44px;
+  }
+
+  /* Status filter chips are a primary mobile interaction (they filter the
+     work queue), but padding alone leaves them 28px tall — well under the
+     touch floor. Desktop keeps its denser 28px chip. */
+  .status-tab {
+    min-height: 44px;
+    padding: 5px 16px;
+  }
+
   .topbar {
+    gap: 10px;
     padding: 0 16px;
   }
 
@@ -1804,8 +1885,18 @@ a.status-badge {
     display: none;
   }
 
+  /* The drawer's account row already shows who is signed in, so the topbar
+     avatar is redundant here and costs ~48px on a 320px-wide header. */
+  .topbar-user .avatar {
+    display: none;
+  }
+
+  .topbar-user {
+    gap: 4px;
+  }
+
   .content-scroll {
-    padding: 20px 16px 32px;
+    padding: 16px 16px 32px;
   }
 
   .page-heading,
@@ -1813,10 +1904,6 @@ a.status-badge {
   .pagination {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .attendance-import-panel .success-button {
-    width: 100%;
   }
 
   .attendance-import-panel {
@@ -1828,11 +1915,6 @@ a.status-badge {
   .app-main {
     width: 100%;
     min-width: 0;
-  }
-
-  .icon-button.mobile-nav-toggle {
-    display: inline-flex;
-    flex: 0 0 44px;
   }
 
   .mobile-drawer-backdrop {
@@ -1860,7 +1942,8 @@ a.status-badge {
     inset: 0 auto 0 0;
     z-index: 40;
     display: flex;
-    width: min(300px, calc(100vw - 56px));
+    /* 280px at a 320px viewport, 300px everywhere above it. */
+    width: min(300px, calc(100vw - 40px));
     max-width: 100%;
     flex-basis: auto;
     overflow-y: auto;
@@ -1878,25 +1961,20 @@ a.status-badge {
     transition: transform 180ms ease;
   }
 
-  /* The 1040px icon-rail rule hides these labels for the collapsed desktop
-     sidebar; that rule still matches here too (375px <= 1040px), so undo it
-     inside the full-width drawer where there is room for text. */
-  .brand span:not(.brand-mark),
-  .nav-item span,
-  .sidebar-account span {
-    display: revert;
-  }
-
   /* --- HR-core list card fallback (branch 2) ---
      Below 720px the six HR-core grid tables become stacked label→value cards
      instead of a 900px horizontal-scroll trap. Sales-stack tables
-     (.user-table / .commission-table / .commission-payroll-table) are
+     (.commission-table / .commission-payroll-table) are
      intentionally excluded — they keep scrolling horizontally. */
   .request-table,
   .payroll-table,
   .reflow-cards {
-    /* Override the 1040px min-width:900px scroll trap for these classes. */
-    min-width: 0;
+    /* Override the 1040px min-width:900px scroll trap for these classes.
+       !important is required: styles.css now loads into @layer legacy,
+       which is ordered before @layer utilities, so a Tailwind
+       `min-w-[900px]` utility on the same element would otherwise win by
+       layer order regardless of this rule's higher selector specificity. */
+    min-width: 0 !important;
   }
 
   /* Each cell now carries its own label, so hide the shared header row. */
@@ -1907,30 +1985,33 @@ a.status-badge {
   }
 
   /* Turn every data row into a full-width card. */
-  .request-table.table-row,
-  .payroll-table.table-row,
-  .reflow-cards.table-row {
+  .request-table.data-row,
+  .payroll-table.data-row,
+  .reflow-cards.data-row {
     display: grid;
-    grid-template-columns: 1fr;
+    /* !important: overrides a Tailwind `grid-cols-[...]` arbitrary utility
+       carried by the same element for the desktop column layout; see note
+       above on the min-width override in this same media block. */
+    grid-template-columns: 1fr !important;
     gap: 8px;
     width: 100%;
-    min-width: 0;
+    min-width: 0 !important;
     padding: 14px 16px;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md, 12px);
     background: var(--color-surface);
   }
 
-  .request-table.table-row + .table-row,
-  .payroll-table.table-row + .table-row,
-  .reflow-cards.table-row + .table-row {
+  .request-table.data-row + .data-row,
+  .payroll-table.data-row + .data-row,
+  .reflow-cards.data-row + .data-row {
     margin-top: 10px;
   }
 
   /* Each cell on its own line. */
-  .request-table.table-row > span,
-  .payroll-table.table-row > span,
-  .reflow-cards.table-row > span {
+  .request-table.data-row > span,
+  .payroll-table.data-row > span,
+  .reflow-cards.data-row > span {
     display: block;
     width: 100%;
     min-width: 0;
@@ -1938,9 +2019,9 @@ a.status-badge {
 
   /* Show the column name as a small muted label above the value.
      Only cells that carry a non-empty data-label get a label. */
-  .request-table.table-row > span[data-label]:not([data-label=""])::before,
-  .payroll-table.table-row > span[data-label]:not([data-label=""])::before,
-  .reflow-cards.table-row > span[data-label]:not([data-label=""])::before {
+  .request-table.data-row > span[data-label]:not([data-label=""])::before,
+  .payroll-table.data-row > span[data-label]:not([data-label=""])::before,
+  .reflow-cards.data-row > span[data-label]:not([data-label=""])::before {
     content: attr(data-label);
     display: block;
     margin-bottom: 2px;
@@ -1952,11 +2033,74 @@ a.status-badge {
   }
 
   /* Keep the action cell's buttons laid out in a row within its card line. */
-  .request-table.table-row > .row-actions,
-  .payroll-table.table-row > .row-actions,
-  .reflow-cards.table-row > .row-actions {
+  .request-table.data-row > .row-actions,
+  .payroll-table.data-row > .row-actions,
+  .reflow-cards.data-row > .row-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+  }
+
+  /* --- Ticket items table (Step 12 backlog item C) ---
+     TicketDetailPage's items table is hand-rolled (not the shared DataTable),
+     so its cells mix <span>/<div>/<code> instead of DataTable's span-only
+     cells — it can't just join the `.reflow-cards` group above, whose
+     `> span` selectors would skip the price <code>/<div> cells. Below 720px
+     it gets the same stacked label→value card treatment, targeting `> *`
+     instead. Was truncating to "3…"/"21…" at 375px (verified in-browser). */
+  .ticket-items-table.table-head {
+    display: none;
+  }
+
+  /* !important is unavoidable here, and for a different reason than the
+     reflow-cards rules above: TicketDetailPage sets the desktop track list as
+     an INLINE style (style={{ gridTemplateColumns: itemsGridCols }}), and an
+     inline style beats every stylesheet rule that is not !important —
+     specificity and cascade layers cannot reach it. */
+  .ticket-items-table.data-row {
+    display: grid;
+    grid-template-columns: 1fr !important;
+    gap: 6px;
+    width: 100%;
+    min-width: 0 !important;
+    padding: 14px 16px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md, 12px);
+    background: var(--color-surface);
+  }
+
+  .ticket-items-table.data-row + .data-row {
+    margin-top: 10px;
+  }
+
+  .ticket-items-table.data-row > * {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    overflow: visible;
+    white-space: normal;
+    text-overflow: clip;
+  }
+
+  .ticket-items-table.data-row > [data-label]:not([data-label=""])::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+  }
+}
+
+/* The drawer slide and its backdrop fade convey open/closed state, so they
+   resolve instantly rather than disappearing — the drawer still opens, it just
+   does not travel. */
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .sidebar.is-mobile-drawer-open,
+  .mobile-drawer-backdrop {
+    transition: none;
   }
 }

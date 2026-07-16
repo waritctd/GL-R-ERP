@@ -147,7 +147,8 @@ public class TicketController {
         @Valid @RequestBody SendFactoryEmailRequest request,
         HttpSession session
     ) {
-        sessions.requireUser(session);
+        UserPrincipal user = sessions.requireUser(session);
+        ticketService.assertFactoryEmailAllowed(id, user);
         factoryEmail.send(id, request.factory(), request.to(), request.subject(), request.body());
         return Map.of("status", "sent");
     }
@@ -196,12 +197,6 @@ public class TicketController {
     TicketDetailResponse confirmCustomer(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new TicketDetailResponse(ticketService.confirmCustomer(id, user));
-    }
-
-    @PostMapping("/{id}/deposit-notice")
-    TicketDetailResponse issueDepositNotice(@PathVariable long id, HttpSession session) {
-        UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.issueDepositNotice(id, user));
     }
 
     @PostMapping("/{id}/deposit-paid")

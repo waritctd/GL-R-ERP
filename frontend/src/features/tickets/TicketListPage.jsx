@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -8,21 +10,17 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
 
-const TONE_BORDER = {
-  neutral: '#94a3b8',
-  warning: '#f59e0b',
-  info:    '#3b82f6',
-  success: '#22c55e',
-  danger:  '#ef4444',
-};
-
+// Mirrors the StatusBadge tone palette (see src/styles.css .status-* rules) so the
+// filter-tab accent never drifts from the shared status-color tokens. The three
+// `border` accents (f59e0b/3b82f6/ef4444) are dot-accent colors with no existing
+// design token equivalent — left as literals deliberately (see handoff notes).
 const TONE_ACTIVE = {
-  primary: { bg: '#1e40af', color: '#fff',    border: '#1e40af' },
-  neutral: { bg: '#f1f5f9', color: '#475569', border: '#94a3b8' },
-  warning: { bg: '#fef3c7', color: '#b45309', border: '#f59e0b' },
-  info:    { bg: '#dbeafe', color: '#1d4ed8', border: '#3b82f6' },
-  success: { bg: '#dcfce7', color: '#15803d', border: '#22c55e' },
-  danger:  { bg: '#fee2e2', color: '#b91c1c', border: '#ef4444' },
+  primary: { bg: 'var(--color-info-dot)', color: 'var(--color-surface)', border: 'var(--color-info-dot)' },
+  neutral: { bg: 'var(--color-surface-subtle)', color: 'var(--color-icon-muted)', border: 'var(--color-text-faint)' },
+  warning: { bg: 'var(--color-warning-bg)', color: 'var(--color-warning)', border: '#f59e0b' },
+  info:    { bg: 'var(--color-info-bg)', color: 'var(--color-info)', border: '#3b82f6' },
+  success: { bg: 'var(--color-success-bg)', color: 'var(--color-success-dark)', border: 'var(--color-success-soft)' },
+  danger:  { bg: 'var(--color-danger-bg)', color: 'var(--color-danger-dark)', border: '#ef4444' },
 };
 
 const STATUS_TABS = [
@@ -34,6 +32,7 @@ const STATUS_TABS = [
   { value: 'quotation_issued', label: 'ออกใบเสนอราคาแล้ว',   tone: 'success' },
   { value: 'document_issued',  label: 'ออกใบแจ้งยอดแล้ว',    tone: 'success' },
   { value: 'closed',           label: 'ปิดแล้ว',              tone: 'neutral' },
+  { value: 'cancelled',        label: 'ยกเลิกแล้ว',           tone: 'danger'  },
 ];
 
 const STATUS_ORDER = [
@@ -42,37 +41,102 @@ const STATUS_ORDER = [
 ];
 
 
+/**
+ * Mobile record card for a price request. The desktop grid crushes five columns
+ * into ~34–90px each at 375px, which truncates every field to a stub ("PR-…",
+ * "คุณส…") and clips the status badge. This shows only what a user needs to
+ * identify the record and decide the next step: code, customer, status, owner,
+ * and date. Full detail stays one tap away on the detail page.
+ */
+function TicketCard({ ticket }) {
+  const status = ticketStatusLabel(ticket.status);
+  const subLabel = ticket.status === 'quotation_issued'
+    ? TRACK_LABEL[ticket.paymentStatus] ?? TRACK_LABEL[ticket.fulfillmentStatus] ?? null
+    : null;
+
+  return (
+    <>
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <code className="min-w-0 truncate text-xs text-text-muted">{ticket.code}</code>
+        <span className="flex shrink-0 flex-col items-end gap-1">
+          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+          {subLabel ? <span className="text-2xs text-text-muted">{subLabel}</span> : null}
+        </span>
+      </div>
+
+      <strong className="min-w-0 text-md leading-snug font-extrabold text-text">
+        {ticket.customerName || ticket.title}
+      </strong>
+
+      <span className="min-w-0 truncate text-xs text-text-muted">
+        {[ticket.createdByName, formatThaiDate(ticket.createdAt)].filter(Boolean).join(' · ')}
+      </span>
+    </>
+  );
+}
+
 export function TicketListPage({ user, showToast }) {
   const navigate = useNavigate();
-  const [tickets, setTickets] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState('');
+  const queryClient = useQueryClient();
+  // Status filter + search text live in the URL (not local state) so that:
+  // (a) a dashboard queue card can land here pre-filtered via ?status=..., and
+  // (b) list → detail → back preserves whatever filter/search was active,
+  // instead of resetting to "ทั้งหมด" every time (previously statusFilter was
+  // plain useState, so onBack navigating to a bare '/tickets' lost it).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const statusFilter = searchParams.get('status') ?? '';
+  const searchText = searchParams.get('q') ?? '';
   const [creating, setCreating] = useState(false);
 
   const canCreate = ROLE_PERMISSIONS.canCreateTickets.includes(user.role);
 
-  async function loadTickets(status = statusFilter) {
-    setLoading(true);
-    try {
-      const params = status ? { status } : {};
-      const response = await api.tickets.list(params);
-      setTickets(response.tickets);
-    } catch (error) {
-      showToast('error', error.message || 'โหลดข้อมูลไม่สำเร็จ');
-    } finally {
-      setLoading(false);
-    }
+  const ticketsQuery = useQuery({
+    queryKey: queryKeys.ticketList(statusFilter),
+    queryFn: () => api.tickets.list(statusFilter ? { status: statusFilter } : {}).then((response) => response.tickets || []),
+  });
+  const tickets = ticketsQuery.data ?? [];
+  const loading = ticketsQuery.isLoading || ticketsQuery.isFetching;
+
+  // Preserve the original error-toast behavior of the imperative loader.
+  useEffect(() => {
+    if (ticketsQuery.error) showToast('error', ticketsQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
+  }, [ticketsQuery.error, showToast]);
+
+  function invalidateTicketsList() {
+    return queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
   }
 
-  useEffect(() => {
-    loadTickets(statusFilter);
-  }, [statusFilter]);
+  function updateParam(key, value) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set(key, value); else next.delete(key);
+      return next;
+    }, { replace: true });
+  }
+
+  function setStatusFilter(value) {
+    updateParam('status', value);
+  }
+
+  function setSearchText(value) {
+    updateParam('q', value);
+  }
+
+  // No onError toast here: the original imperative handler let a create
+  // failure propagate uncaught to TicketCreateModal's own try/catch, which
+  // shows an inline modal error instead of a toast. mutateAsync preserves
+  // that same propagation.
+  const createMutation = useMutation({
+    mutationFn: (payload) => api.tickets.create(payload),
+    onSuccess: () => {
+      setCreating(false);
+      showToast('success', 'สร้างใบขอราคาเรียบร้อย');
+      invalidateTicketsList();
+    },
+  });
 
   async function handleCreate(payload) {
-    await api.tickets.create(payload);
-    setCreating(false);
-    showToast('success', 'สร้างใบขอราคาเรียบร้อย');
-    loadTickets(statusFilter);
+    await createMutation.mutateAsync(payload);
   }
 
   return (
@@ -111,7 +175,7 @@ export function TicketListPage({ user, showToast }) {
             </button>
           );
         })}
-        <button type="button" className="icon-button" onClick={() => loadTickets(statusFilter)} title="รีเฟรช" aria-label="รีเฟรช">
+        <button type="button" className="icon-button" onClick={invalidateTicketsList} title="รีเฟรช" aria-label="รีเฟรช">
           <Icon name="refresh" />
         </button>
       </div>
@@ -122,10 +186,10 @@ export function TicketListPage({ user, showToast }) {
         getRowKey={(ticket) => ticket.id}
         gridClassName="ticket-table"
         onRowClick={(ticket) => navigate(`/tickets/${ticket.id}`)}
-        rowStyle={(ticket) => ({
-          borderLeft: `4px solid ${TONE_BORDER[ticketStatusLabel(ticket.status).tone] ?? '#94a3b8'}`,
-        })}
+        mobileCard={(ticket) => <TicketCard ticket={ticket} />}
         searchable
+        searchValue={searchText}
+        onSearchChange={setSearchText}
         searchPlaceholder="ค้นหาเลขที่ / บริษัท / ผู้ดูแล"
         initialSort={{ key: 'date', dir: 'desc' }}
         loading={loading}
@@ -157,16 +221,19 @@ const TRACK_LABEL = {
 
 const TICKET_COLUMNS = [
   {
-    key: 'code',
-    header: 'เลขที่',
-    searchAccessor: (ticket) => ticket.code || '',
-    render: (ticket) => <code style={{ fontSize: 12 }}>{ticket.code}</code>,
-  },
-  {
     key: 'customer',
     header: 'บริษัท / โครงการ',
-    searchAccessor: (ticket) => ticket.customerName || ticket.title || '',
-    render: (ticket) => <span><strong>{ticket.customerName || ticket.title}</strong></span>,
+    searchAccessor: (ticket) => [ticket.code, ticket.customerName, ticket.title].filter(Boolean).join(' '),
+    // Primary entity (company/project) leads, bold and full-size; the request
+    // code is secondary metadata underneath in muted mono — matches the
+    // mobile card's hierarchy (code above title there; company is still the
+    // thing a desktop user scans for first in a wide row).
+    render: (ticket) => (
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <strong className="block truncate text-text">{ticket.customerName || ticket.title}</strong>
+        <code className="block truncate text-2xs text-text-muted">{ticket.code}</code>
+      </span>
+    ),
   },
   {
     key: 'createdByName',
