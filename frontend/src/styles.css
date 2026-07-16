@@ -1403,11 +1403,15 @@ a.status-badge {
   place-items: center;
   align-content: center;
   gap: 8px;
+  /* Icon-only faint color at the container level (DESIGN.md: Ink Faint is for
+     icons/placeholders only). Title and description text below are pinned to
+     Ink Muted so they clear the DESIGN.md text-contrast floor. */
   color: var(--color-text-faint);
   text-align: center;
 }
 
-.empty-state strong {
+.empty-state strong,
+.empty-state span {
   color: var(--color-text-muted);
 }
 
@@ -1906,6 +1910,17 @@ a.status-badge {
 
   .sidebar {
     display: none;
+  }
+
+  /* These legacy classes bypass the shared Button component, so the 44px
+     mobile floor added there never reached them — including the approve
+     button on the price-approval screen. .text-button is excluded: it is a
+     borderless inline link, same reasoning as Button's text variant. */
+  .primary-button,
+  .secondary-button,
+  .success-button,
+  .danger-button {
+    min-height: 44px;
   }
 
   /* Status filter chips are a primary mobile interaction (they filter the
