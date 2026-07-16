@@ -305,7 +305,7 @@ textarea:focus {
 .topbar-user span,
 .sidebar-account small,
 .request-feed small,
-.table-row small {
+.data-row small {
   display: block;
   color: var(--color-text-faint);
   font-size: var(--text-xs);
@@ -810,7 +810,7 @@ textarea:focus {
 }
 
 .table-head,
-.table-row {
+.data-row {
   display: grid;
   gap: 12px;
   align-items: center;
@@ -818,27 +818,27 @@ textarea:focus {
 }
 
 .table-head > *,
-.table-row > * {
+.data-row > * {
   min-width: 0;
   overflow: hidden;
 }
 
-.table-row > span,
-.table-row > code {
+.data-row > span,
+.data-row > code {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.table-row > span > strong,
-.table-row > span > small,
-.table-row > span > span {
+.data-row > span > strong,
+.data-row > span > small,
+.data-row > span > span {
   display: block;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.table-row > .status-badge {
+.data-row > .status-badge {
   display: flex;
   width: auto;
   max-width: 100%;
@@ -861,7 +861,7 @@ textarea:focus {
   z-index: 2;
 }
 
-.table-row {
+.data-row {
   border: 0;
   border-bottom: 1px solid var(--color-surface-subtle);
   background: var(--color-surface);
@@ -870,7 +870,7 @@ textarea:focus {
   text-align: left;
 }
 
-.table-row:hover {
+.data-row:hover {
   background: var(--color-surface-hover);
 }
 
@@ -1082,7 +1082,7 @@ textarea:focus {
   border-bottom: 1px solid var(--color-surface-subtle);
 }
 
-.commission-row-wrap .table-row {
+.commission-row-wrap .data-row {
   border-bottom: 0;
 }
 
@@ -1169,7 +1169,7 @@ textarea:focus {
 }
 
 .employee-cell strong,
-.table-row strong,
+.data-row strong,
 .topbar-user strong {
   color: var(--color-text);
 }
@@ -2010,8 +2010,12 @@ a.status-badge {
   .request-table,
   .payroll-table,
   .reflow-cards {
-    /* Override the 1040px min-width:900px scroll trap for these classes. */
-    min-width: 0;
+    /* Override the 1040px min-width:900px scroll trap for these classes.
+       !important is required: styles.css now loads into @layer legacy,
+       which is ordered before @layer utilities, so a Tailwind
+       `min-w-[900px]` utility on the same element would otherwise win by
+       layer order regardless of this rule's higher selector specificity. */
+    min-width: 0 !important;
   }
 
   /* Each cell now carries its own label, so hide the shared header row. */
@@ -2022,30 +2026,33 @@ a.status-badge {
   }
 
   /* Turn every data row into a full-width card. */
-  .request-table.table-row,
-  .payroll-table.table-row,
-  .reflow-cards.table-row {
+  .request-table.data-row,
+  .payroll-table.data-row,
+  .reflow-cards.data-row {
     display: grid;
-    grid-template-columns: 1fr;
+    /* !important: overrides a Tailwind `grid-cols-[...]` arbitrary utility
+       carried by the same element for the desktop column layout; see note
+       above on the min-width override in this same media block. */
+    grid-template-columns: 1fr !important;
     gap: 8px;
     width: 100%;
-    min-width: 0;
+    min-width: 0 !important;
     padding: 14px 16px;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md, 12px);
     background: var(--color-surface);
   }
 
-  .request-table.table-row + .table-row,
-  .payroll-table.table-row + .table-row,
-  .reflow-cards.table-row + .table-row {
+  .request-table.data-row + .data-row,
+  .payroll-table.data-row + .data-row,
+  .reflow-cards.data-row + .data-row {
     margin-top: 10px;
   }
 
   /* Each cell on its own line. */
-  .request-table.table-row > span,
-  .payroll-table.table-row > span,
-  .reflow-cards.table-row > span {
+  .request-table.data-row > span,
+  .payroll-table.data-row > span,
+  .reflow-cards.data-row > span {
     display: block;
     width: 100%;
     min-width: 0;
@@ -2053,9 +2060,9 @@ a.status-badge {
 
   /* Show the column name as a small muted label above the value.
      Only cells that carry a non-empty data-label get a label. */
-  .request-table.table-row > span[data-label]:not([data-label=""])::before,
-  .payroll-table.table-row > span[data-label]:not([data-label=""])::before,
-  .reflow-cards.table-row > span[data-label]:not([data-label=""])::before {
+  .request-table.data-row > span[data-label]:not([data-label=""])::before,
+  .payroll-table.data-row > span[data-label]:not([data-label=""])::before,
+  .reflow-cards.data-row > span[data-label]:not([data-label=""])::before {
     content: attr(data-label);
     display: block;
     margin-bottom: 2px;
@@ -2067,9 +2074,9 @@ a.status-badge {
   }
 
   /* Keep the action cell's buttons laid out in a row within its card line. */
-  .request-table.table-row > .row-actions,
-  .payroll-table.table-row > .row-actions,
-  .reflow-cards.table-row > .row-actions {
+  .request-table.data-row > .row-actions,
+  .payroll-table.data-row > .row-actions,
+  .reflow-cards.data-row > .row-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;

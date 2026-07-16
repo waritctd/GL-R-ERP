@@ -1042,7 +1042,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                           const currLabel = selectedCurr.currency ?? 'THB';
                           const unitLabel = selectedCurr.unit === 'sqm' ? 'ตร.ม.' : selectedCurr.unit === 'box' ? 'กล่อง' : 'แผ่น';
                           return (
-                            <div key={item.id ?? i} className="ticket-items-table table-row" style={{ gridTemplateColumns: itemsGridCols }}>
+                            <div key={item.id ?? i} className="ticket-items-table data-row" style={{ gridTemplateColumns: itemsGridCols }}>
                               <span>
                                 <strong>{item.brand}</strong>
                                 {item.model && <small style={{ color: '#64748b' }}>{item.model}</small>}
@@ -1075,7 +1075,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                     );
                   })
                 ) : items.map((item, i) => (
-                  <div key={item.id ?? i} className="ticket-items-table table-row" style={{ gridTemplateColumns: itemsGridCols }}>
+                  <div key={item.id ?? i} className="ticket-items-table data-row" style={{ gridTemplateColumns: itemsGridCols }}>
                     <span>
                       <strong>{item.brand}</strong>
                       {item.model && <small style={{ color: '#64748b' }}>{item.model}</small>}
@@ -1235,9 +1235,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   <input
                     id="ticket-attachment-file"
                     type="file"
-                    // See FileUploadField: unlayered global `input` rules beat
-                    // sr-only's geometry, leaving a full-width box past the viewport.
-                    className="sr-only !h-px !min-h-0 !w-px !border-0 !p-0"
+                    // See FileUploadField: styles.css now loads into @layer legacy
+                    // (before Tailwind's utilities layer), so these utilities win
+                    // over the legacy global `input` rules without `!` overrides.
+                    className="sr-only h-px min-h-0 w-px border-0 p-0"
                     onChange={handleUploadAttachment}
                     accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
                   />

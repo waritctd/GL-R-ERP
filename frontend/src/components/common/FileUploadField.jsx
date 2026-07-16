@@ -59,22 +59,21 @@ export const FileUploadField = forwardRef(function FileUploadField(
         type="file"
         disabled={disabled}
         onChange={handleChange}
-        // The `!` overrides matter: the legacy global stylesheet sets unlayered
-        // `input { width/height/padding/border }` rules, and unlayered CSS beats
-        // Tailwind's layered utilities. Without them sr-only still clips the
-        // input visually but leaves a full-width 40px box that spills past the
-        // viewport. Keep sr-only itself so the input stays keyboard-focusable.
-        className="sr-only !h-px !min-h-0 !w-px !border-0 !p-0"
+        // styles.css now loads into @layer legacy, ordered before Tailwind's
+        // utilities layer (see src/index.css), so these utilities win over the
+        // legacy global `input { width/height/padding/border }` rules without
+        // needing `!` overrides. Keep sr-only itself so the input stays
+        // keyboard-focusable.
+        className="sr-only h-px min-h-0 w-px border-0 p-0"
       />
       <label
         htmlFor={inputId}
         className={cn(
-          // `!` overrides are required here: the app's legacy global stylesheet
-          // (src/styles.css) sets an unlayered `label { display: grid; gap: 7px }`
-          // rule that otherwise wins over Tailwind's layered utilities regardless
-          // of specificity (Tailwind utilities live in `@layer utilities`, and
-          // unlayered CSS always beats layered CSS in the cascade).
-          '!flex min-h-11 w-full !items-center !gap-3 rounded-md border-[1.5px] border-dashed border-border-input bg-surface px-3 py-2.5 cursor-pointer transition-colors',
+          // styles.css loads into @layer legacy (before Tailwind's utilities
+          // layer, see src/index.css), so these utilities correctly win over
+          // the legacy global `label { display: grid; gap: 7px }` rule without
+          // needing `!` overrides.
+          'flex min-h-11 w-full items-center gap-3 rounded-md border-[1.5px] border-dashed border-border-input bg-surface px-3 py-2.5 cursor-pointer transition-colors',
           'hover:border-primary-hover focus-within:border-primary-hover',
           disabled && 'pointer-events-none opacity-55',
         )}
