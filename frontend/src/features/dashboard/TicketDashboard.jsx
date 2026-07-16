@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Skeleton, SkeletonCard } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
@@ -48,35 +50,43 @@ function RecentTicketCard({ ticket, showOwner }) {
 export function TicketDashboard({ user, employee, showToast }) {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
-  const [summary, setSummary] = useState(null);
+
+  const summaryQuery = useQuery({
+    queryKey: queryKeys.dashboardSummary(),
+    queryFn: () => api.dashboard.summary(),
+  });
+  // Shares the SAME cache entry as TicketListPage's "ทั้งหมด" tab
+  // (queryKeys.tickets.list('')) — a mutation invalidating ['tickets','list']
+  // anywhere in the app refreshes this recent-tickets strip too, instead of
+  // the dashboard only ever refreshing on mount like before.
+  const recentQuery = useQuery({
+    queryKey: queryKeys.tickets.list(''),
+    queryFn: () => api.tickets.list({}),
+  });
+
+  const summaryPayload = summaryQuery.data;
+  const nextSummary = useMemo(
+    () => summaryPayload?.summary ?? summaryPayload ?? null,
+    [summaryPayload],
+  );
+  const summary = nextSummary?.tickets ?? nextSummary;
   // Same api.dashboard.summary() call as `summary` (no extra request) — just
   // keeping the notifications slice it already returns instead of discarding it,
   // so the needs-action queue below can show unread count honestly.
-  const [notifications, setNotifications] = useState(null);
-  const [recent, setRecent] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const notifications = nextSummary?.notifications ?? null;
+
+  const ticketsRes = recentQuery.data;
+  const recent = useMemo(() => {
+    const tickets = Array.isArray(ticketsRes) ? ticketsRes : (ticketsRes?.tickets ?? []);
+    return tickets.slice(0, 6);
+  }, [ticketsRes]);
+
+  const loading = summaryQuery.isLoading || recentQuery.isLoading;
 
   useEffect(() => {
-    async function load() {
-      setLoading(true);
-      try {
-        const [summaryRes, ticketsRes] = await Promise.all([
-          api.dashboard.summary(),
-          api.tickets.list({}),
-        ]);
-        const nextSummary = summaryRes?.summary ?? summaryRes ?? null;
-        setSummary(nextSummary?.tickets ?? nextSummary);
-        setNotifications(nextSummary?.notifications ?? null);
-        const tickets = Array.isArray(ticketsRes) ? ticketsRes : (ticketsRes?.tickets ?? []);
-        setRecent(tickets.slice(0, 6));
-      } catch (err) {
-        showToast('error', err.message || 'โหลดข้อมูลไม่สำเร็จ');
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, []);
+    const error = summaryQuery.error || recentQuery.error;
+    if (error) showToast('error', error.message || 'โหลดข้อมูลไม่สำเร็จ');
+  }, [summaryQuery.error, recentQuery.error, showToast]);
 
   const greeting = `สวัสดี, ${employee?.nickName || employee?.nameTh || user.name}`;
 
