@@ -305,6 +305,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     mutationFn: (id) => api.leave.approve(id, {}).then((response) => response.request),
     onSuccess: () => {
       showToast('success', 'อนุมัติวันลาแล้ว');
+      setConfirmState(null);
       invalidateLeave();
     },
     onError: (error) => showToast('error', error.message || 'อนุมัติวันลาไม่สำเร็จ'),
@@ -366,8 +367,15 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     });
   }
 
+  // Approve now goes through a confirmation step (matches the reference
+  // CommissionPage/TicketDetailPage pattern) instead of firing immediately,
+  // so the reviewer sees what they're approving before committing to it.
   function approve(id) {
-    approveMutation.mutate(id);
+    setConfirmState({ kind: 'approve', id });
+  }
+
+  function confirmApprove() {
+    approveMutation.mutate(confirmState.id);
   }
 
   function reject(id) {
@@ -618,30 +626,59 @@ export function LeavePage({ user, currentEmployee, showToast }) {
           const managerCancellable = canManagerCancel(request);
           return (
             <div className={`${LEAVE_TABLE_GRID} data-row`} key={request.id}>
-              <span data-label="ช่วงลา / พนักงาน">
+              {/* Mobile order (step 8 rule 7 — summary -> actions -> details): this
+                  span is the summary (who/when) and stays first on every viewport. */}
+              <span data-label="ช่วงลา / พนักงาน" className="max-[720px]:order-1">
                 <strong>{formatDateRange(request.startDate, request.endDate)}</strong>
                 <small>{request.employeeName || request.employeeCode || request.employeeId}</small>
               </span>
-              <span data-label="ประเภท / จำนวนวัน">
+              <span data-label="ประเภท / จำนวนวัน" className="max-[720px]:order-4">
                 <strong>{request.leaveTypeNameTh || request.leaveTypeCode}</strong>
-                <small>{formatDays(request.totalDays)} · เหลือ {formatDays(request.quotaRemainingAfter)}</small>
+                {/* formatDays figures get mono digits so multi-day counts line up
+                    when scanning several cards, per step 9 rule 5. */}
+                <small><span className="font-mono">{formatDays(request.totalDays)}</span> · เหลือ <span className="font-mono">{formatDays(request.quotaRemainingAfter)}</span></small>
               </span>
-              <span data-label="เหตุผล / เอกสาร">
+              <span data-label="เหตุผล / เอกสาร" className="max-[720px]:order-5">
                 <strong>{request.reason}</strong>
                 <small>{request.attachmentFileName || '-'}</small>
               </span>
-              <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-              <span data-label="อนุมัติ / หมายเหตุ">
+              {/* Wrapped in a labelled span (was a bare StatusBadge) so mobile gets
+                  a "สถานะ" label like every other cell, and so it can join the
+                  summary block via the order utility below. */}
+              <span data-label="สถานะ" className="max-[720px]:order-2">
+                <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+              </span>
+              <span data-label="อนุมัติ / หมายเหตุ" className="max-[720px]:order-6">
                 <strong>{request.reviewedByName || '-'}</strong>
                 <small>{request.reviewerNote || request.systemNote || formatDateTime(request.requestedAt)}</small>
               </span>
-              <span className="row-actions">
+              {/* Approve/reject visually differentiated per DESIGN.md (danger stays
+                  outlined, not filled) and step 9 rule 2 — mirrors the exact
+                  success/danger icon-button tinting CommissionPage uses for its
+                  manager/CEO review actions. */}
+              <span className="row-actions max-[720px]:order-3">
                 {reviewable ? (
                   <>
-                    <Button type="button" variant="icon" title="อนุมัติ" aria-label="อนุมัติ" disabled={saving} onClick={() => approve(request.id)}>
+                    <Button
+                      type="button"
+                      variant="icon"
+                      title="อนุมัติ"
+                      aria-label="อนุมัติ"
+                      disabled={saving}
+                      style={{ color: 'var(--color-success)', borderColor: 'var(--color-success)' }}
+                      onClick={() => approve(request.id)}
+                    >
                       <Icon name="check" size={14} />
                     </Button>
-                    <Button type="button" variant="icon" title="ปฏิเสธ" aria-label="ปฏิเสธ" disabled={saving} onClick={() => reject(request.id)}>
+                    <Button
+                      type="button"
+                      variant="icon"
+                      title="ปฏิเสธ"
+                      aria-label="ปฏิเสธ"
+                      disabled={saving}
+                      style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger)' }}
+                      onClick={() => reject(request.id)}
+                    >
                       <Icon name="close" size={14} />
                     </Button>
                   </>
@@ -658,9 +695,41 @@ export function LeavePage({ user, currentEmployee, showToast }) {
       </section>
 
       <ConfirmDialog
+        open={confirmState?.kind === 'approve'}
+        title="ยืนยันการอนุมัติวันลา"
+        message={(() => {
+          const request = requests.find((item) => item.id === confirmState?.id);
+          if (!request) return 'ยืนยันการอนุมัติคำขอลานี้?';
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <p className="confirm-dialog-message" style={{ margin: 0 }}>
+                ตรวจสอบคำขอลาของ <strong>{request.employeeName || request.employeeCode || request.employeeId}</strong> ก่อนอนุมัติ
+              </p>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid var(--color-border)', paddingTop: 8 }}>
+                <span style={{ color: 'var(--color-icon-muted)' }}>ประเภท / ช่วงวันที่</span>
+                <span>{request.leaveTypeNameTh || request.leaveTypeCode} · {formatDateRange(request.startDate, request.endDate)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700 }}>
+                <span>จำนวนวันลา</span>
+                <span className="font-mono">{formatDays(request.totalDays)}</span>
+              </div>
+              {/* Next-step copy quoted from api.leave.approve (src/api/mockApi.js
+                  ~L1536-1550): it only sets status -> APPROVED plus the reviewer
+                  stamp — it does not recompute quotaRemainingAfter, which was
+                  already fixed at create() time. */}
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--color-icon-muted)' }}>{'สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว"'}</p>
+            </div>
+          );
+        })()}
+        confirmLabel="อนุมัติ"
+        busy={saving}
+        onConfirm={confirmApprove}
+        onCancel={() => setConfirmState(null)}
+      />
+      <ConfirmDialog
         open={confirmState?.kind === 'reject'}
         title="ปฏิเสธคำขอลา"
-        message="ยืนยันการปฏิเสธคำขอลานี้?"
+        message='ยืนยันการปฏิเสธคำขอลานี้? สถานะจะเปลี่ยนเป็น "ปฏิเสธแล้ว" และไม่สามารถอนุมัติย้อนหลังได้'
         confirmLabel="ปฏิเสธคำขอ"
         tone="danger"
         busy={saving}
@@ -672,7 +741,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
       <ConfirmDialog
         open={confirmState?.kind === 'cancel'}
         title="ยกเลิกคำขอลา"
-        message="ยืนยันการยกเลิกคำขอลานี้?"
+        message='ยืนยันการยกเลิกคำขอลานี้? สถานะจะเปลี่ยนเป็น "ยกเลิกแล้ว" ถาวร'
         confirmLabel="ยกเลิกคำขอ"
         tone="danger"
         busy={saving}
