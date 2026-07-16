@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
@@ -9,6 +10,20 @@ import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { ProductFormModal } from './ProductFormModal.jsx';
+
+// ── StepLabel ─────────────────────────────────────────────────────────────────
+// This upload flow is a genuine ordered sequence (select factory → upload →
+// commit — there is no separate preview/validate step, see handleUpload),
+// which is exactly the case where a step number carries real information
+// rather than acting as decoration. Kept to plain bold/muted text, no
+// circles or color blocks, per DESIGN.md's overline treatment.
+function StepLabel({ n, children }) {
+  return (
+    <p className="mb-1.5 text-xs font-bold text-text-muted">
+      ขั้นตอนที่ {n} · {children}
+    </p>
+  );
+}
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -201,6 +216,7 @@ function ProductCard({ product, onEdit, onDelete }) {
         </span>
         <div className="flex gap-1">
           <Button size="sm" variant="secondary" onClick={() => onEdit(product)}>
+            <Icon name="pencil" size={14} />
             แก้ไข
           </Button>
           <Button size="sm" variant="danger" onClick={() => onDelete(product)}>
@@ -261,6 +277,7 @@ export function PriceImportPage({ showToast }) {
 
   const [showFactoryModal, setShowFactoryModal] = useState(false);
   const [editingProduct, setEditingProduct]     = useState(null);
+  const [confirmUpload, setConfirmUpload]       = useState(false);
 
   const fileRef = useRef(null);
 
@@ -318,6 +335,14 @@ export function PriceImportPage({ showToast }) {
     setError('');
   }
 
+  // uploadAndCommit (src/api/hrApi.js) hits POST /api/price-import/upload-commit,
+  // which parses the file then calls PriceImportService.uploadAndCommit —
+  // parse → stage → validate → commit, in one transaction, with no separate
+  // preview step. commit() sets this version ACTIVE, archives the factory's
+  // previous ACTIVE version (kept for history, not deleted), and carries
+  // forward any existing product not matched by a row in the new file. This
+  // same call/args are unchanged; the confirm step below only gates *when*
+  // it fires, not what it does.
   async function handleUpload() {
     if (!factoryId || !file) return;
     setUploading(true);
@@ -338,6 +363,7 @@ export function PriceImportPage({ showToast }) {
       setError(err.message || 'อัปโหลดไม่สำเร็จ');
     } finally {
       setUploading(false);
+      setConfirmUpload(false);
     }
   }
 
@@ -378,7 +404,8 @@ export function PriceImportPage({ showToast }) {
       />
 
       {/* Factory selection */}
-      <Panel title="เลือกโรงงาน">
+      <Panel>
+        <StepLabel n={1}>เลือกโรงงาน</StepLabel>
         <div className="flex gap-3 items-end flex-wrap">
           <div className="flex-1 min-w-[200px]">
             <label htmlFor="factory-select" className="block text-sm font-medium mb-1">
@@ -405,7 +432,8 @@ export function PriceImportPage({ showToast }) {
 
       {/* Upload panel */}
       {factoryId && (
-        <Panel title="อัปโหลด Price List">
+        <Panel>
+          <StepLabel n={2}>อัปโหลด Price List</StepLabel>
           <div className="mb-3">
             <label htmlFor="version-label" className="block text-sm font-medium mb-1">
               Label (ชื่อ version)
@@ -419,24 +447,37 @@ export function PriceImportPage({ showToast }) {
               onChange={(e) => setLabel(e.target.value)}
             />
           </div>
-          <div className="flex items-start gap-3 flex-wrap max-[720px]:flex-col">
-            <FileUploadField
-              ref={fileRef}
-              accept=".xlsx,.xls"
-              onChange={handleFileChange}
-              helperText="Excel (.xlsx, .xls)"
-              className="max-w-md"
-            />
-            <Button
-              variant="primary"
-              onClick={handleUpload}
-              disabled={!file || uploading}
-              className="max-[720px]:min-h-11 max-[720px]:w-full"
-            >
-              <Icon name="upload" />
-              {uploading ? 'กำลังอัปโหลด…' : 'อัปโหลดและ Commit'}
-            </Button>
+          <FileUploadField
+            ref={fileRef}
+            accept=".xlsx,.xls"
+            onChange={handleFileChange}
+            helperText="Excel (.xlsx, .xls)"
+            className="max-w-md mb-4"
+          />
+
+          {/* No preview/validation step exists for this upload path — it parses,
+              stages, validates, and commits in one call (see handleUpload above).
+              Per the plan: "If preview does not exist, add a clear warning/note
+              before commit" instead of fabricating one. */}
+          <div className="max-w-md rounded-md border border-border-input bg-surface-muted p-3 mb-4">
+            <StepLabel n={3}>ไม่มีขั้นตอนแสดงตัวอย่างก่อน Commit</StepLabel>
+            <p className="text-sm text-text-secondary">
+              ระบบนี้จะอ่านไฟล์และตั้งเป็นราคาที่ใช้งานจริง (ACTIVE) ทันทีในขั้นตอนเดียว
+              โดยไม่มีหน้าตรวจสอบก่อน เวอร์ชันราคาเดิมของโรงงานนี้จะถูกเก็บเป็นประวัติ (ARCHIVED)
+              ไม่ถูกลบ และสินค้าที่ไม่มีในไฟล์ใหม่จะยังคงอยู่ในเวอร์ชันใหม่
+            </p>
           </div>
+
+          <StepLabel n={4}>อัปโหลดและ Commit</StepLabel>
+          <Button
+            variant="primary"
+            onClick={() => setConfirmUpload(true)}
+            disabled={!file || uploading}
+            className="max-[720px]:min-h-11 max-[720px]:w-full"
+          >
+            <Icon name="upload" />
+            {uploading ? 'กำลังอัปโหลด…' : 'อัปโหลดและ Commit'}
+          </Button>
         </Panel>
       )}
 
@@ -517,6 +558,7 @@ export function PriceImportPage({ showToast }) {
                       <td className="px-2 py-2">
                         <div className="flex gap-1 justify-end">
                           <Button size="sm" variant="secondary" onClick={() => setEditingProduct(p)}>
+                            <Icon name="pencil" size={14} />
                             แก้ไข
                           </Button>
                           <Button size="sm" variant="danger" onClick={() => handleDeleteProduct(p)}>
@@ -551,6 +593,18 @@ export function PriceImportPage({ showToast }) {
           onSaved={handleProductSaved}
         />
       )}
+
+      {/* tone stays default (not danger): commit archives the previous version
+          and carries forward unmatched products — it does not delete data. */}
+      <ConfirmDialog
+        open={confirmUpload}
+        title="ยืนยันอัปโหลดและ Commit"
+        message="ราคาที่ Commit จะมีผลใช้งานจริงทันที (ACTIVE) เวอร์ชันเดิมของโรงงานนี้จะถูกเก็บเป็นประวัติ ไม่สามารถย้อนกลับจากหน้านี้ได้"
+        confirmLabel="อัปโหลดและ Commit"
+        busy={uploading}
+        onConfirm={handleUpload}
+        onCancel={() => setConfirmUpload(false)}
+      />
     </PageStack>
   );
 }

@@ -59,6 +59,7 @@ function ProductCard({ product, onEdit }) {
           <span className="ml-1 text-xs font-normal text-text-muted">/ {unitLabel(product.priceUnit)}</span>
         </span>
         <Button size="sm" variant="secondary" onClick={() => onEdit(product)}>
+          <Icon name="pencil" size={14} />
           แก้ไข
         </Button>
       </div>
@@ -126,25 +127,33 @@ export function CatalogSearchPage({ showToast }) {
     <PageStack>
       <PageHeader title="ค้นหาสินค้า" subtitle="ราคาจาก price list ที่ import ล่าสุด (ACTIVE)" />
 
-      {/* Search bar */}
+      {/* Search bar — search is the primary interaction on this page, so it
+          leads with a full-width icon field; factory narrows the same query. */}
       <Panel>
-        <form onSubmit={handleSearch} className="flex flex-wrap gap-3 items-end">
-          <div className="flex-1 min-w-[200px]">
-            <label className="block text-sm font-medium mb-1" htmlFor="catalog-q">
+        <form onSubmit={handleSearch} className="flex flex-wrap gap-2.5 items-end">
+          <div className="flex-1 min-w-[220px]">
+            <label className="block text-xs font-bold text-text-muted mb-1" htmlFor="catalog-q">
               ค้นหา (แบรนด์ / รุ่น / สี / รหัส)
             </label>
-            <input
-              id="catalog-q"
-              ref={inputRef}
-              type="text"
-              className="input w-full"
-              placeholder="เช่น Panaria, Stone, L-Trim..."
-              value={query}
-              onChange={handleQueryChange}
-            />
+            <div className="relative">
+              <Icon
+                name="search"
+                size={16}
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-icon-muted"
+              />
+              <input
+                id="catalog-q"
+                ref={inputRef}
+                type="text"
+                className="input w-full pl-9"
+                placeholder="เช่น Panaria, Stone, L-Trim..."
+                value={query}
+                onChange={handleQueryChange}
+              />
+            </div>
           </div>
-          <div className="min-w-[180px]">
-            <label className="block text-sm font-medium mb-1" htmlFor="catalog-factory">
+          <div className="min-w-[160px]">
+            <label className="block text-xs font-bold text-text-muted mb-1" htmlFor="catalog-factory">
               โรงงาน
             </label>
             <select
@@ -160,7 +169,7 @@ export function CatalogSearchPage({ showToast }) {
             </select>
           </div>
           <Button type="submit" variant="primary" disabled={loading}>
-            <Icon name="search" />
+            <Icon name="search" size={14} />
             {loading ? 'กำลังค้นหา…' : 'ค้นหา'}
           </Button>
         </form>
@@ -229,6 +238,7 @@ export function CatalogSearchPage({ showToast }) {
                       </td>
                       <td className="px-3 py-2">
                         <Button size="sm" variant="secondary" onClick={() => setEditingProduct(p)}>
+                          <Icon name="pencil" size={14} />
                           แก้ไข
                         </Button>
                       </td>
