@@ -91,7 +91,7 @@ export function TicketListPage({ user, showToast }) {
   const canCreate = ROLE_PERMISSIONS.canCreateTickets.includes(user.role);
 
   const ticketsQuery = useQuery({
-    queryKey: queryKeys.tickets.list(statusFilter),
+    queryKey: queryKeys.ticketList(statusFilter),
     queryFn: () => api.tickets.list(statusFilter ? { status: statusFilter } : {}).then((response) => response.tickets || []),
   });
   const tickets = ticketsQuery.data ?? [];

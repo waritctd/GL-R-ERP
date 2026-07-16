@@ -56,11 +56,11 @@ export function TicketDashboard({ user, employee, showToast }) {
     queryFn: () => api.dashboard.summary(),
   });
   // Shares the SAME cache entry as TicketListPage's "ทั้งหมด" tab
-  // (queryKeys.tickets.list('')) — a mutation invalidating ['tickets','list']
+  // (queryKeys.ticketList('')) — a mutation invalidating ['tickets','list']
   // anywhere in the app refreshes this recent-tickets strip too, instead of
   // the dashboard only ever refreshing on mount like before.
   const recentQuery = useQuery({
-    queryKey: queryKeys.tickets.list(''),
+    queryKey: queryKeys.ticketList(''),
     queryFn: () => api.tickets.list({}),
   });
 

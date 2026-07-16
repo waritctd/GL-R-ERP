@@ -13,11 +13,9 @@ export const queryKeys = {
   leaveTypes: () => ['leave', 'types'],
   overtimeRequests: (filters = {}) => ['overtime', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   overtimeEmployees: () => ['overtime', 'employees'],
-  // detail/attachments are for slice B (TicketDetailPage) — defined now so the
-  // key module is stable across both slices; only `list` is consumed here.
-  tickets: {
-    list: (status) => ['tickets', 'list', status ?? ''],
-    detail: (id) => ['tickets', 'detail', id],
-    attachments: (id) => ['tickets', 'attachments', id],
-  },
+  // ticketDetail/ticketAttachments are for slice B (TicketDetailPage) — defined
+  // now so the key module is stable across both slices; only ticketList is used here.
+  ticketList: (status) => ['tickets', 'list', status ?? ''],
+  ticketDetail: (id) => ['tickets', 'detail', id],
+  ticketAttachments: (id) => ['tickets', 'attachments', id],
 };
