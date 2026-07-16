@@ -301,7 +301,12 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     downloadRemainingInvoice: st === 'quotation_issued' && fs === 'GOODS_RECEIVED' && isSales,
   };
 
-  const hasActions = Object.values(can).some(Boolean);
+  // `comment` has its own independent UI in the event-history panel (line ~1530)
+  // and isn't rendered inside "การดำเนินการอื่น ๆ" at all — excluding it here so a
+  // viewer with comment-only access (e.g. sales_manager) doesn't get an empty
+  // actions panel with a header and no buttons.
+  const { comment: _commentFlag, ...actionOnlyFlags } = can;
+  const hasActions = Object.values(actionOnlyFlags).some(Boolean);
 
   const status = ticketStatusLabel(st);
 

@@ -23,8 +23,10 @@ public class DepositNoticeService {
     private static final java.util.Set<String> IMPORT_ROLES = java.util.Set.of("import");
     // Same read rule as TicketService.VIEWER_ROLES: deposit notices are customer
     // financial documents — hr/employee have no business downloading them.
+    // sales_manager is read-only oversight here too — never add it to SALES_ROLES/
+    // CEO_ROLES/IMPORT_ROLES.
     private static final java.util.Set<String> VIEWER_ROLES =
-        java.util.Set.of("sales", "import", "ceo", "account");
+        java.util.Set.of("sales", "import", "ceo", "account", "sales_manager");
 
     private final DepositNoticeRepository docs;
     private final TicketRepository   tickets;

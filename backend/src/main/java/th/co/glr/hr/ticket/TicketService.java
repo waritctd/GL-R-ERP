@@ -27,7 +27,11 @@ public class TicketService {
     private static final Set<String> ACCOUNT_ROLES = Set.of("account", "ceo");
     // Who may read tickets at all. Mirrors the frontend's canViewTickets and the mock's
     // list/get gates — hr/employee have no business reading customer pricing.
-    private static final Set<String> VIEWER_ROLES = Set.of("sales", "import", "ceo", "account");
+    // sales_manager is read+comment-only oversight (a project-manager-style follow-up
+    // role for the sales team) — it must NEVER be added to SALES_ROLES/IMPORT_ROLES/
+    // CEO_ROLES/ACCOUNT_ROLES, only here.
+    private static final Set<String> VIEWER_ROLES =
+        Set.of("sales", "import", "ceo", "account", "sales_manager");
     private static final Set<String> QUOTATION_ALLOWED_STATUSES =
         Set.of(TicketStatus.APPROVED, TicketStatus.QUOTATION_ISSUED);
     private static final Set<String> PROPOSE_ALLOWED_STATUSES =

@@ -338,9 +338,10 @@ function hasRole(...roles) {
 // --- ticket helpers ---
 
 // Mirrors TicketService.requireViewAccess: viewer role required, sales reps
-// only see their own tickets. Used by every read/render path.
+// only see their own tickets. Used by every read/render path. sales_manager is
+// read+comment-only oversight — never add it to a write-action role list.
 function requireTicketViewer(id) {
-  const user = hasRole('sales', 'import', 'ceo', 'account');
+  const user = hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
   const ticket = findTicketRaw(Number(id));
   if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
   return { user, ticket };
@@ -1062,7 +1063,10 @@ export const api = {
   tickets: {
     async list(params = {}) {
       const user = requireSession();
-      if (!['sales', 'import', 'ceo', 'account'].includes(user.role)) fail('Forbidden', 403);
+      // sales_manager: read+comment oversight only — kept here (not routed through
+      // requireTicketViewer) to match the existing inline-array pattern; must move
+      // in lockstep with requireTicketViewer/get() and TicketService.VIEWER_ROLES.
+      if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('Forbidden', 403);
       let list = structuredClone(db.tickets);
       if (user.role === 'sales') list = list.filter((t) => t.createdById === user.id);
       if (params.status) list = list.filter((t) => t.status === params.status);
@@ -1082,7 +1086,7 @@ export const api = {
 
     async get(id) {
       const user = requireSession();
-      if (!['sales', 'import', 'ceo', 'account'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('Forbidden', 403);
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
       if (!ticket) fail('Ticket not found', 404);
       if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);

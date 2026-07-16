@@ -44,6 +44,10 @@ class TicketServiceTest {
     private final UserPrincipal accountActor = actor(5L, "account");
     private final UserPrincipal hrActor      = actor(6L, "hr");
     private final UserPrincipal employeeActor = actor(7L, "employee");
+    // sales_manager: read + comment oversight only — a project-manager-style
+    // follow-up role for the sales team. Never owns a ticket (cannot create one),
+    // so every owner-gated write action denies it via the ownership check alone.
+    private final UserPrincipal salesManagerActor = actor(8L, "sales_manager");
 
     // ── list ──────────────────────────────────────────────────────────────
 
@@ -858,6 +862,133 @@ class TicketServiceTest {
         assertThatThrownBy(() -> service.comment(99L, new CommentRequest("hi"), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    // ── sales_manager oversight (read + comment only, zero write actions) ──
+    // Product decision (2026-07-16): sales_manager acts like a project manager for the
+    // sales team — follow up / check up, but never perform the actual work. It was
+    // added to VIEWER_ROLES only; SALES_ROLES/IMPORT_ROLES/CEO_ROLES/ACCOUNT_ROLES are
+    // untouched. Every write test below asserts 403.
+
+    @Test
+    void list_salesManagerSeesAllTicketsUnfiltered() {
+        // Same as any non-sales viewer: no createdBy scoping.
+        service.list(null, salesManagerActor);
+        verify(ticketRepo).findSummaries(null, null);
+    }
+
+    @Test
+    void get_salesManagerCanViewAnyonesTicket() {
+        TicketDto ticket = stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
+        assertThat(service.get(10L, salesManagerActor)).isEqualTo(ticket);
+    }
+
+    @Test
+    void comment_salesManagerCanCommentOnAnyonesTicket() {
+        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
+
+        service.comment(10L, new CommentRequest("ติดตามความคืบหน้าให้ลูกค้าหน่อย"), salesManagerActor);
+
+        verify(ticketRepo).addEvent(eq(10L), eq(8L), anyString(),
+            eq(TicketEventKind.COMMENTED), isNull(), isNull(), eq("ติดตามความคืบหน้าให้ลูกค้าหน่อย"));
+    }
+
+    @Test
+    void submit_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.submit(10L, salesManagerActor));
+    }
+
+    @Test
+    void pickup_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.pickup(10L, salesManagerActor));
+    }
+
+    @Test
+    void proposePrice_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.proposePrice(10L, new ProposePriceRequest(List.of(), null), salesManagerActor));
+    }
+
+    @Test
+    void approve_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.approve(10L, salesManagerActor));
+    }
+
+    @Test
+    void calculatePrices_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.calculatePrices(10L, salesManagerActor));
+    }
+
+    @Test
+    void overrideItemPrice_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.overrideItemPrice(10L, 101L,
+            new OverridePriceRequest(new BigDecimal("777.00"), null), salesManagerActor));
+    }
+
+    @Test
+    void generateQuotation_rejectsSalesManagerRole() {
+        // Role-gated (SALES_ROLES) before the ownership check even runs.
+        assertForbidden(() -> service.generateQuotation(10L, salesManagerActor));
+    }
+
+    @Test
+    void editItems_rejectsSalesManagerRole() {
+        // Not role-gated via requireRole, but salesCanEdit requires SALES_ROLES
+        // membership regardless of ownership — sales_manager fails that check.
+        stubTicket(10L, 1L, TicketStatus.SUBMITTED);
+        TicketItemRequest req = new TicketItemRequest(
+            "Brand", "Model", "Color", "Texture", "Size", "Factory",
+            BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB");
+
+        assertForbidden(() -> service.editItems(10L, new EditItemsRequest(List.of(req), null), salesManagerActor));
+    }
+
+    @Test
+    void close_rejectsSalesManagerRole() {
+        // close() has NO role gate — only ownership. sales_manager can never be the
+        // createdById of any ticket (it has no create access), so the owner check
+        // alone suffices to deny it here; confirmed by stubbing a ticket owned by
+        // someone else and asserting 403.
+        stubTicket(10L, 1L, TicketStatus.DOCUMENT_ISSUED);
+        assertForbidden(() -> service.close(10L, salesManagerActor));
+    }
+
+    @Test
+    void cancel_rejectsSalesManagerRole() {
+        // Same reasoning as close(): cancel() is owner-gated only, and sales_manager
+        // can never own a ticket, so it always 403s here.
+        stubTicket(10L, 1L, TicketStatus.SUBMITTED);
+        assertForbidden(() -> service.cancel(10L, salesManagerActor));
+    }
+
+    @Test
+    void confirmCustomer_rejectsSalesManagerRole() {
+        // Role-gated (SALES_ROLES) before the ownership check.
+        assertForbidden(() -> service.confirmCustomer(10L, salesManagerActor));
+    }
+
+    @Test
+    void confirmDepositPaid_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.confirmDepositPaid(10L, salesManagerActor));
+    }
+
+    @Test
+    void issueImportRequest_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.issueImportRequest(10L, salesManagerActor));
+    }
+
+    @Test
+    void markGoodsReceived_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.markGoodsReceived(10L, salesManagerActor));
+    }
+
+    @Test
+    void confirmFinalPayment_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.confirmFinalPayment(10L, salesManagerActor));
+    }
+
+    @Test
+    void factoryEmail_rejectsSalesManagerRole() {
+        assertForbidden(() -> service.assertFactoryEmailAllowed(10L, salesManagerActor));
     }
 
     // ── helpers ───────────────────────────────────────────────────────────
