@@ -379,18 +379,26 @@ function mockDocPlaceholderBlob(lines) {
 }
 
 // ── Quotation XLSX (demo placeholder) — real file from QuotationRenderer.java ───
+// Mirrors TicketService.loadQuotationContext (V49): if this quotation has a snapshot
+// (items + customer/project header frozen at issue time), render from that — never from
+// today's live ticket data. Older mock quotations (created before this change, or a
+// freshly-loaded page that never re-ran quotation()) have no `items` array and fall back
+// to live data, matching the backend's legacy-quotation fallback.
 async function buildMockQuotationXlsx(ticketId, quotationId) {
   const ticket = findTicketRaw(Number(ticketId));
   const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
   if (!quotation) fail('Quotation not found', 404);
 
+  const hasSnapshot = Array.isArray(quotation.items) && quotation.items.length > 0;
   const issueDate = quotation.issuedAt ? new Date(quotation.issuedAt) : new Date();
-  const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
+  const priceItems = hasSnapshot ? quotation.items : ticket.items.filter((it) => it.approvedPrice != null);
+  const customerName = hasSnapshot ? (quotation.customerName ?? '') : (ticket.customerName ?? '');
+  const projectName = hasSnapshot ? quotation.projectName : ticket.projectName;
   const lines = [
     `ใบเสนอราคา  เลขที่ ${quotation.number ?? ''}`,
     `วันที่: ${mockThaiDate(issueDate)}`,
-    `ลูกค้า: ${ticket.customerName ?? ''}`,
-    ...(ticket.projectName ? [`Project: ${ticket.projectName}`] : []),
+    `ลูกค้า: ${customerName}`,
+    ...(projectName ? [`Project: ${projectName}`] : []),
     '',
     ...priceItems.map((it, i) => {
       const qty = Number(it.qty) || 0;
@@ -402,11 +410,14 @@ async function buildMockQuotationXlsx(ticketId, quotationId) {
 }
 
 // ── Quotation HTML preview — shown when "PDF" is clicked in demo mode ────────
+// Same snapshot-first / live-data-fallback rule as buildMockQuotationXlsx above.
 function buildMockQuotationHtml(ticketId, quotationId) {
   const ticket = findTicketRaw(Number(ticketId));
   const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
   if (!quotation) fail('Quotation not found', 404);
-  const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
+  const hasSnapshot = Array.isArray(quotation.items) && quotation.items.length > 0;
+  const priceItems = hasSnapshot ? quotation.items : ticket.items.filter((it) => it.approvedPrice != null);
+  const customerName = hasSnapshot ? (quotation.customerName ?? '') : (ticket.customerName ?? '');
   const fmtNum = (n) => Number(n).toLocaleString('th-TH', { minimumFractionDigits: 2 });
   const rowsHtml = priceItems.map((it, i) => {
     const amt = Number(it.approvedPrice) * Number(it.qty);
@@ -423,7 +434,7 @@ td{border:1px solid #e2e8f0;padding:8px 10px;font-size:13px}
 .total{font-weight:700;font-size:15px;text-align:right;margin-top:16px}</style></head>
 <body><div class="banner">⚠ Demo Mode — PDF จริงสร้างจาก template บน server</div>
 <h2>ใบเสนอราคา</h2>
-<div class="meta">เลขที่: <strong>${quotation.number}</strong> &nbsp;|&nbsp; ลูกค้า: <strong>${ticket.customerName ?? ''}</strong> &nbsp;|&nbsp; วันที่: ${mockThaiDate(new Date(quotation.issuedAt))}</div>
+<div class="meta">เลขที่: <strong>${quotation.number}</strong> &nbsp;|&nbsp; ลูกค้า: <strong>${customerName}</strong> &nbsp;|&nbsp; วันที่: ${mockThaiDate(new Date(quotation.issuedAt))}</div>
 <table><thead><tr><th>#</th><th>รายละเอียด</th><th>จำนวน</th><th>หน่วย</th><th>ราคา/หน่วย</th><th>เป็นเงิน (บาท)</th></tr></thead>
 <tbody>${rowsHtml}</tbody>
 <tfoot><tr><td colspan="5" style="text-align:right;font-weight:700">รวมเป็นเงิน</td><td style="text-align:right;font-weight:700">${total}</td></tr></tfoot></table>
@@ -1338,6 +1349,16 @@ export const api = {
 
       const nextVersion = ticket.quotations.length + 1;
       const nextQNum = db.tickets.flatMap((t) => t.quotations ?? (t.quotation ? [t.quotation] : [])).length + 1;
+
+      // Freeze this quotation at issue time (mirrors TicketService.generateQuotation +
+      // V49's quotation_item/customer-header columns): deep-copy the priced items and the
+      // customer/project header NOW, so a later ticket edit or customer-record change can
+      // never alter this quotation's downloaded content. customerName/address/taxId/phone
+      // come from the linked customer record (mockCustomers), not the ticket's own
+      // (possibly stale) customerName field — same source-of-truth choice as the backend.
+      const customer = ticket.customerId ? mockCustomers.find((c) => c.id === ticket.customerId) : null;
+      const project = ticket.projectId ? mockProjects.find((p) => p.id === ticket.projectId) : null;
+      const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
       const newQuotation = {
         id: nextQNum, ticketId: ticket.id,
         number: `QT-2026-${String(nextQNum).padStart(4, '0')}`,
@@ -1345,6 +1366,13 @@ export const api = {
         issuedAt: new Date().toISOString(), pdfPath: null,
         totalAmount: total, currency: 'THB',
         quotationVersion: nextVersion, docStatus: 'DRAFT',
+        // Snapshot (V49) — undefined/empty on any quotation object built before this change.
+        items: priceItems.map((it) => ({ ...it })),
+        customerName: customer ? customer.name : (ticket.customerName ?? null),
+        customerAddress: customer ? customer.address : null,
+        customerTaxId: customer ? customer.taxId : null,
+        customerPhone: customer ? customer.phone : null,
+        projectName: project ? project.name : null,
       };
       ticket.quotations.unshift(newQuotation); // newest first
       ticket.quotation = newQuotation; // backward compat

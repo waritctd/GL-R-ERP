@@ -208,14 +208,29 @@ public class TicketService {
             })
             .reduce(BigDecimal.ZERO, BigDecimal::add);
         String number = tickets.nextQuotationCode();
-        tickets.createQuotation(ticketId, number, actor.id(), total);
+        QuotationDto created = tickets.createQuotation(ticketId, number, actor.id(), total);
+
+        // Freeze this quotation at issue time (V49): item data + customer/project header,
+        // in the same transaction as createQuotation, so a later ticket edit or customer-
+        // record change can never alter an already-issued quotation's downloaded content
+        // (legal-compliance requirement — quotation v1 re-downloaded after a revision must
+        // still show v1's items/prices, not today's).
+        tickets.insertQuotationItems(created.id(), full.items());
+        CustomerDto customer = s.customerId() != null ? customers.findById(s.customerId()).orElse(null) : null;
+        tickets.updateQuotationHeader(created.id(),
+            customer != null ? customer.name() : s.customerName(),
+            customer != null ? customer.address() : null,
+            customer != null ? customer.taxId() : null,
+            customer != null ? customer.phone() : null,
+            s.projectName());
+
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.QUOTATION_ISSUED, fromStatus, TicketStatus.QUOTATION_ISSUED, null);
         return requireTicket(ticketId);
     }
 
-    // Renders the quotation straight from the current ticket + quotation record — there is no
-    // separate draft/edit phase, so "regenerating" just means re-rendering from live data.
+    // Renders the quotation from its issue-time snapshot when one exists (V49); falls back
+    // to live ticket data only for pre-V49 quotations that predate the snapshot.
     public byte[] getQuotationXlsx(long ticketId, long quotationId, UserPrincipal actor) {
         var ctx = loadQuotationContext(ticketId, quotationId, actor);
         return quotationRenderer.toXlsx(ctx.ticket(), ctx.quotation(), ctx.customer());
@@ -234,10 +249,42 @@ public class TicketService {
             .filter(q -> q.id() == quotationId)
             .findFirst()
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Quotation not found"));
+
+        List<TicketItemDto> snapshotItems = tickets.findQuotationItemsByQuotationId(quotationId, ticketId);
+        if (!snapshotItems.isEmpty()) {
+            TicketRepository.QuotationHeaderSnapshot header = tickets.findQuotationHeaderSnapshot(quotationId)
+                .orElse(new TicketRepository.QuotationHeaderSnapshot(null, null, null, null, null));
+            String frozenCustomerName = header.customerName() != null
+                ? header.customerName() : ticket.summary().customerName();
+            String frozenProjectName = header.projectName() != null
+                ? header.projectName() : ticket.summary().projectName();
+            TicketSummaryDto frozenSummary =
+                withCustomerAndProject(ticket.summary(), frozenCustomerName, frozenProjectName);
+            TicketDto frozenTicket = new TicketDto(frozenSummary, snapshotItems, ticket.events(),
+                ticket.quotation(), ticket.quotations());
+            CustomerDto frozenCustomer = new CustomerDto(
+                ticket.summary().customerId() != null ? ticket.summary().customerId() : 0L,
+                frozenCustomerName, header.customerTaxId(), header.customerAddress(),
+                null, header.customerPhone());
+            return new QuotationRenderContext(frozenTicket, quotation, frozenCustomer);
+        }
+
+        // Legacy fallback: no snapshot rows (quotation issued before V49) — render from
+        // live data exactly as before this change.
         CustomerDto customer = ticket.summary().customerId() != null
             ? customers.findById(ticket.summary().customerId()).orElse(null)
             : null;
         return new QuotationRenderContext(ticket, quotation, customer);
+    }
+
+    private TicketSummaryDto withCustomerAndProject(TicketSummaryDto s, String customerName, String projectName) {
+        return new TicketSummaryDto(
+            s.id(), s.code(), s.type(), s.title(), s.status(), s.priority(),
+            s.createdById(), s.createdByName(), s.assignedToId(), s.assignedToName(),
+            customerName, s.customerId(), s.projectId(), projectName,
+            s.contactId(), s.contactName(), s.note(),
+            s.createdAt(), s.updatedAt(), s.closedAt(), s.itemCount(), s.hasEdits(),
+            s.paymentStatus(), s.fulfillmentStatus());
     }
 
     @Transactional
