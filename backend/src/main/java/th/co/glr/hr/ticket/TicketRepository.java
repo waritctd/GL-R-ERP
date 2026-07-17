@@ -260,7 +260,10 @@ public class TicketRepository {
                 .addValue("calcedPrice", item.calcedPrice())
                 .addValue("calcConfigVersion", item.calcConfigVersion())
                 .addValue("manualPrice", item.manualPrice())
-                .addValue("manualOverrideReason", item.manualOverrideReason());
+                .addValue("manualOverrideReason", item.manualOverrideReason())
+                .addValue("qtyDelivered", item.qtyDelivered())
+                .addValue("qtyFromStock", item.qtyFromStock())
+                .addValue("stockNote", item.stockNote());
         }
         jdbc.batchUpdate("""
             INSERT INTO sales.ticket_item
@@ -268,12 +271,12 @@ public class TicketRepository {
                  qty, qty_sqm, unit_basis, raw_price, raw_currency, raw_unit,
                  proposed_price, approved_price, currency, sort_order,
                  calced_cost, calced_price, calc_config_version,
-                 manual_price, manual_override_reason)
+                 manual_price, manual_override_reason, qty_delivered, qty_from_stock, stock_note)
             VALUES (:ticketId, :brand, :model, :color, :texture, :size, :factory,
                     :qty, :qtySqm, :unitBasis, :rawPrice, :rawCurrency, :rawUnit,
                     :proposedPrice, :approvedPrice, :currency, :sortOrder,
                     :calcedCost, :calcedPrice, :calcConfigVersion,
-                    :manualPrice, :manualOverrideReason)
+                    :manualPrice, :manualOverrideReason, :qtyDelivered, :qtyFromStock, :stockNote)
             """, batch);
     }
 
@@ -530,7 +533,8 @@ public class TicketRepository {
                    qty, qty_sqm, unit_basis, raw_price, raw_currency, raw_unit,
                    proposed_price, approved_price, currency, sort_order,
                    calced_cost, calced_price, calc_config_version,
-                   manual_price, manual_override_reason
+                   manual_price, manual_override_reason,
+                   qty_delivered, qty_from_stock, stock_note
               FROM sales.ticket_item
              WHERE ticket_id = :id
              ORDER BY sort_order, item_id
@@ -562,7 +566,10 @@ public class TicketRepository {
                     calcConfigVersion,
                     rs.getString("unit_basis"),
                     rs.getBigDecimal("manual_price"),
-                    rs.getString("manual_override_reason")
+                    rs.getString("manual_override_reason"),
+                    rs.getBigDecimal("qty_delivered"),
+                    rs.getBigDecimal("qty_from_stock"),
+                    rs.getString("stock_note")
                 );
             });
     }
@@ -1005,6 +1012,165 @@ public class TicketRepository {
                 .addValue("creditTermDays", creditTermDays)
                 .addValue("lastFollowUpAt", lastFollowUpAt)
                 .addValue("nextFollowUpAt", nextFollowUpAt));
+    }
+
+    @Transactional
+    public void reserveStock(long ticketId, List<StockReservationRequest.Line> lines) {
+        MapSqlParameterSource[] batch = new MapSqlParameterSource[lines.size()];
+        for (int i = 0; i < lines.size(); i++) {
+            StockReservationRequest.Line line = lines.get(i);
+            batch[i] = new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("itemId", line.itemId())
+                .addValue("qtyFromStock", line.qtyFromStock())
+                .addValue("note", line.note());
+        }
+        jdbc.batchUpdate("""
+            UPDATE sales.ticket_item
+               SET qty_from_stock = :qtyFromStock,
+                   stock_note = :note
+             WHERE ticket_id = :ticketId AND item_id = :itemId
+            """, batch);
+    }
+
+    @Transactional
+    public long insertDeliveryRecord(long ticketId, String source, long deliveredBy, String note,
+                                     List<RecordDeliveryRequest.Line> lines) {
+        GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbc.update("""
+            INSERT INTO sales.delivery_record (ticket_id, source, delivered_by, note)
+            VALUES (:ticketId, :source, :deliveredBy, :note)
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("source", source)
+                .addValue("deliveredBy", deliveredBy)
+                .addValue("note", note),
+            keyHolder,
+            new String[] {"delivery_id"});
+        long deliveryId = keyHolder.getKey().longValue();
+        for (RecordDeliveryRequest.Line line : lines) {
+            jdbc.update("""
+                INSERT INTO sales.delivery_record_item (delivery_id, item_id, qty)
+                VALUES (:deliveryId, :itemId, :qty)
+                """,
+                new MapSqlParameterSource()
+                    .addValue("deliveryId", deliveryId)
+                    .addValue("itemId", line.itemId())
+                    .addValue("qty", line.qty()));
+            int updated = jdbc.update("""
+                UPDATE sales.ticket_item
+                   SET qty_delivered = qty_delivered + :qty
+                 WHERE ticket_id = :ticketId
+                   AND item_id = :itemId
+                   AND qty_delivered + :qty <= qty
+                """,
+                new MapSqlParameterSource()
+                    .addValue("ticketId", ticketId)
+                    .addValue("itemId", line.itemId())
+                    .addValue("qty", line.qty()));
+            if (updated != 1) {
+                throw new org.springframework.dao.DataIntegrityViolationException("Delivery exceeds ordered quantity");
+            }
+        }
+        return deliveryId;
+    }
+
+    public List<DeliveryRecordDto> findDeliveriesByTicket(long ticketId) {
+        List<DeliveryRecordDto> records = jdbc.query("""
+            SELECT dr.delivery_id, dr.ticket_id, dr.source, dr.delivered_at, dr.delivered_by,
+                   NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS delivered_by_name,
+                   dr.note, dr.created_at
+              FROM sales.delivery_record dr
+              JOIN hr.employee e ON e.employee_id = dr.delivered_by
+             WHERE dr.ticket_id = :ticketId
+             ORDER BY dr.delivered_at ASC, dr.delivery_id ASC
+            """,
+            Map.of("ticketId", ticketId),
+            (rs, rowNum) -> new DeliveryRecordDto(
+                rs.getLong("delivery_id"),
+                rs.getLong("ticket_id"),
+                rs.getString("source"),
+                rs.getTimestamp("delivered_at").toInstant(),
+                rs.getLong("delivered_by"),
+                rs.getString("delivered_by_name"),
+                rs.getString("note"),
+                rs.getTimestamp("created_at").toInstant(),
+                findDeliveryItems(rs.getLong("delivery_id"))
+            ));
+        return records;
+    }
+
+    private List<DeliveryRecordItemDto> findDeliveryItems(long deliveryId) {
+        return jdbc.query("""
+            SELECT delivery_item_id, item_id, qty
+              FROM sales.delivery_record_item
+             WHERE delivery_id = :deliveryId
+             ORDER BY delivery_item_id
+            """,
+            Map.of("deliveryId", deliveryId),
+            (rs, rowNum) -> new DeliveryRecordItemDto(
+                rs.getLong("delivery_item_id"),
+                rs.getLong("item_id"),
+                rs.getBigDecimal("qty")
+            ));
+    }
+
+    public BigDecimal sumOrdered(long ticketId) {
+        BigDecimal value = jdbc.queryForObject("""
+            SELECT COALESCE(SUM(qty), 0)
+              FROM sales.ticket_item
+             WHERE ticket_id = :ticketId
+            """, Map.of("ticketId", ticketId), BigDecimal.class);
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    public BigDecimal sumDelivered(long ticketId) {
+        BigDecimal value = jdbc.queryForObject("""
+            SELECT COALESCE(SUM(qty_delivered), 0)
+              FROM sales.ticket_item
+             WHERE ticket_id = :ticketId
+            """, Map.of("ticketId", ticketId), BigDecimal.class);
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    public boolean allLinesFullyDelivered(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT COALESCE(bool_and(qty_delivered >= qty), false)
+              FROM sales.ticket_item
+             WHERE ticket_id = :ticketId
+            """, Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
+    }
+
+
+    public boolean hasDeliveries(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM sales.delivery_record
+                 WHERE ticket_id = :ticketId
+            )
+            """, Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
+    }
+
+    /**
+     * Whether the deal's imported goods ever physically reached OUR warehouse — a
+     * permanent fact from the GOODS_RECEIVED event, NOT the current fulfillment_status
+     * (which gets overwritten to PARTIALLY_DELIVERED/FULLY_DELIVERED once deliveries
+     * start). Used to gate WAREHOUSE-source deliveries so a stock-first partial
+     * delivery on an imported deal can't lock out the warehouse remainder (Case 8).
+     */
+    public boolean hasReceivedGoods(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM sales.ticket_event
+                 WHERE ticket_id = :ticketId AND kind = 'GOODS_RECEIVED'
+            )
+            """, Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
     }
 
     public void updatePaymentStatus(long ticketId, String paymentStatus) {

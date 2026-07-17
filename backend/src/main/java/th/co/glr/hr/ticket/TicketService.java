@@ -3,7 +3,9 @@ package th.co.glr.hr.ticket;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import th.co.glr.hr.pricing.PriceBreakdownItemDto;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -27,6 +29,7 @@ public class TicketService {
     private static final Set<String> SALES_ROLES  = Set.of("sales");
     private static final Set<String> IMPORT_ROLES = Set.of("import");
     private static final Set<String> CEO_ROLES    = Set.of("ceo");
+    private static final Set<String> FULFILMENT_ROLES = Set.of("import", "ceo");
     // Money-receipt confirmations belong to ฝ่ายบัญชี (accounting), with CEO as fallback.
     private static final Set<String> ACCOUNT_ROLES = Set.of("account", "ceo");
     // Who may read tickets at all. Mirrors the frontend's canViewTickets and the mock's
@@ -41,6 +44,7 @@ public class TicketService {
     private static final Set<String> PROPOSE_ALLOWED_STATUSES =
         Set.of(TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED, TicketStatus.APPROVED);
     private static final Set<String> PAYMENT_RECEIPT_KINDS = Set.of("DEPOSIT", "BALANCE", "ADJUSTMENT");
+    private static final Set<String> DELIVERY_SOURCES = Set.of("WAREHOUSE", "STOCK");
 
     private final TicketRepository tickets;
     private final NotificationRepository notifications;
@@ -429,10 +433,10 @@ public class TicketService {
             && (s.paymentStatus() == null || "FULLY_PAID".equals(s.paymentStatus()));
         boolean dualTrackOk = TicketStatus.QUOTATION_ISSUED.equals(st)
             && "FULLY_PAID".equals(s.paymentStatus())
-            && "GOODS_RECEIVED".equals(s.fulfillmentStatus());
+            && deliveryGateComplete(s);
         if (!legacyOk && !dualTrackOk) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "Cannot close: require paymentStatus=FULLY_PAID and fulfillmentStatus=GOODS_RECEIVED");
+                "Cannot close: require paymentStatus=FULLY_PAID and delivery complete");
         }
         if (s.amountOutstanding() != null && s.amountOutstanding().signum() > 0) {
             throw new ApiException(HttpStatus.CONFLICT, "Cannot close: ยังมียอดค้างชำระ");
@@ -494,7 +498,7 @@ public class TicketService {
 
     @Transactional
     public TicketDto issueImportRequest(long ticketId, UserPrincipal actor) {
-        requireRole(actor, IMPORT_ROLES);
+        requireRole(actor, FULFILMENT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
         // DEPOSIT_PAID is also acceptable: the customer often pays (and accounting
@@ -514,7 +518,7 @@ public class TicketService {
         if (s.fulfillmentStatus() != null) {
             throw new ApiException(HttpStatus.CONFLICT, "Import request already issued");
         }
-        tickets.updateFulfillmentStatus(ticketId, "IR_ISSUED");
+        tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.IR_ISSUED);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.IR_ISSUED, s.status(), s.status(), null);
         // Deal pipeline (V50): the whole import journey (IR→warehouse) lives inside
@@ -526,13 +530,13 @@ public class TicketService {
 
     @Transactional
     public TicketDto markIrSent(long ticketId, UserPrincipal actor) {
-        requireRole(actor, IMPORT_ROLES);
+        requireRole(actor, FULFILMENT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
-        if (!"IR_ISSUED".equals(s.fulfillmentStatus())) {
+        if (!FulfilmentStatus.IR_ISSUED.equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "Expected fulfillmentStatus=IR_ISSUED");
         }
-        tickets.updateFulfillmentStatus(ticketId, "IR_SENT");
+        tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.IR_SENT);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.IR_SENT, s.status(), s.status(), null);
         return requireTicket(ticketId);
@@ -540,13 +544,13 @@ public class TicketService {
 
     @Transactional
     public TicketDto markShipping(long ticketId, UserPrincipal actor) {
-        requireRole(actor, IMPORT_ROLES);
+        requireRole(actor, FULFILMENT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
-        if (!"IR_SENT".equals(s.fulfillmentStatus())) {
+        if (!FulfilmentStatus.IR_SENT.equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "Expected fulfillmentStatus=IR_SENT");
         }
-        tickets.updateFulfillmentStatus(ticketId, "SHIPPING");
+        tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.SHIPPING);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.SHIPPING, s.status(), s.status(), null);
         return requireTicket(ticketId);
@@ -554,15 +558,13 @@ public class TicketService {
 
     @Transactional
     public TicketDto markGoodsReceived(long ticketId, UserPrincipal actor) {
-        if (!IMPORT_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
-        }
+        requireRole(actor, FULFILMENT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
-        if (!"SHIPPING".equals(s.fulfillmentStatus())) {
+        if (!FulfilmentStatus.SHIPPING.equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "Expected fulfillmentStatus=SHIPPING");
         }
-        tickets.updateFulfillmentStatus(ticketId, "GOODS_RECEIVED");
+        tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.GOODS_RECEIVED);
         // Also advance payment track to AWAITING_FINAL_PAYMENT if deposit was paid
         if ("DEPOSIT_PAID".equals(s.paymentStatus())) {
             tickets.updatePaymentStatus(ticketId, "AWAITING_FINAL_PAYMENT");
@@ -572,6 +574,143 @@ public class TicketService {
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.GOODS_RECEIVED, s.status(), s.status(), null);
         return requireTicket(ticketId);
+    }
+
+    public List<DeliveryRecordDto> listDeliveries(long ticketId, UserPrincipal actor) {
+        requireViewAccess(ticketId, actor);
+        return tickets.findDeliveriesByTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto reserveStock(long ticketId, StockReservationRequest request, UserPrincipal actor) {
+        requireRole(actor, FULFILMENT_ROLES);
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
+        requireActive(s);
+        List<StockReservationRequest.Line> lines = request == null ? List.of() : request.lines();
+        if (lines == null || lines.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุรายการสินค้า");
+        }
+        Map<Long, TicketItemDto> itemsById = itemMap(ticket.items());
+        Map<Long, BigDecimal> mergedStock = new LinkedHashMap<>();
+        for (TicketItemDto item : ticket.items()) {
+            mergedStock.put(item.id(), nullToZero(item.qtyFromStock()));
+        }
+        BigDecimal totalDeclared = BigDecimal.ZERO;
+        for (StockReservationRequest.Line line : lines) {
+            TicketItemDto item = requireLineItem(itemsById, line.itemId());
+            BigDecimal qty = nullToZero(line.qtyFromStock());
+            if (qty.signum() < 0 || qty.compareTo(nullToZero(item.qty())) > 0) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "จำนวนสินค้าจากสต็อกต้องไม่เกินจำนวนที่สั่ง");
+            }
+            mergedStock.put(item.id(), qty);
+            totalDeclared = totalDeclared.add(qty);
+        }
+        tickets.reserveStock(ticketId, lines);
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.STOCK_RESERVED, s.status(), s.status(),
+            "qty_from_stock=" + totalDeclared.stripTrailingZeros().toPlainString());
+        boolean allCovered = !ticket.items().isEmpty()
+            && ticket.items().stream()
+                .allMatch(item -> nullToZero(mergedStock.get(item.id())).compareTo(nullToZero(item.qty())) >= 0);
+        if (allCovered && (s.fulfillmentStatus() == null || FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()))) {
+            tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.FROM_STOCK);
+            autoAdvanceStage(s, DealStage.PROCUREMENT, actor);
+        }
+        return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto recordPartialDelivery(long ticketId, RecordDeliveryRequest request, UserPrincipal actor) {
+        requireRole(actor, FULFILMENT_ROLES);
+        TicketDto ticket = requireTicket(ticketId);
+        return recordDeliveryInternal(ticket, request, actor, false);
+    }
+
+    @Transactional
+    public TicketDto completeDelivery(long ticketId, CompleteDeliveryRequest request, UserPrincipal actor) {
+        requireRole(actor, FULFILMENT_ROLES);
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
+        requireActive(s);
+        List<RecordDeliveryRequest.Line> remaining = ticket.items().stream()
+            .map(item -> new RecordDeliveryRequest.Line(item.id(),
+                nullToZero(item.qty()).subtract(nullToZero(item.qtyDelivered()))))
+            .filter(line -> line.qty().signum() > 0)
+            .toList();
+        if (remaining.isEmpty()) {
+            throw new ApiException(HttpStatus.CONFLICT, "ไม่มีจำนวนค้างส่ง");
+        }
+        boolean allRemainingCoveredByStock = ticket.items().stream().allMatch(item -> {
+            BigDecimal remainingQty = nullToZero(item.qty()).subtract(nullToZero(item.qtyDelivered()));
+            if (remainingQty.signum() <= 0) return true;
+            return nullToZero(item.qtyDelivered()).add(remainingQty).compareTo(nullToZero(item.qtyFromStock())) <= 0;
+        });
+        String source = allRemainingCoveredByStock ? "STOCK" : "WAREHOUSE";
+        RecordDeliveryRequest delivery = new RecordDeliveryRequest(
+            source,
+            request == null ? null : request.note(),
+            remaining);
+        return recordDeliveryInternal(ticket, delivery, actor, true);
+    }
+
+    private TicketDto recordDeliveryInternal(TicketDto ticket, RecordDeliveryRequest request,
+                                             UserPrincipal actor, boolean completing) {
+        TicketSummaryDto s = ticket.summary();
+        requireActive(s);
+        if (request == null || request.lines() == null || request.lines().isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุรายการส่งสินค้า");
+        }
+        String source = request.source() == null ? "" : request.source().trim().toUpperCase();
+        if (!DELIVERY_SOURCES.contains(source)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "source ต้องเป็น WAREHOUSE หรือ STOCK");
+        }
+        Map<Long, TicketItemDto> itemsById = itemMap(ticket.items());
+        Map<Long, BigDecimal> combined = new LinkedHashMap<>();
+        for (RecordDeliveryRequest.Line line : request.lines()) {
+            TicketItemDto item = requireLineItem(itemsById, line.itemId());
+            BigDecimal qty = nullToZero(line.qty());
+            if (qty.signum() <= 0) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "จำนวนส่งมอบต้องมากกว่า 0");
+            }
+            combined.merge(item.id(), qty, BigDecimal::add);
+        }
+        List<RecordDeliveryRequest.Line> normalized = combined.entrySet().stream()
+            .map(entry -> new RecordDeliveryRequest.Line(entry.getKey(), entry.getValue()))
+            .toList();
+        for (RecordDeliveryRequest.Line line : normalized) {
+            TicketItemDto item = itemsById.get(line.itemId());
+            BigDecimal newDelivered = nullToZero(item.qtyDelivered()).add(line.qty());
+            if (newDelivered.compareTo(nullToZero(item.qty())) > 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "จำนวนส่งมอบเกินจำนวนที่สั่ง");
+            }
+            if ("STOCK".equals(source)
+                && newDelivered.compareTo(nullToZero(item.qtyFromStock())) > 0) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "ส่งจากสต็อกได้ไม่เกินจำนวนที่ประกาศว่าพร้อมจากสต็อก");
+            }
+        }
+        if ("WAREHOUSE".equals(source) && !warehouseDeliveryAvailable(s, ticket.summary().id())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ต้องรับสินค้าเข้าโกดังก่อนส่งจาก WAREHOUSE");
+        }
+        tickets.insertDeliveryRecord(s.id(), source, actor.id(), request.note(), normalized);
+        TicketDto updated = requireTicket(s.id());
+        TicketSummaryDto updatedSummary = updated.summary();
+        boolean fullyDelivered = updated.items().stream()
+            .allMatch(item -> nullToZero(item.qtyDelivered()).compareTo(nullToZero(item.qty())) >= 0);
+        String message = deliveryMessage(updated.items(), normalized);
+        tickets.addEvent(s.id(), actor.id(), actor.name(),
+            TicketEventKind.DELIVERY_RECORDED, updatedSummary.status(), updatedSummary.status(), message);
+        if (fullyDelivered) {
+            tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.FULLY_DELIVERED);
+            tickets.addEvent(s.id(), actor.id(), actor.name(),
+                TicketEventKind.DELIVERY_COMPLETED, updatedSummary.status(), updatedSummary.status(),
+                completing ? "ส่งมอบครบจากปุ่ม completeDelivery" : message);
+            autoAdvanceStage(updatedSummary, DealStage.DELIVERED, actor);
+        } else {
+            tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.PARTIALLY_DELIVERED);
+        }
+        return requireTicket(s.id());
     }
 
     @Transactional
@@ -718,6 +857,52 @@ public class TicketService {
 
     private static BigDecimal nullToZero(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private static Map<Long, TicketItemDto> itemMap(List<TicketItemDto> items) {
+        Map<Long, TicketItemDto> map = new LinkedHashMap<>();
+        for (TicketItemDto item : items) {
+            map.put(item.id(), item);
+        }
+        return map;
+    }
+
+    private TicketItemDto requireLineItem(Map<Long, TicketItemDto> itemsById, Long itemId) {
+        if (itemId == null || !itemsById.containsKey(itemId)) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "Item not found in this ticket");
+        }
+        return itemsById.get(itemId);
+    }
+
+    private boolean warehouseDeliveryAvailable(TicketSummaryDto s, long ticketId) {
+        // Goods reaching the warehouse is a permanent fact — the current status is enough
+        // when it's still GOODS_RECEIVED, but once a delivery flips it to
+        // PARTIALLY_DELIVERED we fall back to the GOODS_RECEIVED event so a stock-first
+        // partial delivery can't wrongly block the warehouse remainder (Case 8: 40 from
+        // stock delivered first, 60 imported still to go).
+        return FulfilmentStatus.GOODS_RECEIVED.equals(s.fulfillmentStatus())
+            || tickets.hasReceivedGoods(ticketId);
+    }
+
+    private static boolean hasRemainingDelivery(TicketDto ticket) {
+        return ticket.items().stream()
+            .anyMatch(item -> nullToZero(item.qty()).compareTo(nullToZero(item.qtyDelivered())) > 0);
+    }
+
+    private static String deliveryMessage(List<TicketItemDto> updatedItems, List<RecordDeliveryRequest.Line> lines) {
+        Map<Long, TicketItemDto> itemsById = itemMap(updatedItems);
+        return lines.stream()
+            .map(line -> {
+                TicketItemDto item = itemsById.get(line.itemId());
+                if (item == null) {
+                    return line.itemId() + ": +" + line.qty().stripTrailingZeros().toPlainString();
+                }
+                return line.itemId() + ": "
+                    + nullToZero(item.qtyDelivered()).stripTrailingZeros().toPlainString()
+                    + "/" + nullToZero(item.qty()).stripTrailingZeros().toPlainString();
+            })
+            .toList()
+            .toString();
     }
 
     private boolean canConfirmFinalPaymentNow(TicketSummaryDto s) {
@@ -1115,7 +1300,7 @@ public class TicketService {
         List<TicketActionDto> actions = new ArrayList<>();
         boolean active = DealLifecycle.ACTIVE.equals(s.lifecycle());
         if (active) {
-            addOperationalActions(actions, s, actor);
+            addOperationalActions(actions, ticket, actor);
             addStageActions(actions, s, actor);
             addPolicyActions(actions, s, actor);
             addQuotationActions(actions, ticket, actor);
@@ -1138,7 +1323,8 @@ public class TicketService {
         return new TicketActionsResponse(state, actions);
     }
 
-    private void addOperationalActions(List<TicketActionDto> actions, TicketSummaryDto s, UserPrincipal actor) {
+    private void addOperationalActions(List<TicketActionDto> actions, TicketDto ticket, UserPrincipal actor) {
+        TicketSummaryDto s = ticket.summary();
         if (canSubmit(s, actor)) actions.add(new TicketActionDto("SUBMIT", "operational", "ส่งขอราคา"));
         if (IMPORT_ROLES.contains(actor.role()) && TicketStatus.SUBMITTED.equals(s.status())) {
             actions.add(new TicketActionDto("PICKUP", "operational", "รับเรื่อง"));
@@ -1169,17 +1355,26 @@ public class TicketService {
             actions.add(new TicketActionDto("SET_BILLING", "payment", "ตั้งค่าการวางบิล",
                 List.of("dueDate")));
         }
-        if (IMPORT_ROLES.contains(actor.role()) && canIssueImportRequest(s)) {
+        if (FULFILMENT_ROLES.contains(actor.role()) && canIssueImportRequest(s)) {
             actions.add(new TicketActionDto("ISSUE_IMPORT_REQUEST", "fulfillment", "ออก IR"));
         }
-        if (IMPORT_ROLES.contains(actor.role()) && "IR_ISSUED".equals(s.fulfillmentStatus())) {
+        if (FULFILMENT_ROLES.contains(actor.role()) && FulfilmentStatus.IR_ISSUED.equals(s.fulfillmentStatus())) {
             actions.add(new TicketActionDto("IR_SENT", "fulfillment", "ส่ง IR"));
         }
-        if (IMPORT_ROLES.contains(actor.role()) && "IR_SENT".equals(s.fulfillmentStatus())) {
+        if (FULFILMENT_ROLES.contains(actor.role()) && FulfilmentStatus.IR_SENT.equals(s.fulfillmentStatus())) {
             actions.add(new TicketActionDto("SHIPPING", "fulfillment", "สินค้าเดินทาง"));
         }
-        if (IMPORT_ROLES.contains(actor.role()) && "SHIPPING".equals(s.fulfillmentStatus())) {
+        if (FULFILMENT_ROLES.contains(actor.role()) && FulfilmentStatus.SHIPPING.equals(s.fulfillmentStatus())) {
             actions.add(new TicketActionDto("GOODS_RECEIVED", "fulfillment", "รับสินค้า"));
+        }
+        if (canReserveStock(ticket, actor)) {
+            actions.add(new TicketActionDto("RESERVE_STOCK", "fulfillment", "จองสินค้าจากสต็อก",
+                List.of("lines")));
+        }
+        if (canRecordDelivery(ticket, actor)) {
+            actions.add(new TicketActionDto("RECORD_PARTIAL_DELIVERY", "fulfillment", "บันทึกการส่งสินค้า",
+                List.of("source", "lines")));
+            actions.add(new TicketActionDto("COMPLETE_DELIVERY", "fulfillment", "ส่งมอบครบ"));
         }
         if (ACCOUNT_ROLES.contains(actor.role()) && canConfirmFinalPaymentNow(s)) {
             actions.add(new TicketActionDto("FINAL_PAYMENT", "payment", "รับเงินครบ"));
@@ -1279,13 +1474,39 @@ public class TicketService {
             && !PaymentStage.FULLY_PAID.equals(s.paymentStage());
     }
 
+    private boolean canReserveStock(TicketDto ticket, UserPrincipal actor) {
+        return FULFILMENT_ROLES.contains(actor.role())
+            && !ticket.items().isEmpty()
+            && hasRemainingDelivery(ticket)
+            && !FulfilmentStatus.FULLY_DELIVERED.equals(ticket.summary().fulfillmentStatus());
+    }
+
+    private boolean canRecordDelivery(TicketDto ticket, UserPrincipal actor) {
+        if (!FULFILMENT_ROLES.contains(actor.role()) || !hasRemainingDelivery(ticket)) {
+            return false;
+        }
+        TicketSummaryDto s = ticket.summary();
+        boolean stockAvailable = ticket.items().stream()
+            .anyMatch(item -> nullToZero(item.qtyFromStock()).compareTo(nullToZero(item.qtyDelivered())) > 0);
+        boolean warehouseAvailable = warehouseDeliveryAvailable(s, s.id());
+        return FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()) || stockAvailable || warehouseAvailable;
+    }
+
     private boolean canClose(TicketSummaryDto s, UserPrincipal actor) {
         boolean legacyOk = TicketStatus.DOCUMENT_ISSUED.equals(s.status())
             && (s.paymentStatus() == null || "FULLY_PAID".equals(s.paymentStatus()));
         boolean dualTrackOk = TicketStatus.QUOTATION_ISSUED.equals(s.status())
             && "FULLY_PAID".equals(s.paymentStatus())
-            && "GOODS_RECEIVED".equals(s.fulfillmentStatus());
+            && deliveryGateComplete(s);
         return s.createdById() == actor.id() && (legacyOk || dualTrackOk);
+    }
+
+    private boolean deliveryGateComplete(TicketSummaryDto s) {
+        if (FulfilmentStatus.FULLY_DELIVERED.equals(s.fulfillmentStatus())) {
+            return true;
+        }
+        return FulfilmentStatus.GOODS_RECEIVED.equals(s.fulfillmentStatus())
+            && !tickets.hasDeliveries(s.id());
     }
 
     private boolean canCancel(TicketSummaryDto s, UserPrincipal actor) {

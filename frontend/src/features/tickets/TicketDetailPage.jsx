@@ -13,6 +13,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
   formatMoney,
   formatThaiDate,
+  fulfilmentStatusLabel,
   overdueBadgeLabel,
   paymentStageLabel,
   quotationRecipientLabel,
@@ -62,6 +63,9 @@ const EVENT_KIND_LABEL = {
   IR_SENT:                'ส่ง IR แล้ว',
   SHIPPING:               'สินค้าออกเดินทาง (Shipping)',
   GOODS_RECEIVED:         'รับสินค้าแล้ว',
+  STOCK_RESERVED:         'จองสินค้าจากสต็อก',
+  DELIVERY_RECORDED:      'บันทึกการส่งสินค้า',
+  DELIVERY_COMPLETED:     'ส่งมอบครบแล้ว',
   AWAITING_FINAL_PAYMENT: 'รอชำระส่วนที่เหลือ',
   FULLY_PAID:             'ชำระครบแล้ว',
 };
@@ -75,6 +79,7 @@ const PAYMENT_TRACK_KINDS = new Set([
 ]);
 const FULFILLMENT_TRACK_KINDS = new Set([
   'IR_ISSUED', 'IR_SENT', 'SHIPPING', 'GOODS_RECEIVED',
+  'STOCK_RESERVED', 'DELIVERY_RECORDED', 'DELIVERY_COMPLETED',
 ]);
 
 const TERMINAL = ['closed', 'cancelled'];
@@ -174,6 +179,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     lastFollowUpAt: '',
     nextFollowUpAt: '',
   });
+  const [deliveryModal, setDeliveryModal] = useState(false);
+  const [deliveryDraft, setDeliveryDraft] = useState({ source: 'WAREHOUSE', note: '', lines: {} });
+  const [stockModal, setStockModal] = useState(false);
+  const [stockDraft, setStockDraft] = useState({ note: '', lines: {} });
 
   // Comment
   const [commentText, setCommentText] = useState('');
@@ -219,6 +228,13 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   });
   const paymentReceipts = paymentsQuery.data ?? [];
 
+  const deliveriesQuery = useQuery({
+    queryKey: queryKeys.ticketDeliveries(ticketId),
+    queryFn: () => api.tickets.listDeliveries(ticketId).then((r) => r.items ?? []),
+    enabled: !!ticketId && !!ticket,
+  });
+  const deliveryRecords = deliveriesQuery.data ?? [];
+
   useEffect(() => {
     if (ticketQuery.error) showToast('error', ticketQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
   }, [ticketQuery.error, showToast]);
@@ -259,6 +275,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     queryClient.setQueryData(queryKeys.ticketDetail(ticketId), updatedTicket);
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketPayments(ticketId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.ticketDeliveries(ticketId) });
     queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary() });
     queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
@@ -286,6 +303,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     });
     setPaymentModal(false);
     setBillingModal(false);
+    setDeliveryModal(false);
+    setStockModal(false);
     setCommentText('');
     setDraftRaw({});
     setDraftFactoryCurr({});
@@ -444,8 +463,13 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const fs = summary.fulfillmentStatus;
   const isSales   = ROLE_PERMISSIONS.canCreateTickets.includes(role);
   const isImport  = ROLE_PERMISSIONS.canPickupTickets.includes(role);
+  const isFulfilment = isImport || role === 'ceo';
   const isAccount = ROLE_PERMISSIONS.canConfirmPayments.includes(role);
-  const dualTrackDone = ps === 'FULLY_PAID' && fs === 'GOODS_RECEIVED';
+  const deliveryDone = fs === 'GOODS_RECEIVED' || fs === 'FULLY_DELIVERED';
+  const dualTrackDone = ps === 'FULLY_PAID' && deliveryDone;
+  const totalOrdered = items.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+  const totalDelivered = items.reduce((sum, item) => sum + Number(item.qtyDelivered || 0), 0);
+  const deliveryProgress = totalOrdered > 0 ? Math.min(100, Math.round((totalDelivered / totalOrdered) * 100)) : 0;
 
   // Documents that already exist stay reachable from the deal-stage panel
   // through the later stages: the latest quotation file, and the issued
@@ -502,13 +526,16 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     confirmDepositPaid: hasAction('DEPOSIT_PAID') && st === 'quotation_issued' && ps === 'DEPOSIT_NOTICE_ISSUED' && isAccount,
     // DEPOSIT_PAID also qualifies: accounting may confirm the deposit before
     // import gets to the IR (mirrors TicketService.issueImportRequest).
-    issueImportRequest: hasAction('ISSUE_IMPORT_REQUEST') && st === 'quotation_issued' && fs == null && isImport,
-    markIrSent:         hasAction('IR_SENT') && st === 'quotation_issued' && fs === 'IR_ISSUED' && isImport,
-    markShipping:       hasAction('SHIPPING') && st === 'quotation_issued' && fs === 'IR_SENT' && isImport,
-    markGoodsReceived:  hasAction('GOODS_RECEIVED') && st === 'quotation_issued' && fs === 'SHIPPING' && isImport,
+    issueImportRequest: hasAction('ISSUE_IMPORT_REQUEST') && st === 'quotation_issued' && fs == null && isFulfilment,
+    markIrSent:         hasAction('IR_SENT') && st === 'quotation_issued' && fs === 'IR_ISSUED' && isFulfilment,
+    markShipping:       hasAction('SHIPPING') && st === 'quotation_issued' && fs === 'IR_SENT' && isFulfilment,
+    markGoodsReceived:  hasAction('GOODS_RECEIVED') && st === 'quotation_issued' && fs === 'SHIPPING' && isFulfilment,
     confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && isAccount,
     recordPayment:      hasAction('RECORD_PAYMENT') && isAccount,
     setBilling:         hasAction('SET_BILLING') && isAccount,
+    reserveStock:       hasAction('RESERVE_STOCK') && isFulfilment,
+    recordDelivery:     hasAction('RECORD_PARTIAL_DELIVERY') && isFulfilment,
+    completeDelivery:   hasAction('COMPLETE_DELIVERY') && isFulfilment,
     downloadRemainingInvoice: st === 'quotation_issued' && fs === 'GOODS_RECEIVED' && isSales,
   };
 
@@ -878,6 +905,30 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     await doAction(() => api.tickets.setBilling(ticketId, payload), 'บันทึกข้อมูลวางบิลแล้ว');
   }
 
+  async function handleRecordDelivery() {
+    const lines = items
+      .map((item) => ({ itemId: item.id, qty: Number(deliveryDraft.lines[item.id] || 0) }))
+      .filter((line) => line.qty > 0);
+    if (lines.length === 0) {
+      showToast('error', 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ');
+      return;
+    }
+    await doAction(() => api.tickets.recordDelivery(ticketId, {
+      source: deliveryDraft.source,
+      note: deliveryDraft.note.trim() || null,
+      lines,
+    }), 'บันทึกการส่งสินค้าแล้ว');
+  }
+
+  async function handleReserveStock() {
+    const lines = items.map((item) => ({
+      itemId: item.id,
+      qtyFromStock: Number(stockDraft.lines[item.id] || 0),
+      note: stockDraft.note.trim() || null,
+    }));
+    await doAction(() => api.tickets.reserveStock(ticketId, { lines }), 'บันทึกสินค้าจากสต็อกแล้ว');
+  }
+
   function openBillingModal() {
     setBillingDraft({
       billingDate: summary.billingDate ?? '',
@@ -900,6 +951,23 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       allowOverpayment: false,
     });
     setPaymentModal(true);
+  }
+
+  function openDeliveryModal() {
+    const source = fs === 'FROM_STOCK' ? 'STOCK' : 'WAREHOUSE';
+    const lines = {};
+    items.forEach((item) => {
+      lines[item.id] = String(Math.max(0, Number(item.qty || 0) - Number(item.qtyDelivered || 0)));
+    });
+    setDeliveryDraft({ source, note: '', lines });
+    setDeliveryModal(true);
+  }
+
+  function openStockModal() {
+    const lines = {};
+    items.forEach((item) => { lines[item.id] = String(item.qtyFromStock ?? 0); });
+    setStockDraft({ note: '', lines });
+    setStockModal(true);
   }
 
   return (
@@ -944,6 +1012,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         primaryAction={primaryAction}
         guidance={nextAction ?? waitingHint}
         actionLoading={actionLoading}
+        deliveryProgress={{ delivered: totalDelivered, ordered: totalOrdered }}
         onUpdateStage={(payload) => doAction(() => api.tickets.updateStage(ticketId, payload), 'อัปเดตสถานะดีลแล้ว')}
         onMarkLost={(payload) => doAction(() => api.tickets.markLost(ticketId, payload), 'บันทึกเสียงานแล้ว')}
         onReopen={() => doAction(() => api.tickets.reopen(ticketId, {}), 'เปิดดีลอีกครั้งแล้ว')}
@@ -1060,6 +1129,87 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                       {formatMoney(receipt.amount)}
                       <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
                         {receipt.recordedByName || '-'}{receipt.note ? ` · ${receipt.note}` : ''}
+                      </small>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header" style={{ alignItems: 'center' }}>
+          <h2>การส่งมอบสินค้า</h2>
+          <StatusBadge tone={fulfilmentStatusLabel(fs).tone}>
+            {fulfilmentStatusLabel(fs).label}
+          </StatusBadge>
+        </div>
+        <div style={{ padding: '0 18px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 12, alignItems: 'center' }}>
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
+                <strong>{totalDelivered.toLocaleString('en-US')} / {totalOrdered.toLocaleString('en-US')}</strong>
+                <span style={{ color: 'var(--color-text-muted)' }}>{deliveryProgress}%</span>
+              </div>
+              <div style={{ height: 8, borderRadius: 999, background: 'var(--color-surface-subtle)', overflow: 'hidden' }}>
+                <div style={{ width: `${deliveryProgress}%`, height: '100%', background: 'var(--color-success)' }} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              {can.reserveStock && (
+                <button type="button" className="secondary-button" disabled={actionLoading} onClick={openStockModal}>
+                  จองสินค้าจากสต็อก
+                </button>
+              )}
+              {can.recordDelivery && (
+                <button type="button" className="primary-button" disabled={actionLoading} onClick={openDeliveryModal}>
+                  บันทึกการส่งสินค้า
+                </button>
+              )}
+              {can.completeDelivery && (
+                <button type="button" className="secondary-button" disabled={actionLoading}
+                  onClick={() => doAction(() => api.tickets.completeDelivery(ticketId, { note: 'ส่งมอบครบจากหน้าดีล' }), 'ส่งมอบครบแล้ว')}>
+                  ส่งมอบครบ
+                </button>
+              )}
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {items.map((item) => {
+              const ordered = Number(item.qty || 0);
+              const delivered = Number(item.qtyDelivered || 0);
+              const remaining = Math.max(0, ordered - delivered);
+              return (
+                <div key={item.id} style={{ border: '1px solid var(--color-border-subtle)', borderRadius: 8, padding: '10px 12px', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 10 }}>
+                  <div>
+                    <strong>{item.brand} {item.model || ''}</strong>
+                    <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
+                      จากสต็อก {Number(item.qtyFromStock || 0).toLocaleString('en-US')} · คงเหลือ {remaining.toLocaleString('en-US')}
+                    </small>
+                  </div>
+                  <strong>{delivered.toLocaleString('en-US')} / {ordered.toLocaleString('en-US')}</strong>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 10 }}>
+            <h3 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700 }}>ประวัติส่งมอบ</h3>
+            {deliveriesQuery.isLoading ? (
+              <SkeletonText lines={2} />
+            ) : deliveryRecords.length === 0 ? (
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--color-text-muted)' }}>ยังไม่มีรายการส่งมอบ</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {deliveryRecords.map((record) => (
+                  <div key={record.deliveryId} style={{ display: 'grid', gridTemplateColumns: '110px 90px 1fr', gap: 10, alignItems: 'start', fontSize: 13 }}>
+                    <span style={{ color: 'var(--color-text-muted)' }}>{formatThaiDate(record.deliveredAt)}</span>
+                    <strong>{record.source}</strong>
+                    <span>
+                      {(record.items ?? []).map((line) => `${line.itemId}: ${Number(line.qty).toLocaleString('en-US')}`).join(', ')}
+                      <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
+                        {record.deliveredByName || '-'}{record.note ? ` · ${record.note}` : ''}
                       </small>
                     </span>
                   </div>
@@ -2073,6 +2223,101 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   onChange={(e) => setBillingDraft((draft) => ({ ...draft, nextFollowUpAt: e.target.value }))} />
               </label>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {deliveryModal && (
+        <Modal
+          title="บันทึกการส่งสินค้า"
+          onClose={() => setDeliveryModal(false)}
+          footer={(
+            <>
+              <button type="button" className="secondary-button" onClick={() => setDeliveryModal(false)}>ยกเลิก</button>
+              <button type="button" className="primary-button" disabled={actionLoading} onClick={handleRecordDelivery}>
+                บันทึก
+              </button>
+            </>
+          )}
+        >
+          <div style={{ display: 'grid', gap: 12 }}>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              แหล่งสินค้า
+              <select value={deliveryDraft.source}
+                onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, source: e.target.value }))}>
+                <option value="WAREHOUSE">WAREHOUSE</option>
+                <option value="STOCK">STOCK</option>
+              </select>
+            </label>
+            <div style={{ display: 'grid', gap: 8 }}>
+              {items.map((item) => {
+                const remaining = Math.max(0, Number(item.qty || 0) - Number(item.qtyDelivered || 0));
+                return (
+	                  <label key={item.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px', gap: 10, alignItems: 'center', fontSize: 13 }}>
+	                    <span>
+                        <span className="sr-only">จำนวนส่งมอบ</span>
+	                      <strong>{item.brand} {item.model || ''}</strong>
+                      <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
+                        คงเหลือ {remaining.toLocaleString('en-US')} · ส่งแล้ว {Number(item.qtyDelivered || 0).toLocaleString('en-US')}
+                      </small>
+                    </span>
+	                    <input type="number" min="0" max={remaining} step="0.01"
+                        aria-label={`จำนวนส่งมอบ ${item.brand} ${item.model || ''}`}
+	                      value={deliveryDraft.lines[item.id] ?? ''}
+                      onChange={(e) => setDeliveryDraft((draft) => ({
+                        ...draft,
+                        lines: { ...draft.lines, [item.id]: e.target.value },
+                      }))} />
+                  </label>
+                );
+              })}
+            </div>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              หมายเหตุ
+              <textarea rows={3} value={deliveryDraft.note}
+                onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, note: e.target.value }))} />
+            </label>
+          </div>
+        </Modal>
+      )}
+
+      {stockModal && (
+        <Modal
+          title="จองสินค้าจากสต็อก"
+          onClose={() => setStockModal(false)}
+          footer={(
+            <>
+              <button type="button" className="secondary-button" onClick={() => setStockModal(false)}>ยกเลิก</button>
+              <button type="button" className="primary-button" disabled={actionLoading} onClick={handleReserveStock}>
+                บันทึก
+              </button>
+            </>
+          )}
+        >
+          <div style={{ display: 'grid', gap: 12 }}>
+            {items.map((item) => (
+	              <label key={item.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px', gap: 10, alignItems: 'center', fontSize: 13 }}>
+	                <span>
+                    <span className="sr-only">จำนวนจากสต็อก</span>
+	                  <strong>{item.brand} {item.model || ''}</strong>
+                  <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
+                    สั่ง {Number(item.qty || 0).toLocaleString('en-US')} · จากสต็อกเดิม {Number(item.qtyFromStock || 0).toLocaleString('en-US')}
+                  </small>
+                </span>
+	                <input type="number" min="0" max={Number(item.qty || 0)} step="0.01"
+                    aria-label={`จำนวนจากสต็อก ${item.brand} ${item.model || ''}`}
+	                  value={stockDraft.lines[item.id] ?? ''}
+                  onChange={(e) => setStockDraft((draft) => ({
+                    ...draft,
+                    lines: { ...draft.lines, [item.id]: e.target.value },
+                  }))} />
+              </label>
+            ))}
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              เหตุผล / หมายเหตุ
+              <textarea rows={3} value={stockDraft.note}
+                onChange={(e) => setStockDraft((draft) => ({ ...draft, note: e.target.value }))} />
+            </label>
           </div>
         </Modal>
       )}

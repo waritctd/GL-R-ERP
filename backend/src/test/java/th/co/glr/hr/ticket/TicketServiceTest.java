@@ -880,6 +880,139 @@ class TicketServiceTest {
     }
 
     @Test
+    void reserveStock_fullCoverage_skipsIrAndStartsProcurement() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
+
+        service.reserveStock(10L, new StockReservationRequest(List.of(
+            new StockReservationRequest.Line(1L, new BigDecimal("100.00"), "พร้อมจากสต็อก"))), importActor);
+
+        verify(ticketRepo).reserveStock(eq(10L), argThat(lines ->
+            lines.size() == 1 && lines.get(0).qtyFromStock().compareTo(new BigDecimal("100.00")) == 0));
+        verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FROM_STOCK);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.PROCUREMENT);
+        verify(ticketRepo).addEvent(eq(10L), eq(3L), anyString(),
+            eq(TicketEventKind.STOCK_RESERVED), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void reserveStock_rejectsQuantityAboveOrdered() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
+
+        assertBadRequest(() -> service.reserveStock(10L, new StockReservationRequest(List.of(
+            new StockReservationRequest.Line(1L, new BigDecimal("101.00"), null))), importActor));
+    }
+
+    @Test
+    void recordPartialDelivery_updatesLineProgressAndStatus() {
+        TicketItemDto initialItem = deliveryItem(1L, "100.00", "0.00", "0.00");
+        TicketDto initial = stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(initialItem),
+            "FULLY_PAID", FulfilmentStatus.GOODS_RECEIVED, DealStage.PROCUREMENT, null);
+        TicketDto updated = ticketLike(initial, List.of(deliveryItem(1L, "100.00", "40.00", "0.00")),
+            FulfilmentStatus.GOODS_RECEIVED);
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
+
+        service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งบางส่วน",
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("40.00")))), importActor);
+
+        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(3L), eq("ส่งบางส่วน"),
+            argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("40.00")) == 0));
+        verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.PARTIALLY_DELIVERED);
+        verify(ticketRepo).addEvent(eq(10L), eq(3L), anyString(),
+            eq(TicketEventKind.DELIVERY_RECORDED), anyString(), anyString(), argThat(msg -> msg.contains("40/100")));
+    }
+
+    @Test
+    void recordPartialDelivery_remainingQuantityCompletesDeliveryAndStage() {
+        TicketItemDto initialItem = deliveryItem(1L, "100.00", "40.00", "0.00");
+        TicketDto initial = stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(initialItem),
+            "FULLY_PAID", FulfilmentStatus.PARTIALLY_DELIVERED, DealStage.PROCUREMENT, null);
+        TicketDto updated = ticketLike(initial, List.of(deliveryItem(1L, "100.00", "100.00", "0.00")),
+            FulfilmentStatus.PARTIALLY_DELIVERED);
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
+        // Warehouse availability now keys off the permanent GOODS_RECEIVED event, not a
+        // prior delivery-record source (see warehouseDeliveryAvailable — Case 8 fix).
+        when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
+
+        service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งส่วนที่เหลือ",
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00")))), importActor);
+
+        verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERED);
+        verify(ticketRepo).addEvent(eq(10L), eq(3L), anyString(),
+            eq(TicketEventKind.DELIVERY_COMPLETED), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void recordPartialDelivery_rejectsOverDeliveryAndWrongRoles() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "40.00", "0.00");
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "FULLY_PAID", FulfilmentStatus.GOODS_RECEIVED, DealStage.PROCUREMENT, null);
+
+        RecordDeliveryRequest over = new RecordDeliveryRequest("WAREHOUSE", null,
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("70.00"))));
+        assertConflict(() -> service.recordPartialDelivery(10L, over, importActor));
+        assertForbidden(() -> service.recordPartialDelivery(10L, over, salesActor));
+        assertForbidden(() -> service.recordPartialDelivery(10L, over, accountActor));
+        assertForbidden(() -> service.recordPartialDelivery(10L, over, salesManagerActor));
+    }
+
+    @Test
+    void recordPartialDelivery_rejectsInactiveDeal() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "FULLY_PAID", FulfilmentStatus.GOODS_RECEIVED, DealStage.PROCUREMENT, null,
+            DealLifecycle.ON_HOLD, DepositPolicy.REQUIRED);
+
+        assertConflict(() -> service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", null,
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("10.00")))), importActor));
+    }
+
+    @Test
+    void completeDelivery_deliversRemainingFromStockWhenCovered() {
+        TicketItemDto initialItem = deliveryItem(1L, "100.00", "40.00", "100.00");
+        TicketDto initial = stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(initialItem),
+            "FULLY_PAID", FulfilmentStatus.FROM_STOCK, DealStage.PROCUREMENT, null);
+        TicketDto updated = ticketLike(initial, List.of(deliveryItem(1L, "100.00", "100.00", "100.00")),
+            FulfilmentStatus.FROM_STOCK);
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
+
+        service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบจากสต็อก"), importActor);
+
+        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("STOCK"), eq(3L), eq("ส่งครบจากสต็อก"),
+            argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0));
+        verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
+    }
+
+    @Test
+    void recordPartialDelivery_stockFirstThenWarehouseRemainder_isAllowed() {
+        // Case 8 ordering regression: 40 from stock delivered first flips status to
+        // PARTIALLY_DELIVERED; the imported remainder must still be WAREHOUSE-deliverable
+        // because goods physically reached the warehouse (GOODS_RECEIVED event), even
+        // though the current fulfillment_status is no longer GOODS_RECEIVED.
+        TicketItemDto stockDelivered = deliveryItem(1L, "100.00", "40.00", "40.00");
+        TicketDto partiallyDelivered = stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED,
+            List.of(stockDelivered), "FULLY_PAID", FulfilmentStatus.PARTIALLY_DELIVERED,
+            DealStage.PROCUREMENT, null);
+        TicketDto fully = ticketLike(partiallyDelivered,
+            List.of(deliveryItem(1L, "100.00", "100.00", "40.00")), FulfilmentStatus.PARTIALLY_DELIVERED);
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(partiallyDelivered),
+            Optional.of(fully), Optional.of(fully));
+        // No prior WAREHOUSE delivery record — the goods-received EVENT is the signal.
+        when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
+
+        service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งของนำเข้าที่เหลือ",
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00")))), importActor);
+
+        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(3L), anyString(),
+            argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0));
+        verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
+    }
+
+    @Test
     void confirmFinalPayment_byAccount_completesPaymentTrack() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
         when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
@@ -1319,6 +1452,16 @@ class TicketServiceTest {
     }
 
     @Test
+    void close_dualTrackCompleteWithDeliveryRecords_transitionsToClosed() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", FulfilmentStatus.FULLY_DELIVERED);
+
+        service.close(10L, salesActor);
+
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.CLOSED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.CLOSED), isNull());
+    }
+
+    @Test
     void close_dualTrackRejectsWhenPaymentIncomplete() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
         assertConflict(() -> service.close(10L, salesActor));
@@ -1327,6 +1470,14 @@ class TicketServiceTest {
     @Test
     void close_dualTrackRejectsWhenFulfillmentIncomplete() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", "SHIPPING");
+        assertConflict(() -> service.close(10L, salesActor));
+    }
+
+    @Test
+    void close_rejectsGoodsReceivedWhenDeliveryRecordsAreInUseButNotComplete() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", "GOODS_RECEIVED");
+        when(ticketRepo.hasDeliveries(10L)).thenReturn(true);
+
         assertConflict(() -> service.close(10L, salesActor));
     }
 
@@ -1780,6 +1931,29 @@ class TicketServiceTest {
         return new TicketItemDto(1L, 10L, "Brand", "Model", null, null,
             "pcs", null, BigDecimal.ONE, null, null, null, null, null,
             null, "THB", 0, null, null, null, "PIECE", null, null);
+    }
+
+    private static TicketItemDto deliveryItem(long itemId, String qty, String delivered, String fromStock) {
+        return new TicketItemDto(itemId, 10L, "Brand", "Model", null, null,
+            "pcs", null, new BigDecimal(qty), null, null, null, null, null,
+            null, "THB", 0, null, null, null, "PIECE", null, null,
+            new BigDecimal(delivered), new BigDecimal(fromStock), null);
+    }
+
+    private static TicketDto ticketLike(TicketDto source, List<TicketItemDto> items, String fulfillmentStatus) {
+        TicketSummaryDto s = source.summary();
+        TicketSummaryDto summary = new TicketSummaryDto(
+            s.id(), s.code(), s.type(), s.title(), s.status(), s.priority(),
+            s.createdById(), s.createdByName(), s.assignedToId(), s.assignedToName(),
+            s.customerName(), s.customerId(), s.projectId(), s.projectName(),
+            s.contactId(), s.contactName(), s.note(), s.createdAt(), s.updatedAt(), s.closedAt(),
+            items.size(), s.hasEdits(), s.paymentStatus(), fulfillmentStatus,
+            s.salesStage(), s.lostReason(), s.lostAt(), s.stageUpdatedAt(),
+            s.lifecycle(), s.tenderRequirement(), s.depositPolicy(), s.depositPolicyReason(),
+            s.entryChannel(), s.billingDate(), s.dueDate(), s.creditTermDays(), s.lastFollowUpAt(),
+            s.nextFollowUpAt(), s.paymentStage(), s.amountPayable(), s.amountPaid(),
+            s.amountOutstanding(), s.overdue());
+        return new TicketDto(summary, items, source.events(), source.quotation(), source.quotations());
     }
 
     private static void assertForbidden(ThrowableAssert.ThrowingCallable action) {
