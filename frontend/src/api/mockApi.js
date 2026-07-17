@@ -99,6 +99,15 @@ db.paymentReceipts = db.paymentReceipts || [
 const partialDeliveryDemo = db.tickets.find((t) => t.id === 13);
 if (partialDeliveryDemo?.items?.[0]) {
   partialDeliveryDemo.items[0].qtyDelivered = 200;
+  partialDeliveryDemo.fulfillmentStatus = 'PARTIALLY_DELIVERED';
+}
+const onHoldDemoTicket = db.tickets.find((t) => t.id === 15);
+if (onHoldDemoTicket) {
+  onHoldDemoTicket.lifecycle = 'ON_HOLD';
+}
+const dormantDemoTicket = db.tickets.find((t) => t.id === 11);
+if (dormantDemoTicket) {
+  dormantDemoTicket.lifecycle = 'DORMANT';
 }
 db.deliveryRecords = db.deliveryRecords || [
   {
@@ -1067,6 +1076,10 @@ function dashboardTickets(user) {
     closedThisMonth: list.filter((ticket) => ticket.status === 'closed' && ticket.closedAt >= monthStart).length,
     cancelledThisMonth: list.filter((ticket) => ticket.status === 'cancelled' && ticket.updatedAt >= monthStart).length,
     overdueOver3Days: list.filter((ticket) => !['closed', 'cancelled', 'draft'].includes(ticket.status) && ticket.createdAt < threeDaysAgo).length,
+    onHold: list.filter((ticket) => ticket.lifecycle === 'ON_HOLD').length,
+    dormant: list.filter((ticket) => ticket.lifecycle === 'DORMANT').length,
+    paymentOverdue: list.filter((ticket) => derivePaymentFields(ticket).overdue).length,
+    partiallyDelivered: list.filter((ticket) => ticket.fulfillmentStatus === 'PARTIALLY_DELIVERED').length,
   };
 }
 
@@ -3053,6 +3066,10 @@ export const api = {
           closedThisMonth: tickets.closedThisMonth,
           cancelledThisMonth: tickets.cancelledThisMonth,
           overdueOver3Days: tickets.overdueOver3Days,
+          onHold: tickets.onHold,
+          dormant: tickets.dormant,
+          paymentOverdue: tickets.paymentOverdue,
+          partiallyDelivered: tickets.partiallyDelivered,
         },
       });
     },

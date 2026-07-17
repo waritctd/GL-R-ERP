@@ -62,6 +62,10 @@ describe('TicketDashboard', () => {
           quotationIssued: 2,
           closedThisMonth: 5,
           cancelledThisMonth: 0,
+          onHold: 2,
+          dormant: 1,
+          paymentOverdue: 3,
+          partiallyDelivered: 4,
         },
         notifications: { unread: 2 },
       },
@@ -86,6 +90,9 @@ describe('TicketDashboard', () => {
 
     expect(await screen.findByText('12')).not.toBeNull();
     expect(screen.getByText('เปิดอยู่ทั้งหมด')).not.toBeNull();
+    expect(screen.getByText('พักไว้ชั่วคราว')).not.toBeNull();
+    expect(screen.getByText('เกินกำหนดชำระ')).not.toBeNull();
+    expect(screen.getByText('ส่งมอบบางส่วน')).not.toBeNull();
     expect(api.dashboard.summary).toHaveBeenCalledTimes(1);
   });
 

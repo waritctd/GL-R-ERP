@@ -70,8 +70,56 @@ describe('TicketListPage', () => {
           createdByName: 'สมชาย ใจดี',
           createdAt: '2026-07-01T09:00:00.000Z',
           salesStage: 'QUOTE_DESIGN_SIDE',
+          lifecycle: 'ACTIVE',
           lostReason: null,
+          overdue: false,
+          fulfillmentStatus: null,
           stageUpdatedAt: '2026-07-01T09:00:00.000Z',
+        },
+        {
+          id: 503,
+          code: 'PR-2026-0503',
+          title: 'โครงการเกินกำหนด',
+          customerName: 'บริษัท เกินกำหนด จำกัด',
+          status: 'quotation_issued',
+          createdByName: 'สมชาย ใจดี',
+          createdAt: '2026-07-02T09:00:00.000Z',
+          salesStage: 'DELIVERY_SCHEDULING',
+          lifecycle: 'ACTIVE',
+          lostReason: null,
+          overdue: true,
+          fulfillmentStatus: 'PARTIALLY_DELIVERED',
+          stageUpdatedAt: '2026-07-02T09:00:00.000Z',
+        },
+        {
+          id: 504,
+          code: 'PR-2026-0504',
+          title: 'โครงการพักไว้',
+          customerName: 'บริษัท พักไว้ จำกัด',
+          status: 'in_review',
+          createdByName: 'สมชาย ใจดี',
+          createdAt: '2026-07-03T09:00:00.000Z',
+          salesStage: 'NEGOTIATION',
+          lifecycle: 'ON_HOLD',
+          lostReason: null,
+          overdue: false,
+          fulfillmentStatus: null,
+          stageUpdatedAt: '2026-07-03T09:00:00.000Z',
+        },
+        {
+          id: 505,
+          code: 'PR-2026-0505',
+          title: 'โครงการเงียบ',
+          customerName: 'บริษัท เงียบ จำกัด',
+          status: 'in_review',
+          createdByName: 'สมชาย ใจดี',
+          createdAt: '2026-07-04T09:00:00.000Z',
+          salesStage: 'NEGOTIATION',
+          lifecycle: 'DORMANT',
+          lostReason: null,
+          overdue: false,
+          fulfillmentStatus: null,
+          stageUpdatedAt: '2026-07-04T09:00:00.000Z',
         },
       ],
     });
@@ -108,5 +156,24 @@ describe('TicketListPage', () => {
     await waitFor(() => expect(api.tickets.create).toHaveBeenCalledWith({ title: 'โครงการใหม่' }));
     await waitFor(() => expect(api.tickets.list).toHaveBeenCalledTimes(2));
     expect(showToast).toHaveBeenCalledWith('success', 'สร้างดีลเรียบร้อย');
+  });
+
+  it('filters by lifecycle, overdue, and partial delivery chips', async () => {
+    renderTicketListPage();
+
+    expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /พักไว้ชั่วคราว/ }));
+    expect(screen.getByText('บริษัท พักไว้ จำกัด')).not.toBeNull();
+    expect(screen.queryByText('บริษัท ทดสอบ จำกัด')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /พักไว้ชั่วคราว/ }));
+    fireEvent.click(screen.getByRole('button', { name: /เกินกำหนด/ }));
+    expect(screen.getByText('บริษัท เกินกำหนด จำกัด')).not.toBeNull();
+    expect(screen.queryByText('บริษัท พักไว้ จำกัด')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /เกินกำหนด/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ส่งมอบบางส่วน/ }));
+    expect(screen.getByText('บริษัท เกินกำหนด จำกัด')).not.toBeNull();
+    expect(screen.queryByText('บริษัท เงียบ จำกัด')).toBeNull();
   });
 });

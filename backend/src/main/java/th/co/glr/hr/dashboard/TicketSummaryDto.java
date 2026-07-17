@@ -15,9 +15,13 @@ public record TicketSummaryDto(
     long totalOpen,
     long closedThisMonth,
     long cancelledThisMonth,
-    long overdueOver3Days
+    long overdueOver3Days,
+    long onHold,
+    long dormant,
+    long paymentOverdue,
+    long partiallyDelivered
 ) {
     public static TicketSummaryDto empty(String scope) {
-        return new TicketSummaryDto(scope, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        return new TicketSummaryDto(scope, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
 }

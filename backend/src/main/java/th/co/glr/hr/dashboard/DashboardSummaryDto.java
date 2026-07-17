@@ -24,7 +24,11 @@ public record DashboardSummaryDto(
     long quotationIssued,
     long closedThisMonth,
     long cancelledThisMonth,
-    long overdueOver3Days
+    long overdueOver3Days,
+    long onHold,
+    long dormant,
+    long paymentOverdue,
+    long partiallyDelivered
 ) {
     public static DashboardSummaryDto of(
         String role,
@@ -59,7 +63,11 @@ public record DashboardSummaryDto(
             tickets.quotationIssued(),
             tickets.closedThisMonth(),
             tickets.cancelledThisMonth(),
-            tickets.overdueOver3Days()
+            tickets.overdueOver3Days(),
+            tickets.onHold(),
+            tickets.dormant(),
+            tickets.paymentOverdue(),
+            tickets.partiallyDelivered()
         );
     }
 }
