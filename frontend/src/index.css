@@ -83,6 +83,21 @@
   --color-override: #7c3aed;
   --color-override-border: #a78bfa;
 
+  /* Deal pipeline phase accents (V50) — one hue per phase, adopted from the
+     user's Claude Design prototype (PipelineApp PHASE_TONE/hexTint). Used by
+     the งานขาย phase filter cards and stage progress bars; เสียงาน uses the
+     existing danger tokens. */
+  --color-phase-1: #6366f1;
+  --color-phase-1-bg: #eef2ff;
+  --color-phase-2: #0ea5e9;
+  --color-phase-2-bg: #e0f2fe;
+  --color-phase-3: #4f46e5;
+  --color-phase-3-bg: #eef2ff;
+  --color-phase-4: #0f766e;
+  --color-phase-4-bg: #ccfbf1;
+  --color-phase-5: #059669;
+  --color-phase-5-bg: #dcfce7;
+
   /* Neutrals / surfaces */
   --color-bg: #eef1f6;
   --color-bg-alt: #101827;

@@ -1,5 +1,22 @@
 import { useState } from 'react';
 import { Icon } from '../../components/common/Icon.jsx';
+
+// Per-phase accents (design tokens --color-phase-N, from the user's Claude
+// Design prototype). Static map — Tailwind needs full class names in source.
+const PHASE_FILL = {
+  1: 'bg-phase-1',
+  2: 'bg-phase-2',
+  3: 'bg-phase-3',
+  4: 'bg-phase-4',
+  5: 'bg-phase-5',
+};
+const PHASE_TEXT = {
+  1: 'text-phase-1',
+  2: 'text-phase-2',
+  3: 'text-phase-3',
+  4: 'text-phase-4',
+  5: 'text-phase-5',
+};
 import { dealStageLabel } from '../../utils/format.js';
 import { GATE_LABEL, SALES_PHASES, SALES_STAGES, stageIndex } from './stageMeta.js';
 
@@ -121,12 +138,12 @@ export function PhaseTracker({ salesStage, lost = false }) {
         const isCurrent = !lost && currentIdx >= firstIdx && currentIdx <= lastIdx;
         return (
           <div key={phase.id} className="min-w-0 flex flex-col gap-1.5" style={{ flex: steps.length }}>
-            <span className={`text-2xs font-extrabold ${isCurrent ? 'text-info' : 'text-text-muted'}`}>
+            <span className={`text-2xs font-extrabold ${isCurrent ? PHASE_TEXT[phase.id] : 'text-text-muted'}`}>
               เฟส {phase.id}
             </span>
             <div className="h-2 overflow-hidden rounded-full bg-surface-subtle">
               <span
-                className={`block h-full rounded-full ${lost ? 'bg-danger-bg' : 'bg-info'}`}
+                className={`block h-full rounded-full ${lost ? 'bg-danger-bg' : PHASE_FILL[phase.id]}`}
                 style={{ width: `${fill * 100}%` }}
               />
             </div>
@@ -159,7 +176,7 @@ export function StageProgressBar({ salesStage, lost = false }) {
             style={{ flex: steps.length }}
           >
             <span
-              className={`block h-full rounded-full ${lost ? 'bg-danger-bg' : 'bg-info'}`}
+              className={`block h-full rounded-full ${lost ? 'bg-danger-bg' : PHASE_FILL[phase.id]}`}
               style={{ width: `${fill * 100}%` }}
             />
           </span>

@@ -13,33 +13,16 @@ import { StageProgressBar } from './DealStageStepper.jsx';
 import { SALES_PHASES, stageMeta } from './stageMeta.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
 
-// Mirrors the StatusBadge tone palette (see src/styles.css .status-* rules) so the
-// filter-tab accent never drifts from the shared status-color tokens. The three
-// `border` accents (f59e0b/3b82f6/ef4444) are dot-accent colors with no existing
-// design token equivalent — left as literals deliberately (see handoff notes).
-const TONE_ACTIVE = {
-  primary: { bg: 'var(--color-info-dot)', color: 'var(--color-surface)', border: 'var(--color-info-dot)' },
-  neutral: { bg: 'var(--color-surface-subtle)', color: 'var(--color-icon-muted)', border: 'var(--color-text-faint)' },
-  warning: { bg: 'var(--color-warning-bg)', color: 'var(--color-warning)', border: '#f59e0b' },
-  info:    { bg: 'var(--color-info-bg)', color: 'var(--color-info)', border: '#3b82f6' },
-  success: { bg: 'var(--color-success-bg)', color: 'var(--color-success-dark)', border: 'var(--color-success-soft)' },
-  danger:  { bg: 'var(--color-danger-bg)', color: 'var(--color-danger-dark)', border: '#ef4444' },
+// Per-phase accents (design tokens --color-phase-N, adopted from the user's
+// Claude Design prototype). Static class map — Tailwind's scanner needs the
+// full class names in source, so no `bg-phase-${id}` interpolation.
+const PHASE_STYLES = {
+  1: { dot: 'bg-phase-1', active: 'border-phase-1 bg-phase-1-bg', num: 'text-phase-1' },
+  2: { dot: 'bg-phase-2', active: 'border-phase-2 bg-phase-2-bg', num: 'text-phase-2' },
+  3: { dot: 'bg-phase-3', active: 'border-phase-3 bg-phase-3-bg', num: 'text-phase-3' },
+  4: { dot: 'bg-phase-4', active: 'border-phase-4 bg-phase-4-bg', num: 'text-phase-4' },
+  5: { dot: 'bg-phase-5', active: 'border-phase-5 bg-phase-5-bg', num: 'text-phase-5' },
 };
-
-// Operational queue filters (secondary row): import/CEO/account work off these,
-// and dashboard queue cards deep-link here via ?status=... — keep them intact.
-const STATUS_TABS = [
-  { value: '',                 label: 'ทั้งหมด',              tone: 'primary' },
-  { value: 'draft',            label: 'ดีลเริ่มต้น (ยังไม่ขอราคา)', tone: 'neutral' },
-  { value: 'submitted',        label: 'รอรับเรื่อง',          tone: 'warning' },
-  { value: 'in_review',        label: 'กำลังดำเนินการ',       tone: 'info'    },
-  { value: 'price_proposed',   label: 'รอการอนุมัติ',         tone: 'warning' },
-  { value: 'approved',         label: 'อนุมัติแล้ว',          tone: 'success' },
-  { value: 'quotation_issued', label: 'ออกใบเสนอราคาแล้ว',   tone: 'success' },
-  { value: 'document_issued',  label: 'ออกใบแจ้งยอดแล้ว',    tone: 'success' },
-  { value: 'closed',           label: 'ปิดแล้ว',              tone: 'neutral' },
-  { value: 'cancelled',        label: 'ยกเลิกแล้ว',           tone: 'danger'  },
-];
 
 const STALE_DAYS = 7;
 
@@ -107,10 +90,11 @@ function DealCard({ deal }) {
 export function TicketListPage({ user, showToast }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  // Filters + search live in the URL so dashboard queue cards can deep-link via
-  // ?status=..., and list → detail → back keeps the active filters.
+  // Phase filter + search live in the URL so list → detail → back keeps them.
+  // The old operational ?status= chips row was removed as redundant with the
+  // phase cards (user decision) — the stage cell's sublabel still shows where
+  // the paperwork stands per deal.
   const [searchParams, setSearchParams] = useSearchParams();
-  const statusFilter = searchParams.get('status') ?? '';
   const phaseFilter = searchParams.get('phase') ?? '';
   const searchText = searchParams.get('q') ?? '';
   const [creating, setCreating] = useState(false);
@@ -118,8 +102,8 @@ export function TicketListPage({ user, showToast }) {
   const canCreate = ROLE_PERMISSIONS.canCreateTickets.includes(user.role);
 
   const ticketsQuery = useQuery({
-    queryKey: queryKeys.ticketList(statusFilter),
-    queryFn: () => api.tickets.list(statusFilter ? { status: statusFilter } : {}).then((response) => response.tickets || []),
+    queryKey: queryKeys.ticketList(''),
+    queryFn: () => api.tickets.list({}).then((response) => response.tickets || []),
   });
   const allDeals = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
   const loading = ticketsQuery.isLoading || ticketsQuery.isFetching;
@@ -180,32 +164,43 @@ export function TicketListPage({ user, showToast }) {
       <PageHeader
         title="งานขาย"
         subtitle="ดีลทั้งหมด · 1 ดีล = 1 ใบขอราคา ภายใต้โครงการ"
-        actions={canCreate ? (
-          <button type="button" className="primary-button" onClick={() => setCreating(true)}>
-            <Icon name="plus" />
-            สร้างดีลใหม่
-          </button>
-        ) : null}
+        actions={(
+          <>
+            <button type="button" className="icon-button" onClick={invalidateTicketsList} title="รีเฟรช" aria-label="รีเฟรช">
+              <Icon name="refresh" />
+            </button>
+            {canCreate ? (
+              <button type="button" className="primary-button" onClick={() => setCreating(true)}>
+                <Icon name="plus" />
+                สร้างดีลใหม่
+              </button>
+            ) : null}
+          </>
+        )}
       />
 
       {/* Phase summary cards double as filters — no 14-stage tab bar. */}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
         {SALES_PHASES.map((phase) => {
           const isActive = phaseFilter === String(phase.id);
+          const style = PHASE_STYLES[phase.id];
           return (
             <button
               key={phase.id}
               type="button"
               aria-pressed={isActive}
               className={`flex flex-col gap-1 rounded-xl border px-3 py-2.5 text-left ${
-                isActive ? 'border-info bg-info-bg-alt' : 'border-border bg-surface'
+                isActive ? style.active : 'border-border bg-surface'
               }`}
               onClick={() => updateParam('phase', isActive ? '' : String(phase.id))}
             >
-              <span className={`text-xl font-extrabold leading-none ${isActive ? 'text-info' : 'text-text'}`}>
-                {phaseCounts[phase.id]}
+              <span className="flex items-center gap-1.5">
+                <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${style.dot}`} />
+                <span className={`text-xl font-extrabold leading-none ${isActive ? style.num : 'text-text'}`}>
+                  {phaseCounts[phase.id]}
+                </span>
               </span>
-              <span className={`text-2xs font-bold leading-tight ${isActive ? 'text-info' : 'text-text-muted'}`}>
+              <span className={`text-2xs font-bold leading-tight ${isActive ? style.num : 'text-text-muted'}`}>
                 เฟส {phase.id} · {phase.name}
               </span>
             </button>
@@ -219,36 +214,11 @@ export function TicketListPage({ user, showToast }) {
           }`}
           onClick={() => updateParam('phase', phaseFilter === 'lost' ? '' : 'lost')}
         >
-          <span className="text-xl font-extrabold leading-none text-danger-dark">{phaseCounts.lost}</span>
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-danger" />
+            <span className="text-xl font-extrabold leading-none text-danger-dark">{phaseCounts.lost}</span>
+          </span>
           <span className="text-2xs font-bold leading-tight text-danger-dark">เสียงาน</span>
-        </button>
-      </div>
-
-      <div className="status-tabs">
-        {STATUS_TABS.map((tab) => {
-          const isActive = statusFilter === tab.value;
-          const ts = TONE_ACTIVE[tab.tone];
-          const activeStyle = isActive
-            ? { background: ts.bg, color: ts.color, borderColor: ts.border, fontWeight: 700 }
-            : {};
-          const dot = tab.tone !== 'primary'
-            ? <span style={{ width: 8, height: 8, borderRadius: '50%', background: ts.border, display: 'inline-block', flexShrink: 0 }} />
-            : null;
-          return (
-            <button
-              key={tab.value}
-              type="button"
-              className={`status-tab${isActive ? ' active' : ''}`}
-              style={activeStyle}
-              onClick={() => updateParam('status', tab.value)}
-            >
-              {dot}
-              {tab.label}
-            </button>
-          );
-        })}
-        <button type="button" className="icon-button" onClick={invalidateTicketsList} title="รีเฟรช" aria-label="รีเฟรช">
-          <Icon name="refresh" />
         </button>
       </div>
 

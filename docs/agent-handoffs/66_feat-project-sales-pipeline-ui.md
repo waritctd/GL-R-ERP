@@ -36,9 +36,9 @@ Claude Opus 4.8 (plan + implementation + browser verification)
 - `frontend/src/features/tickets/UpdateStageModal.jsx` (+test), `MarkLostModal.jsx` — deal
   props; backward-needs-note mirrored.
 - `frontend/src/features/tickets/TicketListPage.jsx` (+test) — THE one งานขาย page: phase
-  summary cards as filters (+เสียงาน bucket), operational status chips kept (dashboard
-  ?status= deep links intact, new "ดีลเริ่มต้น" draft chip), columns ดีล/โครงการ · ผู้ดูแล ·
-  สถานะดีล (stage badge + operational sublabel) · progress bar · days-stale; mobile card.
+  summary cards as the ONLY filter row (+เสียงาน bucket; see follow-up below — the status
+  chips were later removed as redundant), columns ดีล/โครงการ · ผู้ดูแล · สถานะดีล (stage
+  badge + operational sublabel) · progress bar · days-stale; mobile card.
 - `frontend/src/features/tickets/TicketDetailPage.jsx` — DealStagePanel wired through the
   existing doAction/applyTicketUpdate machinery; EDITABLE_STATUSES += 'draft'; new can.submit
   + "ส่งขอราคา" button (only when items exist) + no-items hint; event labels for
@@ -78,8 +78,9 @@ Claude Opus 4.8 (plan + implementation + browser verification)
 1. Impeccable hook flags in TicketListPage (#3b82f6/#ef4444 dot accents), TicketCreateModal,
    mockApi fixture HTML, styles.css side-tab are all pre-existing/documented — not restyled
    or suppressed in this diff.
-2. The dashboard's queue cards still deep-link ?status= — kept working; drafts get their own
-   chip but no dashboard card (lead deals are sales' private work).
+2. Dashboard queue cards show counts but land on the UNFILTERED list (status filtering was
+   dropped entirely in the follow-up below) — import/CEO locate work via the stage sublabel
+   or search.
 3. TicketDetailPage is large; DealStagePanel is a separate component but the page itself
    remains a refactor candidate (pre-existing).
 
@@ -87,3 +88,22 @@ Claude Opus 4.8 (plan + implementation + browser verification)
 Both branches ready for PR: backend `3c41449` first, then this one. After merge, optional
 follow-ups: demo-seed stages for the Render showcase, dashboard ภาพรวม gaining phase-funnel
 cards, C1–C12/D1–D6 pipelines (schema room reserved via ticket_event kinds pattern).
+
+---
+
+## Follow-up (2026-07-17): status chips removed, phase cards colored
+
+User feedback: the two filter rows were ซ้ำซ้อน. Changes:
+- `TicketListPage.jsx` — operational STATUS_TABS chips row + `?status=` filtering REMOVED;
+  the phase cards are THE filter. Each card now carries its phase color (dot + tinted
+  active state); เสียงาน keeps danger. Refresh button moved to the header actions.
+- `frontend/src/index.css` — new `--color-phase-1..5` (+`-bg`) design tokens, adopted from
+  the Claude Design prototype's PHASE_TONE/hexTint (per the PR #221 tokenization direction).
+- `DealStageStepper.jsx` — PhaseTracker + StageProgressBar segments now fill with their
+  phase color (static class maps; Tailwind needs literal class names).
+- `TicketDashboard.jsx` — queue cards still show counts but land on the unfiltered
+  งานขาย list (user chose to drop status filtering entirely).
+- Row-level operational sublabel under the stage badge KEPT (user decision) — that is now
+  the only list-level view of where the paperwork stands.
+- Verified: lint 0 errors · 118/118 tests · build PASS · mock browser (chips gone, colored
+  cards, เฟส 2 filter active state + per-phase bar segments).
