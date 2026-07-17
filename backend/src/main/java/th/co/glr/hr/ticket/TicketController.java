@@ -141,6 +141,41 @@ public class TicketController {
         return new TicketDetailResponse(ticketService.cancel(id, user));
     }
 
+    // ── Deal pipeline (V50) ─────────────────────────────────────────────────
+
+    @PostMapping("/{id}/stage")
+    TicketDetailResponse updateStage(@PathVariable long id,
+                                     @Valid @RequestBody UpdateStageRequest request,
+                                     HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.updateStage(id, request.stage(), request.note(), user));
+    }
+
+    @PostMapping("/{id}/lost")
+    TicketDetailResponse markLost(@PathVariable long id,
+                                  @Valid @RequestBody MarkLostRequest request,
+                                  HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.markLost(id, request.reason(), request.note(), user));
+    }
+
+    @PostMapping("/{id}/reopen")
+    TicketDetailResponse reopen(@PathVariable long id,
+                                @RequestBody(required = false) ReopenRequest request,
+                                HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(
+            ticketService.reopenDeal(id, request == null ? null : request.note(), user));
+    }
+
+    record UpdateStageRequest(@jakarta.validation.constraints.NotBlank String stage,
+                              @jakarta.validation.constraints.Size(max = 2000) String note) {}
+
+    record MarkLostRequest(@jakarta.validation.constraints.NotBlank String reason,
+                           @jakarta.validation.constraints.Size(max = 2000) String note) {}
+
+    record ReopenRequest(@jakarta.validation.constraints.Size(max = 2000) String note) {}
+
     @PostMapping("/{id}/factory-emails/send")
     Map<String, String> sendFactoryEmail(
         @PathVariable long id,

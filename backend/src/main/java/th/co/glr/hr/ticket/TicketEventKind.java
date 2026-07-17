@@ -28,6 +28,11 @@ public final class TicketEventKind {
     // CEO manual price override on a ticket item (2026-07-16 pricing-integrity audit) —
     // sales.ticket_event.chk_event_kind was extended for this in V48.
     public static final String PRICE_OVERRIDDEN      = "PRICE_OVERRIDDEN";
+    // Deal pipeline events (V50) — from_status/to_status carry DealStage codes.
+    // chk_event_kind was re-declared for these in V50.
+    public static final String STAGE_CHANGED         = "STAGE_CHANGED";
+    public static final String MARKED_LOST           = "MARKED_LOST";
+    public static final String REOPENED              = "REOPENED";
 
     private TicketEventKind() {}
 }
