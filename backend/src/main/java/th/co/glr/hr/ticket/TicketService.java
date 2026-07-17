@@ -573,6 +573,10 @@ public class TicketService {
         }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.GOODS_RECEIVED, s.status(), s.status(), null);
+        // Goods are at the warehouse (S17) — advance to DELIVERY_SCHEDULING (S18)
+        // so the "schedule delivery / collect balance" step is reached before
+        // DELIVERED, instead of the pipeline jumping PROCUREMENT → DELIVERED.
+        autoAdvanceStage(s, DealStage.DELIVERY_SCHEDULING, actor);
         return requireTicket(ticketId);
     }
 
@@ -615,7 +619,10 @@ public class TicketService {
                 .allMatch(item -> nullToZero(mergedStock.get(item.id())).compareTo(nullToZero(item.qty())) >= 0);
         if (allCovered && (s.fulfillmentStatus() == null || FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()))) {
             tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.FROM_STOCK);
-            autoAdvanceStage(s, DealStage.PROCUREMENT, actor);
+            // Fully covered from stock — no import journey, so the goods are ready
+            // now. Advance straight to DELIVERY_SCHEDULING (S18) rather than
+            // PROCUREMENT (an import step this deal never performs).
+            autoAdvanceStage(s, DealStage.DELIVERY_SCHEDULING, actor);
         }
         return requireTicket(ticketId);
     }
@@ -707,6 +714,11 @@ public class TicketService {
                 TicketEventKind.DELIVERY_COMPLETED, updatedSummary.status(), updatedSummary.status(),
                 completing ? "ส่งมอบครบจากปุ่ม completeDelivery" : message);
             autoAdvanceStage(updatedSummary, DealStage.DELIVERED, actor);
+            // Second CLOSED_PAID gate: a deal paid in full before delivery closes
+            // exactly when delivery completes (reload so fulfilment reflects the
+            // just-written FULLY_DELIVERED).
+            TicketSummaryDto afterDelivery = requireTicket(s.id()).summary();
+            maybeAdvanceClosedPaid(afterDelivery, "FULLY_PAID".equals(afterDelivery.paymentStatus()), actor);
         } else {
             tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.PARTIALLY_DELIVERED);
         }
@@ -729,7 +741,7 @@ public class TicketService {
                 tickets.updatePaymentStatus(ticketId, "FULLY_PAID");
                 tickets.addEvent(ticketId, actor.id(), actor.name(),
                     TicketEventKind.FULLY_PAID, s.status(), s.status(), null);
-                autoAdvanceStage(s, DealStage.CLOSED_PAID, actor);
+                maybeAdvanceClosedPaid(s, true, actor);
             }
             return requireTicket(ticketId);
         }
@@ -817,7 +829,7 @@ public class TicketService {
                 tickets.updatePaymentStatus(ticketId, "FULLY_PAID");
                 tickets.addEvent(ticketId, actor.id(), actor.name(),
                     TicketEventKind.FULLY_PAID, s.status(), s.status(), null);
-                autoAdvanceStage(s, DealStage.CLOSED_PAID, actor);
+                maybeAdvanceClosedPaid(s, true, actor);
             }
             return;
         }
@@ -1507,6 +1519,28 @@ public class TicketService {
         }
         return FulfilmentStatus.GOODS_RECEIVED.equals(s.fulfillmentStatus())
             && !tickets.hasDeliveries(s.id());
+    }
+
+    /**
+     * Advance to CLOSED_PAID only when BOTH gates are satisfied — payment is fully
+     * paid AND the goods have actually been delivered to the customer
+     * (FULLY_DELIVERED). CLOSED_PAID (S20) must not be reachable on payment alone
+     * while goods are still undelivered.
+     *
+     * This is deliberately STRICTER than {@link #deliveryGateComplete} (used by the
+     * manual {@link #close}): that predicate also accepts a legacy coarse deal at
+     * GOODS_RECEIVED with no delivery records, but GOODS_RECEIVED only means the
+     * goods reached GLR's warehouse (S17) — nothing has been handed to the
+     * customer. Auto-advancing on that would skip DELIVERED (S19) for a fully-paid
+     * deal whose stock is sitting in our warehouse, which is exactly the bug this
+     * gate exists to prevent. {@code paymentFullyPaid} is passed explicitly because
+     * the in-hand summary at the payment call sites was loaded before the FULLY_PAID
+     * write in the same transaction; fulfilment status is read live from s.
+     */
+    private void maybeAdvanceClosedPaid(TicketSummaryDto s, boolean paymentFullyPaid, UserPrincipal actor) {
+        if (paymentFullyPaid && FulfilmentStatus.FULLY_DELIVERED.equals(s.fulfillmentStatus())) {
+            autoAdvanceStage(s, DealStage.CLOSED_PAID, actor);
+        }
     }
 
     private boolean canCancel(TicketSummaryDto s, UserPrincipal actor) {

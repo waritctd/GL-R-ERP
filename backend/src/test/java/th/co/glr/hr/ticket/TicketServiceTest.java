@@ -900,7 +900,7 @@ class TicketServiceTest {
     }
 
     @Test
-    void reserveStock_fullCoverage_skipsIrAndStartsProcurement() {
+    void reserveStock_fullCoverage_skipsIrAndStartsDeliveryScheduling() {
         TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
             "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
@@ -911,7 +911,10 @@ class TicketServiceTest {
         verify(ticketRepo).reserveStock(eq(10L), argThat(lines ->
             lines.size() == 1 && lines.get(0).qtyFromStock().compareTo(new BigDecimal("100.00")) == 0));
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FROM_STOCK);
-        verify(ticketRepo).updateSalesStage(10L, DealStage.PROCUREMENT);
+        // Full stock coverage has no import journey — goods are ready now, so the
+        // deal jumps past PROCUREMENT straight to DELIVERY_SCHEDULING (S18).
+        verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERY_SCHEDULING);
+        verify(ticketRepo, never()).updateSalesStage(10L, DealStage.PROCUREMENT);
         verify(ticketRepo).addEvent(eq(10L), eq(3L), anyString(),
             eq(TicketEventKind.STOCK_RESERVED), anyString(), anyString(), anyString());
     }
@@ -1426,13 +1429,51 @@ class TicketServiceTest {
     }
 
     @Test
-    void confirmFinalPayment_autoAdvancesDealToClosedPaid() {
+    void confirmFinalPayment_afterFullDelivery_advancesDealToClosedPaid() {
+        // Delivered in full, then the balance is paid — both gates satisfied, so
+        // CLOSED_PAID advances.
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(),
-            "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED", DealStage.DELIVERED, null);
+            "AWAITING_FINAL_PAYMENT", FulfilmentStatus.FULLY_DELIVERED, DealStage.DELIVERED, null);
         when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
         when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("500.00"),
             new BigDecimal("1000.00"));
         service.confirmFinalPayment(10L, accountActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.CLOSED_PAID);
+    }
+
+    @Test
+    void confirmFinalPayment_goodsInWarehouseNotDelivered_doesNotAdvanceClosedPaid() {
+        // Case 9 / warehouse path: goods reached GLR's warehouse (GOODS_RECEIVED)
+        // and the deal sits at DELIVERY_SCHEDULING, but nothing has been delivered
+        // to the customer. Paying the balance in full must NOT close the deal —
+        // CLOSED_PAID requires FULLY_DELIVERED, not merely goods-in-warehouse.
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(),
+            "AWAITING_FINAL_PAYMENT", FulfilmentStatus.GOODS_RECEIVED, DealStage.DELIVERY_SCHEDULING, null);
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("500.00"),
+            new BigDecimal("1000.00"));
+        service.confirmFinalPayment(10L, accountActor);
+        verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
+        verify(ticketRepo, never()).updateSalesStage(10L, DealStage.CLOSED_PAID);
+    }
+
+    @Test
+    void deliveryCompletion_whenAlreadyFullyPaid_advancesClosedPaid() {
+        // Second CLOSED_PAID gate: a deal paid in full before delivery closes
+        // exactly when the final delivery completes both tracks.
+        TicketItemDto initialItem = deliveryItem(1L, "100.00", "0.00", "0.00");
+        TicketDto initial = stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(initialItem),
+            "FULLY_PAID", FulfilmentStatus.GOODS_RECEIVED, DealStage.DELIVERY_SCHEDULING, null);
+        TicketDto delivered = ticketLike(initial, List.of(deliveryItem(1L, "100.00", "100.00", "0.00")),
+            FulfilmentStatus.FULLY_DELIVERED);
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(delivered),
+            Optional.of(delivered), Optional.of(delivered));
+        when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
+
+        service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบ"), importActor);
+
+        verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERED);
         verify(ticketRepo).updateSalesStage(10L, DealStage.CLOSED_PAID);
     }
 
@@ -1450,18 +1491,22 @@ class TicketServiceTest {
     }
 
     @Test
-    void midFulfillmentTransitions_stayInsideProcurement() {
-        // IR_SENT / SHIPPING / GOODS_RECEIVED render from fulfillment_status — no stage writes.
+    void midFulfillmentTransitions_stayInsideProcurementUntilGoodsReceived() {
+        // IR_SENT / SHIPPING render from fulfillment_status — no stage writes; they
+        // stay inside PROCUREMENT.
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "DEPOSIT_PAID", "IR_ISSUED",
             DealStage.PROCUREMENT, null);
         service.markIrSent(10L, importActor);
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "DEPOSIT_PAID", "IR_SENT",
             DealStage.PROCUREMENT, null);
         service.markShipping(10L, importActor);
+        verify(ticketRepo, never()).updateSalesStage(org.mockito.ArgumentMatchers.anyLong(), anyString());
+        // Goods reaching the warehouse (S17) is the "ready to deliver" signal —
+        // markGoodsReceived advances the stage to DELIVERY_SCHEDULING (S18).
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "DEPOSIT_PAID", "SHIPPING",
             DealStage.PROCUREMENT, null);
         service.markGoodsReceived(10L, importActor);
-        verify(ticketRepo, never()).updateSalesStage(org.mockito.ArgumentMatchers.anyLong(), anyString());
+        verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERY_SCHEDULING);
     }
 
     @Test

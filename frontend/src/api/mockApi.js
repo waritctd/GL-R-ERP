@@ -566,7 +566,7 @@ function reconcilePaymentStatus(ticket, user) {
     if (ticket.paymentStatus !== 'FULLY_PAID') {
       ticket.paymentStatus = 'FULLY_PAID';
       pushEvent(ticket, user, 'FULLY_PAID', ticket.status, ticket.status, null);
-      autoAdvanceStage(ticket, 'CLOSED_PAID', user);
+      maybeAdvanceClosedPaid(ticket, user);
     }
     return;
   }
@@ -598,6 +598,17 @@ function deliveryComplete(status, ticketId = null) {
   if (status !== 'GOODS_RECEIVED') return false;
   if (ticketId == null) return true;
   return !(db.deliveryRecords ?? []).some((record) => record.ticketId === Number(ticketId));
+}
+
+// Mirrors TicketService.maybeAdvanceClosedPaid: CLOSED_PAID (S20) requires BOTH
+// gates — payment fully paid AND goods actually delivered (FULLY_DELIVERED).
+// Stricter than deliveryComplete (which accepts a legacy GOODS_RECEIVED deal for
+// the manual close): GOODS_RECEIVED means goods are only in GLR's warehouse, so
+// auto-advancing on it would skip DELIVERED for a fully-paid, undelivered deal.
+function maybeAdvanceClosedPaid(ticket, user) {
+  if (ticket.paymentStatus === 'FULLY_PAID' && ticket.fulfillmentStatus === 'FULLY_DELIVERED') {
+    autoAdvanceStage(ticket, 'CLOSED_PAID', user);
+  }
 }
 
 function hasRemainingDelivery(ticket) {
@@ -639,7 +650,9 @@ function reserveStockForTicket(ticket, user, payload = {}) {
     && ticket.items.every((item) => Number(item.qtyFromStock ?? 0) >= Number(item.qty ?? 0));
   if (allCovered && (ticket.fulfillmentStatus == null || ticket.fulfillmentStatus === 'FROM_STOCK')) {
     ticket.fulfillmentStatus = 'FROM_STOCK';
-    autoAdvanceStage(ticket, 'PROCUREMENT', user);
+    // Full stock coverage has no import journey — goods are ready now, so advance
+    // straight to DELIVERY_SCHEDULING (S18) rather than PROCUREMENT.
+    autoAdvanceStage(ticket, 'DELIVERY_SCHEDULING', user);
   }
 }
 
@@ -697,6 +710,9 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
     ticket.fulfillmentStatus = 'FULLY_DELIVERED';
     pushEvent(ticket, user, 'DELIVERY_COMPLETED', ticket.status, ticket.status, completing ? 'ส่งมอบครบ' : message);
     autoAdvanceStage(ticket, 'DELIVERED', user);
+    // Second CLOSED_PAID gate: a deal paid in full before delivery closes exactly
+    // when delivery completes.
+    maybeAdvanceClosedPaid(ticket, user);
   } else {
     ticket.fulfillmentStatus = 'PARTIALLY_DELIVERED';
   }
@@ -2238,6 +2254,9 @@ export const api = {
       }
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'GOODS_RECEIVED', ticket.status, ticket.status, null);
+      // Goods are at the warehouse (S17) — advance to DELIVERY_SCHEDULING (S18) so
+      // the "schedule delivery / collect balance" step is reached before DELIVERED.
+      autoAdvanceStage(ticket, 'DELIVERY_SCHEDULING', user);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
@@ -2255,7 +2274,7 @@ export const api = {
           ticket.paymentStatus = 'FULLY_PAID';
           ticket.updatedAt = new Date().toISOString().slice(0, 10);
           pushEvent(ticket, user, 'FULLY_PAID', ticket.status, ticket.status, null);
-          autoAdvanceStage(ticket, 'CLOSED_PAID', user);
+          maybeAdvanceClosedPaid(ticket, user);
         }
       } else {
         recordPaymentForTicket(ticket, user, {

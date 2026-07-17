@@ -42,7 +42,7 @@ export function DealStageStepper({ salesStage, lost = false }) {
         const lastIdx = stageIndex(steps[steps.length - 1].code);
         const isDone = currentIdx > lastIdx;
         const isCurrent = currentIdx >= firstIdx && currentIdx <= lastIdx;
-        const doneCount = Math.min(Math.max(currentIdx - firstIdx + (isDone ? 1 : 1), 0), steps.length);
+        const doneCount = Math.min(Math.max(currentIdx - firstIdx + 1, 0), steps.length);
         const isOpen = !!open[phase.id];
         return (
           <div key={phase.id} className="border-b border-border last:border-b-0">
