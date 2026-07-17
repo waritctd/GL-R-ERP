@@ -194,6 +194,30 @@ export function entryChannelLabel(value) {
   return { label: map[value] ?? value ?? '-', tone: 'neutral' };
 }
 
+export function quotationRecipientLabel(value) {
+  const map = {
+    DESIGNER: 'ผู้ออกแบบ',
+    OWNER: 'เจ้าของ',
+    BUYER: 'ผู้ซื้อ-ผู้รับเหมา',
+    UNSPECIFIED: 'ไม่ระบุ',
+  };
+  return { label: map[value] ?? value ?? '-', tone: 'neutral' };
+}
+
+export function quotationStatusLabel(value) {
+  const map = {
+    DRAFT: { label: 'แบบร่าง', tone: 'neutral' },
+    ISSUED: { label: 'ออกแล้ว', tone: 'success' },
+    SENT: { label: 'ส่งแล้ว', tone: 'info' },
+    ACCEPTED: { label: 'รับแล้ว', tone: 'success' },
+    REJECTED: { label: 'ปฏิเสธ', tone: 'danger' },
+    EXPIRED: { label: 'หมดอายุ', tone: 'warning' },
+    CANCELLED: { label: 'ยกเลิก', tone: 'danger' },
+    SUPERSEDED: { label: 'ถูกแทนที่', tone: 'neutral' },
+  };
+  return map[value] ?? { label: value || '-', tone: 'neutral' };
+}
+
 // Payroll run status -> StatusBadge tone. Canonical source; do not
 // re-add a page-local `statusInfo`/map for payroll status elsewhere.
 export function payrollStatusLabel(status) {

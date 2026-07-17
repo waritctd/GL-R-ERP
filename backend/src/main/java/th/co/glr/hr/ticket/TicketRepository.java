@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.LocalDate;
 import java.time.Year;
 import java.util.List;
 import java.util.Map;
@@ -283,39 +284,101 @@ public class TicketRepository {
 
     @Transactional
     public QuotationDto createQuotation(long ticketId, String number, long issuedById, BigDecimal totalAmount) {
-        // supersede all current (non-superseded) quotations for this ticket
+        return createQuotation(ticketId, number, issuedById, totalAmount, QuotationRecipient.UNSPECIFIED,
+            null, null, null, null, null);
+    }
+
+    @Transactional
+    public QuotationDto createQuotation(long ticketId, String number, long issuedById, BigDecimal totalAmount,
+                                        String recipientType, String recipientLabel, String paymentTerms,
+                                        String leadTime, String deliveryTerms, LocalDate validityDate) {
+        List<Long> parentIds = jdbc.query("""
+            SELECT quotation_id
+              FROM sales.quotation
+             WHERE ticket_id = :ticketId AND recipient_type = :recipientType
+             ORDER BY quotation_version DESC, quotation_id DESC
+             LIMIT 1
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("recipientType", recipientType),
+            (rs, rowNum) -> rs.getLong("quotation_id"));
+        Long parentQuotationId = parentIds.isEmpty() ? null : parentIds.get(0);
+
+        // Supersede only this recipient chain; accepted/rejected/cancelled rows remain as history.
         jdbc.update("""
             UPDATE sales.quotation
                SET doc_status = 'SUPERSEDED'
-             WHERE ticket_id = :ticketId AND doc_status <> 'SUPERSEDED'
-            """, Map.of("ticketId", ticketId));
+             WHERE ticket_id = :ticketId
+               AND recipient_type = :recipientType
+               AND doc_status NOT IN ('SUPERSEDED','ACCEPTED','REJECTED','CANCELLED')
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("recipientType", recipientType));
 
         Integer maxVersion = jdbc.queryForObject("""
             SELECT COALESCE(MAX(quotation_version), 0)
               FROM sales.quotation
-             WHERE ticket_id = :ticketId
-            """, Map.of("ticketId", ticketId), Integer.class);
+             WHERE ticket_id = :ticketId AND recipient_type = :recipientType
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("recipientType", recipientType),
+            Integer.class);
         int nextVersion = (maxVersion == null ? 0 : maxVersion) + 1;
 
         // generateQuotation() issues and transitions the ticket to QUOTATION_ISSUED in one
         // step (no separate draft phase like deposit notices), so the row starts ISSUED.
         jdbc.update("""
             INSERT INTO sales.quotation
-                (ticket_id, number, issued_by, total_amount, currency, quotation_version, doc_status)
-            VALUES (:ticketId, :number, :issuedBy, :totalAmount, 'THB', :version, 'ISSUED')
+                (ticket_id, number, issued_by, total_amount, currency, quotation_version, doc_status,
+                 recipient_type, recipient_label, payment_terms, lead_time, delivery_terms,
+                 validity_date, parent_quotation_id)
+            VALUES (:ticketId, :number, :issuedBy, :totalAmount, 'THB', :version, 'ISSUED',
+                    :recipientType, :recipientLabel, :paymentTerms, :leadTime, :deliveryTerms,
+                    :validityDate, :parentQuotationId)
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId)
                 .addValue("number", number)
                 .addValue("issuedBy", issuedById)
                 .addValue("totalAmount", totalAmount)
-                .addValue("version", nextVersion));
+                .addValue("version", nextVersion)
+                .addValue("recipientType", recipientType)
+                .addValue("recipientLabel", recipientLabel)
+                .addValue("paymentTerms", paymentTerms)
+                .addValue("leadTime", leadTime)
+                .addValue("deliveryTerms", deliveryTerms)
+                .addValue("validityDate", validityDate)
+                .addValue("parentQuotationId", parentQuotationId));
 
         int versionToFind = nextVersion;
         return findQuotationsByTicketId(ticketId).stream()
-            .filter(q -> q.quotationVersion() == versionToFind)
+            .filter(q -> q.quotationVersion() == versionToFind && recipientType.equals(q.recipientType()))
             .findFirst()
             .orElseThrow();
+    }
+
+    public boolean markQuotationStatus(long ticketId, long quotationId, String status) {
+        String timestampAssignment = switch (status) {
+            case QuotationStatus.SENT -> "sent_at = now(),";
+            case QuotationStatus.ACCEPTED -> "accepted_at = now(),";
+            case QuotationStatus.REJECTED -> "rejected_at = now(),";
+            default -> "";
+        };
+        int rows = jdbc.update("""
+            UPDATE sales.quotation
+               SET doc_status = :status,
+                   %s
+                   issued_at = issued_at
+             WHERE quotation_id = :quotationId AND ticket_id = :ticketId
+            """.formatted(timestampAssignment),
+            new MapSqlParameterSource()
+                .addValue("status", status)
+                .addValue("quotationId", quotationId)
+                .addValue("ticketId", ticketId));
+        return rows > 0;
     }
 
     // --- quotation snapshot (V49: freeze issued quotations at issue time) ---
@@ -549,26 +612,46 @@ public class TicketRepository {
             SELECT q.quotation_id, q.ticket_id, q.number, q.issued_by,
                    NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS issued_by_name,
                    q.issued_at, q.pdf_path, q.total_amount, q.currency,
-                   q.quotation_version, q.doc_status
+                   q.quotation_version, q.doc_status,
+                   q.recipient_type, q.recipient_label, q.payment_terms, q.lead_time,
+                   q.delivery_terms, q.validity_date, q.sent_at, q.accepted_at,
+                   q.rejected_at, q.parent_quotation_id
               FROM sales.quotation q
               JOIN hr.employee e ON e.employee_id = q.issued_by
              WHERE q.ticket_id = :id
-             ORDER BY q.quotation_version DESC
+             ORDER BY q.issued_at DESC, q.quotation_id DESC
             """,
             Map.of("id", ticketId),
-            (rs, rowNum) -> new QuotationDto(
-                rs.getLong("quotation_id"),
-                rs.getLong("ticket_id"),
-                rs.getString("number"),
-                rs.getLong("issued_by"),
-                rs.getString("issued_by_name"),
-                rs.getTimestamp("issued_at").toInstant(),
-                rs.getString("pdf_path"),
-                rs.getBigDecimal("total_amount"),
-                rs.getString("currency"),
-                rs.getInt("quotation_version"),
-                rs.getString("doc_status")
-            ));
+            (rs, rowNum) -> {
+                Timestamp sentAt = rs.getTimestamp("sent_at");
+                Timestamp acceptedAt = rs.getTimestamp("accepted_at");
+                Timestamp rejectedAt = rs.getTimestamp("rejected_at");
+                long parentRaw = rs.getLong("parent_quotation_id");
+                Long parentQuotationId = rs.wasNull() ? null : parentRaw;
+                return new QuotationDto(
+                    rs.getLong("quotation_id"),
+                    rs.getLong("ticket_id"),
+                    rs.getString("number"),
+                    rs.getLong("issued_by"),
+                    rs.getString("issued_by_name"),
+                    rs.getTimestamp("issued_at").toInstant(),
+                    rs.getString("pdf_path"),
+                    rs.getBigDecimal("total_amount"),
+                    rs.getString("currency"),
+                    rs.getInt("quotation_version"),
+                    rs.getString("doc_status"),
+                    rs.getString("recipient_type"),
+                    rs.getString("recipient_label"),
+                    rs.getString("payment_terms"),
+                    rs.getString("lead_time"),
+                    rs.getString("delivery_terms"),
+                    rs.getObject("validity_date", LocalDate.class),
+                    sentAt != null ? sentAt.toInstant() : null,
+                    acceptedAt != null ? acceptedAt.toInstant() : null,
+                    rejectedAt != null ? rejectedAt.toInstant() : null,
+                    parentQuotationId
+                );
+            });
     }
 
     private void insertItems(long ticketId, List<TicketItemRequest> items) {

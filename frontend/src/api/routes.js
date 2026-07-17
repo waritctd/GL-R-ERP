@@ -47,6 +47,7 @@ export const API_ROUTES = {
     createDocDraft: (id) => `/api/tickets/${id}/deposit-notice/draft`,
     listDocs: (id) => `/api/tickets/${id}/deposit-notices`,
     revision: (id) => `/api/tickets/${id}/revision`,
+    quotationStatus: (id, quotationId, action) => `/api/tickets/${id}/quotations/${quotationId}/${action}`,
     quotationFile: (id, quotationId, fmt) => `/api/tickets/${id}/quotations/${quotationId}/file?format=${fmt ?? 'xlsx'}`,
   },
   depositNotices: {

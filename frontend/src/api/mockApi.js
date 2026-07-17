@@ -25,6 +25,25 @@ import {
 
 const db = createDemoDatabase();
 
+function normalizeQuotation(q, ticket, index = 0) {
+  return {
+    ...q,
+    ticketId: q.ticketId ?? ticket.id,
+    quotationVersion: q.quotationVersion ?? index + 1,
+    docStatus: q.docStatus ?? 'ISSUED',
+    recipientType: q.recipientType ?? 'UNSPECIFIED',
+    recipientLabel: q.recipientLabel ?? null,
+    paymentTerms: q.paymentTerms ?? null,
+    leadTime: q.leadTime ?? null,
+    deliveryTerms: q.deliveryTerms ?? null,
+    validityDate: q.validityDate ?? null,
+    sentAt: q.sentAt ?? null,
+    acceptedAt: q.acceptedAt ?? null,
+    rejectedAt: q.rejectedAt ?? null,
+    parentQuotationId: q.parentQuotationId ?? null,
+  };
+}
+
 // Deal pipeline backfill — mirrors V50__deal_sales_pipeline.sql's UPDATE so the
 // demo deals always land exactly where the real migration would put them.
 for (const t of db.tickets) {
@@ -46,6 +65,24 @@ for (const t of db.tickets) {
   t.depositPolicy = t.depositPolicy ?? 'REQUIRED';
   t.depositPolicyReason = t.depositPolicyReason ?? null;
   t.entryChannel = t.entryChannel ?? 'DESIGNER_LED';
+  const existingQuotations = t.quotations ?? (t.quotation ? [t.quotation] : []);
+  t.quotations = existingQuotations.map((q, index) => normalizeQuotation(q, t, index));
+  if (t.id === 6 && t.quotations.length === 1) {
+    t.quotations[0] = { ...t.quotations[0], recipientType: 'DESIGNER', recipientLabel: 'Premium Design Group' };
+    t.quotations.unshift(normalizeQuotation({
+      ...t.quotations[0],
+      id: 101,
+      number: 'QT-2026-0101',
+      issuedAt: '2026-06-17T09:30:00Z',
+      recipientType: 'OWNER',
+      recipientLabel: t.customerName,
+      quotationVersion: 1,
+      docStatus: 'SENT',
+      sentAt: '2026-06-17T10:00:00Z',
+      parentQuotationId: null,
+    }, t, 0));
+  }
+  t.quotation = t.quotations[0] ?? null;
 }
 db.commissions = db.commissions || [];
 db.leaveTypes = db.leaveTypes || [
@@ -529,6 +566,29 @@ function autoAdvanceStage(ticket, targetStage, user) {
   ticket.salesStage = targetStage;
   ticket.stageUpdatedAt = new Date().toISOString();
   pushEvent(ticket, user, 'STAGE_CHANGED', fromStage, targetStage, 'อัตโนมัติจากขั้นตอนของดีล');
+}
+
+function markQuotationStatus(id, quotationId, targetStatus, eventKind, payload = {}) {
+  const user = requireSession();
+  const ticket = findTicketRaw(Number(id));
+  requireActive(ticket);
+  const owner = user.role === 'sales' && ticket.createdById === user.id;
+  if (!owner && user.role !== 'ceo') fail('Forbidden', 403);
+  const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
+  if (!quotation) fail('Quotation not found', 404);
+  const legal = targetStatus === 'SENT'
+    ? ['ISSUED', 'SENT'].includes(quotation.docStatus)
+    : ['ISSUED', 'SENT'].includes(quotation.docStatus);
+  if (!legal) fail(`Cannot mark quotation ${targetStatus} from ${quotation.docStatus}`, 409);
+  quotation.docStatus = targetStatus;
+  const now = new Date().toISOString();
+  if (targetStatus === 'SENT') quotation.sentAt = now;
+  if (targetStatus === 'ACCEPTED') quotation.acceptedAt = now;
+  if (targetStatus === 'REJECTED') quotation.rejectedAt = now;
+  ticket.updatedAt = now.slice(0, 10);
+  pushEvent(ticket, user, eventKind, ticket.status, ticket.status,
+    `${quotation.number} (${quotation.recipientType})${(payload.note || '').trim() ? ` — ${payload.note.trim()}` : ''}`);
+  return delay({ ticket: buildTicketDetail(ticket) });
 }
 
 function buildTicketDetail(ticket) {
@@ -1196,7 +1256,16 @@ export const api = {
           add('APPROVE', 'operational', 'อนุมัติราคา');
           add('REJECT', 'operational', 'ตีกลับราคา', { requiredFields: ['reason'] });
         }
-        if (owner && ['approved', 'quotation_issued'].includes(ticket.status)) add('GENERATE_QUOTATION', 'doc', 'ออกใบเสนอราคา');
+        if (owner && ['approved', 'quotation_issued'].includes(ticket.status)) add('GENERATE_QUOTATION', 'doc', 'ออกใบเสนอราคา', { requiredFields: ['recipientType'] });
+        const quotationManager = owner || user.role === 'ceo';
+        const legalHeads = (ticket.quotations ?? []).filter((q) => ['ISSUED', 'SENT'].includes(q.docStatus));
+        if (quotationManager && legalHeads.some((q) => q.docStatus === 'ISSUED')) {
+          add('MARK_QUOTATION_SENT', 'doc', 'บันทึกว่าส่งใบเสนอราคาแล้ว', { requiredFields: ['quotationId'] });
+        }
+        if (quotationManager && legalHeads.length > 0) {
+          add('MARK_QUOTATION_ACCEPTED', 'doc', 'บันทึกลูกค้ารับใบเสนอราคา', { requiredFields: ['quotationId'] });
+          add('MARK_QUOTATION_REJECTED', 'doc', 'บันทึกลูกค้าปฏิเสธใบเสนอราคา', { requiredFields: ['quotationId'] });
+        }
         if (owner && ticket.status === 'quotation_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')) add('CONFIRM_CUSTOMER', 'payment', 'ลูกค้ายืนยัน');
         if (owner && ticket.status === 'quotation_issued' && ticket.paymentStatus === 'CUSTOMER_CONFIRMED' && !depositBypassesNotice(ticket)) add('ISSUE_DEPOSIT_NOTICE', 'doc', 'ออกใบแจ้งมัดจำ');
         if (['account', 'ceo'].includes(user.role) && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') add('DEPOSIT_PAID', 'payment', 'รับมัดจำ');
@@ -1493,7 +1562,7 @@ export const api = {
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
-    async quotation(id) {
+    async quotation(id, payload = {}) {
       const user = hasRole('sales');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
@@ -1502,16 +1571,27 @@ export const api = {
       }
       const fromStatus = ticket.status;
       if (ticket.createdById !== user.id) fail('Forbidden', 403);
+      const recipientType = (payload.recipientType || '').trim();
+      if (!['DESIGNER', 'OWNER', 'BUYER'].includes(recipientType)) fail(`Unknown quotation recipient '${recipientType}'`, 400);
+      if (!ticket.quotations) ticket.quotations = ticket.quotation ? [normalizeQuotation(ticket.quotation, ticket, 0)] : [];
+      const chain = ticket.quotations.filter((q) => q.recipientType === recipientType);
+      const acceptedInChain = chain.some((q) => q.docStatus === 'ACCEPTED');
+      if ((acceptedInChain || ticket.paymentStatus != null) && !(payload.amendmentReason || '').trim()) {
+        fail('ต้องระบุเหตุผลการแก้ไขใบเสนอราคาหลังลูกค้ายืนยันหรือมีใบที่ accepted แล้ว', 400);
+      }
       const total = ticket.items.reduce((sum, item) => sum + (item.approvedPrice || 0) * item.qty, 0);
 
-      // init quotations array if not present
-      if (!ticket.quotations) ticket.quotations = ticket.quotation ? [{ ...ticket.quotation, quotationVersion: 1, docStatus: 'SUPERSEDED' }] : [];
+      // Supersede only the selected recipient chain; accepted/rejected/cancelled rows stay as history.
+      ticket.quotations.forEach((q) => {
+        if (q.recipientType === recipientType && !['SUPERSEDED', 'ACCEPTED', 'REJECTED', 'CANCELLED'].includes(q.docStatus)) {
+          q.docStatus = 'SUPERSEDED';
+        }
+      });
 
-      // supersede existing non-superseded quotations
-      ticket.quotations.forEach((q) => { if (q.docStatus !== 'SUPERSEDED') q.docStatus = 'SUPERSEDED'; });
-
-      const nextVersion = ticket.quotations.length + 1;
-      const nextQNum = db.tickets.flatMap((t) => t.quotations ?? (t.quotation ? [t.quotation] : [])).length + 1;
+      const nextVersion = Math.max(0, ...chain.map((q) => q.quotationVersion || 0)) + 1;
+      const allQuotationIds = db.tickets.flatMap((t) => t.quotations ?? (t.quotation ? [t.quotation] : [])).map((q) => q.id || 0);
+      const nextQNum = Math.max(0, ...allQuotationIds) + 1;
+      const parent = chain.slice().sort((a, b) => (b.quotationVersion || 0) - (a.quotationVersion || 0))[0] ?? null;
 
       // Freeze this quotation at issue time (mirrors TicketService.generateQuotation +
       // V49's quotation_item/customer-header columns): deep-copy the priced items and the
@@ -1528,7 +1608,17 @@ export const api = {
         issuedById: user.id, issuedByName: user.name,
         issuedAt: new Date().toISOString(), pdfPath: null,
         totalAmount: total, currency: 'THB',
-        quotationVersion: nextVersion, docStatus: 'DRAFT',
+        quotationVersion: nextVersion, docStatus: 'ISSUED',
+        recipientType,
+        recipientLabel: payload.recipientLabel || null,
+        paymentTerms: payload.paymentTerms || null,
+        leadTime: payload.leadTime || null,
+        deliveryTerms: payload.deliveryTerms || null,
+        validityDate: payload.validityDate || null,
+        sentAt: null,
+        acceptedAt: null,
+        rejectedAt: null,
+        parentQuotationId: parent ? parent.id : null,
         // Snapshot (V49) — undefined/empty on any quotation object built before this change.
         items: priceItems.map((it) => ({ ...it })),
         // Fidelity rule (mirrors TicketService.generateQuotation): freeze the TICKET's
@@ -1544,8 +1634,24 @@ export const api = {
 
       ticket.status = 'quotation_issued';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'QUOTATION_ISSUED', fromStatus, 'quotation_issued', null);
+      const message = `recipient_type=${recipientType}, version=${nextVersion}`
+        + ((payload.amendmentReason || '').trim() ? ` — amendment: ${payload.amendmentReason.trim()}` : '');
+      pushEvent(ticket, user, 'QUOTATION_ISSUED', fromStatus, 'quotation_issued', message);
+      if (['DESIGNER', 'OWNER'].includes(recipientType)) autoAdvanceStage(ticket, 'QUOTE_DESIGN_SIDE', user);
+      if (recipientType === 'BUYER') autoAdvanceStage(ticket, 'QUOTE_BUYER', user);
       return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async markQuotationSent(id, quotationId, payload = {}) {
+      return markQuotationStatus(id, quotationId, 'SENT', 'QUOTATION_SENT', payload);
+    },
+
+    async markQuotationAccepted(id, quotationId, payload = {}) {
+      return markQuotationStatus(id, quotationId, 'ACCEPTED', 'QUOTATION_ACCEPTED', payload);
+    },
+
+    async markQuotationRejected(id, quotationId, payload = {}) {
+      return markQuotationStatus(id, quotationId, 'REJECTED', 'QUOTATION_REJECTED', payload);
     },
 
     async downloadQuotationXlsx(ticketId, quotationId) {
