@@ -161,12 +161,14 @@ INSERT INTO sales.quotation (
 SELECT t.ticket_id, v.number, issuer.employee_id, v.doc_status, 1, v.total_amount,
        v.recipient_type, v.sent_at, v.accepted_at
 FROM (VALUES
-    ('UAT-TKT-09', 'QN-2026-00013', 'GLR-0004', 'SENT',     'OWNER',     99000.00::numeric,  TIMESTAMPTZ '2026-07-03 10:00:00+07', NULL::timestamptz),
-    ('UAT-TKT-10', 'QN-2026-00014', 'GLR-0004', 'ACCEPTED', 'DESIGNER', 120000.00::numeric,  TIMESTAMPTZ '2026-06-01 10:00:00+07', TIMESTAMPTZ '2026-06-02 10:00:00+07'),
-    ('UAT-TKT-11', 'QN-2026-00015', 'GLR-0004', 'SENT',     'BUYER',    112500.00::numeric,  TIMESTAMPTZ '2026-07-05 10:00:00+07', NULL::timestamptz),
-    ('UAT-TKT-12', 'QN-2026-00016', 'GLR-0004', 'ACCEPTED', 'BUYER',    126000.00::numeric,  TIMESTAMPTZ '2026-07-06 10:00:00+07', TIMESTAMPTZ '2026-07-06 15:00:00+07'),
-    ('UAT-TKT-13', 'QN-2026-00017', 'GLR-0004', 'ACCEPTED', 'BUYER',    150000.00::numeric,  TIMESTAMPTZ '2026-07-07 10:00:00+07', TIMESTAMPTZ '2026-07-07 15:00:00+07'),
-    ('UAT-TKT-14', 'QN-2026-00018', 'GLR-0004', 'ACCEPTED', 'BUYER',    190000.00::numeric,  TIMESTAMPTZ '2026-07-08 10:00:00+07', TIMESTAMPTZ '2026-07-08 15:00:00+07')
+    -- Distinct 'QN-UAT-*' prefix so these never collide with app-generated
+    -- QN-2026-NNNNN numbers a tester may have issued past the seed's 00012.
+    ('UAT-TKT-09', 'QN-UAT-0013', 'GLR-0004', 'SENT',     'OWNER',     99000.00::numeric,  TIMESTAMPTZ '2026-07-03 10:00:00+07', NULL::timestamptz),
+    ('UAT-TKT-10', 'QN-UAT-0014', 'GLR-0004', 'ACCEPTED', 'DESIGNER', 120000.00::numeric,  TIMESTAMPTZ '2026-06-01 10:00:00+07', TIMESTAMPTZ '2026-06-02 10:00:00+07'),
+    ('UAT-TKT-11', 'QN-UAT-0015', 'GLR-0004', 'SENT',     'BUYER',    112500.00::numeric,  TIMESTAMPTZ '2026-07-05 10:00:00+07', NULL::timestamptz),
+    ('UAT-TKT-12', 'QN-UAT-0016', 'GLR-0004', 'ACCEPTED', 'BUYER',    126000.00::numeric,  TIMESTAMPTZ '2026-07-06 10:00:00+07', TIMESTAMPTZ '2026-07-06 15:00:00+07'),
+    ('UAT-TKT-13', 'QN-UAT-0017', 'GLR-0004', 'ACCEPTED', 'BUYER',    150000.00::numeric,  TIMESTAMPTZ '2026-07-07 10:00:00+07', TIMESTAMPTZ '2026-07-07 15:00:00+07'),
+    ('UAT-TKT-14', 'QN-UAT-0018', 'GLR-0004', 'ACCEPTED', 'BUYER',    190000.00::numeric,  TIMESTAMPTZ '2026-07-08 10:00:00+07', TIMESTAMPTZ '2026-07-08 15:00:00+07')
 ) AS v(ticket_code, number, issuer_code, doc_status, recipient_type, total_amount, sent_at, accepted_at)
 JOIN sales.ticket t ON t.code = v.ticket_code
 JOIN hr.employee issuer ON issuer.employee_code = v.issuer_code
@@ -204,9 +206,16 @@ FROM (VALUES
 JOIN sales.ticket t ON t.code = v.ticket_code
 JOIN customers.customer cust ON cust.name = v.customer_name
 JOIN hr.employee issuer ON issuer.employee_code = 'GLR-0004'
+-- Guard on BOTH unique keys: ux_deposit_notice_ticket_version (ticket_id, version)
+-- and the GLOBAL ux_deposit_notice_doc_number (doc_number). The hosted UAT DB may
+-- already carry a tester-issued version-1 notice on these tickets, or the doc_number
+-- elsewhere; skip in either case so the migration never violates a unique index.
 WHERE NOT EXISTS (
     SELECT 1 FROM sales.deposit_notice dn
-    WHERE dn.ticket_id = t.ticket_id AND dn.doc_number = v.doc_number
+    WHERE dn.ticket_id = t.ticket_id AND dn.version = 1
+)
+AND NOT EXISTS (
+    SELECT 1 FROM sales.deposit_notice dn2 WHERE dn2.doc_number = v.doc_number
 );
 
 -- ---------------------------------------------------------------------
