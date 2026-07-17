@@ -366,6 +366,13 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const isAccount = ROLE_PERMISSIONS.canConfirmPayments.includes(role);
   const dualTrackDone = ps === 'FULLY_PAID' && fs === 'GOODS_RECEIVED';
 
+  // Documents that already exist stay reachable from the deal-stage panel
+  // through the later stages: the latest quotation file, and the issued
+  // ใบแจ้งยอดมัดจำ (payment track past CUSTOMER_CONFIRMED means
+  // DepositNoticeService.issue has run — the deposit page then shows/downloads it).
+  const latestQuotation = quotations && quotations.length > 0 ? quotations[0] : null;
+  const depositNoticeIssued = ps != null && ps !== 'CUSTOMER_CONFIRMED';
+
   // 'draft' included since V50: a lightweight lead-stage deal gets its product
   // items here, then submits into the price-request flow when it reaches the
   // quote stages.
@@ -662,8 +669,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       </header>
 
       {/* Deal pipeline (V50): the 14-stage journey with stage-gated doc actions.
-          The doc buttons reuse the exact handlers/permissions of the action row —
-          they surface HERE on the stage they belong to. */}
+          Generation buttons reuse the exact handlers/permissions of the action
+          row; once a document exists (quotation / ใบแจ้งยอดมัดจำ) it stays
+          reachable from here through the later stages too. */}
       <DealStagePanel
         user={user}
         summary={summary}
@@ -671,7 +679,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         onUpdateStage={(payload) => doAction(() => api.tickets.updateStage(ticketId, payload), 'อัปเดตสถานะดีลแล้ว')}
         onMarkLost={(payload) => doAction(() => api.tickets.markLost(ticketId, payload), 'บันทึกเสียงานแล้ว')}
         onReopen={() => doAction(() => api.tickets.reopen(ticketId, {}), 'เปิดดีลอีกครั้งแล้ว')}
-        docActions={(can.generateQuotation || can.generateDocument || can.issueImportRequest || can.downloadRemainingInvoice) ? (
+        docActions={(can.generateQuotation || can.generateDocument || can.issueImportRequest
+          || can.downloadRemainingInvoice || latestQuotation || depositNoticeIssued) ? (
           <>
             {can.generateQuotation && (
               <button type="button" className="secondary-button" disabled={actionLoading}
@@ -680,11 +689,28 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 {quotations && quotations.length > 0 ? 'ออกใบเสนอราคาใหม่ (Rev)' : 'ออกใบเสนอราคา'}
               </button>
             )}
+            {latestQuotation && (
+              <button type="button" className="secondary-button"
+                disabled={downloadingQuotationKey === `${latestQuotation.id}-pdf`}
+                onClick={() => handleDownloadQuotation(latestQuotation.id, latestQuotation.number, 'pdf')}>
+                <Icon name="fileText" size={14} />
+                {downloadingQuotationKey === `${latestQuotation.id}-pdf`
+                  ? 'กำลังดาวน์โหลด...'
+                  : `ใบเสนอราคา ${latestQuotation.number} (PDF)`}
+              </button>
+            )}
             {can.generateDocument && (
               <button type="button" className="primary-button" disabled={actionLoading}
                 onClick={() => onOpenDocument && onOpenDocument(ticketId)}>
                 <Icon name="fileText" size={14} />
                 ออกใบแจ้งยอดมัดจำ
+              </button>
+            )}
+            {depositNoticeIssued && (
+              <button type="button" className="secondary-button"
+                onClick={() => onOpenDocument && onOpenDocument(ticketId)}>
+                <Icon name="fileText" size={14} />
+                ดูใบแจ้งยอดมัดจำ
               </button>
             )}
             {can.issueImportRequest && (

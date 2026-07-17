@@ -107,3 +107,18 @@ User feedback: the two filter rows were ซ้ำซ้อน. Changes:
   the only list-level view of where the paperwork stands.
 - Verified: lint 0 errors · 118/118 tests · build PASS · mock browser (chips gone, colored
   cards, เฟส 2 filter active state + per-phase bar segments).
+
+---
+
+## Follow-up (2026-07-17): issued documents stay reachable per stage
+
+User: deposit/มัดจำ doc generation must live in the respective stages. Generation already did
+(ออกใบแจ้งยอดมัดจำ at ORDER_RECEIVED once the PO is confirmed); the gap was AFTER issuance —
+later stages had no doc access in the stage panel. `TicketDetailPage.jsx` docActions now adds:
+- **ดูใบแจ้งยอดมัดจำ** whenever the payment track is past CUSTOMER_CONFIRMED (the notice
+  exists) — opens the deposit page (view/download/Rev) at DEPOSIT_RECEIVED → CLOSED_PAID.
+- **ใบเสนอราคา <number> (PDF)** download for the latest quotation whenever one exists,
+  alongside the stage-gated generate/Rev button.
+Verified in mock browser: ticket 12 (PROCUREMENT) shows Rev + QT-2026-0005 PDF + ดูใบแจ้งยอด
+มัดจำ (navigates to /tickets/12/deposit); ticket 11 (ORDER_RECEIVED) shows the generate
+button + QT-2026-0004 PDF. Lint 0 errors · 118/118 tests · build PASS.
