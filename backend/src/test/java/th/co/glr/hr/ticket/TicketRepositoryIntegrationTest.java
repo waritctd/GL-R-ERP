@@ -196,7 +196,7 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
         long ticketId = tickets.create(
             new CreateTicketRequest("ใบเสนอราคา", "NORMAL", customer.name(),
-                customer.id(), project.id(), contact.id(), null, List.of(item("Toyota", "Hilux", "White", "Matte", "L"))),
+                customer.id(), project.id(), contact.id(), null, null, List.of(item("Toyota", "Hilux", "White", "Matte", "L"))),
             tickets.nextTicketCode(), actorId, "พนักงานขาย");
 
         TicketSummaryDto summary = tickets.findById(ticketId).orElseThrow().summary();
@@ -233,7 +233,7 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     private CreateTicketRequest sampleTicket(TicketItemRequest... items) {
-        return new CreateTicketRequest("ใบเสนอราคา", "NORMAL", "ลูกค้าทดสอบ", null, null, null, null, List.of(items));
+        return new CreateTicketRequest("ใบเสนอราคา", "NORMAL", "ลูกค้าทดสอบ", null, null, null, null, null, List.of(items));
     }
 
     private TicketItemRequest item(String brand, String model, String color, String texture, String size) {

@@ -38,6 +38,14 @@ for (const t of db.tickets) {
   t.lostReason = t.lostReason ?? null;
   t.lostAt = t.lostAt ?? null;
   t.stageUpdatedAt = t.stageUpdatedAt ?? t.updatedAt;
+  t.lifecycle = t.lifecycle ?? (t.lostReason ? 'CLOSED_LOST'
+    : t.status === 'cancelled' ? 'CANCELLED'
+      : t.status === 'closed' ? 'COMPLETED'
+        : 'ACTIVE');
+  t.tenderRequirement = t.tenderRequirement ?? 'UNKNOWN';
+  t.depositPolicy = t.depositPolicy ?? 'REQUIRED';
+  t.depositPolicyReason = t.depositPolicyReason ?? null;
+  t.entryChannel = t.entryChannel ?? 'DESIGNER_LED';
 }
 db.commissions = db.commissions || [];
 db.leaveTypes = db.leaveTypes || [
@@ -381,6 +389,16 @@ function verifyStatus(ticket, expected) {
   if (ticket.status !== expected) fail(`Expected status '${expected}' but ticket is '${ticket.status}'`, 409);
 }
 
+function requireActive(ticket) {
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+    fail(`ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงแก้ไขขั้นตอนนี้ไม่ได้`, 409);
+  }
+}
+
+function depositBypassesNotice(ticket) {
+  return ['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(ticket.depositPolicy);
+}
+
 // ── Thai date helper (mirrors QuotationRenderer.java thaiDate) ───────────────
 const MOCK_THAI_MONTHS = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
 function mockThaiDate(d) {
@@ -505,7 +523,7 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
 // Deal pipeline (V50): mirrors TicketService.autoAdvanceStage — monotonic
 // forward-only, no-op while lost. Called from the 4 milestone transitions.
 function autoAdvanceStage(ticket, targetStage, user) {
-  if (ticket.lostReason != null) return;
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE' || ticket.lostReason != null) return;
   if (dealStageIndex(targetStage) <= dealStageIndex(ticket.salesStage)) return;
   const fromStage = ticket.salesStage;
   ticket.salesStage = targetStage;
@@ -535,6 +553,11 @@ function buildTicketDetail(ticket) {
       fulfillmentStatus: ticket.fulfillmentStatus ?? null,
       salesStage: ticket.salesStage, lostReason: ticket.lostReason ?? null,
       lostAt: ticket.lostAt ?? null, stageUpdatedAt: ticket.stageUpdatedAt ?? ticket.updatedAt,
+      lifecycle: ticket.lifecycle ?? 'ACTIVE',
+      tenderRequirement: ticket.tenderRequirement ?? 'UNKNOWN',
+      depositPolicy: ticket.depositPolicy ?? 'REQUIRED',
+      depositPolicyReason: ticket.depositPolicyReason ?? null,
+      entryChannel: ticket.entryChannel ?? 'DESIGNER_LED',
     },
     items: ticket.items, events: ticket.events,
     quotation: ticket.quotations ? ticket.quotations[0] ?? null : ticket.quotation ?? null,
@@ -868,6 +891,7 @@ function buildOvertimeRecord(record) {
 
 function doTransition(id, fromStatus, toStatus, kind, actor, message) {
   const ticket = findTicketRaw(id);
+  requireActive(ticket);
   verifyStatus(ticket, fromStatus);
   ticket.status = toStatus;
   ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -1132,6 +1156,11 @@ export const api = {
         fulfillmentStatus: t.fulfillmentStatus ?? null,
         salesStage: t.salesStage, lostReason: t.lostReason ?? null,
         lostAt: t.lostAt ?? null, stageUpdatedAt: t.stageUpdatedAt ?? t.updatedAt,
+        lifecycle: t.lifecycle ?? 'ACTIVE',
+        tenderRequirement: t.tenderRequirement ?? 'UNKNOWN',
+        depositPolicy: t.depositPolicy ?? 'REQUIRED',
+        depositPolicyReason: t.depositPolicyReason ?? null,
+        entryChannel: t.entryChannel ?? 'DESIGNER_LED',
       }));
       return delay({ tickets });
     },
@@ -1143,6 +1172,71 @@ export const api = {
       if (!ticket) fail('Ticket not found', 404);
       if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
       return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async actions(id) {
+      const { user, ticket } = requireTicketViewer(id);
+      const active = (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE';
+      const availableActions = [];
+      const add = (action, kind, label, extra = {}) => availableActions.push({ action, kind, label, ...extra });
+      const owner = user.role === 'sales' && ticket.createdById === user.id;
+      const dealOwner = owner || user.role === 'sales_manager' || user.role === 'ceo';
+      const canIssueIr = ticket.status === 'quotation_issued'
+        && ticket.fulfillmentStatus == null
+        && (['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
+          || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')));
+
+      if (active) {
+        if (owner && ticket.status === 'draft' && (ticket.items || []).length > 0) add('SUBMIT', 'operational', 'ส่งขอราคา');
+        if (user.role === 'import' && ticket.status === 'submitted') add('PICKUP', 'operational', 'รับเรื่อง');
+        if (user.role === 'import' && ['in_review', 'price_proposed', 'approved'].includes(ticket.status)) add('PROPOSE_PRICE', 'operational', 'เสนอราคา', { requiredFields: ['items'] });
+        if (user.role === 'ceo' && ticket.status === 'price_proposed') {
+          add('CALCULATE_PRICES', 'operational', 'คำนวณราคา');
+          add('OVERRIDE_ITEM_PRICE', 'operational', 'แก้ไขราคาด้วยตนเอง', { requiredFields: ['itemId', 'manualPrice'] });
+          add('APPROVE', 'operational', 'อนุมัติราคา');
+          add('REJECT', 'operational', 'ตีกลับราคา', { requiredFields: ['reason'] });
+        }
+        if (owner && ['approved', 'quotation_issued'].includes(ticket.status)) add('GENERATE_QUOTATION', 'doc', 'ออกใบเสนอราคา');
+        if (owner && ticket.status === 'quotation_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')) add('CONFIRM_CUSTOMER', 'payment', 'ลูกค้ายืนยัน');
+        if (owner && ticket.status === 'quotation_issued' && ticket.paymentStatus === 'CUSTOMER_CONFIRMED' && !depositBypassesNotice(ticket)) add('ISSUE_DEPOSIT_NOTICE', 'doc', 'ออกใบแจ้งมัดจำ');
+        if (['account', 'ceo'].includes(user.role) && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') add('DEPOSIT_PAID', 'payment', 'รับมัดจำ');
+        if (user.role === 'import' && canIssueIr) add('ISSUE_IMPORT_REQUEST', 'fulfillment', 'ออก IR');
+        if (user.role === 'import' && ticket.fulfillmentStatus === 'IR_ISSUED') add('IR_SENT', 'fulfillment', 'ส่ง IR');
+        if (user.role === 'import' && ticket.fulfillmentStatus === 'IR_SENT') add('SHIPPING', 'fulfillment', 'สินค้าเดินทาง');
+        if (user.role === 'import' && ticket.fulfillmentStatus === 'SHIPPING') add('GOODS_RECEIVED', 'fulfillment', 'รับสินค้า');
+        if (['account', 'ceo'].includes(user.role) && ticket.paymentStatus === 'AWAITING_FINAL_PAYMENT') add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
+        if (ticket.createdById === user.id && ((ticket.status === 'document_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID'))
+          || (ticket.status === 'quotation_issued' && ticket.paymentStatus === 'FULLY_PAID' && ticket.fulfillmentStatus === 'GOODS_RECEIVED'))) add('CLOSE', 'operational', 'ปิดงาน');
+        if (ticket.createdById === user.id && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
+        if (owner && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(ticket.status)) add('EDIT_ITEMS', 'operational', 'แก้ไขรายการ');
+        for (const stage of ['LEAD_APPROACH','PRESENTATION','SPEC_APPROVED','QUOTE_DESIGN_SIDE','OWNER_SIGNOFF','AWAITING_BUYER','QUOTE_BUYER','NEGOTIATION','ORDER_RECEIVED','DEPOSIT_RECEIVED','PROCUREMENT','DELIVERY_SCHEDULING','DELIVERED','CLOSED_PAID']) {
+          if (stage !== ticket.salesStage && dealCanSetStage(user, ticket, stage)) add('ADVANCE_STAGE', 'stage', 'เลื่อนสถานะ', { targetStage: stage });
+        }
+        if (availableActions.some((a) => a.kind === 'stage')) add('UPDATE_STAGE', 'stage', 'แก้ไขสถานะ', { requiredFields: ['stage'] });
+        if (dealOwner) {
+          add('MARK_LOST', 'lifecycle', 'เสียงาน', { requiredFields: ['reason'] });
+          add('PLACE_ON_HOLD', 'lifecycle', 'พักดีลไว้');
+          add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
+          add('SET_TENDER_REQUIREMENT', 'policy', 'ตั้งค่าสถานะประมูล', { requiredFields: ['value'] });
+          add('SET_ENTRY_CHANNEL', 'policy', 'ตั้งค่า entry channel', { requiredFields: ['value'] });
+        }
+        if (['account', 'ceo'].includes(user.role)) add('WAIVE_DEPOSIT', 'policy', 'นโยบายมัดจำ', { requiredFields: ['policy', 'reason'] });
+      } else if (['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle) && dealOwner) {
+        add('RESUME', 'lifecycle', 'ดำเนินการต่อ');
+        if (ticket.lifecycle === 'ON_HOLD') add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
+      } else if (ticket.lifecycle === 'CLOSED_LOST' && dealOwner) {
+        add('REOPEN', 'lifecycle', 'เปิดดีลใหม่');
+      }
+      return delay({
+        currentState: {
+          lifecycle: ticket.lifecycle ?? 'ACTIVE',
+          salesStage: ticket.salesStage,
+          paymentStatus: ticket.paymentStatus ?? null,
+          fulfillmentStatus: ticket.fulfillmentStatus ?? null,
+          status: ticket.status,
+        },
+        availableActions,
+      });
     },
 
     async create(payload) {
@@ -1167,6 +1261,11 @@ export const api = {
         contactId: payload.contactId ?? null,
         note: payload.note || null,
         salesStage: 'LEAD_APPROACH', lostReason: null, lostAt: null, stageUpdatedAt: now,
+        lifecycle: 'ACTIVE',
+        tenderRequirement: 'UNKNOWN',
+        depositPolicy: 'REQUIRED',
+        depositPolicyReason: null,
+        entryChannel: payload.entryChannel || 'DESIGNER_LED',
         createdAt: now.slice(0, 10), updatedAt: now.slice(0, 10), closedAt: null,
         items: (payload.items || []).map((item, i) => ({
           id: nextId * 100 + i, ticketId: nextId,
@@ -1199,6 +1298,7 @@ export const api = {
     async pickup(id) {
       const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       verifyStatus(ticket, 'submitted');
       ticket.status = 'in_review';
       ticket.assignedToId = user.id;
@@ -1211,6 +1311,7 @@ export const api = {
     async proposePrice(id, payload) {
       const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       verifyStatus(ticket, 'in_review');
       ticket.items = (payload.items || []).map((item, i) => ({
         ...ticket.items[i], ...item,
@@ -1231,6 +1332,7 @@ export const api = {
     async editItems(id, payload) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       const st = ticket.status;
       const isOwner = user.id === ticket.createdById;
       // 'draft' included since V50: a lightweight lead-stage deal gets its product
@@ -1267,6 +1369,7 @@ export const api = {
     async calculatePrices(id) {
       hasRole('ceo');
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       verifyStatus(ticket, 'price_proposed');
 
       const fcMap = {};
@@ -1347,6 +1450,7 @@ export const api = {
     async overrideItemPrice(ticketId, itemId, payload) {
       const user = hasRole('ceo');
       const ticket = findTicketRaw(Number(ticketId));
+      requireActive(ticket);
       verifyStatus(ticket, 'price_proposed');
       const item = ticket.items.find((it) => it.id === Number(itemId));
       if (!item) throw new Error('Item not found');
@@ -1366,6 +1470,7 @@ export const api = {
     async approve(id) {
       const user = hasRole('ceo');
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       verifyStatus(ticket, 'price_proposed');
       ticket.items = ticket.items.map((item) => ({ ...item, approvedPrice: item.proposedPrice }));
       ticket.hasEdits = false;
@@ -1379,6 +1484,7 @@ export const api = {
     async reject(id, payload) {
       const user = hasRole('ceo');
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       verifyStatus(ticket, 'price_proposed');
       ticket.status = 'in_review';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -1390,6 +1496,7 @@ export const api = {
     async quotation(id) {
       const user = hasRole('sales');
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       if (ticket.status !== 'approved' && ticket.status !== 'quotation_issued') {
         fail(`Expected status 'approved' or 'quotation_issued' but ticket is '${ticket.status}'`, 409);
       }
@@ -1452,6 +1559,7 @@ export const api = {
     async close(id) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       // Mirrors TicketService.close(): legacy document_issued path (pre-dual-track
       // tickets only, or fully paid), or the dual-track completion
       // (quotation_issued + FULLY_PAID + GOODS_RECEIVED).
@@ -1468,6 +1576,7 @@ export const api = {
       ticket.closedAt = new Date().toISOString().slice(0, 10);
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'CLOSED', prev, 'closed', null);
+      ticket.lifecycle = 'COMPLETED';
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
@@ -1477,6 +1586,7 @@ export const api = {
       if (ticket.status === 'closed' || ticket.status === 'cancelled') fail('Cannot cancel', 409);
       const prev = ticket.status;
       ticket.status = 'cancelled';
+      ticket.lifecycle = 'CANCELLED';
       ticket.closedAt = new Date().toISOString().slice(0, 10);
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'CANCELLED', prev, 'cancelled', null);
@@ -1503,6 +1613,8 @@ export const api = {
     async revision(id, payload) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
+      // Phase 1 lifecycle gate (mirrors DepositNoticeService.requestRevision).
+      requireActive(ticket);
       if (!['approved', 'document_issued'].includes(ticket.status)) fail('ไม่สามารถขอแก้ไขในสถานะนี้', 409);
 
       const toStatus = {
@@ -1529,6 +1641,7 @@ export const api = {
     async confirmCustomer(id) {
       const user = hasRole('sales');
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       // Mirrors TicketService.confirmCustomer: owner-only.
       if (ticket.createdById !== user.id) fail('Forbidden', 403);
       if (ticket.status !== 'quotation_issued') fail('Expected quotation_issued', 409);
@@ -1551,6 +1664,7 @@ export const api = {
       // TicketService.ACCOUNT_ROLES.
       const user = hasRole('account', 'ceo');
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       if (ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') fail('Expected paymentStatus=DEPOSIT_NOTICE_ISSUED', 409);
       ticket.paymentStatus = 'DEPOSIT_PAID';
       pushEvent(ticket, user, 'DEPOSIT_PAID', ticket.status, ticket.status, null);
@@ -1568,10 +1682,13 @@ export const api = {
     async issueImportRequest(id) {
       const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       // DEPOSIT_PAID also qualifies — the deposit is often confirmed before the IR
       // (mirrors TicketService.issueImportRequest).
+      const waivedReady = depositBypassesNotice(ticket)
+        && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED');
       if (ticket.status !== 'quotation_issued'
-          || !['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)) {
+          || (!['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'].includes(ticket.paymentStatus) && !waivedReady)) {
         fail('Requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED or DEPOSIT_PAID', 409);
       }
       if (ticket.fulfillmentStatus != null) fail('Import request already issued', 409);
@@ -1585,6 +1702,7 @@ export const api = {
     async markIrSent(id) {
       const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       if (ticket.fulfillmentStatus !== 'IR_ISSUED') fail('Expected fulfillmentStatus=IR_ISSUED', 409);
       ticket.fulfillmentStatus = 'IR_SENT';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -1595,6 +1713,7 @@ export const api = {
     async markShipping(id) {
       const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       if (ticket.fulfillmentStatus !== 'IR_SENT') fail('Expected fulfillmentStatus=IR_SENT', 409);
       ticket.fulfillmentStatus = 'SHIPPING';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -1605,6 +1724,7 @@ export const api = {
     async markGoodsReceived(id) {
       const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       if (ticket.fulfillmentStatus !== 'SHIPPING') fail('Expected fulfillmentStatus=SHIPPING', 409);
       ticket.fulfillmentStatus = 'GOODS_RECEIVED';
       if (ticket.paymentStatus === 'DEPOSIT_PAID') {
@@ -1620,6 +1740,7 @@ export const api = {
       // Mirrors TicketService.ACCOUNT_ROLES (ฝ่ายบัญชี + CEO fallback).
       const user = hasRole('account', 'ceo');
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       if (ticket.paymentStatus !== 'AWAITING_FINAL_PAYMENT') fail('Expected paymentStatus=AWAITING_FINAL_PAYMENT', 409);
       ticket.paymentStatus = 'FULLY_PAID';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -1635,12 +1756,15 @@ export const api = {
     async updateStage(id, payload) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       if (dealStageIndex(payload.stage) < 0) fail(`Unknown stage '${payload.stage}'`, 400);
       if (!dealCanSetStage(user, ticket, payload.stage)) fail('Forbidden', 403);
       if (ticket.lostReason != null) fail('ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ', 409);
       if (ticket.salesStage === payload.stage) fail(`Deal is already in stage ${payload.stage}`, 409);
       const backward = dealStageIndex(payload.stage) < dealStageIndex(ticket.salesStage);
+      const skipForward = dealStageIndex(payload.stage) - dealStageIndex(ticket.salesStage) > 1;
       if (backward && !(payload.note || '').trim()) fail('การย้อนสถานะกลับต้องระบุเหตุผล', 400);
+      if (skipForward && !(payload.note || '').trim()) fail('การข้ามขั้นตอนต้องระบุเหตุผล', 400);
       const fromStage = ticket.salesStage;
       ticket.salesStage = payload.stage;
       ticket.stageUpdatedAt = new Date().toISOString();
@@ -1651,11 +1775,13 @@ export const api = {
     async markLost(id, payload) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
       if (!DEAL_LOST_REASONS.some((r) => r.code === payload.reason)) fail(`Unknown lost reason '${payload.reason}'`, 400);
       if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
       if (ticket.lostReason != null) fail('Deal is already marked lost', 409);
       ticket.lostReason = payload.reason;
       ticket.lostAt = new Date().toISOString();
+      ticket.lifecycle = 'CLOSED_LOST';
       ticket.stageUpdatedAt = ticket.lostAt;
       // Stage untouched by design: reopening resumes exactly where the deal was.
       pushEvent(ticket, user, 'MARKED_LOST', ticket.salesStage, ticket.salesStage,
@@ -1667,11 +1793,87 @@ export const api = {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
       if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
-      if (ticket.lostReason == null) fail('Deal is not marked lost', 409);
+      if (ticket.lifecycle !== 'CLOSED_LOST' || ticket.lostReason == null) fail('Deal is not marked lost', 409);
       ticket.lostReason = null;
       ticket.lostAt = null;
+      ticket.lifecycle = 'ACTIVE';
       ticket.stageUpdatedAt = new Date().toISOString();
       pushEvent(ticket, user, 'REOPENED', ticket.salesStage, ticket.salesStage, (payload.note || '').trim() || null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async hold(id, payload = {}) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      requireActive(ticket);
+      ticket.lifecycle = 'ON_HOLD';
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'ON_HOLD', ticket.salesStage, ticket.salesStage, (payload.note || '').trim() || null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async dormant(id, payload = {}) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      if (!['ACTIVE', 'ON_HOLD'].includes(ticket.lifecycle ?? 'ACTIVE')) fail('พัก dormant ได้เฉพาะดีลที่ active หรือ on hold', 409);
+      ticket.lifecycle = 'DORMANT';
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'DORMANT', ticket.salesStage, ticket.salesStage, (payload.note || '').trim() || null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async resume(id, payload = {}) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      if (!['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle)) fail('ดำเนินการต่อได้เฉพาะดีลที่พักไว้', 409);
+      ticket.lifecycle = 'ACTIVE';
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'RESUMED', ticket.salesStage, ticket.salesStage, (payload.note || '').trim() || null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async setTenderRequirement(id, payload) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      requireActive(ticket);
+      if (!['REQUIRED', 'NOT_REQUIRED', 'UNKNOWN'].includes(payload.value)) fail(`Unknown tender requirement '${payload.value}'`, 400);
+      ticket.tenderRequirement = payload.value;
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage, `tender_requirement → ${payload.value}`);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async setEntryChannel(id, payload) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      requireActive(ticket);
+      if (!['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(payload.value)) fail(`Unknown entry channel '${payload.value}'`, 400);
+      if (ticket.entryChannel && ticket.entryChannel !== 'DESIGNER_LED' && ticket.entryChannel !== payload.value && !(payload.note || '').trim()) {
+        fail('การเปลี่ยน entry channel ต้องระบุเหตุผล', 400);
+      }
+      ticket.entryChannel = payload.value;
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage,
+        `entry_channel → ${payload.value}${(payload.note || '').trim() ? ` — ${payload.note.trim()}` : ''}`);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async setDepositPolicy(id, payload) {
+      const user = hasRole('account', 'ceo');
+      const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
+      if (!['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(payload.policy)) fail(`Unknown deposit waiver policy '${payload.policy}'`, 400);
+      if (!(payload.reason || '').trim()) fail('ต้องระบุเหตุผลนโยบายมัดจำ', 400);
+      ticket.depositPolicy = payload.policy;
+      ticket.depositPolicyReason = payload.reason.trim();
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage,
+        `deposit_policy → ${payload.policy} — ${payload.reason.trim()}`);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
   },
@@ -2611,6 +2813,8 @@ export const api = {
     async createDraft(ticketId, payload) {
       requireSession();
       const ticket = findTicketRaw(Number(ticketId));
+      // Phase 1 lifecycle gate (mirrors DepositNoticeService.createDraft).
+      requireActive(ticket);
       if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('Ticket must be approved', 409);
 
       // Auto-build items from approved ticket items
@@ -2696,6 +2900,8 @@ export const api = {
       if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
         fail('Deposit notice requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED', 409);
       }
+      // Phase 1 lifecycle gate (mirrors DepositNoticeService.requireActiveLifecycle).
+      requireActive(ticket);
 
       // Supersede previous issued docs
       mockDepositNotices.forEach((d) => { if (d.ticketId === doc.ticketId && d.id !== doc.id && d.status === 'ISSUED') d.status = 'SUPERSEDED'; });

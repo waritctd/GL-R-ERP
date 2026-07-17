@@ -31,5 +31,12 @@ public record TicketSummaryDto(
     String salesStage,
     String lostReason,
     Instant lostAt,
-    Instant stageUpdatedAt
+    Instant stageUpdatedAt,
+    // Deal lifecycle and policy fields (V51): lifecycle gates mutations, policy
+    // fields drive tender/deposit/entry-channel workflow choices.
+    String lifecycle,
+    String tenderRequirement,
+    String depositPolicy,
+    String depositPolicyReason,
+    String entryChannel
 ) {}

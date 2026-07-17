@@ -14,6 +14,7 @@ public record CreateTicketRequest(
     @NotNull Long projectId,
     Long contactId,
     String note,
+    String entryChannel,
     // Optional since V50: a deal may start at the lead stage with no product items
     // yet (lightweight DRAFT); items arrive later via editItems before submit.
     List<@Valid TicketItemRequest> items

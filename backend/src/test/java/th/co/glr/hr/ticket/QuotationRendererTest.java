@@ -127,7 +127,8 @@ class QuotationRendererTest {
             "NORMAL", 1L, "Sales User", null, null, "Test Customer Co., Ltd.", 5L, null,
             "Showroom Renovation", null, null, null, Instant.now(), Instant.now(), null,
             items.size(), false, null, null,
-            "QUOTE_BUYER", null, null, Instant.now());
+            "QUOTE_BUYER", null, null, Instant.now(),
+            "ACTIVE", "UNKNOWN", "REQUIRED", null, "DESIGNER_LED");
         return new TicketDto(summary, items, List.of(), null, List.of());
     }
 

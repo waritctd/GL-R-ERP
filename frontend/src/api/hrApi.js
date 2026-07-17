@@ -76,6 +76,7 @@ export const api = {
     list: (params) => apiRequest(withQuery(API_ROUTES.tickets.list, params)),
     create: (payload) => apiRequest(API_ROUTES.tickets.create, { method: 'POST', body: payload }),
     get: (id) => apiRequest(API_ROUTES.tickets.detail(id)),
+    actions: (id) => apiRequest(API_ROUTES.tickets.action(id, 'actions')),
     submit: (id) => apiRequest(API_ROUTES.tickets.action(id, 'submit'), { method: 'POST' }),
     pickup: (id) => apiRequest(API_ROUTES.tickets.action(id, 'pickup'), { method: 'POST' }),
     proposePrice: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'propose-price'), { method: 'POST', body: payload }),
@@ -107,6 +108,12 @@ export const api = {
     updateStage: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'stage'), { method: 'POST', body: payload }),
     markLost: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'lost'), { method: 'POST', body: payload }),
     reopen: (id, payload = {}) => apiRequest(API_ROUTES.tickets.action(id, 'reopen'), { method: 'POST', body: payload }),
+    hold: (id, payload = {}) => apiRequest(API_ROUTES.tickets.action(id, 'hold'), { method: 'POST', body: payload }),
+    dormant: (id, payload = {}) => apiRequest(API_ROUTES.tickets.action(id, 'dormant'), { method: 'POST', body: payload }),
+    resume: (id, payload = {}) => apiRequest(API_ROUTES.tickets.action(id, 'resume'), { method: 'POST', body: payload }),
+    setTenderRequirement: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'tender-requirement'), { method: 'POST', body: payload }),
+    setEntryChannel: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'entry-channel'), { method: 'POST', body: payload }),
+    setDepositPolicy: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'deposit-policy'), { method: 'POST', body: payload }),
     downloadQuotationXlsx: async (id, quotationId) => {
       const res = await fetch(API_ROUTES.tickets.quotationFile(id, quotationId, 'xlsx'), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');

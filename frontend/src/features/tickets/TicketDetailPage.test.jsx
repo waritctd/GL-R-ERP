@@ -15,6 +15,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     api: {
       tickets: {
         get: vi.fn(),
+        actions: vi.fn(),
         approve: vi.fn(),
         comment: vi.fn(),
       },
@@ -83,6 +84,19 @@ describe('TicketDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.tickets.get.mockResolvedValue({ ticket: buildTicket() });
+    api.tickets.actions.mockResolvedValue({
+      currentState: {
+        lifecycle: 'ACTIVE',
+        salesStage: 'QUOTE_DESIGN_SIDE',
+        paymentStatus: null,
+        fulfillmentStatus: null,
+        status: 'price_proposed',
+      },
+      availableActions: [
+        { action: 'APPROVE', kind: 'operational', label: 'อนุมัติราคา' },
+        { action: 'REJECT', kind: 'operational', label: 'ตีกลับราคา', requiredFields: ['reason'] },
+      ],
+    });
     api.attachments.list.mockResolvedValue({ attachments: [] });
     api.factoryConfigs.list.mockResolvedValue({ factories: [] });
     api.tickets.approve.mockResolvedValue({
@@ -107,7 +121,7 @@ describe('TicketDetailPage', () => {
     expect(screen.getByText('รอการอนุมัติ')).not.toBeNull();
     expect(api.tickets.get).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole('button', { name: /^อนุมัติ$/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^อนุมัติ$/ }));
 
     await waitFor(() => expect(api.tickets.approve).toHaveBeenCalledWith(701));
     // New status renders from the mutation's setQueryData fast path.
@@ -115,6 +129,26 @@ describe('TicketDetailPage', () => {
     // The ticket-detail query itself was never re-fetched — the mutation
     // wrote the response straight into the cache instead.
     expect(api.tickets.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides cockpit actions that are absent from api.tickets.actions', async () => {
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE',
+        salesStage: 'QUOTE_DESIGN_SIDE',
+        paymentStatus: null,
+        fulfillmentStatus: null,
+        status: 'price_proposed',
+      },
+      availableActions: [],
+    });
+
+    renderTicketDetailPage();
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' })).not.toBeNull();
+    await waitFor(() => expect(api.tickets.actions).toHaveBeenCalledWith(701));
+
+    expect(screen.queryByRole('button', { name: /^อนุมัติ$/ })).toBeNull();
   });
 
   it('comment posts and invalidates the tickets-list/dashboard/notifications caches', async () => {

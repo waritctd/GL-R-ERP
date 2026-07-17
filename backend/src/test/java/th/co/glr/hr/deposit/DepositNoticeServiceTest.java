@@ -157,12 +157,37 @@ class DepositNoticeServiceTest {
         when(docs.findById(docId)).thenReturn(Optional.of(draft));
     }
 
+    @org.junit.jupiter.api.Test
+    void createDraft_rejectsPausedDeal() {
+        // Phase 1 lifecycle gate: deposit-notice mutations advance the payment track,
+        // so an ON_HOLD deal must not create/issue notices.
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", "ON_HOLD");
+        assertThatThrownBy(() -> service.createDraft(10L,
+                new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), owner))
+            .isInstanceOfSatisfying(ApiException.class, e ->
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    @org.junit.jupiter.api.Test
+    void issue_rejectsPausedDeal() {
+        stubDraft(5L, 10L);
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", "ON_HOLD");
+        assertThatThrownBy(() -> service.issue(5L, owner))
+            .isInstanceOfSatisfying(ApiException.class, e ->
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
     private void stubTicket(long ticketId, String status, String paymentStatus) {
+        stubTicket(ticketId, status, paymentStatus, "ACTIVE");
+    }
+
+    private void stubTicket(long ticketId, String status, String paymentStatus, String lifecycle) {
         TicketSummaryDto summary = new TicketSummaryDto(
             ticketId, "PR-2026-0001", "PRICE_REQUEST", "Test", status, "NORMAL",
             1L, "Sales", null, null, "ACME", null, null, null, null, null, null,
             Instant.now(), Instant.now(), null, 1, false, paymentStatus, null,
-            "LEAD_APPROACH", null, null, Instant.now());
+            "LEAD_APPROACH", null, null, Instant.now(),
+            lifecycle, "UNKNOWN", "REQUIRED", null, "DESIGNER_LED");
         when(ticketRepo.findById(ticketId))
             .thenReturn(Optional.of(new TicketDto(summary, List.of(), List.of(), null, List.of())));
     }

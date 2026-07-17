@@ -33,7 +33,9 @@ public class TicketRepository {
                COUNT(ti.item_id) AS item_count,
                t.has_edits,
                t.payment_status, t.fulfillment_status,
-               t.sales_stage, t.lost_reason, t.lost_at, t.stage_updated_at
+               t.sales_stage, t.lost_reason, t.lost_at, t.stage_updated_at,
+               t.lifecycle, t.tender_requirement, t.deposit_policy,
+               t.deposit_policy_reason, t.entry_channel
           FROM sales.ticket t
           JOIN hr.employee ec ON ec.employee_id = t.created_by
           LEFT JOIN hr.employee ea ON ea.employee_id = t.assigned_to
@@ -125,9 +127,9 @@ public class TicketRepository {
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO sales.ticket
-                (code, title, status, priority, created_by, customer_name, customer_id, project_id, contact_id, note)
+                (code, title, status, priority, created_by, customer_name, customer_id, project_id, contact_id, note, entry_channel)
             VALUES
-                (:code, :title, :status, :priority, :createdBy, :customerName, :customerId, :projectId, :contactId, :note)
+                (:code, :title, :status, :priority, :createdBy, :customerName, :customerId, :projectId, :contactId, :note, :entryChannel)
             """,
             new MapSqlParameterSource()
                 .addValue("code", code)
@@ -139,7 +141,9 @@ public class TicketRepository {
                 .addValue("customerId", request.customerId())
                 .addValue("projectId", request.projectId())
                 .addValue("contactId", request.contactId())
-                .addValue("note", request.note()),
+                .addValue("note", request.note())
+                .addValue("entryChannel", request.entryChannel() != null && !request.entryChannel().isBlank()
+                    ? request.entryChannel() : EntryChannel.DESIGNER_LED),
             keyHolder, new String[]{"ticket_id"});
         long ticketId = keyHolder.getKey().longValue();
         if (hasItems) {
@@ -646,7 +650,12 @@ public class TicketRepository {
             rs.getString("sales_stage"),
             rs.getString("lost_reason"),
             rs.getTimestamp("lost_at") != null ? rs.getTimestamp("lost_at").toInstant() : null,
-            rs.getTimestamp("stage_updated_at").toInstant()
+            rs.getTimestamp("stage_updated_at").toInstant(),
+            rs.getString("lifecycle"),
+            rs.getString("tender_requirement"),
+            rs.getString("deposit_policy"),
+            rs.getString("deposit_policy_reason"),
+            rs.getString("entry_channel")
         );
     }
 
@@ -658,14 +667,53 @@ public class TicketRepository {
 
     public void markDealLost(long ticketId, String reason) {
         jdbc.update(
-            "UPDATE sales.ticket SET lost_reason = :r, lost_at = now(), stage_updated_at = now() WHERE ticket_id = :id",
-            new MapSqlParameterSource().addValue("r", reason).addValue("id", ticketId));
+            "UPDATE sales.ticket SET lost_reason = :r, lost_at = now(), lifecycle = :lifecycle, stage_updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource()
+                .addValue("r", reason)
+                .addValue("lifecycle", DealLifecycle.CLOSED_LOST)
+                .addValue("id", ticketId));
     }
 
     public void clearDealLost(long ticketId) {
         jdbc.update(
-            "UPDATE sales.ticket SET lost_reason = NULL, lost_at = NULL, stage_updated_at = now() WHERE ticket_id = :id",
-            new MapSqlParameterSource().addValue("id", ticketId));
+            "UPDATE sales.ticket SET lost_reason = NULL, lost_at = NULL, lifecycle = :lifecycle, stage_updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource()
+                .addValue("lifecycle", DealLifecycle.ACTIVE)
+                .addValue("id", ticketId));
+    }
+
+    public void updateLifecycle(long ticketId, String lifecycle) {
+        jdbc.update(
+            "UPDATE sales.ticket SET lifecycle = :lifecycle, updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource().addValue("lifecycle", lifecycle).addValue("id", ticketId));
+    }
+
+    public void updateTenderRequirement(long ticketId, String value) {
+        jdbc.update(
+            "UPDATE sales.ticket SET tender_requirement = :value, updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource().addValue("value", value).addValue("id", ticketId));
+    }
+
+    public void updateDepositPolicy(long ticketId, String policy, String reason, long setBy) {
+        jdbc.update("""
+            UPDATE sales.ticket
+               SET deposit_policy = :policy,
+                   deposit_policy_reason = :reason,
+                   deposit_policy_set_by = :setBy,
+                   updated_at = now()
+             WHERE ticket_id = :id
+            """,
+            new MapSqlParameterSource()
+                .addValue("policy", policy)
+                .addValue("reason", reason)
+                .addValue("setBy", setBy)
+                .addValue("id", ticketId));
+    }
+
+    public void updateEntryChannel(long ticketId, String value) {
+        jdbc.update(
+            "UPDATE sales.ticket SET entry_channel = :value, updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource().addValue("value", value).addValue("id", ticketId));
     }
 
     public void updatePaymentStatus(long ticketId, String paymentStatus) {

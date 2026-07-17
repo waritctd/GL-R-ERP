@@ -17,6 +17,9 @@ import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
+import th.co.glr.hr.ticket.TicketResponses.TicketActionDto;
+import th.co.glr.hr.ticket.TicketResponses.TicketActionState;
+import th.co.glr.hr.ticket.TicketResponses.TicketActionsResponse;
 
 @Service
 public class TicketService {
@@ -98,6 +101,11 @@ public class TicketService {
         if (request.projectId() == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องเลือกโครงการก่อนสร้างดีล");
         }
+        if (request.entryChannel() != null && !request.entryChannel().isBlank()
+                && !EntryChannel.isValid(request.entryChannel())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "Unknown entry channel '" + request.entryChannel() + "'");
+        }
         String code = tickets.nextTicketCode();
         long id = tickets.create(request, code, actor.id(), actor.name());
         // A lightweight lead-stage deal (no items yet) is the rep's private draft —
@@ -116,6 +124,7 @@ public class TicketService {
     public TicketDto submit(long ticketId, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.DRAFT);
+        requireActive(s);
         if (s.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Only the ticket owner can submit");
         }
@@ -137,7 +146,8 @@ public class TicketService {
     @Transactional
     public TicketDto pickup(long ticketId, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
-        loadAndVerifyStatus(ticketId, TicketStatus.SUBMITTED);
+        TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.SUBMITTED);
+        requireActive(s);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.PICKED_UP, TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW, null);
         return requireTicket(ticketId);
@@ -150,6 +160,7 @@ public class TicketService {
         }
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
+        requireActive(s);
         String currentStatus = s.status();
         if (!PROPOSE_ALLOWED_STATUSES.contains(currentStatus)) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -184,6 +195,7 @@ public class TicketService {
     public TicketDto approve(long ticketId, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.PRICE_PROPOSED);
+        requireActive(s);
         tickets.approveItemPrices(ticketId);
         tickets.setHasEdits(ticketId, false);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -197,6 +209,7 @@ public class TicketService {
     public TicketDto reject(long ticketId, RejectRequest request, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.PRICE_PROPOSED);
+        requireActive(s);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.REJECTED, TicketStatus.PRICE_PROPOSED, TicketStatus.IN_REVIEW, request.reason());
         notifications.notifyByRole("import", ticketId, "REJECTED",
@@ -208,6 +221,7 @@ public class TicketService {
     public TicketDto generateQuotation(long ticketId, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
         String fromStatus = s.status();
         if (!QUOTATION_ALLOWED_STATUSES.contains(fromStatus)) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -309,13 +323,16 @@ public class TicketService {
             s.contactId(), s.contactName(), s.note(),
             s.createdAt(), s.updatedAt(), s.closedAt(), s.itemCount(), s.hasEdits(),
             s.paymentStatus(), s.fulfillmentStatus(),
-            s.salesStage(), s.lostReason(), s.lostAt(), s.stageUpdatedAt());
+            s.salesStage(), s.lostReason(), s.lostAt(), s.stageUpdatedAt(),
+            s.lifecycle(), s.tenderRequirement(), s.depositPolicy(), s.depositPolicyReason(),
+            s.entryChannel());
     }
 
     @Transactional
     public TicketDto close(long ticketId, UserPrincipal actor) {
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
+        requireActive(s);
         if (s.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
@@ -336,6 +353,7 @@ public class TicketService {
         }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CLOSED, st, TicketStatus.CLOSED, null);
+        tickets.updateLifecycle(ticketId, DealLifecycle.COMPLETED);
         return requireTicket(ticketId);
     }
 
@@ -345,6 +363,7 @@ public class TicketService {
     public TicketDto confirmCustomer(long ticketId, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
+        requireActive(s);
         requireOwner(s, actor);
         // Never downgrade the payment track: once past CUSTOMER_CONFIRMED, re-confirming
         // would reset paymentStatus and deadlock the later transitions.
@@ -369,6 +388,7 @@ public class TicketService {
     public TicketDto confirmDepositPaid(long ticketId, UserPrincipal actor) {
         requireRole(actor, ACCOUNT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
         if (!"DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "Expected paymentStatus=DEPOSIT_NOTICE_ISSUED");
         }
@@ -392,14 +412,18 @@ public class TicketService {
     public TicketDto issueImportRequest(long ticketId, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
         // DEPOSIT_PAID is also acceptable: the customer often pays (and accounting
         // confirms) before import gets to the IR — requiring DEPOSIT_NOTICE_ISSUED
         // exactly deadlocked the fulfillment track in that ordering.
+        boolean depositPolicyBypassesNotice = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
+            && (s.paymentStatus() == null || "CUSTOMER_CONFIRMED".equals(s.paymentStatus()));
         boolean depositReady = "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
-            || "DEPOSIT_PAID".equals(s.paymentStatus());
+            || "DEPOSIT_PAID".equals(s.paymentStatus())
+            || depositPolicyBypassesNotice;
         if (!TicketStatus.QUOTATION_ISSUED.equals(s.status()) || !depositReady) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "IR requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED or DEPOSIT_PAID");
+                "IR requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED/DEPOSIT_PAID or a waived deposit policy");
         }
         // Never restart an in-flight fulfillment track: re-issuing the IR would
         // downgrade IR_SENT/SHIPPING/GOODS_RECEIVED back to IR_ISSUED.
@@ -420,6 +444,7 @@ public class TicketService {
     public TicketDto markIrSent(long ticketId, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
         if (!"IR_ISSUED".equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "Expected fulfillmentStatus=IR_ISSUED");
         }
@@ -433,6 +458,7 @@ public class TicketService {
     public TicketDto markShipping(long ticketId, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
         if (!"IR_SENT".equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "Expected fulfillmentStatus=IR_SENT");
         }
@@ -448,6 +474,7 @@ public class TicketService {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
         if (!"SHIPPING".equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "Expected fulfillmentStatus=SHIPPING");
         }
@@ -467,6 +494,7 @@ public class TicketService {
     public TicketDto confirmFinalPayment(long ticketId, UserPrincipal actor) {
         requireRole(actor, ACCOUNT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
         if (!"AWAITING_FINAL_PAYMENT".equals(s.paymentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "Expected paymentStatus=AWAITING_FINAL_PAYMENT");
         }
@@ -504,6 +532,7 @@ public class TicketService {
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireStageWriteAccess(s, targetStage, actor);
+        requireActive(s);
         if (s.lostReason() != null) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ");
@@ -512,9 +541,14 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT, "Deal is already in stage " + targetStage);
         }
         boolean backward = DealStage.indexOf(targetStage) < DealStage.indexOf(s.salesStage());
+        boolean skipForward = DealStage.indexOf(targetStage) - DealStage.indexOf(s.salesStage()) > 1;
         if (backward && (note == null || note.isBlank())) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "การย้อนสถานะกลับต้องระบุเหตุผล");
+        }
+        if (skipForward && (note == null || note.isBlank())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "การข้ามขั้นตอนต้องระบุเหตุผล");
         }
         tickets.updateSalesStage(ticketId, targetStage);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -529,6 +563,7 @@ public class TicketService {
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
+        requireActive(s);
         if (s.lostReason() != null) {
             throw new ApiException(HttpStatus.CONFLICT, "Deal is already marked lost");
         }
@@ -544,7 +579,7 @@ public class TicketService {
     public TicketDto reopenDeal(long ticketId, String note, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
-        if (s.lostReason() == null) {
+        if (!DealLifecycle.CLOSED_LOST.equals(s.lifecycle()) || s.lostReason() == null) {
             throw new ApiException(HttpStatus.CONFLICT, "Deal is not marked lost");
         }
         tickets.clearDealLost(ticketId);
@@ -559,7 +594,7 @@ public class TicketService {
      * strictly forward (monotonic — re-running a transition can never regress).
      */
     private void autoAdvanceStage(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
-        if (s.lostReason() != null) {
+        if (!DealLifecycle.ACTIVE.equals(s.lifecycle()) || s.lostReason() != null) {
             return;
         }
         if (DealStage.indexOf(targetStage) <= DealStage.indexOf(s.salesStage())) {
@@ -568,6 +603,98 @@ public class TicketService {
         tickets.updateSalesStage(s.id(), targetStage);
         tickets.addEvent(s.id(), actor.id(), actor.name(),
             TicketEventKind.STAGE_CHANGED, s.salesStage(), targetStage, "อัตโนมัติจากขั้นตอนของดีล");
+    }
+
+    @Transactional
+    public TicketDto placeOnHold(long ticketId, String note, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireDealOwnership(s, actor);
+        requireActive(s);
+        tickets.updateLifecycle(ticketId, DealLifecycle.ON_HOLD);
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.ON_HOLD, s.salesStage(), s.salesStage(), blankToNull(note));
+        return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto markDormant(long ticketId, String note, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireDealOwnership(s, actor);
+        if (!DealLifecycle.ACTIVE.equals(s.lifecycle()) && !DealLifecycle.ON_HOLD.equals(s.lifecycle())) {
+            throw new ApiException(HttpStatus.CONFLICT, "พัก dormant ได้เฉพาะดีลที่ active หรือ on hold");
+        }
+        tickets.updateLifecycle(ticketId, DealLifecycle.DORMANT);
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.DORMANT, s.salesStage(), s.salesStage(), blankToNull(note));
+        return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto resume(long ticketId, String note, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireDealOwnership(s, actor);
+        if (!DealLifecycle.ON_HOLD.equals(s.lifecycle()) && !DealLifecycle.DORMANT.equals(s.lifecycle())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ดำเนินการต่อได้เฉพาะดีลที่พักไว้");
+        }
+        tickets.updateLifecycle(ticketId, DealLifecycle.ACTIVE);
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.RESUMED, s.salesStage(), s.salesStage(), blankToNull(note));
+        return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto setTenderRequirement(long ticketId, String value, UserPrincipal actor) {
+        if (!TenderRequirement.isValid(value)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown tender requirement '" + value + "'");
+        }
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireDealOwnership(s, actor);
+        requireActive(s);
+        tickets.updateTenderRequirement(ticketId, value);
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(),
+            "tender_requirement → " + value);
+        return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto setEntryChannel(long ticketId, String value, String note, UserPrincipal actor) {
+        if (!EntryChannel.isValid(value)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown entry channel '" + value + "'");
+        }
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireDealOwnership(s, actor);
+        requireActive(s);
+        boolean changingExistingNonDefault = s.entryChannel() != null
+            && !EntryChannel.DESIGNER_LED.equals(s.entryChannel())
+            && !s.entryChannel().equals(value);
+        if (changingExistingNonDefault && (note == null || note.isBlank())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "การเปลี่ยน entry channel ต้องระบุเหตุผล");
+        }
+        tickets.updateEntryChannel(ticketId, value);
+        String message = "entry_channel → " + value
+            + (note != null && !note.isBlank() ? " — " + note.trim() : "");
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(), message);
+        return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto waiveDeposit(long ticketId, String policy, String reason, UserPrincipal actor) {
+        if (!DepositPolicy.NON_REQUIRED.contains(policy)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown deposit waiver policy '" + policy + "'");
+        }
+        if (reason == null || reason.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเหตุผลนโยบายมัดจำ");
+        }
+        requireRole(actor, ACCOUNT_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
+        tickets.updateDepositPolicy(ticketId, policy, reason.trim(), actor.id());
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(),
+            "deposit_policy → " + policy + " — " + reason.trim());
+        return requireTicket(ticketId);
     }
 
     private void requireStageWriteAccess(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
@@ -619,6 +746,7 @@ public class TicketService {
         }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CANCELLED, currentStatus, TicketStatus.CANCELLED, null);
+        tickets.updateLifecycle(ticketId, DealLifecycle.CANCELLED);
         return requireTicket(ticketId);
     }
 
@@ -626,6 +754,7 @@ public class TicketService {
     public TicketDto editItems(long ticketId, EditItemsRequest request, UserPrincipal actor) {
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
+        requireActive(s);
         String st = s.status();
         boolean isOwner = actor.id() == s.createdById();
 
@@ -704,6 +833,7 @@ public class TicketService {
     public CalculatePricesResult calculatePrices(long ticketId, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
         if (!TicketStatus.PRICE_PROPOSED.equals(s.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "คำนวณราคาได้เฉพาะ ticket ที่มีสถานะ price_proposed");
@@ -719,6 +849,7 @@ public class TicketService {
     public TicketDto overrideItemPrice(long ticketId, long itemId, OverridePriceRequest request, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
         if (!TicketStatus.PRICE_PROPOSED.equals(s.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "override ราคาได้เฉพาะ ticket ที่มีสถานะ price_proposed");
@@ -750,6 +881,160 @@ public class TicketService {
         requireTicket(ticketId);
     }
 
+    public TicketActionsResponse actions(long ticketId, UserPrincipal actor) {
+        TicketDto ticket = requireViewAccess(ticketId, actor);
+        TicketSummaryDto s = ticket.summary();
+        List<TicketActionDto> actions = new ArrayList<>();
+        boolean active = DealLifecycle.ACTIVE.equals(s.lifecycle());
+        if (active) {
+            addOperationalActions(actions, s, actor);
+            addStageActions(actions, s, actor);
+            addPolicyActions(actions, s, actor);
+            if (canDealOwnership(s, actor)) {
+                actions.add(new TicketActionDto("MARK_LOST", "lifecycle", "เสียงาน", List.of("reason")));
+                actions.add(new TicketActionDto("PLACE_ON_HOLD", "lifecycle", "พักดีลไว้"));
+                actions.add(new TicketActionDto("MARK_DORMANT", "lifecycle", "พัก dormant"));
+            }
+        } else if ((DealLifecycle.ON_HOLD.equals(s.lifecycle()) || DealLifecycle.DORMANT.equals(s.lifecycle()))
+                && canDealOwnership(s, actor)) {
+            actions.add(new TicketActionDto("RESUME", "lifecycle", "ดำเนินการต่อ"));
+            if (DealLifecycle.ON_HOLD.equals(s.lifecycle())) {
+                actions.add(new TicketActionDto("MARK_DORMANT", "lifecycle", "พัก dormant"));
+            }
+        } else if (DealLifecycle.CLOSED_LOST.equals(s.lifecycle()) && canDealOwnership(s, actor)) {
+            actions.add(new TicketActionDto("REOPEN", "lifecycle", "เปิดดีลใหม่"));
+        }
+        TicketActionState state = new TicketActionState(s.lifecycle(), s.salesStage(), s.paymentStatus(),
+            s.fulfillmentStatus(), s.status());
+        return new TicketActionsResponse(state, actions);
+    }
+
+    private void addOperationalActions(List<TicketActionDto> actions, TicketSummaryDto s, UserPrincipal actor) {
+        if (canSubmit(s, actor)) actions.add(new TicketActionDto("SUBMIT", "operational", "ส่งขอราคา"));
+        if (IMPORT_ROLES.contains(actor.role()) && TicketStatus.SUBMITTED.equals(s.status())) {
+            actions.add(new TicketActionDto("PICKUP", "operational", "รับเรื่อง"));
+        }
+        if (IMPORT_ROLES.contains(actor.role()) && PROPOSE_ALLOWED_STATUSES.contains(s.status())) {
+            actions.add(new TicketActionDto("PROPOSE_PRICE", "operational", "เสนอราคา", List.of("items")));
+        }
+        if (CEO_ROLES.contains(actor.role()) && TicketStatus.PRICE_PROPOSED.equals(s.status())) {
+            actions.add(new TicketActionDto("APPROVE", "operational", "อนุมัติราคา"));
+            actions.add(new TicketActionDto("REJECT", "operational", "ตีกลับราคา", List.of("reason")));
+            actions.add(new TicketActionDto("CALCULATE_PRICES", "operational", "คำนวณราคา"));
+            actions.add(new TicketActionDto("OVERRIDE_ITEM_PRICE", "operational", "แก้ไขราคาด้วยตนเอง", List.of("itemId", "manualPrice")));
+        }
+        if (canGenerateQuotation(s, actor)) {
+            actions.add(new TicketActionDto("GENERATE_QUOTATION", "doc", "ออกใบเสนอราคา"));
+        }
+        if (canConfirmCustomer(s, actor)) actions.add(new TicketActionDto("CONFIRM_CUSTOMER", "payment", "ลูกค้ายืนยัน"));
+        if (canCreateDepositNotice(s, actor)) actions.add(new TicketActionDto("ISSUE_DEPOSIT_NOTICE", "doc", "ออกใบแจ้งมัดจำ"));
+        if (ACCOUNT_ROLES.contains(actor.role()) && "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
+            actions.add(new TicketActionDto("DEPOSIT_PAID", "payment", "รับมัดจำ"));
+        }
+        if (IMPORT_ROLES.contains(actor.role()) && canIssueImportRequest(s)) {
+            actions.add(new TicketActionDto("ISSUE_IMPORT_REQUEST", "fulfillment", "ออก IR"));
+        }
+        if (IMPORT_ROLES.contains(actor.role()) && "IR_ISSUED".equals(s.fulfillmentStatus())) {
+            actions.add(new TicketActionDto("IR_SENT", "fulfillment", "ส่ง IR"));
+        }
+        if (IMPORT_ROLES.contains(actor.role()) && "IR_SENT".equals(s.fulfillmentStatus())) {
+            actions.add(new TicketActionDto("SHIPPING", "fulfillment", "สินค้าเดินทาง"));
+        }
+        if (IMPORT_ROLES.contains(actor.role()) && "SHIPPING".equals(s.fulfillmentStatus())) {
+            actions.add(new TicketActionDto("GOODS_RECEIVED", "fulfillment", "รับสินค้า"));
+        }
+        if (ACCOUNT_ROLES.contains(actor.role()) && "AWAITING_FINAL_PAYMENT".equals(s.paymentStatus())) {
+            actions.add(new TicketActionDto("FINAL_PAYMENT", "payment", "รับเงินครบ"));
+        }
+        if (canClose(s, actor)) actions.add(new TicketActionDto("CLOSE", "operational", "ปิดงาน"));
+        if (canCancel(s, actor)) actions.add(new TicketActionDto("CANCEL", "operational", "ยกเลิก"));
+        if (canEditItems(s, actor)) actions.add(new TicketActionDto("EDIT_ITEMS", "operational", "แก้ไขรายการ"));
+    }
+
+    private void addStageActions(List<TicketActionDto> actions, TicketSummaryDto s, UserPrincipal actor) {
+        for (String target : DealStage.ORDER) {
+            if (target.equals(s.salesStage())) continue;
+            if (canSetStage(s, target, actor)) {
+                actions.add(new TicketActionDto("ADVANCE_STAGE", "stage", "เลื่อนสถานะ", target));
+            }
+        }
+        if (DealStage.ORDER.stream().anyMatch(target -> !target.equals(s.salesStage()) && canSetStage(s, target, actor))) {
+            actions.add(new TicketActionDto("UPDATE_STAGE", "stage", "แก้ไขสถานะ", List.of("stage")));
+        }
+    }
+
+    private void addPolicyActions(List<TicketActionDto> actions, TicketSummaryDto s, UserPrincipal actor) {
+        if (canDealOwnership(s, actor)) {
+            actions.add(new TicketActionDto("SET_TENDER_REQUIREMENT", "policy", "ตั้งค่าสถานะประมูล", List.of("value")));
+            actions.add(new TicketActionDto("SET_ENTRY_CHANNEL", "policy", "ตั้งค่า entry channel", List.of("value")));
+        }
+        if (ACCOUNT_ROLES.contains(actor.role())) {
+            actions.add(new TicketActionDto("WAIVE_DEPOSIT", "policy", "นโยบายมัดจำ", List.of("policy", "reason")));
+        }
+    }
+
+    private boolean canSubmit(TicketSummaryDto s, UserPrincipal actor) {
+        return SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id()
+            && TicketStatus.DRAFT.equals(s.status()) && s.itemCount() > 0;
+    }
+
+    private boolean canGenerateQuotation(TicketSummaryDto s, UserPrincipal actor) {
+        return SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id()
+            && QUOTATION_ALLOWED_STATUSES.contains(s.status());
+    }
+
+    private boolean canConfirmCustomer(TicketSummaryDto s, UserPrincipal actor) {
+        return SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id()
+            && TicketStatus.QUOTATION_ISSUED.equals(s.status())
+            && (s.paymentStatus() == null || "CUSTOMER_CONFIRMED".equals(s.paymentStatus()));
+    }
+
+    private boolean canCreateDepositNotice(TicketSummaryDto s, UserPrincipal actor) {
+        return SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id()
+            && TicketStatus.QUOTATION_ISSUED.equals(s.status())
+            && "CUSTOMER_CONFIRMED".equals(s.paymentStatus())
+            && !DepositPolicy.bypassesDepositNotice(s.depositPolicy());
+    }
+
+    private boolean canIssueImportRequest(TicketSummaryDto s) {
+        boolean depositPolicyBypassesNotice = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
+            && (s.paymentStatus() == null || "CUSTOMER_CONFIRMED".equals(s.paymentStatus()));
+        boolean depositReady = "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
+            || "DEPOSIT_PAID".equals(s.paymentStatus())
+            || depositPolicyBypassesNotice;
+        return TicketStatus.QUOTATION_ISSUED.equals(s.status()) && depositReady && s.fulfillmentStatus() == null;
+    }
+
+    private boolean canClose(TicketSummaryDto s, UserPrincipal actor) {
+        boolean legacyOk = TicketStatus.DOCUMENT_ISSUED.equals(s.status())
+            && (s.paymentStatus() == null || "FULLY_PAID".equals(s.paymentStatus()));
+        boolean dualTrackOk = TicketStatus.QUOTATION_ISSUED.equals(s.status())
+            && "FULLY_PAID".equals(s.paymentStatus())
+            && "GOODS_RECEIVED".equals(s.fulfillmentStatus());
+        return s.createdById() == actor.id() && (legacyOk || dualTrackOk);
+    }
+
+    private boolean canCancel(TicketSummaryDto s, UserPrincipal actor) {
+        return s.createdById() == actor.id()
+            && !TicketStatus.CLOSED.equals(s.status())
+            && !TicketStatus.CANCELLED.equals(s.status());
+    }
+
+    private boolean canEditItems(TicketSummaryDto s, UserPrincipal actor) {
+        return SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id()
+            && Set.of(TicketStatus.DRAFT, TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW,
+                      TicketStatus.PRICE_PROPOSED).contains(s.status());
+    }
+
+    private boolean canSetStage(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
+        try {
+            requireStageWriteAccess(s, targetStage, actor);
+            return true;
+        } catch (ApiException e) {
+            return false;
+        }
+    }
+
     private TicketDto requireTicket(long id) {
         return tickets.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
@@ -764,6 +1049,13 @@ public class TicketService {
         return s;
     }
 
+    private void requireActive(TicketSummaryDto summary) {
+        if (!DealLifecycle.ACTIVE.equals(summary.lifecycle())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + summary.lifecycle() + ") จึงแก้ไขขั้นตอนนี้ไม่ได้");
+        }
+    }
+
     private void requireOwner(TicketSummaryDto summary, UserPrincipal actor) {
         if (summary.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
@@ -774,5 +1066,11 @@ public class TicketService {
         if (!allowed.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
+    }
+
+    private boolean canDealOwnership(TicketSummaryDto s, UserPrincipal actor) {
+        String role = actor.role();
+        boolean isOwner = SALES_ROLES.contains(role) && s.createdById() == actor.id();
+        return isOwner || "sales_manager".equals(role) || "ceo".equals(role);
     }
 }

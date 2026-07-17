@@ -17,6 +17,7 @@ export const queryKeys = {
   // now so the key module is stable across both slices; only ticketList is used here.
   ticketList: (status) => ['tickets', 'list', status ?? ''],
   ticketDetail: (id) => ['tickets', 'detail', id],
+  ticketActions: (id) => ['tickets', 'actions', id],
   ticketAttachments: (id) => ['tickets', 'attachments', id],
   // slice C (DepositNoticePage/CeoSettingsPage/NotificationBell)
   depositNotices: (ticketId) => ['depositNotices', ticketId],

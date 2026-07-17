@@ -8,6 +8,7 @@ import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketItemDto;
@@ -65,6 +66,7 @@ public class DepositNoticeService {
     public DepositNoticeDto createDraft(long ticketId, DepositNoticeDraftRequest req, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
+        requireActiveLifecycle(s);
 
         // Auto-populate items from approved ticket items if not provided
         List<DepositNoticeItemRequest> items = buildItemsFromRequest(req, ticketId);
@@ -124,6 +126,9 @@ public class DepositNoticeService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "Deposit notice requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED");
         }
+        // Issuing advances the payment track — a paused/terminal deal must not move
+        // (Phase 1 lifecycle gate; mirrors TicketService.requireActive).
+        requireActiveLifecycle(s);
 
         String docNumber = docs.issue(docId, actor.id(), actor.name());
 
@@ -243,6 +248,7 @@ public class DepositNoticeService {
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
         TicketSummaryDto s = ticket.summary();
         String st = s.status();
+        requireActiveLifecycle(s);
 
         if (!TicketStatus.APPROVED.equals(st) && !TicketStatus.DOCUMENT_ISSUED.equals(st)) {
             throw new ApiException(HttpStatus.CONFLICT, "Revision only allowed from approved or document_issued");
@@ -283,6 +289,17 @@ public class DepositNoticeService {
             throw new ApiException(HttpStatus.CONFLICT, "Deposit notice can only be created for approved tickets");
         }
         return t.summary();
+    }
+
+    /**
+     * Phase 1 lifecycle gate (mirrors TicketService.requireActive): deposit-notice
+     * mutations advance the payment track, so a paused/terminal deal blocks them.
+     */
+    private void requireActiveLifecycle(TicketSummaryDto summary) {
+        if (!DealLifecycle.ACTIVE.equals(summary.lifecycle())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + summary.lifecycle() + ") จึงแก้ไขขั้นตอนนี้ไม่ได้");
+        }
     }
 
     private DepositNoticeDto requireDraft(long docId) {
