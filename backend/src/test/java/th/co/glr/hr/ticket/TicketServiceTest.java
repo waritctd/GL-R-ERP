@@ -138,7 +138,8 @@ class TicketServiceTest {
         TicketSummaryDto summary = new TicketSummaryDto(
             10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.QUOTATION_ISSUED, "NORMAL",
             1L, "Sales User", null, null, "Live Edited Name", null, null, "Live Edited Project",
-            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null);
+            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null,
+            "QUOTE_BUYER", null, null, Instant.now());
         QuotationDto quotation = quotationOf(1L, 10L, "QT-2026-0001");
         TicketDto ticket = new TicketDto(summary, List.of(liveEditedItem), List.of(), quotation, List.of(quotation));
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
@@ -171,7 +172,8 @@ class TicketServiceTest {
         TicketSummaryDto summary = new TicketSummaryDto(
             10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.QUOTATION_ISSUED, "NORMAL",
             1L, "Sales User", null, null, "Live Edited Name", null, null, "Live Edited Project",
-            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null);
+            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null,
+            "QUOTE_BUYER", null, null, Instant.now());
         QuotationDto quotation = quotationOf(1L, 10L, "QT-2026-0001");
         TicketDto ticket = new TicketDto(summary, List.of(liveEditedItem), List.of(), quotation, List.of(quotation));
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
@@ -208,7 +210,8 @@ class TicketServiceTest {
         TicketSummaryDto summary = new TicketSummaryDto(
             10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.QUOTATION_ISSUED, "NORMAL",
             1L, "Sales User", null, null, "Live Customer Name", null, null, "Live Project",
-            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null);
+            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null,
+            "QUOTE_BUYER", null, null, Instant.now());
         QuotationDto quotation = quotationOf(2L, 10L, "QT-2026-0002");
         TicketDto ticket = new TicketDto(summary, List.of(liveItem), List.of(), quotation, List.of(quotation));
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
@@ -249,7 +252,7 @@ class TicketServiceTest {
 
     @Test
     void submit_draftByOwner_transitionsToSubmitted() {
-        stubTicket(10L, 1L, TicketStatus.DRAFT);
+        stubTicketWithItems(10L, 1L, TicketStatus.DRAFT, List.of(sampleItem()));
 
         service.submit(10L, salesActor);
 
@@ -257,6 +260,14 @@ class TicketServiceTest {
             eq(TicketEventKind.SUBMITTED), eq(TicketStatus.DRAFT), eq(TicketStatus.SUBMITTED), isNull());
         verify(notifRepo).notifyByRole(eq("import"), eq(10L), anyString(), anyString());
         verify(notifRepo).notifyByRole(eq("ceo"),    eq(10L), anyString(), anyString());
+    }
+
+    @Test
+    void submit_rejectsDraftWithoutItems() {
+        // A lightweight lead-stage deal (V50) has no items yet — it cannot enter the
+        // price-request flow until at least one product line exists.
+        stubTicket(10L, 1L, TicketStatus.DRAFT);
+        assertBadRequest(() -> service.submit(10L, salesActor));
     }
 
     @Test
@@ -526,7 +537,8 @@ class TicketServiceTest {
         TicketSummaryDto summary = new TicketSummaryDto(
             10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.APPROVED, "NORMAL",
             1L, "Sales User", null, null, "Free-text Name", 55L, null, "Renovation Project",
-            null, null, null, Instant.now(), Instant.now(), null, 0, false, null, null);
+            null, null, null, Instant.now(), Instant.now(), null, 0, false, null, null,
+            "QUOTE_DESIGN_SIDE", null, null, Instant.now());
         TicketDto ticket = new TicketDto(summary, List.of(), List.of(), null, List.of());
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
         when(customerRepo.findById(55L)).thenReturn(Optional.of(
@@ -551,7 +563,8 @@ class TicketServiceTest {
         TicketSummaryDto summary = new TicketSummaryDto(
             10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.APPROVED, "NORMAL",
             1L, "Sales User", null, null, null, 55L, null, null,
-            null, null, null, Instant.now(), Instant.now(), null, 0, false, null, null);
+            null, null, null, Instant.now(), Instant.now(), null, 0, false, null, null,
+            "QUOTE_DESIGN_SIDE", null, null, Instant.now());
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(
             new TicketDto(summary, List.of(), List.of(), null, List.of())));
         when(customerRepo.findById(55L)).thenReturn(Optional.of(
@@ -798,6 +811,201 @@ class TicketServiceTest {
     void confirmFinalPayment_rejectsBeforeAwaitingFinalPayment() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "SHIPPING");
         assertConflict(() -> service.confirmFinalPayment(10L, accountActor));
+    }
+
+    // ── create (V50: lightweight deal start, required project) ────────────
+
+    @Test
+    void create_requiresProject() {
+        var request = createRequest(null, List.of());
+        assertBadRequest(() -> service.create(request, salesActor));
+        verify(ticketRepo, never()).create(any(), anyString(), org.mockito.ArgumentMatchers.anyLong(), anyString());
+    }
+
+    @Test
+    void create_withoutItems_startsLightweightDraftWithoutNotifying() {
+        var request = createRequest(77L, List.of());
+        when(ticketRepo.nextTicketCode()).thenReturn("PR-2026-0001");
+        when(ticketRepo.create(request, "PR-2026-0001", 1L, "sales")).thenReturn(10L);
+        stubTicket(10L, 1L, TicketStatus.DRAFT);
+
+        service.create(request, salesActor);
+
+        // A lead-stage deal is the rep's private draft — import/CEO not notified yet.
+        verify(notifRepo, never()).notifyByRole(anyString(), org.mockito.ArgumentMatchers.anyLong(),
+            anyString(), anyString());
+    }
+
+    @Test
+    void create_withItems_entersPriceRequestFlowAndNotifies() {
+        var request = createRequest(77L, List.of(sampleItemRequest()));
+        when(ticketRepo.nextTicketCode()).thenReturn("PR-2026-0001");
+        when(ticketRepo.create(request, "PR-2026-0001", 1L, "sales")).thenReturn(10L);
+        stubTicket(10L, 1L, TicketStatus.SUBMITTED);
+
+        service.create(request, salesActor);
+
+        verify(notifRepo).notifyByRole(eq("import"), eq(10L), anyString(), anyString());
+        verify(notifRepo).notifyByRole(eq("ceo"), eq(10L), anyString(), anyString());
+    }
+
+    // ── deal pipeline: manual stage updates (V50) ─────────────────────────
+
+    @Test
+    void updateStage_ownerCanAdvanceSalesStage() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.PRESENTATION, null);
+        service.updateStage(10L, DealStage.SPEC_APPROVED, null, salesActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.SPEC_APPROVED);
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.STAGE_CHANGED), eq(DealStage.PRESENTATION), eq(DealStage.SPEC_APPROVED), isNull());
+    }
+
+    @Test
+    void updateStage_salesManagerAndCeoCanAdvanceSalesStage() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.PRESENTATION, null);
+        service.updateStage(10L, DealStage.SPEC_APPROVED, null, salesManagerActor);
+        service.updateStage(10L, DealStage.OWNER_SIGNOFF, null, ceoActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.SPEC_APPROVED);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.OWNER_SIGNOFF);
+    }
+
+    @Test
+    void updateStage_rejectsNonOwnerSalesAndWrongRolesPerTarget() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.PRESENTATION, null);
+        // another rep's deal
+        assertForbidden(() -> service.updateStage(10L, DealStage.SPEC_APPROVED, null, otherSales));
+        // sales cannot set money/import fallback stages
+        assertForbidden(() -> service.updateStage(10L, DealStage.DEPOSIT_RECEIVED, null, salesActor));
+        assertForbidden(() -> service.updateStage(10L, DealStage.PROCUREMENT, null, salesActor));
+        assertForbidden(() -> service.updateStage(10L, DealStage.CLOSED_PAID, null, salesActor));
+        // account only money stages; import only PROCUREMENT
+        assertForbidden(() -> service.updateStage(10L, DealStage.SPEC_APPROVED, null, accountActor));
+        assertForbidden(() -> service.updateStage(10L, DealStage.SPEC_APPROVED, null, importActor));
+        service.updateStage(10L, DealStage.DEPOSIT_RECEIVED, null, accountActor);
+        service.updateStage(10L, DealStage.PROCUREMENT, null, importActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.DEPOSIT_RECEIVED);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.PROCUREMENT);
+    }
+
+    @Test
+    void updateStage_rejectsUnknownSameLostAndBackwardWithoutNote() {
+        assertBadRequest(() -> service.updateStage(10L, "S3", null, salesActor));
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, null);
+        assertConflict(() -> service.updateStage(10L, DealStage.NEGOTIATION, null, salesActor));
+        assertBadRequest(() -> service.updateStage(10L, DealStage.PRESENTATION, "  ", salesActor));
+        service.updateStage(10L, DealStage.PRESENTATION, "ลูกค้าเปลี่ยนผู้ออกแบบ เริ่มสเปคใหม่", salesActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.PRESENTATION);
+        stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, DealLostReason.PRICE);
+        assertConflict(() -> service.updateStage(11L, DealStage.ORDER_RECEIVED, null, salesActor));
+    }
+
+    // ── deal pipeline: lost / reopen (V50) ────────────────────────────────
+
+    @Test
+    void markLost_ownerPreservesStageAndRecordsReason() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, null);
+        service.markLost(10L, DealLostReason.PRICE, "แพ้ราคาคู่แข่ง", salesActor);
+        verify(ticketRepo).markDealLost(10L, DealLostReason.PRICE);
+        verify(ticketRepo, never()).updateSalesStage(org.mockito.ArgumentMatchers.anyLong(), anyString());
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.MARKED_LOST), eq(DealStage.NEGOTIATION), eq(DealStage.NEGOTIATION), anyString());
+    }
+
+    @Test
+    void markLost_gatesAndValidation() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, null);
+        assertBadRequest(() -> service.markLost(10L, "F2", null, salesActor));
+        assertForbidden(() -> service.markLost(10L, DealLostReason.PRICE, null, otherSales));
+        assertForbidden(() -> service.markLost(10L, DealLostReason.PRICE, null, importActor));
+        assertForbidden(() -> service.markLost(10L, DealLostReason.PRICE, null, accountActor));
+        stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, DealLostReason.PRICE);
+        assertConflict(() -> service.markLost(11L, DealLostReason.LEAD_TIME, null, salesActor));
+    }
+
+    @Test
+    void reopenDeal_resumesAtPreservedStage() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null,
+            DealStage.NEGOTIATION, DealLostReason.PROJECT_ON_HOLD);
+        service.reopenDeal(10L, "โครงการกลับมาก่อสร้างต่อ", salesActor);
+        verify(ticketRepo).clearDealLost(10L);
+        verify(ticketRepo, never()).updateSalesStage(org.mockito.ArgumentMatchers.anyLong(), anyString());
+        stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, null);
+        assertConflict(() -> service.reopenDeal(11L, null, salesActor));
+    }
+
+    // ── deal pipeline: auto-advance from operational transitions (V50) ────
+
+    @Test
+    void confirmCustomer_autoAdvancesDealToOrderReceived() {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null, DealStage.NEGOTIATION, null);
+        service.confirmCustomer(10L, salesActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.ORDER_RECEIVED);
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.STAGE_CHANGED), eq(DealStage.NEGOTIATION), eq(DealStage.ORDER_RECEIVED), anyString());
+    }
+
+    @Test
+    void confirmDepositPaid_autoAdvancesDealToDepositReceived() {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(),
+            "DEPOSIT_NOTICE_ISSUED", null, DealStage.ORDER_RECEIVED, null);
+        service.confirmDepositPaid(10L, accountActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.DEPOSIT_RECEIVED);
+    }
+
+    @Test
+    void issueImportRequest_autoAdvancesDealToProcurement() {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(),
+            "DEPOSIT_PAID", null, DealStage.DEPOSIT_RECEIVED, null);
+        service.issueImportRequest(10L, importActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.PROCUREMENT);
+    }
+
+    @Test
+    void confirmFinalPayment_autoAdvancesDealToClosedPaid() {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(),
+            "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED", DealStage.DELIVERED, null);
+        service.confirmFinalPayment(10L, accountActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.CLOSED_PAID);
+    }
+
+    @Test
+    void autoAdvance_neverRegressesAndSkipsLostDeals() {
+        // Deal already past ORDER_RECEIVED (manual correction) — re-confirming must not regress.
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null, DealStage.PROCUREMENT, null);
+        service.confirmCustomer(10L, salesActor);
+        verify(ticketRepo, never()).updateSalesStage(org.mockito.ArgumentMatchers.anyLong(), anyString());
+        // Lost deal: operational transition proceeds, stage untouched.
+        stubDeal(11L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.NEGOTIATION, DealLostReason.PROJECT_ON_HOLD);
+        service.confirmCustomer(11L, salesActor);
+        verify(ticketRepo).updatePaymentStatus(11L, "CUSTOMER_CONFIRMED");
+        verify(ticketRepo, never()).updateSalesStage(org.mockito.ArgumentMatchers.anyLong(), anyString());
+    }
+
+    @Test
+    void midFulfillmentTransitions_stayInsideProcurement() {
+        // IR_SENT / SHIPPING / GOODS_RECEIVED render from fulfillment_status — no stage writes.
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "DEPOSIT_PAID", "IR_ISSUED",
+            DealStage.PROCUREMENT, null);
+        service.markIrSent(10L, importActor);
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "DEPOSIT_PAID", "IR_SENT",
+            DealStage.PROCUREMENT, null);
+        service.markShipping(10L, importActor);
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "DEPOSIT_PAID", "SHIPPING",
+            DealStage.PROCUREMENT, null);
+        service.markGoodsReceived(10L, importActor);
+        verify(ticketRepo, never()).updateSalesStage(org.mockito.ArgumentMatchers.anyLong(), anyString());
+    }
+
+    @Test
+    void salesManager_stageWriteIsTheOnlyTicketWritePower() {
+        // The pipeline stage/lost/reopen trio is the deliberate exception to
+        // handoff 58's read-only invariant — operational actions must stay denied.
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null, DealStage.NEGOTIATION, null);
+        assertForbidden(() -> service.confirmCustomer(10L, salesManagerActor));
+        assertForbidden(() -> service.submit(10L, salesManagerActor));
+        service.markLost(10L, DealLostReason.RELATIONSHIP, null, salesManagerActor);
+        verify(ticketRepo).markDealLost(10L, DealLostReason.RELATIONSHIP);
     }
 
     @Test
@@ -1196,10 +1404,19 @@ class TicketServiceTest {
 
     private TicketDto stubTicket(long ticketId, long createdById, String status, List<TicketItemDto> items,
                                  String paymentStatus, String fulfillmentStatus) {
+        return stubDeal(ticketId, createdById, status, items, paymentStatus, fulfillmentStatus,
+            DealStage.QUOTE_DESIGN_SIDE, null);
+    }
+
+    /** Full deal stub: operational lifecycle + pipeline stage/lost state (V50). */
+    private TicketDto stubDeal(long ticketId, long createdById, String status, List<TicketItemDto> items,
+                               String paymentStatus, String fulfillmentStatus,
+                               String salesStage, String lostReason) {
         TicketSummaryDto summary = new TicketSummaryDto(
             ticketId, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", status, "NORMAL",
             createdById, "Sales User", null, null, "Test Customer", null, null, null, null, null, null,
-            Instant.now(), Instant.now(), null, items.size(), false, paymentStatus, fulfillmentStatus);
+            Instant.now(), Instant.now(), null, items.size(), false, paymentStatus, fulfillmentStatus,
+            salesStage, lostReason, lostReason == null ? null : Instant.now(), Instant.now());
         TicketDto ticket = new TicketDto(summary, items, List.of(), null, List.of());
         when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
         return ticket;
@@ -1212,10 +1429,31 @@ class TicketServiceTest {
             Instant.now(), null, null, "THB", 1, "ISSUED");
     }
 
+    private static CreateTicketRequest createRequest(Long projectId, List<TicketItemRequest> items) {
+        return new CreateTicketRequest("Test deal", "NORMAL", "ลูกค้า", null, projectId, null, null, items);
+    }
+
+    private static TicketItemRequest sampleItemRequest() {
+        return new TicketItemRequest("Brand", "Model", "White", "Matte", "60x60", null,
+            BigDecimal.ONE, null, null, null, null, null, null, null);
+    }
+
+    private static TicketItemDto sampleItem() {
+        return new TicketItemDto(1L, 10L, "Brand", "Model", null, null,
+            "pcs", null, BigDecimal.ONE, null, null, null, null, null,
+            null, "THB", 0, null, null, null, "PIECE", null, null);
+    }
+
     private static void assertForbidden(ThrowableAssert.ThrowingCallable action) {
         assertThatThrownBy(action)
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    private static void assertBadRequest(ThrowableAssert.ThrowingCallable action) {
+        assertThatThrownBy(action)
+            .isInstanceOfSatisfying(ApiException.class, e ->
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
     private static void assertConflict(ThrowableAssert.ThrowingCallable action) {

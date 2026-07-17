@@ -26,5 +26,10 @@ public record TicketSummaryDto(
     int itemCount,
     boolean hasEdits,
     String paymentStatus,
-    String fulfillmentStatus
+    String fulfillmentStatus,
+    // Deal pipeline (V50): one ticket = one deal running the 14-stage journey.
+    String salesStage,
+    String lostReason,
+    Instant lostAt,
+    Instant stageUpdatedAt
 ) {}
