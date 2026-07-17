@@ -42,8 +42,19 @@ public class CustomerController {
 
     @PostMapping
     Map<String, CustomerDto> create(@Valid @RequestBody CreateCustomerRequest req, HttpSession session) {
-        sessions.requireUser(session);
-        return Map.of("customer", customers.create(req.name(), req.taxId(), req.address(), req.branch(), req.phone()));
+        // Customer/contact/project creation is the sales deal-entry flow (TicketCreateModal);
+        // gate it to the sales role, mirroring TicketService.create. Reads stay open to any
+        // authenticated user (customer pickers). Previously any role (incl. employee) could write.
+        sessions.requireAnyRole(sessions.requireUser(session), "sales");
+        // branch has a DB default ('สำนักงานใหญ่') but an explicit NULL bypasses it and
+        // violates NOT NULL; coalesce so a create that omits branch succeeds (mirrors the mock).
+        return Map.of("customer", customers.create(req.name(), req.taxId(), req.address(), branchOrDefault(req.branch()), req.phone()));
+    }
+
+    private static final String DEFAULT_BRANCH = "สำนักงานใหญ่";
+
+    private static String branchOrDefault(String branch) {
+        return (branch == null || branch.isBlank()) ? DEFAULT_BRANCH : branch;
     }
 
     @GetMapping("/{customerId}/contacts")
@@ -56,7 +67,7 @@ public class CustomerController {
     Map<String, ContactDto> createContact(@PathVariable long customerId,
                                           @Valid @RequestBody CreateContactRequest req,
                                           HttpSession session) {
-        sessions.requireUser(session);
+        sessions.requireAnyRole(sessions.requireUser(session), "sales");
         return Map.of("contact", contacts.create(customerId,
             req.firstName(), req.lastName(), req.position(), req.email(), req.phone()));
     }
@@ -71,7 +82,7 @@ public class CustomerController {
     Map<String, ProjectDto> createProject(@PathVariable long customerId,
                                           @Valid @RequestBody CreateProjectRequest req,
                                           HttpSession session) {
-        sessions.requireUser(session);
+        sessions.requireAnyRole(sessions.requireUser(session), "sales");
         return Map.of("project", projects.create(customerId, req.name()));
     }
 

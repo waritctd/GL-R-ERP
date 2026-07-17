@@ -117,6 +117,14 @@ public class TicketService {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "Unknown entry channel '" + request.entryChannel() + "'");
         }
+        // Guard priority the same way as entryChannel: an unvalidated value hits the
+        // chk_ticket_priority CHECK column in the repository and fails closed (500).
+        // Null/blank is fine — the repository defaults it to NORMAL.
+        if (request.priority() != null && !request.priority().isBlank()
+                && !Priority.isValid(request.priority())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "Unknown priority '" + request.priority() + "'");
+        }
         String code = tickets.nextTicketCode();
         long id = tickets.create(request, code, actor.id(), actor.name());
         // A lightweight lead-stage deal (no items yet) is the rep's private draft —
