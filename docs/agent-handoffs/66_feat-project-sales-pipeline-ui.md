@@ -122,3 +122,34 @@ later stages had no doc access in the stage panel. `TicketDetailPage.jsx` docAct
 Verified in mock browser: ticket 12 (PROCUREMENT) shows Rev + QT-2026-0005 PDF + ดูใบแจ้งยอด
 มัดจำ (navigates to /tickets/12/deposit); ticket 11 (ORDER_RECEIVED) shows the generate
 button + QT-2026-0004 PDF. Lint 0 errors · 118/118 tests · build PASS.
+
+---
+
+## Follow-up (2026-07-17): deal detail de-dup — stage panel is the cockpit
+
+User feedback: the detail page was ซ้ำซ้อน (doc buttons twice, Track P/F panel repeating the
+pipeline, three guidance surfaces). Changes (plan `revise-this-ui-its-transient-bunny.md`):
+- **สถานะหลังออกใบเสนอราคา (Track P/F) panel DELETED.** Its information became labelled
+  sub-status chip rows inside the DealStagePanel hero, all read live from the deal:
+  - `การขอราคา:` (PRICING_SUBSTEPS, keyed by ticket.status) — the OLD internal price
+    workflow preserved and made visible inside the quote stages S4+S5/QUOTE_BUYER:
+    ส่งขอราคาแล้ว → Import กำลังเสนอราคา → รอ CEO อนุมัติราคา → ราคายืนยันแล้ว → ออกใบเสนอราคา.
+  - `การชำระเงิน:` (PAYMENT_SUBSTEPS, paymentStatus) and `การนำเข้า:` (PROCUREMENT_SUBSTEPS,
+    now shown whenever fulfillmentStatus != null).
+- **Full cockpit**: the current sub-step's ONE operational button (ส่งขอราคา / รับเรื่อง /
+  เสนอราคา / ลูกค้ายืนยัน / ยืนยันรับมัดจำ / ส่ง IR แล้ว / shipping / รับสินค้า / ยืนยันชำระครบ /
+  ปิดเรื่อง — handlers moved verbatim) renders as `primaryAction` in the stage hero; ปิดเรื่อง
+  also renders under the stage-14 done banner. Doc-shaped next steps are NOT repeated in the
+  primary slot (they live in the docs row; guidance points at them). CEO approve/reject keeps
+  its dedicated การอนุมัติราคา decision panel.
+- **Guidance folded in**: the blue ขั้นตอนถัดไปสำหรับคุณ + gray รอดำเนินการ bars deleted;
+  `guidance={nextAction ?? waitingHint}` renders as one line in the hero; the panel's own
+  next-stage hint suppresses itself when identical to guidance.
+- **การดำเนินการอื่น ๆ shrunk** to: คำนวณราคา (CIF) + ดูรายละเอียดสูตร, แก้ไขรายการสินค้า,
+  ขอแก้ไข (Revise), ยกเลิก, no-items draft hint — hides when none apply. All duplicated doc
+  buttons removed (each doc action now appears exactly once, in the docs row).
+- No behavior/permission changes anywhere — pure re-homing of existing handlers/flags.
+- Verified: lint 0 errors · 118/118 tests · build PASS · mock browser as sales (ticket 11:
+  no Track panel/callouts, payment chips, guidance, docs once), stage-4 deal shows การขอราคา
+  chips, ticket 14 done banner + ปิดเรื่อง, as import primaryAction=รับเรื่อง with no
+  stage-advance offered. Mock authz non-authoritative per CLAUDE.md.

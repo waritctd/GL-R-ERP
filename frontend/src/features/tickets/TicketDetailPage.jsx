@@ -33,9 +33,9 @@ const EVENT_KIND_LABEL = {
   COMMENTED:          'ความคิดเห็น',
   COMMENT:            'ความคิดเห็น',
   PRICE_OVERRIDDEN:   'แก้ไขราคาด้วยตนเอง (CEO)',
-  // Dual-track post-quotation events (see backend TicketEventKind.java) — Track P
-  // (payment) and Track F (fulfillment) labels mirror the stepper wording further
-  // down this page (สถานะหลังออกใบเสนอราคา) so an event and its stepper step read
+  // Dual-track post-quotation events (see backend TicketEventKind.java) — payment
+  // and fulfillment labels mirror the DealStagePanel's การชำระเงิน/การนำเข้า
+  // sub-status chips so an event and its chip read
   // as the same real-world action.
   CUSTOMER_CONFIRMED:     'ลูกค้ายืนยันคำสั่งซื้อ',
   DEPOSIT_NOTICE_ISSUED:  'ออกใบแจ้งมัดจำ',
@@ -48,9 +48,9 @@ const EVENT_KIND_LABEL = {
   FULLY_PAID:             'ชำระครบแล้ว',
 };
 
-// Track P (payment) events get a success-toned dot, Track F (fulfillment)
+// Payment-track events get a success-toned dot, fulfillment-track
 // events get an info-toned dot — mirrors the two colour groups used by the
-// dual-track stepper (สถานะหลังออกใบเสนอราคา) below.
+// sub-status chips in the DealStagePanel.
 const PAYMENT_TRACK_KINDS = new Set([
   'CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID',
   'AWAITING_FINAL_PAYMENT', 'FULLY_PAID',
@@ -415,12 +415,12 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     downloadRemainingInvoice: st === 'quotation_issued' && fs === 'GOODS_RECEIVED' && isSales,
   };
 
-  // `comment` has its own independent UI in the event-history panel (line ~1530)
-  // and isn't rendered inside "การดำเนินการอื่น ๆ" at all — excluding it here so a
-  // viewer with comment-only access (e.g. sales_manager) doesn't get an empty
-  // actions panel with a header and no buttons.
-  const { comment: _commentFlag, ...actionOnlyFlags } = can;
-  const hasActions = Object.values(actionOnlyFlags).some(Boolean);
+  // การดำเนินการอื่น ๆ now holds only the rare actions — everything workflow-
+  // shaped (submit/pickup/propose/dual-track confirmations/close) moved into the
+  // DealStagePanel cockpit, and docs live in its เอกสารของขั้นนี้ row. The
+  // section hides entirely when none of the remaining actions apply.
+  const hasActions = can.calculatePrices || can.revise || can.editItems || can.cancel
+    || (st === 'draft' && isOwner && items.length === 0);
 
   const status = ticketStatusLabel(st);
 
@@ -461,6 +461,74 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       : ps === 'AWAITING_FINAL_PAYMENT' ? 'รอฝ่ายบัญชียืนยันรับชำระส่วนที่เหลือ'
       : null)
     : null;
+
+  // The cockpit's primary action: the ONE workflow button for this viewer's
+  // current sub-step (moved verbatim out of การดำเนินการอื่น ๆ). Doc-shaped next
+  // steps (ออกใบแจ้งยอดมัดจำ, IR) are NOT repeated here — they already sit in the
+  // stage panel's docs row and the guidance line points at them. CEO price
+  // approve/reject keeps its dedicated decision panel below.
+  const primaryAction = can.submit ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.submit(ticketId), 'ส่งขอราคาแล้ว')}>
+      <Icon name="check" size={14} />
+      ส่งขอราคา (เริ่มเสนอราคา)
+    </button>
+  ) : can.pickup ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.pickup(ticketId), 'รับมอบหมายแล้ว')}>
+      <Icon name="check" size={14} />
+      รับเรื่อง
+    </button>
+  ) : can.propose && !proposeMode ? (
+    <button
+      type="button"
+      className={st === 'approved' ? 'secondary-button' : 'primary-button'}
+      style={st === 'approved' ? { borderColor: 'var(--color-warning-border)', color: 'var(--color-warning-dark)', background: 'var(--color-warning-bg-soft)' } : {}}
+      disabled={actionLoading}
+      onClick={initPropose}
+    >
+      <Icon name="pencil" size={14} />
+      {st === 'in_review' && 'เสนอราคาสินค้า'}
+      {st === 'price_proposed' && 'แก้ไขราคาที่เสนอ'}
+      {st === 'approved' && 'แก้ไขราคา (ต้องอนุมัติใหม่)'}
+    </button>
+  ) : can.confirmCustomer ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.confirmCustomer(ticketId), 'ลูกค้ายืนยันแล้ว')}>
+      ลูกค้ายืนยัน
+    </button>
+  ) : can.confirmDepositPaid ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.confirmDepositPaid(ticketId), 'ยืนยันรับมัดจำแล้ว')}>
+      ยืนยันรับมัดจำ
+    </button>
+  ) : can.markIrSent ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.markIrSent(ticketId), 'ส่ง IR แล้ว')}>
+      ส่ง IR แล้ว
+    </button>
+  ) : can.markShipping ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.markShipping(ticketId), 'สินค้าอยู่ระหว่างขนส่ง')}>
+      สินค้าออกเดินทาง (Shipping)
+    </button>
+  ) : can.markGoodsReceived ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.markGoodsReceived(ticketId), 'รับสินค้าแล้ว')}>
+      รับสินค้าแล้ว (Goods Received)
+    </button>
+  ) : can.confirmFinalPayment ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.confirmFinalPayment(ticketId), 'ชำระครบแล้ว')}>
+      ยืนยันชำระครบ (Final Payment)
+    </button>
+  ) : can.close ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.close(ticketId), 'ปิดใบขอราคาแล้ว')}>
+      <Icon name="check" size={14} />
+      ปิดเรื่อง
+    </button>
+  ) : null;
 
   function initPropose() {
     // Factory configs are now a query (fetched once per session, see above);
@@ -675,6 +743,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       <DealStagePanel
         user={user}
         summary={summary}
+        primaryAction={primaryAction}
+        guidance={nextAction ?? waitingHint}
         actionLoading={actionLoading}
         onUpdateStage={(payload) => doAction(() => api.tickets.updateStage(ticketId, payload), 'อัปเดตสถานะดีลแล้ว')}
         onMarkLost={(payload) => doAction(() => api.tickets.markLost(ticketId, payload), 'บันทึกเสียงานแล้ว')}
@@ -728,32 +798,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           </>
         ) : null}
       />
-
-      {/* Next-action callout — only rendered when derivable from the real `can`
-          permission flags above; otherwise omitted rather than guessed. */}
-      {nextAction && (
-        <div style={{
-          display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px',
-          borderRadius: 8, border: '1px solid var(--color-info-border)',
-          background: 'var(--color-info-bg)', color: 'var(--color-info)', fontSize: 13,
-        }}>
-          <Icon name="chevronRight" size={15} style={{ flexShrink: 0, marginTop: 1 }} />
-          <span><strong>ขั้นตอนถัดไปสำหรับคุณ:</strong> {nextAction}</span>
-        </div>
-      )}
-
-      {/* Passive waiting hint — the next step belongs to another team (ฝ่ายบัญชี /
-          Import), so show who the ticket is waiting on instead of a dead end. */}
-      {waitingHint && (
-        <div style={{
-          display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px',
-          borderRadius: 8, border: '1px solid var(--color-border)',
-          background: 'var(--color-surface-muted, var(--color-info-bg))', color: 'var(--color-text-muted)', fontSize: 13,
-        }}>
-          <Icon name="clock" size={15} style={{ flexShrink: 0, marginTop: 1 }} />
-          <span><strong>รอดำเนินการ:</strong> {waitingHint}</span>
-        </div>
-      )}
 
       {/* Contextual decision panel — approve/reject is the one action on this page
           with real financial and downstream consequences, so it gets its own
@@ -822,41 +866,11 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             <h2>การดำเนินการอื่น ๆ</h2>
           </div>
           <div style={{ padding: '12px 18px', display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-            {can.submit && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.submit(ticketId), 'ส่งขอราคาแล้ว')}>
-                <Icon name="check" size={14} />
-                ส่งขอราคา (เริ่มเสนอราคา)
-              </button>
-            )}
             {st === 'draft' && isOwner && items.length === 0 && (
               <span className="rounded-lg border border-border bg-surface-subtle px-3 py-2 text-xs text-text-muted">
                 ดีลนี้ยังไม่มีรายการสินค้า — กด “แก้ไขรายการสินค้า” เพื่อเพิ่มก่อนส่งขอราคา
               </span>
             )}
-            {can.pickup && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.pickup(ticketId), 'รับมอบหมายแล้ว')}>
-                <Icon name="check" size={14} />
-                รับเรื่อง
-              </button>
-            )}
-
-            {can.propose && !proposeMode && (
-              <button
-                type="button"
-                className={st === 'approved' ? 'secondary-button' : 'primary-button'}
-                style={st === 'approved' ? { borderColor: 'var(--color-warning-border)', color: 'var(--color-warning-dark)', background: 'var(--color-warning-bg-soft)' } : {}}
-                disabled={actionLoading}
-                onClick={initPropose}
-              >
-                <Icon name="pencil" size={14} />
-                {st === 'in_review' && 'เสนอราคาสินค้า'}
-                {st === 'price_proposed' && 'แก้ไขราคาที่เสนอ'}
-                {st === 'approved' && 'แก้ไขราคา (ต้องอนุมัติใหม่)'}
-              </button>
-            )}
-
             {can.calculatePrices && (
               <button type="button" className="secondary-button" disabled={calcLoading || actionLoading}
                 onClick={handleCalculatePrices}
@@ -873,84 +887,11 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               </button>
             )}
 
-            {can.generateQuotation && (
-              <button type="button" className="secondary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.quotation(ticketId), 'ออกใบเสนอราคาแล้ว')}>
-                <Icon name="fileText" size={14} />
-                {ticket.quotations && ticket.quotations.length > 0 ? 'ออกใบเสนอราคาใหม่ (Rev)' : 'ออกใบเสนอราคา'}
-              </button>
-            )}
-
-            {can.generateDocument && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => onOpenDocument && onOpenDocument(ticketId)}>
-                <Icon name="fileText" size={14} />
-                ออกใบแจ้งยอดมัดจำ
-              </button>
-            )}
-
             {can.revise && !showReviseForm && (
               <button type="button" className="secondary-button" disabled={actionLoading}
                 onClick={() => setShowReviseForm(true)}>
                 <Icon name="pencil" size={14} />
                 ขอแก้ไข (Revise)
-              </button>
-            )}
-
-            {can.close && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.close(ticketId), 'ปิดใบขอราคาแล้ว')}>
-                <Icon name="check" size={14} />
-                ปิดเรื่อง
-              </button>
-            )}
-
-            {can.confirmCustomer && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.confirmCustomer(ticketId), 'ลูกค้ายืนยันแล้ว')}>
-                ลูกค้ายืนยัน
-              </button>
-            )}
-            {can.confirmDepositPaid && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.confirmDepositPaid(ticketId), 'ยืนยันรับมัดจำแล้ว')}>
-                ยืนยันรับมัดจำ
-              </button>
-            )}
-            {can.issueImportRequest && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.issueImportRequest(ticketId), 'ออก IR แล้ว')}>
-                ออก Import Request (IR)
-              </button>
-            )}
-            {can.markIrSent && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.markIrSent(ticketId), 'ส่ง IR แล้ว')}>
-                ส่ง IR แล้ว
-              </button>
-            )}
-            {can.markShipping && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.markShipping(ticketId), 'สินค้าอยู่ระหว่างขนส่ง')}>
-                สินค้าออกเดินทาง (Shipping)
-              </button>
-            )}
-            {can.markGoodsReceived && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.markGoodsReceived(ticketId), 'รับสินค้าแล้ว')}>
-                รับสินค้าแล้ว (Goods Received)
-              </button>
-            )}
-            {can.confirmFinalPayment && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.confirmFinalPayment(ticketId), 'ชำระครบแล้ว')}>
-                ยืนยันชำระครบ (Final Payment)
-              </button>
-            )}
-            {can.downloadRemainingInvoice && (
-              <button type="button" className="secondary-button" disabled={downloadingInvoice}
-                onClick={handleDownloadRemainingInvoice}>
-                {downloadingInvoice ? 'กำลังดาวน์โหลด...' : 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ'}
               </button>
             )}
 
@@ -1015,63 +956,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               </div>
             </div>
           )}
-        </section>
-      )}
-
-      {st === 'quotation_issued' && (
-        <section className="panel" style={{ marginBottom: 0 }}>
-          <div className="panel-header"><h2>สถานะหลังออกใบเสนอราคา</h2></div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, padding: '12px 18px 18px' }}>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-muted)', marginBottom: 6 }}>Track P — การชำระเงิน</div>
-              {[
-                { key: 'CUSTOMER_CONFIRMED',    label: 'ลูกค้ายืนยัน' },
-                { key: 'DEPOSIT_NOTICE_ISSUED', label: 'ออกใบแจ้งมัดจำ' },
-                { key: 'DEPOSIT_PAID',          label: 'รับมัดจำแล้ว' },
-                { key: 'AWAITING_FINAL_PAYMENT',label: 'รอชำระส่วนที่เหลือ' },
-                { key: 'FULLY_PAID',            label: 'ชำระครบแล้ว' },
-              ].map((step, idx, arr) => {
-                const stepKeys = arr.map((s) => s.key);
-                const curIdx = stepKeys.indexOf(ps);
-                const done = curIdx >= idx;
-                const active = curIdx === idx;
-                return (
-                  <div key={step.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
-                    <span style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700,
-                      background: done ? (active ? 'var(--color-info-dot)' : 'var(--color-info-border)') : 'var(--color-border-subtle)',
-                      color: done ? (active ? 'var(--color-surface)' : 'var(--color-info-dot)') : 'var(--color-text-muted)' }}>
-                      {done && !active ? '✓' : idx + 1}
-                    </span>
-                    <span style={{ fontSize: 13, color: active ? 'var(--color-info-dot)' : done ? 'var(--color-text-secondary)' : 'var(--color-text-muted)', fontWeight: active ? 600 : 400 }}>{step.label}</span>
-                  </div>
-                );
-              })}
-            </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-muted)', marginBottom: 6 }}>Track F — การนำเข้า/จัดส่ง</div>
-              {[
-                { key: 'IR_ISSUED',      label: 'ออก Import Request' },
-                { key: 'IR_SENT',        label: 'ส่ง IR แล้ว' },
-                { key: 'SHIPPING',       label: 'สินค้าอยู่ระหว่างขนส่ง' },
-                { key: 'GOODS_RECEIVED', label: 'รับสินค้าแล้ว' },
-              ].map((step, idx, arr) => {
-                const stepKeys = arr.map((s) => s.key);
-                const curIdx = stepKeys.indexOf(fs);
-                const done = curIdx >= idx;
-                const active = curIdx === idx;
-                return (
-                  <div key={step.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
-                    <span style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700,
-                      background: done ? (active ? 'var(--color-success)' : 'var(--color-success-border)') : 'var(--color-border-subtle)',
-                      color: done ? (active ? 'var(--color-surface)' : 'var(--color-success)') : 'var(--color-text-muted)' }}>
-                      {done && !active ? '✓' : idx + 1}
-                    </span>
-                    <span style={{ fontSize: 13, color: active ? 'var(--color-success)' : done ? 'var(--color-text-secondary)' : 'var(--color-text-muted)', fontWeight: active ? 600 : 400 }}>{step.label}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
         </section>
       )}
 

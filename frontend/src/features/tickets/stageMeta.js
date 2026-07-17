@@ -114,3 +114,25 @@ export const PROCUREMENT_SUBSTEPS = [
   { code: 'SHIPPING',       label: 'สินค้าอยู่ระหว่างเดินทาง' },
   { code: 'GOODS_RECEIVED', label: 'สินค้าถึงโกดังแล้ว' },
 ];
+
+// Payment sub-steps (keyed by paymentStatus) — the inner journey of stages
+// 9–14. Replaces the old standalone Track P stepper on the deal detail page.
+export const PAYMENT_SUBSTEPS = [
+  { code: 'CUSTOMER_CONFIRMED',    label: 'ลูกค้ายืนยัน' },
+  { code: 'DEPOSIT_NOTICE_ISSUED', label: 'ออกใบแจ้งมัดจำ' },
+  { code: 'DEPOSIT_PAID',          label: 'รับมัดจำแล้ว' },
+  { code: 'AWAITING_FINAL_PAYMENT', label: 'รอชำระส่วนที่เหลือ' },
+  { code: 'FULLY_PAID',            label: 'ชำระครบแล้ว' },
+];
+
+// Internal price workflow (keyed by ticket.status) — the inner journey of the
+// quote stages (S4+S5/QUOTE_DESIGN_SIDE, QUOTE_BUYER): sales requests the price,
+// Import proposes it, the CEO calculates/approves the confirmed price, and only
+// then can the quotation be issued. Draft sits before step 1.
+export const PRICING_SUBSTEPS = [
+  { code: 'submitted',        label: 'ส่งขอราคาแล้ว' },
+  { code: 'in_review',        label: 'Import กำลังเสนอราคา' },
+  { code: 'price_proposed',   label: 'รอ CEO อนุมัติราคา' },
+  { code: 'approved',         label: 'ราคายืนยันแล้ว' },
+  { code: 'quotation_issued', label: 'ออกใบเสนอราคาแล้ว' },
+];

@@ -6,7 +6,7 @@ import { DealStageStepper, PhaseTracker } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
 import {
   allowedTargetStages, canMarkLost, canSetStage, GATE_LABEL, nextStage,
-  PROCUREMENT_SUBSTEPS, stageMeta,
+  PAYMENT_SUBSTEPS, PRICING_SUBSTEPS, PROCUREMENT_SUBSTEPS, stageMeta,
 } from './stageMeta.js';
 import { UpdateStageModal } from './UpdateStageModal.jsx';
 
@@ -16,13 +16,44 @@ function daysSince(iso) {
 }
 
 /**
+ * One labelled row of sub-status chips — the inner journey of the current
+ * stage (internal pricing / payment / import). Replaces the old standalone
+ * Track P / Track F steppers.
+ */
+function SubstepChips({ label, steps, currentCode }) {
+  const currentIdx = steps.findIndex((s) => s.code === currentCode);
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-2xs font-bold text-text-muted">{label}</span>
+      {steps.map((step, i) => {
+        const done = i < currentIdx;
+        const current = i === currentIdx;
+        return (
+          <span
+            key={step.code}
+            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-2xs font-bold ${
+              done ? 'bg-success-bg text-success-dark'
+                : current ? 'bg-info-bg text-info'
+                  : 'bg-surface-subtle text-text-muted'
+            }`}
+          >
+            {done ? <Icon name="check" size={11} /> : null}
+            {step.label}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * Deal pipeline panel (V50): the 14-stage journey this deal must travel, with
  * the current stage front and center. One ticket = one deal — the operational
  * price-request/dual-track machinery below the panel is HOW some stages get
  * done, and doc generation surfaces here on exactly the stage it belongs to
  * (docActions is rendered by the parent from its real `can` permission flags).
  */
-export function DealStagePanel({ user, summary, docActions, actionLoading, onUpdateStage, onMarkLost, onReopen }) {
+export function DealStagePanel({ user, summary, docActions, primaryAction, guidance, actionLoading, onUpdateStage, onMarkLost, onReopen }) {
   const [editOpen, setEditOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
   const [showSteps, setShowSteps] = useState(false);
@@ -38,10 +69,21 @@ export function DealStagePanel({ user, summary, docActions, actionLoading, onUpd
   const isDone = !lost && summary.salesStage === 'CLOSED_PAID';
 
   // When the next stage isn't one this user can one-click into, explain who or
-  // what advances it instead of showing a dead end.
-  const nextHint = next && !canAdvance
+  // what advances it instead of showing a dead end. Suppressed when the parent's
+  // guidance line already says the same thing (guidance wins).
+  const rawNextHint = next && !canAdvance
     ? (next.auto ? next.autoHint : `ขั้นถัดไปอัปเดตโดย${GATE_LABEL[next.gate]}`)
     : null;
+  const nextHint = rawNextHint && rawNextHint !== guidance ? rawNextHint : null;
+
+  // Sub-status chip rows — the inner journey of the current stage:
+  // • การขอราคา: the internal sales→Import→CEO confirmed-price flow that lives
+  //   inside the quote stages (until the customer confirms the order).
+  // • การชำระเงิน / การนำเข้า: replace the old Track P / Track F steppers.
+  const showPricingChips = ['submitted', 'in_review', 'price_proposed', 'approved'].includes(summary.status)
+    || (summary.status === 'quotation_issued' && summary.paymentStatus == null);
+  const showPaymentChips = summary.paymentStatus != null;
+  const showImportChips = summary.fulfillmentStatus != null;
 
   async function submitStage(payload) {
     await onUpdateStage(payload);
@@ -108,37 +150,47 @@ export function DealStagePanel({ user, summary, docActions, actionLoading, onUpd
               </div>
             </div>
 
-            {/* PROCUREMENT sub-detail: the import journey renders live from the
-                deal's own fulfillment status — never separate stages. */}
-            {summary.salesStage === 'PROCUREMENT' ? (
-              <div className="flex flex-wrap items-center gap-1.5">
-                {PROCUREMENT_SUBSTEPS.map((step, i) => {
-                  const currentIdx = PROCUREMENT_SUBSTEPS.findIndex((s) => s.code === summary.fulfillmentStatus);
-                  const done = i < currentIdx;
-                  const current = i === currentIdx;
-                  return (
-                    <span
-                      key={step.code}
-                      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-2xs font-bold ${
-                        done ? 'bg-success-bg text-success-dark'
-                          : current ? 'bg-info-bg text-info'
-                            : 'bg-surface-subtle text-text-muted'
-                      }`}
-                    >
-                      {done ? <Icon name="check" size={11} /> : null}
-                      {step.label}
-                    </span>
-                  );
-                })}
+            {/* Inner journeys of the current stage — replace the old standalone
+                Track P / Track F panel and make the internal price workflow
+                (sales → Import → CEO confirmed price) visible inside the quote
+                stages. All read live from the deal's own status fields. */}
+            {(showPricingChips || showPaymentChips || showImportChips) ? (
+              <div className="flex flex-col gap-1.5">
+                {showPricingChips ? (
+                  <SubstepChips label="การขอราคา:" steps={PRICING_SUBSTEPS} currentCode={summary.status} />
+                ) : null}
+                {showPaymentChips ? (
+                  <SubstepChips label="การชำระเงิน:" steps={PAYMENT_SUBSTEPS} currentCode={summary.paymentStatus} />
+                ) : null}
+                {showImportChips ? (
+                  <SubstepChips label="การนำเข้า:" steps={PROCUREMENT_SUBSTEPS} currentCode={summary.fulfillmentStatus} />
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* One guidance line (folded in from the old standalone callout bars):
+                the viewer's next action, or who the deal is waiting on. */}
+            {guidance ? (
+              <div className="flex items-start gap-2 text-xs text-info">
+                <Icon name="chevronRight" size={14} className="mt-0.5 shrink-0" />
+                <span>{guidance}</span>
               </div>
             ) : null}
 
             {isDone ? (
-              <div className="rounded-xl bg-success-bg px-4 py-3 text-center text-sm font-extrabold text-success-dark">
-                ✓ ดีลเสร็จสมบูรณ์ — เก็บเงินครบแล้ว
+              <div className="flex flex-col gap-2">
+                <div className="rounded-xl bg-success-bg px-4 py-3 text-center text-sm font-extrabold text-success-dark">
+                  ✓ ดีลเสร็จสมบูรณ์ — เก็บเงินครบแล้ว
+                </div>
+                {/* The operational close (ปิดเรื่อง) still happens here — the
+                    pipeline reaching CLOSED_PAID doesn't close the ticket itself. */}
+                {primaryAction ? (
+                  <div className="flex flex-wrap items-center gap-2">{primaryAction}</div>
+                ) : null}
               </div>
             ) : (
               <div className="flex flex-wrap items-center gap-2">
+                {primaryAction}
                 {canAdvance ? (
                   <button
                     type="button"
