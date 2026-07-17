@@ -293,3 +293,39 @@ absent from `/actions`.
 - Legacy `confirmDepositPaid` falls back to 50% of payable when no issued deposit notice amount is available, because older tests/flows can reach that wrapper without notice data. A real issued notice always wins.
 - Ticket list/detail enrichment computes payable and sum-paid per ticket. This is intentionally scoped for Phase 3, but Phase 5 dashboard/reporting/filter work may want aggregated SQL to avoid N+1 behavior at larger volumes.
 - When `receipt_ref` is present, duplicate-key insert failures are mapped to idempotency conflict. If another receipt constraint failed with a ref present, it would currently surface as the same 409 class.
+
+---
+
+## Opus review (2026-07-17) — PASSED, no fixes
+
+Re-verified independently: backend `./mvnw -B clean verify` → **BUILD SUCCESS, 495 tests**
+(Testcontainers/V53 applied); frontend lint 0 errors · **121/121 tests** · build PASS. Codex's
+self-report was accurate.
+
+**Code review against the invariants — all held:**
+- Single ledger path: `recordPaymentInternal` is the one place that inserts receipts +
+  reconciles status; `confirmDepositPaid`/`confirmFinalPayment` are thin wrappers over it
+  (deposit amount from the issued deposit_notice, else payable×0.50; final = outstanding).
+- account/ceo only (`ACCOUNT_ROLES`); sales_manager 403 (asserted). Owner scoping on reads.
+- Overpayment blocked unless `allowOverpayment` AND a note; amount>0 at DB (CHECK) + service.
+- Payable precedence exactly as specified (accepted BUYER→OWNER→any → issued/sent → deposit
+  notice total → Σ approvedPrice×qty), in one SQL COALESCE chain.
+- Case 9: `canConfirmFinalPaymentNow` allows balance from DEPOSIT_PAID (or waived) before
+  GOODS_RECEIVED; `close()` still needs FULLY_PAID + GOODS_RECEIVED, so a paid-early deal
+  stays open until goods land. Case 10: CREDIT policy + due date drives derived `overdue`;
+  `close()` gained an extra outstanding-balance guard (defensive — unreachable in normal flow
+  since reconcile only sets FULLY_PAID at paid≥payable; the real block is close()'s existing
+  FULLY_PAID requirement, covered by `close_dualTrackRejectsWhenPaymentIncomplete`).
+- ADJUSTMENT subtracts from paid (signed in SQL + service). receipt_ref idempotency → 409.
+- Mock mirrors the ledger, derived fields, reconcile, and gates; contract.test.js green.
+
+**Browser verification (the gap Codex flagged) — completed by Opus in frontend-mock:**
+- Ticket 12: payment panel payable ฿130,000 / paid ฿65,000 / outstanding ฿65,000 + receipt
+  history. Recorded a partial BALANCE (฿30k → paid ฿95k, outstanding ฿35k, still not full),
+  then the remaining ฿35k → **FULLY_PAID** (outstanding ฿0, record button correctly hidden,
+  ชำระครบแล้ว chip). Case-9 ยืนยันชำระครบ available at DEPOSIT_PAID before goods received.
+- Ticket 6 (credit): ลูกค้าเครดิต policy + **รอชำระส่วนที่เหลือ** + red **เกินกำหนด** badges,
+  due date 1 ก.ค. 2569 in red, next follow-up shown, ฿240,000 outstanding.
+
+**Verdict: Phase 3 accepted, no changes.** Phase 4 handoff:
+`70_feat-deal-workflow-p4-fulfilment.md` (partial delivery + manual stock declaration).
