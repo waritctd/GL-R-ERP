@@ -121,7 +121,7 @@ public class TicketRepository {
     @Transactional
     public long create(CreateTicketRequest request, String code, long actorId, String actorName) {
         String priority = (request.priority() != null && !request.priority().isBlank())
-            ? request.priority() : "NORMAL";
+            ? request.priority() : Priority.DEFAULT;
         // V50 lightweight deal start: a deal created without items begins as a DRAFT
         // at the lead stage — product items and the price-request flow come later
         // (editItems then submit). A deal created WITH items enters the price-request

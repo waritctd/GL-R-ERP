@@ -1180,6 +1180,27 @@ class TicketServiceTest {
         verify(notifRepo).notifyByRole(eq("ceo"), eq(10L), anyString(), anyString());
     }
 
+    @Test
+    void create_rejectsInvalidPriority() {
+        // F2: an unvalidated priority reaches chk_ticket_priority in the repository and
+        // fails closed (500). The service must reject it up front as a 400 and never write.
+        var request = new CreateTicketRequest("Test deal", "urgent", "ลูกค้า", null, 77L, null, null, null, List.of());
+        assertBadRequest(() -> service.create(request, salesActor));
+        verify(ticketRepo, never()).create(any(), anyString(), org.mockito.ArgumentMatchers.anyLong(), anyString());
+    }
+
+    @Test
+    void create_allowsValidPriority() {
+        var request = new CreateTicketRequest("Test deal", "HIGH", "ลูกค้า", null, 77L, null, null, null, List.of());
+        when(ticketRepo.nextTicketCode()).thenReturn("PR-2026-0001");
+        when(ticketRepo.create(request, "PR-2026-0001", 1L, "sales")).thenReturn(10L);
+        stubTicket(10L, 1L, TicketStatus.DRAFT);
+
+        service.create(request, salesActor); // must not throw
+
+        verify(ticketRepo).create(request, "PR-2026-0001", 1L, "sales");
+    }
+
     // ── deal pipeline: manual stage updates (V50) ─────────────────────────
 
     @Test
