@@ -92,12 +92,13 @@ excluded).
 - **DB `tdyzcqzxmhtxpbouewud`:** `chk_ticket_priority` + `chk_ticket_status` + `branch`
   NOT-NULL default all present; **0 bad priority / 0 bad status / 0 null branch**; **0
   failed migrations**. Counts: 8 tickets, 213 employees, 4 customers.
-- **⚠️ Migration state: latest applied = V47 (2026-07-15); V48–V54 NOT applied.** The
-  `gl-r-erp` stack has **not** redeployed with main's merged work — the F2/gap#1 fixes and
-  the entire deal-pipeline (V50–V54) are **not live on the real/demo stack**; it still runs
-  pre-fix code. This is the deliberate real-DB migration `74_...md` §8 flagged.
-  **Action for the user:** decide when to let the `gl-r-erp` deploy migrate the real DB
-  V47→V54 (additive columns/tables + a V50 backfill over 8 tickets — safe but deliberate).
+- **Migration state — RESOLVED (`gl-r-erp` redeployed):** the real DB migrated **V47→V54,
+  all success, 0 failed**. `sales_stage`/`payment_status`/`fulfillment_status` columns
+  present; the V50 backfill populated `sales_stage` on **8 of 8** real tickets. Integrity
+  clean (0 bad priority/status/null branch) and **no data loss** (213 employees, 148
+  payroll lines preserved). Health 200, default-deny intact. The F2/gap#1 code fixes ship
+  in the same image and are now live on the real/demo stack (behavioural check not run —
+  no MAIN login creds; verified live on UAT instead, §1).
 
 ## 7. Result
 Live hosted UAT is **healthy and behaviourally correct** across the exercised surface: the
