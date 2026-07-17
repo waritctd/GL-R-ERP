@@ -83,12 +83,35 @@ for (const t of db.tickets) {
     }, t, 0));
   }
   t.quotation = t.quotations[0] ?? null;
+  t.items = (t.items ?? []).map((item) => ({
+    ...item,
+    qtyDelivered: item.qtyDelivered ?? 0,
+    qtyFromStock: item.qtyFromStock ?? 0,
+    stockNote: item.stockNote ?? null,
+  }));
 }
 db.paymentReceipts = db.paymentReceipts || [
   { receiptId: 1, ticketId: 12, kind: 'DEPOSIT', amount: 65000, currency: 'THB', receivedAt: '2026-06-18T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำจากใบแจ้งยอด', depositNoticeId: null, receiptRef: 'MOCK-12-DEP', createdAt: '2026-06-18T08:00:00Z' },
   { receiptId: 2, ticketId: 13, kind: 'DEPOSIT', amount: 66250, currency: 'THB', receivedAt: '2026-06-02T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ', depositNoticeId: null, receiptRef: 'MOCK-13-DEP', createdAt: '2026-06-02T08:00:00Z' },
   { receiptId: 3, ticketId: 14, kind: 'DEPOSIT', amount: 312000, currency: 'THB', receivedAt: '2026-05-20T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ', depositNoticeId: null, receiptRef: 'MOCK-14-DEP', createdAt: '2026-05-20T08:00:00Z' },
   { receiptId: 4, ticketId: 14, kind: 'BALANCE', amount: 312000, currency: 'THB', receivedAt: '2026-07-05T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับชำระส่วนที่เหลือ', depositNoticeId: null, receiptRef: 'MOCK-14-BAL', createdAt: '2026-07-05T08:00:00Z' },
+];
+const partialDeliveryDemo = db.tickets.find((t) => t.id === 13);
+if (partialDeliveryDemo?.items?.[0]) {
+  partialDeliveryDemo.items[0].qtyDelivered = 200;
+}
+db.deliveryRecords = db.deliveryRecords || [
+  {
+    deliveryId: 1,
+    ticketId: 13,
+    source: 'WAREHOUSE',
+    deliveredAt: '2026-07-08T08:00:00Z',
+    deliveredById: 2,
+    deliveredByName: 'คุณนำเข้า ต่างประเทศ',
+    note: 'ส่งมอบบางส่วน',
+    createdAt: '2026-07-08T08:00:00Z',
+    items: [{ deliveryItemId: 1, itemId: 16, qty: 200 }],
+  },
 ];
 const creditDemoTicket = db.tickets.find((t) => t.id === 6);
 if (creditDemoTicket) {
@@ -98,6 +121,12 @@ if (creditDemoTicket) {
   creditDemoTicket.dueDate = creditDemoTicket.dueDate ?? '2026-07-01';
   creditDemoTicket.creditTermDays = creditDemoTicket.creditTermDays ?? 30;
   creditDemoTicket.nextFollowUpAt = creditDemoTicket.nextFollowUpAt ?? '2026-07-18';
+  creditDemoTicket.fulfillmentStatus = creditDemoTicket.fulfillmentStatus ?? 'FROM_STOCK';
+  creditDemoTicket.salesStage = 'PROCUREMENT';
+  if (creditDemoTicket.items?.[0]) {
+    creditDemoTicket.items[0].qtyFromStock = creditDemoTicket.items[0].qty;
+    creditDemoTicket.items[0].stockNote = 'พร้อมส่งจากสต็อก';
+  }
 }
 db.commissions = db.commissions || [];
 db.leaveTypes = db.leaveTypes || [
@@ -545,6 +574,117 @@ function reconcilePaymentStatus(ticket, user) {
       ticket.paymentStatus = 'AWAITING_FINAL_PAYMENT';
       pushEvent(ticket, user, 'AWAITING_FINAL_PAYMENT', ticket.status, ticket.status, null);
     }
+  }
+}
+
+function deliveryRecordsForTicket(ticketId) {
+  return (db.deliveryRecords ?? [])
+    .filter((record) => record.ticketId === Number(ticketId))
+    .sort((a, b) => new Date(a.deliveredAt) - new Date(b.deliveredAt) || a.deliveryId - b.deliveryId)
+    .map((record) => structuredClone(record));
+}
+
+function deliveryComplete(status, ticketId = null) {
+  if (status === 'FULLY_DELIVERED') return true;
+  if (status !== 'GOODS_RECEIVED') return false;
+  if (ticketId == null) return true;
+  return !(db.deliveryRecords ?? []).some((record) => record.ticketId === Number(ticketId));
+}
+
+function hasRemainingDelivery(ticket) {
+  return (ticket.items ?? []).some((item) => Number(item.qtyDelivered ?? 0) < Number(item.qty ?? 0));
+}
+
+function hasWarehouseDelivery(ticketId) {
+  return (db.deliveryRecords ?? []).some((record) => record.ticketId === Number(ticketId) && record.source === 'WAREHOUSE');
+}
+
+function deliveryAvailable(ticket) {
+  const stockAvailable = (ticket.items ?? []).some((item) => Number(item.qtyFromStock ?? 0) > Number(item.qtyDelivered ?? 0));
+  const warehouseAvailable = ticket.fulfillmentStatus === 'GOODS_RECEIVED'
+    || (ticket.fulfillmentStatus === 'PARTIALLY_DELIVERED' && hasWarehouseDelivery(ticket.id));
+  return ticket.fulfillmentStatus === 'FROM_STOCK' || stockAvailable || warehouseAvailable;
+}
+
+function reserveStockForTicket(ticket, user, payload = {}) {
+  const lines = payload.lines ?? [];
+  if (!lines.length) fail('ต้องระบุรายการสินค้า', 400);
+  let total = 0;
+  for (const line of lines) {
+    const item = ticket.items.find((it) => it.id === Number(line.itemId));
+    if (!item) fail('Item not found in this ticket', 404);
+    const qty = moneyValue(line.qtyFromStock);
+    if (qty < 0 || qty > Number(item.qty || 0)) fail('จำนวนสินค้าจากสต็อกต้องไม่เกินจำนวนที่สั่ง', 400);
+    item.qtyFromStock = qty;
+    item.stockNote = line.note ?? null;
+    total += qty;
+  }
+  pushEvent(ticket, user, 'STOCK_RESERVED', ticket.status, ticket.status, `qty_from_stock=${total}`);
+  const allCovered = (ticket.items ?? []).length > 0
+    && ticket.items.every((item) => Number(item.qtyFromStock ?? 0) >= Number(item.qty ?? 0));
+  if (allCovered && (ticket.fulfillmentStatus == null || ticket.fulfillmentStatus === 'FROM_STOCK')) {
+    ticket.fulfillmentStatus = 'FROM_STOCK';
+    autoAdvanceStage(ticket, 'PROCUREMENT', user);
+  }
+}
+
+function recordDeliveryForTicket(ticket, user, payload = {}, completing = false) {
+  const source = String(payload.source ?? '').trim().toUpperCase();
+  if (!['WAREHOUSE', 'STOCK'].includes(source)) fail('source ต้องเป็น WAREHOUSE หรือ STOCK', 400);
+  const lines = payload.lines ?? [];
+  if (!lines.length) fail('ต้องระบุรายการส่งสินค้า', 400);
+  const combined = new Map();
+  for (const line of lines) {
+    const item = ticket.items.find((it) => it.id === Number(line.itemId));
+    if (!item) fail('Item not found in this ticket', 404);
+    const qty = moneyValue(line.qty);
+    if (qty <= 0) fail('จำนวนส่งมอบต้องมากกว่า 0', 400);
+    combined.set(item.id, moneyValue((combined.get(item.id) ?? 0) + qty));
+  }
+  for (const [itemId, qty] of combined.entries()) {
+    const item = ticket.items.find((it) => it.id === itemId);
+    const newDelivered = moneyValue(Number(item.qtyDelivered ?? 0) + qty);
+    if (newDelivered > Number(item.qty ?? 0)) fail('จำนวนส่งมอบเกินจำนวนที่สั่ง', 409);
+    if (source === 'STOCK' && newDelivered > Number(item.qtyFromStock ?? 0)) {
+      fail('ส่งจากสต็อกได้ไม่เกินจำนวนที่ประกาศว่าพร้อมจากสต็อก', 409);
+    }
+  }
+  if (source === 'WAREHOUSE' && !(ticket.fulfillmentStatus === 'GOODS_RECEIVED'
+      || (ticket.fulfillmentStatus === 'PARTIALLY_DELIVERED' && hasWarehouseDelivery(ticket.id)))) {
+    fail('ต้องรับสินค้าเข้าโกดังก่อนส่งจาก WAREHOUSE', 409);
+  }
+  const now = new Date().toISOString();
+  const nextId = Math.max(0, ...(db.deliveryRecords ?? []).map((record) => record.deliveryId)) + 1;
+  let itemSeq = Math.max(0, ...(db.deliveryRecords ?? []).flatMap((record) => record.items ?? []).map((item) => item.deliveryItemId)) + 1;
+  const recordItems = [];
+  for (const [itemId, qty] of combined.entries()) {
+    const item = ticket.items.find((it) => it.id === itemId);
+    item.qtyDelivered = moneyValue(Number(item.qtyDelivered ?? 0) + qty);
+    recordItems.push({ deliveryItemId: itemSeq++, itemId, qty });
+  }
+  db.deliveryRecords.push({
+    deliveryId: nextId,
+    ticketId: ticket.id,
+    source,
+    deliveredAt: now,
+    deliveredById: user.id,
+    deliveredByName: user.name,
+    note: payload.note ?? null,
+    createdAt: now,
+    items: recordItems,
+  });
+  const message = recordItems.map((line) => {
+    const item = ticket.items.find((it) => it.id === line.itemId);
+    return `${line.itemId}: ${Number(item.qtyDelivered).toLocaleString('en-US')}/${Number(item.qty).toLocaleString('en-US')}`;
+  }).join(', ');
+  pushEvent(ticket, user, 'DELIVERY_RECORDED', ticket.status, ticket.status, message);
+  const full = ticket.items.every((item) => Number(item.qtyDelivered ?? 0) >= Number(item.qty ?? 0));
+  if (full) {
+    ticket.fulfillmentStatus = 'FULLY_DELIVERED';
+    pushEvent(ticket, user, 'DELIVERY_COMPLETED', ticket.status, ticket.status, completing ? 'ส่งมอบครบ' : message);
+    autoAdvanceStage(ticket, 'DELIVERED', user);
+  } else {
+    ticket.fulfillmentStatus = 'PARTIALLY_DELIVERED';
   }
 }
 
@@ -1393,11 +1533,53 @@ export const api = {
       return delay({ items: receiptsForTicket(id) });
     },
 
+    async listDeliveries(id) {
+      requireTicketViewer(id);
+      return delay({ items: deliveryRecordsForTicket(id) });
+    },
+
     async recordPayment(id, payload) {
       const user = hasRole('account', 'ceo');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       recordPaymentForTicket(ticket, user, payload ?? {});
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async reserveStock(id, payload) {
+      const user = hasRole('import', 'ceo');
+      const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
+      reserveStockForTicket(ticket, user, payload ?? {});
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async recordDelivery(id, payload) {
+      const user = hasRole('import', 'ceo');
+      const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
+      recordDeliveryForTicket(ticket, user, payload ?? {});
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async completeDelivery(id, payload = {}) {
+      const user = hasRole('import', 'ceo');
+      const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
+      const remaining = (ticket.items ?? [])
+        .map((item) => ({ itemId: item.id, qty: moneyValue(Number(item.qty ?? 0) - Number(item.qtyDelivered ?? 0)) }))
+        .filter((line) => line.qty > 0);
+      if (!remaining.length) fail('ไม่มีจำนวนค้างส่ง', 409);
+      const allRemainingCoveredByStock = (ticket.items ?? []).every((item) => {
+        const remainingQty = moneyValue(Number(item.qty ?? 0) - Number(item.qtyDelivered ?? 0));
+        if (remainingQty <= 0) return true;
+        return moneyValue(Number(item.qtyDelivered ?? 0) + remainingQty) <= Number(item.qtyFromStock ?? 0);
+      });
+      recordDeliveryForTicket(ticket, user, {
+        source: allRemainingCoveredByStock ? 'STOCK' : 'WAREHOUSE',
+        note: payload.note ?? null,
+        lines: remaining,
+      }, true);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
@@ -1456,15 +1638,23 @@ export const api = {
           add('RECORD_PAYMENT', 'payment', 'บันทึกรับชำระเงิน', { requiredFields: ['kind', 'amount'] });
         }
         if (['account', 'ceo'].includes(user.role)) add('SET_BILLING', 'payment', 'ตั้งค่าการวางบิล', { requiredFields: ['dueDate'] });
-        if (user.role === 'import' && canIssueIr) add('ISSUE_IMPORT_REQUEST', 'fulfillment', 'ออก IR');
-        if (user.role === 'import' && ticket.fulfillmentStatus === 'IR_ISSUED') add('IR_SENT', 'fulfillment', 'ส่ง IR');
-        if (user.role === 'import' && ticket.fulfillmentStatus === 'IR_SENT') add('SHIPPING', 'fulfillment', 'สินค้าเดินทาง');
-        if (user.role === 'import' && ticket.fulfillmentStatus === 'SHIPPING') add('GOODS_RECEIVED', 'fulfillment', 'รับสินค้า');
+        if (['import', 'ceo'].includes(user.role) && canIssueIr) add('ISSUE_IMPORT_REQUEST', 'fulfillment', 'ออก IR');
+        if (['import', 'ceo'].includes(user.role) && ticket.fulfillmentStatus === 'IR_ISSUED') add('IR_SENT', 'fulfillment', 'ส่ง IR');
+        if (['import', 'ceo'].includes(user.role) && ticket.fulfillmentStatus === 'IR_SENT') add('SHIPPING', 'fulfillment', 'สินค้าเดินทาง');
+        if (['import', 'ceo'].includes(user.role) && ticket.fulfillmentStatus === 'SHIPPING') add('GOODS_RECEIVED', 'fulfillment', 'รับสินค้า');
+        if (['import', 'ceo'].includes(user.role) && (ticket.items ?? []).length > 0 && hasRemainingDelivery(ticket)
+            && ticket.fulfillmentStatus !== 'FULLY_DELIVERED') {
+          add('RESERVE_STOCK', 'fulfillment', 'จองสินค้าจากสต็อก', { requiredFields: ['lines'] });
+        }
+        if (['import', 'ceo'].includes(user.role) && hasRemainingDelivery(ticket) && deliveryAvailable(ticket)) {
+          add('RECORD_PARTIAL_DELIVERY', 'fulfillment', 'บันทึกการส่งสินค้า', { requiredFields: ['source', 'lines'] });
+          add('COMPLETE_DELIVERY', 'fulfillment', 'ส่งมอบครบ');
+        }
         const finalPaymentAllowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
           || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
         if (['account', 'ceo'].includes(user.role) && finalPaymentAllowed) add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
         if (ticket.createdById === user.id && ((ticket.status === 'document_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID'))
-          || (ticket.status === 'quotation_issued' && ticket.paymentStatus === 'FULLY_PAID' && ticket.fulfillmentStatus === 'GOODS_RECEIVED'))) add('CLOSE', 'operational', 'ปิดงาน');
+          || (ticket.status === 'quotation_issued' && ticket.paymentStatus === 'FULLY_PAID' && deliveryComplete(ticket.fulfillmentStatus, ticket.id)))) add('CLOSE', 'operational', 'ปิดงาน');
         if (ticket.createdById === user.id && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
         if (owner && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(ticket.status)) add('EDIT_ITEMS', 'operational', 'แก้ไขรายการ');
         for (const stage of ['LEAD_APPROACH','PRESENTATION','SPEC_APPROVED','QUOTE_DESIGN_SIDE','OWNER_SIGNOFF','AWAITING_BUYER','QUOTE_BUYER','NEGOTIATION','ORDER_RECEIVED','DEPOSIT_RECEIVED','PROCUREMENT','DELIVERY_SCHEDULING','DELIVERED','CLOSED_PAID']) {
@@ -1862,9 +2052,9 @@ export const api = {
         && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID');
       const dualTrackOk = ticket.status === 'quotation_issued'
         && ticket.paymentStatus === 'FULLY_PAID'
-        && ticket.fulfillmentStatus === 'GOODS_RECEIVED';
+        && deliveryComplete(ticket.fulfillmentStatus, ticket.id);
       if (!legacyOk && !dualTrackOk) {
-        fail('Cannot close: require paymentStatus=FULLY_PAID and fulfillmentStatus=GOODS_RECEIVED', 409);
+        fail('Cannot close: require paymentStatus=FULLY_PAID and delivery complete', 409);
       }
       if (derivePaymentFields(ticket).amountOutstanding > 0) {
         fail('Cannot close: ยังมียอดค้างชำระ', 409);

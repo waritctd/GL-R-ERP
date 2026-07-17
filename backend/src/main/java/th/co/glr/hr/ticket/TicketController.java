@@ -95,6 +95,42 @@ public class TicketController {
         return new TicketDetailResponse(ticketService.setBilling(id, request, user));
     }
 
+    @GetMapping("/{id}/deliveries")
+    Map<String, List<DeliveryRecordDto>> deliveries(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("items", ticketService.listDeliveries(id, user));
+    }
+
+    @PostMapping("/{id}/reserve-stock")
+    TicketDetailResponse reserveStock(
+        @PathVariable long id,
+        @Valid @RequestBody StockReservationRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.reserveStock(id, request, user));
+    }
+
+    @PostMapping("/{id}/deliveries")
+    TicketDetailResponse recordDelivery(
+        @PathVariable long id,
+        @Valid @RequestBody RecordDeliveryRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.recordPartialDelivery(id, request, user));
+    }
+
+    @PostMapping("/{id}/deliveries/complete")
+    TicketDetailResponse completeDelivery(
+        @PathVariable long id,
+        @RequestBody(required = false) CompleteDeliveryRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.completeDelivery(id, request, user));
+    }
+
     @PostMapping("/{id}/submit")
     TicketDetailResponse submit(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);

@@ -111,8 +111,13 @@ export function allowedTargetStages(user, deal) {
 export const PROCUREMENT_SUBSTEPS = [
   { code: 'IR_ISSUED',      label: 'ออกใบขอซื้อ (IR) แล้ว' },
   { code: 'IR_SENT',        label: 'สั่งซื้อไปยังผู้ผลิตแล้ว' },
+  { code: 'PICKED_UP',      label: 'รับจากผู้ผลิตแล้ว' },
   { code: 'SHIPPING',       label: 'สินค้าอยู่ระหว่างเดินทาง' },
+  { code: 'CUSTOMS_CLEARANCE', label: 'รอออกของ' },
   { code: 'GOODS_RECEIVED', label: 'สินค้าถึงโกดังแล้ว' },
+  { code: 'FROM_STOCK',     label: 'สินค้าจากสต็อก' },
+  { code: 'PARTIALLY_DELIVERED', label: 'ส่งมอบบางส่วน' },
+  { code: 'FULLY_DELIVERED', label: 'ส่งมอบครบแล้ว' },
 ];
 
 // Payment sub-steps (keyed by paymentStatus) — the inner journey of stages

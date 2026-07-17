@@ -226,13 +226,108 @@ and hides record-delivery absent from `/actions`.
 5. Fill THIS file's sections below. Commit on the branch. Merge NOTHING.
 
 ## Files changed
-(fill in)
+- `backend/src/main/resources/db/migration/V54__fulfilment_and_delivery.sql`
+  - Added per-line `qty_delivered`, manual `qty_from_stock` + `stock_note`, delivery record
+    tables, and the new delivery/stock event kinds.
+- `backend/src/main/java/th/co/glr/hr/ticket/*Delivery*.java`,
+  `StockReservationRequest.java`, `FulfilmentStatus.java`
+  - Added fulfilment constants and request/response DTOs for stock declarations and delivery
+    records.
+- `backend/src/main/java/th/co/glr/hr/ticket/TicketItemDto.java`
+  - Added `qtyDelivered`, `qtyFromStock`, and `stockNote` while preserving the old constructor
+    shape for existing tests/renderers.
+- `backend/src/main/java/th/co/glr/hr/ticket/TicketRepository.java`
+  - Reads/writes delivery quantities, records deliveries atomically, lists delivery history,
+    and exposes delivery/stock aggregate helpers.
+- `backend/src/main/java/th/co/glr/hr/ticket/TicketService.java`
+  - Added `reserveStock`, `recordPartialDelivery`, `completeDelivery`, fulfilment actions,
+    import/ceo goods-handling role gates, over-delivery guards, and the updated close gate:
+    coarse `GOODS_RECEIVED` can still close only when the deal has no delivery records; deals
+    using delivery records must reach `FULLY_DELIVERED`.
+- `backend/src/main/java/th/co/glr/hr/ticket/TicketController.java`
+  - Added delivery history, reserve-stock, record-delivery, and complete-delivery endpoints.
+- `backend/src/test/java/th/co/glr/hr/ticket/TicketServiceTest.java`
+  - Covered stock reservation, partial/complete delivery, over-delivery, role/lifecycle gates,
+    close gating, and payment/delivery independence.
+- `frontend/src/api/routes.js`, `frontend/src/api/hrApi.js`, `frontend/src/api/queryKeys.js`
+  - Added delivery/stock API routes and query keys.
+- `frontend/src/api/mockApi.js`
+  - Mirrored the backend delivery model/actions, seeded one mid-delivery deal and one stock
+    deal, and enforced the same close-gate behavior for mocked flows.
+- `frontend/src/utils/format.js`, `frontend/src/features/tickets/stageMeta.js`,
+  `frontend/src/features/tickets/DealStagePanel.jsx`
+  - Added fulfilment labels, procurement substeps, and stage-level delivery progress.
+- `frontend/src/features/tickets/TicketDetailPage.jsx`
+  - Added the delivery section, per-line progress, history, stock-reservation modal,
+    record-delivery modal, and complete-delivery action wiring.
+- `frontend/src/features/tickets/TicketDetailPage.test.jsx`
+  - Added component coverage for delivery progress/history and action-gated controls.
 
 ## Commands run
-(fill in)
+- `git switch feat/deal-workflow-p3-payments`
+- `git pull --ff-only`
+- `git switch -c feat/deal-workflow-p4-fulfilment`
+- `cd backend && ./mvnw -q -DskipTests compile`
+- `cd backend && ./mvnw -q test-compile`
+- `cd backend && ./mvnw -q -Dtest=TicketServiceTest test`
+- `cd backend && ./mvnw -B clean verify`
+  - First sandboxed run hit Docker/Testcontainers socket access as expected.
+  - Re-run with Docker access passed.
+- `cd frontend && npm test -- --run src/api/contract.test.js`
+- `cd frontend && npm test -- --run src/features/tickets/TicketDetailPage.test.jsx`
+- `cd frontend && npm run lint`
+- `cd frontend && npm test`
+- `cd frontend && npm run build`
+- `cd frontend && VITE_USE_MOCKS=true npm run dev -- --host 127.0.0.1 --port 5201 --strictPort`
+- Mock-module scenario script covering partial delivery, complete delivery, stock skip, and
+  close blocking for fully-paid/partially-delivered.
 
 ## Tests / build results
-(fill in)
+- Backend targeted:
+  - `./mvnw -q -DskipTests compile` passed.
+  - `./mvnw -q test-compile` passed.
+  - `./mvnw -q -Dtest=TicketServiceTest test` passed.
+- Backend full:
+  - `./mvnw -B clean verify` passed with Docker/Testcontainers access.
+  - Result: `Tests run: 504, Failures: 0, Errors: 0, Skipped: 0`, coverage checks met,
+    `BUILD SUCCESS`.
+  - Flyway integration runs applied through V54 (`fulfilment and delivery`).
+- Frontend:
+  - Contract tests passed: 3 tests.
+  - Ticket detail tests passed: 7 tests.
+  - Full `npm test` passed: 27 files, 122 tests.
+  - `npm run lint` passed with 0 errors; retained the 4 existing hook dependency warnings in
+    AttendancePage, CommissionPage, and PayrollPage.
+  - `npm run build` passed.
+  - Existing jsdom navigation stderr still appears in the PayrollPage suite; no Phase 4
+    assertion failures.
+- Manual mock pass:
+  - Ticket 13 started `GOODS_RECEIVED` with `200/500` delivered, recorded another warehouse
+    `100`, and updated to `PARTIALLY_DELIVERED` with `300/500`.
+  - `completeDelivery` on ticket 13 advanced it to `FULLY_DELIVERED`, stage `DELIVERED`, with
+    `500/500` delivered.
+  - Ticket 6 is seeded as a stock deal: `FROM_STOCK`, stage `PROCUREMENT`, item stock
+    `200/200`, no IR required.
+  - Ticket 14 stayed open after becoming fully paid but only partially delivered; close
+    returned 409 with `Cannot close: require paymentStatus=FULLY_PAID and delivery complete`.
 
 ## Known risks / questions for Opus review
-(fill in)
+- Close gate is deliberately hybrid for compatibility: legacy/coarse deals with
+  `GOODS_RECEIVED` and no delivery records can still close, but any deal that uses delivery
+  records must reach `FULLY_DELIVERED`. Confirm whether Phase 5 should remove the
+  `GOODS_RECEIVED` legacy allowance entirely.
+- `qty_from_stock` is a trusted manual declaration, not an inventory ledger. It is capped by
+  ordered quantity and audited via events/history, but there is no on-hand or cross-ticket
+  reservation enforcement by design.
+- Warehouse deliveries are allowed after the first warehouse delivery even though the status
+  becomes `PARTIALLY_DELIVERED`; otherwise multi-drop delivery would block itself after the
+  first partial. This is still a coarse goods-available model.
+- `replaceItemsPreservingPricing` preserves the new delivery fields. The older wholesale
+  price-proposal replacement path still creates fresh line rows with default delivery values;
+  it is expected to run before delivery, but later order-adjustment rules would need a
+  dedicated Phase 5/future decision.
+- Optional `picked-up` / `customs-clearance` endpoints were not implemented. Labels/constants
+  exist so the UI and model can display those states if a later pass adds mutations.
+- In-app browser automation was blocked by the existing local runtime issue
+  `Cannot redefine property: process`; the manual pass was performed directly through the mock
+  API module instead.

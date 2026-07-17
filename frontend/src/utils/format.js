@@ -203,6 +203,21 @@ export function overdueBadgeLabel(overdue) {
     : { label: 'ยังไม่เกินกำหนด', tone: 'neutral' };
 }
 
+export function fulfilmentStatusLabel(value) {
+  const map = {
+    IR_ISSUED: { label: 'ออก IR แล้ว', tone: 'info' },
+    IR_SENT: { label: 'สั่งซื้อผู้ผลิตแล้ว', tone: 'info' },
+    PICKED_UP: { label: 'รับจากผู้ผลิตแล้ว', tone: 'info' },
+    SHIPPING: { label: 'สินค้าเดินทาง', tone: 'info' },
+    CUSTOMS_CLEARANCE: { label: 'รอออกของ', tone: 'warning' },
+    GOODS_RECEIVED: { label: 'สินค้าถึงโกดังแล้ว', tone: 'success' },
+    FROM_STOCK: { label: 'สินค้าจากสต็อก', tone: 'success' },
+    PARTIALLY_DELIVERED: { label: 'ส่งมอบบางส่วน', tone: 'warning' },
+    FULLY_DELIVERED: { label: 'ส่งมอบครบแล้ว', tone: 'success' },
+  };
+  return map[value] ?? { label: value || '-', tone: 'neutral' };
+}
+
 export function entryChannelLabel(value) {
   const map = {
     DESIGNER_LED: 'ผู้ออกแบบนำดีล',

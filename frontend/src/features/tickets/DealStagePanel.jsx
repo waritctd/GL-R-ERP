@@ -59,6 +59,7 @@ function SubstepChips({ label, steps, currentCode }) {
  */
 export function DealStagePanel({
   user, summary, availableActions = [], docActions, primaryAction, guidance, actionLoading,
+  deliveryProgress = null,
   onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement, onSetDepositPolicy,
 }) {
   const [editOpen, setEditOpen] = useState(false);
@@ -247,6 +248,14 @@ export function DealStagePanel({
                 ) : null}
                 {showImportChips ? (
                   <SubstepChips label="การนำเข้า:" steps={PROCUREMENT_SUBSTEPS} currentCode={summary.fulfillmentStatus} />
+                ) : null}
+                {deliveryProgress && deliveryProgress.ordered > 0 ? (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-2xs font-bold text-text-muted">ส่งมอบ:</span>
+                    <StatusBadge tone={deliveryProgress.delivered >= deliveryProgress.ordered ? 'success' : 'warning'}>
+                      {deliveryProgress.delivered.toLocaleString('en-US')} / {deliveryProgress.ordered.toLocaleString('en-US')}
+                    </StatusBadge>
+                  </div>
                 ) : null}
               </div>
             ) : null}

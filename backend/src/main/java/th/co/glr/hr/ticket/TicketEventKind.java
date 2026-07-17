@@ -45,6 +45,10 @@ public final class TicketEventKind {
     // Payment ledger + billing events (V53).
     public static final String PAYMENT_RECORDED       = "PAYMENT_RECORDED";
     public static final String BILLING_UPDATED        = "BILLING_UPDATED";
+    // Per-line fulfilment + delivery events (V54).
+    public static final String STOCK_RESERVED         = "STOCK_RESERVED";
+    public static final String DELIVERY_RECORDED      = "DELIVERY_RECORDED";
+    public static final String DELIVERY_COMPLETED     = "DELIVERY_COMPLETED";
 
     private TicketEventKind() {}
 }

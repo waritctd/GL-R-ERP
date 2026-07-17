@@ -18,6 +18,10 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         listPayments: vi.fn(),
         recordPayment: vi.fn(),
         setBilling: vi.fn(),
+        listDeliveries: vi.fn(),
+        reserveStock: vi.fn(),
+        recordDelivery: vi.fn(),
+        completeDelivery: vi.fn(),
         actions: vi.fn(),
         approve: vi.fn(),
         comment: vi.fn(),
@@ -62,7 +66,7 @@ function buildTicket(overrides = {}) {
       ...overrides.summary,
     },
     items: overrides.items ?? [
-      { id: 70101, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60', qty: 10, proposedPrice: 150, approvedPrice: null },
+      { id: 70101, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60', qty: 10, qtyDelivered: 0, qtyFromStock: 0, proposedPrice: 150, approvedPrice: null },
     ],
     events: overrides.events ?? [
       { id: 1, kind: 'SUBMITTED', actorName: 'สมชาย ใจดี', createdAt: '2026-07-01T09:00:00.000Z' },
@@ -112,6 +116,7 @@ describe('TicketDetailPage', () => {
     });
     api.attachments.list.mockResolvedValue({ attachments: [] });
     api.tickets.listPayments.mockResolvedValue({ items: [] });
+    api.tickets.listDeliveries.mockResolvedValue({ items: [] });
     api.factoryConfigs.list.mockResolvedValue({ factories: [] });
     api.tickets.approve.mockResolvedValue({
       ticket: buildTicket({ summary: { status: 'approved' } }),
@@ -119,6 +124,9 @@ describe('TicketDetailPage', () => {
     api.tickets.comment.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.recordPayment.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.setBilling.mockResolvedValue({ ticket: buildTicket() });
+    api.tickets.reserveStock.mockResolvedValue({ ticket: buildTicket() });
+    api.tickets.recordDelivery.mockResolvedValue({ ticket: buildTicket() });
+    api.tickets.completeDelivery.mockResolvedValue({ ticket: buildTicket() });
   });
 
   it('renders a ticket from a mocked api.tickets.get', async () => {
@@ -270,6 +278,50 @@ describe('TicketDetailPage', () => {
     expect(screen.getByText('฿600')).not.toBeNull();
     expect(await screen.findByText('DEPOSIT')).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
+  });
+
+  it('renders delivery progress and hides record delivery without the action', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: {
+          status: 'quotation_issued',
+          salesStage: 'PROCUREMENT',
+          fulfillmentStatus: 'PARTIALLY_DELIVERED',
+        },
+        items: [
+          { id: 70101, brand: 'SCG', model: 'A1', qty: 100, qtyDelivered: 40, qtyFromStock: 0, approvedPrice: 150 },
+        ],
+      }),
+    });
+    api.tickets.listDeliveries.mockResolvedValueOnce({
+      items: [
+        {
+          deliveryId: 1,
+          source: 'WAREHOUSE',
+          deliveredAt: '2026-07-10T09:00:00.000Z',
+          deliveredByName: 'คุณนำเข้า',
+          note: 'ส่งบางส่วน',
+          items: [{ deliveryItemId: 1, itemId: 70101, qty: 40 }],
+        },
+      ],
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE',
+        salesStage: 'PROCUREMENT',
+        paymentStatus: 'FULLY_PAID',
+        fulfillmentStatus: 'PARTIALLY_DELIVERED',
+        status: 'quotation_issued',
+      },
+      availableActions: [],
+    });
+
+    renderTicketDetailPage();
+
+    expect((await screen.findAllByText('40 / 100')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('ส่งมอบบางส่วน').length).toBeGreaterThan(0);
+    expect(await screen.findByText('WAREHOUSE')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'บันทึกการส่งสินค้า' })).toBeNull();
   });
 
   it('comment posts and invalidates the tickets-list/dashboard/notifications caches', async () => {

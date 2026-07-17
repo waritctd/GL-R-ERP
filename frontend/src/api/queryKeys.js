@@ -19,6 +19,7 @@ export const queryKeys = {
   ticketDetail: (id) => ['tickets', 'detail', id],
   ticketActions: (id) => ['tickets', 'actions', id],
   ticketPayments: (id) => ['tickets', 'payments', id],
+  ticketDeliveries: (id) => ['tickets', 'deliveries', id],
   ticketAttachments: (id) => ['tickets', 'attachments', id],
   // slice C (DepositNoticePage/CeoSettingsPage/NotificationBell)
   depositNotices: (ticketId) => ['depositNotices', ticketId],
