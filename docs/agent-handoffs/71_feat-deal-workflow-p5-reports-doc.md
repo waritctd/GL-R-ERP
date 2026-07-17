@@ -393,3 +393,63 @@ rows resolve to a concrete passing test, listed by name in the results section.
 - `PICKED_UP` and `CUSTOMS_CLEARANCE` remain display vocabulary only; no mutations were added.
 - The owner-direct/buyer-direct skip paths are policy/data conventions, not hard gates that
   validate "commercial completeness" by recipient. The doc reflects this as built.
+
+---
+
+## Opus review — PASSED with a fix (2026-07-17)
+
+Re-verified independently: re-ran the full backend `./mvnw -B verify` and frontend
+`npm run lint && npm test && npm run build`, code-read the whole diff against the spec + carried
+invariants, walked the list filters + dashboard cards in the frontend-mock browser (as CEO,
+against the seeded deals).
+
+### Critical correctness check — `paymentOverdue` mirrors the list `overdue` (PASS)
+The one real risk this phase carried was the dashboard `paymentOverdue` count diverging from the
+list-row `overdue` flag. I diffed the CTE/lateral-join derivation against
+`TicketRepository.payableAmount()` + `sumPaid()` line-by-line: **identical** COALESCE precedence
+(accepted quotation → issued/sent quotation → issued deposit_notice → `SUM(approved_price*qty)` →
+0), identical recipient-priority ordering (BUYER→OWNER→other, accepted_at/issued_at/quotation_id
+tie-breaks), identical ADJUSTMENT-negating paid sum, and `GREATEST(payable-paid,0)>0` ≡
+`outstanding>0`. `due_date < CURRENT_DATE` (NULL-safe) matches `dueDate.isBefore(now)`. The two
+counts will agree. The existing ticket-age `overdueOver3Days` was left untouched, as required.
+Validated end-to-end by `DashboardRepositoryIntegrationTest` on real Postgres.
+
+### Bug found and fixed — phase-card count vs. phase-filter mismatch (frontend consistency)
+Codex correctly made the phase-card **counts** active-only (`lifecycle==='ACTIVE'`), but the
+phase **filter** still matched any non-lost deal (`!lost`), so an ON_HOLD/DORMANT deal in phase N
+appeared when you clicked phase N despite not being in that card's count. Aligned the filter to
+the same active-only predicate (`deal.lifecycle==='ACTIVE' && !deal.lostReason`) so each phase
+card's count equals the rows it filters to; paused/terminal deals are reached via the lifecycle
+chip row, matching Codex's own stated design. (`TicketListPage.jsx`, +1 comment.)
+
+### Verified clean (no change)
+- Owner-scoping: the list endpoint scopes plain `sales` to own deals in Java (`listPage`); Phase 5
+  only groups what the scoped query returns, and the dashboard aggregate reuses the same
+  `whereTicketScope`. Filters/counts cannot leak other owners' deals. (The mock is not owner-scoped
+  — a known, pre-existing mock-authz gap, not a Phase-5 regression; verified against Java + tests.)
+- Mock parity: dashboard summary extended in both `hrApi` and `mockApi`; `contract.test.js` green.
+  Mock `paymentOverdue` reuses `derivePaymentFields(...).overdue`, same derivation as the list.
+- `docs/sales-workflow.md` is accurate and flags the Case-7 `GOODS_RECEIVED`→`FROM_STOCK`
+  handoff-vs-code discrepancy and the hybrid close gate — exactly the "document as built, flag it"
+  behaviour requested.
+
+### Browser walkthrough (frontend-mock, real UI)
+- Deal list: lifecycle chips render with live counts (on-hold 1, dormant 1, cancelled 1,
+  completed 1, lost 0) and flag chips (overdue 1, partial 1); phase cards 0/6/1/3/1 = 11 active,
+  11 + 4 non-active = 15 total (count/filter now consistent).
+- Overdue filter → exactly `PR-2026-0006` (credit/overdue demo); partial-delivery filter →
+  exactly `PR-2026-0013` (partial-delivery demo). URL params `?flag=` / `?life=` back the state.
+- Dashboard: all four bucket cards render (พักไว้ชั่วคราว / ดีลเงียบ / เกินกำหนดชำระ / ส่งมอบบางส่วน).
+
+### 22-scenario matrix
+Resolved — Codex mapped each scenario to a named test (existing or added). Spot-checked the added
+ones (`generateQuotation_beforeSpecApproved_*` Case 1, `entryChannel_ownerAndBuyerDirect*` Cases
+2/3, dashboard-bucket integration assertions, the list-filter frontend test). Nothing was skipped.
+
+### Results after fix
+- Backend: `./mvnw -B verify` → **507 tests, 0 failures, BUILD SUCCESS** (+2 vs 505).
+- Frontend: **lint 0 errors** (4 pre-existing warnings), **123 tests pass** (+1), **build OK**.
+
+Verdict: **PASS.** Phase 5 is complete. **This closes the 5-phase branching-workflow program.**
+All phase PRs (#228–#232) remain draft/do-not-merge pending the user's end-to-end sign-off and the
+decision on merge order (backend PR → UI PR → phase PRs).

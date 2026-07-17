@@ -177,7 +177,11 @@ export function TicketListPage({ user, showToast }) {
   const deals = useMemo(() => {
     return allDeals.filter((deal) => {
       const lost = deal.lifecycle === 'CLOSED_LOST' || deal.lostReason;
-      const phaseOk = !phaseFilter || (!lost && stageMeta(deal.salesStage)?.phase === Number(phaseFilter));
+      // Phase cards are the active-pipeline funnel (counts are ACTIVE-only), so the phase
+      // filter matches on ACTIVE too — paused/terminal deals are reached via the lifecycle
+      // chips below. This keeps each phase card's count equal to the rows it filters to.
+      const phaseOk = !phaseFilter
+        || (deal.lifecycle === 'ACTIVE' && !deal.lostReason && stageMeta(deal.salesStage)?.phase === Number(phaseFilter));
       const lifeOk = !lifecycleFilter || (lifecycleFilter === 'CLOSED_LOST' ? lost : deal.lifecycle === lifecycleFilter);
       const flagOk = !flagFilter
         || (flagFilter === 'overdue' && deal.overdue)
