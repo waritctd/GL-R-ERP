@@ -5,6 +5,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.LocalDate;
+import java.time.Instant;
 import java.time.Year;
 import java.util.List;
 import java.util.Map;
@@ -36,7 +37,9 @@ public class TicketRepository {
                t.payment_status, t.fulfillment_status,
                t.sales_stage, t.lost_reason, t.lost_at, t.stage_updated_at,
                t.lifecycle, t.tender_requirement, t.deposit_policy,
-               t.deposit_policy_reason, t.entry_channel
+               t.deposit_policy_reason, t.entry_channel,
+               t.billing_date, t.due_date, t.credit_term_days,
+               t.last_follow_up_at, t.next_follow_up_at
           FROM sales.ticket t
           JOIN hr.employee ec ON ec.employee_id = t.created_by
           LEFT JOIN hr.employee ea ON ea.employee_id = t.assigned_to
@@ -72,7 +75,7 @@ public class TicketRepository {
             params.addValue("limit", page.size());
             params.addValue("offset", page.offset());
         }
-        return jdbc.query(sql.toString(), params, (rs, rowNum) -> mapSummary(rs));
+        return jdbc.query(sql.toString(), params, (rs, rowNum) -> enrichSummary(mapSummary(rs)));
     }
 
     public int countSummaries(String status, Long createdByFilter) {
@@ -515,7 +518,7 @@ public class TicketRepository {
                           p.name, ct.first_name, ct.last_name
                 """,
                 Map.of("id", id), (rs, rowNum) -> mapSummary(rs));
-            return Optional.ofNullable(summary);
+            return Optional.ofNullable(summary).map(this::enrichSummary);
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
         }
@@ -738,8 +741,60 @@ public class TicketRepository {
             rs.getString("tender_requirement"),
             rs.getString("deposit_policy"),
             rs.getString("deposit_policy_reason"),
-            rs.getString("entry_channel")
+            rs.getString("entry_channel"),
+            rs.getObject("billing_date", LocalDate.class),
+            rs.getObject("due_date", LocalDate.class),
+            (Integer) rs.getObject("credit_term_days"),
+            rs.getObject("last_follow_up_at", LocalDate.class),
+            rs.getObject("next_follow_up_at", LocalDate.class),
+            PaymentStage.NOT_REQUIRED,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            false
         );
+    }
+
+    private TicketSummaryDto enrichSummary(TicketSummaryDto s) {
+        BigDecimal payable = payableAmount(s.id());
+        BigDecimal paid = sumPaid(s.id());
+        BigDecimal outstanding = payable.subtract(paid);
+        if (outstanding.signum() < 0) {
+            outstanding = BigDecimal.ZERO;
+        }
+        boolean balanceReceipt = hasBalanceReceipt(s.id());
+        String stage = derivePaymentStage(s, payable, paid, outstanding, balanceReceipt);
+        boolean overdue = s.dueDate() != null && s.dueDate().isBefore(LocalDate.now()) && outstanding.signum() > 0;
+        return new TicketSummaryDto(
+            s.id(), s.code(), s.type(), s.title(), s.status(), s.priority(),
+            s.createdById(), s.createdByName(), s.assignedToId(), s.assignedToName(),
+            s.customerName(), s.customerId(), s.projectId(), s.projectName(),
+            s.contactId(), s.contactName(), s.note(),
+            s.createdAt(), s.updatedAt(), s.closedAt(), s.itemCount(), s.hasEdits(),
+            s.paymentStatus(), s.fulfillmentStatus(), s.salesStage(), s.lostReason(), s.lostAt(),
+            s.stageUpdatedAt(), s.lifecycle(), s.tenderRequirement(), s.depositPolicy(),
+            s.depositPolicyReason(), s.entryChannel(), s.billingDate(), s.dueDate(),
+            s.creditTermDays(), s.lastFollowUpAt(), s.nextFollowUpAt(),
+            stage, payable, paid, outstanding, overdue);
+    }
+
+    private String derivePaymentStage(TicketSummaryDto s, BigDecimal payable, BigDecimal paid,
+                                      BigDecimal outstanding, boolean balanceReceipt) {
+        if (payable.signum() <= 0) {
+            return PaymentStage.NOT_REQUIRED;
+        }
+        if (paid.compareTo(payable) >= 0) {
+            return PaymentStage.FULLY_PAID;
+        }
+        if (paid.signum() > 0) {
+            return balanceReceipt ? PaymentStage.PARTIALLY_PAID : PaymentStage.DEPOSIT_RECEIVED;
+        }
+        if (!DepositPolicy.bypassesDepositNotice(s.depositPolicy())
+                && ("CUSTOMER_CONFIRMED".equals(s.paymentStatus())
+                    || "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()))) {
+            return PaymentStage.DEPOSIT_PENDING;
+        }
+        return outstanding.signum() > 0 ? PaymentStage.BALANCE_PENDING : PaymentStage.NOT_REQUIRED;
     }
 
     public void updateSalesStage(long ticketId, String stage) {
@@ -797,6 +852,159 @@ public class TicketRepository {
         jdbc.update(
             "UPDATE sales.ticket SET entry_channel = :value, updated_at = now() WHERE ticket_id = :id",
             new MapSqlParameterSource().addValue("value", value).addValue("id", ticketId));
+    }
+
+    public long insertPaymentReceipt(long ticketId, String kind, BigDecimal amount, long recordedBy,
+                                     Instant receivedAt, String note, Long depositNoticeId, String receiptRef) {
+        GeneratedKeyHolder keys = new GeneratedKeyHolder();
+        jdbc.update("""
+            INSERT INTO sales.payment_receipt
+                (ticket_id, kind, amount, currency, received_at, recorded_by, note, deposit_notice_id, receipt_ref)
+            VALUES
+                (:ticketId, :kind, :amount, 'THB', COALESCE(CAST(:receivedAt AS timestamptz), now()), :recordedBy, :note,
+                 :depositNoticeId, :receiptRef)
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("kind", kind)
+                .addValue("amount", amount)
+                .addValue("receivedAt", receivedAt == null ? null : Timestamp.from(receivedAt))
+                .addValue("recordedBy", recordedBy)
+                .addValue("note", note)
+                .addValue("depositNoticeId", depositNoticeId)
+                .addValue("receiptRef", receiptRef),
+            keys, new String[]{"receipt_id"});
+        return keys.getKey().longValue();
+    }
+
+    public List<PaymentReceiptDto> findReceiptsByTicket(long ticketId) {
+        return jdbc.query("""
+            SELECT r.receipt_id, r.ticket_id, r.kind, r.amount, r.currency,
+                   r.received_at, r.recorded_by,
+                   NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS recorded_by_name,
+                   r.note, r.deposit_notice_id, r.receipt_ref, r.created_at
+              FROM sales.payment_receipt r
+              JOIN hr.employee e ON e.employee_id = r.recorded_by
+             WHERE r.ticket_id = :ticketId
+             ORDER BY r.received_at ASC, r.receipt_id ASC
+            """,
+            Map.of("ticketId", ticketId),
+            (rs, rowNum) -> {
+                long depositNoticeRaw = rs.getLong("deposit_notice_id");
+                Long depositNoticeId = rs.wasNull() ? null : depositNoticeRaw;
+                return new PaymentReceiptDto(
+                    rs.getLong("receipt_id"),
+                    rs.getLong("ticket_id"),
+                    rs.getString("kind"),
+                    rs.getBigDecimal("amount"),
+                    rs.getString("currency"),
+                    rs.getTimestamp("received_at").toInstant(),
+                    rs.getLong("recorded_by"),
+                    rs.getString("recorded_by_name"),
+                    rs.getString("note"),
+                    depositNoticeId,
+                    rs.getString("receipt_ref"),
+                    rs.getTimestamp("created_at").toInstant()
+                );
+            });
+    }
+
+    public BigDecimal sumPaid(long ticketId) {
+        BigDecimal value = jdbc.queryForObject("""
+            SELECT COALESCE(SUM(CASE WHEN kind = 'ADJUSTMENT' THEN -amount ELSE amount END), 0)
+              FROM sales.payment_receipt
+             WHERE ticket_id = :ticketId
+            """, Map.of("ticketId", ticketId), BigDecimal.class);
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    public boolean hasBalanceReceipt(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS(
+                SELECT 1 FROM sales.payment_receipt
+                 WHERE ticket_id = :ticketId AND kind = 'BALANCE'
+            )
+            """, Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
+    }
+
+    public BigDecimal payableAmount(long ticketId) {
+        BigDecimal value = jdbc.queryForObject("""
+            SELECT COALESCE(
+                (SELECT q.total_amount
+                   FROM sales.quotation q
+                  WHERE q.ticket_id = :ticketId AND q.doc_status = 'ACCEPTED'
+                  ORDER BY CASE q.recipient_type
+                               WHEN 'BUYER' THEN 0
+                               WHEN 'OWNER' THEN 1
+                               ELSE 2
+                           END,
+                           q.accepted_at DESC NULLS LAST,
+                           q.issued_at DESC,
+                           q.quotation_id DESC
+                  LIMIT 1),
+                (SELECT q.total_amount
+                   FROM sales.quotation q
+                  WHERE q.ticket_id = :ticketId AND q.doc_status IN ('ISSUED','SENT')
+                  ORDER BY CASE q.recipient_type
+                               WHEN 'BUYER' THEN 0
+                               WHEN 'OWNER' THEN 1
+                               ELSE 2
+                           END,
+                           q.issued_at DESC,
+                           q.quotation_id DESC
+                  LIMIT 1),
+                (SELECT d.total_payable
+                   FROM sales.deposit_notice d
+                  WHERE d.ticket_id = :ticketId AND d.status = 'ISSUED'
+                  ORDER BY d.version DESC, d.deposit_notice_id DESC
+                  LIMIT 1),
+                (SELECT COALESCE(SUM(COALESCE(ti.approved_price, 0) * ti.qty), 0)
+                   FROM sales.ticket_item ti
+                  WHERE ti.ticket_id = :ticketId),
+                0
+            )
+            """, Map.of("ticketId", ticketId), BigDecimal.class);
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    public record DepositNoticePaymentInfo(long id, BigDecimal depositAmount, BigDecimal totalPayable) {}
+
+    public Optional<DepositNoticePaymentInfo> latestIssuedDepositNotice(long ticketId) {
+        List<DepositNoticePaymentInfo> rows = jdbc.query("""
+            SELECT deposit_notice_id, deposit_amount, total_payable
+              FROM sales.deposit_notice
+             WHERE ticket_id = :ticketId AND status = 'ISSUED'
+             ORDER BY version DESC, deposit_notice_id DESC
+             LIMIT 1
+            """, Map.of("ticketId", ticketId),
+            (rs, rowNum) -> new DepositNoticePaymentInfo(
+                rs.getLong("deposit_notice_id"),
+                rs.getBigDecimal("deposit_amount"),
+                rs.getBigDecimal("total_payable")
+            ));
+        return rows.stream().findFirst();
+    }
+
+    public void updateBilling(long ticketId, LocalDate billingDate, LocalDate dueDate, Integer creditTermDays,
+                              LocalDate lastFollowUpAt, LocalDate nextFollowUpAt) {
+        jdbc.update("""
+            UPDATE sales.ticket
+               SET billing_date = :billingDate,
+                   due_date = :dueDate,
+                   credit_term_days = :creditTermDays,
+                   last_follow_up_at = :lastFollowUpAt,
+                   next_follow_up_at = :nextFollowUpAt,
+                   updated_at = now()
+             WHERE ticket_id = :ticketId
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("billingDate", billingDate)
+                .addValue("dueDate", dueDate)
+                .addValue("creditTermDays", creditTermDays)
+                .addValue("lastFollowUpAt", lastFollowUpAt)
+                .addValue("nextFollowUpAt", nextFollowUpAt));
     }
 
     public void updatePaymentStatus(long ticketId, String paymentStatus) {

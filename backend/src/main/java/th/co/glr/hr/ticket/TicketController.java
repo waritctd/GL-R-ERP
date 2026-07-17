@@ -2,6 +2,7 @@ package th.co.glr.hr.ticket;
 
 import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
+import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -66,6 +67,32 @@ public class TicketController {
     TicketActionsResponse actions(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return ticketService.actions(id, user);
+    }
+
+    @GetMapping("/{id}/payments")
+    Map<String, List<PaymentReceiptDto>> payments(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("items", ticketService.listPayments(id, user));
+    }
+
+    @PostMapping("/{id}/payments")
+    TicketDetailResponse recordPayment(
+        @PathVariable long id,
+        @Valid @RequestBody RecordPaymentRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.recordPayment(id, request, user));
+    }
+
+    @PostMapping("/{id}/billing")
+    TicketDetailResponse setBilling(
+        @PathVariable long id,
+        @Valid @RequestBody BillingRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.setBilling(id, request, user));
     }
 
     @PostMapping("/{id}/submit")

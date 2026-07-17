@@ -185,6 +185,24 @@ export function depositPolicyLabel(value) {
   return { label: map[value] ?? value ?? '-', tone };
 }
 
+export function paymentStageLabel(value) {
+  const map = {
+    NOT_REQUIRED: { label: 'ไม่ต้องชำระ', tone: 'neutral' },
+    DEPOSIT_PENDING: { label: 'รอมัดจำ', tone: 'warning' },
+    DEPOSIT_RECEIVED: { label: 'รับมัดจำแล้ว', tone: 'success' },
+    PARTIALLY_PAID: { label: 'ชำระบางส่วน', tone: 'warning' },
+    BALANCE_PENDING: { label: 'รอชำระส่วนที่เหลือ', tone: 'warning' },
+    FULLY_PAID: { label: 'ชำระครบแล้ว', tone: 'success' },
+  };
+  return map[value] ?? { label: value || '-', tone: 'neutral' };
+}
+
+export function overdueBadgeLabel(overdue) {
+  return overdue
+    ? { label: 'เกินกำหนด', tone: 'danger' }
+    : { label: 'ยังไม่เกินกำหนด', tone: 'neutral' };
+}
+
 export function entryChannelLabel(value) {
   const map = {
     DESIGNER_LED: 'ผู้ออกแบบนำดีล',

@@ -15,6 +15,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     api: {
       tickets: {
         get: vi.fn(),
+        listPayments: vi.fn(),
+        recordPayment: vi.fn(),
+        setBilling: vi.fn(),
         actions: vi.fn(),
         approve: vi.fn(),
         comment: vi.fn(),
@@ -46,6 +49,16 @@ function buildTicket(overrides = {}) {
       createdAt: '2026-07-01T09:00:00.000Z',
       updatedAt: '2026-07-02T09:00:00.000Z',
       hasEdits: false,
+      billingDate: null,
+      dueDate: null,
+      creditTermDays: null,
+      lastFollowUpAt: null,
+      nextFollowUpAt: null,
+      paymentStage: 'NOT_REQUIRED',
+      amountPayable: 0,
+      amountPaid: 0,
+      amountOutstanding: 0,
+      overdue: false,
       ...overrides.summary,
     },
     items: overrides.items ?? [
@@ -98,11 +111,14 @@ describe('TicketDetailPage', () => {
       ],
     });
     api.attachments.list.mockResolvedValue({ attachments: [] });
+    api.tickets.listPayments.mockResolvedValue({ items: [] });
     api.factoryConfigs.list.mockResolvedValue({ factories: [] });
     api.tickets.approve.mockResolvedValue({
       ticket: buildTicket({ summary: { status: 'approved' } }),
     });
     api.tickets.comment.mockResolvedValue({ ticket: buildTicket() });
+    api.tickets.recordPayment.mockResolvedValue({ ticket: buildTicket() });
+    api.tickets.setBilling.mockResolvedValue({ ticket: buildTicket() });
   });
 
   it('renders a ticket from a mocked api.tickets.get', async () => {
@@ -206,6 +222,54 @@ describe('TicketDetailPage', () => {
     expect(screen.getByText('QT-2026-0902')).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'ส่งแล้ว' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'รับแล้ว' })).toBeNull();
+  });
+
+  it('renders payment totals, overdue badge, and hides record payment without the action', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: {
+          status: 'quotation_issued',
+          paymentStage: 'PARTIALLY_PAID',
+          amountPayable: 1000,
+          amountPaid: 400,
+          amountOutstanding: 600,
+          dueDate: '2026-07-01',
+          overdue: true,
+        },
+      }),
+    });
+    api.tickets.listPayments.mockResolvedValueOnce({
+      items: [
+        {
+          receiptId: 1,
+          kind: 'DEPOSIT',
+          amount: 400,
+          receivedAt: '2026-06-20T09:00:00.000Z',
+          recordedByName: 'คุณบัญชี',
+          note: 'โอนแล้ว',
+        },
+      ],
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE',
+        salesStage: 'DEPOSIT_RECEIVED',
+        paymentStatus: 'DEPOSIT_PAID',
+        fulfillmentStatus: null,
+        status: 'quotation_issued',
+      },
+      availableActions: [{ action: 'SET_BILLING', kind: 'payment', label: 'ตั้งค่าการวางบิล' }],
+    });
+
+    renderTicketDetailPage();
+
+    expect((await screen.findAllByText('ชำระบางส่วน')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('เกินกำหนด').length).toBeGreaterThan(0);
+    expect(screen.getByText('฿1,000')).not.toBeNull();
+    expect(screen.getByText('฿400')).not.toBeNull();
+    expect(screen.getByText('฿600')).not.toBeNull();
+    expect(await screen.findByText('DEPOSIT')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
   });
 
   it('comment posts and invalidates the tickets-list/dashboard/notifications caches', async () => {

@@ -13,6 +13,8 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
   formatMoney,
   formatThaiDate,
+  overdueBadgeLabel,
+  paymentStageLabel,
   quotationRecipientLabel,
   quotationStatusLabel,
   ticketStatusLabel,
@@ -29,6 +31,8 @@ const EVENT_KIND_LABEL = {
   DORMANT:            'พัก dormant',
   RESUMED:            'ดำเนินการต่อ',
   POLICY_CHANGED:     'เปลี่ยนนโยบายดีล',
+  PAYMENT_RECORDED:   'บันทึกรับชำระเงิน',
+  BILLING_UPDATED:    'อัปเดตข้อมูลวางบิล',
   SUBMITTED:          'ส่งเรื่องเข้าระบบ',
   PICKED_UP:          'รับมอบหมาย',
   PRICE_PROPOSED:     'เสนอราคาสินค้า',
@@ -67,7 +71,7 @@ const EVENT_KIND_LABEL = {
 // sub-status chips in the DealStagePanel.
 const PAYMENT_TRACK_KINDS = new Set([
   'CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID',
-  'AWAITING_FINAL_PAYMENT', 'FULLY_PAID',
+  'AWAITING_FINAL_PAYMENT', 'FULLY_PAID', 'PAYMENT_RECORDED', 'BILLING_UPDATED',
 ]);
 const FULFILLMENT_TRACK_KINDS = new Set([
   'IR_ISSUED', 'IR_SENT', 'SHIPPING', 'GOODS_RECEIVED',
@@ -153,6 +157,24 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     amendmentReason: '',
   });
 
+  const [paymentModal, setPaymentModal] = useState(false);
+  const [paymentDraft, setPaymentDraft] = useState({
+    kind: 'DEPOSIT',
+    amount: '',
+    receivedAt: '',
+    note: '',
+    receiptRef: '',
+    allowOverpayment: false,
+  });
+  const [billingModal, setBillingModal] = useState(false);
+  const [billingDraft, setBillingDraft] = useState({
+    billingDate: '',
+    dueDate: '',
+    creditTermDays: '',
+    lastFollowUpAt: '',
+    nextFollowUpAt: '',
+  });
+
   // Comment
   const [commentText, setCommentText] = useState('');
 
@@ -189,6 +211,13 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // quiet background refetch (window refocus, another tab's invalidate) —
   // same reasoning as TicketDashboard's loading gate in slice A (handoff 62).
   const loading = ticketQuery.isLoading;
+
+  const paymentsQuery = useQuery({
+    queryKey: queryKeys.ticketPayments(ticketId),
+    queryFn: () => api.tickets.listPayments(ticketId).then((r) => r.items ?? []),
+    enabled: !!ticketId && !!ticket,
+  });
+  const paymentReceipts = paymentsQuery.data ?? [];
 
   useEffect(() => {
     if (ticketQuery.error) showToast('error', ticketQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
@@ -229,6 +258,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   function applyTicketUpdate(updatedTicket) {
     queryClient.setQueryData(queryKeys.ticketDetail(ticketId), updatedTicket);
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.ticketPayments(ticketId) });
     queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary() });
     queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
@@ -254,6 +284,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       validityDate: '',
       amendmentReason: '',
     });
+    setPaymentModal(false);
+    setBillingModal(false);
     setCommentText('');
     setDraftRaw({});
     setDraftFactoryCurr({});
@@ -474,7 +506,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     markIrSent:         hasAction('IR_SENT') && st === 'quotation_issued' && fs === 'IR_ISSUED' && isImport,
     markShipping:       hasAction('SHIPPING') && st === 'quotation_issued' && fs === 'IR_SENT' && isImport,
     markGoodsReceived:  hasAction('GOODS_RECEIVED') && st === 'quotation_issued' && fs === 'SHIPPING' && isImport,
-    confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && ps === 'AWAITING_FINAL_PAYMENT' && isAccount,
+    confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && isAccount,
+    recordPayment:      hasAction('RECORD_PAYMENT') && isAccount,
+    setBilling:         hasAction('SET_BILLING') && isAccount,
     downloadRemainingInvoice: st === 'quotation_issued' && fs === 'GOODS_RECEIVED' && isSales,
   };
 
@@ -816,6 +850,58 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     await doAction(() => api.tickets.comment(ticketId, { message: commentText.trim() }), 'เพิ่มความคิดเห็นแล้ว');
   }
 
+  async function handleRecordPayment() {
+    const amount = Number(paymentDraft.amount);
+    if (!amount || amount <= 0) {
+      showToast('error', 'กรุณากรอกยอดรับชำระ');
+      return;
+    }
+    const payload = {
+      kind: paymentDraft.kind,
+      amount,
+      receivedAt: paymentDraft.receivedAt ? new Date(paymentDraft.receivedAt).toISOString() : null,
+      note: paymentDraft.note.trim() || null,
+      receiptRef: paymentDraft.receiptRef.trim() || null,
+      allowOverpayment: paymentDraft.allowOverpayment,
+    };
+    await doAction(() => api.tickets.recordPayment(ticketId, payload), 'บันทึกรับชำระเงินแล้ว');
+  }
+
+  async function handleSetBilling() {
+    const payload = {
+      billingDate: billingDraft.billingDate || null,
+      dueDate: billingDraft.dueDate || null,
+      creditTermDays: billingDraft.creditTermDays === '' ? null : Number(billingDraft.creditTermDays),
+      lastFollowUpAt: billingDraft.lastFollowUpAt || null,
+      nextFollowUpAt: billingDraft.nextFollowUpAt || null,
+    };
+    await doAction(() => api.tickets.setBilling(ticketId, payload), 'บันทึกข้อมูลวางบิลแล้ว');
+  }
+
+  function openBillingModal() {
+    setBillingDraft({
+      billingDate: summary.billingDate ?? '',
+      dueDate: summary.dueDate ?? '',
+      creditTermDays: summary.creditTermDays != null ? String(summary.creditTermDays) : '',
+      lastFollowUpAt: summary.lastFollowUpAt ?? '',
+      nextFollowUpAt: summary.nextFollowUpAt ?? '',
+    });
+    setBillingModal(true);
+  }
+
+  function openPaymentModal() {
+    const suggestedKind = summary.amountPaid > 0 ? 'BALANCE' : 'DEPOSIT';
+    setPaymentDraft({
+      kind: suggestedKind,
+      amount: summary.amountOutstanding != null && summary.amountOutstanding > 0 ? String(summary.amountOutstanding) : '',
+      receivedAt: '',
+      note: '',
+      receiptRef: '',
+      allowOverpayment: false,
+    });
+    setPaymentModal(true);
+  }
+
   return (
     <div className="page-stack">
       <Breadcrumbs items={[{ label: 'ใบขอราคา', onClick: onBack }, { label: summary.code || summary.customerName || summary.title }]} />
@@ -915,6 +1001,74 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           </>
         ) : null}
       />
+
+      <section className="panel">
+        <div className="panel-header" style={{ alignItems: 'center' }}>
+          <h2>การชำระเงิน</h2>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <StatusBadge tone={paymentStageLabel(summary.paymentStage).tone}>
+              {paymentStageLabel(summary.paymentStage).label}
+            </StatusBadge>
+            {summary.overdue && (
+              <StatusBadge tone={overdueBadgeLabel(true).tone}>{overdueBadgeLabel(true).label}</StatusBadge>
+            )}
+          </div>
+        </div>
+        <div style={{ padding: '0 18px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+            {[
+              ['ยอดที่ต้องชำระ', summary.amountPayable],
+              ['ชำระแล้ว', summary.amountPaid],
+              ['คงเหลือ', summary.amountOutstanding],
+            ].map(([label, value]) => (
+              <div key={label} style={{ border: '1px solid var(--color-border-subtle)', borderRadius: 8, padding: '10px 12px', background: 'var(--color-surface-muted)' }}>
+                <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 4 }}>{label}</div>
+                <strong style={{ fontSize: 18, color: 'var(--color-text)' }}>{formatMoney(value ?? 0)}</strong>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', fontSize: 13, color: 'var(--color-text-muted)' }}>
+            <span>วันวางบิล <strong style={{ color: 'var(--color-text-secondary)' }}>{formatThaiDate(summary.billingDate)}</strong></span>
+            <span>ครบกำหนด <strong style={{ color: summary.overdue ? 'var(--color-danger)' : 'var(--color-text-secondary)' }}>{formatThaiDate(summary.dueDate)}</strong></span>
+            {summary.nextFollowUpAt && <span>ติดตามครั้งถัดไป <strong style={{ color: 'var(--color-text-secondary)' }}>{formatThaiDate(summary.nextFollowUpAt)}</strong></span>}
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {can.recordPayment && (
+              <button type="button" className="primary-button" disabled={actionLoading} onClick={openPaymentModal}>
+                บันทึกรับชำระเงิน
+              </button>
+            )}
+            {can.setBilling && (
+              <button type="button" className="secondary-button" disabled={actionLoading} onClick={openBillingModal}>
+                ตั้งค่าการวางบิล
+              </button>
+            )}
+          </div>
+          <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 10 }}>
+            <h3 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700 }}>ประวัติรับชำระ</h3>
+            {paymentsQuery.isLoading ? (
+              <SkeletonText lines={2} />
+            ) : paymentReceipts.length === 0 ? (
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--color-text-muted)' }}>ยังไม่มีรายการรับชำระ</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {paymentReceipts.map((receipt) => (
+                  <div key={receipt.receiptId} style={{ display: 'grid', gridTemplateColumns: '110px 90px 1fr', gap: 10, alignItems: 'start', fontSize: 13 }}>
+                    <span style={{ color: 'var(--color-text-muted)' }}>{formatThaiDate(receipt.receivedAt)}</span>
+                    <strong>{receipt.kind}</strong>
+                    <span>
+                      {formatMoney(receipt.amount)}
+                      <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
+                        {receipt.recordedByName || '-'}{receipt.note ? ` · ${receipt.note}` : ''}
+                      </small>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
 
       {/* Contextual decision panel — approve/reject is the one action on this page
           with real financial and downstream consequences, so it gets its own
@@ -1819,6 +1973,106 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 onChange={(e) => setQuotationDraft((draft) => ({ ...draft, amendmentReason: e.target.value }))} />
             </label>
           )}
+          </div>
+        </Modal>
+      )}
+
+      {paymentModal && (
+        <Modal
+          title="บันทึกรับชำระเงิน"
+          onClose={() => setPaymentModal(false)}
+          footer={(
+            <>
+              <button type="button" className="secondary-button" onClick={() => setPaymentModal(false)}>ยกเลิก</button>
+              <button type="button" className="primary-button" disabled={actionLoading} onClick={handleRecordPayment}>
+                บันทึก
+              </button>
+            </>
+          )}
+        >
+          <div style={{ display: 'grid', gap: 12 }}>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              ประเภท
+              <select value={paymentDraft.kind} onChange={(e) => setPaymentDraft((draft) => ({ ...draft, kind: e.target.value }))}>
+                <option value="DEPOSIT">มัดจำ</option>
+                <option value="BALANCE">ส่วนที่เหลือ</option>
+                <option value="ADJUSTMENT">ปรับปรุงยอด/คืนเงิน</option>
+              </select>
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                จำนวนเงิน
+                <input type="number" min="0" step="0.01" value={paymentDraft.amount}
+                  onChange={(e) => setPaymentDraft((draft) => ({ ...draft, amount: e.target.value }))} />
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                วันที่รับเงิน
+                <input type="date" value={paymentDraft.receivedAt}
+                  onChange={(e) => setPaymentDraft((draft) => ({ ...draft, receivedAt: e.target.value }))} />
+              </label>
+            </div>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              เลขอ้างอิง
+              <input value={paymentDraft.receiptRef}
+                onChange={(e) => setPaymentDraft((draft) => ({ ...draft, receiptRef: e.target.value }))} />
+            </label>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              หมายเหตุ
+              <textarea rows={3} value={paymentDraft.note}
+                onChange={(e) => setPaymentDraft((draft) => ({ ...draft, note: e.target.value }))} />
+            </label>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
+              <input type="checkbox" checked={paymentDraft.allowOverpayment}
+                onChange={(e) => setPaymentDraft((draft) => ({ ...draft, allowOverpayment: e.target.checked }))} />
+              ยืนยันรับชำระเกินยอด
+            </label>
+          </div>
+        </Modal>
+      )}
+
+      {billingModal && (
+        <Modal
+          title="ตั้งค่าการวางบิล"
+          onClose={() => setBillingModal(false)}
+          footer={(
+            <>
+              <button type="button" className="secondary-button" onClick={() => setBillingModal(false)}>ยกเลิก</button>
+              <button type="button" className="primary-button" disabled={actionLoading} onClick={handleSetBilling}>
+                บันทึก
+              </button>
+            </>
+          )}
+        >
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                วันที่วางบิล
+                <input type="date" value={billingDraft.billingDate}
+                  onChange={(e) => setBillingDraft((draft) => ({ ...draft, billingDate: e.target.value }))} />
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                วันครบกำหนด
+                <input type="date" value={billingDraft.dueDate}
+                  onChange={(e) => setBillingDraft((draft) => ({ ...draft, dueDate: e.target.value }))} />
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                เครดิต (วัน)
+                <input type="number" min="0" value={billingDraft.creditTermDays}
+                  onChange={(e) => setBillingDraft((draft) => ({ ...draft, creditTermDays: e.target.value }))} />
+              </label>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                ติดตามล่าสุด
+                <input type="date" value={billingDraft.lastFollowUpAt}
+                  onChange={(e) => setBillingDraft((draft) => ({ ...draft, lastFollowUpAt: e.target.value }))} />
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                ติดตามครั้งถัดไป
+                <input type="date" value={billingDraft.nextFollowUpAt}
+                  onChange={(e) => setBillingDraft((draft) => ({ ...draft, nextFollowUpAt: e.target.value }))} />
+              </label>
+            </div>
           </div>
         </Modal>
       )}

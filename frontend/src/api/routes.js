@@ -42,6 +42,8 @@ export const API_ROUTES = {
     list: '/api/tickets',
     create: '/api/tickets',
     detail: (id) => `/api/tickets/${id}`,
+    payments: (id) => `/api/tickets/${id}/payments`,
+    billing: (id) => `/api/tickets/${id}/billing`,
     action: (id, action) => `/api/tickets/${id}/${action}`,
     editItems: (id) => `/api/tickets/${id}/items`,
     createDocDraft: (id) => `/api/tickets/${id}/deposit-notice/draft`,
