@@ -3309,7 +3309,7 @@ export const api = {
   // Mirrors CustomerController (customer/).
   customers: {
     async create(payload) {
-      requireSession();
+      hasRole('sales'); // deal-entry flow; mirrors CustomerController's requireAnyRole('sales')
       const customer = { id: mockCustomerSeq++, name: payload.name, taxId: payload.taxId || null, address: payload.address || null, branch: payload.branch || 'สำนักงานใหญ่', phone: payload.phone || null };
       mockCustomers.push(customer);
       return delay({ customer });
@@ -3327,7 +3327,7 @@ export const api = {
       return delay({ contacts: mockContacts.filter((c) => c.customerId === Number(customerId)) });
     },
     async createContact(customerId, payload) {
-      requireSession();
+      hasRole('sales'); // mirrors CustomerController's requireAnyRole('sales')
       const contact = { id: mockContactSeq++, customerId: Number(customerId), ...payload };
       mockContacts.push(contact);
       return delay({ contact });
@@ -3337,7 +3337,7 @@ export const api = {
       return delay({ projects: mockProjects.filter((p) => p.customerId === Number(customerId)) });
     },
     async createProject(customerId, payload) {
-      requireSession();
+      hasRole('sales'); // mirrors CustomerController's requireAnyRole('sales')
       const project = { id: mockProjectSeq++, customerId: Number(customerId), name: payload.name };
       mockProjects.push(project);
       return delay({ project });
