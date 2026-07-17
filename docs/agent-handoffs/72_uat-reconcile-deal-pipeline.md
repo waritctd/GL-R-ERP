@@ -181,3 +181,36 @@ Known risks:
 Next prompt:
 - Review the local `uat` merge commit, then push/create PR when ready. Do not push automatically
   from this handoff thread.
+
+---
+
+## Opus review — PASSED, no fixes (2026-07-17)
+
+Re-verified independently on the local `uat` merge commit (`7710f4e`, main fully contained):
+
+**Notification/mail seam (the hard part) — correct.**
+- `NotificationRepository.notifyByRole` present (main's pipeline core); `NotificationService` takes
+  main's version; `NotificationEmailService` is uat's **`Mailer`-based** version (no
+  `JavaMailSender`); `mail/*` + `EmployeeContact` preserved. The only `JavaMailSender` reference is
+  *inside* uat's own `SmtpMailer` (a legit `Mailer` provider), not on the notification path.
+- The seam is proven wired, not just compiling: the Spring-context integration tests
+  (`*RepositoryIntegrationTest`, `DashboardServiceSpringWiringTest`, notification tests) all boot
+  and pass — a broken `NotificationService ↔ NotificationEmailService` bean graph would fail them.
+- No lingering conflict markers anywhere.
+
+**Seed rework — verified against real Postgres.** `V903`/`V905` reworked to the V50–V54 model
+(explicit `sales_stage`/`lifecycle`/policies, `recipient_type` quotations, `payment_receipt`
+ledger rows, `delivery_record` + `qty_delivered`). `FlywayMigrationTest` gained a `uatMigrations`
+test that applies `db/migration` + `db/migration-uat` (mirroring `application-uat.yml`) so the
+**full V1..V54 + V900..V908 chain runs on Testcontainers**, and `assertUatDealPipelineSeed()`
+asserts the seed is coherent: **14 stages, 5 payment receipts, 3 delivery records, 1 overdue-credit
+deal, 1 partial delivery, closed-paid end state** — all green. This is the exact "verify the uat
+chain on a fresh DB" gate the handoff required, and it passed.
+
+**Results (independently re-run):**
+- Backend `./mvnw -B verify` → **524 tests, 0 failures, BUILD SUCCESS** (uat Flyway chain exercised
+  through V908).
+- Frontend → **lint 0 errors** (4 pre-existing warnings), **126 tests pass**, **build OK**.
+
+Verdict: **PASS.** `uat` now runs main's canonical pipeline with uat's Mailer infra intact and a
+coherent 14-stage seed. Pushing `uat` (this triggers the Render `gl-r-erp-uat` deploy).
