@@ -465,6 +465,26 @@ class TicketServiceTest {
     }
 
     @Test
+    void generateQuotation_beforeSpecApproved_doesNotRequireSpecStage() {
+        TicketItemDto item = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
+            "pcs", null, new BigDecimal("1"), null, null, null, null, null,
+            new BigDecimal("120.00"), "THB", 0, null, null, null, "PIECE", null, null);
+        stubDeal(10L, 1L, TicketStatus.APPROVED, List.of(item), null, null, DealStage.PRESENTATION, null);
+        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0009");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0009"), eq(1L), eq(new BigDecimal("120.00")),
+            eq(QuotationRecipient.OWNER), isNull(), isNull(), isNull(), isNull(), isNull()))
+            .thenReturn(quotationOf(103L, 10L, "QT-2026-0009",
+                QuotationRecipient.OWNER, 1, QuotationStatus.ISSUED));
+
+        service.generateQuotation(10L, new GenerateQuotationRequest(
+            QuotationRecipient.OWNER, null, null, null, null, null, null), salesActor);
+
+        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0009"), eq(1L), eq(new BigDecimal("120.00")),
+            eq(QuotationRecipient.OWNER), isNull(), isNull(), isNull(), isNull(), isNull());
+        verify(ticketRepo).updateSalesStage(10L, DealStage.QUOTE_DESIGN_SIDE);
+    }
+
+    @Test
     void generateQuotation_sumsMultipleItemsIncludingFractionalQuantities() {
         TicketItemDto item1 = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
             "pcs", null, new BigDecimal("2"), null, null, null, null, null,
@@ -1328,6 +1348,20 @@ class TicketServiceTest {
             eq("tender_requirement → REQUIRED"));
         assertForbidden(() -> service.setTenderRequirement(10L, TenderRequirement.UNKNOWN, importActor));
         assertBadRequest(() -> service.setEntryChannel(10L, "WALK_IN", null, salesActor));
+    }
+
+    @Test
+    void entryChannel_ownerAndBuyerDirectPoliciesSupportSkipPaths() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null,
+            DealStage.AWAITING_BUYER, null);
+        service.setEntryChannel(10L, EntryChannel.OWNER_DIRECT, null, ceoActor);
+
+        stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), null, null,
+            DealStage.AWAITING_BUYER, null);
+        service.setEntryChannel(11L, EntryChannel.BUYER_DIRECT, null, salesActor);
+
+        verify(ticketRepo).updateEntryChannel(10L, EntryChannel.OWNER_DIRECT);
+        verify(ticketRepo).updateEntryChannel(11L, EntryChannel.BUYER_DIRECT);
     }
 
     @Test

@@ -164,6 +164,13 @@ export function TicketDashboard({ user, employee, showToast }) {
             <StatCard icon="close"     label="ยกเลิกเดือนนี้"     value={summary.cancelledThisMonth} helper="Cancelled this month" tone="neutral" onClick={() => navigate('/tickets')} />
           </div>
 
+          <div className="stat-grid">
+            <StatCard icon="clock"     label="พักไว้ชั่วคราว"      value={summary.onHold ?? 0}             helper="On hold"             tone="amber"  onClick={() => navigate('/tickets?life=ON_HOLD')} />
+            <StatCard icon="clock"     label="ดีลเงียบ"            value={summary.dormant ?? 0}            helper="Dormant"             tone="neutral" onClick={() => navigate('/tickets?life=DORMANT')} />
+            <StatCard icon="badge"     label="เกินกำหนดชำระ"       value={summary.paymentOverdue ?? 0}     helper="Payment overdue"     tone="rose"   onClick={() => navigate('/tickets?flag=overdue')} />
+            <StatCard icon="clipboard" label="ส่งมอบบางส่วน"       value={summary.partiallyDelivered ?? 0} helper="Partially delivered" tone="amber"  onClick={() => navigate('/tickets?flag=partial_delivery')} />
+          </div>
+
           {recent.length > 0 && (
             <section className="panel" style={{ padding: 0, overflow: 'hidden' }}>
               <div className="panel-header" style={{ padding: '14px 18px' }}>

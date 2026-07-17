@@ -63,7 +63,7 @@ class DashboardControllerTest {
 
     private DashboardSummaryDto summary() {
         TicketSummaryDto tickets = new TicketSummaryDto(
-            "all", 1, 2, 3, 4, 5, 6, 0, 7, 8, 36, 8, 1, 2, 3);
+            "all", 1, 2, 3, 4, 5, 6, 0, 7, 8, 36, 8, 1, 2, 3, 4, 5, 6, 7);
         return DashboardSummaryDto.of(
             "hr",
             10L,

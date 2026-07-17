@@ -8,7 +8,15 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { SalesTabs } from '../sales/SalesTabs.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
+import {
+  dealLifecycleLabel,
+  dealLostReasonLabel,
+  dealStageLabel,
+  formatThaiDate,
+  fulfilmentStatusLabel,
+  overdueBadgeLabel,
+  ticketStatusLabel,
+} from '../../utils/format.js';
 import { StageProgressBar } from './DealStageStepper.jsx';
 import { SALES_PHASES, stageMeta } from './stageMeta.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
@@ -25,6 +33,18 @@ const PHASE_STYLES = {
 };
 
 const STALE_DAYS = 7;
+const LIFECYCLE_FILTERS = [
+  { value: '', label: 'ทั้งหมด', tone: 'neutral' },
+  { value: 'ON_HOLD', label: dealLifecycleLabel('ON_HOLD').label, tone: dealLifecycleLabel('ON_HOLD').tone },
+  { value: 'DORMANT', label: dealLifecycleLabel('DORMANT').label, tone: dealLifecycleLabel('DORMANT').tone },
+  { value: 'CLOSED_LOST', label: dealLifecycleLabel('CLOSED_LOST').label, tone: dealLifecycleLabel('CLOSED_LOST').tone },
+  { value: 'CANCELLED', label: dealLifecycleLabel('CANCELLED').label, tone: dealLifecycleLabel('CANCELLED').tone },
+  { value: 'COMPLETED', label: dealLifecycleLabel('COMPLETED').label, tone: dealLifecycleLabel('COMPLETED').tone },
+];
+const FLAG_FILTERS = [
+  { value: 'overdue', label: overdueBadgeLabel(true).label, tone: overdueBadgeLabel(true).tone },
+  { value: 'partial_delivery', label: fulfilmentStatusLabel('PARTIALLY_DELIVERED').label, tone: fulfilmentStatusLabel('PARTIALLY_DELIVERED').tone },
+];
 
 function daysSince(iso) {
   if (!iso) return null;
@@ -101,6 +121,8 @@ export function TicketListPage({ user, showToast }) {
   // the paperwork stands per deal.
   const [searchParams, setSearchParams] = useSearchParams();
   const phaseFilter = searchParams.get('phase') ?? '';
+  const lifecycleFilter = searchParams.get('life') ?? '';
+  const flagFilter = searchParams.get('flag') ?? '';
   const searchText = searchParams.get('q') ?? '';
   const [creating, setCreating] = useState(false);
 
@@ -118,13 +140,12 @@ export function TicketListPage({ user, showToast }) {
   }, [ticketsQuery.error, showToast]);
 
   // Phase summary cards double as filters — never a 14-stage tab bar.
-  // 'lost' is its own lifecycle bucket; paused deals keep their phase.
+  // Lifecycle buckets live in the chip row below, so phase counts stay active-only.
   const phaseCounts = useMemo(() => {
-    const counts = { lost: 0 };
+    const counts = {};
     for (const phase of SALES_PHASES) counts[phase.id] = 0;
     for (const deal of allDeals) {
-      if (deal.lifecycle === 'CLOSED_LOST' || deal.lostReason) counts.lost += 1;
-      else {
+      if (deal.lifecycle === 'ACTIVE' && !deal.lostReason) {
         const meta = stageMeta(deal.salesStage);
         if (meta) counts[meta.phase] += 1;
       }
@@ -132,11 +153,49 @@ export function TicketListPage({ user, showToast }) {
     return counts;
   }, [allDeals]);
 
+  const lifecycleCounts = useMemo(() => {
+    const counts = {
+      '': allDeals.length,
+      ON_HOLD: 0,
+      DORMANT: 0,
+      CLOSED_LOST: 0,
+      CANCELLED: 0,
+      COMPLETED: 0,
+    };
+    for (const deal of allDeals) {
+      const key = deal.lifecycle === 'CLOSED_LOST' || deal.lostReason ? 'CLOSED_LOST' : deal.lifecycle;
+      if (Object.hasOwn(counts, key)) counts[key] += 1;
+    }
+    return counts;
+  }, [allDeals]);
+
+  const flagCounts = useMemo(() => ({
+    overdue: allDeals.filter((deal) => deal.overdue).length,
+    partial_delivery: allDeals.filter((deal) => deal.fulfillmentStatus === 'PARTIALLY_DELIVERED').length,
+  }), [allDeals]);
+
   const deals = useMemo(() => {
-    if (!phaseFilter) return allDeals;
-    if (phaseFilter === 'lost') return allDeals.filter((d) => d.lifecycle === 'CLOSED_LOST' || d.lostReason);
-    return allDeals.filter((d) => d.lifecycle !== 'CLOSED_LOST' && !d.lostReason && stageMeta(d.salesStage)?.phase === Number(phaseFilter));
-  }, [allDeals, phaseFilter]);
+    return allDeals.filter((deal) => {
+      const lost = deal.lifecycle === 'CLOSED_LOST' || deal.lostReason;
+      // Phase cards are the active-pipeline funnel (counts are ACTIVE-only), so the phase
+      // filter matches on ACTIVE too — paused/terminal deals are reached via the lifecycle
+      // chips below. This keeps each phase card's count equal to the rows it filters to.
+      const phaseOk = !phaseFilter
+        || (deal.lifecycle === 'ACTIVE' && !deal.lostReason && stageMeta(deal.salesStage)?.phase === Number(phaseFilter));
+      const lifeOk = !lifecycleFilter || (lifecycleFilter === 'CLOSED_LOST' ? lost : deal.lifecycle === lifecycleFilter);
+      const flagOk = !flagFilter
+        || (flagFilter === 'overdue' && deal.overdue)
+        || (flagFilter === 'partial_delivery' && deal.fulfillmentStatus === 'PARTIALLY_DELIVERED');
+      return phaseOk && lifeOk && flagOk;
+    });
+  }, [allDeals, flagFilter, lifecycleFilter, phaseFilter]);
+
+  const emptyDescription = useMemo(() => {
+    if (flagFilter === 'overdue') return 'ไม่มีดีลที่เกินกำหนดชำระ';
+    if (flagFilter === 'partial_delivery') return 'ไม่มีดีลที่ส่งมอบบางส่วน';
+    if (lifecycleFilter) return `ไม่มีดีลในสถานะ${dealLifecycleLabel(lifecycleFilter).label}`;
+    return 'ยังไม่มีดีลในเงื่อนไขที่เลือก';
+  }, [flagFilter, lifecycleFilter]);
 
   function invalidateTicketsList() {
     return queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
@@ -211,20 +270,49 @@ export function TicketListPage({ user, showToast }) {
             </button>
           );
         })}
-        <button
-          type="button"
-          aria-pressed={phaseFilter === 'lost'}
-          className={`flex flex-col gap-1 rounded-xl border px-3 py-2.5 text-left ${
-            phaseFilter === 'lost' ? 'border-danger bg-danger-bg' : 'border-border bg-surface'
-          }`}
-          onClick={() => updateParam('phase', phaseFilter === 'lost' ? '' : 'lost')}
-        >
-          <span className="flex items-center gap-1.5">
-            <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-danger" />
-            <span className="text-xl font-extrabold leading-none text-danger-dark">{phaseCounts.lost}</span>
-          </span>
-          <span className="text-2xs font-bold leading-tight text-danger-dark">เสียงาน</span>
-        </button>
+      </div>
+
+      <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">Lifecycle</span>
+          {LIFECYCLE_FILTERS.map((item) => {
+            const active = lifecycleFilter === item.value;
+            return (
+              <button
+                key={item.value || 'all'}
+                type="button"
+                aria-pressed={active}
+                className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
+                  active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
+                }`}
+                onClick={() => updateParam('life', active ? '' : item.value)}
+              >
+                <span>{item.label}</span>
+                <StatusBadge tone={item.tone}>{lifecycleCounts[item.value] ?? 0}</StatusBadge>
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">Flags</span>
+          {FLAG_FILTERS.map((item) => {
+            const active = flagFilter === item.value;
+            return (
+              <button
+                key={item.value}
+                type="button"
+                aria-pressed={active}
+                className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
+                  active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
+                }`}
+                onClick={() => updateParam('flag', active ? '' : item.value)}
+              >
+                <span>{item.label}</span>
+                <StatusBadge tone={item.tone}>{flagCounts[item.value] ?? 0}</StatusBadge>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <DataTable
@@ -243,7 +331,7 @@ export function TicketListPage({ user, showToast }) {
         emptyState={{
           icon: 'fileText',
           title: 'ไม่มีดีล',
-          description: 'ยังไม่มีดีลในเงื่อนไขที่เลือก',
+          description: emptyDescription,
         }}
       />
 

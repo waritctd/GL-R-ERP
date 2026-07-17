@@ -281,14 +281,175 @@ rows resolve to a concrete passing test, listed by name in the results section.
 - frontend-mock walkthrough: list filters + dashboard cards show sensible numbers on seeded data.
 
 ## Files changed
-_(Codex fills: path + what changed.)_
+- `backend/src/main/java/th/co/glr/hr/dashboard/DashboardRepository.java`
+  - Added scope-correct dashboard buckets for `onHold`, `dormant`, `paymentOverdue`, and
+    `partiallyDelivered`. `paymentOverdue` mirrors ticket-list payable-minus-paid logic using
+    quotation/deposit/item/payments CTEs; existing `overdueOver3Days` is unchanged.
+- `backend/src/main/java/th/co/glr/hr/dashboard/TicketSummaryDto.java`
+  - Added the four dashboard bucket fields and empty defaults.
+- `backend/src/main/java/th/co/glr/hr/dashboard/DashboardSummaryDto.java`
+  - Flattened the new ticket summary fields onto `/api/dashboard/summary`.
+- `backend/src/test/java/th/co/glr/hr/dashboard/DashboardRepositoryIntegrationTest.java`
+  - Added integration assertions for lifecycle, payment-overdue, and partial-delivery buckets.
+- `backend/src/test/java/th/co/glr/hr/dashboard/DashboardControllerTest.java`
+  - Updated dashboard DTO fixture for the additive fields.
+- `backend/src/test/java/th/co/glr/hr/ticket/TicketServiceTest.java`
+  - Added explicit named coverage for quote-before-spec and owner/buyer-direct skip-path policy
+    scenarios.
+- `frontend/src/features/tickets/TicketListPage.jsx`
+  - Added URL-backed lifecycle (`life=`) and flag (`flag=`) filters composing with existing
+    phase/search filters, with Thai labels/count badges and filter-aware empty copy.
+- `frontend/src/features/tickets/TicketListPage.test.jsx`
+  - Added lifecycle/overdue/partial-delivery filter coverage.
+- `frontend/src/features/dashboard/TicketDashboard.jsx`
+  - Added dashboard cards for on-hold, dormant, payment-overdue, and partially-delivered deals.
+- `frontend/src/features/dashboard/TicketDashboard.test.jsx`
+  - Asserted the new dashboard cards render from summary counts.
+- `frontend/src/api/mockApi.js`
+  - Added mock dashboard bucket parity and seeded demo deals for on-hold, dormant, overdue, and
+    partial-delivery walkthroughs.
+- `docs/sales-workflow.md`
+  - Added the canonical workflow doc with all 8 required sections, 12 cases, S1-S20 map, action
+    matrix, and close/lost/cancel semantics.
+- `docs/agent-handoffs/README.md`
+  - Linked the canonical sales workflow doc from the handoff index.
+- `docs/agent-handoffs/71_feat-deal-workflow-p5-reports-doc.md`
+  - Filled this completion record.
 
 ## Commands run
-_(Codex fills.)_
+- `git switch -c feat/deal-workflow-p5-reports`
+- `cd backend && ./mvnw -q -DskipTests compile`
+- `cd backend && ./mvnw -q -Dtest=TicketServiceTest test`
+- `cd backend && ./mvnw -q test-compile`
+- `cd backend && ./mvnw -q -Dtest=DashboardRepositoryIntegrationTest test`
+  - First sandboxed run failed on Docker/Testcontainers socket access.
+  - Re-run with Docker access passed.
+- `cd backend && ./mvnw -B clean verify` with Docker access
+- `cd frontend && npm test -- --run src/features/tickets/TicketListPage.test.jsx src/features/dashboard/TicketDashboard.test.jsx`
+- `cd frontend && npm run lint`
+- `cd frontend && npm test`
+- `cd frontend && npm run build`
+- Mock API walkthrough with `node --input-type=module` and a `window.setTimeout` shim.
 
 ## Tests / build results
-_(Codex fills: backend Tests run, frontend Test Files/Tests, build.)_
+- Backend:
+  - Targeted `TicketServiceTest` passed.
+  - Targeted `DashboardRepositoryIntegrationTest` passed with Docker/Testcontainers access.
+  - Full `./mvnw -B clean verify` passed: `Tests run: 507, Failures: 0, Errors: 0, Skipped: 0`;
+    JaCoCo coverage checks met; `BUILD SUCCESS`.
+- Frontend:
+  - Targeted list/dashboard tests passed: 2 files, 5 tests.
+  - `npm run lint` passed with 0 errors and the same 4 pre-existing hook dependency warnings in
+    AttendancePage, CommissionPage, and PayrollPage.
+  - Full `npm test` passed after final mock seed change: 27 files, 123 tests. Existing jsdom
+    navigation stderr in PayrollPage remains unchanged.
+  - `npm run build` passed after final mock seed change.
+- Mock walkthrough:
+  - Import-role dashboard summary returned `{onHold:1,dormant:1,paymentOverdue:1,partiallyDelivered:1}`.
+  - Client-list bucket equivalents matched the dashboard counts.
+  - Seeded examples: on-hold `PR-2026-0015`, dormant `PR-2026-0011`, overdue
+    `PR-2026-0006`, partial-delivery `PR-2026-0013`.
+
+### 22-scenario coverage matrix
+
+| # | Scenario | Test | Status |
+|---:|---|---|---|
+| 1 | Plain sales list shows only own deals | `TicketServiceTest#list_salesActorFiltersToOwnTickets` | EXISTS |
+| 2 | Non-owner sales cannot open/update another's deal | `TicketServiceTest#get_salesCannotViewOthersTicket`; `TicketServiceTest#updateStage_rejectsNonOwnerSalesAndWrongRolesPerTarget` | EXISTS |
+| 3 | Quotation generated before `SPEC_APPROVED` | `TicketServiceTest#generateQuotation_beforeSpecApproved_doesNotRequireSpecStage` | ADDED |
+| 4 | Owner-is-buyer skips buyer quotation | `TicketServiceTest#entryChannel_ownerAndBuyerDirectPoliciesSupportSkipPaths`; `TicketServiceTest#markQuotationLifecycle_validatesLegalTransitionAuthAndLifecycle` | ADDED/EXISTS |
+| 5 | Buyer-direct entry skips designer quotation | `TicketServiceTest#entryChannel_ownerAndBuyerDirectPoliciesSupportSkipPaths`; `TicketServiceTest#actions_requireViewAccessAndReflectLifecycle` | ADDED/EXISTS |
+| 6 | Per-recipient quotation versions coexist + supersession | `TicketRepositoryIntegrationTest#createQuotation_versionsAndSupersedesPerRecipientChain`; `TicketRepositoryIntegrationTest#uniqueIndex_rejectsDuplicateTicketRecipientAndVersionPair` | EXISTS |
+| 7 | CEO price gate blocks unapproved price quotation | `TicketServiceTest#generateQuotation_rejectsWrongStatus`; `TicketServiceTest#approve_priceProposedByCeo_transitionsToApproved` | EXISTS |
+| 8 | Deposit `WAIVED` allows IR without deposit | `TicketServiceTest#waiveDeposit_accountOrCeoOnlyAndIssueImportRequestCanBypassNotice` | EXISTS |
+| 9 | Deposit `NOT_REQUIRED` allows IR path | `TicketServiceTest#waiveDeposit_accountOrCeoOnlyAndIssueImportRequestCanBypassNotice` | EXISTS |
+| 10 | Full stock skips IR/procurement import path | `TicketServiceTest#reserveStock_fullCoverage_skipsIrAndStartsProcurement` | EXISTS |
+| 11 | Partial stock/delivery 40/100 becomes partial | `TicketServiceTest#recordPartialDelivery_updatesLineProgressAndStatus` | EXISTS |
+| 12 | Stock-first then warehouse remainder allowed | `TicketServiceTest#recordPartialDelivery_stockFirstThenWarehouseRemainder_isAllowed` | EXISTS |
+| 13 | Over-delivery blocked | `TicketServiceTest#recordPartialDelivery_rejectsOverDeliveryAndWrongRoles` | EXISTS |
+| 14 | Pay in full before delivery; close blocked until delivered | `TicketServiceTest#confirmFinalPayment_fromDepositPaidBeforeGoodsReceived_isAllowed`; `TicketServiceTest#close_dualTrackRejectsWhenFulfillmentIncomplete` | EXISTS |
+| 15 | Credit customer overdue; close blocked while outstanding | `TicketServiceTest#recordPayment_balanceBringsCumulativePaidToFull`; `TicketServiceTest#close_dualTrackRejectsWhenPaymentIncomplete`; `DashboardRepositoryIntegrationTest#aggregatesDashboardSectionsWithScopes` | EXISTS/ADDED |
+| 16 | Overpayment blocked without override reason | `TicketServiceTest#recordPayment_rejectsOverpaymentUnlessExplicitlyAllowedWithNote` | EXISTS |
+| 17 | Double-submit receipt idempotency | `TicketServiceTest#recordPayment_duplicateReceiptRefReturnsConflict` | EXISTS |
+| 18 | Quotation amendment after acceptance requires reason | `TicketServiceTest#generateQuotation_requiresAmendmentReasonAfterAcceptedVersionOrCustomerConfirmed` | EXISTS |
+| 19 | On-hold/dormant gates mutations; resume restores | `TicketServiceTest#lifecycle_holdDormantResume_preserveStageAndAudit`; `TicketServiceTest#lifecycle_gatesMutationsButAllowsComment` | EXISTS |
+| 20 | Multi-step stage jump requires note; single-step note optional | `TicketServiceTest#updateStage_multiStepForwardRequiresNote`; `TicketServiceTest#updateStage_ownerCanAdvanceSalesStage` | EXISTS |
+| 21 | Same-stage/stale update conflicts | `TicketServiceTest#updateStage_rejectsUnknownSameLostAndBackwardWithoutNote` | EXISTS |
+| 22 | Unauthorized roles for operational/money/fulfilment actions | `TicketServiceTest#salesManager_stageWriteIsTheOnlyTicketWritePower`; sales-manager rejection sweep; `TicketServiceTest#recordPayment_rejectsNonAccountAndInactiveDeals`; `TicketServiceTest#recordPartialDelivery_rejectsOverDeliveryAndWrongRoles` | EXISTS |
+| + | Deal-list lifecycle/overdue/partial filters | `TicketListPage.test.jsx#filters by lifecycle, overdue, and partial delivery chips` | ADDED |
+| + | Dashboard bucket cards | `TicketDashboard.test.jsx#renders counts from a mocked dashboard summary`; `DashboardRepositoryIntegrationTest#aggregatesDashboardSectionsWithScopes` | ADDED |
+| + | Mock dashboard summary parity | `contract.test.js`; mock walkthrough listed above | EXTENDED |
 
 ## Known risks / questions for Opus review
-_(Codex fills: e.g. paymentOverdue-in-aggregate-SQL decision, any doc-vs-code discrepancy found,
- lifecycle-bucket reconciliation choice.)_
+- `paymentOverdue` is implemented in the single dashboard aggregate query via CTE/lateral joins.
+  It mirrors ticket summary precedence for payable amount. Review query readability/performance
+  before merge, but behavior is now aligned with list-row `overdue`.
+- Lifecycle reconciliation choice: phase cards now count active deals only, while the lifecycle
+  chip row owns on-hold/dormant/lost/cancelled/completed buckets. The table filters still compose
+  if a user combines `phase=` and `life=`.
+- Code-vs-handoff discrepancy documented in `docs/sales-workflow.md`: the Phase 5 case text says
+  full stock goes to `GOODS_RECEIVED`, but the Phase 4 code sets `FROM_STOCK` and auto-advances
+  to `PROCUREMENT`. I documented the code as built and flagged it rather than changing behavior.
+- `PICKED_UP` and `CUSTOMS_CLEARANCE` remain display vocabulary only; no mutations were added.
+- The owner-direct/buyer-direct skip paths are policy/data conventions, not hard gates that
+  validate "commercial completeness" by recipient. The doc reflects this as built.
+
+---
+
+## Opus review — PASSED with a fix (2026-07-17)
+
+Re-verified independently: re-ran the full backend `./mvnw -B verify` and frontend
+`npm run lint && npm test && npm run build`, code-read the whole diff against the spec + carried
+invariants, walked the list filters + dashboard cards in the frontend-mock browser (as CEO,
+against the seeded deals).
+
+### Critical correctness check — `paymentOverdue` mirrors the list `overdue` (PASS)
+The one real risk this phase carried was the dashboard `paymentOverdue` count diverging from the
+list-row `overdue` flag. I diffed the CTE/lateral-join derivation against
+`TicketRepository.payableAmount()` + `sumPaid()` line-by-line: **identical** COALESCE precedence
+(accepted quotation → issued/sent quotation → issued deposit_notice → `SUM(approved_price*qty)` →
+0), identical recipient-priority ordering (BUYER→OWNER→other, accepted_at/issued_at/quotation_id
+tie-breaks), identical ADJUSTMENT-negating paid sum, and `GREATEST(payable-paid,0)>0` ≡
+`outstanding>0`. `due_date < CURRENT_DATE` (NULL-safe) matches `dueDate.isBefore(now)`. The two
+counts will agree. The existing ticket-age `overdueOver3Days` was left untouched, as required.
+Validated end-to-end by `DashboardRepositoryIntegrationTest` on real Postgres.
+
+### Bug found and fixed — phase-card count vs. phase-filter mismatch (frontend consistency)
+Codex correctly made the phase-card **counts** active-only (`lifecycle==='ACTIVE'`), but the
+phase **filter** still matched any non-lost deal (`!lost`), so an ON_HOLD/DORMANT deal in phase N
+appeared when you clicked phase N despite not being in that card's count. Aligned the filter to
+the same active-only predicate (`deal.lifecycle==='ACTIVE' && !deal.lostReason`) so each phase
+card's count equals the rows it filters to; paused/terminal deals are reached via the lifecycle
+chip row, matching Codex's own stated design. (`TicketListPage.jsx`, +1 comment.)
+
+### Verified clean (no change)
+- Owner-scoping: the list endpoint scopes plain `sales` to own deals in Java (`listPage`); Phase 5
+  only groups what the scoped query returns, and the dashboard aggregate reuses the same
+  `whereTicketScope`. Filters/counts cannot leak other owners' deals. (The mock is not owner-scoped
+  — a known, pre-existing mock-authz gap, not a Phase-5 regression; verified against Java + tests.)
+- Mock parity: dashboard summary extended in both `hrApi` and `mockApi`; `contract.test.js` green.
+  Mock `paymentOverdue` reuses `derivePaymentFields(...).overdue`, same derivation as the list.
+- `docs/sales-workflow.md` is accurate and flags the Case-7 `GOODS_RECEIVED`→`FROM_STOCK`
+  handoff-vs-code discrepancy and the hybrid close gate — exactly the "document as built, flag it"
+  behaviour requested.
+
+### Browser walkthrough (frontend-mock, real UI)
+- Deal list: lifecycle chips render with live counts (on-hold 1, dormant 1, cancelled 1,
+  completed 1, lost 0) and flag chips (overdue 1, partial 1); phase cards 0/6/1/3/1 = 11 active,
+  11 + 4 non-active = 15 total (count/filter now consistent).
+- Overdue filter → exactly `PR-2026-0006` (credit/overdue demo); partial-delivery filter →
+  exactly `PR-2026-0013` (partial-delivery demo). URL params `?flag=` / `?life=` back the state.
+- Dashboard: all four bucket cards render (พักไว้ชั่วคราว / ดีลเงียบ / เกินกำหนดชำระ / ส่งมอบบางส่วน).
+
+### 22-scenario matrix
+Resolved — Codex mapped each scenario to a named test (existing or added). Spot-checked the added
+ones (`generateQuotation_beforeSpecApproved_*` Case 1, `entryChannel_ownerAndBuyerDirect*` Cases
+2/3, dashboard-bucket integration assertions, the list-filter frontend test). Nothing was skipped.
+
+### Results after fix
+- Backend: `./mvnw -B verify` → **507 tests, 0 failures, BUILD SUCCESS** (+2 vs 505).
+- Frontend: **lint 0 errors** (4 pre-existing warnings), **123 tests pass** (+1), **build OK**.
+
+Verdict: **PASS.** Phase 5 is complete. **This closes the 5-phase branching-workflow program.**
+All phase PRs (#228–#232) remain draft/do-not-merge pending the user's end-to-end sign-off and the
+decision on merge order (backend PR → UI PR → phase PRs).

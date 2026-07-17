@@ -45,6 +45,8 @@ class DashboardRepositoryIntegrationTest extends AbstractPostgresIntegrationTest
         insertTicket("PR-1", "submitted", salesEmployee, today.minusDays(4));
         insertTicket("PR-2", "price_proposed", hrEmployee, today.minusDays(4));
         insertTicket("PR-3", "closed", salesEmployee, today.minusDays(1));
+        markOperationalBuckets("PR-1", "ON_HOLD", "PARTIALLY_DELIVERED", today.minusDays(2), BigDecimal.valueOf(100));
+        markOperationalBuckets("PR-2", "DORMANT", null, null, null);
         insertCommission(salesEmployee, monthStart);
         insertNotification(salesEmployee, false);
         insertNotification(salesEmployee, true);
@@ -103,6 +105,10 @@ class DashboardRepositoryIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(tickets.totalOpen()).isEqualTo(2);
         assertThat(tickets.closedThisMonth()).isEqualTo(1);
         assertThat(tickets.overdueOver3Days()).isEqualTo(2);
+        assertThat(tickets.onHold()).isEqualTo(1);
+        assertThat(tickets.dormant()).isEqualTo(1);
+        assertThat(tickets.paymentOverdue()).isEqualTo(1);
+        assertThat(tickets.partiallyDelivered()).isEqualTo(1);
 
         NotificationSummaryDto notifications = repository.notifications(salesEmployee);
         assertThat(notifications.unread()).isEqualTo(1);
@@ -214,6 +220,32 @@ class DashboardRepositoryIntegrationTest extends AbstractPostgresIntegrationTest
                 "createdBy", createdBy,
                 "createdAt", createdDate.atStartOfDay().atOffset(BANGKOK_OFFSET)
             ));
+    }
+
+    private void markOperationalBuckets(String code, String lifecycle, String fulfillmentStatus,
+                                        LocalDate dueDate, BigDecimal approvedLineAmount) {
+        jdbc.update("""
+            UPDATE sales.ticket
+               SET lifecycle = :lifecycle,
+                   fulfillment_status = :fulfillmentStatus,
+                   due_date = :dueDate
+             WHERE code = :code
+            """, new MapSqlParameterSource()
+                .addValue("code", code)
+                .addValue("lifecycle", lifecycle)
+                .addValue("fulfillmentStatus", fulfillmentStatus)
+                .addValue("dueDate", dueDate));
+        if (approvedLineAmount != null) {
+            jdbc.update("""
+                INSERT INTO sales.ticket_item (ticket_id, brand, qty, approved_price)
+                SELECT ticket_id, :brand, 1, :approvedPrice
+                  FROM sales.ticket
+                 WHERE code = :code
+                """, new MapSqlParameterSource()
+                    .addValue("code", code)
+                    .addValue("brand", code + "-item")
+                    .addValue("approvedPrice", approvedLineAmount));
+        }
     }
 
     private void insertCommission(long salesRepId, LocalDate payrollMonth) {
