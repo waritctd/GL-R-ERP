@@ -228,13 +228,68 @@ absent from `/actions`.
 5. Fill THIS file's sections below. Commit on the branch. Merge NOTHING.
 
 ## Files changed
-(fill in)
+- Backend:
+  - `backend/src/main/resources/db/migration/V53__payment_ledger_and_billing.sql`
+  - `backend/src/main/java/th/co/glr/hr/ticket/PaymentReceiptDto.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/PaymentStage.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/RecordPaymentRequest.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/BillingRequest.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/TicketController.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/TicketEventKind.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/TicketRepository.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/TicketService.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/TicketSummaryDto.java`
+  - `backend/src/test/java/th/co/glr/hr/ticket/TicketServiceTest.java`
+- Frontend/mock:
+  - `frontend/src/api/routes.js`
+  - `frontend/src/api/hrApi.js`
+  - `frontend/src/api/queryKeys.js`
+  - `frontend/src/api/mockApi.js`
+  - `frontend/src/utils/format.js`
+  - `frontend/src/features/tickets/DealStagePanel.jsx`
+  - `frontend/src/features/tickets/TicketDetailPage.jsx`
+  - `frontend/src/features/tickets/TicketDetailPage.test.jsx`
 
 ## Commands run
-(fill in)
+- `cd backend && ./mvnw -q -DskipTests compile`
+- `cd backend && ./mvnw -q test-compile`
+- `cd backend && ./mvnw -q -Dtest=TicketServiceTest test`
+- `cd backend && ./mvnw -B clean verify`
+  - First sandbox run reached Testcontainers but failed on Docker socket permission.
+  - Escalated rerun passed.
+- `cd frontend && npm run lint`
+- `cd frontend && npm test -- --run src/api/contract.test.js`
+- `cd frontend && npm test -- --run src/features/tickets/TicketDetailPage.test.jsx`
+- `cd frontend && npm test`
+- `cd frontend && npm run build`
+- `VITE_USE_MOCKS=true npm run dev -- --host 127.0.0.1 --port 5200 --strictPort`
+  - Sandbox run failed to bind `127.0.0.1:5200` with `EPERM`.
+  - Escalated rerun found port 5200 already in use by an existing Vite node process.
+- `curl -I http://127.0.0.1:5200/`
+- Frontend-mock scenario via `node --input-type=module` importing `src/api/mockApi.js` with a small `window.setTimeout` shim.
 
 ## Tests / build results
-(fill in)
+- Backend:
+  - `./mvnw -B clean verify` BUILD SUCCESS after escalation.
+  - Final backend verify reported 495 tests run, 0 failures, 0 errors, 0 skipped.
+  - Flyway/Testcontainers applied migrations through V53 during verify.
+- Frontend:
+  - `npm run lint`: 0 errors. Existing React hook dependency warnings remain in `AttendancePage.jsx`, `CommissionPage.jsx`, and `PayrollPage.jsx`.
+  - `npm test -- --run src/api/contract.test.js`: 3 passed.
+  - `npm test -- --run src/features/tickets/TicketDetailPage.test.jsx`: 6 passed.
+  - `npm test`: 27 files, 121 tests passed. Existing jsdom navigation stderr appears in `PayrollPage` but does not fail the suite.
+  - `npm run build`: passed.
+- Frontend-mock pass:
+  - Existing app on `http://127.0.0.1:5200/` responded 200.
+  - Ticket 13 started payable 132,500 / paid 66,250 / outstanding 66,250 with `RECORD_PAYMENT`, `SET_BILLING`, and relaxed `FINAL_PAYMENT` actions available.
+  - Recording a 10,000 BALANCE payment moved it to paid 76,250 / outstanding 56,250 / `PARTIALLY_PAID`.
+  - Recording the remaining 56,250 moved it to paid 132,500 / outstanding 0 / `FULLY_PAID`.
+  - Ticket 6 credit-customer demo showed payable 240,000 / paid 0 / outstanding 240,000 / `overdue=true`.
+  - Ticket 12 allowed final payment from `DEPOSIT_PAID` before delivery, moved to `FULLY_PAID`, and `close` remained blocked until `GOODS_RECEIVED`.
+  - In-app browser automation could not initialize in this desktop session due the existing `Cannot redefine property: process` browser-runtime failure, so the manual pass was driven through the same frontend mock module rather than clickable browser controls.
 
 ## Known risks / questions for Opus review
-(fill in)
+- Payable derivation currently uses latest ACCEPTED quotation, preferring BUYER then OWNER then any accepted; then latest ISSUED/SENT with the same preference; then issued deposit notice `total_payable`; then approved item totals. Business may want accepted BUYER only once the buyer path begins.
+- Legacy `confirmDepositPaid` falls back to 50% of payable when no issued deposit notice amount is available, because older tests/flows can reach that wrapper without notice data. A real issued notice always wins.
+- Ticket list/detail enrichment computes payable and sum-paid per ticket. This is intentionally scoped for Phase 3, but Phase 5 dashboard/reporting/filter work may want aggregated SQL to avoid N+1 behavior at larger volumes.
+- When `receipt_ref` is present, duplicate-key insert failures are mapped to idempotency conflict. If another receipt constraint failed with a ref present, it would currently surface as the same 409 class.

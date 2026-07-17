@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
@@ -22,6 +23,7 @@ import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.assertj.core.api.ThrowableAssert;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -745,9 +747,14 @@ class TicketServiceTest {
     @Test
     void confirmDepositPaid_byAccount_advancesToDepositPaid() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(BigDecimal.ZERO, new BigDecimal("500.00"));
 
         service.confirmDepositPaid(10L, accountActor);
 
+        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("DEPOSIT"),
+            argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
+            eq(5L), isNull(), eq("ยืนยันรับมัดจำ"), isNull(), isNull());
         verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_PAID");
         // Fulfillment hasn't reached GOODS_RECEIVED — no early advance.
         verify(ticketRepo, never()).updatePaymentStatus(10L, "AWAITING_FINAL_PAYMENT");
@@ -756,7 +763,12 @@ class TicketServiceTest {
     @Test
     void confirmDepositPaid_byCeoFallback_isAllowed() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(BigDecimal.ZERO, new BigDecimal("500.00"));
         service.confirmDepositPaid(10L, ceoActor);
+        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("DEPOSIT"),
+            argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
+            eq(4L), isNull(), eq("ยืนยันรับมัดจำ"), isNull(), isNull());
         verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_PAID");
     }
 
@@ -778,9 +790,14 @@ class TicketServiceTest {
         // AWAITING_FINAL_PAYMENT is unreachable and the ticket can never close.
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED,
             "DEPOSIT_NOTICE_ISSUED", "GOODS_RECEIVED");
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(BigDecimal.ZERO, new BigDecimal("500.00"));
 
         service.confirmDepositPaid(10L, accountActor);
 
+        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("DEPOSIT"),
+            argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
+            eq(5L), isNull(), eq("ยืนยันรับมัดจำ"), isNull(), isNull());
         verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_PAID");
         verify(ticketRepo).updatePaymentStatus(10L, "AWAITING_FINAL_PAYMENT");
         verify(ticketRepo).addEvent(eq(10L), eq(5L), anyString(),
@@ -865,16 +882,28 @@ class TicketServiceTest {
     @Test
     void confirmFinalPayment_byAccount_completesPaymentTrack() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("500.00"),
+            new BigDecimal("1000.00"));
 
         service.confirmFinalPayment(10L, accountActor);
 
+        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"),
+            argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
+            eq(5L), isNull(), eq("ยืนยันชำระส่วนที่เหลือ"), isNull(), isNull());
         verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
     }
 
     @Test
     void confirmFinalPayment_byCeoFallback_isAllowed() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("500.00"),
+            new BigDecimal("1000.00"));
         service.confirmFinalPayment(10L, ceoActor);
+        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"),
+            argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
+            eq(4L), isNull(), eq("ยืนยันชำระส่วนที่เหลือ"), isNull(), isNull());
         verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
     }
 
@@ -884,9 +913,79 @@ class TicketServiceTest {
     }
 
     @Test
-    void confirmFinalPayment_rejectsBeforeAwaitingFinalPayment() {
+    void confirmFinalPayment_fromDepositPaidBeforeGoodsReceived_isAllowed() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "SHIPPING");
-        assertConflict(() -> service.confirmFinalPayment(10L, accountActor));
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("500.00"),
+            new BigDecimal("1000.00"));
+
+        service.confirmFinalPayment(10L, accountActor);
+
+        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"),
+            argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
+            eq(5L), isNull(), eq("ยืนยันชำระส่วนที่เหลือ"), isNull(), isNull());
+        verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
+    }
+
+    @Test
+    void recordPayment_balanceBringsCumulativePaidToFull() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "SHIPPING");
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("1000.00"));
+
+        service.recordPayment(10L,
+            new RecordPaymentRequest("BALANCE", new BigDecimal("500.00"), null, "โอนครบ", null, "RC-1", false),
+            accountActor);
+
+        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"), eq(new BigDecimal("500.00")),
+            eq(5L), isNull(), eq("โอนครบ"), isNull(), eq("RC-1"));
+        verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
+    }
+
+    @Test
+    void recordPayment_rejectsOverpaymentUnlessExplicitlyAllowedWithNote() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", null);
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("900.00"));
+
+        assertBadRequest(() -> service.recordPayment(10L,
+            new RecordPaymentRequest("BALANCE", new BigDecimal("200.00"), null, null, null, null, false),
+            accountActor));
+
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("900.00"), new BigDecimal("1100.00"));
+        service.recordPayment(10L,
+            new RecordPaymentRequest("BALANCE", new BigDecimal("200.00"), null, "ลูกค้าโอนเกิน รอหักบิลถัดไป", null, null, true),
+            accountActor);
+
+        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"), eq(new BigDecimal("200.00")),
+            eq(5L), isNull(), eq("ลูกค้าโอนเกิน รอหักบิลถัดไป"), isNull(), isNull());
+    }
+
+    @Test
+    void recordPayment_rejectsNonAccountAndInactiveDeals() {
+        assertForbidden(() -> service.recordPayment(10L,
+            new RecordPaymentRequest("DEPOSIT", new BigDecimal("100.00"), null, null, null, null, false),
+            salesManagerActor));
+
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "DEPOSIT_PAID", null,
+            DealStage.DEPOSIT_RECEIVED, null, DealLifecycle.ON_HOLD, DepositPolicy.REQUIRED);
+        assertConflict(() -> service.recordPayment(10L,
+            new RecordPaymentRequest("BALANCE", new BigDecimal("100.00"), null, null, null, null, false),
+            accountActor));
+    }
+
+    @Test
+    void recordPayment_duplicateReceiptRefReturnsConflict() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", null);
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("100.00"));
+        when(ticketRepo.insertPaymentReceipt(eq(10L), eq("BALANCE"), eq(new BigDecimal("100.00")),
+            eq(5L), isNull(), isNull(), isNull(), eq("DUP")))
+            .thenThrow(new DataIntegrityViolationException("duplicate"));
+
+        assertConflict(() -> service.recordPayment(10L,
+            new RecordPaymentRequest("BALANCE", new BigDecimal("100.00"), null, null, null, "DUP", false),
+            accountActor));
     }
 
     // ── create (V50: lightweight deal start, required project) ────────────
@@ -1145,6 +1244,8 @@ class TicketServiceTest {
     void confirmDepositPaid_autoAdvancesDealToDepositReceived() {
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(),
             "DEPOSIT_NOTICE_ISSUED", null, DealStage.ORDER_RECEIVED, null);
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(BigDecimal.ZERO, new BigDecimal("500.00"));
         service.confirmDepositPaid(10L, accountActor);
         verify(ticketRepo).updateSalesStage(10L, DealStage.DEPOSIT_RECEIVED);
     }
@@ -1161,6 +1262,9 @@ class TicketServiceTest {
     void confirmFinalPayment_autoAdvancesDealToClosedPaid() {
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(),
             "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED", DealStage.DELIVERED, null);
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("500.00"),
+            new BigDecimal("1000.00"));
         service.confirmFinalPayment(10L, accountActor);
         verify(ticketRepo).updateSalesStage(10L, DealStage.CLOSED_PAID);
     }

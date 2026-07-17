@@ -84,6 +84,21 @@ for (const t of db.tickets) {
   }
   t.quotation = t.quotations[0] ?? null;
 }
+db.paymentReceipts = db.paymentReceipts || [
+  { receiptId: 1, ticketId: 12, kind: 'DEPOSIT', amount: 65000, currency: 'THB', receivedAt: '2026-06-18T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำจากใบแจ้งยอด', depositNoticeId: null, receiptRef: 'MOCK-12-DEP', createdAt: '2026-06-18T08:00:00Z' },
+  { receiptId: 2, ticketId: 13, kind: 'DEPOSIT', amount: 66250, currency: 'THB', receivedAt: '2026-06-02T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ', depositNoticeId: null, receiptRef: 'MOCK-13-DEP', createdAt: '2026-06-02T08:00:00Z' },
+  { receiptId: 3, ticketId: 14, kind: 'DEPOSIT', amount: 312000, currency: 'THB', receivedAt: '2026-05-20T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ', depositNoticeId: null, receiptRef: 'MOCK-14-DEP', createdAt: '2026-05-20T08:00:00Z' },
+  { receiptId: 4, ticketId: 14, kind: 'BALANCE', amount: 312000, currency: 'THB', receivedAt: '2026-07-05T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับชำระส่วนที่เหลือ', depositNoticeId: null, receiptRef: 'MOCK-14-BAL', createdAt: '2026-07-05T08:00:00Z' },
+];
+const creditDemoTicket = db.tickets.find((t) => t.id === 6);
+if (creditDemoTicket) {
+  creditDemoTicket.depositPolicy = 'CREDIT_CUSTOMER';
+  creditDemoTicket.depositPolicyReason = creditDemoTicket.depositPolicyReason ?? 'ลูกค้าเครดิตตามข้อตกลง';
+  creditDemoTicket.billingDate = creditDemoTicket.billingDate ?? '2026-06-20';
+  creditDemoTicket.dueDate = creditDemoTicket.dueDate ?? '2026-07-01';
+  creditDemoTicket.creditTermDays = creditDemoTicket.creditTermDays ?? 30;
+  creditDemoTicket.nextFollowUpAt = creditDemoTicket.nextFollowUpAt ?? '2026-07-18';
+}
 db.commissions = db.commissions || [];
 db.leaveTypes = db.leaveTypes || [
   { code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal leave', annualQuotaDays: 3, requiresAttachment: false },
@@ -436,6 +451,142 @@ function depositBypassesNotice(ticket) {
   return ['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(ticket.depositPolicy);
 }
 
+function moneyValue(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+function payableAmount(ticket) {
+  const quotations = ticket.quotations ?? (ticket.quotation ? [ticket.quotation] : []);
+  const recipientRank = (recipient) => recipient === 'BUYER' ? 0 : recipient === 'OWNER' ? 1 : 2;
+  const pickQuotation = (statuses) => [...quotations]
+    .filter((q) => statuses.includes(q.docStatus ?? 'ISSUED'))
+    .sort((a, b) => {
+      const rank = recipientRank(a.recipientType) - recipientRank(b.recipientType);
+      if (rank !== 0) return rank;
+      return new Date(b.acceptedAt ?? b.issuedAt ?? 0) - new Date(a.acceptedAt ?? a.issuedAt ?? 0)
+        || Number(b.id ?? 0) - Number(a.id ?? 0);
+    })[0];
+  const accepted = pickQuotation(['ACCEPTED']);
+  if (accepted?.totalAmount != null) return moneyValue(accepted.totalAmount);
+  const issued = pickQuotation(['ISSUED', 'SENT']);
+  if (issued?.totalAmount != null) return moneyValue(issued.totalAmount);
+  const notice = [...mockDepositNotices]
+    .filter((d) => d.ticketId === ticket.id && d.status === 'ISSUED')
+    .sort((a, b) => Number(b.version ?? 0) - Number(a.version ?? 0) || Number(b.id ?? 0) - Number(a.id ?? 0))[0];
+  if (notice?.totalPayable != null) return moneyValue(notice.totalPayable);
+  return moneyValue((ticket.items ?? []).reduce((sum, item) =>
+    sum + (Number(item.approvedPrice) || 0) * (Number(item.qty) || 0), 0));
+}
+
+function receiptsForTicket(ticketId) {
+  return (db.paymentReceipts ?? [])
+    .filter((r) => r.ticketId === Number(ticketId))
+    .sort((a, b) => new Date(a.receivedAt) - new Date(b.receivedAt) || a.receiptId - b.receiptId);
+}
+
+function sumPaid(ticketId) {
+  return moneyValue(receiptsForTicket(ticketId).reduce((sum, receipt) =>
+    sum + (receipt.kind === 'ADJUSTMENT' ? -Number(receipt.amount) : Number(receipt.amount)), 0));
+}
+
+function derivePaymentFields(ticket) {
+  const payable = payableAmount(ticket);
+  const paid = sumPaid(ticket.id);
+  const outstanding = moneyValue(Math.max(0, payable - paid));
+  const hasBalance = receiptsForTicket(ticket.id).some((receipt) => receipt.kind === 'BALANCE');
+  let paymentStage = 'NOT_REQUIRED';
+  if (payable > 0 && paid >= payable) paymentStage = 'FULLY_PAID';
+  else if (payable > 0 && paid > 0) paymentStage = hasBalance ? 'PARTIALLY_PAID' : 'DEPOSIT_RECEIVED';
+  else if (payable > 0 && !depositBypassesNotice(ticket)
+      && ['CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED'].includes(ticket.paymentStatus)) paymentStage = 'DEPOSIT_PENDING';
+  else if (payable > 0 && outstanding > 0) paymentStage = 'BALANCE_PENDING';
+  const overdue = Boolean(ticket.dueDate && new Date(`${ticket.dueDate}T00:00:00`) < new Date() && outstanding > 0);
+  return {
+    billingDate: ticket.billingDate ?? null,
+    dueDate: ticket.dueDate ?? null,
+    creditTermDays: ticket.creditTermDays ?? null,
+    lastFollowUpAt: ticket.lastFollowUpAt ?? null,
+    nextFollowUpAt: ticket.nextFollowUpAt ?? null,
+    paymentStage,
+    amountPayable: payable,
+    amountPaid: paid,
+    amountOutstanding: outstanding,
+    overdue,
+  };
+}
+
+function latestIssuedDepositNotice(ticketId) {
+  return [...mockDepositNotices]
+    .filter((d) => d.ticketId === Number(ticketId) && d.status === 'ISSUED')
+    .sort((a, b) => Number(b.version ?? 0) - Number(a.version ?? 0) || Number(b.id ?? 0) - Number(a.id ?? 0))[0] ?? null;
+}
+
+function reconcilePaymentStatus(ticket, user) {
+  const payable = payableAmount(ticket);
+  const paid = sumPaid(ticket.id);
+  if (payable > 0 && paid >= payable) {
+    if (ticket.paymentStatus !== 'FULLY_PAID') {
+      ticket.paymentStatus = 'FULLY_PAID';
+      pushEvent(ticket, user, 'FULLY_PAID', ticket.status, ticket.status, null);
+      autoAdvanceStage(ticket, 'CLOSED_PAID', user);
+    }
+    return;
+  }
+  if (paid <= 0 || ticket.paymentStatus === 'FULLY_PAID') return;
+  const eligible = ticket.paymentStatus == null
+    || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'
+    || ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED'
+    || depositBypassesNotice(ticket);
+  if (eligible && ticket.paymentStatus !== 'DEPOSIT_PAID') {
+    ticket.paymentStatus = 'DEPOSIT_PAID';
+    pushEvent(ticket, user, 'DEPOSIT_PAID', ticket.status, ticket.status, null);
+    autoAdvanceStage(ticket, 'DEPOSIT_RECEIVED', user);
+    if (ticket.fulfillmentStatus === 'GOODS_RECEIVED') {
+      ticket.paymentStatus = 'AWAITING_FINAL_PAYMENT';
+      pushEvent(ticket, user, 'AWAITING_FINAL_PAYMENT', ticket.status, ticket.status, null);
+    }
+  }
+}
+
+function recordPaymentForTicket(ticket, user, payload) {
+  const kind = String(payload.kind ?? '').trim().toUpperCase();
+  if (!['DEPOSIT', 'BALANCE', 'ADJUSTMENT'].includes(kind)) fail(`Unknown payment kind '${payload.kind}'`, 400);
+  const amount = moneyValue(payload.amount);
+  if (amount <= 0) fail('ยอดรับชำระต้องมากกว่า 0', 400);
+  const payable = payableAmount(ticket);
+  const paid = sumPaid(ticket.id);
+  const signed = kind === 'ADJUSTMENT' ? -amount : amount;
+  const newPaid = moneyValue(paid + signed);
+  if (newPaid < 0) fail('ยอดรับชำระสุทธิห้ามติดลบ', 400);
+  const note = (payload.note ?? '').trim() || null;
+  if (newPaid > payable && !payload.allowOverpayment) fail('ยอดรับชำระเกินยอดที่ต้องชำระ กรุณายืนยัน overpayment พร้อมเหตุผล', 400);
+  if (newPaid > payable && !note) fail('การรับชำระเกินยอดต้องระบุเหตุผล', 400);
+  const receiptRef = (payload.receiptRef ?? '').trim() || null;
+  if (receiptRef && (db.paymentReceipts ?? []).some((r) => r.ticketId === ticket.id && r.receiptRef === receiptRef)) {
+    fail('เลขอ้างอิงรับชำระซ้ำ', 409);
+  }
+  const nextId = Math.max(0, ...(db.paymentReceipts ?? []).map((r) => r.receiptId)) + 1;
+  const now = new Date().toISOString();
+  db.paymentReceipts.push({
+    receiptId: nextId,
+    ticketId: ticket.id,
+    kind,
+    amount,
+    currency: 'THB',
+    receivedAt: payload.receivedAt || now,
+    recordedById: user.id,
+    recordedByName: user.name,
+    note,
+    depositNoticeId: payload.depositNoticeId ?? null,
+    receiptRef,
+    createdAt: now,
+  });
+  pushEvent(ticket, user, 'PAYMENT_RECORDED', ticket.status, ticket.status,
+    `kind=${kind}, amount=${amount}, paid=${newPaid}, payable=${payable}${note ? ` — ${note}` : ''}`);
+  reconcilePaymentStatus(ticket, user);
+  ticket.updatedAt = now.slice(0, 10);
+}
+
 // ── Thai date helper (mirrors QuotationRenderer.java thaiDate) ───────────────
 const MOCK_THAI_MONTHS = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
 function mockThaiDate(d) {
@@ -594,6 +745,7 @@ function markQuotationStatus(id, quotationId, targetStatus, eventKind, payload =
 function buildTicketDetail(ticket) {
   const project = ticket.projectId ? mockProjects.find((p) => p.id === ticket.projectId) : null;
   const contact = ticket.contactId ? mockContacts.find((c) => c.id === ticket.contactId) : null;
+  const paymentFields = derivePaymentFields(ticket);
   return {
     summary: {
       id: ticket.id, code: ticket.code, type: ticket.type, title: ticket.title,
@@ -618,6 +770,7 @@ function buildTicketDetail(ticket) {
       depositPolicy: ticket.depositPolicy ?? 'REQUIRED',
       depositPolicyReason: ticket.depositPolicyReason ?? null,
       entryChannel: ticket.entryChannel ?? 'DESIGNER_LED',
+      ...paymentFields,
     },
     items: ticket.items, events: ticket.events,
     quotation: ticket.quotations ? ticket.quotations[0] ?? null : ticket.quotation ?? null,
@@ -1221,6 +1374,7 @@ export const api = {
         depositPolicy: t.depositPolicy ?? 'REQUIRED',
         depositPolicyReason: t.depositPolicyReason ?? null,
         entryChannel: t.entryChannel ?? 'DESIGNER_LED',
+        ...derivePaymentFields(t),
       }));
       return delay({ tickets });
     },
@@ -1231,6 +1385,34 @@ export const api = {
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
       if (!ticket) fail('Ticket not found', 404);
       if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async listPayments(id) {
+      requireTicketViewer(id);
+      return delay({ items: receiptsForTicket(id) });
+    },
+
+    async recordPayment(id, payload) {
+      const user = hasRole('account', 'ceo');
+      const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
+      recordPaymentForTicket(ticket, user, payload ?? {});
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async setBilling(id, payload) {
+      const user = hasRole('account', 'ceo');
+      const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
+      ticket.billingDate = payload.billingDate ?? null;
+      ticket.dueDate = payload.dueDate ?? null;
+      ticket.creditTermDays = payload.creditTermDays ?? null;
+      ticket.lastFollowUpAt = payload.lastFollowUpAt ?? null;
+      ticket.nextFollowUpAt = payload.nextFollowUpAt ?? null;
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'BILLING_UPDATED', ticket.status, ticket.status,
+        `billing_date=${ticket.billingDate}, due_date=${ticket.dueDate}`);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
@@ -1269,11 +1451,18 @@ export const api = {
         if (owner && ticket.status === 'quotation_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')) add('CONFIRM_CUSTOMER', 'payment', 'ลูกค้ายืนยัน');
         if (owner && ticket.status === 'quotation_issued' && ticket.paymentStatus === 'CUSTOMER_CONFIRMED' && !depositBypassesNotice(ticket)) add('ISSUE_DEPOSIT_NOTICE', 'doc', 'ออกใบแจ้งมัดจำ');
         if (['account', 'ceo'].includes(user.role) && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') add('DEPOSIT_PAID', 'payment', 'รับมัดจำ');
+        const paymentFields = derivePaymentFields(ticket);
+        if (['account', 'ceo'].includes(user.role) && paymentFields.amountPayable > 0 && paymentFields.paymentStage !== 'FULLY_PAID') {
+          add('RECORD_PAYMENT', 'payment', 'บันทึกรับชำระเงิน', { requiredFields: ['kind', 'amount'] });
+        }
+        if (['account', 'ceo'].includes(user.role)) add('SET_BILLING', 'payment', 'ตั้งค่าการวางบิล', { requiredFields: ['dueDate'] });
         if (user.role === 'import' && canIssueIr) add('ISSUE_IMPORT_REQUEST', 'fulfillment', 'ออก IR');
         if (user.role === 'import' && ticket.fulfillmentStatus === 'IR_ISSUED') add('IR_SENT', 'fulfillment', 'ส่ง IR');
         if (user.role === 'import' && ticket.fulfillmentStatus === 'IR_SENT') add('SHIPPING', 'fulfillment', 'สินค้าเดินทาง');
         if (user.role === 'import' && ticket.fulfillmentStatus === 'SHIPPING') add('GOODS_RECEIVED', 'fulfillment', 'รับสินค้า');
-        if (['account', 'ceo'].includes(user.role) && ticket.paymentStatus === 'AWAITING_FINAL_PAYMENT') add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
+        const finalPaymentAllowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
+          || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
+        if (['account', 'ceo'].includes(user.role) && finalPaymentAllowed) add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
         if (ticket.createdById === user.id && ((ticket.status === 'document_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID'))
           || (ticket.status === 'quotation_issued' && ticket.paymentStatus === 'FULLY_PAID' && ticket.fulfillmentStatus === 'GOODS_RECEIVED'))) add('CLOSE', 'operational', 'ปิดงาน');
         if (ticket.createdById === user.id && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
@@ -1677,6 +1866,9 @@ export const api = {
       if (!legacyOk && !dualTrackOk) {
         fail('Cannot close: require paymentStatus=FULLY_PAID and fulfillmentStatus=GOODS_RECEIVED', 409);
       }
+      if (derivePaymentFields(ticket).amountOutstanding > 0) {
+        fail('Cannot close: ยังมียอดค้างชำระ', 409);
+      }
       const prev = ticket.status;
       ticket.status = 'closed';
       ticket.closedAt = new Date().toISOString().slice(0, 10);
@@ -1772,16 +1964,15 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       if (ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') fail('Expected paymentStatus=DEPOSIT_NOTICE_ISSUED', 409);
-      ticket.paymentStatus = 'DEPOSIT_PAID';
-      pushEvent(ticket, user, 'DEPOSIT_PAID', ticket.status, ticket.status, null);
-      // Goods-first ordering: if goods already arrived, carry payment forward
-      // (mirrors TicketService.confirmDepositPaid).
-      if (ticket.fulfillmentStatus === 'GOODS_RECEIVED') {
-        ticket.paymentStatus = 'AWAITING_FINAL_PAYMENT';
-        pushEvent(ticket, user, 'AWAITING_FINAL_PAYMENT', ticket.status, ticket.status, null);
-      }
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      autoAdvanceStage(ticket, 'DEPOSIT_RECEIVED', user);
+      const notice = latestIssuedDepositNotice(ticket.id);
+      const amount = notice?.depositAmount ?? moneyValue(payableAmount(ticket) * 0.5);
+      if (amount <= 0) fail('ไม่พบยอดมัดจำสำหรับบันทึกรับชำระ', 409);
+      recordPaymentForTicket(ticket, user, {
+        kind: 'DEPOSIT',
+        amount,
+        note: 'ยืนยันรับมัดจำ',
+        depositNoticeId: notice?.id ?? null,
+      });
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
@@ -1847,11 +2038,24 @@ export const api = {
       const user = hasRole('account', 'ceo');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
-      if (ticket.paymentStatus !== 'AWAITING_FINAL_PAYMENT') fail('Expected paymentStatus=AWAITING_FINAL_PAYMENT', 409);
-      ticket.paymentStatus = 'FULLY_PAID';
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'FULLY_PAID', ticket.status, ticket.status, null);
-      autoAdvanceStage(ticket, 'CLOSED_PAID', user);
+      const allowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
+        || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
+      if (!allowed) fail('Expected paymentStatus=DEPOSIT_PAID/AWAITING_FINAL_PAYMENT or a waived deposit policy', 409);
+      const outstanding = moneyValue(payableAmount(ticket) - sumPaid(ticket.id));
+      if (outstanding <= 0) {
+        if (ticket.paymentStatus !== 'FULLY_PAID') {
+          ticket.paymentStatus = 'FULLY_PAID';
+          ticket.updatedAt = new Date().toISOString().slice(0, 10);
+          pushEvent(ticket, user, 'FULLY_PAID', ticket.status, ticket.status, null);
+          autoAdvanceStage(ticket, 'CLOSED_PAID', user);
+        }
+      } else {
+        recordPaymentForTicket(ticket, user, {
+          kind: 'BALANCE',
+          amount: outstanding,
+          note: 'ยืนยันชำระส่วนที่เหลือ',
+        });
+      }
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 

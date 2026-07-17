@@ -4,7 +4,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
   dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, depositPolicyLabel,
-  formatThaiDate, tenderRequirementLabel,
+  formatThaiDate, overdueBadgeLabel, paymentStageLabel, tenderRequirementLabel,
 } from '../../utils/format.js';
 import { DealStageStepper, PhaseTracker } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
@@ -103,6 +103,7 @@ export function DealStagePanel({
   const showPricingChips = ['submitted', 'in_review', 'price_proposed', 'approved'].includes(summary.status)
     || (summary.status === 'quotation_issued' && summary.paymentStatus == null);
   const showPaymentChips = summary.paymentStatus != null;
+  const derivedPayment = paymentStageLabel(summary.paymentStage);
   const showImportChips = summary.fulfillmentStatus != null;
 
   async function submitStage(payload) {
@@ -223,6 +224,15 @@ export function DealStagePanel({
                   depositBypassesNotice(summary.depositPolicy) ? null : (
                     <SubstepChips label="การชำระเงิน:" steps={PAYMENT_SUBSTEPS} currentCode={summary.paymentStatus} />
                   )
+                ) : null}
+                {summary.paymentStage && summary.paymentStage !== 'NOT_REQUIRED' ? (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-2xs font-bold text-text-muted">ยอดชำระ:</span>
+                    <StatusBadge tone={derivedPayment.tone}>{derivedPayment.label}</StatusBadge>
+                    {summary.overdue ? (
+                      <StatusBadge tone={overdueBadgeLabel(true).tone}>{overdueBadgeLabel(true).label}</StatusBadge>
+                    ) : null}
+                  </div>
                 ) : null}
                 {depositBypassesNotice(summary.depositPolicy) ? (
                   <div className="flex flex-wrap items-center gap-1.5">

@@ -42,6 +42,9 @@ public final class TicketEventKind {
     public static final String QUOTATION_SENT         = "QUOTATION_SENT";
     public static final String QUOTATION_ACCEPTED     = "QUOTATION_ACCEPTED";
     public static final String QUOTATION_REJECTED     = "QUOTATION_REJECTED";
+    // Payment ledger + billing events (V53).
+    public static final String PAYMENT_RECORDED       = "PAYMENT_RECORDED";
+    public static final String BILLING_UPDATED        = "BILLING_UPDATED";
 
     private TicketEventKind() {}
 }

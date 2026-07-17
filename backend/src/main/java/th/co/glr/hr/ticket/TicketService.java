@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import th.co.glr.hr.pricing.PriceBreakdownItemDto;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,6 +40,7 @@ public class TicketService {
         Set.of(TicketStatus.APPROVED, TicketStatus.QUOTATION_ISSUED);
     private static final Set<String> PROPOSE_ALLOWED_STATUSES =
         Set.of(TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED, TicketStatus.APPROVED);
+    private static final Set<String> PAYMENT_RECEIPT_KINDS = Set.of("DEPOSIT", "BALANCE", "ADJUSTMENT");
 
     private final TicketRepository tickets;
     private final NotificationRepository notifications;
@@ -77,6 +79,11 @@ public class TicketService {
 
     public TicketDto get(long id, UserPrincipal actor) {
         return requireViewAccess(id, actor);
+    }
+
+    public List<PaymentReceiptDto> listPayments(long ticketId, UserPrincipal actor) {
+        requireViewAccess(ticketId, actor);
+        return tickets.findReceiptsByTicket(ticketId);
     }
 
     /**
@@ -399,7 +406,9 @@ public class TicketService {
             s.paymentStatus(), s.fulfillmentStatus(),
             s.salesStage(), s.lostReason(), s.lostAt(), s.stageUpdatedAt(),
             s.lifecycle(), s.tenderRequirement(), s.depositPolicy(), s.depositPolicyReason(),
-            s.entryChannel());
+            s.entryChannel(), s.billingDate(), s.dueDate(), s.creditTermDays(),
+            s.lastFollowUpAt(), s.nextFollowUpAt(), s.paymentStage(), s.amountPayable(),
+            s.amountPaid(), s.amountOutstanding(), s.overdue());
     }
 
     @Transactional
@@ -424,6 +433,9 @@ public class TicketService {
         if (!legacyOk && !dualTrackOk) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "Cannot close: require paymentStatus=FULLY_PAID and fulfillmentStatus=GOODS_RECEIVED");
+        }
+        if (s.amountOutstanding() != null && s.amountOutstanding().signum() > 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "Cannot close: ยังมียอดค้างชำระ");
         }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CLOSED, st, TicketStatus.CLOSED, null);
@@ -461,25 +473,23 @@ public class TicketService {
     @Transactional
     public TicketDto confirmDepositPaid(long ticketId, UserPrincipal actor) {
         requireRole(actor, ACCOUNT_ROLES);
-        TicketSummaryDto s = requireTicket(ticketId).summary();
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
         requireActive(s);
         if (!"DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "Expected paymentStatus=DEPOSIT_NOTICE_ISSUED");
         }
-        tickets.updatePaymentStatus(ticketId, "DEPOSIT_PAID");
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.DEPOSIT_PAID, s.status(), s.status(), null);
-        // Mirror of markGoodsReceived: if goods already arrived while the deposit was
-        // unconfirmed, advance the payment track now — otherwise AWAITING_FINAL_PAYMENT
-        // is unreachable and the ticket can never be closed.
-        if ("GOODS_RECEIVED".equals(s.fulfillmentStatus())) {
-            tickets.updatePaymentStatus(ticketId, "AWAITING_FINAL_PAYMENT");
-            tickets.addEvent(ticketId, actor.id(), actor.name(),
-                TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
+        var notice = tickets.latestIssuedDepositNotice(ticketId).orElse(null);
+        BigDecimal amount = notice != null && notice.depositAmount() != null
+            ? notice.depositAmount()
+            : payableAmount(ticket).multiply(new BigDecimal("0.50"));
+        if (amount.signum() <= 0) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ไม่พบยอดมัดจำสำหรับบันทึกรับชำระ");
         }
-        // Deal pipeline (V50): deposit received — guarded no-op inside.
-        autoAdvanceStage(s, DealStage.DEPOSIT_RECEIVED, actor);
-        return requireTicket(ticketId);
+        RecordPaymentRequest request = new RecordPaymentRequest(
+            "DEPOSIT", amount, null, "ยืนยันรับมัดจำ", notice != null ? notice.id() : null, null, false);
+        return recordPaymentInternal(ticketId, request, actor);
     }
 
     @Transactional
@@ -567,17 +577,155 @@ public class TicketService {
     @Transactional
     public TicketDto confirmFinalPayment(long ticketId, UserPrincipal actor) {
         requireRole(actor, ACCOUNT_ROLES);
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
+        requireActive(s);
+        if (!canConfirmFinalPaymentNow(s)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Expected paymentStatus=DEPOSIT_PAID/AWAITING_FINAL_PAYMENT or a waived deposit policy");
+        }
+        BigDecimal outstanding = payableAmount(ticket).subtract(nullToZero(tickets.sumPaid(ticketId)));
+        if (outstanding.signum() <= 0) {
+            if (!"FULLY_PAID".equals(s.paymentStatus())) {
+                tickets.updatePaymentStatus(ticketId, "FULLY_PAID");
+                tickets.addEvent(ticketId, actor.id(), actor.name(),
+                    TicketEventKind.FULLY_PAID, s.status(), s.status(), null);
+                autoAdvanceStage(s, DealStage.CLOSED_PAID, actor);
+            }
+            return requireTicket(ticketId);
+        }
+        RecordPaymentRequest request = new RecordPaymentRequest(
+            "BALANCE", outstanding, null, "ยืนยันชำระส่วนที่เหลือ", null, null, false);
+        return recordPaymentInternal(ticketId, request, actor);
+    }
+
+    @Transactional
+    public TicketDto recordPayment(long ticketId, RecordPaymentRequest request, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        return recordPaymentInternal(ticketId, request, actor);
+    }
+
+    @Transactional
+    public TicketDto setBilling(long ticketId, BillingRequest request, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
-        if (!"AWAITING_FINAL_PAYMENT".equals(s.paymentStatus())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Expected paymentStatus=AWAITING_FINAL_PAYMENT");
-        }
-        tickets.updatePaymentStatus(ticketId, "FULLY_PAID");
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.FULLY_PAID, s.status(), s.status(), null);
-        // Deal pipeline (V50): fully paid closes the pipeline — guarded no-op inside.
-        autoAdvanceStage(s, DealStage.CLOSED_PAID, actor);
+        tickets.updateBilling(ticketId, request.billingDate(), request.dueDate(), request.creditTermDays(),
+            request.lastFollowUpAt(), request.nextFollowUpAt());
+        tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.BILLING_UPDATED,
+            s.status(), s.status(), "billing_date=" + request.billingDate() + ", due_date=" + request.dueDate());
         return requireTicket(ticketId);
+    }
+
+    private TicketDto recordPaymentInternal(long ticketId, RecordPaymentRequest request, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        if (request == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุข้อมูลรับชำระเงิน");
+        }
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
+        requireActive(s);
+        String kind = request.kind() == null ? null : request.kind().trim().toUpperCase();
+        if (!PAYMENT_RECEIPT_KINDS.contains(kind)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown payment kind '" + request.kind() + "'");
+        }
+        BigDecimal amount = request.amount();
+        if (amount == null || amount.signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ยอดรับชำระต้องมากกว่า 0");
+        }
+        BigDecimal payable = payableAmount(ticket);
+        BigDecimal paid = nullToZero(tickets.sumPaid(ticketId));
+        BigDecimal newPaid = paid.add(signedPaymentAmount(kind, amount));
+        if (newPaid.signum() < 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ยอดรับชำระสุทธิห้ามติดลบ");
+        }
+        boolean overpaid = newPaid.compareTo(payable) > 0;
+        boolean allowOverpayment = Boolean.TRUE.equals(request.allowOverpayment());
+        String note = blankToNull(request.note());
+        if (overpaid && !allowOverpayment) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ยอดรับชำระเกินยอดที่ต้องชำระ กรุณายืนยัน overpayment พร้อมเหตุผล");
+        }
+        if (overpaid && (note == null || note.isBlank())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "การรับชำระเกินยอดต้องระบุเหตุผล");
+        }
+        String receiptRef = blankToNull(request.receiptRef());
+        try {
+            tickets.insertPaymentReceipt(ticketId, kind, amount, actor.id(), request.receivedAt(),
+                note, request.depositNoticeId(), receiptRef);
+        } catch (DataIntegrityViolationException e) {
+            if (receiptRef != null) {
+                throw new ApiException(HttpStatus.CONFLICT, "เลขอ้างอิงรับชำระซ้ำ");
+            }
+            throw e;
+        }
+        tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.PAYMENT_RECORDED,
+            s.status(), s.status(),
+            "kind=" + kind + ", amount=" + amount + ", paid=" + newPaid + ", payable=" + payable
+                + (note != null ? " — " + note : ""));
+        reconcilePaymentStatus(ticketId, actor);
+        return requireTicket(ticketId);
+    }
+
+    private void reconcilePaymentStatus(long ticketId, UserPrincipal actor) {
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
+        BigDecimal payable = payableAmount(ticket);
+        BigDecimal paid = nullToZero(tickets.sumPaid(ticketId));
+        if (payable.signum() > 0 && paid.compareTo(payable) >= 0) {
+            if (!"FULLY_PAID".equals(s.paymentStatus())) {
+                tickets.updatePaymentStatus(ticketId, "FULLY_PAID");
+                tickets.addEvent(ticketId, actor.id(), actor.name(),
+                    TicketEventKind.FULLY_PAID, s.status(), s.status(), null);
+                autoAdvanceStage(s, DealStage.CLOSED_PAID, actor);
+            }
+            return;
+        }
+        if (paid.signum() <= 0 || "FULLY_PAID".equals(s.paymentStatus())) {
+            return;
+        }
+        boolean eligibleForDepositAdvance =
+            s.paymentStatus() == null
+                || "CUSTOMER_CONFIRMED".equals(s.paymentStatus())
+                || "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
+                || DepositPolicy.bypassesDepositNotice(s.depositPolicy());
+        if (eligibleForDepositAdvance && !"DEPOSIT_PAID".equals(s.paymentStatus())) {
+            tickets.updatePaymentStatus(ticketId, "DEPOSIT_PAID");
+            tickets.addEvent(ticketId, actor.id(), actor.name(),
+                TicketEventKind.DEPOSIT_PAID, s.status(), s.status(), null);
+            autoAdvanceStage(s, DealStage.DEPOSIT_RECEIVED, actor);
+            if ("GOODS_RECEIVED".equals(s.fulfillmentStatus())) {
+                tickets.updatePaymentStatus(ticketId, "AWAITING_FINAL_PAYMENT");
+                tickets.addEvent(ticketId, actor.id(), actor.name(),
+                    TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
+            }
+        }
+    }
+
+    private BigDecimal signedPaymentAmount(String kind, BigDecimal amount) {
+        return "ADJUSTMENT".equals(kind) ? amount.negate() : amount;
+    }
+
+    /**
+     * Payment payable precedence for Phase 3: latest ACCEPTED quotation (BUYER, then
+     * OWNER, then any), latest ISSUED/SENT quotation with the same recipient preference,
+     * latest issued deposit notice total, then approved line totals.
+     */
+    private BigDecimal payableAmount(TicketDto ticket) {
+        return nullToZero(tickets.payableAmount(ticket.summary().id()));
+    }
+
+    private static BigDecimal nullToZero(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private boolean canConfirmFinalPaymentNow(TicketSummaryDto s) {
+        boolean depositBypassed = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
+            && (s.paymentStatus() == null || "CUSTOMER_CONFIRMED".equals(s.paymentStatus()));
+        return "AWAITING_FINAL_PAYMENT".equals(s.paymentStatus())
+            || "DEPOSIT_PAID".equals(s.paymentStatus())
+            || depositBypassed;
     }
 
     // ── Deal pipeline (V50): 14-stage journey on the ticket itself ──────────
@@ -1013,6 +1161,14 @@ public class TicketService {
         if (ACCOUNT_ROLES.contains(actor.role()) && "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
             actions.add(new TicketActionDto("DEPOSIT_PAID", "payment", "รับมัดจำ"));
         }
+        if (canRecordPayment(s, actor)) {
+            actions.add(new TicketActionDto("RECORD_PAYMENT", "payment", "บันทึกรับชำระเงิน",
+                List.of("kind", "amount")));
+        }
+        if (ACCOUNT_ROLES.contains(actor.role())) {
+            actions.add(new TicketActionDto("SET_BILLING", "payment", "ตั้งค่าการวางบิล",
+                List.of("dueDate")));
+        }
         if (IMPORT_ROLES.contains(actor.role()) && canIssueImportRequest(s)) {
             actions.add(new TicketActionDto("ISSUE_IMPORT_REQUEST", "fulfillment", "ออก IR"));
         }
@@ -1025,7 +1181,7 @@ public class TicketService {
         if (IMPORT_ROLES.contains(actor.role()) && "SHIPPING".equals(s.fulfillmentStatus())) {
             actions.add(new TicketActionDto("GOODS_RECEIVED", "fulfillment", "รับสินค้า"));
         }
-        if (ACCOUNT_ROLES.contains(actor.role()) && "AWAITING_FINAL_PAYMENT".equals(s.paymentStatus())) {
+        if (ACCOUNT_ROLES.contains(actor.role()) && canConfirmFinalPaymentNow(s)) {
             actions.add(new TicketActionDto("FINAL_PAYMENT", "payment", "รับเงินครบ"));
         }
         if (canClose(s, actor)) actions.add(new TicketActionDto("CLOSE", "operational", "ปิดงาน"));
@@ -1114,6 +1270,13 @@ public class TicketService {
             || "DEPOSIT_PAID".equals(s.paymentStatus())
             || depositPolicyBypassesNotice;
         return TicketStatus.QUOTATION_ISSUED.equals(s.status()) && depositReady && s.fulfillmentStatus() == null;
+    }
+
+    private boolean canRecordPayment(TicketSummaryDto s, UserPrincipal actor) {
+        return ACCOUNT_ROLES.contains(actor.role())
+            && s.amountPayable() != null
+            && s.amountPayable().signum() > 0
+            && !PaymentStage.FULLY_PAID.equals(s.paymentStage());
     }
 
     private boolean canClose(TicketSummaryDto s, UserPrincipal actor) {
