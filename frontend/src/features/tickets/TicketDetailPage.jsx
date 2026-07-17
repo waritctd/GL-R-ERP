@@ -154,6 +154,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     queryKey: queryKeys.ticketActions(ticketId),
     queryFn: () => api.tickets.actions(ticketId),
     enabled: !!ticketId && !!ticket,
+    // Keep the previous action list while a refetch is in flight — every doAction
+    // invalidates this query, and without a placeholder the whole cockpit's buttons
+    // vanish for a beat on each action (visible flicker; Opus review finding).
+    placeholderData: (previous) => previous,
   });
   const availableActions = actionsQuery.data?.availableActions ?? [];
   const actionNames = new Set(availableActions.map((action) => action.action));

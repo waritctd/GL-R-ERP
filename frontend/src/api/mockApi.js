@@ -1613,6 +1613,8 @@ export const api = {
     async revision(id, payload) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
+      // Phase 1 lifecycle gate (mirrors DepositNoticeService.requestRevision).
+      requireActive(ticket);
       if (!['approved', 'document_issued'].includes(ticket.status)) fail('ไม่สามารถขอแก้ไขในสถานะนี้', 409);
 
       const toStatus = {
@@ -2811,6 +2813,8 @@ export const api = {
     async createDraft(ticketId, payload) {
       requireSession();
       const ticket = findTicketRaw(Number(ticketId));
+      // Phase 1 lifecycle gate (mirrors DepositNoticeService.createDraft).
+      requireActive(ticket);
       if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('Ticket must be approved', 409);
 
       // Auto-build items from approved ticket items
@@ -2896,6 +2900,8 @@ export const api = {
       if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
         fail('Deposit notice requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED', 409);
       }
+      // Phase 1 lifecycle gate (mirrors DepositNoticeService.requireActiveLifecycle).
+      requireActive(ticket);
 
       // Supersede previous issued docs
       mockDepositNotices.forEach((d) => { if (d.ticketId === doc.ticketId && d.id !== doc.id && d.status === 'ISSUED') d.status = 'SUPERSEDED'; });

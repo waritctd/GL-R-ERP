@@ -303,3 +303,39 @@ component test asserting the cockpit hides actions absent from a mocked /actions
 - The actions response is computed inside `TicketService` and reuses the same guard helpers where practical, but review should pay close attention to drift between each transition guard and its advertised action, especially around policy/lifecycle roles.
 - `sales_manager` now gets lifecycle pause/resume plus the specified stage/lost/reopen powers; it should still have no operational powers. Backend tests assert representative action visibility, but this remains a high-value review area.
 - `deposit_policy` bypass currently allows IR when policy is `NOT_REQUIRED`, `WAIVED`, or `CREDIT_CUSTOMER` and payment status is null or `CUSTOMER_CONFIRMED`, matching the handoff. Confirm with business reviewers whether `CREDIT_CUSTOMER` should hide deposit chips or show a credit note only in all later UI/reporting phases.
+
+---
+
+## Opus review (2026-07-17) — PASSED with 3 review fixes
+
+Re-verified independently: backend `./mvnw -B clean verify` → **BUILD SUCCESS, 489 tests**
+(487 Codex + 2 review-fix tests) with Testcontainers/V51 applied; frontend lint 0 errors ·
+**119/119 tests** · build PASS. Codex's self-report was accurate.
+
+**Browser verification (the gap Codex flagged) — completed by Opus in frontend-mock:**
+- Hold → amber banner "พักไว้ชั่วคราว — ขั้นเดิมยังอยู่ที่ 2. นำเสนอสินค้า", all mutating
+  actions gated, dormant offered → resume (note dialog) → actions restored.
+- Skip-with-reason: PRESENTATION → AWAITING_BUYER (multi-step) showed the กำลังข้ามขั้นตอน
+  warning, save disabled until a reason was entered, stage jumped with reason recorded.
+- Case 6 end-to-end: as account, นโยบายมัดจำ… modal (reason required, save disabled without
+  it) → WAIVED → deposit chips hidden + ยกเว้นมัดจำ badge → as import, ออก IR available with
+  NO deposit notice ever issued → IR_ISSUED → stage auto-advanced to PROCUREMENT → ส่ง IR แล้ว.
+- Actions endpoint drives the cockpit per role (sales owner vs account vs import verified).
+
+**Review fixes applied by Opus (commit on this branch):**
+1. **DepositNoticeService lifecycle gate** (spec omission, not Codex's error): createDraft /
+   issue / requestRevision now `requireActiveLifecycle` — an ON_HOLD deal could previously
+   still issue a deposit notice and advance the payment track. Mirrored in mockApi
+   (createDraft / issue / revision) + 2 new backend tests.
+2. **Actions-refetch flicker**: every doAction invalidates the /actions query and the whole
+   cockpit's buttons vanished for a beat (caught my own browser probes 3 times).
+   `placeholderData: (prev) => prev` on the actionsQuery; verified buttons persist mid-refetch.
+3. (Noted, accepted as-is) `ADVANCE_STAGE` is emitted per settable target (up to 13 entries
+   for CEO) rather than next-stage-only — functionally correct, consumed fine by the cockpit;
+   revisit only if the payload size ever matters.
+
+**Known accepted behaviors:** cancel of a CLOSED_LOST deal leaves lost_reason set with
+lifecycle CANCELLED (pre-existing pattern, unreachable via UI); CREDIT_CUSTOMER bypasses the
+deposit notice (per spec — Phase 3 gives it credit-term/overdue treatment).
+
+**Verdict: Phase 1 accepted.** Phase 2 handoff: `68_feat-deal-workflow-p2-quotations.md`.
