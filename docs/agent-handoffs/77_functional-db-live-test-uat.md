@@ -83,6 +83,22 @@ priority/status, 0 null branch, 0 leftover notifications.
 None (test-only). Harnesses in the session scratchpad: `funcdb.py`, `funcdb2.py`,
 `funcdb3.py`; DB verification + cleanup via Supabase MCP `execute_sql`.
 
+## 8. MAIN (real/demo stack) — read-only run
+MAIN is real payroll prod: **no writes**, and no login creds available, so this is
+DB-level integrity + hosted API smoke only (writes/authenticated-reads intentionally
+excluded).
+- **Hosted `gl-r-erp.onrender.com`:** up; default-deny intact — `/api/auth/me`,
+  `/api/tickets`, `/api/employees`, `/api/catalog/prices` all **401** unauthenticated.
+- **DB `tdyzcqzxmhtxpbouewud`:** `chk_ticket_priority` + `chk_ticket_status` + `branch`
+  NOT-NULL default all present; **0 bad priority / 0 bad status / 0 null branch**; **0
+  failed migrations**. Counts: 8 tickets, 213 employees, 4 customers.
+- **⚠️ Migration state: latest applied = V47 (2026-07-15); V48–V54 NOT applied.** The
+  `gl-r-erp` stack has **not** redeployed with main's merged work — the F2/gap#1 fixes and
+  the entire deal-pipeline (V50–V54) are **not live on the real/demo stack**; it still runs
+  pre-fix code. This is the deliberate real-DB migration `74_...md` §8 flagged.
+  **Action for the user:** decide when to let the `gl-r-erp` deploy migrate the real DB
+  V47→V54 (additive columns/tables + a V50 backfill over 8 tickets — safe but deliberate).
+
 ## 7. Result
 Live hosted UAT is **healthy and behaviourally correct** across the exercised surface: the
 deal engine drives to close, every write persists correctly, authz/state gates hold, the
