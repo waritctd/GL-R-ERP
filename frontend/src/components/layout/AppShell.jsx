@@ -21,8 +21,17 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const navItems = [
     { path: '/', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
     { path: '/hr', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', show: hasPermission(user.role, 'canViewEmployees') },
-    { path: '/ticket-overview', label: 'ภาพรวมใบขอราคา', helper: 'Ticket overview', icon: 'home', show: hasPermission(user.role, 'canViewTickets') && SALES_ENABLED },
-    { path: '/tickets', label: 'ใบขอราคา', helper: 'Price requests', icon: 'fileText', show: hasPermission(user.role, 'canViewTickets') && SALES_ENABLED },
+    // งานขาย is one workspace: the deal pipeline (/tickets — one ticket = one deal,
+    // ใบขอราคา and โครงการ merged into one page) plus the ภาพรวม dashboard as a tab
+    // (SalesTabs). `match` keeps this item highlighted across both and detail pages.
+    {
+      path: '/tickets',
+      label: 'งานขาย',
+      helper: 'Sales',
+      icon: 'briefcase',
+      show: hasPermission(user.role, 'canViewTickets') && SALES_ENABLED,
+      match: ['/tickets', '/ticket-overview'],
+    },
     { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', show: user.role === 'ceo' && SALES_ENABLED },
     { path: '/catalog', label: 'แคตตาล็อกสินค้า', helper: 'Product catalog', icon: 'search', show: SALES_ENABLED },
     { path: '/price-import', label: 'นำเข้าราคา', helper: 'Price import', icon: 'upload', show: hasPermission(user.role, 'canManagePriceImport') && SALES_ENABLED },

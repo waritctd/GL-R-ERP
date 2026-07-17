@@ -69,6 +69,9 @@ describe('TicketListPage', () => {
           status: 'submitted',
           createdByName: 'สมชาย ใจดี',
           createdAt: '2026-07-01T09:00:00.000Z',
+          salesStage: 'QUOTE_DESIGN_SIDE',
+          lostReason: null,
+          stageUpdatedAt: '2026-07-01T09:00:00.000Z',
         },
       ],
     });
@@ -99,11 +102,11 @@ describe('TicketListPage', () => {
     await screen.findByText('บริษัท ทดสอบ จำกัด');
     expect(api.tickets.list).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole('button', { name: /สร้างใบขอราคาใหม่/ }));
+    fireEvent.click(screen.getByRole('button', { name: /สร้างดีลใหม่/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันสร้าง (stub)' }));
 
     await waitFor(() => expect(api.tickets.create).toHaveBeenCalledWith({ title: 'โครงการใหม่' }));
     await waitFor(() => expect(api.tickets.list).toHaveBeenCalledTimes(2));
-    expect(showToast).toHaveBeenCalledWith('success', 'สร้างใบขอราคาเรียบร้อย');
+    expect(showToast).toHaveBeenCalledWith('success', 'สร้างดีลเรียบร้อย');
   });
 });

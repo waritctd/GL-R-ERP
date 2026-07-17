@@ -1,4 +1,4 @@
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { roleLabel } from '../../utils/format.js';
 import { Avatar } from '../common/Avatar.jsx';
 import { Button } from '../common/Button.jsx';
@@ -6,6 +6,7 @@ import { Icon } from '../common/Icon.jsx';
 
 export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, user, employee, onLogout }) {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   return (
     <aside
       id={id}
@@ -32,7 +33,14 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, user, empl
             key={item.path}
             to={item.path}
             end={item.path === '/'}
-            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+            className={({ isActive }) => {
+              // `match` lets one item (e.g. งานขาย) stay highlighted across
+              // several routes that live under a single workspace.
+              const matched = item.match?.some(
+                (p) => pathname === p || pathname.startsWith(`${p}/`),
+              );
+              return `nav-item ${isActive || matched ? 'active' : ''}`;
+            }}
           >
             <Icon name={item.icon} size={19} />
             <span>
