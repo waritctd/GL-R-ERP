@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
@@ -22,23 +23,24 @@ import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.assertj.core.api.ThrowableAssert;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
-import th.co.glr.hr.notification.NotificationService;
+import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
 
 class TicketServiceTest {
 
     private final TicketRepository ticketRepo = mock(TicketRepository.class);
-    private final NotificationService notificationService = mock(NotificationService.class);
+    private final NotificationRepository notifRepo = mock(NotificationRepository.class);
     private final PriceCalcService priceCalcService = mock(PriceCalcService.class);
     private final CustomerRepository customerRepo = mock(CustomerRepository.class);
     private final QuotationRenderer quotationRenderer = new QuotationRenderer();
     private final TicketService service = new TicketService(
-        ticketRepo, notificationService, priceCalcService, new ObjectMapper(), customerRepo, quotationRenderer);
+        ticketRepo, notifRepo, priceCalcService, new ObjectMapper(), customerRepo, quotationRenderer);
 
     private final UserPrincipal salesActor   = actor(1L, "sales");
     private final UserPrincipal otherSales   = actor(2L, "sales");
@@ -138,7 +140,9 @@ class TicketServiceTest {
         TicketSummaryDto summary = new TicketSummaryDto(
             10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.QUOTATION_ISSUED, "NORMAL",
             1L, "Sales User", null, null, "Live Edited Name", null, null, "Live Edited Project",
-            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null);
+            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null,
+            "QUOTE_BUYER", null, null, Instant.now(),
+            DealLifecycle.ACTIVE, TenderRequirement.UNKNOWN, DepositPolicy.REQUIRED, null, EntryChannel.DESIGNER_LED);
         QuotationDto quotation = quotationOf(1L, 10L, "QT-2026-0001");
         TicketDto ticket = new TicketDto(summary, List.of(liveEditedItem), List.of(), quotation, List.of(quotation));
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
@@ -171,7 +175,9 @@ class TicketServiceTest {
         TicketSummaryDto summary = new TicketSummaryDto(
             10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.QUOTATION_ISSUED, "NORMAL",
             1L, "Sales User", null, null, "Live Edited Name", null, null, "Live Edited Project",
-            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null);
+            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null,
+            "QUOTE_BUYER", null, null, Instant.now(),
+            DealLifecycle.ACTIVE, TenderRequirement.UNKNOWN, DepositPolicy.REQUIRED, null, EntryChannel.DESIGNER_LED);
         QuotationDto quotation = quotationOf(1L, 10L, "QT-2026-0001");
         TicketDto ticket = new TicketDto(summary, List.of(liveEditedItem), List.of(), quotation, List.of(quotation));
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
@@ -208,7 +214,9 @@ class TicketServiceTest {
         TicketSummaryDto summary = new TicketSummaryDto(
             10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.QUOTATION_ISSUED, "NORMAL",
             1L, "Sales User", null, null, "Live Customer Name", null, null, "Live Project",
-            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null);
+            null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null,
+            "QUOTE_BUYER", null, null, Instant.now(),
+            DealLifecycle.ACTIVE, TenderRequirement.UNKNOWN, DepositPolicy.REQUIRED, null, EntryChannel.DESIGNER_LED);
         QuotationDto quotation = quotationOf(2L, 10L, "QT-2026-0002");
         TicketDto ticket = new TicketDto(summary, List.of(liveItem), List.of(), quotation, List.of(quotation));
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
@@ -249,14 +257,22 @@ class TicketServiceTest {
 
     @Test
     void submit_draftByOwner_transitionsToSubmitted() {
-        stubTicket(10L, 1L, TicketStatus.DRAFT);
+        stubTicketWithItems(10L, 1L, TicketStatus.DRAFT, List.of(sampleItem()));
 
         service.submit(10L, salesActor);
 
         verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.SUBMITTED), eq(TicketStatus.DRAFT), eq(TicketStatus.SUBMITTED), isNull());
-        verify(notificationService).notifyByRole(eq("import"), anyString(), anyString(), anyString(), eq("/tickets/10"), eq(true));
-        verify(notificationService).notifyByRole(eq("ceo"), anyString(), anyString(), anyString(), eq("/tickets/10"), eq(true));
+        verify(notifRepo).notifyByRole(eq("import"), eq(10L), anyString(), anyString());
+        verify(notifRepo).notifyByRole(eq("ceo"),    eq(10L), anyString(), anyString());
+    }
+
+    @Test
+    void submit_rejectsDraftWithoutItems() {
+        // A lightweight lead-stage deal (V50) has no items yet — it cannot enter the
+        // price-request flow until at least one product line exists.
+        stubTicket(10L, 1L, TicketStatus.DRAFT);
+        assertBadRequest(() -> service.submit(10L, salesActor));
     }
 
     @Test
@@ -316,7 +332,7 @@ class TicketServiceTest {
         verify(ticketRepo).addEventWithSnapshot(eq(10L), eq(3L), anyString(),
             eq(TicketEventKind.PRICE_PROPOSED), eq(TicketStatus.IN_REVIEW), eq(TicketStatus.PRICE_PROPOSED),
             eq("ราคาจาก supplier"), anyString());
-        verify(notificationService).notifyByRole(eq("ceo"), anyString(), anyString(), anyString(), eq("/tickets/10"), eq(true));
+        verify(notifRepo).notifyByRole(eq("ceo"), eq(10L), anyString(), anyString());
     }
 
     @Test
@@ -346,7 +362,7 @@ class TicketServiceTest {
         verify(ticketRepo).approveItemPrices(10L);
         verify(ticketRepo).addEvent(eq(10L), eq(4L), anyString(),
             eq(TicketEventKind.APPROVED), eq(TicketStatus.PRICE_PROPOSED), eq(TicketStatus.APPROVED), isNull());
-        verify(notificationService).notify(eq(1L), anyString(), anyString(), anyString(), eq("/tickets/10"), eq(true));
+        verify(notifRepo).notifyEmployee(eq(1L), eq(10L), anyString(), anyString());
     }
 
     @Test
@@ -375,7 +391,7 @@ class TicketServiceTest {
 
         verify(ticketRepo).addEvent(eq(10L), eq(4L), anyString(),
             eq(TicketEventKind.REJECTED), eq(TicketStatus.PRICE_PROPOSED), eq(TicketStatus.IN_REVIEW), eq("ราคาสูงเกิน"));
-        verify(notificationService).notifyByRole(eq("import"), anyString(), anyString(), anyString(), eq("/tickets/10"), eq(true));
+        verify(notifRepo).notifyByRole(eq("import"), eq(10L), anyString(), anyString());
     }
 
     @Test
@@ -403,45 +419,69 @@ class TicketServiceTest {
             new BigDecimal("100.00"), "THB", 0, null, null, null, "PIECE", null, null);
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(item));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0001");
-        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0001"), eq(1L), eq(new BigDecimal("200.00"))))
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0001"), eq(1L), eq(new BigDecimal("200.00")),
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull()))
             .thenReturn(quotationOf(99L, 10L, "QT-2026-0001"));
 
-        service.generateQuotation(10L, salesActor);
+        service.generateQuotation(10L, designerQuotation(), salesActor);
 
-        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0001"), eq(1L), eq(new BigDecimal("200.00")));
+        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0001"), eq(1L), eq(new BigDecimal("200.00")),
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull());
         verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.QUOTATION_ISSUED), eq(TicketStatus.APPROVED), eq(TicketStatus.QUOTATION_ISSUED), isNull());
+            eq(TicketEventKind.QUOTATION_ISSUED), eq(TicketStatus.APPROVED), eq(TicketStatus.QUOTATION_ISSUED), anyString());
     }
 
     @Test
     void generateQuotation_rejectsNonOwnerSales() {
         stubTicket(10L, 1L, TicketStatus.APPROVED);
-        assertForbidden(() -> service.generateQuotation(10L, otherSales));
+        assertForbidden(() -> service.generateQuotation(10L, designerQuotation(), otherSales));
     }
 
     @Test
     void generateQuotation_rejectsCeoRole() {
-        assertForbidden(() -> service.generateQuotation(10L, ceoActor));
+        assertForbidden(() -> service.generateQuotation(10L, designerQuotation(), ceoActor));
     }
 
     @Test
     void generateQuotation_rejectsWrongStatus() {
         stubTicket(10L, 1L, TicketStatus.PRICE_PROPOSED);
-        assertConflict(() -> service.generateQuotation(10L, salesActor));
+        assertConflict(() -> service.generateQuotation(10L, designerQuotation(), salesActor));
     }
 
     @Test
     void generateQuotation_allowsReissueFromQuotationIssued() {
         stubTicketWithItems(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of());
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0003");
-        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0003"), eq(1L), any(BigDecimal.class)))
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0003"), eq(1L), any(BigDecimal.class),
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull()))
             .thenReturn(quotationOf(100L, 10L, "QT-2026-0003"));
 
-        service.generateQuotation(10L, salesActor);
+        service.generateQuotation(10L, designerQuotation(), salesActor);
 
-        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0003"), eq(1L), any(BigDecimal.class));
+        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0003"), eq(1L), any(BigDecimal.class),
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull());
         verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), isNull());
+            eq(TicketEventKind.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), anyString());
+    }
+
+    @Test
+    void generateQuotation_beforeSpecApproved_doesNotRequireSpecStage() {
+        TicketItemDto item = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
+            "pcs", null, new BigDecimal("1"), null, null, null, null, null,
+            new BigDecimal("120.00"), "THB", 0, null, null, null, "PIECE", null, null);
+        stubDeal(10L, 1L, TicketStatus.APPROVED, List.of(item), null, null, DealStage.PRESENTATION, null);
+        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0009");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0009"), eq(1L), eq(new BigDecimal("120.00")),
+            eq(QuotationRecipient.OWNER), isNull(), isNull(), isNull(), isNull(), isNull()))
+            .thenReturn(quotationOf(103L, 10L, "QT-2026-0009",
+                QuotationRecipient.OWNER, 1, QuotationStatus.ISSUED));
+
+        service.generateQuotation(10L, new GenerateQuotationRequest(
+            QuotationRecipient.OWNER, null, null, null, null, null, null), salesActor);
+
+        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0009"), eq(1L), eq(new BigDecimal("120.00")),
+            eq(QuotationRecipient.OWNER), isNull(), isNull(), isNull(), isNull(), isNull());
+        verify(ticketRepo).updateSalesStage(10L, DealStage.QUOTE_DESIGN_SIDE);
     }
 
     @Test
@@ -457,15 +497,17 @@ class TicketServiceTest {
             new BigDecimal("10.00"), "THB", 2, null, null, null, "SQM", null, null);
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(item1, item2, item3));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0004");
-        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0004"), eq(1L), any(BigDecimal.class)))
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0004"), eq(1L), any(BigDecimal.class),
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull()))
             .thenReturn(quotationOf(101L, 10L, "QT-2026-0004"));
 
-        service.generateQuotation(10L, salesActor);
+        service.generateQuotation(10L, designerQuotation(), salesActor);
 
         // (2 x 100.00) + (3 x 50.00) + (1.5 x 10.00) = 200.00 + 150.00 + 15.00 = 365.00
         // (BigDecimal.equals() is scale-sensitive, so use isEqualByComparingTo rather than eq().)
         ArgumentCaptor<BigDecimal> total = ArgumentCaptor.forClass(BigDecimal.class);
-        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0004"), eq(1L), total.capture());
+        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0004"), eq(1L), total.capture(),
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull());
         assertThat(total.getValue()).isEqualByComparingTo(new BigDecimal("365.00"));
     }
 
@@ -479,15 +521,17 @@ class TicketServiceTest {
             null, "THB", 1, null, null, null, "PIECE", null, null);
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(priced, unpriced));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0005");
-        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0005"), eq(1L), any(BigDecimal.class)))
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0005"), eq(1L), any(BigDecimal.class),
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull()))
             .thenReturn(quotationOf(102L, 10L, "QT-2026-0005"));
 
-        service.generateQuotation(10L, salesActor);
+        service.generateQuotation(10L, designerQuotation(), salesActor);
 
         // The unpriced item (approvedPrice = null) contributes 0 regardless of its quantity, rather
         // than throwing or being skipped from the total silently in a way that hides its qty.
         ArgumentCaptor<BigDecimal> total = ArgumentCaptor.forClass(BigDecimal.class);
-        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0005"), eq(1L), total.capture());
+        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0005"), eq(1L), total.capture(),
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull());
         assertThat(total.getValue()).isEqualByComparingTo(new BigDecimal("200.00"));
     }
 
@@ -503,10 +547,11 @@ class TicketServiceTest {
             null, "THB", 1, null, null, null, "PIECE", null, null);
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(priced, unpriced));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0006");
-        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0006"), eq(1L), any(BigDecimal.class)))
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0006"), eq(1L), any(BigDecimal.class),
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull()))
             .thenReturn(quotationOf(200L, 10L, "QT-2026-0006"));
 
-        service.generateQuotation(10L, salesActor);
+        service.generateQuotation(10L, designerQuotation(), salesActor);
 
         // insertQuotationItems is handed the FULL item list (priced + unpriced) — the
         // repository itself is responsible for filtering to approvedPrice != null, mirroring
@@ -526,17 +571,20 @@ class TicketServiceTest {
         TicketSummaryDto summary = new TicketSummaryDto(
             10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.APPROVED, "NORMAL",
             1L, "Sales User", null, null, "Free-text Name", 55L, null, "Renovation Project",
-            null, null, null, Instant.now(), Instant.now(), null, 0, false, null, null);
+            null, null, null, Instant.now(), Instant.now(), null, 0, false, null, null,
+            "QUOTE_DESIGN_SIDE", null, null, Instant.now(),
+            DealLifecycle.ACTIVE, TenderRequirement.UNKNOWN, DepositPolicy.REQUIRED, null, EntryChannel.DESIGNER_LED);
         TicketDto ticket = new TicketDto(summary, List.of(), List.of(), null, List.of());
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
         when(customerRepo.findById(55L)).thenReturn(Optional.of(
             new CustomerDto(55L, "Real Customer Co., Ltd.", "0105500000000",
                 "123 Real Address", "สำนักงานใหญ่", "02-000-0000")));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0007");
-        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0007"), eq(1L), any(BigDecimal.class)))
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0007"), eq(1L), any(BigDecimal.class),
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull()))
             .thenReturn(quotationOf(201L, 10L, "QT-2026-0007"));
 
-        service.generateQuotation(10L, salesActor);
+        service.generateQuotation(10L, designerQuotation(), salesActor);
 
         // Fidelity rule (Opus review): the frozen NAME is the ticket's display name —
         // that's what toXlsx/toPdf have always printed — so the snapshot must capture
@@ -551,20 +599,83 @@ class TicketServiceTest {
         TicketSummaryDto summary = new TicketSummaryDto(
             10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.APPROVED, "NORMAL",
             1L, "Sales User", null, null, null, 55L, null, null,
-            null, null, null, Instant.now(), Instant.now(), null, 0, false, null, null);
+            null, null, null, Instant.now(), Instant.now(), null, 0, false, null, null,
+            "QUOTE_DESIGN_SIDE", null, null, Instant.now(),
+            DealLifecycle.ACTIVE, TenderRequirement.UNKNOWN, DepositPolicy.REQUIRED, null, EntryChannel.DESIGNER_LED);
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(
             new TicketDto(summary, List.of(), List.of(), null, List.of())));
         when(customerRepo.findById(55L)).thenReturn(Optional.of(
             new CustomerDto(55L, "Real Customer Co., Ltd.", "0105500000000",
                 "123 Real Address", "สำนักงานใหญ่", "02-000-0000")));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0008");
-        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0008"), eq(1L), any(BigDecimal.class)))
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0008"), eq(1L), any(BigDecimal.class),
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull()))
             .thenReturn(quotationOf(202L, 10L, "QT-2026-0008"));
 
-        service.generateQuotation(10L, salesActor);
+        service.generateQuotation(10L, designerQuotation(), salesActor);
 
         verify(ticketRepo).updateQuotationHeader(eq(202L), eq("Real Customer Co., Ltd."),
             eq("123 Real Address"), eq("0105500000000"), eq("02-000-0000"), isNull());
+    }
+
+    @Test
+    void generateQuotation_requiresAmendmentReasonAfterAcceptedVersionOrCustomerConfirmed() {
+        QuotationDto accepted = quotationOf(300L, 10L, "QT-2026-0300",
+            QuotationRecipient.DESIGNER, 1, QuotationStatus.ACCEPTED);
+        stubDealWithQuotations(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.QUOTE_DESIGN_SIDE, DealLifecycle.ACTIVE, List.of(accepted));
+
+        assertBadRequest(() -> service.generateQuotation(10L, designerQuotation(), salesActor));
+
+        GenerateQuotationRequest amendment = new GenerateQuotationRequest(
+            QuotationRecipient.DESIGNER, null, null, null, null, null, "แก้ตามแบบล่าสุด");
+        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0301");
+        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0301"), eq(1L), any(BigDecimal.class),
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull()))
+            .thenReturn(quotationOf(301L, 10L, "QT-2026-0301",
+                QuotationRecipient.DESIGNER, 2, QuotationStatus.ISSUED));
+
+        service.generateQuotation(10L, amendment, salesActor);
+
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(), eq(TicketEventKind.QUOTATION_ISSUED),
+            eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED),
+            org.mockito.ArgumentMatchers.contains("แก้ตามแบบล่าสุด"));
+
+        stubDealWithQuotations(11L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(),
+            "CUSTOMER_CONFIRMED", null, DealStage.NEGOTIATION, DealLifecycle.ACTIVE, List.of());
+        assertBadRequest(() -> service.generateQuotation(11L, designerQuotation(), salesActor));
+    }
+
+    @Test
+    void markQuotationLifecycle_validatesLegalTransitionAuthAndLifecycle() {
+        QuotationDto issued = quotationOf(400L, 10L, "QT-2026-0400",
+            QuotationRecipient.OWNER, 1, QuotationStatus.ISSUED);
+        stubDealWithQuotations(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.OWNER_SIGNOFF, DealLifecycle.ACTIVE, List.of(issued));
+
+        service.markQuotationSent(10L, 400L, "ส่งให้เจ้าของแล้ว", salesActor);
+        service.markQuotationAccepted(10L, 400L, null, ceoActor);
+        service.markQuotationRejected(10L, 400L, "ลูกค้าไม่รับ", salesActor);
+
+        verify(ticketRepo).markQuotationStatus(10L, 400L, QuotationStatus.SENT);
+        verify(ticketRepo).markQuotationStatus(10L, 400L, QuotationStatus.ACCEPTED);
+        verify(ticketRepo).markQuotationStatus(10L, 400L, QuotationStatus.REJECTED);
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.QUOTATION_SENT), eq(TicketStatus.QUOTATION_ISSUED),
+            eq(TicketStatus.QUOTATION_ISSUED), org.mockito.ArgumentMatchers.contains("OWNER"));
+
+        assertForbidden(() -> service.markQuotationAccepted(10L, 400L, null, otherSales));
+        assertForbidden(() -> service.markQuotationAccepted(10L, 400L, null, salesManagerActor));
+
+        QuotationDto accepted = quotationOf(401L, 11L, "QT-2026-0401",
+            QuotationRecipient.OWNER, 1, QuotationStatus.ACCEPTED);
+        stubDealWithQuotations(11L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.OWNER_SIGNOFF, DealLifecycle.ACTIVE, List.of(accepted));
+        assertConflict(() -> service.markQuotationRejected(11L, 401L, null, salesActor));
+
+        stubDealWithQuotations(12L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.OWNER_SIGNOFF, DealLifecycle.ON_HOLD, List.of(issued));
+        assertConflict(() -> service.markQuotationSent(12L, 400L, null, salesActor));
     }
 
     // ── close ─────────────────────────────────────────────────────────────
@@ -656,9 +767,14 @@ class TicketServiceTest {
     @Test
     void confirmDepositPaid_byAccount_advancesToDepositPaid() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(BigDecimal.ZERO, new BigDecimal("500.00"));
 
         service.confirmDepositPaid(10L, accountActor);
 
+        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("DEPOSIT"),
+            argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
+            eq(5L), isNull(), eq("ยืนยันรับมัดจำ"), isNull(), isNull());
         verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_PAID");
         // Fulfillment hasn't reached GOODS_RECEIVED — no early advance.
         verify(ticketRepo, never()).updatePaymentStatus(10L, "AWAITING_FINAL_PAYMENT");
@@ -667,7 +783,12 @@ class TicketServiceTest {
     @Test
     void confirmDepositPaid_byCeoFallback_isAllowed() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(BigDecimal.ZERO, new BigDecimal("500.00"));
         service.confirmDepositPaid(10L, ceoActor);
+        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("DEPOSIT"),
+            argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
+            eq(4L), isNull(), eq("ยืนยันรับมัดจำ"), isNull(), isNull());
         verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_PAID");
     }
 
@@ -689,9 +810,14 @@ class TicketServiceTest {
         // AWAITING_FINAL_PAYMENT is unreachable and the ticket can never close.
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED,
             "DEPOSIT_NOTICE_ISSUED", "GOODS_RECEIVED");
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(BigDecimal.ZERO, new BigDecimal("500.00"));
 
         service.confirmDepositPaid(10L, accountActor);
 
+        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("DEPOSIT"),
+            argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
+            eq(5L), isNull(), eq("ยืนยันรับมัดจำ"), isNull(), isNull());
         verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_PAID");
         verify(ticketRepo).updatePaymentStatus(10L, "AWAITING_FINAL_PAYMENT");
         verify(ticketRepo).addEvent(eq(10L), eq(5L), anyString(),
@@ -774,18 +900,163 @@ class TicketServiceTest {
     }
 
     @Test
+    void reserveStock_fullCoverage_skipsIrAndStartsProcurement() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
+
+        service.reserveStock(10L, new StockReservationRequest(List.of(
+            new StockReservationRequest.Line(1L, new BigDecimal("100.00"), "พร้อมจากสต็อก"))), importActor);
+
+        verify(ticketRepo).reserveStock(eq(10L), argThat(lines ->
+            lines.size() == 1 && lines.get(0).qtyFromStock().compareTo(new BigDecimal("100.00")) == 0));
+        verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FROM_STOCK);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.PROCUREMENT);
+        verify(ticketRepo).addEvent(eq(10L), eq(3L), anyString(),
+            eq(TicketEventKind.STOCK_RESERVED), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void reserveStock_rejectsQuantityAboveOrdered() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
+
+        assertBadRequest(() -> service.reserveStock(10L, new StockReservationRequest(List.of(
+            new StockReservationRequest.Line(1L, new BigDecimal("101.00"), null))), importActor));
+    }
+
+    @Test
+    void recordPartialDelivery_updatesLineProgressAndStatus() {
+        TicketItemDto initialItem = deliveryItem(1L, "100.00", "0.00", "0.00");
+        TicketDto initial = stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(initialItem),
+            "FULLY_PAID", FulfilmentStatus.GOODS_RECEIVED, DealStage.PROCUREMENT, null);
+        TicketDto updated = ticketLike(initial, List.of(deliveryItem(1L, "100.00", "40.00", "0.00")),
+            FulfilmentStatus.GOODS_RECEIVED);
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
+
+        service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งบางส่วน",
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("40.00")))), importActor);
+
+        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(3L), eq("ส่งบางส่วน"),
+            argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("40.00")) == 0));
+        verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.PARTIALLY_DELIVERED);
+        verify(ticketRepo).addEvent(eq(10L), eq(3L), anyString(),
+            eq(TicketEventKind.DELIVERY_RECORDED), anyString(), anyString(), argThat(msg -> msg.contains("40/100")));
+    }
+
+    @Test
+    void recordPartialDelivery_remainingQuantityCompletesDeliveryAndStage() {
+        TicketItemDto initialItem = deliveryItem(1L, "100.00", "40.00", "0.00");
+        TicketDto initial = stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(initialItem),
+            "FULLY_PAID", FulfilmentStatus.PARTIALLY_DELIVERED, DealStage.PROCUREMENT, null);
+        TicketDto updated = ticketLike(initial, List.of(deliveryItem(1L, "100.00", "100.00", "0.00")),
+            FulfilmentStatus.PARTIALLY_DELIVERED);
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
+        // Warehouse availability now keys off the permanent GOODS_RECEIVED event, not a
+        // prior delivery-record source (see warehouseDeliveryAvailable — Case 8 fix).
+        when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
+
+        service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งส่วนที่เหลือ",
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00")))), importActor);
+
+        verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERED);
+        verify(ticketRepo).addEvent(eq(10L), eq(3L), anyString(),
+            eq(TicketEventKind.DELIVERY_COMPLETED), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void recordPartialDelivery_rejectsOverDeliveryAndWrongRoles() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "40.00", "0.00");
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "FULLY_PAID", FulfilmentStatus.GOODS_RECEIVED, DealStage.PROCUREMENT, null);
+
+        RecordDeliveryRequest over = new RecordDeliveryRequest("WAREHOUSE", null,
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("70.00"))));
+        assertConflict(() -> service.recordPartialDelivery(10L, over, importActor));
+        assertForbidden(() -> service.recordPartialDelivery(10L, over, salesActor));
+        assertForbidden(() -> service.recordPartialDelivery(10L, over, accountActor));
+        assertForbidden(() -> service.recordPartialDelivery(10L, over, salesManagerActor));
+    }
+
+    @Test
+    void recordPartialDelivery_rejectsInactiveDeal() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "FULLY_PAID", FulfilmentStatus.GOODS_RECEIVED, DealStage.PROCUREMENT, null,
+            DealLifecycle.ON_HOLD, DepositPolicy.REQUIRED);
+
+        assertConflict(() -> service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", null,
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("10.00")))), importActor));
+    }
+
+    @Test
+    void completeDelivery_deliversRemainingFromStockWhenCovered() {
+        TicketItemDto initialItem = deliveryItem(1L, "100.00", "40.00", "100.00");
+        TicketDto initial = stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(initialItem),
+            "FULLY_PAID", FulfilmentStatus.FROM_STOCK, DealStage.PROCUREMENT, null);
+        TicketDto updated = ticketLike(initial, List.of(deliveryItem(1L, "100.00", "100.00", "100.00")),
+            FulfilmentStatus.FROM_STOCK);
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
+
+        service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบจากสต็อก"), importActor);
+
+        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("STOCK"), eq(3L), eq("ส่งครบจากสต็อก"),
+            argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0));
+        verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
+    }
+
+    @Test
+    void recordPartialDelivery_stockFirstThenWarehouseRemainder_isAllowed() {
+        // Case 8 ordering regression: 40 from stock delivered first flips status to
+        // PARTIALLY_DELIVERED; the imported remainder must still be WAREHOUSE-deliverable
+        // because goods physically reached the warehouse (GOODS_RECEIVED event), even
+        // though the current fulfillment_status is no longer GOODS_RECEIVED.
+        TicketItemDto stockDelivered = deliveryItem(1L, "100.00", "40.00", "40.00");
+        TicketDto partiallyDelivered = stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED,
+            List.of(stockDelivered), "FULLY_PAID", FulfilmentStatus.PARTIALLY_DELIVERED,
+            DealStage.PROCUREMENT, null);
+        TicketDto fully = ticketLike(partiallyDelivered,
+            List.of(deliveryItem(1L, "100.00", "100.00", "40.00")), FulfilmentStatus.PARTIALLY_DELIVERED);
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(partiallyDelivered),
+            Optional.of(fully), Optional.of(fully));
+        // No prior WAREHOUSE delivery record — the goods-received EVENT is the signal.
+        when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
+
+        service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งของนำเข้าที่เหลือ",
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00")))), importActor);
+
+        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(3L), anyString(),
+            argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0));
+        verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
+    }
+
+    @Test
     void confirmFinalPayment_byAccount_completesPaymentTrack() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("500.00"),
+            new BigDecimal("1000.00"));
 
         service.confirmFinalPayment(10L, accountActor);
 
+        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"),
+            argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
+            eq(5L), isNull(), eq("ยืนยันชำระส่วนที่เหลือ"), isNull(), isNull());
         verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
     }
 
     @Test
     void confirmFinalPayment_byCeoFallback_isAllowed() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("500.00"),
+            new BigDecimal("1000.00"));
         service.confirmFinalPayment(10L, ceoActor);
+        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"),
+            argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
+            eq(4L), isNull(), eq("ยืนยันชำระส่วนที่เหลือ"), isNull(), isNull());
         verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
     }
 
@@ -795,14 +1066,428 @@ class TicketServiceTest {
     }
 
     @Test
-    void confirmFinalPayment_rejectsBeforeAwaitingFinalPayment() {
+    void confirmFinalPayment_fromDepositPaidBeforeGoodsReceived_isAllowed() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "SHIPPING");
-        assertConflict(() -> service.confirmFinalPayment(10L, accountActor));
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("500.00"),
+            new BigDecimal("1000.00"));
+
+        service.confirmFinalPayment(10L, accountActor);
+
+        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"),
+            argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
+            eq(5L), isNull(), eq("ยืนยันชำระส่วนที่เหลือ"), isNull(), isNull());
+        verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
+    }
+
+    @Test
+    void recordPayment_balanceBringsCumulativePaidToFull() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "SHIPPING");
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("1000.00"));
+
+        service.recordPayment(10L,
+            new RecordPaymentRequest("BALANCE", new BigDecimal("500.00"), null, "โอนครบ", null, "RC-1", false),
+            accountActor);
+
+        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"), eq(new BigDecimal("500.00")),
+            eq(5L), isNull(), eq("โอนครบ"), isNull(), eq("RC-1"));
+        verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
+    }
+
+    @Test
+    void recordPayment_rejectsOverpaymentUnlessExplicitlyAllowedWithNote() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", null);
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("900.00"));
+
+        assertBadRequest(() -> service.recordPayment(10L,
+            new RecordPaymentRequest("BALANCE", new BigDecimal("200.00"), null, null, null, null, false),
+            accountActor));
+
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("900.00"), new BigDecimal("1100.00"));
+        service.recordPayment(10L,
+            new RecordPaymentRequest("BALANCE", new BigDecimal("200.00"), null, "ลูกค้าโอนเกิน รอหักบิลถัดไป", null, null, true),
+            accountActor);
+
+        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"), eq(new BigDecimal("200.00")),
+            eq(5L), isNull(), eq("ลูกค้าโอนเกิน รอหักบิลถัดไป"), isNull(), isNull());
+    }
+
+    @Test
+    void recordPayment_rejectsNonAccountAndInactiveDeals() {
+        assertForbidden(() -> service.recordPayment(10L,
+            new RecordPaymentRequest("DEPOSIT", new BigDecimal("100.00"), null, null, null, null, false),
+            salesManagerActor));
+
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "DEPOSIT_PAID", null,
+            DealStage.DEPOSIT_RECEIVED, null, DealLifecycle.ON_HOLD, DepositPolicy.REQUIRED);
+        assertConflict(() -> service.recordPayment(10L,
+            new RecordPaymentRequest("BALANCE", new BigDecimal("100.00"), null, null, null, null, false),
+            accountActor));
+    }
+
+    @Test
+    void recordPayment_duplicateReceiptRefReturnsConflict() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", null);
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("100.00"));
+        when(ticketRepo.insertPaymentReceipt(eq(10L), eq("BALANCE"), eq(new BigDecimal("100.00")),
+            eq(5L), isNull(), isNull(), isNull(), eq("DUP")))
+            .thenThrow(new DataIntegrityViolationException("duplicate"));
+
+        assertConflict(() -> service.recordPayment(10L,
+            new RecordPaymentRequest("BALANCE", new BigDecimal("100.00"), null, null, null, "DUP", false),
+            accountActor));
+    }
+
+    // ── create (V50: lightweight deal start, required project) ────────────
+
+    @Test
+    void create_requiresProject() {
+        var request = createRequest(null, List.of());
+        assertBadRequest(() -> service.create(request, salesActor));
+        verify(ticketRepo, never()).create(any(), anyString(), org.mockito.ArgumentMatchers.anyLong(), anyString());
+    }
+
+    @Test
+    void create_withoutItems_startsLightweightDraftWithoutNotifying() {
+        var request = createRequest(77L, List.of());
+        when(ticketRepo.nextTicketCode()).thenReturn("PR-2026-0001");
+        when(ticketRepo.create(request, "PR-2026-0001", 1L, "sales")).thenReturn(10L);
+        stubTicket(10L, 1L, TicketStatus.DRAFT);
+
+        service.create(request, salesActor);
+
+        // A lead-stage deal is the rep's private draft — import/CEO not notified yet.
+        verify(notifRepo, never()).notifyByRole(anyString(), org.mockito.ArgumentMatchers.anyLong(),
+            anyString(), anyString());
+    }
+
+    @Test
+    void create_withItems_entersPriceRequestFlowAndNotifies() {
+        var request = createRequest(77L, List.of(sampleItemRequest()));
+        when(ticketRepo.nextTicketCode()).thenReturn("PR-2026-0001");
+        when(ticketRepo.create(request, "PR-2026-0001", 1L, "sales")).thenReturn(10L);
+        stubTicket(10L, 1L, TicketStatus.SUBMITTED);
+
+        service.create(request, salesActor);
+
+        verify(notifRepo).notifyByRole(eq("import"), eq(10L), anyString(), anyString());
+        verify(notifRepo).notifyByRole(eq("ceo"), eq(10L), anyString(), anyString());
+    }
+
+    // ── deal pipeline: manual stage updates (V50) ─────────────────────────
+
+    @Test
+    void updateStage_ownerCanAdvanceSalesStage() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.PRESENTATION, null);
+        service.updateStage(10L, DealStage.SPEC_APPROVED, null, salesActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.SPEC_APPROVED);
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.STAGE_CHANGED), eq(DealStage.PRESENTATION), eq(DealStage.SPEC_APPROVED), isNull());
+    }
+
+    @Test
+    void updateStage_salesManagerAndCeoCanAdvanceSalesStage() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.PRESENTATION, null);
+        service.updateStage(10L, DealStage.SPEC_APPROVED, null, salesManagerActor);
+        service.updateStage(10L, DealStage.OWNER_SIGNOFF, "CEO ปรับตามแผนติดตามดีล", ceoActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.SPEC_APPROVED);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.OWNER_SIGNOFF);
+    }
+
+    @Test
+    void updateStage_rejectsNonOwnerSalesAndWrongRolesPerTarget() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.PRESENTATION, null);
+        // another rep's deal
+        assertForbidden(() -> service.updateStage(10L, DealStage.SPEC_APPROVED, null, otherSales));
+        // sales cannot set money/import fallback stages
+        assertForbidden(() -> service.updateStage(10L, DealStage.DEPOSIT_RECEIVED, null, salesActor));
+        assertForbidden(() -> service.updateStage(10L, DealStage.PROCUREMENT, null, salesActor));
+        assertForbidden(() -> service.updateStage(10L, DealStage.CLOSED_PAID, null, salesActor));
+        // account only money stages; import only PROCUREMENT
+        assertForbidden(() -> service.updateStage(10L, DealStage.SPEC_APPROVED, null, accountActor));
+        assertForbidden(() -> service.updateStage(10L, DealStage.SPEC_APPROVED, null, importActor));
+        service.updateStage(10L, DealStage.DEPOSIT_RECEIVED, "บัญชีแก้ย้อนหลังจากเอกสารรับเงิน", accountActor);
+        service.updateStage(10L, DealStage.PROCUREMENT, "นำเข้าเริ่มออก IR แล้ว", importActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.DEPOSIT_RECEIVED);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.PROCUREMENT);
+    }
+
+    @Test
+    void updateStage_rejectsUnknownSameLostAndBackwardWithoutNote() {
+        assertBadRequest(() -> service.updateStage(10L, "S3", null, salesActor));
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, null);
+        assertConflict(() -> service.updateStage(10L, DealStage.NEGOTIATION, null, salesActor));
+        assertBadRequest(() -> service.updateStage(10L, DealStage.PRESENTATION, "  ", salesActor));
+        service.updateStage(10L, DealStage.PRESENTATION, "ลูกค้าเปลี่ยนผู้ออกแบบ เริ่มสเปคใหม่", salesActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.PRESENTATION);
+        stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, DealLostReason.PRICE);
+        assertConflict(() -> service.updateStage(11L, DealStage.ORDER_RECEIVED, null, salesActor));
+    }
+
+    @Test
+    void updateStage_multiStepForwardRequiresNote() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.PRESENTATION, null);
+
+        assertBadRequest(() -> service.updateStage(10L, DealStage.OWNER_SIGNOFF, null, salesActor));
+        service.updateStage(10L, DealStage.OWNER_SIGNOFF, "ลูกค้าอนุมัติสเปคและเจ้าของเซ็นแล้ว", salesActor);
+
+        verify(ticketRepo).updateSalesStage(10L, DealStage.OWNER_SIGNOFF);
+    }
+
+    // ── deal pipeline: lost / reopen (V50) ────────────────────────────────
+
+    @Test
+    void markLost_ownerPreservesStageAndRecordsReason() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, null);
+        service.markLost(10L, DealLostReason.PRICE, "แพ้ราคาคู่แข่ง", salesActor);
+        verify(ticketRepo).markDealLost(10L, DealLostReason.PRICE);
+        verify(ticketRepo, never()).updateSalesStage(org.mockito.ArgumentMatchers.anyLong(), anyString());
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.MARKED_LOST), eq(DealStage.NEGOTIATION), eq(DealStage.NEGOTIATION), anyString());
+    }
+
+    @Test
+    void markLost_gatesAndValidation() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, null);
+        assertBadRequest(() -> service.markLost(10L, "F2", null, salesActor));
+        assertForbidden(() -> service.markLost(10L, DealLostReason.PRICE, null, otherSales));
+        assertForbidden(() -> service.markLost(10L, DealLostReason.PRICE, null, importActor));
+        assertForbidden(() -> service.markLost(10L, DealLostReason.PRICE, null, accountActor));
+        stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, DealLostReason.PRICE);
+        assertConflict(() -> service.markLost(11L, DealLostReason.LEAD_TIME, null, salesActor));
+    }
+
+    @Test
+    void reopenDeal_resumesAtPreservedStage() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null,
+            DealStage.NEGOTIATION, DealLostReason.PROJECT_ON_HOLD);
+        service.reopenDeal(10L, "โครงการกลับมาก่อสร้างต่อ", salesActor);
+        verify(ticketRepo).clearDealLost(10L);
+        verify(ticketRepo, never()).updateSalesStage(org.mockito.ArgumentMatchers.anyLong(), anyString());
+        stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, null);
+        assertConflict(() -> service.reopenDeal(11L, null, salesActor));
+    }
+
+    // ── deal lifecycle + policies (V51) ──────────────────────────────────
+
+    @Test
+    void lifecycle_holdDormantResume_preserveStageAndAudit() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, null);
+        service.placeOnHold(10L, "รอเจ้าของโครงการ", salesActor);
+        verify(ticketRepo).updateLifecycle(10L, DealLifecycle.ON_HOLD);
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.ON_HOLD), eq(DealStage.NEGOTIATION), eq(DealStage.NEGOTIATION),
+            eq("รอเจ้าของโครงการ"));
+
+        stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), null, null,
+            DealStage.NEGOTIATION, null, DealLifecycle.ON_HOLD, DepositPolicy.REQUIRED);
+        service.markDormant(11L, null, salesManagerActor);
+        verify(ticketRepo).updateLifecycle(11L, DealLifecycle.DORMANT);
+
+        stubDeal(12L, 1L, TicketStatus.DRAFT, List.of(), null, null,
+            DealStage.NEGOTIATION, null, DealLifecycle.DORMANT, DepositPolicy.REQUIRED);
+        service.resume(12L, "กลับมาติดตามต่อ", ceoActor);
+        verify(ticketRepo).updateLifecycle(12L, DealLifecycle.ACTIVE);
+        verify(ticketRepo).addEvent(eq(12L), eq(4L), anyString(),
+            eq(TicketEventKind.RESUMED), eq(DealStage.NEGOTIATION), eq(DealStage.NEGOTIATION),
+            eq("กลับมาติดตามต่อ"));
+    }
+
+    @Test
+    void lifecycle_gatesMutationsButAllowsComment() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(sampleItem()), null, null,
+            DealStage.PRESENTATION, null, DealLifecycle.ON_HOLD, DepositPolicy.REQUIRED);
+
+        assertConflict(() -> service.submit(10L, salesActor));
+        assertConflict(() -> service.updateStage(10L, DealStage.SPEC_APPROVED, null, salesActor));
+        service.comment(10L, new CommentRequest("ยังรอลูกค้ากลับมา"), salesActor);
+
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.COMMENTED), isNull(), isNull(), eq("ยังรอลูกค้ากลับมา"));
+    }
+
+    @Test
+    void waiveDeposit_accountOrCeoOnlyAndIssueImportRequestCanBypassNotice() {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.ORDER_RECEIVED, null);
+
+        service.waiveDeposit(10L, DepositPolicy.WAIVED, "ลูกค้าเครดิตดี", accountActor);
+
+        verify(ticketRepo).updateDepositPolicy(10L, DepositPolicy.WAIVED, "ลูกค้าเครดิตดี", 5L);
+        verify(ticketRepo).addEvent(eq(10L), eq(5L), anyString(),
+            eq(TicketEventKind.POLICY_CHANGED), eq(DealStage.ORDER_RECEIVED), eq(DealStage.ORDER_RECEIVED),
+            eq("deposit_policy → WAIVED — ลูกค้าเครดิตดี"));
+        assertForbidden(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, "sales ขอเอง", salesActor));
+        assertBadRequest(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, " ", accountActor));
+
+        stubDeal(11L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.ORDER_RECEIVED, null, DealLifecycle.ACTIVE, DepositPolicy.WAIVED);
+        service.issueImportRequest(11L, importActor);
+        verify(ticketRepo).updateFulfillmentStatus(11L, "IR_ISSUED");
+
+        stubDeal(12L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.ORDER_RECEIVED, null, DealLifecycle.ACTIVE, DepositPolicy.REQUIRED);
+        assertConflict(() -> service.issueImportRequest(12L, importActor));
+    }
+
+    @Test
+    void policyActions_validateAndAudit() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null,
+            DealStage.AWAITING_BUYER, null);
+
+        service.setTenderRequirement(10L, TenderRequirement.REQUIRED, salesActor);
+        service.setEntryChannel(10L, EntryChannel.OWNER_DIRECT, null, ceoActor);
+
+        verify(ticketRepo).updateTenderRequirement(10L, TenderRequirement.REQUIRED);
+        verify(ticketRepo).updateEntryChannel(10L, EntryChannel.OWNER_DIRECT);
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.POLICY_CHANGED), eq(DealStage.AWAITING_BUYER), eq(DealStage.AWAITING_BUYER),
+            eq("tender_requirement → REQUIRED"));
+        assertForbidden(() -> service.setTenderRequirement(10L, TenderRequirement.UNKNOWN, importActor));
+        assertBadRequest(() -> service.setEntryChannel(10L, "WALK_IN", null, salesActor));
+    }
+
+    @Test
+    void entryChannel_ownerAndBuyerDirectPoliciesSupportSkipPaths() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null,
+            DealStage.AWAITING_BUYER, null);
+        service.setEntryChannel(10L, EntryChannel.OWNER_DIRECT, null, ceoActor);
+
+        stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), null, null,
+            DealStage.AWAITING_BUYER, null);
+        service.setEntryChannel(11L, EntryChannel.BUYER_DIRECT, null, salesActor);
+
+        verify(ticketRepo).updateEntryChannel(10L, EntryChannel.OWNER_DIRECT);
+        verify(ticketRepo).updateEntryChannel(11L, EntryChannel.BUYER_DIRECT);
+    }
+
+    @Test
+    void actions_requireViewAccessAndReflectLifecycle() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(sampleItem()), null, null,
+            DealStage.PRESENTATION, null);
+
+        var actions = service.actions(10L, salesActor);
+        List<String> names = actions.availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
+
+        assertThat(actions.currentState().lifecycle()).isEqualTo(DealLifecycle.ACTIVE);
+        assertThat(names).contains("SUBMIT", "UPDATE_STAGE", "PLACE_ON_HOLD");
+        assertForbidden(() -> service.actions(10L, otherSales));
+
+        stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(sampleItem()), null, null,
+            DealStage.PRESENTATION, null, DealLifecycle.ON_HOLD, DepositPolicy.REQUIRED);
+        List<String> paused = service.actions(11L, salesManagerActor)
+            .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
+        assertThat(paused).contains("RESUME", "MARK_DORMANT");
+        assertThat(paused).doesNotContain("SUBMIT", "UPDATE_STAGE");
+
+        stubDealWithQuotations(12L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.QUOTE_BUYER, DealLifecycle.ACTIVE, List.of(quotationOf(12L, 12L, "QT-2026-0012",
+                QuotationRecipient.BUYER, 1, QuotationStatus.ISSUED)));
+        List<String> quotationOwner = service.actions(12L, salesActor)
+            .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
+        assertThat(quotationOwner).contains("MARK_QUOTATION_SENT", "MARK_QUOTATION_ACCEPTED",
+            "MARK_QUOTATION_REJECTED");
+        List<String> quotationManager = service.actions(12L, salesManagerActor)
+            .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
+        assertThat(quotationManager).doesNotContain("MARK_QUOTATION_SENT", "MARK_QUOTATION_ACCEPTED",
+            "MARK_QUOTATION_REJECTED");
+    }
+
+    // ── deal pipeline: auto-advance from operational transitions (V50) ────
+
+    @Test
+    void confirmCustomer_autoAdvancesDealToOrderReceived() {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null, DealStage.NEGOTIATION, null);
+        service.confirmCustomer(10L, salesActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.ORDER_RECEIVED);
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.STAGE_CHANGED), eq(DealStage.NEGOTIATION), eq(DealStage.ORDER_RECEIVED), anyString());
+    }
+
+    @Test
+    void confirmDepositPaid_autoAdvancesDealToDepositReceived() {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(),
+            "DEPOSIT_NOTICE_ISSUED", null, DealStage.ORDER_RECEIVED, null);
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(BigDecimal.ZERO, new BigDecimal("500.00"));
+        service.confirmDepositPaid(10L, accountActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.DEPOSIT_RECEIVED);
+    }
+
+    @Test
+    void issueImportRequest_autoAdvancesDealToProcurement() {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(),
+            "DEPOSIT_PAID", null, DealStage.DEPOSIT_RECEIVED, null);
+        service.issueImportRequest(10L, importActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.PROCUREMENT);
+    }
+
+    @Test
+    void confirmFinalPayment_autoAdvancesDealToClosedPaid() {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(),
+            "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED", DealStage.DELIVERED, null);
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("500.00"),
+            new BigDecimal("1000.00"));
+        service.confirmFinalPayment(10L, accountActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.CLOSED_PAID);
+    }
+
+    @Test
+    void autoAdvance_neverRegressesAndSkipsLostDeals() {
+        // Deal already past ORDER_RECEIVED (manual correction) — re-confirming must not regress.
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null, DealStage.PROCUREMENT, null);
+        service.confirmCustomer(10L, salesActor);
+        verify(ticketRepo, never()).updateSalesStage(org.mockito.ArgumentMatchers.anyLong(), anyString());
+        // Closed-lost lifecycle gates operational transitions before auto-advance.
+        stubDeal(11L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.NEGOTIATION, DealLostReason.PROJECT_ON_HOLD);
+        assertConflict(() -> service.confirmCustomer(11L, salesActor));
+        verify(ticketRepo, never()).updateSalesStage(org.mockito.ArgumentMatchers.anyLong(), anyString());
+    }
+
+    @Test
+    void midFulfillmentTransitions_stayInsideProcurement() {
+        // IR_SENT / SHIPPING / GOODS_RECEIVED render from fulfillment_status — no stage writes.
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "DEPOSIT_PAID", "IR_ISSUED",
+            DealStage.PROCUREMENT, null);
+        service.markIrSent(10L, importActor);
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "DEPOSIT_PAID", "IR_SENT",
+            DealStage.PROCUREMENT, null);
+        service.markShipping(10L, importActor);
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "DEPOSIT_PAID", "SHIPPING",
+            DealStage.PROCUREMENT, null);
+        service.markGoodsReceived(10L, importActor);
+        verify(ticketRepo, never()).updateSalesStage(org.mockito.ArgumentMatchers.anyLong(), anyString());
+    }
+
+    @Test
+    void salesManager_stageWriteIsTheOnlyTicketWritePower() {
+        // The pipeline stage/lost/reopen trio is the deliberate exception to
+        // handoff 58's read-only invariant — operational actions must stay denied.
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null, DealStage.NEGOTIATION, null);
+        assertForbidden(() -> service.confirmCustomer(10L, salesManagerActor));
+        assertForbidden(() -> service.submit(10L, salesManagerActor));
+        service.markLost(10L, DealLostReason.RELATIONSHIP, null, salesManagerActor);
+        verify(ticketRepo).markDealLost(10L, DealLostReason.RELATIONSHIP);
     }
 
     @Test
     void close_dualTrackComplete_transitionsToClosed() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", "GOODS_RECEIVED");
+
+        service.close(10L, salesActor);
+
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.CLOSED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.CLOSED), isNull());
+    }
+
+    @Test
+    void close_dualTrackCompleteWithDeliveryRecords_transitionsToClosed() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", FulfilmentStatus.FULLY_DELIVERED);
 
         service.close(10L, salesActor);
 
@@ -819,6 +1504,14 @@ class TicketServiceTest {
     @Test
     void close_dualTrackRejectsWhenFulfillmentIncomplete() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", "SHIPPING");
+        assertConflict(() -> service.close(10L, salesActor));
+    }
+
+    @Test
+    void close_rejectsGoodsReceivedWhenDeliveryRecordsAreInUseButNotComplete() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", "GOODS_RECEIVED");
+        when(ticketRepo.hasDeliveries(10L)).thenReturn(true);
+
         assertConflict(() -> service.close(10L, salesActor));
     }
 
@@ -1111,7 +1804,7 @@ class TicketServiceTest {
     @Test
     void generateQuotation_rejectsSalesManagerRole() {
         // Role-gated (SALES_ROLES) before the ownership check even runs.
-        assertForbidden(() -> service.generateQuotation(10L, salesManagerActor));
+        assertForbidden(() -> service.generateQuotation(10L, designerQuotation(), salesManagerActor));
     }
 
     @Test
@@ -1196,11 +1889,47 @@ class TicketServiceTest {
 
     private TicketDto stubTicket(long ticketId, long createdById, String status, List<TicketItemDto> items,
                                  String paymentStatus, String fulfillmentStatus) {
+        return stubDeal(ticketId, createdById, status, items, paymentStatus, fulfillmentStatus,
+            DealStage.QUOTE_DESIGN_SIDE, null);
+    }
+
+    /** Full deal stub: operational lifecycle + pipeline stage/lost state (V50). */
+    private TicketDto stubDeal(long ticketId, long createdById, String status, List<TicketItemDto> items,
+                               String paymentStatus, String fulfillmentStatus,
+                               String salesStage, String lostReason) {
+        String lifecycle = lostReason == null ? DealLifecycle.ACTIVE : DealLifecycle.CLOSED_LOST;
+        return stubDeal(ticketId, createdById, status, items, paymentStatus, fulfillmentStatus,
+            salesStage, lostReason, lifecycle, DepositPolicy.REQUIRED);
+    }
+
+    private TicketDto stubDeal(long ticketId, long createdById, String status, List<TicketItemDto> items,
+                               String paymentStatus, String fulfillmentStatus,
+                               String salesStage, String lostReason,
+                               String lifecycle, String depositPolicy) {
+        return stubDealWithQuotations(ticketId, createdById, status, items, paymentStatus, fulfillmentStatus,
+            salesStage, lifecycle, List.of(), depositPolicy, lostReason);
+    }
+
+    private TicketDto stubDealWithQuotations(long ticketId, long createdById, String status, List<TicketItemDto> items,
+                                             String paymentStatus, String fulfillmentStatus,
+                                             String salesStage, String lifecycle,
+                                             List<QuotationDto> quotations) {
+        return stubDealWithQuotations(ticketId, createdById, status, items, paymentStatus, fulfillmentStatus,
+            salesStage, lifecycle, quotations, DepositPolicy.REQUIRED, null);
+    }
+
+    private TicketDto stubDealWithQuotations(long ticketId, long createdById, String status, List<TicketItemDto> items,
+                                             String paymentStatus, String fulfillmentStatus,
+                                             String salesStage, String lifecycle,
+                                             List<QuotationDto> quotations, String depositPolicy, String lostReason) {
         TicketSummaryDto summary = new TicketSummaryDto(
             ticketId, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", status, "NORMAL",
             createdById, "Sales User", null, null, "Test Customer", null, null, null, null, null, null,
-            Instant.now(), Instant.now(), null, items.size(), false, paymentStatus, fulfillmentStatus);
-        TicketDto ticket = new TicketDto(summary, items, List.of(), null, List.of());
+            Instant.now(), Instant.now(), null, items.size(), false, paymentStatus, fulfillmentStatus,
+            salesStage, lostReason, lostReason == null ? null : Instant.now(), Instant.now(),
+            lifecycle, TenderRequirement.UNKNOWN, depositPolicy, null, EntryChannel.DESIGNER_LED);
+        TicketDto ticket = new TicketDto(summary, items, List.of(),
+            quotations.isEmpty() ? null : quotations.get(0), quotations);
         when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
         return ticket;
     }
@@ -1212,10 +1941,65 @@ class TicketServiceTest {
             Instant.now(), null, null, "THB", 1, "ISSUED");
     }
 
+    private static QuotationDto quotationOf(long quotationId, long ticketId, String number,
+                                            String recipientType, int version, String docStatus) {
+        return new QuotationDto(quotationId, ticketId, number, 1L, "Sales User",
+            Instant.now(), null, null, "THB", version, docStatus, recipientType,
+            null, null, null, null, null, null, null, null, null);
+    }
+
+    private static GenerateQuotationRequest designerQuotation() {
+        return new GenerateQuotationRequest(QuotationRecipient.DESIGNER, null, null, null, null, null, null);
+    }
+
+    private static CreateTicketRequest createRequest(Long projectId, List<TicketItemRequest> items) {
+        return new CreateTicketRequest("Test deal", "NORMAL", "ลูกค้า", null, projectId, null, null, null, items);
+    }
+
+    private static TicketItemRequest sampleItemRequest() {
+        return new TicketItemRequest("Brand", "Model", "White", "Matte", "60x60", null,
+            BigDecimal.ONE, null, null, null, null, null, null, null);
+    }
+
+    private static TicketItemDto sampleItem() {
+        return new TicketItemDto(1L, 10L, "Brand", "Model", null, null,
+            "pcs", null, BigDecimal.ONE, null, null, null, null, null,
+            null, "THB", 0, null, null, null, "PIECE", null, null);
+    }
+
+    private static TicketItemDto deliveryItem(long itemId, String qty, String delivered, String fromStock) {
+        return new TicketItemDto(itemId, 10L, "Brand", "Model", null, null,
+            "pcs", null, new BigDecimal(qty), null, null, null, null, null,
+            null, "THB", 0, null, null, null, "PIECE", null, null,
+            new BigDecimal(delivered), new BigDecimal(fromStock), null);
+    }
+
+    private static TicketDto ticketLike(TicketDto source, List<TicketItemDto> items, String fulfillmentStatus) {
+        TicketSummaryDto s = source.summary();
+        TicketSummaryDto summary = new TicketSummaryDto(
+            s.id(), s.code(), s.type(), s.title(), s.status(), s.priority(),
+            s.createdById(), s.createdByName(), s.assignedToId(), s.assignedToName(),
+            s.customerName(), s.customerId(), s.projectId(), s.projectName(),
+            s.contactId(), s.contactName(), s.note(), s.createdAt(), s.updatedAt(), s.closedAt(),
+            items.size(), s.hasEdits(), s.paymentStatus(), fulfillmentStatus,
+            s.salesStage(), s.lostReason(), s.lostAt(), s.stageUpdatedAt(),
+            s.lifecycle(), s.tenderRequirement(), s.depositPolicy(), s.depositPolicyReason(),
+            s.entryChannel(), s.billingDate(), s.dueDate(), s.creditTermDays(), s.lastFollowUpAt(),
+            s.nextFollowUpAt(), s.paymentStage(), s.amountPayable(), s.amountPaid(),
+            s.amountOutstanding(), s.overdue());
+        return new TicketDto(summary, items, source.events(), source.quotation(), source.quotations());
+    }
+
     private static void assertForbidden(ThrowableAssert.ThrowingCallable action) {
         assertThatThrownBy(action)
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    private static void assertBadRequest(ThrowableAssert.ThrowingCallable action) {
+        assertThatThrownBy(action)
+            .isInstanceOfSatisfying(ApiException.class, e ->
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
     private static void assertConflict(ThrowableAssert.ThrowingCallable action) {

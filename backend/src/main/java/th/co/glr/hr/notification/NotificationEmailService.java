@@ -27,7 +27,17 @@ public class NotificationEmailService {
     }
 
     @Async
+    public void send(long employeeId, String to, String subject, String body) {
+        sendInternal(employeeId, to, null, subject, body, null);
+    }
+
+    @Async
     public void send(long employeeId, String to, String recipientName, String subject, String body, String link) {
+        sendInternal(employeeId, to, recipientName, subject, body, link);
+    }
+
+    private void sendInternal(long employeeId, String to, String recipientName, String subject, String body,
+                              String link) {
         // override-to lets a test deployment redirect every notification email to one real inbox
         // (regardless of the employee's actual/fake address, or even a missing one) so the email
         // pipeline can be verified without real per-employee mailboxes. Blank on every other

@@ -28,6 +28,27 @@ public final class TicketEventKind {
     // CEO manual price override on a ticket item (2026-07-16 pricing-integrity audit) —
     // sales.ticket_event.chk_event_kind was extended for this in V48.
     public static final String PRICE_OVERRIDDEN      = "PRICE_OVERRIDDEN";
+    // Deal pipeline events (V50) — from_status/to_status carry DealStage codes.
+    // chk_event_kind was re-declared for these in V50.
+    public static final String STAGE_CHANGED         = "STAGE_CHANGED";
+    public static final String MARKED_LOST           = "MARKED_LOST";
+    public static final String REOPENED              = "REOPENED";
+    // Deal lifecycle + structured policy events (V51).
+    public static final String ON_HOLD                = "ON_HOLD";
+    public static final String DORMANT                = "DORMANT";
+    public static final String RESUMED                = "RESUMED";
+    public static final String POLICY_CHANGED         = "POLICY_CHANGED";
+    // Quotation recipient-chain lifecycle events (V52).
+    public static final String QUOTATION_SENT         = "QUOTATION_SENT";
+    public static final String QUOTATION_ACCEPTED     = "QUOTATION_ACCEPTED";
+    public static final String QUOTATION_REJECTED     = "QUOTATION_REJECTED";
+    // Payment ledger + billing events (V53).
+    public static final String PAYMENT_RECORDED       = "PAYMENT_RECORDED";
+    public static final String BILLING_UPDATED        = "BILLING_UPDATED";
+    // Per-line fulfilment + delivery events (V54).
+    public static final String STOCK_RESERVED         = "STOCK_RESERVED";
+    public static final String DELIVERY_RECORDED      = "DELIVERY_RECORDED";
+    public static final String DELIVERY_COMPLETED     = "DELIVERY_COMPLETED";
 
     private TicketEventKind() {}
 }

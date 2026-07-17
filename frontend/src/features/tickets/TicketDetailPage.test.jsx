@@ -15,6 +15,14 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     api: {
       tickets: {
         get: vi.fn(),
+        listPayments: vi.fn(),
+        recordPayment: vi.fn(),
+        setBilling: vi.fn(),
+        listDeliveries: vi.fn(),
+        reserveStock: vi.fn(),
+        recordDelivery: vi.fn(),
+        completeDelivery: vi.fn(),
+        actions: vi.fn(),
         approve: vi.fn(),
         comment: vi.fn(),
       },
@@ -45,10 +53,20 @@ function buildTicket(overrides = {}) {
       createdAt: '2026-07-01T09:00:00.000Z',
       updatedAt: '2026-07-02T09:00:00.000Z',
       hasEdits: false,
+      billingDate: null,
+      dueDate: null,
+      creditTermDays: null,
+      lastFollowUpAt: null,
+      nextFollowUpAt: null,
+      paymentStage: 'NOT_REQUIRED',
+      amountPayable: 0,
+      amountPaid: 0,
+      amountOutstanding: 0,
+      overdue: false,
       ...overrides.summary,
     },
     items: overrides.items ?? [
-      { id: 70101, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60', qty: 10, proposedPrice: 150, approvedPrice: null },
+      { id: 70101, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60', qty: 10, qtyDelivered: 0, qtyFromStock: 0, proposedPrice: 150, approvedPrice: null },
     ],
     events: overrides.events ?? [
       { id: 1, kind: 'SUBMITTED', actorName: 'สมชาย ใจดี', createdAt: '2026-07-01T09:00:00.000Z' },
@@ -83,12 +101,32 @@ describe('TicketDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.tickets.get.mockResolvedValue({ ticket: buildTicket() });
+    api.tickets.actions.mockResolvedValue({
+      currentState: {
+        lifecycle: 'ACTIVE',
+        salesStage: 'QUOTE_DESIGN_SIDE',
+        paymentStatus: null,
+        fulfillmentStatus: null,
+        status: 'price_proposed',
+      },
+      availableActions: [
+        { action: 'APPROVE', kind: 'operational', label: 'อนุมัติราคา' },
+        { action: 'REJECT', kind: 'operational', label: 'ตีกลับราคา', requiredFields: ['reason'] },
+      ],
+    });
     api.attachments.list.mockResolvedValue({ attachments: [] });
+    api.tickets.listPayments.mockResolvedValue({ items: [] });
+    api.tickets.listDeliveries.mockResolvedValue({ items: [] });
     api.factoryConfigs.list.mockResolvedValue({ factories: [] });
     api.tickets.approve.mockResolvedValue({
       ticket: buildTicket({ summary: { status: 'approved' } }),
     });
     api.tickets.comment.mockResolvedValue({ ticket: buildTicket() });
+    api.tickets.recordPayment.mockResolvedValue({ ticket: buildTicket() });
+    api.tickets.setBilling.mockResolvedValue({ ticket: buildTicket() });
+    api.tickets.reserveStock.mockResolvedValue({ ticket: buildTicket() });
+    api.tickets.recordDelivery.mockResolvedValue({ ticket: buildTicket() });
+    api.tickets.completeDelivery.mockResolvedValue({ ticket: buildTicket() });
   });
 
   it('renders a ticket from a mocked api.tickets.get', async () => {
@@ -107,7 +145,7 @@ describe('TicketDetailPage', () => {
     expect(screen.getByText('รอการอนุมัติ')).not.toBeNull();
     expect(api.tickets.get).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole('button', { name: /^อนุมัติ$/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^อนุมัติ$/ }));
 
     await waitFor(() => expect(api.tickets.approve).toHaveBeenCalledWith(701));
     // New status renders from the mutation's setQueryData fast path.
@@ -115,6 +153,175 @@ describe('TicketDetailPage', () => {
     // The ticket-detail query itself was never re-fetched — the mutation
     // wrote the response straight into the cache instead.
     expect(api.tickets.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides cockpit actions that are absent from api.tickets.actions', async () => {
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE',
+        salesStage: 'QUOTE_DESIGN_SIDE',
+        paymentStatus: null,
+        fulfillmentStatus: null,
+        status: 'price_proposed',
+      },
+      availableActions: [],
+    });
+
+    renderTicketDetailPage();
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' })).not.toBeNull();
+    await waitFor(() => expect(api.tickets.actions).toHaveBeenCalledWith(701));
+
+    expect(screen.queryByRole('button', { name: /^อนุมัติ$/ })).toBeNull();
+  });
+
+  it('renders quotation recipient groups and hides mark actions absent from api.tickets.actions', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        quotations: [
+          {
+            id: 9001,
+            ticketId: 701,
+            number: 'QT-2026-0901',
+            issuedById: 1,
+            issuedByName: 'สมชาย ใจดี',
+            issuedAt: '2026-07-03T09:00:00.000Z',
+            totalAmount: 1000,
+            currency: 'THB',
+            quotationVersion: 1,
+            docStatus: 'ISSUED',
+            recipientType: 'DESIGNER',
+            recipientLabel: 'Design Studio',
+          },
+          {
+            id: 9002,
+            ticketId: 701,
+            number: 'QT-2026-0902',
+            issuedById: 1,
+            issuedByName: 'สมชาย ใจดี',
+            issuedAt: '2026-07-04T09:00:00.000Z',
+            totalAmount: 1200,
+            currency: 'THB',
+            quotationVersion: 1,
+            docStatus: 'SENT',
+            recipientType: 'OWNER',
+            recipientLabel: 'Owner Co.',
+            sentAt: '2026-07-04T10:00:00.000Z',
+          },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE',
+        salesStage: 'QUOTE_DESIGN_SIDE',
+        paymentStatus: null,
+        fulfillmentStatus: null,
+        status: 'price_proposed',
+      },
+      availableActions: [],
+    });
+
+    renderTicketDetailPage();
+
+    expect(await screen.findByText('ผู้ออกแบบ')).not.toBeNull();
+    expect(screen.getByText('เจ้าของ')).not.toBeNull();
+    expect(screen.getByText('QT-2026-0901')).not.toBeNull();
+    expect(screen.getByText('QT-2026-0902')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'ส่งแล้ว' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'รับแล้ว' })).toBeNull();
+  });
+
+  it('renders payment totals, overdue badge, and hides record payment without the action', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: {
+          status: 'quotation_issued',
+          paymentStage: 'PARTIALLY_PAID',
+          amountPayable: 1000,
+          amountPaid: 400,
+          amountOutstanding: 600,
+          dueDate: '2026-07-01',
+          overdue: true,
+        },
+      }),
+    });
+    api.tickets.listPayments.mockResolvedValueOnce({
+      items: [
+        {
+          receiptId: 1,
+          kind: 'DEPOSIT',
+          amount: 400,
+          receivedAt: '2026-06-20T09:00:00.000Z',
+          recordedByName: 'คุณบัญชี',
+          note: 'โอนแล้ว',
+        },
+      ],
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE',
+        salesStage: 'DEPOSIT_RECEIVED',
+        paymentStatus: 'DEPOSIT_PAID',
+        fulfillmentStatus: null,
+        status: 'quotation_issued',
+      },
+      availableActions: [{ action: 'SET_BILLING', kind: 'payment', label: 'ตั้งค่าการวางบิล' }],
+    });
+
+    renderTicketDetailPage();
+
+    expect((await screen.findAllByText('ชำระบางส่วน')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('เกินกำหนด').length).toBeGreaterThan(0);
+    expect(screen.getByText('฿1,000')).not.toBeNull();
+    expect(screen.getByText('฿400')).not.toBeNull();
+    expect(screen.getByText('฿600')).not.toBeNull();
+    expect(await screen.findByText('DEPOSIT')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
+  });
+
+  it('renders delivery progress and hides record delivery without the action', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: {
+          status: 'quotation_issued',
+          salesStage: 'PROCUREMENT',
+          fulfillmentStatus: 'PARTIALLY_DELIVERED',
+        },
+        items: [
+          { id: 70101, brand: 'SCG', model: 'A1', qty: 100, qtyDelivered: 40, qtyFromStock: 0, approvedPrice: 150 },
+        ],
+      }),
+    });
+    api.tickets.listDeliveries.mockResolvedValueOnce({
+      items: [
+        {
+          deliveryId: 1,
+          source: 'WAREHOUSE',
+          deliveredAt: '2026-07-10T09:00:00.000Z',
+          deliveredByName: 'คุณนำเข้า',
+          note: 'ส่งบางส่วน',
+          items: [{ deliveryItemId: 1, itemId: 70101, qty: 40 }],
+        },
+      ],
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE',
+        salesStage: 'PROCUREMENT',
+        paymentStatus: 'FULLY_PAID',
+        fulfillmentStatus: 'PARTIALLY_DELIVERED',
+        status: 'quotation_issued',
+      },
+      availableActions: [],
+    });
+
+    renderTicketDetailPage();
+
+    expect((await screen.findAllByText('40 / 100')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('ส่งมอบบางส่วน').length).toBeGreaterThan(0);
+    expect(await screen.findByText('WAREHOUSE')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'บันทึกการส่งสินค้า' })).toBeNull();
   });
 
   it('comment posts and invalidates the tickets-list/dashboard/notifications caches', async () => {

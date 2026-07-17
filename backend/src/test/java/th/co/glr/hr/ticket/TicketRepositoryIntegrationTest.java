@@ -74,23 +74,33 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void createQuotation_reissue_supersedesPreviousAndBumpsVersion() {
+    void createQuotation_versionsAndSupersedesPerRecipientChain() {
         long ticketId = tickets.create(sampleTicket(
             item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
 
-        QuotationDto v1 = tickets.createQuotation(ticketId, "QT-2026-0001", actorId, new BigDecimal("1000"));
-        QuotationDto v2 = tickets.createQuotation(ticketId, "QT-2026-0002", actorId, new BigDecimal("1200"));
+        QuotationDto designerV1 = tickets.createQuotation(ticketId, "QT-2026-0001", actorId, new BigDecimal("1000"),
+            QuotationRecipient.DESIGNER, "Designer Co.", "30 วัน", "45 วัน", "ส่งถึงไซต์", null);
+        QuotationDto ownerV1 = tickets.createQuotation(ticketId, "QT-2026-0002", actorId, new BigDecimal("1200"),
+            QuotationRecipient.OWNER, "Owner", null, null, null, null);
+        QuotationDto designerV2 = tickets.createQuotation(ticketId, "QT-2026-0003", actorId, new BigDecimal("1400"),
+            QuotationRecipient.DESIGNER, null, null, null, null, null);
 
-        assertThat(v1.quotationVersion()).isEqualTo(1);
-        assertThat(v2.quotationVersion()).isEqualTo(2);
-        assertThat(v2.docStatus()).isEqualTo("ISSUED");
+        assertThat(designerV1.quotationVersion()).isEqualTo(1);
+        assertThat(ownerV1.quotationVersion()).isEqualTo(1);
+        assertThat(designerV2.quotationVersion()).isEqualTo(2);
+        assertThat(designerV2.parentQuotationId()).isEqualTo(designerV1.id());
+        assertThat(designerV2.docStatus()).isEqualTo("ISSUED");
+        assertThat(designerV1.recipientLabel()).isEqualTo("Designer Co.");
+        assertThat(designerV1.paymentTerms()).isEqualTo("30 วัน");
 
         List<QuotationDto> all = tickets.findById(ticketId).orElseThrow().quotations();
-        assertThat(all).hasSize(2);
-        assertThat(all.get(0).quotationVersion()).isEqualTo(2);
-        assertThat(all.get(0).docStatus()).isEqualTo("ISSUED");
-        assertThat(all.get(1).quotationVersion()).isEqualTo(1);
-        assertThat(all.get(1).docStatus()).isEqualTo("SUPERSEDED");
+        assertThat(all).hasSize(3);
+        assertThat(all).filteredOn(q -> q.id() == designerV1.id())
+            .singleElement().extracting(QuotationDto::docStatus).isEqualTo("SUPERSEDED");
+        assertThat(all).filteredOn(q -> q.id() == ownerV1.id())
+            .singleElement().extracting(QuotationDto::docStatus).isEqualTo("ISSUED");
+        assertThat(all).filteredOn(q -> q.id() == designerV2.id())
+            .singleElement().extracting(QuotationDto::docStatus).isEqualTo("ISSUED");
 
         // the DTO's single `quotation` field mirrors the newest version (backward compat)
         assertThat(tickets.findById(ticketId).orElseThrow().quotation().quotationVersion()).isEqualTo(2);
@@ -163,14 +173,12 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void uniqueIndex_rejectsDuplicateTicketAndVersionPair() {
+    void uniqueIndex_rejectsDuplicateTicketRecipientAndVersionPair() {
         long ticketId = tickets.create(sampleTicket(
             item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
         tickets.createQuotation(ticketId, "QT-2026-0020", actorId, new BigDecimal("100.00"));
 
-        // Simulates the double-click-generate race the V49 unique index guards against:
-        // two concurrent requests both read MAX(quotation_version)=1 and both try to
-        // insert version 2 — ux_quotation_ticket_version must reject the second write.
+        // Same ticket + same recipient_type + same version is rejected.
         assertThatThrownBy(() -> jdbc.update("""
             INSERT INTO sales.quotation
                 (ticket_id, number, issued_by, total_amount, currency, quotation_version, doc_status)
@@ -182,6 +190,18 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
                 .addValue("issuedBy", actorId)
                 .addValue("total", new BigDecimal("100.00"))))
             .isInstanceOf(DataIntegrityViolationException.class);
+
+        // Same ticket + same version is allowed for a different recipient chain.
+        jdbc.update("""
+            INSERT INTO sales.quotation
+                (ticket_id, number, issued_by, total_amount, currency, quotation_version, doc_status, recipient_type)
+            VALUES (:ticketId, :number, :issuedBy, :total, 'THB', 1, 'ISSUED', 'DESIGNER')
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("number", "QT-2026-0022")
+                .addValue("issuedBy", actorId)
+                .addValue("total", new BigDecimal("100.00")));
     }
 
     @Test
@@ -196,7 +216,7 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
         long ticketId = tickets.create(
             new CreateTicketRequest("ใบเสนอราคา", "NORMAL", customer.name(),
-                customer.id(), project.id(), contact.id(), null, List.of(item("Toyota", "Hilux", "White", "Matte", "L"))),
+                customer.id(), project.id(), contact.id(), null, null, List.of(item("Toyota", "Hilux", "White", "Matte", "L"))),
             tickets.nextTicketCode(), actorId, "พนักงานขาย");
 
         TicketSummaryDto summary = tickets.findById(ticketId).orElseThrow().summary();
@@ -233,7 +253,7 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     private CreateTicketRequest sampleTicket(TicketItemRequest... items) {
-        return new CreateTicketRequest("ใบเสนอราคา", "NORMAL", "ลูกค้าทดสอบ", null, null, null, null, List.of(items));
+        return new CreateTicketRequest("ใบเสนอราคา", "NORMAL", "ลูกค้าทดสอบ", null, null, null, null, null, List.of(items));
     }
 
     private TicketItemRequest item(String brand, String model, String color, String texture, String size) {

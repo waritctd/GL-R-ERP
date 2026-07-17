@@ -7,19 +7,42 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { InfoTip } from '../../components/common/InfoTip.jsx';
+import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatMoney, formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
+import {
+  formatMoney,
+  formatThaiDate,
+  fulfilmentStatusLabel,
+  overdueBadgeLabel,
+  paymentStageLabel,
+  quotationRecipientLabel,
+  quotationStatusLabel,
+  ticketStatusLabel,
+} from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
+import { DealStagePanel } from './DealStagePanel.jsx';
 
 const EVENT_KIND_LABEL = {
-  CREATED:            'สร้างใบขอราคา',
+  CREATED:            'สร้างดีล',
+  STAGE_CHANGED:      'เปลี่ยนสถานะดีล',
+  MARKED_LOST:        'เสียงาน',
+  REOPENED:           'เปิดดีลอีกครั้ง',
+  ON_HOLD:            'พักดีลไว้',
+  DORMANT:            'พัก dormant',
+  RESUMED:            'ดำเนินการต่อ',
+  POLICY_CHANGED:     'เปลี่ยนนโยบายดีล',
+  PAYMENT_RECORDED:   'บันทึกรับชำระเงิน',
+  BILLING_UPDATED:    'อัปเดตข้อมูลวางบิล',
   SUBMITTED:          'ส่งเรื่องเข้าระบบ',
   PICKED_UP:          'รับมอบหมาย',
   PRICE_PROPOSED:     'เสนอราคาสินค้า',
   APPROVED:           'อนุมัติ',
   REJECTED:           'ปฏิเสธ',
   QUOTATION_ISSUED:   'ออกใบเสนอราคา',
+  QUOTATION_SENT:     'ส่งใบเสนอราคา',
+  QUOTATION_ACCEPTED: 'ลูกค้ารับใบเสนอราคา',
+  QUOTATION_REJECTED: 'ลูกค้าปฏิเสธใบเสนอราคา',
   DOCUMENT_ISSUED:    'ออกใบแจ้งยอดมัดจำ',
   PRICE_REVISED:      'แก้ไขราคาที่เสนอ',
   REVISION_REQUESTED: 'ขอแก้ไข',
@@ -29,9 +52,9 @@ const EVENT_KIND_LABEL = {
   COMMENTED:          'ความคิดเห็น',
   COMMENT:            'ความคิดเห็น',
   PRICE_OVERRIDDEN:   'แก้ไขราคาด้วยตนเอง (CEO)',
-  // Dual-track post-quotation events (see backend TicketEventKind.java) — Track P
-  // (payment) and Track F (fulfillment) labels mirror the stepper wording further
-  // down this page (สถานะหลังออกใบเสนอราคา) so an event and its stepper step read
+  // Dual-track post-quotation events (see backend TicketEventKind.java) — payment
+  // and fulfillment labels mirror the DealStagePanel's การชำระเงิน/การนำเข้า
+  // sub-status chips so an event and its chip read
   // as the same real-world action.
   CUSTOMER_CONFIRMED:     'ลูกค้ายืนยันคำสั่งซื้อ',
   DEPOSIT_NOTICE_ISSUED:  'ออกใบแจ้งมัดจำ',
@@ -40,19 +63,23 @@ const EVENT_KIND_LABEL = {
   IR_SENT:                'ส่ง IR แล้ว',
   SHIPPING:               'สินค้าออกเดินทาง (Shipping)',
   GOODS_RECEIVED:         'รับสินค้าแล้ว',
+  STOCK_RESERVED:         'จองสินค้าจากสต็อก',
+  DELIVERY_RECORDED:      'บันทึกการส่งสินค้า',
+  DELIVERY_COMPLETED:     'ส่งมอบครบแล้ว',
   AWAITING_FINAL_PAYMENT: 'รอชำระส่วนที่เหลือ',
   FULLY_PAID:             'ชำระครบแล้ว',
 };
 
-// Track P (payment) events get a success-toned dot, Track F (fulfillment)
+// Payment-track events get a success-toned dot, fulfillment-track
 // events get an info-toned dot — mirrors the two colour groups used by the
-// dual-track stepper (สถานะหลังออกใบเสนอราคา) below.
+// sub-status chips in the DealStagePanel.
 const PAYMENT_TRACK_KINDS = new Set([
   'CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID',
-  'AWAITING_FINAL_PAYMENT', 'FULLY_PAID',
+  'AWAITING_FINAL_PAYMENT', 'FULLY_PAID', 'PAYMENT_RECORDED', 'BILLING_UPDATED',
 ]);
 const FULFILLMENT_TRACK_KINDS = new Set([
   'IR_ISSUED', 'IR_SENT', 'SHIPPING', 'GOODS_RECEIVED',
+  'STOCK_RESERVED', 'DELIVERY_RECORDED', 'DELIVERY_COMPLETED',
 ]);
 
 const TERMINAL = ['closed', 'cancelled'];
@@ -123,6 +150,40 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const [reviseScope, setReviseScope] = useState('QTY_OR_NOTE');
   const [reviseReason, setReviseReason] = useState('');
 
+  // Quotation recipient/terms form (Phase 2 recipient-scoped chains)
+  const [quotationModal, setQuotationModal] = useState(null); // { defaultRecipientType, amendmentRequired } | null
+  const [quotationDraft, setQuotationDraft] = useState({
+    recipientType: 'BUYER',
+    recipientLabel: '',
+    paymentTerms: '',
+    leadTime: '',
+    deliveryTerms: '',
+    validityDate: '',
+    amendmentReason: '',
+  });
+
+  const [paymentModal, setPaymentModal] = useState(false);
+  const [paymentDraft, setPaymentDraft] = useState({
+    kind: 'DEPOSIT',
+    amount: '',
+    receivedAt: '',
+    note: '',
+    receiptRef: '',
+    allowOverpayment: false,
+  });
+  const [billingModal, setBillingModal] = useState(false);
+  const [billingDraft, setBillingDraft] = useState({
+    billingDate: '',
+    dueDate: '',
+    creditTermDays: '',
+    lastFollowUpAt: '',
+    nextFollowUpAt: '',
+  });
+  const [deliveryModal, setDeliveryModal] = useState(false);
+  const [deliveryDraft, setDeliveryDraft] = useState({ source: 'WAREHOUSE', note: '', lines: {} });
+  const [stockModal, setStockModal] = useState(false);
+  const [stockDraft, setStockDraft] = useState({ note: '', lines: {} });
+
   // Comment
   const [commentText, setCommentText] = useState('');
 
@@ -142,11 +203,37 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     enabled: !!ticketId,
   });
   const ticket = ticketQuery.data ?? null;
+  const actionsQuery = useQuery({
+    queryKey: queryKeys.ticketActions(ticketId),
+    queryFn: () => api.tickets.actions(ticketId),
+    enabled: !!ticketId && !!ticket,
+    // Keep the previous action list while a refetch is in flight — every doAction
+    // invalidates this query, and without a placeholder the whole cockpit's buttons
+    // vanish for a beat on each action (visible flicker; Opus review finding).
+    placeholderData: (previous) => previous,
+  });
+  const availableActions = actionsQuery.data?.availableActions ?? [];
+  const actionNames = new Set(availableActions.map((action) => action.action));
+  const hasAction = (action) => actionNames.has(action);
   // isLoading-only (not isFetching): this gate swaps the ENTIRE page for a
   // full skeleton. Using isFetching too would flash that skeleton on every
   // quiet background refetch (window refocus, another tab's invalidate) —
   // same reasoning as TicketDashboard's loading gate in slice A (handoff 62).
   const loading = ticketQuery.isLoading;
+
+  const paymentsQuery = useQuery({
+    queryKey: queryKeys.ticketPayments(ticketId),
+    queryFn: () => api.tickets.listPayments(ticketId).then((r) => r.items ?? []),
+    enabled: !!ticketId && !!ticket,
+  });
+  const paymentReceipts = paymentsQuery.data ?? [];
+
+  const deliveriesQuery = useQuery({
+    queryKey: queryKeys.ticketDeliveries(ticketId),
+    queryFn: () => api.tickets.listDeliveries(ticketId).then((r) => r.items ?? []),
+    enabled: !!ticketId && !!ticket,
+  });
+  const deliveryRecords = deliveriesQuery.data ?? [];
 
   useEffect(() => {
     if (ticketQuery.error) showToast('error', ticketQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
@@ -186,6 +273,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // action before this slice and nothing refreshed them.
   function applyTicketUpdate(updatedTicket) {
     queryClient.setQueryData(queryKeys.ticketDetail(ticketId), updatedTicket);
+    queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.ticketPayments(ticketId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.ticketDeliveries(ticketId) });
     queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary() });
     queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
@@ -201,6 +291,20 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     setRejectReason('');
     setShowReviseForm(false);
     setReviseReason('');
+    setQuotationModal(null);
+    setQuotationDraft({
+      recipientType: 'BUYER',
+      recipientLabel: '',
+      paymentTerms: '',
+      leadTime: '',
+      deliveryTerms: '',
+      validityDate: '',
+      amendmentReason: '',
+    });
+    setPaymentModal(false);
+    setBillingModal(false);
+    setDeliveryModal(false);
+    setStockModal(false);
     setCommentText('');
     setDraftRaw({});
     setDraftFactoryCurr({});
@@ -359,51 +463,88 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const fs = summary.fulfillmentStatus;
   const isSales   = ROLE_PERMISSIONS.canCreateTickets.includes(role);
   const isImport  = ROLE_PERMISSIONS.canPickupTickets.includes(role);
+  const isFulfilment = isImport || role === 'ceo';
   const isAccount = ROLE_PERMISSIONS.canConfirmPayments.includes(role);
-  const dualTrackDone = ps === 'FULLY_PAID' && fs === 'GOODS_RECEIVED';
+  const deliveryDone = fs === 'GOODS_RECEIVED' || fs === 'FULLY_DELIVERED';
+  const dualTrackDone = ps === 'FULLY_PAID' && deliveryDone;
+  const totalOrdered = items.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+  const totalDelivered = items.reduce((sum, item) => sum + Number(item.qtyDelivered || 0), 0);
+  const deliveryProgress = totalOrdered > 0 ? Math.min(100, Math.round((totalDelivered / totalOrdered) * 100)) : 0;
 
-  const EDITABLE_STATUSES = ['submitted', 'in_review', 'price_proposed'];
+  // Documents that already exist stay reachable from the deal-stage panel
+  // through the later stages: the latest quotation file, and the issued
+  // ใบแจ้งยอดมัดจำ (payment track past CUSTOMER_CONFIRMED means
+  // DepositNoticeService.issue has run — the deposit page then shows/downloads it).
+  const sortedQuotations = [...(quotations ?? [])].sort((a, b) => new Date(b.issuedAt ?? 0) - new Date(a.issuedAt ?? 0));
+  const activeQuotations = sortedQuotations.filter((q) => !['SUPERSEDED', 'CANCELLED', 'REJECTED'].includes(q.docStatus));
+  const stageRecipientPriority = summary.salesStage === 'QUOTE_BUYER'
+    ? ['BUYER', 'OWNER', 'DESIGNER', 'UNSPECIFIED']
+    : ['DESIGNER', 'OWNER', 'BUYER', 'UNSPECIFIED'];
+  const latestQuotation = stageRecipientPriority
+    .map((recipient) => activeQuotations.find((q) => (q.recipientType ?? 'UNSPECIFIED') === recipient))
+    .find(Boolean) ?? activeQuotations[0] ?? sortedQuotations[0] ?? null;
+  const quotationGroups = ['DESIGNER', 'OWNER', 'BUYER', 'UNSPECIFIED']
+    .map((recipientType) => ({
+      recipientType,
+      label: quotationRecipientLabel(recipientType).label,
+      quotations: sortedQuotations.filter((q) => (q.recipientType ?? 'UNSPECIFIED') === recipientType),
+    }))
+    .filter((group) => group.quotations.length > 0);
+  const depositNoticeIssued = ps != null && ps !== 'CUSTOMER_CONFIRMED';
+
+  // 'draft' included since V50: a lightweight lead-stage deal gets its product
+  // items here, then submits into the price-request flow when it reaches the
+  // quote stages.
+  const EDITABLE_STATUSES = ['draft', 'submitted', 'in_review', 'price_proposed'];
   const can = {
-    pickup:            st === 'submitted'       && ROLE_PERMISSIONS.canPickupTickets.includes(role),
-    propose:           ['in_review', 'price_proposed', 'approved'].includes(st) && ROLE_PERMISSIONS.canProposePrices.includes(role),
-    calculatePrices:   st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    overridePrice:     st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    approve:           st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    reject:            st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    generateQuotation: (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canGenerateQuotation.includes(role) && isOwner,
+    // Submit is only meaningful once the deal has product lines — the backend
+    // 400s an item-less submit (mirrors TicketService.submit).
+    submit:            hasAction('SUBMIT') && st === 'draft' && isOwner && ROLE_PERMISSIONS.canCreateTickets.includes(role) && items.length > 0,
+    pickup:            hasAction('PICKUP') && st === 'submitted'       && ROLE_PERMISSIONS.canPickupTickets.includes(role),
+    propose:           hasAction('PROPOSE_PRICE') && ['in_review', 'price_proposed', 'approved'].includes(st) && ROLE_PERMISSIONS.canProposePrices.includes(role),
+    calculatePrices:   hasAction('CALCULATE_PRICES') && st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
+    overridePrice:     hasAction('OVERRIDE_ITEM_PRICE') && st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
+    approve:           hasAction('APPROVE') && st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
+    reject:            hasAction('REJECT') && st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
+    generateQuotation: hasAction('GENERATE_QUOTATION') && (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canGenerateQuotation.includes(role) && isOwner,
     // Issuing the deposit-notice DOCUMENT is the payment-track step (mirrors
     // DepositNoticeService.issue): customer must have confirmed first, and the
     // former no-document "ออกใบแจ้งมัดจำ" action is gone.
-    generateDocument:  st === 'quotation_issued' && ps === 'CUSTOMER_CONFIRMED' && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
+    generateDocument:  hasAction('ISSUE_DEPOSIT_NOTICE') && st === 'quotation_issued' && ps === 'CUSTOMER_CONFIRMED' && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     revise:            (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     // Legacy document_issued close only for pre-dual-track tickets (ps never set)
     // or fully paid ones — mirrors TicketService.close().
-    close:            ((st === 'document_issued' && (ps == null || ps === 'FULLY_PAID'))
+    close:            hasAction('CLOSE') && ((st === 'document_issued' && (ps == null || ps === 'FULLY_PAID'))
                         || (st === 'quotation_issued' && dualTrackDone)) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
-    cancel:           !TERMINAL.includes(st)   && isOwner,
+    cancel:           hasAction('CANCEL') && !TERMINAL.includes(st)   && isOwner,
     comment:          !TERMINAL.includes(st),
-    editItems: EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
+    editItems: hasAction('EDIT_ITEMS') && EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     // Dual-track (ข้อ 13)
-    confirmCustomer:    st === 'quotation_issued' && ps == null && isSales,
+    confirmCustomer:    hasAction('CONFIRM_CUSTOMER') && st === 'quotation_issued' && (ps == null || ps === 'CUSTOMER_CONFIRMED') && isSales,
     // Money receipts are confirmed by ฝ่ายบัญชี (account role, CEO fallback) —
     // mirrors TicketService.ACCOUNT_ROLES.
-    confirmDepositPaid: st === 'quotation_issued' && ps === 'DEPOSIT_NOTICE_ISSUED' && isAccount,
+    confirmDepositPaid: hasAction('DEPOSIT_PAID') && st === 'quotation_issued' && ps === 'DEPOSIT_NOTICE_ISSUED' && isAccount,
     // DEPOSIT_PAID also qualifies: accounting may confirm the deposit before
     // import gets to the IR (mirrors TicketService.issueImportRequest).
-    issueImportRequest: st === 'quotation_issued' && (ps === 'DEPOSIT_NOTICE_ISSUED' || ps === 'DEPOSIT_PAID') && fs == null && isImport,
-    markIrSent:         st === 'quotation_issued' && fs === 'IR_ISSUED' && isImport,
-    markShipping:       st === 'quotation_issued' && fs === 'IR_SENT' && isImport,
-    markGoodsReceived:  st === 'quotation_issued' && fs === 'SHIPPING' && isImport,
-    confirmFinalPayment:st === 'quotation_issued' && ps === 'AWAITING_FINAL_PAYMENT' && isAccount,
+    issueImportRequest: hasAction('ISSUE_IMPORT_REQUEST') && st === 'quotation_issued' && fs == null && isFulfilment,
+    markIrSent:         hasAction('IR_SENT') && st === 'quotation_issued' && fs === 'IR_ISSUED' && isFulfilment,
+    markShipping:       hasAction('SHIPPING') && st === 'quotation_issued' && fs === 'IR_SENT' && isFulfilment,
+    markGoodsReceived:  hasAction('GOODS_RECEIVED') && st === 'quotation_issued' && fs === 'SHIPPING' && isFulfilment,
+    confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && isAccount,
+    recordPayment:      hasAction('RECORD_PAYMENT') && isAccount,
+    setBilling:         hasAction('SET_BILLING') && isAccount,
+    reserveStock:       hasAction('RESERVE_STOCK') && isFulfilment,
+    recordDelivery:     hasAction('RECORD_PARTIAL_DELIVERY') && isFulfilment,
+    completeDelivery:   hasAction('COMPLETE_DELIVERY') && isFulfilment,
     downloadRemainingInvoice: st === 'quotation_issued' && fs === 'GOODS_RECEIVED' && isSales,
   };
 
-  // `comment` has its own independent UI in the event-history panel (line ~1530)
-  // and isn't rendered inside "การดำเนินการอื่น ๆ" at all — excluding it here so a
-  // viewer with comment-only access (e.g. sales_manager) doesn't get an empty
-  // actions panel with a header and no buttons.
-  const { comment: _commentFlag, ...actionOnlyFlags } = can;
-  const hasActions = Object.values(actionOnlyFlags).some(Boolean);
+  // การดำเนินการอื่น ๆ now holds only the rare actions — everything workflow-
+  // shaped (submit/pickup/propose/dual-track confirmations/close) moved into the
+  // DealStagePanel cockpit, and docs live in its เอกสารของขั้นนี้ row. The
+  // section hides entirely when none of the remaining actions apply.
+  const hasActions = can.calculatePrices || can.revise || can.editItems || can.cancel
+    || (st === 'draft' && isOwner && items.length === 0);
 
   const status = ticketStatusLabel(st);
 
@@ -413,6 +554,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // reject/pickup/... in src/api/mockApi.js) so the wording matches what the
   // button actually does. Never invents an owner or action the data can't support.
   const NEXT_ACTION_STEPS = [
+    ['submit',           'ส่งขอราคา — รายการสินค้าพร้อมแล้ว ส่งให้ฝ่ายนำเข้าเสนอราคาได้เลย'],
     ['reject',           st === 'price_proposed' ? 'ตรวจสอบราคาที่เสนอ แล้วอนุมัติหรือตีกลับให้ Import แก้ไข' : null],
     ['approve',          st === 'price_proposed' ? 'ตรวจสอบราคาที่เสนอ แล้วอนุมัติหรือตีกลับให้ Import แก้ไข' : null],
     ['pickup',           'รับมอบหมายใบขอราคานี้เพื่อเริ่มเสนอราคา'],
@@ -443,6 +585,74 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       : ps === 'AWAITING_FINAL_PAYMENT' ? 'รอฝ่ายบัญชียืนยันรับชำระส่วนที่เหลือ'
       : null)
     : null;
+
+  // The cockpit's primary action: the ONE workflow button for this viewer's
+  // current sub-step (moved verbatim out of การดำเนินการอื่น ๆ). Doc-shaped next
+  // steps (ออกใบแจ้งยอดมัดจำ, IR) are NOT repeated here — they already sit in the
+  // stage panel's docs row and the guidance line points at them. CEO price
+  // approve/reject keeps its dedicated decision panel below.
+  const primaryAction = can.submit ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.submit(ticketId), 'ส่งขอราคาแล้ว')}>
+      <Icon name="check" size={14} />
+      ส่งขอราคา (เริ่มเสนอราคา)
+    </button>
+  ) : can.pickup ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.pickup(ticketId), 'รับมอบหมายแล้ว')}>
+      <Icon name="check" size={14} />
+      รับเรื่อง
+    </button>
+  ) : can.propose && !proposeMode ? (
+    <button
+      type="button"
+      className={st === 'approved' ? 'secondary-button' : 'primary-button'}
+      style={st === 'approved' ? { borderColor: 'var(--color-warning-border)', color: 'var(--color-warning-dark)', background: 'var(--color-warning-bg-soft)' } : {}}
+      disabled={actionLoading}
+      onClick={initPropose}
+    >
+      <Icon name="pencil" size={14} />
+      {st === 'in_review' && 'เสนอราคาสินค้า'}
+      {st === 'price_proposed' && 'แก้ไขราคาที่เสนอ'}
+      {st === 'approved' && 'แก้ไขราคา (ต้องอนุมัติใหม่)'}
+    </button>
+  ) : can.confirmCustomer ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.confirmCustomer(ticketId), 'ลูกค้ายืนยันแล้ว')}>
+      ลูกค้ายืนยัน
+    </button>
+  ) : can.confirmDepositPaid ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.confirmDepositPaid(ticketId), 'ยืนยันรับมัดจำแล้ว')}>
+      ยืนยันรับมัดจำ
+    </button>
+  ) : can.markIrSent ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.markIrSent(ticketId), 'ส่ง IR แล้ว')}>
+      ส่ง IR แล้ว
+    </button>
+  ) : can.markShipping ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.markShipping(ticketId), 'สินค้าอยู่ระหว่างขนส่ง')}>
+      สินค้าออกเดินทาง (Shipping)
+    </button>
+  ) : can.markGoodsReceived ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.markGoodsReceived(ticketId), 'รับสินค้าแล้ว')}>
+      รับสินค้าแล้ว (Goods Received)
+    </button>
+  ) : can.confirmFinalPayment ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.confirmFinalPayment(ticketId), 'ชำระครบแล้ว')}>
+      ยืนยันชำระครบ (Final Payment)
+    </button>
+  ) : can.close ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.close(ticketId), 'ปิดใบขอราคาแล้ว')}>
+      <Icon name="check" size={14} />
+      ปิดเรื่อง
+    </button>
+  ) : null;
 
   function initPropose() {
     // Factory configs are now a query (fetched once per session, see above);
@@ -597,6 +807,54 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     }
   }
 
+  function openQuotationModal(recipientType = null) {
+    const defaultRecipientType = recipientType
+      ?? (summary.salesStage === 'QUOTE_BUYER' ? 'BUYER' : 'DESIGNER');
+    const chainAccepted = (quotations ?? []).some((q) =>
+      (q.recipientType ?? 'UNSPECIFIED') === defaultRecipientType && q.docStatus === 'ACCEPTED');
+    const amendmentRequired = chainAccepted || summary.paymentStatus != null;
+    setQuotationDraft({
+      recipientType: defaultRecipientType,
+      recipientLabel: '',
+      paymentTerms: '',
+      leadTime: '',
+      deliveryTerms: '',
+      validityDate: '',
+      amendmentReason: '',
+    });
+    setQuotationModal({ amendmentRequired });
+  }
+
+  async function submitQuotation() {
+    if (!quotationDraft.recipientType) {
+      showToast('error', 'กรุณาเลือกผู้รับใบเสนอราคา');
+      return;
+    }
+    if (quotationModal?.amendmentRequired && !quotationDraft.amendmentReason.trim()) {
+      showToast('error', 'กรุณาระบุเหตุผลการแก้ไขใบเสนอราคา');
+      return;
+    }
+    const payload = Object.fromEntries(Object.entries(quotationDraft).map(([key, value]) => [
+      key,
+      typeof value === 'string' && value.trim() === '' ? null : value,
+    ]));
+    await doAction(() => api.tickets.quotation(ticketId, payload), 'ออกใบเสนอราคาแล้ว');
+  }
+
+  async function markQuotation(q, action) {
+    const fn = action === 'sent'
+      ? () => api.tickets.markQuotationSent(ticketId, q.id, {})
+      : action === 'accepted'
+        ? () => api.tickets.markQuotationAccepted(ticketId, q.id, {})
+        : () => api.tickets.markQuotationRejected(ticketId, q.id, {});
+    const message = action === 'sent'
+      ? 'บันทึกว่าส่งใบเสนอราคาแล้ว'
+      : action === 'accepted'
+        ? 'บันทึกลูกค้ารับใบเสนอราคาแล้ว'
+        : 'บันทึกลูกค้าปฏิเสธใบเสนอราคาแล้ว';
+    await doAction(fn, message);
+  }
+
   async function handleDownloadRemainingInvoice() {
     setDownloadingInvoice(true);
     try {
@@ -617,6 +875,99 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   async function handleComment() {
     if (!commentText.trim()) return;
     await doAction(() => api.tickets.comment(ticketId, { message: commentText.trim() }), 'เพิ่มความคิดเห็นแล้ว');
+  }
+
+  async function handleRecordPayment() {
+    const amount = Number(paymentDraft.amount);
+    if (!amount || amount <= 0) {
+      showToast('error', 'กรุณากรอกยอดรับชำระ');
+      return;
+    }
+    const payload = {
+      kind: paymentDraft.kind,
+      amount,
+      receivedAt: paymentDraft.receivedAt ? new Date(paymentDraft.receivedAt).toISOString() : null,
+      note: paymentDraft.note.trim() || null,
+      receiptRef: paymentDraft.receiptRef.trim() || null,
+      allowOverpayment: paymentDraft.allowOverpayment,
+    };
+    await doAction(() => api.tickets.recordPayment(ticketId, payload), 'บันทึกรับชำระเงินแล้ว');
+  }
+
+  async function handleSetBilling() {
+    const payload = {
+      billingDate: billingDraft.billingDate || null,
+      dueDate: billingDraft.dueDate || null,
+      creditTermDays: billingDraft.creditTermDays === '' ? null : Number(billingDraft.creditTermDays),
+      lastFollowUpAt: billingDraft.lastFollowUpAt || null,
+      nextFollowUpAt: billingDraft.nextFollowUpAt || null,
+    };
+    await doAction(() => api.tickets.setBilling(ticketId, payload), 'บันทึกข้อมูลวางบิลแล้ว');
+  }
+
+  async function handleRecordDelivery() {
+    const lines = items
+      .map((item) => ({ itemId: item.id, qty: Number(deliveryDraft.lines[item.id] || 0) }))
+      .filter((line) => line.qty > 0);
+    if (lines.length === 0) {
+      showToast('error', 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ');
+      return;
+    }
+    await doAction(() => api.tickets.recordDelivery(ticketId, {
+      source: deliveryDraft.source,
+      note: deliveryDraft.note.trim() || null,
+      lines,
+    }), 'บันทึกการส่งสินค้าแล้ว');
+  }
+
+  async function handleReserveStock() {
+    const lines = items.map((item) => ({
+      itemId: item.id,
+      qtyFromStock: Number(stockDraft.lines[item.id] || 0),
+      note: stockDraft.note.trim() || null,
+    }));
+    await doAction(() => api.tickets.reserveStock(ticketId, { lines }), 'บันทึกสินค้าจากสต็อกแล้ว');
+  }
+
+  function openBillingModal() {
+    setBillingDraft({
+      billingDate: summary.billingDate ?? '',
+      dueDate: summary.dueDate ?? '',
+      creditTermDays: summary.creditTermDays != null ? String(summary.creditTermDays) : '',
+      lastFollowUpAt: summary.lastFollowUpAt ?? '',
+      nextFollowUpAt: summary.nextFollowUpAt ?? '',
+    });
+    setBillingModal(true);
+  }
+
+  function openPaymentModal() {
+    const suggestedKind = summary.amountPaid > 0 ? 'BALANCE' : 'DEPOSIT';
+    setPaymentDraft({
+      kind: suggestedKind,
+      amount: summary.amountOutstanding != null && summary.amountOutstanding > 0 ? String(summary.amountOutstanding) : '',
+      receivedAt: '',
+      note: '',
+      receiptRef: '',
+      allowOverpayment: false,
+    });
+    setPaymentModal(true);
+  }
+
+  function openDeliveryModal() {
+    const source = fs === 'FROM_STOCK' ? 'STOCK' : 'WAREHOUSE';
+    const lines = {};
+    items.forEach((item) => {
+      lines[item.id] = String(Math.max(0, Number(item.qty || 0) - Number(item.qtyDelivered || 0)));
+    });
+    setDeliveryDraft({ source, note: '', lines });
+    setDeliveryModal(true);
+  }
+
+  function openStockModal() {
+    const lines = {};
+    items.forEach((item) => { lines[item.id] = String(item.qtyFromStock ?? 0); });
+    setStockDraft({ note: '', lines });
+    setStockModal(true);
   }
 
   return (
@@ -650,31 +1001,224 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         </button>
       </header>
 
-      {/* Next-action callout — only rendered when derivable from the real `can`
-          permission flags above; otherwise omitted rather than guessed. */}
-      {nextAction && (
-        <div style={{
-          display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px',
-          borderRadius: 8, border: '1px solid var(--color-info-border)',
-          background: 'var(--color-info-bg)', color: 'var(--color-info)', fontSize: 13,
-        }}>
-          <Icon name="chevronRight" size={15} style={{ flexShrink: 0, marginTop: 1 }} />
-          <span><strong>ขั้นตอนถัดไปสำหรับคุณ:</strong> {nextAction}</span>
-        </div>
-      )}
+      {/* Deal pipeline (V50): the 14-stage journey with stage-gated doc actions.
+          Generation buttons reuse the exact handlers/permissions of the action
+          row; once a document exists (quotation / ใบแจ้งยอดมัดจำ) it stays
+          reachable from here through the later stages too. */}
+      <DealStagePanel
+        user={user}
+        summary={summary}
+        availableActions={availableActions}
+        primaryAction={primaryAction}
+        guidance={nextAction ?? waitingHint}
+        actionLoading={actionLoading}
+        deliveryProgress={{ delivered: totalDelivered, ordered: totalOrdered }}
+        onUpdateStage={(payload) => doAction(() => api.tickets.updateStage(ticketId, payload), 'อัปเดตสถานะดีลแล้ว')}
+        onMarkLost={(payload) => doAction(() => api.tickets.markLost(ticketId, payload), 'บันทึกเสียงานแล้ว')}
+        onReopen={() => doAction(() => api.tickets.reopen(ticketId, {}), 'เปิดดีลอีกครั้งแล้ว')}
+        onHold={(payload) => doAction(() => api.tickets.hold(ticketId, payload), 'พักดีลไว้แล้ว')}
+        onDormant={(payload) => doAction(() => api.tickets.dormant(ticketId, payload), 'พัก dormant แล้ว')}
+        onResume={(payload) => doAction(() => api.tickets.resume(ticketId, payload), 'ดำเนินการต่อแล้ว')}
+        onSetTenderRequirement={(payload) => doAction(() => api.tickets.setTenderRequirement(ticketId, payload), 'บันทึกสถานะประมูลแล้ว')}
+        onSetDepositPolicy={(payload) => doAction(() => api.tickets.setDepositPolicy(ticketId, payload), 'บันทึกนโยบายมัดจำแล้ว')}
+        docActions={(can.generateQuotation || can.generateDocument || can.issueImportRequest
+          || can.downloadRemainingInvoice || latestQuotation || depositNoticeIssued) ? (
+          <>
+            {can.generateQuotation && (
+              <button type="button" className="secondary-button" disabled={actionLoading}
+                onClick={() => openQuotationModal()}>
+                <Icon name="fileText" size={14} />
+                {quotations && quotations.length > 0 ? 'ออกใบเสนอราคาใหม่ (Rev)' : 'ออกใบเสนอราคา'}
+              </button>
+            )}
+            {latestQuotation && (
+              <button type="button" className="secondary-button"
+                disabled={downloadingQuotationKey === `${latestQuotation.id}-pdf`}
+                onClick={() => handleDownloadQuotation(latestQuotation.id, latestQuotation.number, 'pdf')}>
+                <Icon name="fileText" size={14} />
+                {downloadingQuotationKey === `${latestQuotation.id}-pdf`
+                  ? 'กำลังดาวน์โหลด...'
+                  : `ใบเสนอราคา ${latestQuotation.number} (PDF)`}
+              </button>
+            )}
+            {can.generateDocument && (
+              <button type="button" className="primary-button" disabled={actionLoading}
+                onClick={() => onOpenDocument && onOpenDocument(ticketId)}>
+                <Icon name="fileText" size={14} />
+                ออกใบแจ้งยอดมัดจำ
+              </button>
+            )}
+            {depositNoticeIssued && (
+              <button type="button" className="secondary-button"
+                onClick={() => onOpenDocument && onOpenDocument(ticketId)}>
+                <Icon name="fileText" size={14} />
+                ดูใบแจ้งยอดมัดจำ
+              </button>
+            )}
+            {can.issueImportRequest && (
+              <button type="button" className="primary-button" disabled={actionLoading}
+                onClick={() => doAction(() => api.tickets.issueImportRequest(ticketId), 'ออก IR แล้ว')}>
+                ออก Import Request (IR)
+              </button>
+            )}
+            {can.downloadRemainingInvoice && (
+              <button type="button" className="secondary-button" disabled={downloadingInvoice}
+                onClick={handleDownloadRemainingInvoice}>
+                {downloadingInvoice ? 'กำลังดาวน์โหลด...' : 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ'}
+              </button>
+            )}
+          </>
+        ) : null}
+      />
 
-      {/* Passive waiting hint — the next step belongs to another team (ฝ่ายบัญชี /
-          Import), so show who the ticket is waiting on instead of a dead end. */}
-      {waitingHint && (
-        <div style={{
-          display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px',
-          borderRadius: 8, border: '1px solid var(--color-border)',
-          background: 'var(--color-surface-muted, var(--color-info-bg))', color: 'var(--color-text-muted)', fontSize: 13,
-        }}>
-          <Icon name="clock" size={15} style={{ flexShrink: 0, marginTop: 1 }} />
-          <span><strong>รอดำเนินการ:</strong> {waitingHint}</span>
+      <section className="panel">
+        <div className="panel-header" style={{ alignItems: 'center' }}>
+          <h2>การชำระเงิน</h2>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <StatusBadge tone={paymentStageLabel(summary.paymentStage).tone}>
+              {paymentStageLabel(summary.paymentStage).label}
+            </StatusBadge>
+            {summary.overdue && (
+              <StatusBadge tone={overdueBadgeLabel(true).tone}>{overdueBadgeLabel(true).label}</StatusBadge>
+            )}
+          </div>
         </div>
-      )}
+        <div style={{ padding: '0 18px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+            {[
+              ['ยอดที่ต้องชำระ', summary.amountPayable],
+              ['ชำระแล้ว', summary.amountPaid],
+              ['คงเหลือ', summary.amountOutstanding],
+            ].map(([label, value]) => (
+              <div key={label} style={{ border: '1px solid var(--color-border-subtle)', borderRadius: 8, padding: '10px 12px', background: 'var(--color-surface-muted)' }}>
+                <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 4 }}>{label}</div>
+                <strong style={{ fontSize: 18, color: 'var(--color-text)' }}>{formatMoney(value ?? 0)}</strong>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', fontSize: 13, color: 'var(--color-text-muted)' }}>
+            <span>วันวางบิล <strong style={{ color: 'var(--color-text-secondary)' }}>{formatThaiDate(summary.billingDate)}</strong></span>
+            <span>ครบกำหนด <strong style={{ color: summary.overdue ? 'var(--color-danger)' : 'var(--color-text-secondary)' }}>{formatThaiDate(summary.dueDate)}</strong></span>
+            {summary.nextFollowUpAt && <span>ติดตามครั้งถัดไป <strong style={{ color: 'var(--color-text-secondary)' }}>{formatThaiDate(summary.nextFollowUpAt)}</strong></span>}
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {can.recordPayment && (
+              <button type="button" className="primary-button" disabled={actionLoading} onClick={openPaymentModal}>
+                บันทึกรับชำระเงิน
+              </button>
+            )}
+            {can.setBilling && (
+              <button type="button" className="secondary-button" disabled={actionLoading} onClick={openBillingModal}>
+                ตั้งค่าการวางบิล
+              </button>
+            )}
+          </div>
+          <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 10 }}>
+            <h3 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700 }}>ประวัติรับชำระ</h3>
+            {paymentsQuery.isLoading ? (
+              <SkeletonText lines={2} />
+            ) : paymentReceipts.length === 0 ? (
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--color-text-muted)' }}>ยังไม่มีรายการรับชำระ</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {paymentReceipts.map((receipt) => (
+                  <div key={receipt.receiptId} style={{ display: 'grid', gridTemplateColumns: '110px 90px 1fr', gap: 10, alignItems: 'start', fontSize: 13 }}>
+                    <span style={{ color: 'var(--color-text-muted)' }}>{formatThaiDate(receipt.receivedAt)}</span>
+                    <strong>{receipt.kind}</strong>
+                    <span>
+                      {formatMoney(receipt.amount)}
+                      <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
+                        {receipt.recordedByName || '-'}{receipt.note ? ` · ${receipt.note}` : ''}
+                      </small>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header" style={{ alignItems: 'center' }}>
+          <h2>การส่งมอบสินค้า</h2>
+          <StatusBadge tone={fulfilmentStatusLabel(fs).tone}>
+            {fulfilmentStatusLabel(fs).label}
+          </StatusBadge>
+        </div>
+        <div style={{ padding: '0 18px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 12, alignItems: 'center' }}>
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
+                <strong>{totalDelivered.toLocaleString('en-US')} / {totalOrdered.toLocaleString('en-US')}</strong>
+                <span style={{ color: 'var(--color-text-muted)' }}>{deliveryProgress}%</span>
+              </div>
+              <div style={{ height: 8, borderRadius: 999, background: 'var(--color-surface-subtle)', overflow: 'hidden' }}>
+                <div style={{ width: `${deliveryProgress}%`, height: '100%', background: 'var(--color-success)' }} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              {can.reserveStock && (
+                <button type="button" className="secondary-button" disabled={actionLoading} onClick={openStockModal}>
+                  จองสินค้าจากสต็อก
+                </button>
+              )}
+              {can.recordDelivery && (
+                <button type="button" className="primary-button" disabled={actionLoading} onClick={openDeliveryModal}>
+                  บันทึกการส่งสินค้า
+                </button>
+              )}
+              {can.completeDelivery && (
+                <button type="button" className="secondary-button" disabled={actionLoading}
+                  onClick={() => doAction(() => api.tickets.completeDelivery(ticketId, { note: 'ส่งมอบครบจากหน้าดีล' }), 'ส่งมอบครบแล้ว')}>
+                  ส่งมอบครบ
+                </button>
+              )}
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {items.map((item) => {
+              const ordered = Number(item.qty || 0);
+              const delivered = Number(item.qtyDelivered || 0);
+              const remaining = Math.max(0, ordered - delivered);
+              return (
+                <div key={item.id} style={{ border: '1px solid var(--color-border-subtle)', borderRadius: 8, padding: '10px 12px', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 10 }}>
+                  <div>
+                    <strong>{item.brand} {item.model || ''}</strong>
+                    <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
+                      จากสต็อก {Number(item.qtyFromStock || 0).toLocaleString('en-US')} · คงเหลือ {remaining.toLocaleString('en-US')}
+                    </small>
+                  </div>
+                  <strong>{delivered.toLocaleString('en-US')} / {ordered.toLocaleString('en-US')}</strong>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 10 }}>
+            <h3 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700 }}>ประวัติส่งมอบ</h3>
+            {deliveriesQuery.isLoading ? (
+              <SkeletonText lines={2} />
+            ) : deliveryRecords.length === 0 ? (
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--color-text-muted)' }}>ยังไม่มีรายการส่งมอบ</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {deliveryRecords.map((record) => (
+                  <div key={record.deliveryId} style={{ display: 'grid', gridTemplateColumns: '110px 90px 1fr', gap: 10, alignItems: 'start', fontSize: 13 }}>
+                    <span style={{ color: 'var(--color-text-muted)' }}>{formatThaiDate(record.deliveredAt)}</span>
+                    <strong>{record.source}</strong>
+                    <span>
+                      {(record.items ?? []).map((line) => `${line.itemId}: ${Number(line.qty).toLocaleString('en-US')}`).join(', ')}
+                      <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
+                        {record.deliveredByName || '-'}{record.note ? ` · ${record.note}` : ''}
+                      </small>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
 
       {/* Contextual decision panel — approve/reject is the one action on this page
           with real financial and downstream consequences, so it gets its own
@@ -743,29 +1287,11 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             <h2>การดำเนินการอื่น ๆ</h2>
           </div>
           <div style={{ padding: '12px 18px', display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-            {can.pickup && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.pickup(ticketId), 'รับมอบหมายแล้ว')}>
-                <Icon name="check" size={14} />
-                รับเรื่อง
-              </button>
+            {st === 'draft' && isOwner && items.length === 0 && (
+              <span className="rounded-lg border border-border bg-surface-subtle px-3 py-2 text-xs text-text-muted">
+                ดีลนี้ยังไม่มีรายการสินค้า — กด “แก้ไขรายการสินค้า” เพื่อเพิ่มก่อนส่งขอราคา
+              </span>
             )}
-
-            {can.propose && !proposeMode && (
-              <button
-                type="button"
-                className={st === 'approved' ? 'secondary-button' : 'primary-button'}
-                style={st === 'approved' ? { borderColor: 'var(--color-warning-border)', color: 'var(--color-warning-dark)', background: 'var(--color-warning-bg-soft)' } : {}}
-                disabled={actionLoading}
-                onClick={initPropose}
-              >
-                <Icon name="pencil" size={14} />
-                {st === 'in_review' && 'เสนอราคาสินค้า'}
-                {st === 'price_proposed' && 'แก้ไขราคาที่เสนอ'}
-                {st === 'approved' && 'แก้ไขราคา (ต้องอนุมัติใหม่)'}
-              </button>
-            )}
-
             {can.calculatePrices && (
               <button type="button" className="secondary-button" disabled={calcLoading || actionLoading}
                 onClick={handleCalculatePrices}
@@ -782,84 +1308,11 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               </button>
             )}
 
-            {can.generateQuotation && (
-              <button type="button" className="secondary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.quotation(ticketId), 'ออกใบเสนอราคาแล้ว')}>
-                <Icon name="fileText" size={14} />
-                {ticket.quotations && ticket.quotations.length > 0 ? 'ออกใบเสนอราคาใหม่ (Rev)' : 'ออกใบเสนอราคา'}
-              </button>
-            )}
-
-            {can.generateDocument && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => onOpenDocument && onOpenDocument(ticketId)}>
-                <Icon name="fileText" size={14} />
-                ออกใบแจ้งยอดมัดจำ
-              </button>
-            )}
-
             {can.revise && !showReviseForm && (
               <button type="button" className="secondary-button" disabled={actionLoading}
                 onClick={() => setShowReviseForm(true)}>
                 <Icon name="pencil" size={14} />
                 ขอแก้ไข (Revise)
-              </button>
-            )}
-
-            {can.close && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.close(ticketId), 'ปิดใบขอราคาแล้ว')}>
-                <Icon name="check" size={14} />
-                ปิดเรื่อง
-              </button>
-            )}
-
-            {can.confirmCustomer && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.confirmCustomer(ticketId), 'ลูกค้ายืนยันแล้ว')}>
-                ลูกค้ายืนยัน
-              </button>
-            )}
-            {can.confirmDepositPaid && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.confirmDepositPaid(ticketId), 'ยืนยันรับมัดจำแล้ว')}>
-                ยืนยันรับมัดจำ
-              </button>
-            )}
-            {can.issueImportRequest && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.issueImportRequest(ticketId), 'ออก IR แล้ว')}>
-                ออก Import Request (IR)
-              </button>
-            )}
-            {can.markIrSent && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.markIrSent(ticketId), 'ส่ง IR แล้ว')}>
-                ส่ง IR แล้ว
-              </button>
-            )}
-            {can.markShipping && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.markShipping(ticketId), 'สินค้าอยู่ระหว่างขนส่ง')}>
-                สินค้าออกเดินทาง (Shipping)
-              </button>
-            )}
-            {can.markGoodsReceived && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.markGoodsReceived(ticketId), 'รับสินค้าแล้ว')}>
-                รับสินค้าแล้ว (Goods Received)
-              </button>
-            )}
-            {can.confirmFinalPayment && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.confirmFinalPayment(ticketId), 'ชำระครบแล้ว')}>
-                ยืนยันชำระครบ (Final Payment)
-              </button>
-            )}
-            {can.downloadRemainingInvoice && (
-              <button type="button" className="secondary-button" disabled={downloadingInvoice}
-                onClick={handleDownloadRemainingInvoice}>
-                {downloadingInvoice ? 'กำลังดาวน์โหลด...' : 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ'}
               </button>
             )}
 
@@ -924,63 +1377,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               </div>
             </div>
           )}
-        </section>
-      )}
-
-      {st === 'quotation_issued' && (
-        <section className="panel" style={{ marginBottom: 0 }}>
-          <div className="panel-header"><h2>สถานะหลังออกใบเสนอราคา</h2></div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, padding: '12px 18px 18px' }}>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-muted)', marginBottom: 6 }}>Track P — การชำระเงิน</div>
-              {[
-                { key: 'CUSTOMER_CONFIRMED',    label: 'ลูกค้ายืนยัน' },
-                { key: 'DEPOSIT_NOTICE_ISSUED', label: 'ออกใบแจ้งมัดจำ' },
-                { key: 'DEPOSIT_PAID',          label: 'รับมัดจำแล้ว' },
-                { key: 'AWAITING_FINAL_PAYMENT',label: 'รอชำระส่วนที่เหลือ' },
-                { key: 'FULLY_PAID',            label: 'ชำระครบแล้ว' },
-              ].map((step, idx, arr) => {
-                const stepKeys = arr.map((s) => s.key);
-                const curIdx = stepKeys.indexOf(ps);
-                const done = curIdx >= idx;
-                const active = curIdx === idx;
-                return (
-                  <div key={step.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
-                    <span style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700,
-                      background: done ? (active ? 'var(--color-info-dot)' : 'var(--color-info-border)') : 'var(--color-border-subtle)',
-                      color: done ? (active ? 'var(--color-surface)' : 'var(--color-info-dot)') : 'var(--color-text-muted)' }}>
-                      {done && !active ? '✓' : idx + 1}
-                    </span>
-                    <span style={{ fontSize: 13, color: active ? 'var(--color-info-dot)' : done ? 'var(--color-text-secondary)' : 'var(--color-text-muted)', fontWeight: active ? 600 : 400 }}>{step.label}</span>
-                  </div>
-                );
-              })}
-            </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-muted)', marginBottom: 6 }}>Track F — การนำเข้า/จัดส่ง</div>
-              {[
-                { key: 'IR_ISSUED',      label: 'ออก Import Request' },
-                { key: 'IR_SENT',        label: 'ส่ง IR แล้ว' },
-                { key: 'SHIPPING',       label: 'สินค้าอยู่ระหว่างขนส่ง' },
-                { key: 'GOODS_RECEIVED', label: 'รับสินค้าแล้ว' },
-              ].map((step, idx, arr) => {
-                const stepKeys = arr.map((s) => s.key);
-                const curIdx = stepKeys.indexOf(fs);
-                const done = curIdx >= idx;
-                const active = curIdx === idx;
-                return (
-                  <div key={step.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
-                    <span style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700,
-                      background: done ? (active ? 'var(--color-success)' : 'var(--color-success-border)') : 'var(--color-border-subtle)',
-                      color: done ? (active ? 'var(--color-surface)' : 'var(--color-success)') : 'var(--color-text-muted)' }}>
-                      {done && !active ? '✓' : idx + 1}
-                    </span>
-                    <span style={{ fontSize: 13, color: active ? 'var(--color-success)' : done ? 'var(--color-text-secondary)' : 'var(--color-text-muted)', fontWeight: active ? 600 : 400 }}>{step.label}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
         </section>
       )}
 
@@ -1504,43 +1900,90 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             )}
           </section>
 
-          {(quotations && quotations.length > 0) && (
+          {quotationGroups.length > 0 && (
             <section className="panel">
               <div className="panel-header">
                 <h2>ใบเสนอราคา</h2>
               </div>
-              {quotations.map((q) => (
-                <div key={q.id} style={{ padding: '10px 18px', borderBottom: '1px solid var(--color-surface-subtle)', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                  <div style={{ flexShrink: 0, marginTop: 2 }}>
-                    <span style={{
-                      fontSize: 11, fontWeight: 700, borderRadius: 4, padding: '2px 7px',
-                      ...docStatusColors(q.docStatus),
-                    }}>Rev {q.quotationVersion}</span>
+              {quotationGroups.map((group) => (
+                <div key={group.recipientType} style={{ borderTop: '1px solid var(--color-surface-subtle)' }}>
+                  <div style={{ padding: '12px 18px 6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                    <h3 style={{ margin: 0, fontSize: 14 }}>{group.label}</h3>
+                    {can.generateQuotation && (
+                      <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                        disabled={actionLoading}
+                        onClick={() => openQuotationModal(group.recipientType)}>
+                        <Icon name="fileText" size={12} /> Revise
+                      </button>
+                    )}
                   </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <span style={{ fontWeight: 600, fontSize: 13 }}>{q.number}</span>
-                      <span style={{
-                        fontSize: 10, borderRadius: 3, padding: '1px 5px', fontWeight: 600,
-                        ...docStatusColors(q.docStatus),
-                      }}>{q.docStatus}</span>
-                    </div>
-                    <div style={{ fontSize: 12, color: 'var(--color-icon-muted)', marginTop: 2 }}>
-                      ยอดรวม {formatMoney(q.totalAmount)} · ออกโดย {q.issuedByName} · {formatThaiDate(q.issuedAt)}
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                    <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
-                      disabled={downloadingQuotationKey === `${q.id}-xlsx`}
-                      onClick={() => handleDownloadQuotation(q.id, q.number, 'xlsx')}>
-                      <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-xlsx` ? 'กำลังดาวน์โหลด...' : 'Excel'}
-                    </button>
-                    <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
-                      disabled={downloadingQuotationKey === `${q.id}-pdf`}
-                      onClick={() => handleDownloadQuotation(q.id, q.number, 'pdf')}>
-                      <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-pdf` ? 'กำลังดาวน์โหลด...' : 'PDF'}
-                    </button>
-                  </div>
+                  {group.quotations.map((q, index) => {
+                    const status = quotationStatusLabel(q.docStatus);
+                    const activeHead = index === 0 && !['SUPERSEDED', 'CANCELLED', 'REJECTED'].includes(q.docStatus);
+                    const canMarkSent = activeHead && hasAction('MARK_QUOTATION_SENT') && q.docStatus === 'ISSUED';
+                    const canMarkDecision = activeHead && ['ISSUED', 'SENT'].includes(q.docStatus);
+                    return (
+                      <div key={q.id} style={{ padding: '10px 18px', borderTop: '1px solid var(--color-surface-subtle)', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                        <div style={{ flexShrink: 0, marginTop: 2 }}>
+                          <span style={{
+                            fontSize: 11, fontWeight: 700, borderRadius: 4, padding: '2px 7px',
+                            ...docStatusColors(q.docStatus),
+                          }}>Rev {q.quotationVersion}</span>
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span style={{ fontWeight: 600, fontSize: 13 }}>{q.number}</span>
+                            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                            {q.recipientLabel && <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{q.recipientLabel}</span>}
+                          </div>
+                          <div style={{ fontSize: 12, color: 'var(--color-icon-muted)', marginTop: 2 }}>
+                            ยอดรวม {formatMoney(q.totalAmount)} · ออกโดย {q.issuedByName} · ออก {formatThaiDate(q.issuedAt)}
+                            {q.sentAt ? ` · ส่ง ${formatThaiDate(q.sentAt)}` : ''}
+                            {q.acceptedAt ? ` · รับ ${formatThaiDate(q.acceptedAt)}` : ''}
+                            {q.validityDate ? ` · ใช้ได้ถึง ${formatThaiDate(q.validityDate)}` : ''}
+                          </div>
+                          {(q.paymentTerms || q.leadTime || q.deliveryTerms) && (
+                            <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 4 }}>
+                              {[q.paymentTerms && `ชำระเงิน: ${q.paymentTerms}`, q.leadTime && `Lead time: ${q.leadTime}`, q.deliveryTerms && `ส่งมอบ: ${q.deliveryTerms}`].filter(Boolean).join(' · ')}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                          {canMarkSent && (
+                            <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                              disabled={actionLoading}
+                              onClick={() => markQuotation(q, 'sent')}>
+                              ส่งแล้ว
+                            </button>
+                          )}
+                          {canMarkDecision && hasAction('MARK_QUOTATION_ACCEPTED') && (
+                            <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                              disabled={actionLoading}
+                              onClick={() => markQuotation(q, 'accepted')}>
+                              รับแล้ว
+                            </button>
+                          )}
+                          {canMarkDecision && hasAction('MARK_QUOTATION_REJECTED') && (
+                            <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                              disabled={actionLoading}
+                              onClick={() => markQuotation(q, 'rejected')}>
+                              ปฏิเสธ
+                            </button>
+                          )}
+                          <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                            disabled={downloadingQuotationKey === `${q.id}-xlsx`}
+                            onClick={() => handleDownloadQuotation(q.id, q.number, 'xlsx')}>
+                            <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-xlsx` ? 'กำลังดาวน์โหลด...' : 'Excel'}
+                          </button>
+                          <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                            disabled={downloadingQuotationKey === `${q.id}-pdf`}
+                            onClick={() => handleDownloadQuotation(q.id, q.number, 'pdf')}>
+                            <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-pdf` ? 'กำลังดาวน์โหลด...' : 'PDF'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               ))}
             </section>
@@ -1611,6 +2054,273 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           )}
         </section>
       </div>
+
+      {quotationModal && (
+        <Modal
+          title="ออกใบเสนอราคา"
+          onClose={() => setQuotationModal(null)}
+          footer={(
+          <>
+            <button type="button" className="secondary-button" onClick={() => setQuotationModal(null)}>
+              ยกเลิก
+            </button>
+            <button type="button" className="primary-button" disabled={actionLoading} onClick={submitQuotation}>
+              <Icon name="fileText" size={14} />
+              {actionLoading ? 'กำลังบันทึก...' : 'ออกใบเสนอราคา'}
+            </button>
+          </>
+          )}
+        >
+          <div style={{ display: 'grid', gap: 12 }}>
+          <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+            ผู้รับใบเสนอราคา
+            <select
+              value={quotationDraft.recipientType}
+              onChange={(e) => {
+                const recipientType = e.target.value;
+                const chainAccepted = (quotations ?? []).some((q) =>
+                  (q.recipientType ?? 'UNSPECIFIED') === recipientType && q.docStatus === 'ACCEPTED');
+                setQuotationDraft((draft) => ({ ...draft, recipientType }));
+                setQuotationModal((modal) => ({ ...(modal ?? {}), amendmentRequired: chainAccepted || summary.paymentStatus != null }));
+              }}
+            >
+              <option value="DESIGNER">ผู้ออกแบบ</option>
+              <option value="OWNER">เจ้าของ</option>
+              <option value="BUYER">ผู้ซื้อ-ผู้รับเหมา</option>
+            </select>
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+            ชื่อผู้รับ/บริษัท
+            <input value={quotationDraft.recipientLabel}
+              onChange={(e) => setQuotationDraft((draft) => ({ ...draft, recipientLabel: e.target.value }))} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+            เงื่อนไขชำระเงิน
+            <textarea rows={2} value={quotationDraft.paymentTerms}
+              onChange={(e) => setQuotationDraft((draft) => ({ ...draft, paymentTerms: e.target.value }))} />
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              Lead time
+              <input value={quotationDraft.leadTime}
+                onChange={(e) => setQuotationDraft((draft) => ({ ...draft, leadTime: e.target.value }))} />
+            </label>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              ใช้ได้ถึง
+              <input type="date" value={quotationDraft.validityDate}
+                onChange={(e) => setQuotationDraft((draft) => ({ ...draft, validityDate: e.target.value }))} />
+            </label>
+          </div>
+          <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+            เงื่อนไขส่งมอบ
+            <textarea rows={2} value={quotationDraft.deliveryTerms}
+              onChange={(e) => setQuotationDraft((draft) => ({ ...draft, deliveryTerms: e.target.value }))} />
+          </label>
+          {quotationModal?.amendmentRequired && (
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              เหตุผลการแก้ไข
+              <textarea rows={3} value={quotationDraft.amendmentReason}
+                onChange={(e) => setQuotationDraft((draft) => ({ ...draft, amendmentReason: e.target.value }))} />
+            </label>
+          )}
+          </div>
+        </Modal>
+      )}
+
+      {paymentModal && (
+        <Modal
+          title="บันทึกรับชำระเงิน"
+          onClose={() => setPaymentModal(false)}
+          footer={(
+            <>
+              <button type="button" className="secondary-button" onClick={() => setPaymentModal(false)}>ยกเลิก</button>
+              <button type="button" className="primary-button" disabled={actionLoading} onClick={handleRecordPayment}>
+                บันทึก
+              </button>
+            </>
+          )}
+        >
+          <div style={{ display: 'grid', gap: 12 }}>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              ประเภท
+              <select value={paymentDraft.kind} onChange={(e) => setPaymentDraft((draft) => ({ ...draft, kind: e.target.value }))}>
+                <option value="DEPOSIT">มัดจำ</option>
+                <option value="BALANCE">ส่วนที่เหลือ</option>
+                <option value="ADJUSTMENT">ปรับปรุงยอด/คืนเงิน</option>
+              </select>
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                จำนวนเงิน
+                <input type="number" min="0" step="0.01" value={paymentDraft.amount}
+                  onChange={(e) => setPaymentDraft((draft) => ({ ...draft, amount: e.target.value }))} />
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                วันที่รับเงิน
+                <input type="date" value={paymentDraft.receivedAt}
+                  onChange={(e) => setPaymentDraft((draft) => ({ ...draft, receivedAt: e.target.value }))} />
+              </label>
+            </div>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              เลขอ้างอิง
+              <input value={paymentDraft.receiptRef}
+                onChange={(e) => setPaymentDraft((draft) => ({ ...draft, receiptRef: e.target.value }))} />
+            </label>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              หมายเหตุ
+              <textarea rows={3} value={paymentDraft.note}
+                onChange={(e) => setPaymentDraft((draft) => ({ ...draft, note: e.target.value }))} />
+            </label>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
+              <input type="checkbox" checked={paymentDraft.allowOverpayment}
+                onChange={(e) => setPaymentDraft((draft) => ({ ...draft, allowOverpayment: e.target.checked }))} />
+              ยืนยันรับชำระเกินยอด
+            </label>
+          </div>
+        </Modal>
+      )}
+
+      {billingModal && (
+        <Modal
+          title="ตั้งค่าการวางบิล"
+          onClose={() => setBillingModal(false)}
+          footer={(
+            <>
+              <button type="button" className="secondary-button" onClick={() => setBillingModal(false)}>ยกเลิก</button>
+              <button type="button" className="primary-button" disabled={actionLoading} onClick={handleSetBilling}>
+                บันทึก
+              </button>
+            </>
+          )}
+        >
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                วันที่วางบิล
+                <input type="date" value={billingDraft.billingDate}
+                  onChange={(e) => setBillingDraft((draft) => ({ ...draft, billingDate: e.target.value }))} />
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                วันครบกำหนด
+                <input type="date" value={billingDraft.dueDate}
+                  onChange={(e) => setBillingDraft((draft) => ({ ...draft, dueDate: e.target.value }))} />
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                เครดิต (วัน)
+                <input type="number" min="0" value={billingDraft.creditTermDays}
+                  onChange={(e) => setBillingDraft((draft) => ({ ...draft, creditTermDays: e.target.value }))} />
+              </label>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                ติดตามล่าสุด
+                <input type="date" value={billingDraft.lastFollowUpAt}
+                  onChange={(e) => setBillingDraft((draft) => ({ ...draft, lastFollowUpAt: e.target.value }))} />
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                ติดตามครั้งถัดไป
+                <input type="date" value={billingDraft.nextFollowUpAt}
+                  onChange={(e) => setBillingDraft((draft) => ({ ...draft, nextFollowUpAt: e.target.value }))} />
+              </label>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {deliveryModal && (
+        <Modal
+          title="บันทึกการส่งสินค้า"
+          onClose={() => setDeliveryModal(false)}
+          footer={(
+            <>
+              <button type="button" className="secondary-button" onClick={() => setDeliveryModal(false)}>ยกเลิก</button>
+              <button type="button" className="primary-button" disabled={actionLoading} onClick={handleRecordDelivery}>
+                บันทึก
+              </button>
+            </>
+          )}
+        >
+          <div style={{ display: 'grid', gap: 12 }}>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              แหล่งสินค้า
+              <select value={deliveryDraft.source}
+                onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, source: e.target.value }))}>
+                <option value="WAREHOUSE">WAREHOUSE</option>
+                <option value="STOCK">STOCK</option>
+              </select>
+            </label>
+            <div style={{ display: 'grid', gap: 8 }}>
+              {items.map((item) => {
+                const remaining = Math.max(0, Number(item.qty || 0) - Number(item.qtyDelivered || 0));
+                return (
+	                  <label key={item.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px', gap: 10, alignItems: 'center', fontSize: 13 }}>
+	                    <span>
+                        <span className="sr-only">จำนวนส่งมอบ</span>
+	                      <strong>{item.brand} {item.model || ''}</strong>
+                      <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
+                        คงเหลือ {remaining.toLocaleString('en-US')} · ส่งแล้ว {Number(item.qtyDelivered || 0).toLocaleString('en-US')}
+                      </small>
+                    </span>
+	                    <input type="number" min="0" max={remaining} step="0.01"
+                        aria-label={`จำนวนส่งมอบ ${item.brand} ${item.model || ''}`}
+	                      value={deliveryDraft.lines[item.id] ?? ''}
+                      onChange={(e) => setDeliveryDraft((draft) => ({
+                        ...draft,
+                        lines: { ...draft.lines, [item.id]: e.target.value },
+                      }))} />
+                  </label>
+                );
+              })}
+            </div>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              หมายเหตุ
+              <textarea rows={3} value={deliveryDraft.note}
+                onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, note: e.target.value }))} />
+            </label>
+          </div>
+        </Modal>
+      )}
+
+      {stockModal && (
+        <Modal
+          title="จองสินค้าจากสต็อก"
+          onClose={() => setStockModal(false)}
+          footer={(
+            <>
+              <button type="button" className="secondary-button" onClick={() => setStockModal(false)}>ยกเลิก</button>
+              <button type="button" className="primary-button" disabled={actionLoading} onClick={handleReserveStock}>
+                บันทึก
+              </button>
+            </>
+          )}
+        >
+          <div style={{ display: 'grid', gap: 12 }}>
+            {items.map((item) => (
+	              <label key={item.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px', gap: 10, alignItems: 'center', fontSize: 13 }}>
+	                <span>
+                    <span className="sr-only">จำนวนจากสต็อก</span>
+	                  <strong>{item.brand} {item.model || ''}</strong>
+                  <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
+                    สั่ง {Number(item.qty || 0).toLocaleString('en-US')} · จากสต็อกเดิม {Number(item.qtyFromStock || 0).toLocaleString('en-US')}
+                  </small>
+                </span>
+	                <input type="number" min="0" max={Number(item.qty || 0)} step="0.01"
+                    aria-label={`จำนวนจากสต็อก ${item.brand} ${item.model || ''}`}
+	                  value={stockDraft.lines[item.id] ?? ''}
+                  onChange={(e) => setStockDraft((draft) => ({
+                    ...draft,
+                    lines: { ...draft.lines, [item.id]: e.target.value },
+                  }))} />
+              </label>
+            ))}
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              เหตุผล / หมายเหตุ
+              <textarea rows={3} value={stockDraft.note}
+                onChange={(e) => setStockDraft((draft) => ({ ...draft, note: e.target.value }))} />
+            </label>
+          </div>
+        </Modal>
+      )}
 
       <ConfirmDialog
         open={confirm?.kind === 'deleteAttachment'}

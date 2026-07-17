@@ -7,7 +7,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.notification.NotificationService;
+import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketItemDto;
@@ -21,9 +22,6 @@ public class DepositNoticeService {
     private static final java.util.Set<String> SALES_ROLES  = java.util.Set.of("sales");
     private static final java.util.Set<String> CEO_ROLES    = java.util.Set.of("ceo");
     private static final java.util.Set<String> IMPORT_ROLES = java.util.Set.of("import");
-    // Ticket-event title mirrors th.co.glr.hr.ticket.TicketService.TICKET_EVENT_TITLES for the one
-    // event type this service raises. NotificationService.notify requires an explicit title.
-    private static final String REVISION_REQUESTED_TITLE = "ขอแก้ไขเอกสาร";
     // Same read rule as TicketService.VIEWER_ROLES: deposit notices are customer
     // financial documents — hr/employee have no business downloading them.
     // sales_manager is read-only oversight here too — never add it to SALES_ROLES/
@@ -33,18 +31,18 @@ public class DepositNoticeService {
 
     private final DepositNoticeRepository docs;
     private final TicketRepository   tickets;
-    private final NotificationService notificationService;
+    private final NotificationRepository notifications;
     private final DepositNoticeRenderer renderer;
     private final RemainingInvoiceRenderer remainingRenderer;
 
     public DepositNoticeService(DepositNoticeRepository docs, TicketRepository tickets,
-                           NotificationService notificationService, DepositNoticeRenderer renderer,
+                           NotificationRepository notifications, DepositNoticeRenderer renderer,
                            RemainingInvoiceRenderer remainingRenderer) {
-        this.docs                = docs;
-        this.tickets              = tickets;
-        this.notificationService = notificationService;
-        this.renderer             = renderer;
-        this.remainingRenderer   = remainingRenderer;
+        this.docs              = docs;
+        this.tickets           = tickets;
+        this.notifications     = notifications;
+        this.renderer          = renderer;
+        this.remainingRenderer = remainingRenderer;
     }
 
     public List<DocumentNoteTemplateDto> getNoteTemplates() {
@@ -68,6 +66,7 @@ public class DepositNoticeService {
     public DepositNoticeDto createDraft(long ticketId, DepositNoticeDraftRequest req, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
+        requireActiveLifecycle(s);
 
         // Auto-populate items from approved ticket items if not provided
         List<DepositNoticeItemRequest> items = buildItemsFromRequest(req, ticketId);
@@ -127,6 +126,9 @@ public class DepositNoticeService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "Deposit notice requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED");
         }
+        // Issuing advances the payment track — a paused/terminal deal must not move
+        // (Phase 1 lifecycle gate; mirrors TicketService.requireActive).
+        requireActiveLifecycle(s);
 
         String docNumber = docs.issue(docId, actor.id(), actor.name());
 
@@ -246,6 +248,7 @@ public class DepositNoticeService {
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
         TicketSummaryDto s = ticket.summary();
         String st = s.status();
+        requireActiveLifecycle(s);
 
         if (!TicketStatus.APPROVED.equals(st) && !TicketStatus.DOCUMENT_ISSUED.equals(st)) {
             throw new ApiException(HttpStatus.CONFLICT, "Revision only allowed from approved or document_issued");
@@ -265,11 +268,11 @@ public class DepositNoticeService {
             "[" + req.scope().name() + "] " + req.reason());
 
         if (req.scope() == RevisionScope.PRICE_CHANGE) {
-            notificationService.notifyByRole("ceo", "REVISION_REQUESTED", REVISION_REQUESTED_TITLE,
-                "Ticket " + s.code() + " ขอแก้ไขราคา — รออนุมัติใหม่", "/tickets/" + ticketId, true);
+            notifications.notifyByRole("ceo", ticketId, "REVISION_REQUESTED",
+                "Ticket " + s.code() + " ขอแก้ไขราคา — รออนุมัติใหม่");
         } else if (req.scope() == RevisionScope.NEW_ITEM) {
-            notificationService.notifyByRole("import", "REVISION_REQUESTED", REVISION_REQUESTED_TITLE,
-                "Ticket " + s.code() + " มีสินค้าเพิ่มใหม่ — กรุณาตั้งราคา", "/tickets/" + ticketId, true);
+            notifications.notifyByRole("import", ticketId, "REVISION_REQUESTED",
+                "Ticket " + s.code() + " มีสินค้าเพิ่มใหม่ — กรุณาตั้งราคา");
         }
 
         return tickets.findById(ticketId).orElseThrow();
@@ -286,6 +289,17 @@ public class DepositNoticeService {
             throw new ApiException(HttpStatus.CONFLICT, "Deposit notice can only be created for approved tickets");
         }
         return t.summary();
+    }
+
+    /**
+     * Phase 1 lifecycle gate (mirrors TicketService.requireActive): deposit-notice
+     * mutations advance the payment track, so a paused/terminal deal blocks them.
+     */
+    private void requireActiveLifecycle(TicketSummaryDto summary) {
+        if (!DealLifecycle.ACTIVE.equals(summary.lifecycle())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + summary.lifecycle() + ") จึงแก้ไขขั้นตอนนี้ไม่ได้");
+        }
     }
 
     private DepositNoticeDto requireDraft(long docId) {

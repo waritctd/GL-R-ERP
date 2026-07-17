@@ -2,6 +2,7 @@ package th.co.glr.hr.ticket;
 
 import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
+import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -23,6 +24,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import th.co.glr.hr.ticket.TicketResponses.CalculatePricesResponse;
 import th.co.glr.hr.ticket.TicketResponses.TicketDetailResponse;
 import th.co.glr.hr.ticket.TicketResponses.TicketListResponse;
+import th.co.glr.hr.ticket.TicketResponses.TicketActionsResponse;
 
 @RestController
 @RequestMapping("/api/tickets")
@@ -59,6 +61,74 @@ public class TicketController {
     TicketDetailResponse get(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new TicketDetailResponse(ticketService.get(id, user));
+    }
+
+    @GetMapping("/{id}/actions")
+    TicketActionsResponse actions(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return ticketService.actions(id, user);
+    }
+
+    @GetMapping("/{id}/payments")
+    Map<String, List<PaymentReceiptDto>> payments(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("items", ticketService.listPayments(id, user));
+    }
+
+    @PostMapping("/{id}/payments")
+    TicketDetailResponse recordPayment(
+        @PathVariable long id,
+        @Valid @RequestBody RecordPaymentRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.recordPayment(id, request, user));
+    }
+
+    @PostMapping("/{id}/billing")
+    TicketDetailResponse setBilling(
+        @PathVariable long id,
+        @Valid @RequestBody BillingRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.setBilling(id, request, user));
+    }
+
+    @GetMapping("/{id}/deliveries")
+    Map<String, List<DeliveryRecordDto>> deliveries(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("items", ticketService.listDeliveries(id, user));
+    }
+
+    @PostMapping("/{id}/reserve-stock")
+    TicketDetailResponse reserveStock(
+        @PathVariable long id,
+        @Valid @RequestBody StockReservationRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.reserveStock(id, request, user));
+    }
+
+    @PostMapping("/{id}/deliveries")
+    TicketDetailResponse recordDelivery(
+        @PathVariable long id,
+        @Valid @RequestBody RecordDeliveryRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.recordPartialDelivery(id, request, user));
+    }
+
+    @PostMapping("/{id}/deliveries/complete")
+    TicketDetailResponse completeDelivery(
+        @PathVariable long id,
+        @RequestBody(required = false) CompleteDeliveryRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.completeDelivery(id, request, user));
     }
 
     @PostMapping("/{id}/submit")
@@ -100,9 +170,41 @@ public class TicketController {
     }
 
     @PostMapping("/{id}/quotation")
-    TicketDetailResponse quotation(@PathVariable long id, HttpSession session) {
+    TicketDetailResponse quotation(@PathVariable long id,
+                                   @Valid @RequestBody GenerateQuotationRequest request,
+                                   HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.generateQuotation(id, user));
+        return new TicketDetailResponse(ticketService.generateQuotation(id, request, user));
+    }
+
+    @PostMapping("/{id}/quotations/{quotationId}/sent")
+    TicketDetailResponse markQuotationSent(@PathVariable long id,
+                                           @PathVariable long quotationId,
+                                           @RequestBody(required = false) NoteRequest request,
+                                           HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(
+            ticketService.markQuotationSent(id, quotationId, request == null ? null : request.note(), user));
+    }
+
+    @PostMapping("/{id}/quotations/{quotationId}/accepted")
+    TicketDetailResponse markQuotationAccepted(@PathVariable long id,
+                                               @PathVariable long quotationId,
+                                               @RequestBody(required = false) NoteRequest request,
+                                               HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(
+            ticketService.markQuotationAccepted(id, quotationId, request == null ? null : request.note(), user));
+    }
+
+    @PostMapping("/{id}/quotations/{quotationId}/rejected")
+    TicketDetailResponse markQuotationRejected(@PathVariable long id,
+                                               @PathVariable long quotationId,
+                                               @RequestBody(required = false) NoteRequest request,
+                                               HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(
+            ticketService.markQuotationRejected(id, quotationId, request == null ? null : request.note(), user));
     }
 
     @GetMapping("/{id}/quotations/{quotationId}/file")
@@ -140,6 +242,103 @@ public class TicketController {
         UserPrincipal user = sessions.requireUser(session);
         return new TicketDetailResponse(ticketService.cancel(id, user));
     }
+
+    // ── Deal pipeline (V50) ─────────────────────────────────────────────────
+
+    @PostMapping("/{id}/stage")
+    TicketDetailResponse updateStage(@PathVariable long id,
+                                     @Valid @RequestBody UpdateStageRequest request,
+                                     HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.updateStage(id, request.stage(), request.note(), user));
+    }
+
+    @PostMapping("/{id}/lost")
+    TicketDetailResponse markLost(@PathVariable long id,
+                                  @Valid @RequestBody MarkLostRequest request,
+                                  HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.markLost(id, request.reason(), request.note(), user));
+    }
+
+    @PostMapping("/{id}/reopen")
+    TicketDetailResponse reopen(@PathVariable long id,
+                                @RequestBody(required = false) ReopenRequest request,
+                                HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(
+            ticketService.reopenDeal(id, request == null ? null : request.note(), user));
+    }
+
+    @PostMapping("/{id}/hold")
+    TicketDetailResponse hold(@PathVariable long id,
+                              @RequestBody(required = false) NoteRequest request,
+                              HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(
+            ticketService.placeOnHold(id, request == null ? null : request.note(), user));
+    }
+
+    @PostMapping("/{id}/dormant")
+    TicketDetailResponse dormant(@PathVariable long id,
+                                 @RequestBody(required = false) NoteRequest request,
+                                 HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(
+            ticketService.markDormant(id, request == null ? null : request.note(), user));
+    }
+
+    @PostMapping("/{id}/resume")
+    TicketDetailResponse resume(@PathVariable long id,
+                                @RequestBody(required = false) NoteRequest request,
+                                HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(
+            ticketService.resume(id, request == null ? null : request.note(), user));
+    }
+
+    @PostMapping("/{id}/tender-requirement")
+    TicketDetailResponse tenderRequirement(@PathVariable long id,
+                                           @Valid @RequestBody PolicyValueRequest request,
+                                           HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.setTenderRequirement(id, request.value(), user));
+    }
+
+    @PostMapping("/{id}/entry-channel")
+    TicketDetailResponse entryChannel(@PathVariable long id,
+                                      @Valid @RequestBody EntryChannelRequest request,
+                                      HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.setEntryChannel(id, request.value(), request.note(), user));
+    }
+
+    @PostMapping("/{id}/deposit-policy")
+    TicketDetailResponse depositPolicy(@PathVariable long id,
+                                       @Valid @RequestBody DepositPolicyRequest request,
+                                       HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.waiveDeposit(id, request.policy(), request.reason(), user));
+    }
+
+    record UpdateStageRequest(@jakarta.validation.constraints.NotBlank String stage,
+                              @jakarta.validation.constraints.Size(max = 2000) String note) {}
+
+    record MarkLostRequest(@jakarta.validation.constraints.NotBlank String reason,
+                           @jakarta.validation.constraints.Size(max = 2000) String note) {}
+
+    record ReopenRequest(@jakarta.validation.constraints.Size(max = 2000) String note) {}
+
+    record NoteRequest(@jakarta.validation.constraints.Size(max = 2000) String note) {}
+
+    record PolicyValueRequest(@jakarta.validation.constraints.NotBlank String value) {}
+
+    record EntryChannelRequest(@jakarta.validation.constraints.NotBlank String value,
+                               @jakarta.validation.constraints.Size(max = 2000) String note) {}
+
+    record DepositPolicyRequest(@jakarta.validation.constraints.NotBlank String policy,
+                                @jakarta.validation.constraints.NotBlank
+                                @jakarta.validation.constraints.Size(max = 2000) String reason) {}
 
     @PostMapping("/{id}/factory-emails/send")
     Map<String, String> sendFactoryEmail(

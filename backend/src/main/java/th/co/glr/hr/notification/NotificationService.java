@@ -41,34 +41,12 @@ public class NotificationService {
         NotificationDto created = notifications.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Notification was not saved"));
         if (sendEmail) {
-            // Always hand off to NotificationEmailService, even when the employee has no email on
-            // file (`to` is null then) - it decides whether to skip or redirect to a configured
-            // override address (used by test/UAT deployments to verify the email pipeline works).
-            EmployeeContact contact = notifications.findEmployeeContact(employeeId)
-                .orElse(new EmployeeContact(null, null));
-            sendEmailAfterCommit(
-                employeeId,
-                contact.email(),
-                contact.name(),
-                subject.trim(),
-                body.trim(),
-                trimmedOrNull(link));
+            notifications.findEmployeeEmail(employeeId)
+                .ifPresentOrElse(
+                    to -> sendEmailAfterCommit(employeeId, to, subject.trim(), body.trim()),
+                    () -> log.info("Notification email skipped: employee={} has no email", employeeId));
         }
         return created;
-    }
-
-    /**
-     * Fans {@link #notify} out to every active employee in the given role (ticket-module roles:
-     * import/ceo/sales — see {@link NotificationRepository#findActiveEmployeeIdsByRole}). Each
-     * recipient gets its own in-app row and, if requested, its own email — same one-stop path as a
-     * single-employee notify(), just looped.
-     */
-    @Transactional
-    public void notifyByRole(String role, String type, String subject, String body, String link,
-                             boolean sendEmail) {
-        for (Long employeeId : notifications.findActiveEmployeeIdsByRole(role)) {
-            notify(employeeId, type, subject, body, link, sendEmail);
-        }
     }
 
     @Transactional
@@ -79,16 +57,15 @@ public class NotificationService {
         }
     }
 
-    private void sendEmailAfterCommit(long employeeId, String to, String recipientName, String subject,
-                                      String body, String link) {
+    private void sendEmailAfterCommit(long employeeId, String to, String subject, String body) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            emailService.send(employeeId, to, recipientName, subject, body, link);
+            emailService.send(employeeId, to, subject, body);
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                emailService.send(employeeId, to, recipientName, subject, body, link);
+                emailService.send(employeeId, to, subject, body);
             }
         });
     }

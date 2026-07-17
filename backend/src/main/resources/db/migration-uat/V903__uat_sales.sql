@@ -163,23 +163,34 @@ WHERE NOT EXISTS (SELECT 1 FROM customers.customer c WHERE c.name = v.name);
 --    for the still-draft UAT-TKT-01).
 -- ---------------------------------------------------------------------
 INSERT INTO sales.ticket (
-    code, title, status, priority, created_by, assigned_to, customer_name, customer_id, note
+    code, title, status, priority, created_by, assigned_to, customer_name, customer_id, note,
+    sales_stage, lifecycle, tender_requirement, deposit_policy, entry_channel,
+    payment_status, fulfillment_status
 )
 SELECT v.code, v.title, v.status, v.priority,
        creator.employee_id, assignee.employee_id,
-       cust.name, cust.customer_id, v.notes
+       cust.name, cust.customer_id, v.notes,
+       v.sales_stage, v.lifecycle, v.tender_requirement, v.deposit_policy, v.entry_channel,
+       v.payment_status, v.fulfillment_status
 FROM (VALUES
     ('UAT-TKT-01', 'กระเบื้องปูพื้นโครงการคอนโด A',                 'draft',          'NORMAL',
-        'GLR-0005', NULL,        'บริษัท สยามคอนสตรัคชั่น จำกัด',      'Draft ticket, not yet submitted'),
+        'GLR-0005', NULL,        'บริษัท สยามคอนสตรัคชั่น จำกัด',      'Draft lead-stage ticket, not yet submitted',
+        'LEAD_APPROACH', 'ACTIVE', 'UNKNOWN', 'REQUIRED', 'DESIGNER_LED', NULL::varchar, NULL::varchar),
     ('UAT-TKT-02', 'กระเบื้องปูผนังโครงการบ้านจัดสรร B',             'submitted',      'NORMAL',
-        'GLR-0005', 'GLR-0004',  'หจก. บ้านสวยกรุ๊ป',                 'Submitted, awaiting pickup'),
+        'GLR-0005', 'GLR-0004',  'หจก. บ้านสวยกรุ๊ป',                 'Presentation-stage price request awaiting pickup',
+        'PRESENTATION', 'ACTIVE', 'UNKNOWN', 'REQUIRED', 'DESIGNER_LED', NULL::varchar, NULL::varchar),
     ('UAT-TKT-03', 'กระเบื้องสระว่ายน้ำโครงการรีสอร์ท C',            'price_proposed', 'HIGH',
-        'GLR-0006', 'GLR-0004',  'บริษัท ไทยรีสอร์ท แอนด์ สปา จำกัด', 'Mid-flow: price proposed, awaiting sales_manager/ceo approval'),
+        'GLR-0006', 'GLR-0004',  'บริษัท ไทยรีสอร์ท แอนด์ สปา จำกัด', 'Spec-approved stage: price proposed, awaiting approval',
+        'SPEC_APPROVED', 'ACTIVE', 'UNKNOWN', 'REQUIRED', 'DESIGNER_LED', NULL::varchar, NULL::varchar),
     ('UAT-TKT-04', 'กระเบื้องปูพื้นโครงการคอนโด D',                  'closed',         'NORMAL',
-        'GLR-0005', 'GLR-0004',  'บริษัท เมโทรพร็อพเพอร์ตี้ จำกัด',   'Closed happy-path ticket, feeds a document + commission'),
+        'GLR-0005', 'GLR-0004',  'บริษัท เมโทรพร็อพเพอร์ตี้ จำกัด',   'Closed paid happy-path ticket, feeds a document + commission',
+        'CLOSED_PAID', 'COMPLETED', 'UNKNOWN', 'REQUIRED', 'DESIGNER_LED', 'FULLY_PAID', 'FULLY_DELIVERED'),
     ('UAT-TKT-05', 'กระเบื้องบ้านเดี่ยวโครงการ E (rejection path)',  'in_review',      'LOW',
-        'GLR-0006', 'GLR-0004',  'บริษัท แกรนด์วิลเลจ จำกัด',         'Price was proposed then rejected by sales_manager, sent back to in_review for re-pricing')
-) AS v(code, title, status, priority, created_by_code, assigned_to_code, customer_name, notes)
+        'GLR-0006', 'GLR-0004',  'บริษัท แกรนด์วิลเลจ จำกัด',         'Quote-design-side stage after rejection, sent back to in_review for re-pricing',
+        'QUOTE_DESIGN_SIDE', 'ACTIVE', 'UNKNOWN', 'REQUIRED', 'DESIGNER_LED', NULL::varchar, NULL::varchar)
+) AS v(code, title, status, priority, created_by_code, assigned_to_code, customer_name, notes,
+       sales_stage, lifecycle, tender_requirement, deposit_policy, entry_channel,
+       payment_status, fulfillment_status)
 JOIN hr.employee creator ON creator.employee_code = v.created_by_code
 LEFT JOIN hr.employee assignee ON assignee.employee_code = v.assigned_to_code
 JOIN customers.customer cust ON cust.name = v.customer_name
@@ -238,8 +249,8 @@ WHERE NOT EXISTS (
 
 -- Draft quotation for UAT-TKT-03 (no issue_date in the CSV -> issued_at
 -- keeps its schema default of now(); doc_status left DRAFT).
-INSERT INTO sales.quotation (ticket_id, number, issued_by, doc_status, quotation_version)
-SELECT t.ticket_id, 'QN-2026-00002', issuer.employee_id, 'DRAFT', 1
+INSERT INTO sales.quotation (ticket_id, number, issued_by, doc_status, quotation_version, recipient_type)
+SELECT t.ticket_id, 'QN-2026-00002', issuer.employee_id, 'DRAFT', 1, 'DESIGNER'
 FROM sales.ticket t
 JOIN hr.employee issuer ON issuer.employee_code = 'GLR-0004'
 WHERE t.code = 'UAT-TKT-03'

@@ -110,6 +110,7 @@ class FlywayMigrationTest {
 
         assertThat(result.success).isTrue();
         assertThat(result.migrationsExecuted).isGreaterThan(0);
+        assertUatDealPipelineSeed();
     }
 
     /**
@@ -171,6 +172,61 @@ class FlywayMigrationTest {
                         .isTrue();
                 }
             }
+        }
+    }
+
+    private void assertUatDealPipelineSeed() {
+        try (Connection connection = DriverManager.getConnection(
+                PostgresTestSupport.jdbcUrl(),
+                PostgresTestSupport.username(),
+                PostgresTestSupport.password());
+            PreparedStatement statement = connection.prepareStatement("""
+                SELECT
+                    (SELECT COUNT(DISTINCT sales_stage)
+                       FROM sales.ticket
+                      WHERE code LIKE 'UAT-TKT-%') AS stage_count,
+                    (SELECT COUNT(*)
+                       FROM sales.payment_receipt pr
+                       JOIN sales.ticket t ON t.ticket_id = pr.ticket_id
+                      WHERE t.code LIKE 'UAT-TKT-%') AS receipt_count,
+                    (SELECT COUNT(*)
+                       FROM sales.delivery_record dr
+                       JOIN sales.ticket t ON t.ticket_id = dr.ticket_id
+                      WHERE t.code IN ('UAT-TKT-04','UAT-TKT-08','UAT-TKT-14')) AS delivery_count,
+                    (SELECT COUNT(*)
+                       FROM sales.ticket
+                      WHERE code = 'UAT-TKT-10'
+                        AND deposit_policy = 'CREDIT_CUSTOMER'
+                        AND due_date = DATE '2026-06-30') AS overdue_credit_count,
+                    (SELECT COUNT(*)
+                       FROM (
+                            SELECT t.ticket_id
+                              FROM sales.ticket t
+                              JOIN sales.ticket_item ti ON ti.ticket_id = t.ticket_id
+                             WHERE t.code = 'UAT-TKT-08'
+                             GROUP BY t.ticket_id
+                            HAVING SUM(ti.qty_delivered) > 0
+                               AND SUM(ti.qty_delivered) < SUM(ti.qty)
+                       ) partial_delivery) AS partial_delivery_count,
+                    (SELECT COUNT(*)
+                       FROM sales.ticket
+                      WHERE code = 'UAT-TKT-04'
+                        AND sales_stage = 'CLOSED_PAID'
+                        AND lifecycle = 'COMPLETED'
+                        AND payment_status = 'FULLY_PAID'
+                        AND fulfillment_status = 'FULLY_DELIVERED') AS closed_paid_count
+                """)) {
+            try (ResultSet rows = statement.executeQuery()) {
+                assertThat(rows.next()).isTrue();
+                assertThat(rows.getInt("stage_count")).isEqualTo(14);
+                assertThat(rows.getInt("receipt_count")).isEqualTo(5);
+                assertThat(rows.getInt("delivery_count")).isEqualTo(3);
+                assertThat(rows.getInt("overdue_credit_count")).isEqualTo(1);
+                assertThat(rows.getInt("partial_delivery_count")).isEqualTo(1);
+                assertThat(rows.getInt("closed_paid_count")).isEqualTo(1);
+            }
+        } catch (Exception exception) {
+            throw new AssertionError("UAT deal-pipeline seed assertions failed", exception);
         }
     }
 }

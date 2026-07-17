@@ -12,6 +12,7 @@ Every agent must:
 ## Files in this folder
 - `00_MASTER_CONTEXT.md` — product identity, priorities, non-negotiable rules, and the v0.1.0 Definition of Done. Read first, every time.
 - `01_STABILIZATION_AUDIT.md` — the brutal current-state audit, prioritized fix plan (P0/P1/P2), exact branch sequence, and agent assignments.
+- `../sales-workflow.md` — canonical current-state sales/deal workflow after the Phase 1-5 branching program.
 - `README.md` — this file: how the handoff process works and the template to use.
 - Per-branch handoff files (create as work starts), named `NN_<branch-name>.md` (e.g. `02_fix-mobile-app-shell.md`).
 

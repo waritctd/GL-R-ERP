@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { SalesTabs } from '../sales/SalesTabs.jsx';
 import { Skeleton, SkeletonCard } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -104,14 +105,15 @@ export function TicketDashboard({ user, employee, showToast }) {
   // previously every card landed on "ทั้งหมด" and made the user re-apply the
   // exact filter the card already named.
   const queueItems = summary ? [
-    { key: 'submitted', label: 'รอรับเรื่อง (Import)', value: summary.submitted, to: canPickup ? () => navigate('/tickets?status=submitted') : undefined },
-    { key: 'priceProposed', label: 'รอการอนุมัติราคา (CEO)', value: summary.priceProposed, to: canApprove ? () => navigate('/tickets?status=price_proposed') : undefined },
-    { key: 'approved', label: 'อนุมัติแล้ว รอออกใบเสนอราคา', value: summary.approved, to: canQuote ? () => navigate('/tickets?status=approved') : undefined },
+    { key: 'submitted', label: 'รอรับเรื่อง (Import)', value: summary.submitted, to: canPickup ? () => navigate('/tickets') : undefined },
+    { key: 'priceProposed', label: 'รอการอนุมัติราคา (CEO)', value: summary.priceProposed, to: canApprove ? () => navigate('/tickets') : undefined },
+    { key: 'approved', label: 'อนุมัติแล้ว รอออกใบเสนอราคา', value: summary.approved, to: canQuote ? () => navigate('/tickets') : undefined },
     { key: 'notifications', label: 'แจ้งเตือนยังไม่อ่าน', value: notifications?.unread ?? 0 },
   ] : [];
 
   return (
     <div className="page-stack">
+      <SalesTabs role={user.role} />
       <PageHeader title={greeting} subtitle={<GreetingSubtitle role={user.role} />} />
 
       {loading ? (
@@ -160,6 +162,13 @@ export function TicketDashboard({ user, employee, showToast }) {
             <StatCard icon="fileText"  label="ออกใบเสนอราคาแล้ว"  value={summary.quotationIssued} helper="Quotation issued"   tone="teal"   onClick={() => navigate('/tickets')} />
             <StatCard icon="badge"     label="ปิดแล้วเดือนนี้"    value={summary.closedThisMonth} helper="Closed this month"  tone="indigo" onClick={() => navigate('/tickets')} />
             <StatCard icon="close"     label="ยกเลิกเดือนนี้"     value={summary.cancelledThisMonth} helper="Cancelled this month" tone="neutral" onClick={() => navigate('/tickets')} />
+          </div>
+
+          <div className="stat-grid">
+            <StatCard icon="clock"     label="พักไว้ชั่วคราว"      value={summary.onHold ?? 0}             helper="On hold"             tone="amber"  onClick={() => navigate('/tickets?life=ON_HOLD')} />
+            <StatCard icon="clock"     label="ดีลเงียบ"            value={summary.dormant ?? 0}            helper="Dormant"             tone="neutral" onClick={() => navigate('/tickets?life=DORMANT')} />
+            <StatCard icon="badge"     label="เกินกำหนดชำระ"       value={summary.paymentOverdue ?? 0}     helper="Payment overdue"     tone="rose"   onClick={() => navigate('/tickets?flag=overdue')} />
+            <StatCard icon="clipboard" label="ส่งมอบบางส่วน"       value={summary.partiallyDelivered ?? 0} helper="Partially delivered" tone="amber"  onClick={() => navigate('/tickets?flag=partial_delivery')} />
           </div>
 
           {recent.length > 0 && (

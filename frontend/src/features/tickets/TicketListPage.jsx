@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
@@ -6,70 +6,107 @@ import { queryKeys } from '../../api/queryKeys.js';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { SalesTabs } from '../sales/SalesTabs.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
+import {
+  dealLifecycleLabel,
+  dealLostReasonLabel,
+  dealStageLabel,
+  formatThaiDate,
+  fulfilmentStatusLabel,
+  overdueBadgeLabel,
+  ticketStatusLabel,
+} from '../../utils/format.js';
+import { StageProgressBar } from './DealStageStepper.jsx';
+import { SALES_PHASES, stageMeta } from './stageMeta.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
 
-// Mirrors the StatusBadge tone palette (see src/styles.css .status-* rules) so the
-// filter-tab accent never drifts from the shared status-color tokens. The three
-// `border` accents (f59e0b/3b82f6/ef4444) are dot-accent colors with no existing
-// design token equivalent — left as literals deliberately (see handoff notes).
-const TONE_ACTIVE = {
-  primary: { bg: 'var(--color-info-dot)', color: 'var(--color-surface)', border: 'var(--color-info-dot)' },
-  neutral: { bg: 'var(--color-surface-subtle)', color: 'var(--color-icon-muted)', border: 'var(--color-text-faint)' },
-  warning: { bg: 'var(--color-warning-bg)', color: 'var(--color-warning)', border: '#f59e0b' },
-  info:    { bg: 'var(--color-info-bg)', color: 'var(--color-info)', border: '#3b82f6' },
-  success: { bg: 'var(--color-success-bg)', color: 'var(--color-success-dark)', border: 'var(--color-success-soft)' },
-  danger:  { bg: 'var(--color-danger-bg)', color: 'var(--color-danger-dark)', border: '#ef4444' },
+// Per-phase accents (design tokens --color-phase-N, adopted from the user's
+// Claude Design prototype). Static class map — Tailwind's scanner needs the
+// full class names in source, so no `bg-phase-${id}` interpolation.
+const PHASE_STYLES = {
+  1: { dot: 'bg-phase-1', active: 'border-phase-1 bg-phase-1-bg', num: 'text-phase-1' },
+  2: { dot: 'bg-phase-2', active: 'border-phase-2 bg-phase-2-bg', num: 'text-phase-2' },
+  3: { dot: 'bg-phase-3', active: 'border-phase-3 bg-phase-3-bg', num: 'text-phase-3' },
+  4: { dot: 'bg-phase-4', active: 'border-phase-4 bg-phase-4-bg', num: 'text-phase-4' },
+  5: { dot: 'bg-phase-5', active: 'border-phase-5 bg-phase-5-bg', num: 'text-phase-5' },
 };
 
-const STATUS_TABS = [
-  { value: '',                 label: 'ทั้งหมด',              tone: 'primary' },
-  { value: 'submitted',        label: 'รอรับเรื่อง',          tone: 'warning' },
-  { value: 'in_review',        label: 'กำลังดำเนินการ',       tone: 'info'    },
-  { value: 'price_proposed',   label: 'รอการอนุมัติ',         tone: 'warning' },
-  { value: 'approved',         label: 'อนุมัติแล้ว',          tone: 'success' },
-  { value: 'quotation_issued', label: 'ออกใบเสนอราคาแล้ว',   tone: 'success' },
-  { value: 'document_issued',  label: 'ออกใบแจ้งยอดแล้ว',    tone: 'success' },
-  { value: 'closed',           label: 'ปิดแล้ว',              tone: 'neutral' },
-  { value: 'cancelled',        label: 'ยกเลิกแล้ว',           tone: 'danger'  },
+const STALE_DAYS = 7;
+const LIFECYCLE_FILTERS = [
+  { value: '', label: 'ทั้งหมด', tone: 'neutral' },
+  { value: 'ON_HOLD', label: dealLifecycleLabel('ON_HOLD').label, tone: dealLifecycleLabel('ON_HOLD').tone },
+  { value: 'DORMANT', label: dealLifecycleLabel('DORMANT').label, tone: dealLifecycleLabel('DORMANT').tone },
+  { value: 'CLOSED_LOST', label: dealLifecycleLabel('CLOSED_LOST').label, tone: dealLifecycleLabel('CLOSED_LOST').tone },
+  { value: 'CANCELLED', label: dealLifecycleLabel('CANCELLED').label, tone: dealLifecycleLabel('CANCELLED').tone },
+  { value: 'COMPLETED', label: dealLifecycleLabel('COMPLETED').label, tone: dealLifecycleLabel('COMPLETED').tone },
+];
+const FLAG_FILTERS = [
+  { value: 'overdue', label: overdueBadgeLabel(true).label, tone: overdueBadgeLabel(true).tone },
+  { value: 'partial_delivery', label: fulfilmentStatusLabel('PARTIALLY_DELIVERED').label, tone: fulfilmentStatusLabel('PARTIALLY_DELIVERED').tone },
 ];
 
-const STATUS_ORDER = [
-  'draft', 'submitted', 'in_review', 'price_proposed',
-  'approved', 'quotation_issued', 'document_issued', 'closed', 'cancelled', 'rejected',
-];
+function daysSince(iso) {
+  if (!iso) return null;
+  const diff = Date.now() - new Date(iso).getTime();
+  return Math.max(0, Math.floor(diff / 86400000));
+}
 
+function DaysBadge({ stageUpdatedAt }) {
+  const days = daysSince(stageUpdatedAt);
+  if (days == null) return <span>-</span>;
+  const stale = days > STALE_DAYS;
+  return (
+    <span className={`text-xs font-bold ${stale ? 'text-warning' : 'text-text-muted'}`}>
+      {stale ? <Icon name="clock" size={12} /> : null} {days === 0 ? 'วันนี้' : `${days} วัน`}
+    </span>
+  );
+}
 
-/**
- * Mobile record card for a price request. The desktop grid crushes five columns
- * into ~34–90px each at 375px, which truncates every field to a stub ("PR-…",
- * "คุณส…") and clips the status badge. This shows only what a user needs to
- * identify the record and decide the next step: code, customer, status, owner,
- * and date. Full detail stays one tap away on the detail page.
- */
-function TicketCard({ ticket }) {
-  const status = ticketStatusLabel(ticket.status);
-  const subLabel = ticket.status === 'quotation_issued'
-    ? TRACK_LABEL[ticket.paymentStatus] ?? TRACK_LABEL[ticket.fulfillmentStatus] ?? null
-    : null;
+function DealStageCell({ deal }) {
+  if (deal.lifecycle === 'CLOSED_LOST' || deal.lostReason) {
+    const lost = dealLostReasonLabel(deal.lostReason);
+    return <StatusBadge tone="danger">เสียงาน · {lost.label}</StatusBadge>;
+  }
+  const stage = dealStageLabel(deal.salesStage);
+  const meta = stageMeta(deal.salesStage);
+  const operational = ticketStatusLabel(deal.status);
+  const paused = ['ON_HOLD', 'DORMANT'].includes(deal.lifecycle);
+  const lifecycle = dealLifecycleLabel(deal.lifecycle);
+  return (
+    <span className="flex min-w-0 flex-col gap-0.5">
+      <span className="flex flex-wrap items-center gap-1">
+        <StatusBadge tone={stage.tone}>
+          {meta ? `${meta.no}. ` : ''}{stage.label}
+        </StatusBadge>
+        {paused ? <StatusBadge tone={lifecycle.tone}>{lifecycle.label}</StatusBadge> : null}
+      </span>
+      <span className="pl-0.5 text-2xs text-text-muted">{operational.label}</span>
+    </span>
+  );
+}
 
+/** Mobile record card for a deal: identity, stage, progress, owner, freshness. */
+function DealCard({ deal }) {
   return (
     <>
       <div className="flex min-w-0 items-start justify-between gap-3">
-        <code className="min-w-0 truncate text-xs text-text-muted">{ticket.code}</code>
-        <span className="flex shrink-0 flex-col items-end gap-1">
-          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-          {subLabel ? <span className="text-2xs text-text-muted">{subLabel}</span> : null}
-        </span>
+        <code className="min-w-0 truncate text-xs text-text-muted">{deal.code}</code>
+        <DaysBadge stageUpdatedAt={deal.stageUpdatedAt} />
       </div>
 
       <strong className="min-w-0 text-md leading-snug font-extrabold text-text">
-        {ticket.customerName || ticket.title}
+        {deal.customerName || deal.title}
       </strong>
+      {deal.projectName ? (
+        <span className="min-w-0 truncate text-xs text-text-muted">{deal.projectName}</span>
+      ) : null}
+
+      <DealStageCell deal={deal} />
+      <StageProgressBar salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST' || !!deal.lostReason} />
 
       <span className="min-w-0 truncate text-xs text-text-muted">
-        {[ticket.createdByName, formatThaiDate(ticket.createdAt)].filter(Boolean).join(' · ')}
+        {[deal.createdByName, formatThaiDate(deal.createdAt)].filter(Boolean).join(' · ')}
       </span>
     </>
   );
@@ -78,29 +115,87 @@ function TicketCard({ ticket }) {
 export function TicketListPage({ user, showToast }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  // Status filter + search text live in the URL (not local state) so that:
-  // (a) a dashboard queue card can land here pre-filtered via ?status=..., and
-  // (b) list → detail → back preserves whatever filter/search was active,
-  // instead of resetting to "ทั้งหมด" every time (previously statusFilter was
-  // plain useState, so onBack navigating to a bare '/tickets' lost it).
+  // Phase filter + search live in the URL so list → detail → back keeps them.
+  // The old operational ?status= chips row was removed as redundant with the
+  // phase cards (user decision) — the stage cell's sublabel still shows where
+  // the paperwork stands per deal.
   const [searchParams, setSearchParams] = useSearchParams();
-  const statusFilter = searchParams.get('status') ?? '';
+  const phaseFilter = searchParams.get('phase') ?? '';
+  const lifecycleFilter = searchParams.get('life') ?? '';
+  const flagFilter = searchParams.get('flag') ?? '';
   const searchText = searchParams.get('q') ?? '';
   const [creating, setCreating] = useState(false);
 
   const canCreate = ROLE_PERMISSIONS.canCreateTickets.includes(user.role);
 
   const ticketsQuery = useQuery({
-    queryKey: queryKeys.ticketList(statusFilter),
-    queryFn: () => api.tickets.list(statusFilter ? { status: statusFilter } : {}).then((response) => response.tickets || []),
+    queryKey: queryKeys.ticketList(''),
+    queryFn: () => api.tickets.list({}).then((response) => response.tickets || []),
   });
-  const tickets = ticketsQuery.data ?? [];
+  const allDeals = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
   const loading = ticketsQuery.isLoading || ticketsQuery.isFetching;
 
-  // Preserve the original error-toast behavior of the imperative loader.
   useEffect(() => {
     if (ticketsQuery.error) showToast('error', ticketsQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
   }, [ticketsQuery.error, showToast]);
+
+  // Phase summary cards double as filters — never a 14-stage tab bar.
+  // Lifecycle buckets live in the chip row below, so phase counts stay active-only.
+  const phaseCounts = useMemo(() => {
+    const counts = {};
+    for (const phase of SALES_PHASES) counts[phase.id] = 0;
+    for (const deal of allDeals) {
+      if (deal.lifecycle === 'ACTIVE' && !deal.lostReason) {
+        const meta = stageMeta(deal.salesStage);
+        if (meta) counts[meta.phase] += 1;
+      }
+    }
+    return counts;
+  }, [allDeals]);
+
+  const lifecycleCounts = useMemo(() => {
+    const counts = {
+      '': allDeals.length,
+      ON_HOLD: 0,
+      DORMANT: 0,
+      CLOSED_LOST: 0,
+      CANCELLED: 0,
+      COMPLETED: 0,
+    };
+    for (const deal of allDeals) {
+      const key = deal.lifecycle === 'CLOSED_LOST' || deal.lostReason ? 'CLOSED_LOST' : deal.lifecycle;
+      if (Object.hasOwn(counts, key)) counts[key] += 1;
+    }
+    return counts;
+  }, [allDeals]);
+
+  const flagCounts = useMemo(() => ({
+    overdue: allDeals.filter((deal) => deal.overdue).length,
+    partial_delivery: allDeals.filter((deal) => deal.fulfillmentStatus === 'PARTIALLY_DELIVERED').length,
+  }), [allDeals]);
+
+  const deals = useMemo(() => {
+    return allDeals.filter((deal) => {
+      const lost = deal.lifecycle === 'CLOSED_LOST' || deal.lostReason;
+      // Phase cards are the active-pipeline funnel (counts are ACTIVE-only), so the phase
+      // filter matches on ACTIVE too — paused/terminal deals are reached via the lifecycle
+      // chips below. This keeps each phase card's count equal to the rows it filters to.
+      const phaseOk = !phaseFilter
+        || (deal.lifecycle === 'ACTIVE' && !deal.lostReason && stageMeta(deal.salesStage)?.phase === Number(phaseFilter));
+      const lifeOk = !lifecycleFilter || (lifecycleFilter === 'CLOSED_LOST' ? lost : deal.lifecycle === lifecycleFilter);
+      const flagOk = !flagFilter
+        || (flagFilter === 'overdue' && deal.overdue)
+        || (flagFilter === 'partial_delivery' && deal.fulfillmentStatus === 'PARTIALLY_DELIVERED');
+      return phaseOk && lifeOk && flagOk;
+    });
+  }, [allDeals, flagFilter, lifecycleFilter, phaseFilter]);
+
+  const emptyDescription = useMemo(() => {
+    if (flagFilter === 'overdue') return 'ไม่มีดีลที่เกินกำหนดชำระ';
+    if (flagFilter === 'partial_delivery') return 'ไม่มีดีลที่ส่งมอบบางส่วน';
+    if (lifecycleFilter) return `ไม่มีดีลในสถานะ${dealLifecycleLabel(lifecycleFilter).label}`;
+    return 'ยังไม่มีดีลในเงื่อนไขที่เลือก';
+  }, [flagFilter, lifecycleFilter]);
 
   function invalidateTicketsList() {
     return queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
@@ -114,23 +209,11 @@ export function TicketListPage({ user, showToast }) {
     }, { replace: true });
   }
 
-  function setStatusFilter(value) {
-    updateParam('status', value);
-  }
-
-  function setSearchText(value) {
-    updateParam('q', value);
-  }
-
-  // No onError toast here: the original imperative handler let a create
-  // failure propagate uncaught to TicketCreateModal's own try/catch, which
-  // shows an inline modal error instead of a toast. mutateAsync preserves
-  // that same propagation.
   const createMutation = useMutation({
     mutationFn: (payload) => api.tickets.create(payload),
     onSuccess: () => {
       setCreating(false);
-      showToast('success', 'สร้างใบขอราคาเรียบร้อย');
+      showToast('success', 'สร้างดีลเรียบร้อย');
       invalidateTicketsList();
     },
   });
@@ -141,62 +224,114 @@ export function TicketListPage({ user, showToast }) {
 
   return (
     <div className="page-stack">
+      <SalesTabs />
       <PageHeader
-        title="ใบขอราคา"
-        subtitle="Price Requests"
-        actions={canCreate ? (
-          <button type="button" className="primary-button" onClick={() => setCreating(true)}>
-            <Icon name="plus" />
-            สร้างใบขอราคาใหม่
-          </button>
-        ) : null}
+        title="งานขาย"
+        subtitle="ดีลทั้งหมด · 1 ดีล = 1 ใบขอราคา ภายใต้โครงการ"
+        actions={(
+          <>
+            <button type="button" className="icon-button" onClick={invalidateTicketsList} title="รีเฟรช" aria-label="รีเฟรช">
+              <Icon name="refresh" />
+            </button>
+            {canCreate ? (
+              <button type="button" className="primary-button" onClick={() => setCreating(true)}>
+                <Icon name="plus" />
+                สร้างดีลใหม่
+              </button>
+            ) : null}
+          </>
+        )}
       />
 
-      <div className="status-tabs">
-        {STATUS_TABS.map((tab) => {
-          const isActive = statusFilter === tab.value;
-          const ts = TONE_ACTIVE[tab.tone];
-          const activeStyle = isActive
-            ? { background: ts.bg, color: ts.color, borderColor: ts.border, fontWeight: 700 }
-            : {};
-          const dot = tab.tone !== 'primary'
-            ? <span style={{ width: 8, height: 8, borderRadius: '50%', background: ts.border, display: 'inline-block', flexShrink: 0 }} />
-            : null;
+      {/* Phase summary cards double as filters — no 14-stage tab bar. */}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        {SALES_PHASES.map((phase) => {
+          const isActive = phaseFilter === String(phase.id);
+          const style = PHASE_STYLES[phase.id];
           return (
             <button
-              key={tab.value}
+              key={phase.id}
               type="button"
-              className={`status-tab${isActive ? ' active' : ''}`}
-              style={activeStyle}
-              onClick={() => setStatusFilter(tab.value)}
+              aria-pressed={isActive}
+              className={`flex flex-col gap-1 rounded-xl border px-3 py-2.5 text-left ${
+                isActive ? style.active : 'border-border bg-surface'
+              }`}
+              onClick={() => updateParam('phase', isActive ? '' : String(phase.id))}
             >
-              {dot}
-              {tab.label}
+              <span className="flex items-center gap-1.5">
+                <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${style.dot}`} />
+                <span className={`text-xl font-extrabold leading-none ${isActive ? style.num : 'text-text'}`}>
+                  {phaseCounts[phase.id]}
+                </span>
+              </span>
+              <span className={`text-2xs font-bold leading-tight ${isActive ? style.num : 'text-text-muted'}`}>
+                เฟส {phase.id} · {phase.name}
+              </span>
             </button>
           );
         })}
-        <button type="button" className="icon-button" onClick={invalidateTicketsList} title="รีเฟรช" aria-label="รีเฟรช">
-          <Icon name="refresh" />
-        </button>
+      </div>
+
+      <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">Lifecycle</span>
+          {LIFECYCLE_FILTERS.map((item) => {
+            const active = lifecycleFilter === item.value;
+            return (
+              <button
+                key={item.value || 'all'}
+                type="button"
+                aria-pressed={active}
+                className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
+                  active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
+                }`}
+                onClick={() => updateParam('life', active ? '' : item.value)}
+              >
+                <span>{item.label}</span>
+                <StatusBadge tone={item.tone}>{lifecycleCounts[item.value] ?? 0}</StatusBadge>
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">Flags</span>
+          {FLAG_FILTERS.map((item) => {
+            const active = flagFilter === item.value;
+            return (
+              <button
+                key={item.value}
+                type="button"
+                aria-pressed={active}
+                className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
+                  active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
+                }`}
+                onClick={() => updateParam('flag', active ? '' : item.value)}
+              >
+                <span>{item.label}</span>
+                <StatusBadge tone={item.tone}>{flagCounts[item.value] ?? 0}</StatusBadge>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <DataTable
-        columns={TICKET_COLUMNS}
-        rows={tickets}
-        getRowKey={(ticket) => ticket.id}
+        columns={DEAL_COLUMNS}
+        rows={deals}
+        getRowKey={(deal) => deal.id}
         gridClassName="ticket-table"
-        onRowClick={(ticket) => navigate(`/tickets/${ticket.id}`)}
-        mobileCard={(ticket) => <TicketCard ticket={ticket} />}
+        onRowClick={(deal) => navigate(`/tickets/${deal.id}`)}
+        mobileCard={(deal) => <DealCard deal={deal} />}
         searchable
         searchValue={searchText}
-        onSearchChange={setSearchText}
-        searchPlaceholder="ค้นหาเลขที่ / บริษัท / ผู้ดูแล"
+        onSearchChange={(value) => updateParam('q', value)}
+        searchPlaceholder="ค้นหาเลขที่ / บริษัท / โครงการ / ผู้ดูแล"
         initialSort={{ key: 'date', dir: 'desc' }}
         loading={loading}
         emptyState={{
           icon: 'fileText',
-          title: 'ไม่มีใบขอราคา',
-          description: 'ยังไม่มีรายการในสถานะที่เลือก',
+          title: 'ไม่มีดีล',
+          description: emptyDescription,
         }}
       />
 
@@ -207,65 +342,43 @@ export function TicketListPage({ user, showToast }) {
   );
 }
 
-const TRACK_LABEL = {
-  CUSTOMER_CONFIRMED:     'P: ลูกค้ายืนยันแล้ว',
-  DEPOSIT_NOTICE_ISSUED:  'P: ออกใบแจ้งมัดจำแล้ว',
-  DEPOSIT_PAID:           'P: รับมัดจำแล้ว',
-  AWAITING_FINAL_PAYMENT: 'P: รอชำระส่วนที่เหลือ',
-  FULLY_PAID:             'P: ชำระครบแล้ว',
-  IR_ISSUED:              'F: ออก IR แล้ว',
-  IR_SENT:                'F: ส่ง IR แล้ว',
-  SHIPPING:               'F: กำลังขนส่ง',
-  GOODS_RECEIVED:         'F: รับสินค้าแล้ว',
-};
-
-const TICKET_COLUMNS = [
+const DEAL_COLUMNS = [
   {
     key: 'customer',
-    header: 'บริษัท / โครงการ',
-    searchAccessor: (ticket) => [ticket.code, ticket.customerName, ticket.title].filter(Boolean).join(' '),
-    // Primary entity (company/project) leads, bold and full-size; the request
-    // code is secondary metadata underneath in muted mono — matches the
-    // mobile card's hierarchy (code above title there; company is still the
-    // thing a desktop user scans for first in a wide row).
-    render: (ticket) => (
+    header: 'ดีล / โครงการ',
+    searchAccessor: (deal) => [deal.code, deal.customerName, deal.projectName, deal.title].filter(Boolean).join(' '),
+    render: (deal) => (
       <span className="flex min-w-0 flex-col gap-0.5">
-        <strong className="block truncate text-text">{ticket.customerName || ticket.title}</strong>
-        <code className="block truncate text-2xs text-text-muted">{ticket.code}</code>
+        <strong className="block truncate text-text">{deal.customerName || deal.title}</strong>
+        <span className="block truncate text-2xs text-text-muted">
+          {[deal.projectName, deal.code].filter(Boolean).join(' · ')}
+        </span>
       </span>
     ),
   },
   {
     key: 'createdByName',
     header: 'ผู้ดูแล (Sales)',
-    searchAccessor: (ticket) => ticket.createdByName || '',
-    render: (ticket) => <span>{ticket.createdByName}</span>,
+    searchAccessor: (deal) => deal.createdByName || '',
+    render: (deal) => <span>{deal.createdByName}</span>,
   },
   {
-    key: 'status',
-    header: 'สถานะ',
+    key: 'stage',
+    header: 'สถานะดีล',
     sortable: true,
-    sortAccessor: (ticket) => STATUS_ORDER.indexOf(ticket.status),
-    render: (ticket) => {
-      const status = ticketStatusLabel(ticket.status);
-      const subLabel = ticket.status === 'quotation_issued'
-        ? TRACK_LABEL[ticket.paymentStatus] ?? TRACK_LABEL[ticket.fulfillmentStatus] ?? null
-        : null;
-      return (
-        <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-          {subLabel && (
-            <span style={{ fontSize: 11, color: '#64748b', paddingLeft: 2 }}>{subLabel}</span>
-          )}
-        </span>
-      );
-    },
+    sortAccessor: (deal) => (deal.lostReason ? -1 : stageMeta(deal.salesStage)?.no ?? 0),
+    render: (deal) => <DealStageCell deal={deal} />,
+  },
+  {
+    key: 'progress',
+    header: 'ความคืบหน้า',
+    render: (deal) => <StageProgressBar salesStage={deal.salesStage} lost={!!deal.lostReason} />,
   },
   {
     key: 'date',
-    header: 'วันที่สร้าง',
+    header: 'อัปเดตล่าสุด',
     sortable: true,
-    sortAccessor: (ticket) => new Date(ticket.createdAt),
-    render: (ticket) => <span>{formatThaiDate(ticket.createdAt)}</span>,
+    sortAccessor: (deal) => new Date(deal.stageUpdatedAt ?? deal.updatedAt),
+    render: (deal) => <DaysBadge stageUpdatedAt={deal.stageUpdatedAt ?? deal.updatedAt} />,
   },
 ];

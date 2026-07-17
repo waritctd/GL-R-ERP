@@ -11,7 +11,6 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeDto;
 import th.co.glr.hr.employee.EmployeeRepository;
-import th.co.glr.hr.notification.NotificationService;
 
 @Service
 public class ProfileRequestService {
@@ -20,14 +19,12 @@ public class ProfileRequestService {
     private final ProfileRequestRepository profileRequests;
     private final EmployeeRepository employees;
     private final AuditService auditService;
-    private final NotificationService notificationService;
 
     public ProfileRequestService(ProfileRequestRepository profileRequests, EmployeeRepository employees,
-                                 AuditService auditService, NotificationService notificationService) {
+                                 AuditService auditService) {
         this.profileRequests = profileRequests;
         this.employees = employees;
         this.auditService = auditService;
-        this.notificationService = notificationService;
     }
 
     public List<ProfileRequestDto> list(UserPrincipal user) {
@@ -52,16 +49,7 @@ public class ProfileRequestService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Unsupported profile field");
         }
         long id = profileRequests.create(user.employeeId(), request, user);
-        ProfileRequestDto created = profileRequests.findById(id).map(this::toDto).orElseThrow();
-        notificationService.notifyByRole(
-            "hr",
-            "PROFILE_REQUEST_SUBMITTED",
-            "มีคำขอแก้ไขข้อมูลพนักงาน",
-            "พนักงาน " + created.requestedBy() + " ยื่นคำขอแก้ไขข้อมูล ("
-                + created.fieldLabel() + ") รอการตรวจสอบ",
-            "/requests",
-            true);
-        return created;
+        return profileRequests.findById(id).map(this::toDto).orElseThrow();
     }
 
     @Transactional
@@ -87,35 +75,7 @@ public class ProfileRequestService {
             ? "APPROVE_PROFILE_REQUEST"
             : "REJECT_PROFILE_REQUEST";
         auditService.record(reviewer, action, "profile_request", id, existing, reviewed);
-        notifyReviewedRequest(reviewed, request);
         return toDto(reviewed);
-    }
-
-    private void notifyReviewedRequest(ProfileRequestRecord reviewed, UpdateProfileRequestRequest request) {
-        if ("approved".equals(reviewed.status())) {
-            notificationService.notify(
-                reviewed.employeeId(),
-                "PROFILE_REQUEST_APPROVED",
-                "คำขอแก้ไขข้อมูลได้รับการอนุมัติ",
-                "คำขอแก้ไขข้อมูล (" + reviewed.fieldLabel() + ") ของคุณได้รับการอนุมัติแล้ว",
-                "/my-requests",
-                true);
-            return;
-        }
-        notificationService.notify(
-            reviewed.employeeId(),
-            "PROFILE_REQUEST_REJECTED",
-            "คำขอแก้ไขข้อมูลไม่ได้รับการอนุมัติ",
-            "คำขอแก้ไขข้อมูล (" + reviewed.fieldLabel() + ") ของคุณไม่ได้รับการอนุมัติ: "
-                + reviewerNoteOrFallback(request),
-            "/my-requests",
-            true);
-    }
-
-    private String reviewerNoteOrFallback(UpdateProfileRequestRequest request) {
-        return request.reviewerNote() == null || request.reviewerNote().isBlank()
-            ? "กรุณาติดต่อ HR"
-            : request.reviewerNote().trim();
     }
 
     private void applyApprovedRequest(ProfileRequestRecord request) {

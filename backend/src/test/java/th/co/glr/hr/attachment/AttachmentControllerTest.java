@@ -199,7 +199,9 @@ class AttachmentControllerTest {
             Instant.parse("2026-07-01T00:00:00Z"),
             Instant.parse("2026-07-01T00:00:00Z"),
             null,
-            0, false, null, null);
+            0, false, null, null,
+            "LEAD_APPROACH", null, null, Instant.parse("2026-07-01T00:00:00Z"),
+            "ACTIVE", "UNKNOWN", "REQUIRED", null, "DESIGNER_LED");
         List<TicketItemDto> items = List.of();
         List<TicketEventDto> events = List.of();
         List<QuotationDto> quotations = List.of();

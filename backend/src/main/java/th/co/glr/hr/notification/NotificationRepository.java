@@ -69,50 +69,71 @@ public class NotificationRepository {
     }
 
     public Optional<String> findEmployeeEmail(long employeeId) {
-        return findEmployeeContact(employeeId).map(EmployeeContact::email);
-    }
-
-    public Optional<EmployeeContact> findEmployeeContact(long employeeId) {
         try {
-            EmployeeContact contact = jdbc.queryForObject("""
-                SELECT NULLIF(TRIM(CONCAT_WS(' ', first_name_th, last_name_th)), '') AS name,
-                       NULLIF(BTRIM(email), '') AS email
+            String email = jdbc.queryForObject("""
+                SELECT NULLIF(BTRIM(email), '')
                   FROM hr.employee
                  WHERE employee_id = :employeeId
-                """,
-                Map.of("employeeId", employeeId),
-                (rs, rowNum) -> new EmployeeContact(rs.getString("name"), rs.getString("email")));
-            return Optional.ofNullable(contact);
+                """, Map.of("employeeId", employeeId), String.class);
+            return Optional.ofNullable(email);
         } catch (EmptyResultDataAccessException exception) {
             return Optional.empty();
         }
     }
 
+    // Ticket-event types are short machine codes (e.g. "PRICE_PROPOSED"); hr.notification.title is
+    // NOT NULL and human-facing, so map each to a short Thai label. Unmapped types (new ticket event
+    // kinds added later) fall back to a generic title rather than failing the insert.
+    private static final Map<String, String> TICKET_EVENT_TITLES = Map.of(
+        "SUBMITTED", "มีคำขอราคาใหม่",
+        "PRICE_PROPOSED", "รอการอนุมัติราคา",
+        "APPROVED", "ราคาได้รับการอนุมัติ",
+        "REJECTED", "ราคาถูกตีกลับ",
+        "REVISION_REQUESTED", "ขอแก้ไขเอกสาร"
+    );
+
+    public void notifyEmployee(long employeeId, long ticketId, String type, String message) {
+        jdbc.update("""
+            INSERT INTO hr.notification (employee_id, type, title, message, link)
+            VALUES (:employeeId, :type, :title, :message, :link)
+            """,
+            new MapSqlParameterSource()
+                .addValue("employeeId", employeeId)
+                .addValue("type", type)
+                .addValue("title", ticketEventTitle(type))
+                .addValue("message", message)
+                .addValue("link", "/tickets/" + ticketId));
+    }
+
     /**
-     * Active employee IDs whose division maps to the given sales role, for role-based notification
-     * fan-out (e.g. ticket events). Division mapping mirrors DivisionAccessPolicy, extended for sales
-     * module roles. Callers (NotificationService.notifyByRole) drive each ID through notify() so the
-     * in-app row and the optional email go through the one shared insert+send path — this repository
-     * only resolves *who*, it doesn't write the notification itself.
+     * Notify all employees whose division maps to the given sales role.
+     * Division mapping mirrors DivisionAccessPolicy — extended for sales module roles.
      */
-    public List<Long> findActiveEmployeeIdsByRole(String role) {
+    public void notifyByRole(String role, long ticketId, String type, String message) {
         String divisionFilter = switch (role) {
             case "import" -> "d.source_code ILIKE 'PCIM%'";
             case "ceo"    -> "d.source_code ILIKE 'MD%' OR d.source_code ILIKE 'MN%'";
             case "sales"  -> "d.source_code ILIKE 'SA%'";
-            case "hr"     -> "d.source_code ILIKE 'HR%'";
             default -> null;
         };
-        if (divisionFilter == null) return List.of();
+        if (divisionFilter == null) return;
 
-        return jdbc.query("""
-            SELECT e.employee_id
+        jdbc.update("""
+            INSERT INTO hr.notification (employee_id, type, title, message, link)
+            SELECT e.employee_id, :type, :title, :message, :link
               FROM hr.employee e
               JOIN hr.division d ON d.division_id = e.division_id
              WHERE (%s) AND e.is_active = TRUE
             """.formatted(divisionFilter),
-            Map.of(),
-            (rs, rowNum) -> rs.getLong("employee_id"));
+            new MapSqlParameterSource()
+                .addValue("type", type)
+                .addValue("title", ticketEventTitle(type))
+                .addValue("message", message)
+                .addValue("link", "/tickets/" + ticketId));
+    }
+
+    private String ticketEventTitle(String type) {
+        return TICKET_EVENT_TITLES.getOrDefault(type, "อัปเดตสถานะใบขอราคา");
     }
 
     private NotificationDto mapHrNotification(java.sql.ResultSet rs) throws java.sql.SQLException {
