@@ -115,6 +115,44 @@ export function leaveStatusLabel(status) {
   return map[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
+// Project sales-pipeline stage -> StatusBadge tone (V50). Canonical source; do
+// not re-add a page-local map for project stage labels elsewhere. Stage order/
+// gates/phases live in features/tickets/stageMeta.js.
+export function dealStageLabel(stage) {
+  const map = {
+    LEAD_APPROACH:       { label: 'เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ', tone: 'neutral' },
+    PRESENTATION:        { label: 'นำเสนอสินค้า', tone: 'info' },
+    SPEC_APPROVED:       { label: 'ผู้ออกแบบอนุมัติสเปค', tone: 'info' },
+    QUOTE_DESIGN_SIDE:   { label: 'เสนอราคาผู้ออกแบบ/เจ้าของ', tone: 'info' },
+    OWNER_SIGNOFF:       { label: 'เจ้าของอนุมัติสเปค', tone: 'success' },
+    AWAITING_BUYER:      { label: 'รอผลประมูล / รอผู้ซื้อ', tone: 'warning' },
+    QUOTE_BUYER:         { label: 'เสนอราคาผู้ซื้อ/ผู้รับเหมา', tone: 'info' },
+    NEGOTIATION:         { label: 'เจรจา ติดตามใบสั่งซื้อ/มัดจำ', tone: 'warning' },
+    ORDER_RECEIVED:      { label: 'ได้รับใบสั่งซื้อ', tone: 'success' },
+    DEPOSIT_RECEIVED:    { label: 'ได้รับเงินมัดจำ', tone: 'success' },
+    PROCUREMENT:         { label: 'จัดซื้อและนำเข้าสินค้า', tone: 'info' },
+    DELIVERY_SCHEDULING: { label: 'นัดส่งสินค้า / นัดรับเงินส่วนที่เหลือ', tone: 'warning' },
+    DELIVERED:           { label: 'ส่งมอบสินค้าครบถ้วน', tone: 'success' },
+    CLOSED_PAID:         { label: 'ปิดงาน — รับเงินครบถ้วน', tone: 'success' },
+  };
+  return map[stage] ?? { label: stage || '-', tone: 'neutral' };
+}
+
+// Project lost reason -> StatusBadge tone (V50). Canonical source.
+export function dealLostReasonLabel(reason) {
+  const map = {
+    PRODUCT_FIT:       'ไม่มีสินค้าที่ลูกค้าต้องการ',
+    PRICE:             'ราคา',
+    LEAD_TIME:         'ระยะเวลาส่งมอบ',
+    PAYMENT_TERMS:     'เงื่อนไขการชำระเงิน',
+    RELATIONSHIP:      'ความสัมพันธ์ / connection',
+    PROJECT_ON_HOLD:   'โครงการหยุดก่อสร้างชั่วคราว',
+    PROJECT_CANCELLED: 'โครงการหยุดก่อสร้างถาวร',
+    ALREADY_PURCHASED: 'ลูกค้าสั่งซื้อกระเบื้องไปหมดแล้ว',
+  };
+  return { label: map[reason] ?? reason ?? '-', tone: 'danger' };
+}
+
 // Payroll run status -> StatusBadge tone. Canonical source; do not
 // re-add a page-local `statusInfo`/map for payroll status elsewhere.
 export function payrollStatusLabel(status) {

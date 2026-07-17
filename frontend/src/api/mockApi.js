@@ -13,8 +13,32 @@
 // accurate when editing — they are how the next reader finds the source of truth.
 
 import { createDemoDatabase } from '../data/demoData.js';
+// Deal pipeline (V50): stage order + write gates shared with the pages so the
+// mock's monotonic/gate behavior can't drift from the UI's; the authoritative
+// rules live in TicketService (backend ticket/).
+import {
+  canMarkLost as dealCanMarkLost,
+  canSetStage as dealCanSetStage,
+  LOST_REASONS as DEAL_LOST_REASONS,
+  stageIndex as dealStageIndex,
+} from '../features/tickets/stageMeta.js';
 
 const db = createDemoDatabase();
+
+// Deal pipeline backfill — mirrors V50__deal_sales_pipeline.sql's UPDATE so the
+// demo deals always land exactly where the real migration would put them.
+for (const t of db.tickets) {
+  if (t.salesStage) continue;
+  if (t.paymentStatus === 'FULLY_PAID' || t.status === 'closed') t.salesStage = 'CLOSED_PAID';
+  else if (t.fulfillmentStatus != null) t.salesStage = 'PROCUREMENT';
+  else if (['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT'].includes(t.paymentStatus)) t.salesStage = 'DEPOSIT_RECEIVED';
+  else if (['CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED'].includes(t.paymentStatus)) t.salesStage = 'ORDER_RECEIVED';
+  else if (['quotation_issued', 'document_issued'].includes(t.status)) t.salesStage = 'QUOTE_BUYER';
+  else t.salesStage = 'QUOTE_DESIGN_SIDE';
+  t.lostReason = t.lostReason ?? null;
+  t.lostAt = t.lostAt ?? null;
+  t.stageUpdatedAt = t.stageUpdatedAt ?? t.updatedAt;
+}
 db.commissions = db.commissions || [];
 db.leaveTypes = db.leaveTypes || [
   { code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal leave', annualQuotaDays: 3, requiresAttachment: false },
@@ -478,6 +502,17 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
   db.notifications.unshift({ id: nextId, userId, ticketId, ticketCode, type, message, read: false, createdAt: new Date().toISOString() });
 }
 
+// Deal pipeline (V50): mirrors TicketService.autoAdvanceStage — monotonic
+// forward-only, no-op while lost. Called from the 4 milestone transitions.
+function autoAdvanceStage(ticket, targetStage, user) {
+  if (ticket.lostReason != null) return;
+  if (dealStageIndex(targetStage) <= dealStageIndex(ticket.salesStage)) return;
+  const fromStage = ticket.salesStage;
+  ticket.salesStage = targetStage;
+  ticket.stageUpdatedAt = new Date().toISOString();
+  pushEvent(ticket, user, 'STAGE_CHANGED', fromStage, targetStage, 'อัตโนมัติจากขั้นตอนของดีล');
+}
+
 function buildTicketDetail(ticket) {
   const project = ticket.projectId ? mockProjects.find((p) => p.id === ticket.projectId) : null;
   const contact = ticket.contactId ? mockContacts.find((c) => c.id === ticket.contactId) : null;
@@ -498,6 +533,8 @@ function buildTicketDetail(ticket) {
       itemCount: ticket.items.length, hasEdits: ticket.hasEdits ?? false,
       paymentStatus: ticket.paymentStatus ?? null,
       fulfillmentStatus: ticket.fulfillmentStatus ?? null,
+      salesStage: ticket.salesStage, lostReason: ticket.lostReason ?? null,
+      lostAt: ticket.lostAt ?? null, stageUpdatedAt: ticket.stageUpdatedAt ?? ticket.updatedAt,
     },
     items: ticket.items, events: ticket.events,
     quotation: ticket.quotations ? ticket.quotations[0] ?? null : ticket.quotation ?? null,
@@ -1087,10 +1124,14 @@ export const api = {
         createdById: t.createdById, createdByName: t.createdByName,
         assignedToId: t.assignedToId, assignedToName: t.assignedToName,
         customerName: t.customerName, note: t.note,
+        projectId: t.projectId ?? null,
+        projectName: t.projectId ? (mockProjects.find((p) => p.id === t.projectId)?.name ?? null) : null,
         createdAt: t.createdAt, updatedAt: t.updatedAt, closedAt: t.closedAt,
         itemCount: t.items.length,
         paymentStatus: t.paymentStatus ?? null,
         fulfillmentStatus: t.fulfillmentStatus ?? null,
+        salesStage: t.salesStage, lostReason: t.lostReason ?? null,
+        lostAt: t.lostAt ?? null, stageUpdatedAt: t.stageUpdatedAt ?? t.updatedAt,
       }));
       return delay({ tickets });
     },
@@ -1106,12 +1147,17 @@ export const api = {
 
     async create(payload) {
       const user = hasRole('sales');
+      // Mirrors TicketService.create (V50): every new deal belongs to a โครงการ.
+      if (payload.projectId == null) fail('ต้องเลือกโครงการก่อนสร้างดีล', 400);
       const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
       const code = `PR-2026-${String(nextId).padStart(4, '0')}`;
       const now = new Date().toISOString();
+      // Lightweight deal start (V50): no items → DRAFT at the lead stage, no
+      // import/CEO notification; items → the price-request flow as before.
+      const hasItems = (payload.items || []).length > 0;
       const ticket = {
         id: nextId, code, type: 'PRICE_REQUEST',
-        title: payload.title, status: 'submitted',
+        title: payload.title, status: hasItems ? 'submitted' : 'draft',
         priority: payload.priority || 'NORMAL',
         createdById: user.id, createdByName: user.name,
         assignedToId: null, assignedToName: null,
@@ -1120,6 +1166,7 @@ export const api = {
         projectId: payload.projectId ?? null,
         contactId: payload.contactId ?? null,
         note: payload.note || null,
+        salesStage: 'LEAD_APPROACH', lostReason: null, lostAt: null, stageUpdatedAt: now,
         createdAt: now.slice(0, 10), updatedAt: now.slice(0, 10), closedAt: null,
         items: (payload.items || []).map((item, i) => ({
           id: nextId * 100 + i, ticketId: nextId,
@@ -1130,7 +1177,9 @@ export const api = {
           proposedPrice: null, approvedPrice: null,
           currency: item.currency || 'THB', sortOrder: i,
         })),
-        events: [{ id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'SUBMITTED', fromStatus: null, toStatus: 'submitted', message: null, createdAt: now }],
+        events: [hasItems
+          ? { id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'SUBMITTED', fromStatus: null, toStatus: 'submitted', message: null, createdAt: now }
+          : { id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: now }],
         quotation: null,
       };
       db.tickets.unshift(ticket);
@@ -1139,6 +1188,11 @@ export const api = {
 
     async submit(id) {
       const user = hasRole('sales');
+      // Mirrors TicketService.submit: the price-request flow needs ≥1 product line.
+      const ticket = findTicketRaw(Number(id));
+      if ((ticket.items || []).length === 0) {
+        fail('ต้องเพิ่มรายการสินค้าอย่างน้อย 1 รายการก่อนส่งขอราคา', 400);
+      }
       return delay(doTransition(Number(id), 'draft', 'submitted', 'SUBMITTED', user, null));
     },
 
@@ -1179,8 +1233,10 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       const st = ticket.status;
       const isOwner = user.id === ticket.createdById;
+      // 'draft' included since V50: a lightweight lead-stage deal gets its product
+      // items here before submit().
       const salesCanEdit = user.role === 'sales' && isOwner
-        && ['submitted', 'in_review', 'price_proposed'].includes(st);
+        && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(st);
       const importCanEdit = user.role === 'import'
         && ['in_review', 'price_proposed'].includes(st);
       if (!salesCanEdit && !importCanEdit) fail('ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้', 403);
@@ -1483,6 +1539,7 @@ export const api = {
       ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
+      autoAdvanceStage(ticket, 'ORDER_RECEIVED', user);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
@@ -1504,6 +1561,7 @@ export const api = {
         pushEvent(ticket, user, 'AWAITING_FINAL_PAYMENT', ticket.status, ticket.status, null);
       }
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      autoAdvanceStage(ticket, 'DEPOSIT_RECEIVED', user);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
@@ -1520,6 +1578,7 @@ export const api = {
       ticket.fulfillmentStatus = 'IR_ISSUED';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'IR_ISSUED', ticket.status, ticket.status, null);
+      autoAdvanceStage(ticket, 'PROCUREMENT', user);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
@@ -1565,6 +1624,54 @@ export const api = {
       ticket.paymentStatus = 'FULLY_PAID';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'FULLY_PAID', ticket.status, ticket.status, null);
+      autoAdvanceStage(ticket, 'CLOSED_PAID', user);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    // ── Deal pipeline (V50): mirrors TicketService.updateStage/markLost/reopenDeal.
+    // Gates come from stageMeta (shared with the pages); authz here approximates
+    // the Java service and is NOT authoritative (CLAUDE.md).
+
+    async updateStage(id, payload) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      if (dealStageIndex(payload.stage) < 0) fail(`Unknown stage '${payload.stage}'`, 400);
+      if (!dealCanSetStage(user, ticket, payload.stage)) fail('Forbidden', 403);
+      if (ticket.lostReason != null) fail('ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ', 409);
+      if (ticket.salesStage === payload.stage) fail(`Deal is already in stage ${payload.stage}`, 409);
+      const backward = dealStageIndex(payload.stage) < dealStageIndex(ticket.salesStage);
+      if (backward && !(payload.note || '').trim()) fail('การย้อนสถานะกลับต้องระบุเหตุผล', 400);
+      const fromStage = ticket.salesStage;
+      ticket.salesStage = payload.stage;
+      ticket.stageUpdatedAt = new Date().toISOString();
+      pushEvent(ticket, user, 'STAGE_CHANGED', fromStage, payload.stage, (payload.note || '').trim() || null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async markLost(id, payload) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      if (!DEAL_LOST_REASONS.some((r) => r.code === payload.reason)) fail(`Unknown lost reason '${payload.reason}'`, 400);
+      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      if (ticket.lostReason != null) fail('Deal is already marked lost', 409);
+      ticket.lostReason = payload.reason;
+      ticket.lostAt = new Date().toISOString();
+      ticket.stageUpdatedAt = ticket.lostAt;
+      // Stage untouched by design: reopening resumes exactly where the deal was.
+      pushEvent(ticket, user, 'MARKED_LOST', ticket.salesStage, ticket.salesStage,
+        `เสียงาน (${payload.reason})${(payload.note || '').trim() ? ` — ${payload.note.trim()}` : ''}`);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async reopen(id, payload = {}) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      if (ticket.lostReason == null) fail('Deal is not marked lost', 409);
+      ticket.lostReason = null;
+      ticket.lostAt = null;
+      ticket.stageUpdatedAt = new Date().toISOString();
+      pushEvent(ticket, user, 'REOPENED', ticket.salesStage, ticket.salesStage, (payload.note || '').trim() || null);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
   },

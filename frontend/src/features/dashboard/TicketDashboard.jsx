@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { SalesTabs } from '../sales/SalesTabs.jsx';
 import { Skeleton, SkeletonCard } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -104,14 +105,15 @@ export function TicketDashboard({ user, employee, showToast }) {
   // previously every card landed on "ทั้งหมด" and made the user re-apply the
   // exact filter the card already named.
   const queueItems = summary ? [
-    { key: 'submitted', label: 'รอรับเรื่อง (Import)', value: summary.submitted, to: canPickup ? () => navigate('/tickets?status=submitted') : undefined },
-    { key: 'priceProposed', label: 'รอการอนุมัติราคา (CEO)', value: summary.priceProposed, to: canApprove ? () => navigate('/tickets?status=price_proposed') : undefined },
-    { key: 'approved', label: 'อนุมัติแล้ว รอออกใบเสนอราคา', value: summary.approved, to: canQuote ? () => navigate('/tickets?status=approved') : undefined },
+    { key: 'submitted', label: 'รอรับเรื่อง (Import)', value: summary.submitted, to: canPickup ? () => navigate('/tickets') : undefined },
+    { key: 'priceProposed', label: 'รอการอนุมัติราคา (CEO)', value: summary.priceProposed, to: canApprove ? () => navigate('/tickets') : undefined },
+    { key: 'approved', label: 'อนุมัติแล้ว รอออกใบเสนอราคา', value: summary.approved, to: canQuote ? () => navigate('/tickets') : undefined },
     { key: 'notifications', label: 'แจ้งเตือนยังไม่อ่าน', value: notifications?.unread ?? 0 },
   ] : [];
 
   return (
     <div className="page-stack">
+      <SalesTabs role={user.role} />
       <PageHeader title={greeting} subtitle={<GreetingSubtitle role={user.role} />} />
 
       {loading ? (
