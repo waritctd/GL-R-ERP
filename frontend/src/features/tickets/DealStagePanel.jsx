@@ -212,6 +212,18 @@ export function DealStagePanel({
               </div>
             </div>
 
+            {/* Compact "next step" line — keeps the default view to current + next
+                only. Suppressed when the explicit "เลื่อนไป:" button below already
+                names the next stage (canAdvance), to avoid saying it twice. */}
+            {next && !isDone && !canAdvance ? (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="font-bold text-text-muted">ถัดไป:</span>
+                <span className="rounded-full bg-info-bg px-2.5 py-0.5 text-2xs font-bold text-info">
+                  {next.no}. {dealStageLabel(next.code).label}
+                </span>
+              </div>
+            ) : null}
+
             {/* Inner journeys of the current stage — replace the old standalone
                 Track P / Track F panel and make the internal price workflow
                 (sales → Import → CEO confirmed price) visible inside the quote
