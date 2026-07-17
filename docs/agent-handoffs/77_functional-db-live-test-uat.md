@@ -100,6 +100,27 @@ excluded).
   in the same image and are now live on the real/demo stack (behavioural check not run —
   no MAIN login creds; verified live on UAT instead, §1).
 
+### 8b. Independent audit re-verification — 2026-07-18 (read-only MCP, `tdyzcqzxmhtxpbouewud`)
+A skeptical audit re-checked the migration/data claims directly against the live real DB
+(read-only `SELECT`/catalog only, no writes) after re-running both suites locally
+(backend 523 / frontend 123, all green; `TicketEventStatusIntegrationTest` 3/3 on real
+Postgres via Testcontainers). Findings **confirm §8**:
+- **Flyway history:** V48–V54 all `success=true`, `type=SQL`, `installed_rank` 50→56
+  contiguous, installed `2026-07-17 18:47 UTC`; no failed/repaired rows, no gaps.
+- **Data preserved:** `hr.employee` 213, `hr.payroll_line` 148, `sales.ticket` 8 — and
+  **8/8 tickets have non-NULL `sales_stage`** (V50 backfill complete). (`customer` lives in
+  the `customers` schema post-V41, not `sales`.)
+- **Schema landed:** `sales.ticket.sales_stage`, `chk_ticket_sales_stage`, and the V53
+  `sales.payment_receipt` / V54 `sales.delivery_record` tables all present.
+- **Constraints match the Java vocabularies the fixes depend on** (`pg_get_constraintdef`):
+  live `chk_ticket_status` == `TicketStatus.VALUES` (10 values, exact) — so the
+  stage-corruption `writeStatus` guard is correct against what is actually deployed;
+  live `chk_ticket_priority` == `Priority.VALID` (LOW/NORMAL/HIGH); `chk_ticket_sales_stage`
+  == the 14 `DealStage` codes.
+- Verdict: real-DB migration V47→V54 **VERIFIED clean, no data loss** (was previously
+  inferred; now directly confirmed). Doc-only nit: older commit messages cite test counts
+  (529/526/126) that don't reconcile with today's tree (523/123).
+
 ## 7. Result
 Live hosted UAT is **healthy and behaviourally correct** across the exercised surface: the
 deal engine drives to close, every write persists correctly, authz/state gates hold, the
