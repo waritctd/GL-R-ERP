@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { dealLostReasonLabel, dealStageLabel, formatThaiDate } from '../../utils/format.js';
+import {
+  dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, depositPolicyLabel,
+  formatThaiDate, tenderRequirementLabel,
+} from '../../utils/format.js';
 import { DealStageStepper, PhaseTracker } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
 import {
@@ -53,19 +57,35 @@ function SubstepChips({ label, steps, currentCode }) {
  * done, and doc generation surfaces here on exactly the stage it belongs to
  * (docActions is rendered by the parent from its real `can` permission flags).
  */
-export function DealStagePanel({ user, summary, docActions, primaryAction, guidance, actionLoading, onUpdateStage, onMarkLost, onReopen }) {
+export function DealStagePanel({
+  user, summary, availableActions = [], docActions, primaryAction, guidance, actionLoading,
+  onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement, onSetDepositPolicy,
+}) {
   const [editOpen, setEditOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
+  const [noteAction, setNoteAction] = useState(null);
+  const [note, setNote] = useState('');
+  const [depositOpen, setDepositOpen] = useState(false);
+  const [depositPolicy, setDepositPolicy] = useState('WAIVED');
+  const [depositReason, setDepositReason] = useState('');
   const [showSteps, setShowSteps] = useState(false);
 
+  const hasAction = (action, targetStage = null) => availableActions.some((item) =>
+    item.action === action && (targetStage == null || item.targetStage === targetStage));
   const lost = !!summary.lostReason;
+  const lifecycle = summary.lifecycle ?? (lost ? 'CLOSED_LOST' : 'ACTIVE');
   const meta = stageMeta(summary.salesStage);
   const label = dealStageLabel(summary.salesStage);
   const next = lost ? null : nextStage(summary.salesStage);
   const days = daysSince(summary.stageUpdatedAt);
-  const canEditStage = allowedTargetStages(user, summary).length > 0 && !lost;
-  const canLost = canMarkLost(user, summary) && !lost && summary.salesStage !== 'CLOSED_PAID';
-  const canAdvance = next && !next.auto && canSetStage(user, summary, next.code);
+  const canEditStage = hasAction('UPDATE_STAGE') && allowedTargetStages(user, summary).length > 0 && !lost;
+  const canLost = hasAction('MARK_LOST') && canMarkLost(user, summary) && !lost && summary.salesStage !== 'CLOSED_PAID';
+  const canAdvance = next && !next.auto && hasAction('ADVANCE_STAGE', next.code) && canSetStage(user, summary, next.code);
+  const canHold = hasAction('PLACE_ON_HOLD');
+  const canDormant = hasAction('MARK_DORMANT');
+  const canResume = hasAction('RESUME');
+  const canTender = hasAction('SET_TENDER_REQUIREMENT') && summary.salesStage === 'AWAITING_BUYER';
+  const canDepositPolicy = hasAction('WAIVE_DEPOSIT');
   const isDone = !lost && summary.salesStage === 'CLOSED_PAID';
 
   // When the next stage isn't one this user can one-click into, explain who or
@@ -95,6 +115,21 @@ export function DealStagePanel({ user, summary, docActions, primaryAction, guida
     setLostOpen(false);
   }
 
+  async function submitNoteAction() {
+    const payload = { note: note.trim() || undefined };
+    if (noteAction === 'hold') await onHold(payload);
+    if (noteAction === 'dormant') await onDormant(payload);
+    if (noteAction === 'resume') await onResume(payload);
+    setNoteAction(null);
+    setNote('');
+  }
+
+  async function submitDepositPolicy() {
+    await onSetDepositPolicy({ policy: depositPolicy, reason: depositReason.trim() });
+    setDepositOpen(false);
+    setDepositReason('');
+  }
+
   return (
     <section className="panel">
       <div className="panel-header">
@@ -112,7 +147,32 @@ export function DealStagePanel({ user, summary, docActions, primaryAction, guida
       <div className="flex flex-col gap-4 px-4 py-4 sm:px-5">
         <PhaseTracker salesStage={summary.salesStage} lost={lost} />
 
-        {lost ? (
+        {lifecycle === 'ON_HOLD' || lifecycle === 'DORMANT' ? (
+          <div className={`flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 ${
+            lifecycle === 'ON_HOLD'
+              ? 'border-warning-border bg-warning-bg-soft'
+              : 'border-border bg-surface-subtle'
+          }`}>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-extrabold text-text">
+                {dealLifecycleLabel(lifecycle).label}
+              </div>
+              <div className="mt-0.5 text-xs text-text-muted">
+                ขั้นเดิมยังอยู่ที่ {meta?.no ?? '-'}. {label.label}
+              </div>
+            </div>
+            {canResume ? (
+              <button type="button" className="primary-button" disabled={actionLoading} onClick={() => setNoteAction('resume')}>
+                ดำเนินการต่อ
+              </button>
+            ) : null}
+            {canDormant && lifecycle === 'ON_HOLD' ? (
+              <button type="button" className="secondary-button" disabled={actionLoading} onClick={() => setNoteAction('dormant')}>
+                พัก dormant
+              </button>
+            ) : null}
+          </div>
+        ) : lost ? (
           <div className="flex flex-wrap items-center gap-3 rounded-xl border border-danger-border bg-danger-bg px-4 py-3">
             <div className="min-w-0 flex-1">
               <div className="text-sm font-extrabold text-danger-dark">
@@ -160,7 +220,20 @@ export function DealStagePanel({ user, summary, docActions, primaryAction, guida
                   <SubstepChips label="การขอราคา:" steps={PRICING_SUBSTEPS} currentCode={summary.status} />
                 ) : null}
                 {showPaymentChips ? (
-                  <SubstepChips label="การชำระเงิน:" steps={PAYMENT_SUBSTEPS} currentCode={summary.paymentStatus} />
+                  depositBypassesNotice(summary.depositPolicy) ? null : (
+                    <SubstepChips label="การชำระเงิน:" steps={PAYMENT_SUBSTEPS} currentCode={summary.paymentStatus} />
+                  )
+                ) : null}
+                {depositBypassesNotice(summary.depositPolicy) ? (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-2xs font-bold text-text-muted">นโยบายมัดจำ:</span>
+                    <StatusBadge tone={depositPolicyLabel(summary.depositPolicy).tone}>
+                      {depositPolicyLabel(summary.depositPolicy).label}
+                    </StatusBadge>
+                    {summary.depositPolicyReason ? (
+                      <span className="text-2xs text-text-muted">— {summary.depositPolicyReason}</span>
+                    ) : null}
+                  </div>
                 ) : null}
                 {showImportChips ? (
                   <SubstepChips label="การนำเข้า:" steps={PROCUREMENT_SUBSTEPS} currentCode={summary.fulfillmentStatus} />
@@ -216,15 +289,49 @@ export function DealStagePanel({ user, summary, docActions, primaryAction, guida
                   <button
                     type="button"
                     className="secondary-button"
-                    style={{ marginLeft: 'auto', color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}
+                    style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}
                     disabled={actionLoading}
                     onClick={() => setLostOpen(true)}
                   >
                     เสียงาน
                   </button>
                 ) : null}
+                {canHold ? (
+                  <button type="button" className="secondary-button" disabled={actionLoading} onClick={() => setNoteAction('hold')}>
+                    พักดีลไว้
+                  </button>
+                ) : null}
+                {canDormant ? (
+                  <button type="button" className="secondary-button" disabled={actionLoading} onClick={() => setNoteAction('dormant')}>
+                    พัก dormant
+                  </button>
+                ) : null}
               </div>
             )}
+
+            {(canTender || canDepositPolicy) ? (
+              <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+                {canTender ? (
+                  <label className="flex items-center gap-2 text-xs font-bold text-text-muted">
+                    ประมูล
+                    <select
+                      value={summary.tenderRequirement ?? 'UNKNOWN'}
+                      disabled={actionLoading}
+                      onChange={(event) => onSetTenderRequirement({ value: event.target.value })}
+                    >
+                      {['UNKNOWN', 'REQUIRED', 'NOT_REQUIRED'].map((value) => (
+                        <option key={value} value={value}>{tenderRequirementLabel(value).label}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                {canDepositPolicy ? (
+                  <button type="button" className="secondary-button" disabled={actionLoading} onClick={() => setDepositOpen(true)}>
+                    นโยบายมัดจำ…
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
 
             {/* Stage-gated documents: the doc that belongs to THIS stage of the
                 deal (quotation at the quote stages, deposit notice at order,
@@ -257,6 +364,54 @@ export function DealStagePanel({ user, summary, docActions, primaryAction, guida
           onSubmit={submitLost}
         />
       ) : null}
+      {noteAction ? (
+        <Modal
+          title={noteAction === 'resume' ? 'ดำเนินการต่อ' : noteAction === 'hold' ? 'พักดีลไว้' : 'พัก dormant'}
+          onClose={() => { setNoteAction(null); setNote(''); }}
+          footer={(
+            <>
+              <button type="button" className="secondary-button" onClick={() => { setNoteAction(null); setNote(''); }}>ยกเลิก</button>
+              <button type="button" className="primary-button" disabled={actionLoading} onClick={submitNoteAction}>บันทึก</button>
+            </>
+          )}
+        >
+          <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+            หมายเหตุ (ถ้ามี)
+            <textarea className="min-h-20" value={note} onChange={(event) => setNote(event.target.value)} />
+          </label>
+        </Modal>
+      ) : null}
+      {depositOpen ? (
+        <Modal
+          title="นโยบายมัดจำ"
+          onClose={() => setDepositOpen(false)}
+          footer={(
+            <>
+              <button type="button" className="secondary-button" onClick={() => setDepositOpen(false)}>ยกเลิก</button>
+              <button type="button" className="primary-button" disabled={actionLoading || !depositReason.trim()} onClick={submitDepositPolicy}>บันทึก</button>
+            </>
+          )}
+        >
+          <div className="flex flex-col gap-3">
+            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+              นโยบาย
+              <select value={depositPolicy} onChange={(event) => setDepositPolicy(event.target.value)}>
+                {['WAIVED', 'NOT_REQUIRED', 'CREDIT_CUSTOMER'].map((value) => (
+                  <option key={value} value={value}>{depositPolicyLabel(value).label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+              เหตุผล *
+              <textarea className="min-h-20" value={depositReason} onChange={(event) => setDepositReason(event.target.value)} />
+            </label>
+          </div>
+        </Modal>
+      ) : null}
     </section>
   );
+}
+
+function depositBypassesNotice(policy) {
+  return ['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(policy);
 }

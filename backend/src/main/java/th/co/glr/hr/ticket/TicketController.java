@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import th.co.glr.hr.ticket.TicketResponses.CalculatePricesResponse;
 import th.co.glr.hr.ticket.TicketResponses.TicketDetailResponse;
 import th.co.glr.hr.ticket.TicketResponses.TicketListResponse;
+import th.co.glr.hr.ticket.TicketResponses.TicketActionsResponse;
 
 @RestController
 @RequestMapping("/api/tickets")
@@ -59,6 +60,12 @@ public class TicketController {
     TicketDetailResponse get(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new TicketDetailResponse(ticketService.get(id, user));
+    }
+
+    @GetMapping("/{id}/actions")
+    TicketActionsResponse actions(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return ticketService.actions(id, user);
     }
 
     @PostMapping("/{id}/submit")
@@ -168,6 +175,57 @@ public class TicketController {
             ticketService.reopenDeal(id, request == null ? null : request.note(), user));
     }
 
+    @PostMapping("/{id}/hold")
+    TicketDetailResponse hold(@PathVariable long id,
+                              @RequestBody(required = false) NoteRequest request,
+                              HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(
+            ticketService.placeOnHold(id, request == null ? null : request.note(), user));
+    }
+
+    @PostMapping("/{id}/dormant")
+    TicketDetailResponse dormant(@PathVariable long id,
+                                 @RequestBody(required = false) NoteRequest request,
+                                 HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(
+            ticketService.markDormant(id, request == null ? null : request.note(), user));
+    }
+
+    @PostMapping("/{id}/resume")
+    TicketDetailResponse resume(@PathVariable long id,
+                                @RequestBody(required = false) NoteRequest request,
+                                HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(
+            ticketService.resume(id, request == null ? null : request.note(), user));
+    }
+
+    @PostMapping("/{id}/tender-requirement")
+    TicketDetailResponse tenderRequirement(@PathVariable long id,
+                                           @Valid @RequestBody PolicyValueRequest request,
+                                           HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.setTenderRequirement(id, request.value(), user));
+    }
+
+    @PostMapping("/{id}/entry-channel")
+    TicketDetailResponse entryChannel(@PathVariable long id,
+                                      @Valid @RequestBody EntryChannelRequest request,
+                                      HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.setEntryChannel(id, request.value(), request.note(), user));
+    }
+
+    @PostMapping("/{id}/deposit-policy")
+    TicketDetailResponse depositPolicy(@PathVariable long id,
+                                       @Valid @RequestBody DepositPolicyRequest request,
+                                       HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.waiveDeposit(id, request.policy(), request.reason(), user));
+    }
+
     record UpdateStageRequest(@jakarta.validation.constraints.NotBlank String stage,
                               @jakarta.validation.constraints.Size(max = 2000) String note) {}
 
@@ -175,6 +233,17 @@ public class TicketController {
                            @jakarta.validation.constraints.Size(max = 2000) String note) {}
 
     record ReopenRequest(@jakarta.validation.constraints.Size(max = 2000) String note) {}
+
+    record NoteRequest(@jakarta.validation.constraints.Size(max = 2000) String note) {}
+
+    record PolicyValueRequest(@jakarta.validation.constraints.NotBlank String value) {}
+
+    record EntryChannelRequest(@jakarta.validation.constraints.NotBlank String value,
+                               @jakarta.validation.constraints.Size(max = 2000) String note) {}
+
+    record DepositPolicyRequest(@jakarta.validation.constraints.NotBlank String policy,
+                                @jakarta.validation.constraints.NotBlank
+                                @jakarta.validation.constraints.Size(max = 2000) String reason) {}
 
     @PostMapping("/{id}/factory-emails/send")
     Map<String, String> sendFactoryEmail(

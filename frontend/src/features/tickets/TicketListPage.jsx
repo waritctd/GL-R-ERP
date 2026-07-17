@@ -8,7 +8,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { SalesTabs } from '../sales/SalesTabs.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { dealLostReasonLabel, dealStageLabel, formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
+import { dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
 import { StageProgressBar } from './DealStageStepper.jsx';
 import { SALES_PHASES, stageMeta } from './stageMeta.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
@@ -44,18 +44,23 @@ function DaysBadge({ stageUpdatedAt }) {
 }
 
 function DealStageCell({ deal }) {
-  if (deal.lostReason) {
+  if (deal.lifecycle === 'CLOSED_LOST' || deal.lostReason) {
     const lost = dealLostReasonLabel(deal.lostReason);
     return <StatusBadge tone="danger">เสียงาน · {lost.label}</StatusBadge>;
   }
   const stage = dealStageLabel(deal.salesStage);
   const meta = stageMeta(deal.salesStage);
   const operational = ticketStatusLabel(deal.status);
+  const paused = ['ON_HOLD', 'DORMANT'].includes(deal.lifecycle);
+  const lifecycle = dealLifecycleLabel(deal.lifecycle);
   return (
     <span className="flex min-w-0 flex-col gap-0.5">
-      <StatusBadge tone={stage.tone}>
-        {meta ? `${meta.no}. ` : ''}{stage.label}
-      </StatusBadge>
+      <span className="flex flex-wrap items-center gap-1">
+        <StatusBadge tone={stage.tone}>
+          {meta ? `${meta.no}. ` : ''}{stage.label}
+        </StatusBadge>
+        {paused ? <StatusBadge tone={lifecycle.tone}>{lifecycle.label}</StatusBadge> : null}
+      </span>
       <span className="pl-0.5 text-2xs text-text-muted">{operational.label}</span>
     </span>
   );
@@ -78,7 +83,7 @@ function DealCard({ deal }) {
       ) : null}
 
       <DealStageCell deal={deal} />
-      <StageProgressBar salesStage={deal.salesStage} lost={!!deal.lostReason} />
+      <StageProgressBar salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST' || !!deal.lostReason} />
 
       <span className="min-w-0 truncate text-xs text-text-muted">
         {[deal.createdByName, formatThaiDate(deal.createdAt)].filter(Boolean).join(' · ')}
@@ -113,12 +118,12 @@ export function TicketListPage({ user, showToast }) {
   }, [ticketsQuery.error, showToast]);
 
   // Phase summary cards double as filters — never a 14-stage tab bar.
-  // 'lost' is its own bucket; lost deals are excluded from phase counts.
+  // 'lost' is its own lifecycle bucket; paused deals keep their phase.
   const phaseCounts = useMemo(() => {
     const counts = { lost: 0 };
     for (const phase of SALES_PHASES) counts[phase.id] = 0;
     for (const deal of allDeals) {
-      if (deal.lostReason) counts.lost += 1;
+      if (deal.lifecycle === 'CLOSED_LOST' || deal.lostReason) counts.lost += 1;
       else {
         const meta = stageMeta(deal.salesStage);
         if (meta) counts[meta.phase] += 1;
@@ -129,8 +134,8 @@ export function TicketListPage({ user, showToast }) {
 
   const deals = useMemo(() => {
     if (!phaseFilter) return allDeals;
-    if (phaseFilter === 'lost') return allDeals.filter((d) => d.lostReason);
-    return allDeals.filter((d) => !d.lostReason && stageMeta(d.salesStage)?.phase === Number(phaseFilter));
+    if (phaseFilter === 'lost') return allDeals.filter((d) => d.lifecycle === 'CLOSED_LOST' || d.lostReason);
+    return allDeals.filter((d) => d.lifecycle !== 'CLOSED_LOST' && !d.lostReason && stageMeta(d.salesStage)?.phase === Number(phaseFilter));
   }, [allDeals, phaseFilter]);
 
   function invalidateTicketsList() {

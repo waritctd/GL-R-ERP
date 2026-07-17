@@ -33,6 +33,11 @@ public final class TicketEventKind {
     public static final String STAGE_CHANGED         = "STAGE_CHANGED";
     public static final String MARKED_LOST           = "MARKED_LOST";
     public static final String REOPENED              = "REOPENED";
+    // Deal lifecycle + structured policy events (V51).
+    public static final String ON_HOLD                = "ON_HOLD";
+    public static final String DORMANT                = "DORMANT";
+    public static final String RESUMED                = "RESUMED";
+    public static final String POLICY_CHANGED         = "POLICY_CHANGED";
 
     private TicketEventKind() {}
 }

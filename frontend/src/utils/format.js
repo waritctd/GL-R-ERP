@@ -153,6 +153,47 @@ export function dealLostReasonLabel(reason) {
   return { label: map[reason] ?? reason ?? '-', tone: 'danger' };
 }
 
+export function dealLifecycleLabel(value) {
+  const map = {
+    ACTIVE:      { label: 'กำลังดำเนินการ', tone: 'success' },
+    ON_HOLD:     { label: 'พักไว้ชั่วคราว', tone: 'warning' },
+    DORMANT:     { label: 'พักยาว (dormant)', tone: 'neutral' },
+    CLOSED_LOST: { label: 'เสียงาน', tone: 'danger' },
+    CANCELLED:   { label: 'ยกเลิก', tone: 'danger' },
+    COMPLETED:   { label: 'เสร็จสมบูรณ์', tone: 'success' },
+  };
+  return map[value] ?? { label: value || '-', tone: 'neutral' };
+}
+
+export function tenderRequirementLabel(value) {
+  const map = {
+    REQUIRED: 'ต้องประมูล',
+    NOT_REQUIRED: 'ไม่ต้องประมูล',
+    UNKNOWN: 'ยังไม่ทราบ',
+  };
+  return { label: map[value] ?? value ?? '-', tone: value === 'REQUIRED' ? 'warning' : 'neutral' };
+}
+
+export function depositPolicyLabel(value) {
+  const map = {
+    REQUIRED: 'ต้องเก็บมัดจำ',
+    NOT_REQUIRED: 'ไม่เก็บมัดจำ',
+    WAIVED: 'ยกเว้นมัดจำ',
+    CREDIT_CUSTOMER: 'ลูกค้าเครดิต',
+  };
+  const tone = value === 'REQUIRED' ? 'neutral' : value === 'CREDIT_CUSTOMER' ? 'info' : 'warning';
+  return { label: map[value] ?? value ?? '-', tone };
+}
+
+export function entryChannelLabel(value) {
+  const map = {
+    DESIGNER_LED: 'ผู้ออกแบบนำดีล',
+    OWNER_DIRECT: 'เจ้าของติดต่อโดยตรง',
+    BUYER_DIRECT: 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง',
+  };
+  return { label: map[value] ?? value ?? '-', tone: 'neutral' };
+}
+
 // Payroll run status -> StatusBadge tone. Canonical source; do not
 // re-add a page-local `statusInfo`/map for payroll status elsewhere.
 export function payrollStatusLabel(status) {

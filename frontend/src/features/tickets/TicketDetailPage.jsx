@@ -18,6 +18,10 @@ const EVENT_KIND_LABEL = {
   STAGE_CHANGED:      'เปลี่ยนสถานะดีล',
   MARKED_LOST:        'เสียงาน',
   REOPENED:           'เปิดดีลอีกครั้ง',
+  ON_HOLD:            'พักดีลไว้',
+  DORMANT:            'พัก dormant',
+  RESUMED:            'ดำเนินการต่อ',
+  POLICY_CHANGED:     'เปลี่ยนนโยบายดีล',
   SUBMITTED:          'ส่งเรื่องเข้าระบบ',
   PICKED_UP:          'รับมอบหมาย',
   PRICE_PROPOSED:     'เสนอราคาสินค้า',
@@ -146,6 +150,14 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     enabled: !!ticketId,
   });
   const ticket = ticketQuery.data ?? null;
+  const actionsQuery = useQuery({
+    queryKey: queryKeys.ticketActions(ticketId),
+    queryFn: () => api.tickets.actions(ticketId),
+    enabled: !!ticketId && !!ticket,
+  });
+  const availableActions = actionsQuery.data?.availableActions ?? [];
+  const actionNames = new Set(availableActions.map((action) => action.action));
+  const hasAction = (action) => actionNames.has(action);
   // isLoading-only (not isFetching): this gate swaps the ENTIRE page for a
   // full skeleton. Using isFetching too would flash that skeleton on every
   // quiet background refetch (window refocus, another tab's invalidate) —
@@ -190,6 +202,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // action before this slice and nothing refreshed them.
   function applyTicketUpdate(updatedTicket) {
     queryClient.setQueryData(queryKeys.ticketDetail(ticketId), updatedTicket);
+    queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
     queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary() });
     queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
@@ -380,38 +393,38 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const can = {
     // Submit is only meaningful once the deal has product lines — the backend
     // 400s an item-less submit (mirrors TicketService.submit).
-    submit:            st === 'draft' && isOwner && ROLE_PERMISSIONS.canCreateTickets.includes(role) && items.length > 0,
-    pickup:            st === 'submitted'       && ROLE_PERMISSIONS.canPickupTickets.includes(role),
-    propose:           ['in_review', 'price_proposed', 'approved'].includes(st) && ROLE_PERMISSIONS.canProposePrices.includes(role),
-    calculatePrices:   st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    overridePrice:     st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    approve:           st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    reject:            st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    generateQuotation: (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canGenerateQuotation.includes(role) && isOwner,
+    submit:            hasAction('SUBMIT') && st === 'draft' && isOwner && ROLE_PERMISSIONS.canCreateTickets.includes(role) && items.length > 0,
+    pickup:            hasAction('PICKUP') && st === 'submitted'       && ROLE_PERMISSIONS.canPickupTickets.includes(role),
+    propose:           hasAction('PROPOSE_PRICE') && ['in_review', 'price_proposed', 'approved'].includes(st) && ROLE_PERMISSIONS.canProposePrices.includes(role),
+    calculatePrices:   hasAction('CALCULATE_PRICES') && st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
+    overridePrice:     hasAction('OVERRIDE_ITEM_PRICE') && st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
+    approve:           hasAction('APPROVE') && st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
+    reject:            hasAction('REJECT') && st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
+    generateQuotation: hasAction('GENERATE_QUOTATION') && (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canGenerateQuotation.includes(role) && isOwner,
     // Issuing the deposit-notice DOCUMENT is the payment-track step (mirrors
     // DepositNoticeService.issue): customer must have confirmed first, and the
     // former no-document "ออกใบแจ้งมัดจำ" action is gone.
-    generateDocument:  st === 'quotation_issued' && ps === 'CUSTOMER_CONFIRMED' && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
+    generateDocument:  hasAction('ISSUE_DEPOSIT_NOTICE') && st === 'quotation_issued' && ps === 'CUSTOMER_CONFIRMED' && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     revise:            (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     // Legacy document_issued close only for pre-dual-track tickets (ps never set)
     // or fully paid ones — mirrors TicketService.close().
-    close:            ((st === 'document_issued' && (ps == null || ps === 'FULLY_PAID'))
+    close:            hasAction('CLOSE') && ((st === 'document_issued' && (ps == null || ps === 'FULLY_PAID'))
                         || (st === 'quotation_issued' && dualTrackDone)) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
-    cancel:           !TERMINAL.includes(st)   && isOwner,
+    cancel:           hasAction('CANCEL') && !TERMINAL.includes(st)   && isOwner,
     comment:          !TERMINAL.includes(st),
-    editItems: EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
+    editItems: hasAction('EDIT_ITEMS') && EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     // Dual-track (ข้อ 13)
-    confirmCustomer:    st === 'quotation_issued' && ps == null && isSales,
+    confirmCustomer:    hasAction('CONFIRM_CUSTOMER') && st === 'quotation_issued' && (ps == null || ps === 'CUSTOMER_CONFIRMED') && isSales,
     // Money receipts are confirmed by ฝ่ายบัญชี (account role, CEO fallback) —
     // mirrors TicketService.ACCOUNT_ROLES.
-    confirmDepositPaid: st === 'quotation_issued' && ps === 'DEPOSIT_NOTICE_ISSUED' && isAccount,
+    confirmDepositPaid: hasAction('DEPOSIT_PAID') && st === 'quotation_issued' && ps === 'DEPOSIT_NOTICE_ISSUED' && isAccount,
     // DEPOSIT_PAID also qualifies: accounting may confirm the deposit before
     // import gets to the IR (mirrors TicketService.issueImportRequest).
-    issueImportRequest: st === 'quotation_issued' && (ps === 'DEPOSIT_NOTICE_ISSUED' || ps === 'DEPOSIT_PAID') && fs == null && isImport,
-    markIrSent:         st === 'quotation_issued' && fs === 'IR_ISSUED' && isImport,
-    markShipping:       st === 'quotation_issued' && fs === 'IR_SENT' && isImport,
-    markGoodsReceived:  st === 'quotation_issued' && fs === 'SHIPPING' && isImport,
-    confirmFinalPayment:st === 'quotation_issued' && ps === 'AWAITING_FINAL_PAYMENT' && isAccount,
+    issueImportRequest: hasAction('ISSUE_IMPORT_REQUEST') && st === 'quotation_issued' && fs == null && isImport,
+    markIrSent:         hasAction('IR_SENT') && st === 'quotation_issued' && fs === 'IR_ISSUED' && isImport,
+    markShipping:       hasAction('SHIPPING') && st === 'quotation_issued' && fs === 'IR_SENT' && isImport,
+    markGoodsReceived:  hasAction('GOODS_RECEIVED') && st === 'quotation_issued' && fs === 'SHIPPING' && isImport,
+    confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && ps === 'AWAITING_FINAL_PAYMENT' && isAccount,
     downloadRemainingInvoice: st === 'quotation_issued' && fs === 'GOODS_RECEIVED' && isSales,
   };
 
@@ -743,12 +756,18 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       <DealStagePanel
         user={user}
         summary={summary}
+        availableActions={availableActions}
         primaryAction={primaryAction}
         guidance={nextAction ?? waitingHint}
         actionLoading={actionLoading}
         onUpdateStage={(payload) => doAction(() => api.tickets.updateStage(ticketId, payload), 'อัปเดตสถานะดีลแล้ว')}
         onMarkLost={(payload) => doAction(() => api.tickets.markLost(ticketId, payload), 'บันทึกเสียงานแล้ว')}
         onReopen={() => doAction(() => api.tickets.reopen(ticketId, {}), 'เปิดดีลอีกครั้งแล้ว')}
+        onHold={(payload) => doAction(() => api.tickets.hold(ticketId, payload), 'พักดีลไว้แล้ว')}
+        onDormant={(payload) => doAction(() => api.tickets.dormant(ticketId, payload), 'พัก dormant แล้ว')}
+        onResume={(payload) => doAction(() => api.tickets.resume(ticketId, payload), 'ดำเนินการต่อแล้ว')}
+        onSetTenderRequirement={(payload) => doAction(() => api.tickets.setTenderRequirement(ticketId, payload), 'บันทึกสถานะประมูลแล้ว')}
+        onSetDepositPolicy={(payload) => doAction(() => api.tickets.setDepositPolicy(ticketId, payload), 'บันทึกนโยบายมัดจำแล้ว')}
         docActions={(can.generateQuotation || can.generateDocument || can.issueImportRequest
           || can.downloadRemainingInvoice || latestQuotation || depositNoticeIssued) ? (
           <>

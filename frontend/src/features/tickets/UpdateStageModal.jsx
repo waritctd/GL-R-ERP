@@ -5,16 +5,19 @@ import { allowedTargetStages, stageIndex } from './stageMeta.js';
 
 /**
  * Manual stage-change modal (from the Claude Design prototype). The select is
- * limited to stages this user may set on this deal; moving backward requires a
- * note (mirrors TicketService.updateStage).
+ * limited to stages this user may set on this deal; moving backward or skipping
+ * forward multiple stages requires a note (mirrors TicketService.updateStage).
  */
 export function UpdateStageModal({ user, deal, onClose, onSubmit, submitting }) {
   const options = allowedTargetStages(user, deal);
   const [stage, setStage] = useState(options[0]?.code ?? '');
   const [note, setNote] = useState('');
 
-  const backward = stage !== '' && stageIndex(stage) < stageIndex(deal.salesStage);
-  const canSave = stage !== '' && (!backward || note.trim() !== '') && !submitting;
+  const distance = stage !== '' ? stageIndex(stage) - stageIndex(deal.salesStage) : 0;
+  const backward = distance < 0;
+  const skipForward = distance > 1;
+  const noteRequired = backward || skipForward;
+  const canSave = stage !== '' && (!noteRequired || note.trim() !== '') && !submitting;
 
   return (
     <Modal
@@ -55,9 +58,14 @@ export function UpdateStageModal({ user, deal, onClose, onSubmit, submitting }) 
             กำลังย้อนสถานะกลับ — ต้องระบุเหตุผลประกอบการแก้ไข
           </div>
         ) : null}
+        {skipForward ? (
+          <div className="rounded-lg border border-warning-border bg-warning-bg-soft px-3 py-2 text-xs text-warning-dark">
+            กำลังข้ามขั้นตอน — ต้องระบุเหตุผลประกอบการแก้ไข
+          </div>
+        ) : null}
 
         <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-          หมายเหตุ {backward ? '(จำเป็น)' : '(ถ้ามี)'}
+          หมายเหตุ {noteRequired ? '(จำเป็น)' : '(ถ้ามี)'}
           <textarea
             className="min-h-20"
             value={note}

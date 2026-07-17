@@ -239,13 +239,67 @@ component test asserting the cockpit hides actions absent from a mocked /actions
    Questions for review). Commit everything on the phase branch. Do NOT merge anything.
 
 ## Files changed
-(fill in)
+- Backend lifecycle/policy model and migration:
+  - `backend/src/main/resources/db/migration/V51__deal_lifecycle_and_policies.sql`
+  - `backend/src/main/java/th/co/glr/hr/ticket/DealLifecycle.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/TenderRequirement.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/DepositPolicy.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/EntryChannel.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/TicketEventKind.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/TicketSummaryDto.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/CreateTicketRequest.java`
+- Backend persistence/API/service:
+  - `backend/src/main/java/th/co/glr/hr/ticket/TicketRepository.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/TicketResponses.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/TicketService.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/TicketController.java`
+- Backend tests/constructor updates:
+  - `backend/src/test/java/th/co/glr/hr/ticket/TicketServiceTest.java`
+  - `backend/src/test/java/th/co/glr/hr/ticket/TicketRepositoryIntegrationTest.java`
+  - `backend/src/test/java/th/co/glr/hr/ticket/QuotationRendererTest.java`
+  - `backend/src/test/java/th/co/glr/hr/pricing/PriceCalcServiceTest.java`
+  - `backend/src/test/java/th/co/glr/hr/deposit/DepositNoticeServiceTest.java`
+  - `backend/src/test/java/th/co/glr/hr/attachment/AttachmentControllerTest.java`
+- Frontend API/mock/query/format wiring:
+  - `frontend/src/api/hrApi.js`
+  - `frontend/src/api/mockApi.js`
+  - `frontend/src/api/queryKeys.js`
+  - `frontend/src/utils/format.js`
+- Frontend cockpit/list/stage UI:
+  - `frontend/src/features/tickets/TicketDetailPage.jsx`
+  - `frontend/src/features/tickets/DealStagePanel.jsx`
+  - `frontend/src/features/tickets/UpdateStageModal.jsx`
+  - `frontend/src/features/tickets/TicketListPage.jsx`
+  - `frontend/src/features/tickets/TicketDetailPage.test.jsx`
 
 ## Commands run
-(fill in)
+- `git switch feat/deal-pipeline-base`
+- `git switch -c feat/deal-workflow-p1-lifecycle`
+- `cd backend && ./mvnw -q -Dtest=TicketServiceTest test`
+- `cd backend && ./mvnw -B clean verify`
+  - First sandboxed run failed because Testcontainers could not access Docker.
+  - Reran with approved escalation for Docker/Testcontainers access.
+- `cd frontend && npm run lint`
+- `cd frontend && npm test -- --run`
+- `cd frontend && npm run build`
+- `cd frontend && npm run dev -- --host 127.0.0.1 --port 5200`
+  - Started for manual frontend-mock verification, then stopped.
 
 ## Tests / build results
-(fill in)
+- Backend focused test: `TicketServiceTest` passed.
+- Backend full verify: `BUILD SUCCESS`; Testcontainers/Flyway ran successfully after Docker escalation.
+  - Reported summary: 487 tests run, 0 failures, 0 errors, 0 skipped.
+- Frontend lint: passed with 0 errors and 4 pre-existing hook dependency warnings outside this work:
+  - `AttendancePage.jsx` missing `loadPunches`
+  - `CommissionPage.jsx` missing `load`, `canCeoReview`, `canReviewRecord`
+  - `PayrollPage.jsx` missing `load`
+- Frontend tests: 27 files passed, 119 tests passed.
+  - Added component coverage that `TicketDetailPage` hides an approve cockpit action when mocked `/actions` omits `APPROVE`.
+- Frontend build: passed.
+- Manual frontend-mock pass: attempted but not completed because the in-app browser runtime failed during setup with `Cannot redefine property: process`, even after `js_reset`; direct Playwright import was also unavailable in this repo/runtime (`Cannot find package 'playwright'`). The dev server itself started on `http://127.0.0.1:5200/` and was stopped afterward.
 
 ## Known risks / questions for Opus review
-(fill in)
+- Manual UI verification is the main gap: hold/resume, deposit-waived IR, skip reason, and action-driven cockpit behavior are covered by service/mock/component tests, but were not browser-driven because the browser tooling failed locally.
+- The actions response is computed inside `TicketService` and reuses the same guard helpers where practical, but review should pay close attention to drift between each transition guard and its advertised action, especially around policy/lifecycle roles.
+- `sales_manager` now gets lifecycle pause/resume plus the specified stage/lost/reopen powers; it should still have no operational powers. Backend tests assert representative action visibility, but this remains a high-value review area.
+- `deposit_policy` bypass currently allows IR when policy is `NOT_REQUIRED`, `WAIVED`, or `CREDIT_CUSTOMER` and payment status is null or `CUSTOMER_CONFIRMED`, matching the handoff. Confirm with business reviewers whether `CREDIT_CUSTOMER` should hide deposit chips or show a credit note only in all later UI/reporting phases.

@@ -162,7 +162,8 @@ class DepositNoticeServiceTest {
             ticketId, "PR-2026-0001", "PRICE_REQUEST", "Test", status, "NORMAL",
             1L, "Sales", null, null, "ACME", null, null, null, null, null, null,
             Instant.now(), Instant.now(), null, 1, false, paymentStatus, null,
-            "LEAD_APPROACH", null, null, Instant.now());
+            "LEAD_APPROACH", null, null, Instant.now(),
+            "ACTIVE", "UNKNOWN", "REQUIRED", null, "DESIGNER_LED");
         when(ticketRepo.findById(ticketId))
             .thenReturn(Optional.of(new TicketDto(summary, List.of(), List.of(), null, List.of())));
     }
