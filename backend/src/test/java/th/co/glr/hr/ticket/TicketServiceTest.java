@@ -933,7 +933,9 @@ class TicketServiceTest {
         TicketDto updated = ticketLike(initial, List.of(deliveryItem(1L, "100.00", "100.00", "0.00")),
             FulfilmentStatus.PARTIALLY_DELIVERED);
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
-        when(ticketRepo.hasDeliveryRecordSource(10L, "WAREHOUSE")).thenReturn(true);
+        // Warehouse availability now keys off the permanent GOODS_RECEIVED event, not a
+        // prior delivery-record source (see warehouseDeliveryAvailable — Case 8 fix).
+        when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
 
         service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งส่วนที่เหลือ",
             List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00")))), importActor);
@@ -981,6 +983,31 @@ class TicketServiceTest {
         service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบจากสต็อก"), importActor);
 
         verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("STOCK"), eq(3L), eq("ส่งครบจากสต็อก"),
+            argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0));
+        verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
+    }
+
+    @Test
+    void recordPartialDelivery_stockFirstThenWarehouseRemainder_isAllowed() {
+        // Case 8 ordering regression: 40 from stock delivered first flips status to
+        // PARTIALLY_DELIVERED; the imported remainder must still be WAREHOUSE-deliverable
+        // because goods physically reached the warehouse (GOODS_RECEIVED event), even
+        // though the current fulfillment_status is no longer GOODS_RECEIVED.
+        TicketItemDto stockDelivered = deliveryItem(1L, "100.00", "40.00", "40.00");
+        TicketDto partiallyDelivered = stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED,
+            List.of(stockDelivered), "FULLY_PAID", FulfilmentStatus.PARTIALLY_DELIVERED,
+            DealStage.PROCUREMENT, null);
+        TicketDto fully = ticketLike(partiallyDelivered,
+            List.of(deliveryItem(1L, "100.00", "100.00", "40.00")), FulfilmentStatus.PARTIALLY_DELIVERED);
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(partiallyDelivered),
+            Optional.of(fully), Optional.of(fully));
+        // No prior WAREHOUSE delivery record — the goods-received EVENT is the signal.
+        when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
+
+        service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งของนำเข้าที่เหลือ",
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00")))), importActor);
+
+        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(3L), anyString(),
             argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0));
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
     }

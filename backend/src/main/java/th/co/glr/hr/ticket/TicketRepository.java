@@ -1143,20 +1143,6 @@ public class TicketRepository {
         return Boolean.TRUE.equals(value);
     }
 
-    public boolean hasDeliveryRecordSource(long ticketId, String source) {
-        Boolean value = jdbc.queryForObject("""
-            SELECT EXISTS (
-                SELECT 1
-                  FROM sales.delivery_record
-                 WHERE ticket_id = :ticketId AND source = :source
-            )
-            """,
-            new MapSqlParameterSource()
-                .addValue("ticketId", ticketId)
-                .addValue("source", source),
-            Boolean.class);
-        return Boolean.TRUE.equals(value);
-    }
 
     public boolean hasDeliveries(long ticketId) {
         Boolean value = jdbc.queryForObject("""
@@ -1164,6 +1150,24 @@ public class TicketRepository {
                 SELECT 1
                   FROM sales.delivery_record
                  WHERE ticket_id = :ticketId
+            )
+            """, Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
+    }
+
+    /**
+     * Whether the deal's imported goods ever physically reached OUR warehouse — a
+     * permanent fact from the GOODS_RECEIVED event, NOT the current fulfillment_status
+     * (which gets overwritten to PARTIALLY_DELIVERED/FULLY_DELIVERED once deliveries
+     * start). Used to gate WAREHOUSE-source deliveries so a stock-first partial
+     * delivery on an imported deal can't lock out the warehouse remainder (Case 8).
+     */
+    public boolean hasReceivedGoods(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM sales.ticket_event
+                 WHERE ticket_id = :ticketId AND kind = 'GOODS_RECEIVED'
             )
             """, Map.of("ticketId", ticketId), Boolean.class);
         return Boolean.TRUE.equals(value);

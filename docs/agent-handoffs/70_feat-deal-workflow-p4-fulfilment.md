@@ -331,3 +331,55 @@ and hides record-delivery absent from `/actions`.
 - In-app browser automation was blocked by the existing local runtime issue
   `Cannot redefine property: process`; the manual pass was performed directly through the mock
   API module instead.
+
+---
+
+## Opus review — PASSED with fixes (2026-07-17)
+
+Re-verified independently (not trusting Codex's self-report): re-ran the full backend
+`./mvnw -B clean verify` and frontend `npm run lint && npm test && npm run build`, code-read
+the whole diff against the Phase-4 spec + carried invariants, and walked the fulfilment flows
+in the frontend-mock browser (ticket 13 partial-delivery demo, ticket 6 credit/FROM_STOCK demo).
+
+### Bug found and fixed — Case 8 stock-first ordering lockout (correctness)
+
+`warehouseDeliveryAvailable` gated warehouse deliveries on the *current* `fulfillmentStatus`
+being `GOODS_RECEIVED`. On a **Case 8 mixed deal** (some lines from stock, remainder imported),
+recording the STOCK delivery first flips the status to `PARTIALLY_DELIVERED` — which then
+**permanently blocked the imported warehouse remainder**, because the "goods physically
+arrived" fact had been overwritten by the delivery-progress status. The seeded demo happened
+to deliver warehouse-first, so the ordering hazard was invisible in the mock.
+
+Fix: derive warehouse availability from the durable **event** (`GOODS_RECEIVED` ever emitted),
+not the mutable status.
+- `TicketRepository.hasReceivedGoods(ticketId)` — `EXISTS` on `ticket_event` kind
+  `GOODS_RECEIVED` (replaces the transient `hasDeliveryRecordSource` helper, now removed).
+- `warehouseDeliveryAvailable` returns `GOODS_RECEIVED.equals(status) || hasReceivedGoods(id)`;
+  `canRecordDelivery` uses it consistently.
+- New test `recordPartialDelivery_stockFirstThenWarehouseRemainder_isAllowed` (40 STOCK then
+  60 WAREHOUSE → `FULLY_DELIVERED`); the pre-existing completion test was re-stubbed onto
+  `hasReceivedGoods`. Mock (`hasReceivedGoods` + `warehouseAvailableFor`) aligned so
+  contract parity + the mock-browser walkthrough exercise the same rule.
+
+### Verified clean (no change needed)
+- Over-delivery rejected (409); STOCK delivery capped at `qty_from_stock`; per-line
+  `qty_delivered` CHECK `0 ≤ qty_delivered ≤ qty` (V54).
+- `deliveryGateComplete` in both `close()` and `canClose()`; hybrid legacy `GOODS_RECEIVED`
+  allowance is intentional (flagged for a Phase-5 decision, not a bug).
+- Case 7 full-stock skip sets `GOODS_RECEIVED` without an IR; owner-scoping preserved on
+  every new mutation; event-audit + `chk_event_kind` re-declaration correct.
+
+### Browser walkthrough (frontend-mock, real UI)
+- Ticket 13: delivery section `200 / 500 · 40%` per-line; `ส่งมอบครบ` (completeDelivery) →
+  `500 / 500 · 100% · ส่งมอบครบแล้ว`, remaining 300 recorded as a 2nd WAREHOUSE delivery,
+  fulfillment `FULLY_DELIVERED`, `DELIVERED` stage reached — i.e. a warehouse delivery on a
+  deal already past `GOODS_RECEIVED` (exactly the Case-8 fix path) succeeds.
+- Ticket 6: `สินค้าจากสต็อก` (FROM_STOCK) state renders; delivery section present.
+
+### Results after fixes
+- Backend: `./mvnw -B clean verify` → **505 tests, 0 failures, BUILD SUCCESS** (Flyway → V54).
+- Frontend: **lint 0 errors** (4 pre-existing warnings), **122 tests pass**, **build OK**.
+
+Verdict: **PASS.** Phase 4 is functionally complete and internally consistent. PR stays
+**draft / do-not-merge** per the program strategy; the hybrid close-gate and optional
+picked-up/customs-clearance mutations are carried into Phase 5 as explicit decisions.

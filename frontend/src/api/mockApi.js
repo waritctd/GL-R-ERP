@@ -595,15 +595,21 @@ function hasRemainingDelivery(ticket) {
   return (ticket.items ?? []).some((item) => Number(item.qtyDelivered ?? 0) < Number(item.qty ?? 0));
 }
 
-function hasWarehouseDelivery(ticketId) {
-  return (db.deliveryRecords ?? []).some((record) => record.ticketId === Number(ticketId) && record.source === 'WAREHOUSE');
+// Goods reaching the warehouse is a permanent fact (the GOODS_RECEIVED event), not the
+// mutable fulfillmentStatus — so a stock-first partial delivery can't lock out the
+// warehouse remainder (mirrors TicketService.warehouseDeliveryAvailable — Case 8 fix).
+function hasReceivedGoods(ticketId) {
+  const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+  return (ticket?.events ?? []).some((ev) => ev.kind === 'GOODS_RECEIVED');
+}
+
+function warehouseAvailableFor(ticket) {
+  return ticket.fulfillmentStatus === 'GOODS_RECEIVED' || hasReceivedGoods(ticket.id);
 }
 
 function deliveryAvailable(ticket) {
   const stockAvailable = (ticket.items ?? []).some((item) => Number(item.qtyFromStock ?? 0) > Number(item.qtyDelivered ?? 0));
-  const warehouseAvailable = ticket.fulfillmentStatus === 'GOODS_RECEIVED'
-    || (ticket.fulfillmentStatus === 'PARTIALLY_DELIVERED' && hasWarehouseDelivery(ticket.id));
-  return ticket.fulfillmentStatus === 'FROM_STOCK' || stockAvailable || warehouseAvailable;
+  return ticket.fulfillmentStatus === 'FROM_STOCK' || stockAvailable || warehouseAvailableFor(ticket);
 }
 
 function reserveStockForTicket(ticket, user, payload = {}) {
@@ -649,8 +655,7 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
       fail('ส่งจากสต็อกได้ไม่เกินจำนวนที่ประกาศว่าพร้อมจากสต็อก', 409);
     }
   }
-  if (source === 'WAREHOUSE' && !(ticket.fulfillmentStatus === 'GOODS_RECEIVED'
-      || (ticket.fulfillmentStatus === 'PARTIALLY_DELIVERED' && hasWarehouseDelivery(ticket.id)))) {
+  if (source === 'WAREHOUSE' && !warehouseAvailableFor(ticket)) {
     fail('ต้องรับสินค้าเข้าโกดังก่อนส่งจาก WAREHOUSE', 409);
   }
   const now = new Date().toISOString();

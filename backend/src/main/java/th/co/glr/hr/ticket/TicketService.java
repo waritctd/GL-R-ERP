@@ -875,9 +875,13 @@ public class TicketService {
     }
 
     private boolean warehouseDeliveryAvailable(TicketSummaryDto s, long ticketId) {
+        // Goods reaching the warehouse is a permanent fact — the current status is enough
+        // when it's still GOODS_RECEIVED, but once a delivery flips it to
+        // PARTIALLY_DELIVERED we fall back to the GOODS_RECEIVED event so a stock-first
+        // partial delivery can't wrongly block the warehouse remainder (Case 8: 40 from
+        // stock delivered first, 60 imported still to go).
         return FulfilmentStatus.GOODS_RECEIVED.equals(s.fulfillmentStatus())
-            || (FulfilmentStatus.PARTIALLY_DELIVERED.equals(s.fulfillmentStatus())
-                && tickets.hasDeliveryRecordSource(ticketId, "WAREHOUSE"));
+            || tickets.hasReceivedGoods(ticketId);
     }
 
     private static boolean hasRemainingDelivery(TicketDto ticket) {
@@ -1484,9 +1488,7 @@ public class TicketService {
         TicketSummaryDto s = ticket.summary();
         boolean stockAvailable = ticket.items().stream()
             .anyMatch(item -> nullToZero(item.qtyFromStock()).compareTo(nullToZero(item.qtyDelivered())) > 0);
-        boolean warehouseAvailable = FulfilmentStatus.GOODS_RECEIVED.equals(s.fulfillmentStatus())
-            || (FulfilmentStatus.PARTIALLY_DELIVERED.equals(s.fulfillmentStatus())
-                && tickets.hasDeliveryRecordSource(s.id(), "WAREHOUSE"));
+        boolean warehouseAvailable = warehouseDeliveryAvailable(s, s.id());
         return FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()) || stockAvailable || warehouseAvailable;
     }
 
