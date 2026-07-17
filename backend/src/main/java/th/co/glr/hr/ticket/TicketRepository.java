@@ -174,11 +174,20 @@ public class TicketRepository {
                                    String kind, String fromStatus, String toStatus,
                                    String message, String itemSnapshotJson) {
         if (toStatus != null) {
-            boolean closing = TicketStatus.CLOSED.equals(toStatus) || TicketStatus.CANCELLED.equals(toStatus);
+            // toStatus doubles as the event's "to" timeline label AND, for genuine
+            // status transitions, the ticket's new status. Deal-pipeline events
+            // (STAGE_CHANGED, MARKED_LOST, ON_HOLD, POLICY_CHANGED, …) reuse the same
+            // from/to slots to carry a sales_stage / lifecycle value — write it onto
+            // sales.ticket.status ONLY when it is a real ticket status, otherwise a
+            // stage code (e.g. QUOTE_BUYER) would violate chk_ticket_status. The
+            // updated_at / closed_at / pickup side-effects still fire for every event.
+            boolean writeStatus = TicketStatus.isValid(toStatus);
+            boolean closing = writeStatus
+                && (TicketStatus.CLOSED.equals(toStatus) || TicketStatus.CANCELLED.equals(toStatus));
             boolean isPickup = TicketEventKind.PICKED_UP.equals(kind);
             jdbc.update("""
                 UPDATE sales.ticket
-                   SET status = :status,
+                   SET status = CASE WHEN :writeStatus THEN :status ELSE status END,
                        updated_at = now(),
                        closed_at = CASE WHEN :closing THEN now() ELSE closed_at END,
                        assigned_to = CASE WHEN :isPickup THEN :actorId ELSE assigned_to END
@@ -186,6 +195,7 @@ public class TicketRepository {
                 """,
                 new MapSqlParameterSource()
                     .addValue("status", toStatus)
+                    .addValue("writeStatus", writeStatus)
                     .addValue("closing", closing)
                     .addValue("isPickup", isPickup)
                     .addValue("actorId", actorId)
