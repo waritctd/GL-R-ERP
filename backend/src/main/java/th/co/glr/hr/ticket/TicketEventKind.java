@@ -38,6 +38,10 @@ public final class TicketEventKind {
     public static final String DORMANT                = "DORMANT";
     public static final String RESUMED                = "RESUMED";
     public static final String POLICY_CHANGED         = "POLICY_CHANGED";
+    // Quotation recipient-chain lifecycle events (V52).
+    public static final String QUOTATION_SENT         = "QUOTATION_SENT";
+    public static final String QUOTATION_ACCEPTED     = "QUOTATION_ACCEPTED";
+    public static final String QUOTATION_REJECTED     = "QUOTATION_REJECTED";
 
     private TicketEventKind() {}
 }

@@ -7,9 +7,16 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { InfoTip } from '../../components/common/InfoTip.jsx';
+import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatMoney, formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
+import {
+  formatMoney,
+  formatThaiDate,
+  quotationRecipientLabel,
+  quotationStatusLabel,
+  ticketStatusLabel,
+} from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
 
@@ -28,6 +35,9 @@ const EVENT_KIND_LABEL = {
   APPROVED:           'อนุมัติ',
   REJECTED:           'ปฏิเสธ',
   QUOTATION_ISSUED:   'ออกใบเสนอราคา',
+  QUOTATION_SENT:     'ส่งใบเสนอราคา',
+  QUOTATION_ACCEPTED: 'ลูกค้ารับใบเสนอราคา',
+  QUOTATION_REJECTED: 'ลูกค้าปฏิเสธใบเสนอราคา',
   DOCUMENT_ISSUED:    'ออกใบแจ้งยอดมัดจำ',
   PRICE_REVISED:      'แก้ไขราคาที่เสนอ',
   REVISION_REQUESTED: 'ขอแก้ไข',
@@ -131,6 +141,18 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const [reviseScope, setReviseScope] = useState('QTY_OR_NOTE');
   const [reviseReason, setReviseReason] = useState('');
 
+  // Quotation recipient/terms form (Phase 2 recipient-scoped chains)
+  const [quotationModal, setQuotationModal] = useState(null); // { defaultRecipientType, amendmentRequired } | null
+  const [quotationDraft, setQuotationDraft] = useState({
+    recipientType: 'BUYER',
+    recipientLabel: '',
+    paymentTerms: '',
+    leadTime: '',
+    deliveryTerms: '',
+    validityDate: '',
+    amendmentReason: '',
+  });
+
   // Comment
   const [commentText, setCommentText] = useState('');
 
@@ -222,6 +244,16 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     setRejectReason('');
     setShowReviseForm(false);
     setReviseReason('');
+    setQuotationModal(null);
+    setQuotationDraft({
+      recipientType: 'BUYER',
+      recipientLabel: '',
+      paymentTerms: '',
+      leadTime: '',
+      deliveryTerms: '',
+      validityDate: '',
+      amendmentReason: '',
+    });
     setCommentText('');
     setDraftRaw({});
     setDraftFactoryCurr({});
@@ -387,7 +419,21 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // through the later stages: the latest quotation file, and the issued
   // ใบแจ้งยอดมัดจำ (payment track past CUSTOMER_CONFIRMED means
   // DepositNoticeService.issue has run — the deposit page then shows/downloads it).
-  const latestQuotation = quotations && quotations.length > 0 ? quotations[0] : null;
+  const sortedQuotations = [...(quotations ?? [])].sort((a, b) => new Date(b.issuedAt ?? 0) - new Date(a.issuedAt ?? 0));
+  const activeQuotations = sortedQuotations.filter((q) => !['SUPERSEDED', 'CANCELLED', 'REJECTED'].includes(q.docStatus));
+  const stageRecipientPriority = summary.salesStage === 'QUOTE_BUYER'
+    ? ['BUYER', 'OWNER', 'DESIGNER', 'UNSPECIFIED']
+    : ['DESIGNER', 'OWNER', 'BUYER', 'UNSPECIFIED'];
+  const latestQuotation = stageRecipientPriority
+    .map((recipient) => activeQuotations.find((q) => (q.recipientType ?? 'UNSPECIFIED') === recipient))
+    .find(Boolean) ?? activeQuotations[0] ?? sortedQuotations[0] ?? null;
+  const quotationGroups = ['DESIGNER', 'OWNER', 'BUYER', 'UNSPECIFIED']
+    .map((recipientType) => ({
+      recipientType,
+      label: quotationRecipientLabel(recipientType).label,
+      quotations: sortedQuotations.filter((q) => (q.recipientType ?? 'UNSPECIFIED') === recipientType),
+    }))
+    .filter((group) => group.quotations.length > 0);
   const depositNoticeIssued = ps != null && ps !== 'CUSTOMER_CONFIRMED';
 
   // 'draft' included since V50: a lightweight lead-stage deal gets its product
@@ -700,6 +746,54 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     }
   }
 
+  function openQuotationModal(recipientType = null) {
+    const defaultRecipientType = recipientType
+      ?? (summary.salesStage === 'QUOTE_BUYER' ? 'BUYER' : 'DESIGNER');
+    const chainAccepted = (quotations ?? []).some((q) =>
+      (q.recipientType ?? 'UNSPECIFIED') === defaultRecipientType && q.docStatus === 'ACCEPTED');
+    const amendmentRequired = chainAccepted || summary.paymentStatus != null;
+    setQuotationDraft({
+      recipientType: defaultRecipientType,
+      recipientLabel: '',
+      paymentTerms: '',
+      leadTime: '',
+      deliveryTerms: '',
+      validityDate: '',
+      amendmentReason: '',
+    });
+    setQuotationModal({ amendmentRequired });
+  }
+
+  async function submitQuotation() {
+    if (!quotationDraft.recipientType) {
+      showToast('error', 'กรุณาเลือกผู้รับใบเสนอราคา');
+      return;
+    }
+    if (quotationModal?.amendmentRequired && !quotationDraft.amendmentReason.trim()) {
+      showToast('error', 'กรุณาระบุเหตุผลการแก้ไขใบเสนอราคา');
+      return;
+    }
+    const payload = Object.fromEntries(Object.entries(quotationDraft).map(([key, value]) => [
+      key,
+      typeof value === 'string' && value.trim() === '' ? null : value,
+    ]));
+    await doAction(() => api.tickets.quotation(ticketId, payload), 'ออกใบเสนอราคาแล้ว');
+  }
+
+  async function markQuotation(q, action) {
+    const fn = action === 'sent'
+      ? () => api.tickets.markQuotationSent(ticketId, q.id, {})
+      : action === 'accepted'
+        ? () => api.tickets.markQuotationAccepted(ticketId, q.id, {})
+        : () => api.tickets.markQuotationRejected(ticketId, q.id, {});
+    const message = action === 'sent'
+      ? 'บันทึกว่าส่งใบเสนอราคาแล้ว'
+      : action === 'accepted'
+        ? 'บันทึกลูกค้ารับใบเสนอราคาแล้ว'
+        : 'บันทึกลูกค้าปฏิเสธใบเสนอราคาแล้ว';
+    await doAction(fn, message);
+  }
+
   async function handleDownloadRemainingInvoice() {
     setDownloadingInvoice(true);
     try {
@@ -777,7 +871,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           <>
             {can.generateQuotation && (
               <button type="button" className="secondary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.quotation(ticketId), 'ออกใบเสนอราคาแล้ว')}>
+                onClick={() => openQuotationModal()}>
                 <Icon name="fileText" size={14} />
                 {quotations && quotations.length > 0 ? 'ออกใบเสนอราคาใหม่ (Rev)' : 'ออกใบเสนอราคา'}
               </button>
@@ -1502,43 +1596,90 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             )}
           </section>
 
-          {(quotations && quotations.length > 0) && (
+          {quotationGroups.length > 0 && (
             <section className="panel">
               <div className="panel-header">
                 <h2>ใบเสนอราคา</h2>
               </div>
-              {quotations.map((q) => (
-                <div key={q.id} style={{ padding: '10px 18px', borderBottom: '1px solid var(--color-surface-subtle)', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                  <div style={{ flexShrink: 0, marginTop: 2 }}>
-                    <span style={{
-                      fontSize: 11, fontWeight: 700, borderRadius: 4, padding: '2px 7px',
-                      ...docStatusColors(q.docStatus),
-                    }}>Rev {q.quotationVersion}</span>
+              {quotationGroups.map((group) => (
+                <div key={group.recipientType} style={{ borderTop: '1px solid var(--color-surface-subtle)' }}>
+                  <div style={{ padding: '12px 18px 6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                    <h3 style={{ margin: 0, fontSize: 14 }}>{group.label}</h3>
+                    {can.generateQuotation && (
+                      <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                        disabled={actionLoading}
+                        onClick={() => openQuotationModal(group.recipientType)}>
+                        <Icon name="fileText" size={12} /> Revise
+                      </button>
+                    )}
                   </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <span style={{ fontWeight: 600, fontSize: 13 }}>{q.number}</span>
-                      <span style={{
-                        fontSize: 10, borderRadius: 3, padding: '1px 5px', fontWeight: 600,
-                        ...docStatusColors(q.docStatus),
-                      }}>{q.docStatus}</span>
-                    </div>
-                    <div style={{ fontSize: 12, color: 'var(--color-icon-muted)', marginTop: 2 }}>
-                      ยอดรวม {formatMoney(q.totalAmount)} · ออกโดย {q.issuedByName} · {formatThaiDate(q.issuedAt)}
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                    <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
-                      disabled={downloadingQuotationKey === `${q.id}-xlsx`}
-                      onClick={() => handleDownloadQuotation(q.id, q.number, 'xlsx')}>
-                      <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-xlsx` ? 'กำลังดาวน์โหลด...' : 'Excel'}
-                    </button>
-                    <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
-                      disabled={downloadingQuotationKey === `${q.id}-pdf`}
-                      onClick={() => handleDownloadQuotation(q.id, q.number, 'pdf')}>
-                      <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-pdf` ? 'กำลังดาวน์โหลด...' : 'PDF'}
-                    </button>
-                  </div>
+                  {group.quotations.map((q, index) => {
+                    const status = quotationStatusLabel(q.docStatus);
+                    const activeHead = index === 0 && !['SUPERSEDED', 'CANCELLED', 'REJECTED'].includes(q.docStatus);
+                    const canMarkSent = activeHead && hasAction('MARK_QUOTATION_SENT') && q.docStatus === 'ISSUED';
+                    const canMarkDecision = activeHead && ['ISSUED', 'SENT'].includes(q.docStatus);
+                    return (
+                      <div key={q.id} style={{ padding: '10px 18px', borderTop: '1px solid var(--color-surface-subtle)', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                        <div style={{ flexShrink: 0, marginTop: 2 }}>
+                          <span style={{
+                            fontSize: 11, fontWeight: 700, borderRadius: 4, padding: '2px 7px',
+                            ...docStatusColors(q.docStatus),
+                          }}>Rev {q.quotationVersion}</span>
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span style={{ fontWeight: 600, fontSize: 13 }}>{q.number}</span>
+                            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                            {q.recipientLabel && <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{q.recipientLabel}</span>}
+                          </div>
+                          <div style={{ fontSize: 12, color: 'var(--color-icon-muted)', marginTop: 2 }}>
+                            ยอดรวม {formatMoney(q.totalAmount)} · ออกโดย {q.issuedByName} · ออก {formatThaiDate(q.issuedAt)}
+                            {q.sentAt ? ` · ส่ง ${formatThaiDate(q.sentAt)}` : ''}
+                            {q.acceptedAt ? ` · รับ ${formatThaiDate(q.acceptedAt)}` : ''}
+                            {q.validityDate ? ` · ใช้ได้ถึง ${formatThaiDate(q.validityDate)}` : ''}
+                          </div>
+                          {(q.paymentTerms || q.leadTime || q.deliveryTerms) && (
+                            <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 4 }}>
+                              {[q.paymentTerms && `ชำระเงิน: ${q.paymentTerms}`, q.leadTime && `Lead time: ${q.leadTime}`, q.deliveryTerms && `ส่งมอบ: ${q.deliveryTerms}`].filter(Boolean).join(' · ')}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                          {canMarkSent && (
+                            <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                              disabled={actionLoading}
+                              onClick={() => markQuotation(q, 'sent')}>
+                              ส่งแล้ว
+                            </button>
+                          )}
+                          {canMarkDecision && hasAction('MARK_QUOTATION_ACCEPTED') && (
+                            <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                              disabled={actionLoading}
+                              onClick={() => markQuotation(q, 'accepted')}>
+                              รับแล้ว
+                            </button>
+                          )}
+                          {canMarkDecision && hasAction('MARK_QUOTATION_REJECTED') && (
+                            <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                              disabled={actionLoading}
+                              onClick={() => markQuotation(q, 'rejected')}>
+                              ปฏิเสธ
+                            </button>
+                          )}
+                          <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                            disabled={downloadingQuotationKey === `${q.id}-xlsx`}
+                            onClick={() => handleDownloadQuotation(q.id, q.number, 'xlsx')}>
+                            <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-xlsx` ? 'กำลังดาวน์โหลด...' : 'Excel'}
+                          </button>
+                          <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                            disabled={downloadingQuotationKey === `${q.id}-pdf`}
+                            onClick={() => handleDownloadQuotation(q.id, q.number, 'pdf')}>
+                            <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-pdf` ? 'กำลังดาวน์โหลด...' : 'PDF'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               ))}
             </section>
@@ -1609,6 +1750,78 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           )}
         </section>
       </div>
+
+      {quotationModal && (
+        <Modal
+          title="ออกใบเสนอราคา"
+          onClose={() => setQuotationModal(null)}
+          footer={(
+          <>
+            <button type="button" className="secondary-button" onClick={() => setQuotationModal(null)}>
+              ยกเลิก
+            </button>
+            <button type="button" className="primary-button" disabled={actionLoading} onClick={submitQuotation}>
+              <Icon name="fileText" size={14} />
+              {actionLoading ? 'กำลังบันทึก...' : 'ออกใบเสนอราคา'}
+            </button>
+          </>
+          )}
+        >
+          <div style={{ display: 'grid', gap: 12 }}>
+          <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+            ผู้รับใบเสนอราคา
+            <select
+              value={quotationDraft.recipientType}
+              onChange={(e) => {
+                const recipientType = e.target.value;
+                const chainAccepted = (quotations ?? []).some((q) =>
+                  (q.recipientType ?? 'UNSPECIFIED') === recipientType && q.docStatus === 'ACCEPTED');
+                setQuotationDraft((draft) => ({ ...draft, recipientType }));
+                setQuotationModal((modal) => ({ ...(modal ?? {}), amendmentRequired: chainAccepted || summary.paymentStatus != null }));
+              }}
+            >
+              <option value="DESIGNER">ผู้ออกแบบ</option>
+              <option value="OWNER">เจ้าของ</option>
+              <option value="BUYER">ผู้ซื้อ-ผู้รับเหมา</option>
+            </select>
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+            ชื่อผู้รับ/บริษัท
+            <input value={quotationDraft.recipientLabel}
+              onChange={(e) => setQuotationDraft((draft) => ({ ...draft, recipientLabel: e.target.value }))} />
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+            เงื่อนไขชำระเงิน
+            <textarea rows={2} value={quotationDraft.paymentTerms}
+              onChange={(e) => setQuotationDraft((draft) => ({ ...draft, paymentTerms: e.target.value }))} />
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              Lead time
+              <input value={quotationDraft.leadTime}
+                onChange={(e) => setQuotationDraft((draft) => ({ ...draft, leadTime: e.target.value }))} />
+            </label>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              ใช้ได้ถึง
+              <input type="date" value={quotationDraft.validityDate}
+                onChange={(e) => setQuotationDraft((draft) => ({ ...draft, validityDate: e.target.value }))} />
+            </label>
+          </div>
+          <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+            เงื่อนไขส่งมอบ
+            <textarea rows={2} value={quotationDraft.deliveryTerms}
+              onChange={(e) => setQuotationDraft((draft) => ({ ...draft, deliveryTerms: e.target.value }))} />
+          </label>
+          {quotationModal?.amendmentRequired && (
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              เหตุผลการแก้ไข
+              <textarea rows={3} value={quotationDraft.amendmentReason}
+                onChange={(e) => setQuotationDraft((draft) => ({ ...draft, amendmentReason: e.target.value }))} />
+            </label>
+          )}
+          </div>
+        </Modal>
+      )}
 
       <ConfirmDialog
         open={confirm?.kind === 'deleteAttachment'}

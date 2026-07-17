@@ -222,13 +222,108 @@ recipient groups from a mocked ticket and hides mark-actions absent from `/actio
 5. Fill THIS file's sections below. Commit on the branch. Merge NOTHING.
 
 ## Files changed
-(fill in)
+- Backend migration/model/API:
+  - `backend/src/main/resources/db/migration/V52__quotation_recipient_and_terms.sql`
+  - `backend/src/main/java/th/co/glr/hr/ticket/QuotationRecipient.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/QuotationStatus.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/GenerateQuotationRequest.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/QuotationDto.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/TicketEventKind.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/TicketController.java`
+- Backend persistence/service/tests:
+  - `backend/src/main/java/th/co/glr/hr/ticket/TicketRepository.java`
+  - `backend/src/main/java/th/co/glr/hr/ticket/TicketService.java`
+  - `backend/src/test/java/th/co/glr/hr/ticket/TicketServiceTest.java`
+  - `backend/src/test/java/th/co/glr/hr/ticket/TicketRepositoryIntegrationTest.java`
+- Frontend API/mock/UI/tests:
+  - `frontend/src/api/routes.js`
+  - `frontend/src/api/hrApi.js`
+  - `frontend/src/api/mockApi.js`
+  - `frontend/src/utils/format.js`
+  - `frontend/src/features/tickets/TicketDetailPage.jsx`
+  - `frontend/src/features/tickets/TicketDetailPage.test.jsx`
 
 ## Commands run
-(fill in)
+- `git switch -c feat/deal-workflow-p2-quotations`
+- `cd backend && ./mvnw -q -Dtest=TicketServiceTest test`
+- `cd backend && ./mvnw -q test-compile`
+- `cd backend && ./mvnw -q -Dtest=TicketRepositoryIntegrationTest test`
+  - First sandboxed run failed because Testcontainers could not access Docker.
+- `cd frontend && npm run lint`
+- `cd frontend && npm test -- --run`
+- `cd frontend && npm run build`
+- `cd backend && ./mvnw -B clean verify`
+  - Reran with approved Docker/Testcontainers escalation.
+- `cd frontend && npm run dev -- --host 127.0.0.1 --port 5200`
+  - Failed because port 5200 was already in use.
+- `cd frontend && npm run dev -- --host 127.0.0.1 --port 5201`
+  - Started successfully for manual attempt, then stopped.
 
 ## Tests / build results
-(fill in)
+- Backend focused test: `TicketServiceTest` passed.
+- Backend test compile: passed.
+- Backend full verify: `BUILD SUCCESS`; Testcontainers/Flyway ran successfully with V52 applied.
+  - Reported summary: 491 tests run, 0 failures, 0 errors, 0 skipped.
+- Frontend lint: passed with 0 errors and 4 pre-existing hook dependency warnings outside this work:
+  - `AttendancePage.jsx` missing `loadPunches`
+  - `CommissionPage.jsx` missing `load`, `canCeoReview`, `canReviewRecord`
+  - `PayrollPage.jsx` missing `load`
+- Frontend tests: 27 files passed, 120 tests passed.
+  - Added component coverage for rendering DESIGNER/OWNER quotation recipient groups and hiding mark actions when `/actions` omits them.
+- Frontend build: passed.
+- Manual frontend-mock pass: attempted but not completed because the in-app browser runtime failed with `Cannot redefine property: process` after `js_reset`. Dev server started on `http://127.0.0.1:5201/` and was stopped afterward.
 
 ## Known risks / questions for Opus review
-(fill in)
+- Manual browser verification is the main gap due to the local browser connector failure. The intended flows are covered by backend service/integration tests, mock parity, frontend component tests, and build, but were not browser-driven.
+- `generateQuotation` still requires sales owner + approved/quotation_issued + ACTIVE and still totals from approved prices. CEO is allowed only for mark sent/accepted/rejected, not for generation.
+- Supersession now skips ACCEPTED/REJECTED/CANCELLED rows by design, while the new version still points to the previous chain head via `parent_quotation_id`. Please review whether accepted rows should remain non-superseded forever or whether a later phase wants an explicit amendment marker.
+- Cockpit "latest quotation" now chooses an active quotation by stage-recipient priority and falls back to newest overall. Review UX expectations for stages between OWNER_SIGNOFF/AWAITING_BUYER where designer vs owner relevance can be business-specific.
+
+---
+
+## Opus review (2026-07-17) — PASSED, no fixes required
+
+Independently re-verified: backend `./mvnw -B clean verify` → **BUILD SUCCESS, 491 tests**
+(Testcontainers ran V52 incl. the unique-index swap and doc_status CHECK widen); frontend
+lint 0 errors · **120/120 tests** · build PASS. Codex's self-report was accurate.
+
+**Code review against the invariants — all held:**
+- **CEO price gate untouched (invariant 2).** `generateQuotation` still requires SALES + owner
+  + `QUOTATION_ALLOWED_STATUSES` + `requireActive`; total still `approvedPrice × qty`; frozen
+  into the V49 snapshot. Tests `generateQuotation_rejectsCeoRole` / `_rejectsNonOwnerSales` /
+  `_rejectsWrongStatus` survived and were updated for the new signature. No unapproved-price
+  path exists. Recipient differences live in terms fields, not prices — exactly as specified.
+- **Per-recipient supersession** (`TicketRepository.createQuotation`): supersedes only the
+  same `recipient_type` chain and only DRAFT/ISSUED/SENT rows — ACCEPTED/REJECTED/CANCELLED
+  stay as history; `parent_quotation_id` points to the prior chain head; version is
+  `MAX(version) WHERE ticket+recipient` + 1. Integration test asserts the
+  `(ticket, recipient, version)` unique index rejects dup pairs and allows same version across
+  recipients.
+- **Owner scoping / lifecycle / sales_manager**: markQuotationSent/Accepted/Rejected gated by
+  `canManageQuotation` (sales owner OR ceo — NOT sales_manager), `requireActive`, and legal
+  source-state (ISSUED/SENT → ACCEPTED/REJECTED; ISSUED → SENT). Tests assert otherSales 403,
+  sales_manager 403, illegal-transition 409, ON_HOLD 409.
+- Amendment reason required once a chain has an ACCEPTED version or `paymentStatus != null`;
+  400 without it, recorded in the QUOTATION_ISSUED event. New event kinds
+  QUOTATION_SENT/ACCEPTED/REJECTED in V52's chk_event_kind re-declaration.
+- Actions API extended (`addQuotationActions`, `GENERATE_QUOTATION` now requires
+  recipientType); mock mirrors all of it (contract.test.js green).
+
+**Browser verification (the gap Codex flagged) — completed by Opus on ticket PR-2026-0006
+(seeded with a DESIGNER + an OWNER chain):**
+- Two coexisting recipient groups render — ผู้ออกแบบ (QT-2026-0001, ออกแล้ว, ISSUED → offers
+  ส่งแล้ว/รับแล้ว/ปฏิเสธ) and เจ้าของ (QT-2026-0101, ส่งแล้ว, SENT → offers only รับแล้ว/ปฏิเสธ:
+  correct legal-transition gating).
+- Accepted the owner quotation → badge → รับแล้ว, accepted date set, timeline "ลูกค้ารับ
+  ใบเสนอราคา", download-only actions remain; **designer chain untouched** (no sibling
+  auto-reject).
+- Revise on the now-ACCEPTED owner chain opened the recipient/terms modal and blocked save
+  without a reason ("กรุณาระบุเหตุผลการแก้ไขใบเสนอราคา") — amendment gate верified end-to-end.
+- CEO gate in the UI: a draft deal (แบบร่าง) offers NO ออกใบเสนอราคา action.
+
+**Minor notes (accepted, not blocking):** `markQuotationStatus` uses a `issued_at = issued_at`
+no-op to keep the dynamic SET clause valid — harmless. The quotation list ORDER BY moved to
+`issued_at DESC` (from version DESC) to interleave chains sensibly for the grouped UI.
+
+**Verdict: Phase 2 accepted, no code changes needed.** Next: Phase 3 handoff
+`69_feat-deal-workflow-p3-payments.md` (payment ledger + credit/overdue + pay-before-delivery).

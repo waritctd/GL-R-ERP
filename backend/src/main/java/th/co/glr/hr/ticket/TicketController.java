@@ -107,9 +107,41 @@ public class TicketController {
     }
 
     @PostMapping("/{id}/quotation")
-    TicketDetailResponse quotation(@PathVariable long id, HttpSession session) {
+    TicketDetailResponse quotation(@PathVariable long id,
+                                   @Valid @RequestBody GenerateQuotationRequest request,
+                                   HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.generateQuotation(id, user));
+        return new TicketDetailResponse(ticketService.generateQuotation(id, request, user));
+    }
+
+    @PostMapping("/{id}/quotations/{quotationId}/sent")
+    TicketDetailResponse markQuotationSent(@PathVariable long id,
+                                           @PathVariable long quotationId,
+                                           @RequestBody(required = false) NoteRequest request,
+                                           HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(
+            ticketService.markQuotationSent(id, quotationId, request == null ? null : request.note(), user));
+    }
+
+    @PostMapping("/{id}/quotations/{quotationId}/accepted")
+    TicketDetailResponse markQuotationAccepted(@PathVariable long id,
+                                               @PathVariable long quotationId,
+                                               @RequestBody(required = false) NoteRequest request,
+                                               HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(
+            ticketService.markQuotationAccepted(id, quotationId, request == null ? null : request.note(), user));
+    }
+
+    @PostMapping("/{id}/quotations/{quotationId}/rejected")
+    TicketDetailResponse markQuotationRejected(@PathVariable long id,
+                                               @PathVariable long quotationId,
+                                               @RequestBody(required = false) NoteRequest request,
+                                               HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(
+            ticketService.markQuotationRejected(id, quotationId, request == null ? null : request.note(), user));
     }
 
     @GetMapping("/{id}/quotations/{quotationId}/file")

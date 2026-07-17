@@ -151,6 +151,63 @@ describe('TicketDetailPage', () => {
     expect(screen.queryByRole('button', { name: /^อนุมัติ$/ })).toBeNull();
   });
 
+  it('renders quotation recipient groups and hides mark actions absent from api.tickets.actions', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        quotations: [
+          {
+            id: 9001,
+            ticketId: 701,
+            number: 'QT-2026-0901',
+            issuedById: 1,
+            issuedByName: 'สมชาย ใจดี',
+            issuedAt: '2026-07-03T09:00:00.000Z',
+            totalAmount: 1000,
+            currency: 'THB',
+            quotationVersion: 1,
+            docStatus: 'ISSUED',
+            recipientType: 'DESIGNER',
+            recipientLabel: 'Design Studio',
+          },
+          {
+            id: 9002,
+            ticketId: 701,
+            number: 'QT-2026-0902',
+            issuedById: 1,
+            issuedByName: 'สมชาย ใจดี',
+            issuedAt: '2026-07-04T09:00:00.000Z',
+            totalAmount: 1200,
+            currency: 'THB',
+            quotationVersion: 1,
+            docStatus: 'SENT',
+            recipientType: 'OWNER',
+            recipientLabel: 'Owner Co.',
+            sentAt: '2026-07-04T10:00:00.000Z',
+          },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE',
+        salesStage: 'QUOTE_DESIGN_SIDE',
+        paymentStatus: null,
+        fulfillmentStatus: null,
+        status: 'price_proposed',
+      },
+      availableActions: [],
+    });
+
+    renderTicketDetailPage();
+
+    expect(await screen.findByText('ผู้ออกแบบ')).not.toBeNull();
+    expect(screen.getByText('เจ้าของ')).not.toBeNull();
+    expect(screen.getByText('QT-2026-0901')).not.toBeNull();
+    expect(screen.getByText('QT-2026-0902')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'ส่งแล้ว' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'รับแล้ว' })).toBeNull();
+  });
+
   it('comment posts and invalidates the tickets-list/dashboard/notifications caches', async () => {
     const { queryClient } = renderTicketDetailPage();
     // Seed cache entries so invalidateQueries has something to mark stale —

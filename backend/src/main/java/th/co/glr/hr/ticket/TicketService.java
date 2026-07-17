@@ -218,9 +218,17 @@ public class TicketService {
     }
 
     @Transactional
-    public TicketDto generateQuotation(long ticketId, UserPrincipal actor) {
+    public TicketDto generateQuotation(long ticketId, GenerateQuotationRequest request, UserPrincipal actor) {
+        if (request == null || request.recipientType() == null || request.recipientType().isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุผู้รับใบเสนอราคา");
+        }
+        String recipientType = request.recipientType().trim();
+        if (!QuotationRecipient.isValid(recipientType) || QuotationRecipient.UNSPECIFIED.equals(recipientType)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown quotation recipient '" + recipientType + "'");
+        }
         requireRole(actor, SALES_ROLES);
-        TicketSummaryDto s = requireTicket(ticketId).summary();
+        TicketDto full = requireTicket(ticketId);
+        TicketSummaryDto s = full.summary();
         requireActive(s);
         String fromStatus = s.status();
         if (!QUOTATION_ALLOWED_STATUSES.contains(fromStatus)) {
@@ -230,7 +238,13 @@ public class TicketService {
         if (s.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Only the ticket owner can generate a quotation");
         }
-        TicketDto full = requireTicket(ticketId);
+        boolean acceptedInChain = full.quotations().stream()
+            .anyMatch(q -> recipientType.equals(q.recipientType()) && QuotationStatus.ACCEPTED.equals(q.docStatus()));
+        boolean amendmentReasonRequired = acceptedInChain || s.paymentStatus() != null;
+        if (amendmentReasonRequired && (request.amendmentReason() == null || request.amendmentReason().isBlank())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ต้องระบุเหตุผลการแก้ไขใบเสนอราคาหลังลูกค้ายืนยันหรือมีใบที่ accepted แล้ว");
+        }
         BigDecimal total = full.items().stream()
             .map(item -> {
                 BigDecimal price = item.approvedPrice() != null ? item.approvedPrice() : BigDecimal.ZERO;
@@ -238,7 +252,9 @@ public class TicketService {
             })
             .reduce(BigDecimal.ZERO, BigDecimal::add);
         String number = tickets.nextQuotationCode();
-        QuotationDto created = tickets.createQuotation(ticketId, number, actor.id(), total);
+        QuotationDto created = tickets.createQuotation(ticketId, number, actor.id(), total, recipientType,
+            blankToNull(request.recipientLabel()), blankToNull(request.paymentTerms()),
+            blankToNull(request.leadTime()), blankToNull(request.deliveryTerms()), request.validityDate());
 
         // Freeze this quotation at issue time (V49): item data + customer/project header,
         // in the same transaction as createQuotation, so a later ticket edit or customer-
@@ -262,9 +278,67 @@ public class TicketService {
             customer != null ? customer.phone() : null,
             s.projectName());
 
+        String eventMessage = "recipient_type=" + recipientType + ", version=" + created.quotationVersion()
+            + (request.amendmentReason() != null && !request.amendmentReason().isBlank()
+                ? " — amendment: " + request.amendmentReason().trim()
+                : "");
         tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.QUOTATION_ISSUED, fromStatus, TicketStatus.QUOTATION_ISSUED, null);
+            TicketEventKind.QUOTATION_ISSUED, fromStatus, TicketStatus.QUOTATION_ISSUED, eventMessage);
+        if (QuotationRecipient.DESIGNER.equals(recipientType) || QuotationRecipient.OWNER.equals(recipientType)) {
+            autoAdvanceStage(s, DealStage.QUOTE_DESIGN_SIDE, actor);
+        } else if (QuotationRecipient.BUYER.equals(recipientType)) {
+            autoAdvanceStage(s, DealStage.QUOTE_BUYER, actor);
+        }
         return requireTicket(ticketId);
+    }
+
+    @Transactional
+    public TicketDto markQuotationSent(long ticketId, long quotationId, String note, UserPrincipal actor) {
+        return markQuotationLifecycle(ticketId, quotationId, QuotationStatus.SENT,
+            TicketEventKind.QUOTATION_SENT, note, actor);
+    }
+
+    @Transactional
+    public TicketDto markQuotationAccepted(long ticketId, long quotationId, String note, UserPrincipal actor) {
+        return markQuotationLifecycle(ticketId, quotationId, QuotationStatus.ACCEPTED,
+            TicketEventKind.QUOTATION_ACCEPTED, note, actor);
+    }
+
+    @Transactional
+    public TicketDto markQuotationRejected(long ticketId, long quotationId, String note, UserPrincipal actor) {
+        return markQuotationLifecycle(ticketId, quotationId, QuotationStatus.REJECTED,
+            TicketEventKind.QUOTATION_REJECTED, note, actor);
+    }
+
+    private TicketDto markQuotationLifecycle(long ticketId, long quotationId, String targetStatus,
+                                             String eventKind, String note, UserPrincipal actor) {
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
+        requireQuotationWriteAccess(s, actor);
+        requireActive(s);
+        QuotationDto quotation = ticket.quotations().stream()
+            .filter(q -> q.id() == quotationId)
+            .findFirst()
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Quotation not found"));
+        if (!legalQuotationTransition(quotation.docStatus(), targetStatus)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Cannot mark quotation " + targetStatus + " from " + quotation.docStatus());
+        }
+        tickets.markQuotationStatus(ticketId, quotationId, targetStatus);
+        String message = quotation.number() + " (" + quotation.recipientType() + ")"
+            + (note != null && !note.isBlank() ? " — " + note.trim() : "");
+        tickets.addEvent(ticketId, actor.id(), actor.name(), eventKind, s.status(), s.status(), message);
+        return requireTicket(ticketId);
+    }
+
+    private boolean legalQuotationTransition(String currentStatus, String targetStatus) {
+        if (QuotationStatus.SENT.equals(targetStatus)) {
+            return QuotationStatus.ISSUED.equals(currentStatus) || QuotationStatus.SENT.equals(currentStatus);
+        }
+        if (QuotationStatus.ACCEPTED.equals(targetStatus) || QuotationStatus.REJECTED.equals(targetStatus)) {
+            return QuotationStatus.ISSUED.equals(currentStatus) || QuotationStatus.SENT.equals(currentStatus);
+        }
+        return false;
     }
 
     // Renders the quotation from its issue-time snapshot when one exists (V49); falls back
@@ -730,6 +804,12 @@ public class TicketService {
         }
     }
 
+    private void requireQuotationWriteAccess(TicketSummaryDto s, UserPrincipal actor) {
+        if (!canManageQuotation(s, actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+    }
+
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s;
     }
@@ -890,6 +970,7 @@ public class TicketService {
             addOperationalActions(actions, s, actor);
             addStageActions(actions, s, actor);
             addPolicyActions(actions, s, actor);
+            addQuotationActions(actions, ticket, actor);
             if (canDealOwnership(s, actor)) {
                 actions.add(new TicketActionDto("MARK_LOST", "lifecycle", "เสียงาน", List.of("reason")));
                 actions.add(new TicketActionDto("PLACE_ON_HOLD", "lifecycle", "พักดีลไว้"));
@@ -924,7 +1005,8 @@ public class TicketService {
             actions.add(new TicketActionDto("OVERRIDE_ITEM_PRICE", "operational", "แก้ไขราคาด้วยตนเอง", List.of("itemId", "manualPrice")));
         }
         if (canGenerateQuotation(s, actor)) {
-            actions.add(new TicketActionDto("GENERATE_QUOTATION", "doc", "ออกใบเสนอราคา"));
+            actions.add(new TicketActionDto("GENERATE_QUOTATION", "doc", "ออกใบเสนอราคา",
+                List.of("recipientType")));
         }
         if (canConfirmCustomer(s, actor)) actions.add(new TicketActionDto("CONFIRM_CUSTOMER", "payment", "ลูกค้ายืนยัน"));
         if (canCreateDepositNotice(s, actor)) actions.add(new TicketActionDto("ISSUE_DEPOSIT_NOTICE", "doc", "ออกใบแจ้งมัดจำ"));
@@ -973,6 +1055,30 @@ public class TicketService {
         }
     }
 
+    private void addQuotationActions(List<TicketActionDto> actions, TicketDto ticket, UserPrincipal actor) {
+        if (!canManageQuotation(ticket.summary(), actor)) {
+            return;
+        }
+        boolean canMarkSent = ticket.quotations().stream()
+            .anyMatch(q -> legalQuotationTransition(q.docStatus(), QuotationStatus.SENT));
+        boolean canMarkAccepted = ticket.quotations().stream()
+            .anyMatch(q -> legalQuotationTransition(q.docStatus(), QuotationStatus.ACCEPTED));
+        boolean canMarkRejected = ticket.quotations().stream()
+            .anyMatch(q -> legalQuotationTransition(q.docStatus(), QuotationStatus.REJECTED));
+        if (canMarkSent) {
+            actions.add(new TicketActionDto("MARK_QUOTATION_SENT", "doc", "บันทึกว่าส่งใบเสนอราคาแล้ว",
+                List.of("quotationId")));
+        }
+        if (canMarkAccepted) {
+            actions.add(new TicketActionDto("MARK_QUOTATION_ACCEPTED", "doc", "บันทึกลูกค้ารับใบเสนอราคา",
+                List.of("quotationId")));
+        }
+        if (canMarkRejected) {
+            actions.add(new TicketActionDto("MARK_QUOTATION_REJECTED", "doc", "บันทึกลูกค้าปฏิเสธใบเสนอราคา",
+                List.of("quotationId")));
+        }
+    }
+
     private boolean canSubmit(TicketSummaryDto s, UserPrincipal actor) {
         return SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id()
             && TicketStatus.DRAFT.equals(s.status()) && s.itemCount() > 0;
@@ -981,6 +1087,11 @@ public class TicketService {
     private boolean canGenerateQuotation(TicketSummaryDto s, UserPrincipal actor) {
         return SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id()
             && QUOTATION_ALLOWED_STATUSES.contains(s.status());
+    }
+
+    private boolean canManageQuotation(TicketSummaryDto s, UserPrincipal actor) {
+        return CEO_ROLES.contains(actor.role())
+            || (SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id());
     }
 
     private boolean canConfirmCustomer(TicketSummaryDto s, UserPrincipal actor) {
