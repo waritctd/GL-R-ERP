@@ -29,7 +29,25 @@
       "withdrawn": [
         "UX-01"
       ],
-      "date": "2026-07-18"
+      "date": "2026-07-18",
+      "phaseB": {
+        "branch": "fix/ux-audit-phase-2",
+        "status": "in progress",
+        "fixed": [
+          "UX-09",
+          "UX-07",
+          "UX-27",
+          "UX-12"
+        ],
+        "remaining": [
+          "UX-08",
+          "UX-03",
+          "UX-04"
+        ],
+        "newFindings": [
+          "UX-37"
+        ]
+      }
     }
   },
   "findings": [
@@ -213,7 +231,10 @@
       ],
       "validation": "Delete a product on /price-import; verify the styled dialog appears and cancel aborts.",
       "effort": "S",
-      "confidence": "High"
+      "confidence": "High",
+      "fixed": true,
+      "fixedIn": "899ade1",
+      "fixNote": "window.confirm replaced with the branded ConfirmDialog (tone=danger). No native confirm/alert/prompt remains in frontend/src. Verified live."
     },
     {
       "id": "UX-08",
@@ -264,7 +285,10 @@
       ],
       "validation": "As HR open an employee detail; confirm salary + sensitive tab render; confirm a non-privileged role does not.",
       "effort": "S",
-      "confidence": "Medium"
+      "confidence": "Medium",
+      "fixed": true,
+      "fixedIn": "899ade1",
+      "fixNote": "canViewSensitiveEmployeeData defined as [hr], mirroring EmployeeController requireAnyRole(hr). Verified live: salary + populated sensitive tab visible to HR."
     },
     {
       "id": "UX-10",
@@ -340,7 +364,10 @@
       ],
       "validation": "Open the create modal; confirm required fields are marked before any submit.",
       "effort": "S",
-      "confidence": "High"
+      "confidence": "High",
+      "fixed": true,
+      "fixedIn": "f8b95ee",
+      "fixNote": "required prop applied where the zod schema unconditionally requires the field. Verified live: markers + aria-required present before any submit."
     },
     {
       "id": "UX-13",
@@ -704,7 +731,10 @@
       ],
       "validation": "Inspect a failed field's DOM for the aria attributes across several forms.",
       "effort": "M",
-      "confidence": "Medium"
+      "confidence": "Medium",
+      "fixed": true,
+      "fixedIn": "f8b95ee",
+      "fixNote": "FormField now auto-injects aria-invalid / aria-describedby / aria-required via safe id-matching, merging rather than clobbering. Verified live: 3/3 invalid fields point at real error elements."
     },
     {
       "id": "UX-28",
@@ -944,6 +974,30 @@
       "validation": "Render a diacritic-heavy Thai string (e.g. ที่ปรึกษาการเงิน, ผู้จัดการฝ่าย) at every scale step on light and muted backgrounds; inspect for clipping/crowding; re-check at 200% zoom.",
       "effort": "M",
       "confidence": "Medium"
+    },
+    {
+      "id": "UX-37",
+      "title": "Change-password form accepts an EMPTY new password client-side (schema guard omitted)",
+      "severity": "P3",
+      "category": "Forms / Validation",
+      "route": "ChangePasswordModal (forced password gate)",
+      "viewport": "Desktop + Mobile",
+      "role": "all",
+      "frequency": "Edge case",
+      "evidence": [],
+      "observed": "In ChangePasswordModal the zod schema declares newPassword as a bare z.string() with no .min(1) — unlike currentPassword and confirmPassword, which both carry .min(1). Every superRefine check (length, mismatch, reuse) is additionally guarded by `data.newPassword.length > 0`, so all of them are skipped when the field is empty. Verified by parsing the schema directly: {currentPassword:\"oldpass123\", newPassword:\"\", confirmPassword:\"x\"} returns success=true, while a short non-empty password is correctly rejected. Surfaced while marking required fields for UX-12.",
+      "impact": "A user can submit the change-password form with an empty new password and pass client validation. The server does reject it (mockApi and the Java service both enforce a minimum length), so no weak password is ever set — but the user hits a raw server error banner instead of an inline field error, and this happens on the FORCED password-change gate, i.e. at a security checkpoint where a confusing failure is worst. The asymmetry with confirmPassword makes this look like an omission rather than a deliberate choice.",
+      "root_cause": "Missing .min(1) on newPassword, combined with length>0 guards on every superRefine rule.",
+      "principle": "Error prevention; consistency (the sibling fields are guarded)",
+      "recommendation": "Add .min(1) to newPassword with a Thai required message, matching currentPassword/confirmPassword. Re-check the superRefine guards afterwards so the length/mismatch/reuse rules still fire correctly. Then mark the field required in the UI (deferred from UX-12 for exactly this reason).",
+      "acceptance": [
+        "Submitting an empty new password shows an inline required error, not a server error.",
+        "The field carries a required marker and aria-required.",
+        "Short/mismatched/reused passwords still produce their existing specific messages."
+      ],
+      "validation": "Parse the schema with an empty newPassword and expect success=false; then drive the forced gate and confirm an inline error.",
+      "effort": "XS",
+      "confidence": "High"
     }
   ]
 }
