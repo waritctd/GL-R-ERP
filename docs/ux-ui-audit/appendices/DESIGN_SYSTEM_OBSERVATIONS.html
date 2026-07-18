@@ -1,0 +1,96 @@
+<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Design-System Observations</title><style>
+*{box-sizing:border-box}
+:root{--ink:#0f172a;--ink2:#334155;--muted:#64748b;--faint:#94a3b8;--bg:#f6f8fb;--surface:#fff;--border:#e6eaf0;--brand:#4f46e5;--brand2:#6366f1;--radius:12px}
+html{scroll-behavior:smooth}
+body{margin:0;font-family:'Sarabun',system-ui,-apple-system,'Segoe UI',sans-serif;color:var(--ink);background:var(--bg);line-height:1.6;font-size:15px}
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+header.hero{background:linear-gradient(135deg,#111827,#312e81);color:#fff;padding:48px 0 40px}
+header.hero .wrap{padding:0 24px}
+.hero h1{font-size:30px;margin:0 0 6px;font-weight:800;letter-spacing:-.5px}
+.hero .sub{color:#c7d2fe;font-size:16px;margin:0 0 18px}
+.hero .metaline{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13px;color:#e0e7ff}
+.hero .metaline b{color:#fff;font-weight:600}
+nav.toc{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--border);padding:10px 0}
+nav.toc .wrap{display:flex;flex-wrap:wrap;gap:6px}
+nav.toc a{font-size:12.5px;color:var(--ink2);text-decoration:none;padding:5px 10px;border-radius:999px;border:1px solid var(--border);background:#fff;white-space:nowrap}
+nav.toc a:hover{border-color:var(--brand);color:var(--brand)}
+main{padding:32px 0 80px}
+section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:26px 30px;margin:0 0 22px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+section>h2{font-size:22px;margin:0 0 4px;font-weight:800;letter-spacing:-.3px;scroll-margin-top:60px}
+section>.lead{color:var(--muted);margin:0 0 18px;font-size:14px}
+h3{font-size:17px;margin:26px 0 10px;font-weight:700}
+h4{font-size:15px;margin:18px 0 8px;font-weight:700;color:var(--ink2)}
+p{margin:0 0 12px}
+a{color:var(--brand)}
+table{width:100%;border-collapse:collapse;margin:12px 0 18px;font-size:13.5px}
+th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--border);vertical-align:top}
+th{background:#f8fafc;font-weight:700;color:var(--ink2);font-size:12.5px;text-transform:uppercase;letter-spacing:.03em}
+tr:hover td{background:#fbfcff}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:700;letter-spacing:.02em}
+.rate{display:inline-flex;align-items:center;gap:6px;font-weight:700}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:1fr 1fr}
+.g4{grid-template-columns:repeat(4,1fr)}
+.card{border:1px solid var(--border);border-radius:10px;padding:14px 16px;background:#fbfcff}
+.card .n{font-size:26px;font-weight:800}
+.card .l{font-size:12.5px;color:var(--muted)}
+.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:14px 0}
+.kpi{border:1px solid var(--border);border-radius:10px;padding:12px;text-align:center;background:#fff}
+.kpi .v{font-size:24px;font-weight:800}
+.kpi .k{font-size:12px;color:var(--muted)}
+.finding{border:1px solid var(--border);border-left-width:5px;border-radius:10px;padding:18px 20px;margin:16px 0;background:#fff;scroll-margin-top:60px}
+.finding h3{margin:0 0 10px;font-size:16.5px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.finding h3 .fid{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--muted)}
+.meta-row{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;color:var(--muted);margin:0 0 12px;padding-bottom:12px;border-bottom:1px dashed var(--border)}
+.meta-row b{color:var(--ink2)}
+.finding dl{display:grid;grid-template-columns:150px 1fr;gap:4px 14px;margin:0}
+.finding dt{font-weight:700;color:var(--ink2);font-size:13px}
+.finding dd{margin:0;font-size:13.8px}
+.finding ul{margin:4px 0;padding-left:20px}
+.finding .ev{margin-top:12px}
+.finding .ev img{max-width:100%;border:1px solid var(--border);border-radius:8px;margin-top:6px;display:block}
+.thumb{max-width:340px}
+figure{margin:0 0 14px}
+figure img{width:100%;border:1px solid var(--border);border-radius:8px;display:block}
+figcaption{font-size:12px;color:var(--muted);margin-top:6px}
+.gallery{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.pill{padding:2px 8px;border-radius:6px;font-size:11.5px;font-weight:600;background:#eef2ff;color:#4338ca}
+.ok{color:#15803d}.warn{color:#b45309}.bad{color:#b91c1c}
+.callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:13.5px}
+.callout.info{background:#eff6ff;border:1px solid #bfdbfe}
+.callout.warn{background:#fffbeb;border:1px solid #fbbf24}
+ul.clean{list-style:none;padding:0;margin:0}
+ul.clean li{padding:6px 0;border-bottom:1px solid var(--border)}
+ul.clean li:last-child{border:0}
+code{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;background:#f1f5f9;padding:1px 5px;border-radius:4px}
+footer{color:var(--muted);font-size:12.5px;text-align:center;padding:30px 0}
+@media(max-width:820px){.g2,.g4,.kpis,.gallery{grid-template-columns:1fr 1fr}.finding dl{grid-template-columns:1fr}.hero h1{font-size:24px}}
+@media(max-width:520px){.g4,.kpis,.gallery{grid-template-columns:1fr}}
+@media print{nav.toc{display:none}section{break-inside:avoid;box-shadow:none}}
+</style></head><body><header class="hero"><div class="wrap"><h1>Design-System Observations</h1><p class="sub"><a href="../UX_UI_AUDIT_REPORT.html" style="color:#c7d2fe">← Back to main report</a> · GL&amp;R-ERP UX/UI Audit · 2026-07-18</p></div></header><main><div class="wrap">
+<section><h2>Tokens (index.css @theme static)</h2>
+<h4>Color</h4><p>Brand <code>--color-primary #4f46e5</code>/<code>-hover #6366f1</code>, accent <code>#14b8a6</code>. Semantic sets for success/warning/danger/info each with fg/bg/border. Deal-pipeline phase accents <code>--color-phase-1..5</code>. ~90 flat color vars; neutrals + surfaces + a text ramp (ink → faint). Sidebar <code>#0b1220</code>. <b>Light only</b> (no dark scheme).</p>
+<h4>Type</h4><p>Sarabun / system; sizes 11–34px (px, not rem); weights hardcoded inline (no weight tokens).</p>
+<h4>Spacing / radius / shadow</h4><p>4px base, <code>--space-1..8</code>; radius sm3/md8/lg20/pill999; shadows sm/md/lg + focus-ring + inset-active.</p>
+<h4>Breakpoints</h4><p>No tokens — hardcoded literals (720 mobile, 721–1040 icon-rail, 1040, 900 ticket-detail). <code>useIsMobile</code> mirrors 720px.</p>
+</section>
+<section><h2>Legacy CSS (styles.css ≈ 2,100 lines, @layer legacy)</h2>
+<p>Still styles: reset/base (global input min-height 40px, label grid), auth, app-shell/sidebar/topbar, a full parallel button system (<code>.primary-button</code>…), cards/panels, grid "tables", status badges, modals, toasts, skeletons, ~400 lines of media queries with table→card reflow.</p>
+<p><b>Dead/duplicated:</b> a full duplicate <code>:root</code> token block (shadowed by @theme); unused <code>.tabs/.status-tabs/.status-tab</code> (~75 lines); button styling duplicated vs Button.jsx (44px floor patched twice). See UX-11, UX-29.</p>
+</section>
+<section><h2>Component inventory</h2>
+<div class="scroll"><table><thead><tr><th>Component</th><th>Variants</th><th>Styling</th><th>Accessibility</th></tr></thead><tbody><tr><td>Button</td><td>primary/secondary/success/danger/text/icon; md/sm</td><td>Tailwind cva + cn; 44px mobile floor</td><td>native button; caller supplies aria-label on icon</td></tr><tr><td>StatusBadge</td><td>tone: success/warning/danger/neutral/info/indigo</td><td>legacy class</td><td>color + text label (not color-only)</td></tr><tr><td>StatCard</td><td>indigo/teal/amber/blue/rose; optional onClick</td><td>legacy + Tailwind clickable state</td><td>clickable = real button with focus ring</td></tr><tr><td>Modal</td><td>title/subtitle/footer/onClose</td><td>legacy .modal-*</td><td>role=dialog, aria-modal, focus trap, Escape, focus restore</td></tr><tr><td>ConfirmDialog</td><td>default/danger; requireReason; busy</td><td>on Modal + legacy buttons</td><td>inherits trap; reason label htmlFor/id</td></tr><tr><td>FormField</td><td>label/error/hint/required</td><td>legacy + Tailwind</td><td>label htmlFor; error role=alert; ⚠ caller must wire aria-invalid</td></tr><tr><td>DataTable</td><td>sortable/searchable/pagination/mobileCard</td><td>grid + Tailwind</td><td>role=table/row/cell; aria-sort; aria-busy</td></tr><tr><td>Toast</td><td>success/error/other</td><td>legacy .toast-*</td><td>role=alert/assertive vs status/polite; icon+text</td></tr><tr><td>EmptyState</td><td>icon/title/description</td><td>legacy</td><td>icon aria-hidden; no heading role</td></tr><tr><td>CollapsibleSection</td><td>title/defaultOpen</td><td>legacy</td><td>button aria-expanded/controls; ⚠ title is span, not heading</td></tr><tr><td>Breadcrumbs</td><td>items</td><td>legacy</td><td>nav aria-label; ol; aria-current</td></tr><tr><td>Avatar</td><td>employee/name/size</td><td>legacy + inline hex</td><td>text initials + title</td></tr><tr><td>Icon</td><td>~40 lucide icons</td><td>lucide-react</td><td>aria-hidden focusable=false</td></tr></tbody></table></div>
+</section>
+<section><h2>Inconsistencies (evidence in code)</h2>
+<ul><li><b>Two button systems</b> — cva Button vs legacy classes across 9 sales files (UX-11).</li>
+<li><b>Two tone vocabularies</b> — StatCard color-names vs StatusBadge semantic-names; same green aliased 3 ways (UX-17).</li>
+<li><b>Per-feature status→tone maps</b> — no shared helper (UX-17).</li>
+<li><b>Inline hex instead of tokens</b> — TicketDetail ~264, TicketCreate ~111, Deposit ~77 inline styles (UX-18).</li>
+<li><b>Modal-primitive drift</b> — CeoSettings bespoke overlay; PriceImport native confirm (UX-07/08).</li>
+<li><b>Empty-state rendered two ways</b> — EmptyState component vs raw div in dashboard.</li></ul>
+</section>
+<section><h2>Accessibility-in-code & color-as-status</h2>
+<p>Focus traps (Modal + AppShell drawer), aria-live toasts, aria-hidden icons, dl/dt semantics, breadcrumb nav — all present. Gaps: FormField doesn't auto-inject aria-invalid/aria-describedby (UX-27); collapsible titles aren't headings (UX-25). Status color is generally backed by a text label; the exceptions are timeline event dots and the current-step left border, which are color-only (UX-16).</p>
+</section></div></main><footer>GL&amp;R-ERP UX/UI Audit appendix · 2026-07-18</footer></body></html>

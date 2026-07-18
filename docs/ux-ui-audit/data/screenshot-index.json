@@ -1,0 +1,1318 @@
+[
+  {
+    "id": "S001",
+    "file": "screenshots/desktop/account-attendance.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "account-attendance"
+  },
+  {
+    "id": "S002",
+    "file": "screenshots/desktop/account-catalog.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "account-catalog"
+  },
+  {
+    "id": "S003",
+    "file": "screenshots/desktop/account-ceo-settings.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "account-ceo-settings"
+  },
+  {
+    "id": "S004",
+    "file": "screenshots/desktop/account-dashboard.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "account-dashboard"
+  },
+  {
+    "id": "S005",
+    "file": "screenshots/desktop/account-ticket-overview.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "account-ticket-overview"
+  },
+  {
+    "id": "S006",
+    "file": "screenshots/desktop/account-tickets.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "account-tickets"
+  },
+  {
+    "id": "S007",
+    "file": "screenshots/desktop/ceo-attendance.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "ceo-attendance"
+  },
+  {
+    "id": "S008",
+    "file": "screenshots/desktop/ceo-catalog.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "ceo-catalog"
+  },
+  {
+    "id": "S009",
+    "file": "screenshots/desktop/ceo-ceo-settings.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "ceo-ceo-settings"
+  },
+  {
+    "id": "S010",
+    "file": "screenshots/desktop/ceo-commissions.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "ceo-commissions"
+  },
+  {
+    "id": "S011",
+    "file": "screenshots/desktop/ceo-dashboard.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "ceo-dashboard"
+  },
+  {
+    "id": "S012",
+    "file": "screenshots/desktop/ceo-leave.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "ceo-leave"
+  },
+  {
+    "id": "S013",
+    "file": "screenshots/desktop/ceo-overtime.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "ceo-overtime"
+  },
+  {
+    "id": "S014",
+    "file": "screenshots/desktop/ceo-price-import.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "ceo-price-import"
+  },
+  {
+    "id": "S015",
+    "file": "screenshots/desktop/ceo-profile.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "ceo-profile"
+  },
+  {
+    "id": "S016",
+    "file": "screenshots/desktop/ceo-ticket-overview.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "ceo-ticket-overview"
+  },
+  {
+    "id": "S017",
+    "file": "screenshots/desktop/ceo-tickets.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "ceo-tickets"
+  },
+  {
+    "id": "S018",
+    "file": "screenshots/desktop/employee-attendance.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "employee-attendance"
+  },
+  {
+    "id": "S019",
+    "file": "screenshots/desktop/employee-catalog.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "employee-catalog"
+  },
+  {
+    "id": "S020",
+    "file": "screenshots/desktop/employee-ceo-settings.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "employee-ceo-settings"
+  },
+  {
+    "id": "S021",
+    "file": "screenshots/desktop/employee-dashboard.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "employee-dashboard"
+  },
+  {
+    "id": "S022",
+    "file": "screenshots/desktop/employee-leave.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "employee-leave"
+  },
+  {
+    "id": "S023",
+    "file": "screenshots/desktop/employee-my-requests.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "employee-my-requests"
+  },
+  {
+    "id": "S024",
+    "file": "screenshots/desktop/employee-overtime.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "employee-overtime"
+  },
+  {
+    "id": "S025",
+    "file": "screenshots/desktop/employee-profile.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "employee-profile"
+  },
+  {
+    "id": "S026",
+    "file": "screenshots/desktop/hr-attendance.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "hr-attendance"
+  },
+  {
+    "id": "S027",
+    "file": "screenshots/desktop/hr-catalog.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "hr-catalog"
+  },
+  {
+    "id": "S028",
+    "file": "screenshots/desktop/hr-ceo-settings.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "hr-ceo-settings"
+  },
+  {
+    "id": "S029",
+    "file": "screenshots/desktop/hr-commissions.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "hr-commissions"
+  },
+  {
+    "id": "S030",
+    "file": "screenshots/desktop/hr-dashboard.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "hr-dashboard"
+  },
+  {
+    "id": "S031",
+    "file": "screenshots/desktop/hr-employee-detail.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "hr-employee-detail"
+  },
+  {
+    "id": "S032",
+    "file": "screenshots/desktop/hr-employees.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "hr-employees"
+  },
+  {
+    "id": "S033",
+    "file": "screenshots/desktop/hr-hr.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "hr-hr"
+  },
+  {
+    "id": "S034",
+    "file": "screenshots/desktop/hr-leave.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "hr-leave"
+  },
+  {
+    "id": "S035",
+    "file": "screenshots/desktop/hr-overtime.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "hr-overtime"
+  },
+  {
+    "id": "S036",
+    "file": "screenshots/desktop/hr-payroll-populated.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "hr-payroll-populated"
+  },
+  {
+    "id": "S037",
+    "file": "screenshots/desktop/hr-payroll.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "hr-payroll"
+  },
+  {
+    "id": "S038",
+    "file": "screenshots/desktop/hr-profile.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "hr-profile"
+  },
+  {
+    "id": "S039",
+    "file": "screenshots/desktop/hr-requests.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "hr-requests"
+  },
+  {
+    "id": "S040",
+    "file": "screenshots/desktop/import-attendance.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "import-attendance"
+  },
+  {
+    "id": "S041",
+    "file": "screenshots/desktop/import-catalog.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "import-catalog"
+  },
+  {
+    "id": "S042",
+    "file": "screenshots/desktop/import-ceo-settings.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "import-ceo-settings"
+  },
+  {
+    "id": "S043",
+    "file": "screenshots/desktop/import-dashboard.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "import-dashboard"
+  },
+  {
+    "id": "S044",
+    "file": "screenshots/desktop/import-price-import.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "import-price-import"
+  },
+  {
+    "id": "S045",
+    "file": "screenshots/desktop/import-ticket-overview.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "import-ticket-overview"
+  },
+  {
+    "id": "S046",
+    "file": "screenshots/desktop/import-tickets.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "import-tickets"
+  },
+  {
+    "id": "S047",
+    "file": "screenshots/desktop/sales-attendance.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales-attendance"
+  },
+  {
+    "id": "S048",
+    "file": "screenshots/desktop/sales-catalog.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales-catalog"
+  },
+  {
+    "id": "S049",
+    "file": "screenshots/desktop/sales-ceo-settings.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales-ceo-settings"
+  },
+  {
+    "id": "S050",
+    "file": "screenshots/desktop/sales-commissions.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales-commissions"
+  },
+  {
+    "id": "S051",
+    "file": "screenshots/desktop/sales-dashboard.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales-dashboard"
+  },
+  {
+    "id": "S052",
+    "file": "screenshots/desktop/sales-ticket-detail.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales-ticket-detail"
+  },
+  {
+    "id": "S053",
+    "file": "screenshots/desktop/sales-ticket-overview.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales-ticket-overview"
+  },
+  {
+    "id": "S054",
+    "file": "screenshots/desktop/sales-tickets.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales-tickets"
+  },
+  {
+    "id": "S055",
+    "file": "screenshots/desktop/sales_manager-attendance.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales_manager-attendance"
+  },
+  {
+    "id": "S056",
+    "file": "screenshots/desktop/sales_manager-catalog.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales_manager-catalog"
+  },
+  {
+    "id": "S057",
+    "file": "screenshots/desktop/sales_manager-ceo-settings.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales_manager-ceo-settings"
+  },
+  {
+    "id": "S058",
+    "file": "screenshots/desktop/sales_manager-commissions.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales_manager-commissions"
+  },
+  {
+    "id": "S059",
+    "file": "screenshots/desktop/sales_manager-dashboard.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales_manager-dashboard"
+  },
+  {
+    "id": "S060",
+    "file": "screenshots/desktop/sales_manager-leave.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales_manager-leave"
+  },
+  {
+    "id": "S061",
+    "file": "screenshots/desktop/sales_manager-overtime.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales_manager-overtime"
+  },
+  {
+    "id": "S062",
+    "file": "screenshots/desktop/sales_manager-profile.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales_manager-profile"
+  },
+  {
+    "id": "S063",
+    "file": "screenshots/desktop/sales_manager-ticket-overview.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales_manager-ticket-overview"
+  },
+  {
+    "id": "S064",
+    "file": "screenshots/desktop/sales_manager-tickets.png",
+    "group": "desktop",
+    "viewport": "1440x900",
+    "name": "sales_manager-tickets"
+  },
+  {
+    "id": "S065",
+    "file": "screenshots/mobile/account-attendance.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "account-attendance"
+  },
+  {
+    "id": "S066",
+    "file": "screenshots/mobile/account-catalog.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "account-catalog"
+  },
+  {
+    "id": "S067",
+    "file": "screenshots/mobile/account-ceo-settings.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "account-ceo-settings"
+  },
+  {
+    "id": "S068",
+    "file": "screenshots/mobile/account-dashboard.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "account-dashboard"
+  },
+  {
+    "id": "S069",
+    "file": "screenshots/mobile/account-ticket-overview.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "account-ticket-overview"
+  },
+  {
+    "id": "S070",
+    "file": "screenshots/mobile/account-tickets.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "account-tickets"
+  },
+  {
+    "id": "S071",
+    "file": "screenshots/mobile/ceo-attendance.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "ceo-attendance"
+  },
+  {
+    "id": "S072",
+    "file": "screenshots/mobile/ceo-catalog.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "ceo-catalog"
+  },
+  {
+    "id": "S073",
+    "file": "screenshots/mobile/ceo-ceo-settings.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "ceo-ceo-settings"
+  },
+  {
+    "id": "S074",
+    "file": "screenshots/mobile/ceo-commissions.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "ceo-commissions"
+  },
+  {
+    "id": "S075",
+    "file": "screenshots/mobile/ceo-dashboard.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "ceo-dashboard"
+  },
+  {
+    "id": "S076",
+    "file": "screenshots/mobile/ceo-leave.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "ceo-leave"
+  },
+  {
+    "id": "S077",
+    "file": "screenshots/mobile/ceo-overtime.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "ceo-overtime"
+  },
+  {
+    "id": "S078",
+    "file": "screenshots/mobile/ceo-price-import.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "ceo-price-import"
+  },
+  {
+    "id": "S079",
+    "file": "screenshots/mobile/ceo-profile.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "ceo-profile"
+  },
+  {
+    "id": "S080",
+    "file": "screenshots/mobile/ceo-settings.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "ceo-settings"
+  },
+  {
+    "id": "S081",
+    "file": "screenshots/mobile/ceo-ticket-overview.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "ceo-ticket-overview"
+  },
+  {
+    "id": "S082",
+    "file": "screenshots/mobile/ceo-tickets.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "ceo-tickets"
+  },
+  {
+    "id": "S083",
+    "file": "screenshots/mobile/employee-attendance.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "employee-attendance"
+  },
+  {
+    "id": "S084",
+    "file": "screenshots/mobile/employee-catalog.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "employee-catalog"
+  },
+  {
+    "id": "S085",
+    "file": "screenshots/mobile/employee-ceo-settings.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "employee-ceo-settings"
+  },
+  {
+    "id": "S086",
+    "file": "screenshots/mobile/employee-dashboard.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "employee-dashboard"
+  },
+  {
+    "id": "S087",
+    "file": "screenshots/mobile/employee-leave.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "employee-leave"
+  },
+  {
+    "id": "S088",
+    "file": "screenshots/mobile/employee-my-requests.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "employee-my-requests"
+  },
+  {
+    "id": "S089",
+    "file": "screenshots/mobile/employee-overtime.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "employee-overtime"
+  },
+  {
+    "id": "S090",
+    "file": "screenshots/mobile/employee-profile.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "employee-profile"
+  },
+  {
+    "id": "S091",
+    "file": "screenshots/mobile/hr-attendance.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "hr-attendance"
+  },
+  {
+    "id": "S092",
+    "file": "screenshots/mobile/hr-catalog.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "hr-catalog"
+  },
+  {
+    "id": "S093",
+    "file": "screenshots/mobile/hr-ceo-settings.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "hr-ceo-settings"
+  },
+  {
+    "id": "S094",
+    "file": "screenshots/mobile/hr-commissions.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "hr-commissions"
+  },
+  {
+    "id": "S095",
+    "file": "screenshots/mobile/hr-dashboard.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "hr-dashboard"
+  },
+  {
+    "id": "S096",
+    "file": "screenshots/mobile/hr-employees.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "hr-employees"
+  },
+  {
+    "id": "S097",
+    "file": "screenshots/mobile/hr-hr.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "hr-hr"
+  },
+  {
+    "id": "S098",
+    "file": "screenshots/mobile/hr-leave.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "hr-leave"
+  },
+  {
+    "id": "S099",
+    "file": "screenshots/mobile/hr-nav-drawer.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "hr-nav-drawer"
+  },
+  {
+    "id": "S100",
+    "file": "screenshots/mobile/hr-overtime.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "hr-overtime"
+  },
+  {
+    "id": "S101",
+    "file": "screenshots/mobile/hr-payroll-desktoponly.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "hr-payroll-desktoponly"
+  },
+  {
+    "id": "S102",
+    "file": "screenshots/mobile/hr-payroll.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "hr-payroll"
+  },
+  {
+    "id": "S103",
+    "file": "screenshots/mobile/hr-profile.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "hr-profile"
+  },
+  {
+    "id": "S104",
+    "file": "screenshots/mobile/hr-requests.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "hr-requests"
+  },
+  {
+    "id": "S105",
+    "file": "screenshots/mobile/import-attendance.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "import-attendance"
+  },
+  {
+    "id": "S106",
+    "file": "screenshots/mobile/import-catalog.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "import-catalog"
+  },
+  {
+    "id": "S107",
+    "file": "screenshots/mobile/import-ceo-settings.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "import-ceo-settings"
+  },
+  {
+    "id": "S108",
+    "file": "screenshots/mobile/import-dashboard.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "import-dashboard"
+  },
+  {
+    "id": "S109",
+    "file": "screenshots/mobile/import-price-import.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "import-price-import"
+  },
+  {
+    "id": "S110",
+    "file": "screenshots/mobile/import-ticket-overview.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "import-ticket-overview"
+  },
+  {
+    "id": "S111",
+    "file": "screenshots/mobile/import-tickets.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "import-tickets"
+  },
+  {
+    "id": "S112",
+    "file": "screenshots/mobile/sales-attendance.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales-attendance"
+  },
+  {
+    "id": "S113",
+    "file": "screenshots/mobile/sales-catalog.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales-catalog"
+  },
+  {
+    "id": "S114",
+    "file": "screenshots/mobile/sales-ceo-settings.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales-ceo-settings"
+  },
+  {
+    "id": "S115",
+    "file": "screenshots/mobile/sales-commissions.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales-commissions"
+  },
+  {
+    "id": "S116",
+    "file": "screenshots/mobile/sales-dashboard.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales-dashboard"
+  },
+  {
+    "id": "S117",
+    "file": "screenshots/mobile/sales-ticket-detail.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales-ticket-detail"
+  },
+  {
+    "id": "S118",
+    "file": "screenshots/mobile/sales-ticket-overview.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales-ticket-overview"
+  },
+  {
+    "id": "S119",
+    "file": "screenshots/mobile/sales-tickets.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales-tickets"
+  },
+  {
+    "id": "S120",
+    "file": "screenshots/mobile/sales_manager-attendance.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales_manager-attendance"
+  },
+  {
+    "id": "S121",
+    "file": "screenshots/mobile/sales_manager-catalog.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales_manager-catalog"
+  },
+  {
+    "id": "S122",
+    "file": "screenshots/mobile/sales_manager-ceo-settings.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales_manager-ceo-settings"
+  },
+  {
+    "id": "S123",
+    "file": "screenshots/mobile/sales_manager-commissions.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales_manager-commissions"
+  },
+  {
+    "id": "S124",
+    "file": "screenshots/mobile/sales_manager-dashboard.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales_manager-dashboard"
+  },
+  {
+    "id": "S125",
+    "file": "screenshots/mobile/sales_manager-leave.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales_manager-leave"
+  },
+  {
+    "id": "S126",
+    "file": "screenshots/mobile/sales_manager-overtime.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales_manager-overtime"
+  },
+  {
+    "id": "S127",
+    "file": "screenshots/mobile/sales_manager-profile.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales_manager-profile"
+  },
+  {
+    "id": "S128",
+    "file": "screenshots/mobile/sales_manager-ticket-overview.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales_manager-ticket-overview"
+  },
+  {
+    "id": "S129",
+    "file": "screenshots/mobile/sales_manager-tickets.png",
+    "group": "mobile",
+    "viewport": "390x844",
+    "name": "sales_manager-tickets"
+  },
+  {
+    "id": "S130",
+    "file": "screenshots/tablet/hr-dashboard.png",
+    "group": "tablet",
+    "viewport": "768x1024",
+    "name": "hr-dashboard"
+  },
+  {
+    "id": "S131",
+    "file": "screenshots/tablet/hr-employees.png",
+    "group": "tablet",
+    "viewport": "768x1024",
+    "name": "hr-employees"
+  },
+  {
+    "id": "S132",
+    "file": "screenshots/modals/account-billing-modal.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "account-billing-modal"
+  },
+  {
+    "id": "S133",
+    "file": "screenshots/modals/account-deposit-policy-modal.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "account-deposit-policy-modal"
+  },
+  {
+    "id": "S134",
+    "file": "screenshots/modals/ceo-catalog-product-edit.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "ceo-catalog-product-edit"
+  },
+  {
+    "id": "S135",
+    "file": "screenshots/modals/ceo-country-config-overlay.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "ceo-country-config-overlay"
+  },
+  {
+    "id": "S136",
+    "file": "screenshots/modals/ceo-fx-inline-override.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "ceo-fx-inline-override"
+  },
+  {
+    "id": "S137",
+    "file": "screenshots/modals/ceo-notification-dropdown.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "ceo-notification-dropdown"
+  },
+  {
+    "id": "S138",
+    "file": "screenshots/modals/employee-change-request.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "employee-change-request"
+  },
+  {
+    "id": "S139",
+    "file": "screenshots/modals/hr-employee-create-validation.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "hr-employee-create-validation"
+  },
+  {
+    "id": "S140",
+    "file": "screenshots/modals/hr-employee-create.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "hr-employee-create"
+  },
+  {
+    "id": "S141",
+    "file": "screenshots/modals/hr-employee-edit.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "hr-employee-edit"
+  },
+  {
+    "id": "S142",
+    "file": "screenshots/modals/hr-leave-cancel-confirm.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "hr-leave-cancel-confirm"
+  },
+  {
+    "id": "S143",
+    "file": "screenshots/modals/hr-payroll-confirm.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "hr-payroll-confirm"
+  },
+  {
+    "id": "S144",
+    "file": "screenshots/modals/import-add-factory-modal.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "import-add-factory-modal"
+  },
+  {
+    "id": "S145",
+    "file": "screenshots/modals/import-product-form-modal.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "import-product-form-modal"
+  },
+  {
+    "id": "S146",
+    "file": "screenshots/modals/leave-form-validation.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "leave-form-validation"
+  },
+  {
+    "id": "S147",
+    "file": "screenshots/modals/mgr-ot-approve-confirm.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "mgr-ot-approve-confirm"
+  },
+  {
+    "id": "S148",
+    "file": "screenshots/modals/mgr-ot-reject-confirm.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "mgr-ot-reject-confirm"
+  },
+  {
+    "id": "S149",
+    "file": "screenshots/modals/sales-cancel-ticket-confirm.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "sales-cancel-ticket-confirm"
+  },
+  {
+    "id": "S150",
+    "file": "screenshots/modals/sales-ticket-create-typeahead.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "sales-ticket-create-typeahead"
+  },
+  {
+    "id": "S151",
+    "file": "screenshots/modals/sales-ticket-create.png",
+    "group": "modals",
+    "viewport": "1440x900",
+    "name": "sales-ticket-create"
+  },
+  {
+    "id": "S152",
+    "file": "screenshots/states/account-final-payment-no-confirm.png",
+    "group": "states",
+    "viewport": "1440x900",
+    "name": "account-final-payment-no-confirm"
+  },
+  {
+    "id": "S153",
+    "file": "screenshots/states/employee-not-found.png",
+    "group": "states",
+    "viewport": "1440x900",
+    "name": "employee-not-found"
+  },
+  {
+    "id": "S154",
+    "file": "screenshots/states/hr-leave-after-submit.png",
+    "group": "states",
+    "viewport": "1440x900",
+    "name": "hr-leave-after-submit"
+  },
+  {
+    "id": "S155",
+    "file": "screenshots/states/hr-ot-after-submit.png",
+    "group": "states",
+    "viewport": "1440x900",
+    "name": "hr-ot-after-submit"
+  },
+  {
+    "id": "S156",
+    "file": "screenshots/states/login-invalid-credentials.png",
+    "group": "states",
+    "viewport": "1440x900",
+    "name": "login-invalid-credentials"
+  },
+  {
+    "id": "S157",
+    "file": "screenshots/states/sales-deposit-after-create-draft.png",
+    "group": "states",
+    "viewport": "1440x900",
+    "name": "sales-deposit-after-create-draft"
+  },
+  {
+    "id": "S158",
+    "file": "screenshots/states/sales-ticket-list-populated.png",
+    "group": "states",
+    "viewport": "1440x900",
+    "name": "sales-ticket-list-populated"
+  },
+  {
+    "id": "S159",
+    "file": "screenshots/flow/01-sales-deal7-detail.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "01-sales-deal7-detail"
+  },
+  {
+    "id": "S160",
+    "file": "screenshots/flow/02-sales-stage-stepper.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "02-sales-stage-stepper"
+  },
+  {
+    "id": "S161",
+    "file": "screenshots/flow/03-sales-update-stage-modal.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "03-sales-update-stage-modal"
+  },
+  {
+    "id": "S162",
+    "file": "screenshots/flow/04-sales-mark-lost-modal.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "04-sales-mark-lost-modal"
+  },
+  {
+    "id": "S163",
+    "file": "screenshots/flow/05-sales-hold-modal.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "05-sales-hold-modal"
+  },
+  {
+    "id": "S164",
+    "file": "screenshots/flow/06-sales-after-submit-pricing.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "06-sales-after-submit-pricing"
+  },
+  {
+    "id": "S165",
+    "file": "screenshots/flow/07-sales-quotation-modal.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "07-sales-quotation-modal"
+  },
+  {
+    "id": "S166",
+    "file": "screenshots/flow/08-import-deal7-detail.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "08-import-deal7-detail"
+  },
+  {
+    "id": "S167",
+    "file": "screenshots/flow/14-ceo-deal2-approval.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "14-ceo-deal2-approval"
+  },
+  {
+    "id": "S168",
+    "file": "screenshots/flow/16-ceo-reject-inline.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "16-ceo-reject-inline"
+  },
+  {
+    "id": "S169",
+    "file": "screenshots/flow/17-ceo-deal7-state.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "17-ceo-deal7-state"
+  },
+  {
+    "id": "S170",
+    "file": "screenshots/flow/18-account-deal11-detail.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "18-account-deal11-detail"
+  },
+  {
+    "id": "S171",
+    "file": "screenshots/flow/20-account-deposit-notice.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "20-account-deposit-notice"
+  },
+  {
+    "id": "S172",
+    "file": "screenshots/flow/21-sales-deposit-notice-issued.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "21-sales-deposit-notice-issued"
+  },
+  {
+    "id": "S173",
+    "file": "screenshots/flow/22-import-deal5-pickup-view.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "22-import-deal5-pickup-view"
+  },
+  {
+    "id": "S174",
+    "file": "screenshots/flow/23-import-deal5-after-pickup.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "23-import-deal5-after-pickup"
+  },
+  {
+    "id": "S175",
+    "file": "screenshots/flow/24-import-propose-price-mode.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "24-import-propose-price-mode"
+  },
+  {
+    "id": "S176",
+    "file": "screenshots/flow/25-import-propose-price-filled.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "25-import-propose-price-filled"
+  },
+  {
+    "id": "S177",
+    "file": "screenshots/flow/26-import-deal4-awaiting-pickup.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "26-import-deal4-awaiting-pickup"
+  },
+  {
+    "id": "S178",
+    "file": "screenshots/flow/27-import-deal4-after-pickup.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "27-import-deal4-after-pickup"
+  },
+  {
+    "id": "S179",
+    "file": "screenshots/flow/28-import-propose-mode.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "28-import-propose-mode"
+  },
+  {
+    "id": "S180",
+    "file": "screenshots/flow/29-import-factory-email.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "29-import-factory-email"
+  },
+  {
+    "id": "S181",
+    "file": "screenshots/flow/30-import-propose-filled.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "30-import-propose-filled"
+  },
+  {
+    "id": "S182",
+    "file": "screenshots/flow/31-import-deal4-after-propose.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "31-import-deal4-after-propose"
+  },
+  {
+    "id": "S183",
+    "file": "screenshots/flow/32-ceo-approval-panel.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "32-ceo-approval-panel"
+  },
+  {
+    "id": "S184",
+    "file": "screenshots/flow/33-ceo-price-formula.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "33-ceo-price-formula"
+  },
+  {
+    "id": "S185",
+    "file": "screenshots/flow/34-ceo-after-approve.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "34-ceo-after-approve"
+  },
+  {
+    "id": "S186",
+    "file": "screenshots/flow/35-account-deal8-detail.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "35-account-deal8-detail"
+  },
+  {
+    "id": "S187",
+    "file": "screenshots/flow/36-account-payment-modal.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "36-account-payment-modal"
+  },
+  {
+    "id": "S188",
+    "file": "screenshots/flow/37-sales-deal1-detail.png",
+    "group": "flow",
+    "viewport": "1440x900",
+    "name": "37-sales-deal1-detail"
+  }
+]
