@@ -231,7 +231,7 @@ export function App() {
             />
             <Route
               path="/requests"
-              element={<ProfileRequestsPage profileRequests={profileRequests} onReview={reviewProfileRequest} />}
+              element={<ProfileRequestsPage profileRequests={profileRequests} onReview={reviewProfileRequest} showToast={showToast} />}
             />
             <Route
               path="/my-requests"

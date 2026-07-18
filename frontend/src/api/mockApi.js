@@ -1514,6 +1514,7 @@ export const api = {
       if (!request) fail('Profile request not found', 404);
       request.status = payload.status;
       request.reviewedAt = new Date().toISOString().slice(0, 10);
+      if (payload.reviewerNote !== undefined) request.reviewerNote = payload.reviewerNote;
       if (request.status === 'approved') applyApprovedProfileRequest(request);
       return delay({ profileRequest: { ...request, employee: findEmployee(request.employeeId) } });
     },
