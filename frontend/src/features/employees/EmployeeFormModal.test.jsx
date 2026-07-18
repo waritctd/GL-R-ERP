@@ -12,9 +12,9 @@ describe('EmployeeFormModal form validation', () => {
 
     // Clear the name field (all required fields start empty in create mode already,
     // but we still touch one to trigger onChange validation).
-    fireEvent.change(screen.getByLabelText('ชื่อ-นามสกุล'), { target: { value: '' } });
-    fireEvent.change(screen.getByLabelText('อีเมล'), { target: { value: '' } });
-    fireEvent.change(screen.getByLabelText('เบอร์โทร'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText(/ชื่อ-นามสกุล/), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText(/อีเมล/), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText(/เบอร์โทร/), { target: { value: '' } });
 
     fireEvent.click(screen.getByRole('button', { name: /บันทึก/ }));
 
@@ -29,9 +29,9 @@ describe('EmployeeFormModal form validation', () => {
     const onSubmit = vi.fn();
     render(<EmployeeFormModal employees={[]} onClose={vi.fn()} onSubmit={onSubmit} />);
 
-    fireEvent.change(screen.getByLabelText('ชื่อ-นามสกุล'), { target: { value: 'ทดสอบ ระบบ' } });
-    fireEvent.change(screen.getByLabelText('อีเมล'), { target: { value: 'not-an-email' } });
-    fireEvent.change(screen.getByLabelText('เบอร์โทร'), { target: { value: '0812345678' } });
+    fireEvent.change(screen.getByLabelText(/ชื่อ-นามสกุล/), { target: { value: 'ทดสอบ ระบบ' } });
+    fireEvent.change(screen.getByLabelText(/อีเมล/), { target: { value: 'not-an-email' } });
+    fireEvent.change(screen.getByLabelText(/เบอร์โทร/), { target: { value: '0812345678' } });
 
     fireEvent.click(screen.getByRole('button', { name: /บันทึก/ }));
 
@@ -43,9 +43,9 @@ describe('EmployeeFormModal form validation', () => {
     const onSubmit = vi.fn();
     render(<EmployeeFormModal employees={[]} onClose={vi.fn()} onSubmit={onSubmit} />);
 
-    fireEvent.change(screen.getByLabelText('ชื่อ-นามสกุล'), { target: { value: 'ทดสอบ ระบบ' } });
-    fireEvent.change(screen.getByLabelText('อีเมล'), { target: { value: 'test@example.com' } });
-    fireEvent.change(screen.getByLabelText('เบอร์โทร'), { target: { value: '0812345678' } });
+    fireEvent.change(screen.getByLabelText(/ชื่อ-นามสกุล/), { target: { value: 'ทดสอบ ระบบ' } });
+    fireEvent.change(screen.getByLabelText(/อีเมล/), { target: { value: 'test@example.com' } });
+    fireEvent.change(screen.getByLabelText(/เบอร์โทร/), { target: { value: '0812345678' } });
 
     fireEvent.click(screen.getByRole('button', { name: /บันทึก/ }));
 
@@ -126,8 +126,8 @@ describe('EmployeeFormModal form validation', () => {
 
     render(<EmployeeFormModal employee={employee} employees={[]} onClose={vi.fn()} onSubmit={onSubmit} />);
 
-    expect(screen.getByLabelText('ชื่อ-นามสกุล').value).toBe('สมชาย ใจดี');
-    expect(screen.getByLabelText('อีเมล').value).toBe('somchai@example.com');
+    expect(screen.getByLabelText(/ชื่อ-นามสกุล/).value).toBe('สมชาย ใจดี');
+    expect(screen.getByLabelText(/อีเมล/).value).toBe('somchai@example.com');
 
     fireEvent.click(screen.getByRole('button', { name: /บันทึก/ }));
 

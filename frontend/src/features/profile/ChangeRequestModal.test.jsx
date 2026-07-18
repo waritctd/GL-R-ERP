@@ -36,7 +36,7 @@ describe('ChangeRequestModal form validation', () => {
   it('sends the existing change-request payload shape for a valid submit', async () => {
     const { onSubmit } = renderModal();
 
-    fireEvent.change(screen.getByLabelText('ค่าใหม่'), { target: { value: '089-999-9999' } });
+    fireEvent.change(screen.getByLabelText(/ค่าใหม่/), { target: { value: '089-999-9999' } });
     fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));

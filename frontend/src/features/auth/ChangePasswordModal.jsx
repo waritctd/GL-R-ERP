@@ -167,6 +167,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
               label="รหัสผ่านปัจจุบัน"
               htmlFor="change-password-current"
               error={errors.currentPassword?.message}
+              required
             >
               <input
                 id="change-password-current"
@@ -201,6 +202,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
               label="ยืนยันรหัสผ่านใหม่"
               htmlFor="change-password-confirm"
               error={confirmPasswordFieldError}
+              required
             >
               <input
                 id="change-password-confirm"
