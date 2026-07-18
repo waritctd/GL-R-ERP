@@ -28,6 +28,16 @@ describe('hasPermission', () => {
     expect(hasPermission('sales', 'canManageCatalogProducts')).toBe(false);
     expect(hasPermission('employee', 'canManageCatalogProducts')).toBe(false);
   });
+
+  it('scopes sensitive employee data (salary, salary history, PDPA tab) to hr only (UX-09)', () => {
+    expect(hasPermission('hr', 'canViewSensitiveEmployeeData')).toBe(true);
+    expect(hasPermission('employee', 'canViewSensitiveEmployeeData')).toBe(false);
+    expect(hasPermission('sales', 'canViewSensitiveEmployeeData')).toBe(false);
+    expect(hasPermission('sales_manager', 'canViewSensitiveEmployeeData')).toBe(false);
+    expect(hasPermission('ceo', 'canViewSensitiveEmployeeData')).toBe(false);
+    expect(hasPermission('import', 'canViewSensitiveEmployeeData')).toBe(false);
+    expect(hasPermission('account', 'canViewSensitiveEmployeeData')).toBe(false);
+  });
 });
 
 describe('allowedRoute', () => {

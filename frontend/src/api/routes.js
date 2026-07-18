@@ -145,6 +145,11 @@ export const ROLE_PERMISSIONS = {
   canSubmitProfileRequests: ['employee'],
   canViewEmployees: ['hr'],
   canManageEmployees: ['hr'],
+  // Salary, salary history, and the "ข้อมูลอ่อนไหว" (sensitive) tab on the
+  // employee detail page. Mirrors EmployeeController's
+  // requireAnyRole(user, "hr") gate on every employee endpoint — this key
+  // does not grant anyone access they don't already have server-side.
+  canViewSensitiveEmployeeData: ['hr'],
   canReviewProfileRequests: ['hr'],
   canViewAllAttendance: ['hr', 'ceo'],
   canImportAttendance: ['hr', 'ceo'],

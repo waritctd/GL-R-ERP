@@ -278,6 +278,8 @@ export function PriceImportPage({ showToast }) {
   const [showFactoryModal, setShowFactoryModal] = useState(false);
   const [editingProduct, setEditingProduct]     = useState(null);
   const [confirmUpload, setConfirmUpload]       = useState(false);
+  const [deleteTarget, setDeleteTarget]         = useState(null);
+  const [deletingProduct, setDeletingProduct]   = useState(false);
 
   const fileRef = useRef(null);
 
@@ -377,16 +379,22 @@ export function PriceImportPage({ showToast }) {
     setProducts([]);
   }
 
-  async function handleDeleteProduct(product) {
-    const displayName =
-      product.collection || product.productName || product.productCode || 'รายการนี้';
-    if (!window.confirm(`ยืนยันลบ "${displayName}"?`)) return;
+  function handleDeleteProduct(product) {
+    setDeleteTarget(product);
+  }
+
+  async function confirmDeleteProduct() {
+    if (!deleteTarget) return;
+    setDeletingProduct(true);
     try {
-      await api.catalog.deleteProduct(product.priceId);
+      await api.catalog.deleteProduct(deleteTarget.priceId);
       showToast?.('success', 'ลบสินค้าแล้ว');
-      loadProducts(factoryId);
+      await loadProducts(factoryId);
     } catch (err) {
       showToast?.('error', err.message || 'ลบไม่สำเร็จ');
+    } finally {
+      setDeletingProduct(false);
+      setDeleteTarget(null);
     }
   }
 
@@ -604,6 +612,17 @@ export function PriceImportPage({ showToast }) {
         busy={uploading}
         onConfirm={handleUpload}
         onCancel={() => setConfirmUpload(false)}
+      />
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        tone="danger"
+        title="ลบสินค้า"
+        message={`ยืนยันลบ "${deleteTarget?.collection || deleteTarget?.productName || deleteTarget?.productCode || 'รายการนี้'}"?`}
+        confirmLabel="ลบสินค้า"
+        busy={deletingProduct}
+        onConfirm={confirmDeleteProduct}
+        onCancel={() => setDeleteTarget(null)}
       />
     </PageStack>
   );
