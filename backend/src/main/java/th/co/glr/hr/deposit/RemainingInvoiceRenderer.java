@@ -8,11 +8,10 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Locale;
 import org.apache.poi.ss.usermodel.Cell;
-import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
@@ -24,7 +23,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class RemainingInvoiceRenderer {
 
-    private static final String TEMPLATE = "templates/remaining_invoice_template.xlsx";
+    private static final String TEMPLATE = "templates/remaining_invoice_template.xls";
     private static final int ITEM_START_ROW = 12; // 0-based (= row 13 in 1-based)
     private static final int MAX_ITEM_ROWS  = 28; // rows 13-40 available (row 41 reserved)
 
@@ -35,7 +34,7 @@ public class RemainingInvoiceRenderer {
 
     public byte[] toXlsx(RemainingInvoiceDto doc) throws Exception {
         try (InputStream tpl = new ClassPathResource(TEMPLATE).getInputStream();
-             Workbook wb = new XSSFWorkbook(tpl);
+             Workbook wb = WorkbookFactory.create(tpl);
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
             Sheet sh = wb.getSheet("Update");
@@ -99,15 +98,11 @@ public class RemainingInvoiceRenderer {
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private void setStr(Sheet sh, int rowIdx, int colIdx, String value) {
-        Cell cell = getOrCreate(sh, rowIdx, colIdx);
-        cell.setCellType(CellType.STRING);
-        cell.setCellValue(value != null ? value : "");
+        getOrCreate(sh, rowIdx, colIdx).setCellValue(value != null ? value : "");
     }
 
     private void setNum(Sheet sh, int rowIdx, int colIdx, double value) {
-        Cell cell = getOrCreate(sh, rowIdx, colIdx);
-        cell.setCellType(CellType.NUMERIC);
-        cell.setCellValue(value);
+        getOrCreate(sh, rowIdx, colIdx).setCellValue(value);
     }
 
     private Cell getOrCreate(Sheet sh, int rowIdx, int colIdx) {

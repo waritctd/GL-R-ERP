@@ -420,13 +420,13 @@ class TicketServiceTest {
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(item));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0001");
         when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0001"), eq(1L), eq(new BigDecimal("200.00")),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull()))
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
             .thenReturn(quotationOf(99L, 10L, "QT-2026-0001"));
 
         service.generateQuotation(10L, designerQuotation(), salesActor);
 
         verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0001"), eq(1L), eq(new BigDecimal("200.00")),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull());
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
         verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.QUOTATION_ISSUED), eq(TicketStatus.APPROVED), eq(TicketStatus.QUOTATION_ISSUED), anyString());
     }
@@ -453,13 +453,13 @@ class TicketServiceTest {
         stubTicketWithItems(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of());
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0003");
         when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0003"), eq(1L), any(BigDecimal.class),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull()))
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
             .thenReturn(quotationOf(100L, 10L, "QT-2026-0003"));
 
         service.generateQuotation(10L, designerQuotation(), salesActor);
 
         verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0003"), eq(1L), any(BigDecimal.class),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull());
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
         verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), anyString());
     }
@@ -472,15 +472,15 @@ class TicketServiceTest {
         stubDeal(10L, 1L, TicketStatus.APPROVED, List.of(item), null, null, DealStage.PRESENTATION, null);
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0009");
         when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0009"), eq(1L), eq(new BigDecimal("120.00")),
-            eq(QuotationRecipient.OWNER), isNull(), isNull(), isNull(), isNull(), isNull()))
+            eq(QuotationRecipient.OWNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
             .thenReturn(quotationOf(103L, 10L, "QT-2026-0009",
                 QuotationRecipient.OWNER, 1, QuotationStatus.ISSUED));
 
         service.generateQuotation(10L, new GenerateQuotationRequest(
-            QuotationRecipient.OWNER, null, null, null, null, null, null), salesActor);
+            QuotationRecipient.OWNER, null, null, null, null, null, null, null, null, null), salesActor);
 
         verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0009"), eq(1L), eq(new BigDecimal("120.00")),
-            eq(QuotationRecipient.OWNER), isNull(), isNull(), isNull(), isNull(), isNull());
+            eq(QuotationRecipient.OWNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
         verify(ticketRepo).updateSalesStage(10L, DealStage.QUOTE_DESIGN_SIDE);
     }
 
@@ -498,7 +498,7 @@ class TicketServiceTest {
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(item1, item2, item3));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0004");
         when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0004"), eq(1L), any(BigDecimal.class),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull()))
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
             .thenReturn(quotationOf(101L, 10L, "QT-2026-0004"));
 
         service.generateQuotation(10L, designerQuotation(), salesActor);
@@ -507,7 +507,7 @@ class TicketServiceTest {
         // (BigDecimal.equals() is scale-sensitive, so use isEqualByComparingTo rather than eq().)
         ArgumentCaptor<BigDecimal> total = ArgumentCaptor.forClass(BigDecimal.class);
         verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0004"), eq(1L), total.capture(),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull());
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
         assertThat(total.getValue()).isEqualByComparingTo(new BigDecimal("365.00"));
     }
 
@@ -522,7 +522,7 @@ class TicketServiceTest {
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(priced, unpriced));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0005");
         when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0005"), eq(1L), any(BigDecimal.class),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull()))
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
             .thenReturn(quotationOf(102L, 10L, "QT-2026-0005"));
 
         service.generateQuotation(10L, designerQuotation(), salesActor);
@@ -531,7 +531,7 @@ class TicketServiceTest {
         // than throwing or being skipped from the total silently in a way that hides its qty.
         ArgumentCaptor<BigDecimal> total = ArgumentCaptor.forClass(BigDecimal.class);
         verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0005"), eq(1L), total.capture(),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull());
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
         assertThat(total.getValue()).isEqualByComparingTo(new BigDecimal("200.00"));
     }
 
@@ -548,7 +548,7 @@ class TicketServiceTest {
         stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(priced, unpriced));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0006");
         when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0006"), eq(1L), any(BigDecimal.class),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull()))
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
             .thenReturn(quotationOf(200L, 10L, "QT-2026-0006"));
 
         service.generateQuotation(10L, designerQuotation(), salesActor);
@@ -581,7 +581,7 @@ class TicketServiceTest {
                 "123 Real Address", "สำนักงานใหญ่", "02-000-0000")));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0007");
         when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0007"), eq(1L), any(BigDecimal.class),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull()))
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
             .thenReturn(quotationOf(201L, 10L, "QT-2026-0007"));
 
         service.generateQuotation(10L, designerQuotation(), salesActor);
@@ -609,7 +609,7 @@ class TicketServiceTest {
                 "123 Real Address", "สำนักงานใหญ่", "02-000-0000")));
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0008");
         when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0008"), eq(1L), any(BigDecimal.class),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull()))
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
             .thenReturn(quotationOf(202L, 10L, "QT-2026-0008"));
 
         service.generateQuotation(10L, designerQuotation(), salesActor);
@@ -628,10 +628,10 @@ class TicketServiceTest {
         assertBadRequest(() -> service.generateQuotation(10L, designerQuotation(), salesActor));
 
         GenerateQuotationRequest amendment = new GenerateQuotationRequest(
-            QuotationRecipient.DESIGNER, null, null, null, null, null, "แก้ตามแบบล่าสุด");
+            QuotationRecipient.DESIGNER, null, null, null, null, null, "แก้ตามแบบล่าสุด", null, null, null);
         when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0301");
         when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0301"), eq(1L), any(BigDecimal.class),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull()))
+            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
             .thenReturn(quotationOf(301L, 10L, "QT-2026-0301",
                 QuotationRecipient.DESIGNER, 2, QuotationStatus.ISSUED));
 
@@ -2011,11 +2011,11 @@ class TicketServiceTest {
                                             String recipientType, int version, String docStatus) {
         return new QuotationDto(quotationId, ticketId, number, 1L, "Sales User",
             Instant.now(), null, null, "THB", version, docStatus, recipientType,
-            null, null, null, null, null, null, null, null, null);
+            null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private static GenerateQuotationRequest designerQuotation() {
-        return new GenerateQuotationRequest(QuotationRecipient.DESIGNER, null, null, null, null, null, null);
+        return new GenerateQuotationRequest(QuotationRecipient.DESIGNER, null, null, null, null, null, null, null, null, null);
     }
 
     private static CreateTicketRequest createRequest(Long projectId, List<TicketItemRequest> items) {

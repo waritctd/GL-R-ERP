@@ -160,6 +160,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     deliveryTerms: '',
     validityDate: '',
     amendmentReason: '',
+    offerDate: '',
+    depositPercent: 50,
+    deliveryLeadDays: 90,
   });
 
   const [paymentModal, setPaymentModal] = useState(false);
@@ -300,6 +303,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       deliveryTerms: '',
       validityDate: '',
       amendmentReason: '',
+      offerDate: '',
+      depositPercent: 50,
+      deliveryLeadDays: 90,
     });
     setPaymentModal(false);
     setBillingModal(false);
@@ -815,12 +821,15 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     const amendmentRequired = chainAccepted || summary.paymentStatus != null;
     setQuotationDraft({
       recipientType: defaultRecipientType,
-      recipientLabel: '',
+      recipientLabel: summary.customerName ?? '',
       paymentTerms: '',
       leadTime: '',
       deliveryTerms: '',
       validityDate: '',
       amendmentReason: '',
+      offerDate: '',
+      depositPercent: 50,
+      deliveryLeadDays: 90,
     });
     setQuotationModal({ amendmentRequired });
   }
@@ -2116,6 +2125,23 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             <textarea rows={2} value={quotationDraft.deliveryTerms}
               onChange={(e) => setQuotationDraft((draft) => ({ ...draft, deliveryTerms: e.target.value }))} />
           </label>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              วันที่เสนอราคา
+              <input type="date" value={quotationDraft.offerDate}
+                onChange={(e) => setQuotationDraft((draft) => ({ ...draft, offerDate: e.target.value }))} />
+            </label>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              มัดจำ (%)
+              <input type="number" min="1" max="100" value={quotationDraft.depositPercent}
+                onChange={(e) => setQuotationDraft((draft) => ({ ...draft, depositPercent: e.target.value === '' ? '' : Number(e.target.value) }))} />
+            </label>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              ระยะส่งมอบ (วัน)
+              <input type="number" min="1" max="3650" value={quotationDraft.deliveryLeadDays}
+                onChange={(e) => setQuotationDraft((draft) => ({ ...draft, deliveryLeadDays: e.target.value === '' ? '' : Number(e.target.value) }))} />
+            </label>
+          </div>
           {quotationModal?.amendmentRequired && (
             <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
               เหตุผลการแก้ไข

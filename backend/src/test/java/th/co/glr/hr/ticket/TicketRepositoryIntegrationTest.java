@@ -79,11 +79,11 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
 
         QuotationDto designerV1 = tickets.createQuotation(ticketId, "QT-2026-0001", actorId, new BigDecimal("1000"),
-            QuotationRecipient.DESIGNER, "Designer Co.", "30 วัน", "45 วัน", "ส่งถึงไซต์", null);
+            QuotationRecipient.DESIGNER, "Designer Co.", "30 วัน", "45 วัน", "ส่งถึงไซต์", null, null, null, null);
         QuotationDto ownerV1 = tickets.createQuotation(ticketId, "QT-2026-0002", actorId, new BigDecimal("1200"),
-            QuotationRecipient.OWNER, "Owner", null, null, null, null);
+            QuotationRecipient.OWNER, "Owner", null, null, null, null, null, null, null);
         QuotationDto designerV2 = tickets.createQuotation(ticketId, "QT-2026-0003", actorId, new BigDecimal("1400"),
-            QuotationRecipient.DESIGNER, null, null, null, null, null);
+            QuotationRecipient.DESIGNER, null, null, null, null, null, null, null, null);
 
         assertThat(designerV1.quotationVersion()).isEqualTo(1);
         assertThat(ownerV1.quotationVersion()).isEqualTo(1);

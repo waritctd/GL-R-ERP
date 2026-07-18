@@ -25,13 +25,16 @@ public record QuotationDto(
     Instant sentAt,
     Instant acceptedAt,
     Instant rejectedAt,
-    Long parentQuotationId
+    Long parentQuotationId,
+    LocalDate offerDate,
+    Integer depositPercent,
+    Integer deliveryLeadDays
 ) {
     public QuotationDto(long id, long ticketId, String number, long issuedById, String issuedByName,
                         Instant issuedAt, String pdfPath, BigDecimal totalAmount, String currency,
                         int quotationVersion, String docStatus) {
         this(id, ticketId, number, issuedById, issuedByName, issuedAt, pdfPath, totalAmount, currency,
             quotationVersion, docStatus, QuotationRecipient.UNSPECIFIED, null, null, null, null,
-            null, null, null, null, null);
+            null, null, null, null, null, null, null, null);
     }
 }
