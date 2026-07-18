@@ -1400,8 +1400,10 @@ export const api = {
         ? db.users.find((item) => item.role === requestedRole && item.active)
         : db.users.find((item) => item.email.toLowerCase() === email && item.active);
 
-      if (!user) fail('Invalid email or inactive user', 401);
-      if (!requestedRole && payload?.password && payload.password !== user.password) fail('Invalid password', 401);
+      // Collapsed to one message (matches AuthService.INVALID_CREDENTIALS): must not
+      // reveal whether the email exists, only whether the credential pair is valid.
+      if (!user) fail('Invalid email or password', 401);
+      if (!requestedRole && payload?.password && payload.password !== user.password) fail('Invalid email or password', 401);
 
       sessionUser = user;
       return delay({ user: publicUser(user) });

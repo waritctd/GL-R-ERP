@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -71,6 +71,53 @@ describe('App auth restore', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'เข้าสู่ระบบ' })).toBeTruthy();
+    });
+  });
+});
+
+describe('App login errors (UX-06)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.auth.me.mockRejectedValue(new Error('Not authenticated'));
+  });
+
+  async function renderLoginForm() {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'เข้าสู่ระบบ' })).toBeTruthy();
+    });
+    fireEvent.change(screen.getByLabelText('อีเมล'), { target: { value: 'someone@glr.co' } });
+    fireEvent.change(screen.getByLabelText('รหัสผ่าน'), { target: { value: 'wrong-password' } });
+    fireEvent.click(screen.getByRole('button', { name: 'เข้าสู่ระบบ' }));
+  }
+
+  it('shows Thai bad-credentials copy for a 401, not the raw server message', async () => {
+    // client.js's ApiError always carries a `.status` — this is the real shape
+    // App.jsx branches on, not an invented field.
+    const unauthorized = new Error('Invalid email or password');
+    unauthorized.status = 401;
+    api.auth.login.mockRejectedValue(unauthorized);
+
+    await renderLoginForm();
+
+    await waitFor(() => {
+      expect(screen.getByText('อีเมลหรือรหัสผ่านไม่ถูกต้อง')).toBeTruthy();
+    });
+    expect(screen.queryByText('Invalid email or password')).toBeNull();
+    expect(screen.queryByText(/invalid/i)).toBeNull();
+  });
+
+  it('shows a distinct generic Thai message when the failure has no HTTP status', async () => {
+    api.auth.login.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    await renderLoginForm();
+
+    await waitFor(() => {
+      expect(screen.getByText('เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')).toBeTruthy();
     });
   });
 });

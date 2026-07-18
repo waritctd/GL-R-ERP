@@ -46,6 +46,8 @@ const PATH_GUARDS = [
   { test: (p) => p === '/leave', can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllLeave') },
   { test: (p) => p === '/profile', can: (u) => !!u.employeeId },
   { test: (p) => p === '/price-import', can: (u) => hasPermission(u.role, 'canManagePriceImport') },
+  // Matches the sidebar's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
+  { test: (p) => p === '/ceo-settings', can: (u) => u.role === 'ceo' },
 ];
 
 export function canAccessPath(path, user) {
