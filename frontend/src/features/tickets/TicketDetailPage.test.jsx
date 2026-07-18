@@ -25,6 +25,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         actions: vi.fn(),
         approve: vi.fn(),
         comment: vi.fn(),
+        confirmFinalPayment: vi.fn(),
       },
       attachments: {
         list: vi.fn(),
@@ -278,6 +279,63 @@ describe('TicketDetailPage', () => {
     expect(screen.getByText('฿600')).not.toBeNull();
     expect(await screen.findByText('DEPOSIT')).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
+  });
+
+  it('UX-34: Final Payment opens a confirm dialog with the real outstanding amount instead of firing the mutation on click', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: {
+          status: 'quotation_issued',
+          paymentStage: 'AWAITING_FINAL_PAYMENT',
+          amountPayable: 132500,
+          amountPaid: 100000,
+          amountOutstanding: 32500,
+        },
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE',
+        salesStage: 'DELIVERY_SCHEDULING',
+        paymentStatus: 'AWAITING_FINAL_PAYMENT',
+        fulfillmentStatus: null,
+        status: 'quotation_issued',
+      },
+      availableActions: [{ action: 'FINAL_PAYMENT', kind: 'payment', label: 'ยืนยันชำระครบ' }],
+    });
+    api.tickets.confirmFinalPayment.mockResolvedValue({
+      ticket: buildTicket({
+        summary: {
+          status: 'quotation_issued',
+          paymentStage: 'FULLY_PAID',
+          amountPayable: 132500,
+          amountPaid: 132500,
+          amountOutstanding: 0,
+        },
+      }),
+    });
+
+    renderTicketDetailPage();
+
+    const finalPaymentButton = await screen.findByRole('button', { name: 'ยืนยันชำระครบ (Final Payment)' });
+    fireEvent.click(finalPaymentButton);
+
+    // The single click must NOT call the mutation directly — it only opens
+    // the confirm dialog (this is the exact defect UX-34 flags: previously
+    // this click called confirmFinalPayment straight away).
+    expect(api.tickets.confirmFinalPayment).not.toHaveBeenCalled();
+
+    // The dialog states the real outstanding amount, sourced from the same
+    // summary.amountOutstanding the payment panel's "คงเหลือ" tile renders
+    // (not a separately-computed figure).
+    expect(await screen.findByText('ยืนยันการรับชำระครบถ้วน')).not.toBeNull();
+    expect(screen.getAllByText('฿32,500').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันชำระครบ' }));
+
+    await waitFor(() => expect(api.tickets.confirmFinalPayment).toHaveBeenCalledWith(701));
+    // Dialog closes after a successful confirm.
+    await waitFor(() => expect(screen.queryByText('ยืนยันการรับชำระครบถ้วน')).toBeNull());
   });
 
   it('renders delivery progress and hides record delivery without the action', async () => {

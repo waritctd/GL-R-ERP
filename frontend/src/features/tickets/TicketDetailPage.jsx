@@ -188,7 +188,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const [commentText, setCommentText] = useState('');
 
   // Confirmation dialogs (state-driven, replaces native browser confirm)
-  const [confirm, setConfirm] = useState(null); // { kind: 'deleteAttachment', id, name } | { kind: 'cancelTicket' } | null
+  const [confirm, setConfirm] = useState(null); // { kind: 'deleteAttachment', id, name } | { kind: 'cancelTicket' } | { kind: 'finalPayment' } | null
 
   // Download busy-state — keyed so each quotation/format pair (and the
   // remaining-invoice download) gets its own disabled+label state instead of
@@ -643,7 +643,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     </button>
   ) : can.confirmFinalPayment ? (
     <button type="button" className="primary-button" disabled={actionLoading}
-      onClick={() => doAction(() => api.tickets.confirmFinalPayment(ticketId), 'ชำระครบแล้ว')}>
+      onClick={() => setConfirm({ kind: 'finalPayment' })}>
       ยืนยันชำระครบ (Final Payment)
     </button>
   ) : can.close ? (
@@ -790,6 +790,18 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     } catch { /* onError above already toasted */ } finally {
       setConfirm(null);
     }
+  }
+
+  // UX-34: Final Payment used to fire straight off the primary-action button
+  // with no confirmation — the least-guarded action in the app despite being
+  // one of the most financially consequential (auto-records a full BALANCE
+  // receipt server-side, see TicketService.confirmFinalPayment). Routed
+  // through the same confirm-dialog + doAction pattern as cancelTicket below:
+  // doAction already swallows/toasts its own error, so unconditionally
+  // closing the dialog afterwards matches that existing behavior.
+  async function confirmFinalPaymentAction() {
+    await doAction(() => api.tickets.confirmFinalPayment(ticketId), 'ชำระครบแล้ว');
+    setConfirm(null);
   }
 
   async function handleDownloadQuotation(quotationId, number, format) {
@@ -2343,6 +2355,41 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           await doAction(() => api.tickets.cancel(ticketId), 'ยกเลิกใบขอราคาแล้ว');
           setConfirm(null);
         }}
+      />
+
+      <ConfirmDialog
+        open={confirm?.kind === 'finalPayment'}
+        tone="danger"
+        title="ยืนยันการรับชำระครบถ้วน"
+        message={(() => {
+          // Same summary.amountOutstanding the การชำระเงิน panel above renders
+          // as "คงเหลือ" (line ~1091) — reused as-is, not recomputed, so this
+          // dialog can never disagree with the panel the user just looked at.
+          const outstanding = Number(summary.amountOutstanding ?? 0);
+          const hasOutstanding = outstanding > 0;
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <p className="confirm-dialog-message" style={{ margin: 0 }}>
+                {hasOutstanding
+                  ? 'ระบบจะบันทึกรับชำระส่วนที่เหลือเต็มจำนวนเป็นรายการ BALANCE แล้วทำเครื่องหมายดีลนี้ว่าชำระครบแล้ว'
+                  : 'ยอดคงเหลือเป็นศูนย์อยู่แล้ว ระบบจะทำเครื่องหมายดีลนี้ว่าชำระครบแล้วโดยไม่บันทึกรายการรับชำระใหม่'}
+              </p>
+              {hasOutstanding && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700, borderTop: '1px solid var(--color-border)', paddingTop: 8 }}>
+                  <span>ยอดที่จะบันทึกเป็นรับชำระ (คงเหลือ)</span>
+                  <span className="font-mono">{formatMoney(outstanding)}</span>
+                </div>
+              )}
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--color-icon-muted)' }}>
+                สถานะการชำระเงินจะเปลี่ยนเป็น &quot;ชำระครบแล้ว&quot; และไม่สามารถย้อนกลับได้
+              </p>
+            </div>
+          );
+        })()}
+        confirmLabel="ยืนยันชำระครบ"
+        busy={actionLoading}
+        onConfirm={confirmFinalPaymentAction}
+        onCancel={() => setConfirm(null)}
       />
     </div>
   );
