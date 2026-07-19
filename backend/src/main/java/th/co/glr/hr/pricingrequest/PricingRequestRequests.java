@@ -20,6 +20,7 @@ public final class PricingRequestRequests {
         @DecimalMin("0.00") BigDecimal customerTargetPrice,
         String targetCurrency,
         String note,
+        String clientRequestId,
         @NotEmpty List<@Valid PricingRequestItemRequest> items
     ) {}
 
@@ -41,6 +42,7 @@ public final class PricingRequestRequests {
         Long variantId,
         String brand,
         String model,
+        String productDescription,
         String color,
         String texture,
         String size,

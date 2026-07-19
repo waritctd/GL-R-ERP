@@ -406,7 +406,7 @@ const mockPricingRequests = [];
 let mockPricingRequestSeq = 1;
 let mockPricingRequestItemSeq = 1;
 let mockPricingRequestEventSeq = 1;
-const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'account', 'sales_manager'];
+const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'sales_manager'];
 const PRICING_REQUEST_RECIPIENT_VALUES = PRICING_REQUEST_RECIPIENT_OPTIONS.map((o) => o.code);
 const PRICING_REQUEST_QUANTITY_TYPE_VALUES = PRICING_REQUEST_QUANTITY_TYPE_OPTIONS.map((o) => o.code);
 
@@ -481,6 +481,10 @@ function requirePricingRequestViewable(id, user) {
   if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('Forbidden', 403);
   const pr = findPricingRequestRaw(id);
   const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+  const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
+  if (pr.status === 'DRAFT' && !draftOversight && ticket?.createdById !== user.id) {
+    fail('Pricing request not found', 404);
+  }
   if (user.role === 'sales' && ticket?.createdById !== user.id) fail('Forbidden', 403);
   return pr;
 }
@@ -519,12 +523,12 @@ function requirePricingRequestItemFieldsValid(items) {
     }
     // Mirrors PricingRequestService.validateItems: an item must actually name
     // a product somehow — a link to an existing deal line, a catalog
-    // product, a model name, or a free-text special requirement. Brand alone
+    // product, a model name, or a dedicated product description. Brand alone
     // is deliberately NOT sufficient (a brand with no model does not
     // identify a product), so Import never receives a request for a line
     // nobody can actually source.
     const identified = item.sourceTicketItemId != null || item.productId != null
-      || Boolean(item.model?.trim()) || Boolean(item.specialRequirement?.trim());
+      || Boolean(item.model?.trim()) || Boolean(item.productDescription?.trim());
     if (!identified) {
       fail(`รายการที่ ${index + 1}: ต้องระบุสินค้าที่ต้องการเสนอราคา (เลือกจากรายการในดีล หรือระบุรุ่น/รายละเอียด)`, 400);
     }
@@ -3883,8 +3887,10 @@ export const api = {
       // Mirrors PricingRequestService.listForTicket: sales may only see requests
       // on tickets they created.
       if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
+      const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
       const items = mockPricingRequests
         .filter((pr) => pr.ticketId === Number(ticketId))
+        .filter((pr) => pr.status !== 'DRAFT' || draftOversight || ticket.createdById === user.id)
         .map(buildPricingRequestSummary);
       return delay({ items });
     },
@@ -3903,7 +3909,7 @@ export const api = {
       }
       // Mirrors PricingRequestService.list's draft-privacy clause: a DRAFT is the
       // owning rep's private scratchpad, visible only to them plus ceo/sales_manager
-      // oversight. import/account must not see it in the queue even though they see
+      // oversight. import must not see it in the queue even though it sees
       // every other status. Without this the mock is MORE permissive than the Java
       // service, which is the direction that only surfaces in production (#199).
       const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
@@ -3938,6 +3944,16 @@ export const api = {
       if (!ticket) fail('Ticket not found', 404);
       requirePricingRequestDealActive(ticket);
       if (ticket.createdById !== user.id) fail('Forbidden', 403);
+      if (!payload.clientRequestId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.clientRequestId)) {
+        fail('clientRequestId must be a UUID', 400);
+      }
+      const existing = mockPricingRequests.find((pr) => (
+        pr.requestedById === user.id && pr.clientRequestId === payload.clientRequestId
+      ));
+      if (existing) {
+        if (existing.ticketId !== Number(ticketId)) fail('clientRequestId has already been used for a different ticket', 409);
+        return delay({ pricingRequest: buildPricingRequestDetail(existing) });
+      }
       if (!PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
         fail(`Unknown recipient type '${payload.recipientType}'`, 400);
       }
@@ -3972,6 +3988,7 @@ export const api = {
         variantId: item.variantId ?? null,
         brand: item.brand ?? null,
         model: item.model ?? null,
+        productDescription: item.productDescription ?? null,
         color: item.color ?? null,
         texture: item.texture ?? null,
         size: item.size ?? null,
@@ -3997,6 +4014,7 @@ export const api = {
         customerTargetPrice: payload.customerTargetPrice ?? null,
         targetCurrency: normalizePricingRequestCurrency(payload.targetCurrency),
         note: payload.note ?? null,
+        clientRequestId: payload.clientRequestId,
         // DB column is `revision_no INTEGER NOT NULL DEFAULT 1` with
         // `chk_pricing_request_revision CHECK (revision_no >= 1)` (V58) — a
         // mock row starting at 0 would violate that constraint in production.
@@ -4073,6 +4091,7 @@ export const api = {
           variantId: item.variantId ?? null,
           brand: item.brand ?? null,
           model: item.model ?? null,
+          productDescription: item.productDescription ?? null,
           color: item.color ?? null,
           texture: item.texture ?? null,
           size: item.size ?? null,

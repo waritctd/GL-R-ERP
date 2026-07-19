@@ -72,10 +72,12 @@ public class PricingRequestRepository {
         jdbc.update("""
             INSERT INTO sales.pricing_request
                 (request_code, ticket_id, recipient_type, recipient_contact_id, recipient_label,
-                 status, requested_by, required_date, customer_target_price, target_currency, note)
+                 status, requested_by, required_date, customer_target_price, target_currency, note,
+                 client_request_id)
             VALUES
                 (:requestCode, :ticketId, :recipientType, :recipientContactId, :recipientLabel,
-                 'DRAFT', :requestedBy, :requiredDate, :customerTargetPrice, :targetCurrency, :note)
+                 'DRAFT', :requestedBy, :requiredDate, :customerTargetPrice, :targetCurrency, :note,
+                 CAST(:clientRequestId AS uuid))
             """,
             new MapSqlParameterSource()
                 .addValue("requestCode", requestCode)
@@ -87,7 +89,8 @@ public class PricingRequestRepository {
                 .addValue("requiredDate", request.requiredDate())
                 .addValue("customerTargetPrice", request.customerTargetPrice())
                 .addValue("targetCurrency", targetCurrency)
-                .addValue("note", request.note()),
+                .addValue("note", request.note())
+                .addValue("clientRequestId", request.clientRequestId()),
             keyHolder, new String[]{"pricing_request_id"});
         long pricingRequestId = keyHolder.getKey().longValue();
         replaceItems(pricingRequestId, request.items());
@@ -110,6 +113,7 @@ public class PricingRequestRepository {
                 .addValue("variantId", item.variantId())
                 .addValue("brand", item.brand())
                 .addValue("model", item.model())
+                .addValue("productDescription", item.productDescription())
                 .addValue("color", item.color())
                 .addValue("texture", item.texture())
                 .addValue("size", item.size())
@@ -126,12 +130,12 @@ public class PricingRequestRepository {
         jdbc.batchUpdate("""
             INSERT INTO sales.pricing_request_item
                 (pricing_request_id, source_ticket_item_id, product_id, variant_id,
-                 brand, model, color, texture, size, factory,
+                 brand, model, product_description, color, texture, size, factory,
                  requested_qty, requested_qty_sqm, requested_unit, quantity_type,
                  target_delivery_date, delivery_location, special_requirement, sort_order)
             VALUES
                 (:pricingRequestId, :sourceTicketItemId, :productId, :variantId,
-                 :brand, :model, :color, :texture, :size, :factory,
+                 :brand, :model, :productDescription, :color, :texture, :size, :factory,
                  :requestedQty, :requestedQtySqm, :requestedUnit, :quantityType,
                  :targetDeliveryDate, :deliveryLocation, :specialRequirement, :sortOrder)
             """, batch);
@@ -258,10 +262,27 @@ public class PricingRequestRepository {
         }
     }
 
+    public Optional<PricingRequestSummaryDto> findByClientRequestId(long requestedBy, String clientRequestId) {
+        try {
+            PricingRequestSummaryDto summary = jdbc.queryForObject(
+                SUMMARY_SELECT + """
+                 WHERE pr.requested_by = :requestedBy
+                   AND pr.client_request_id = CAST(:clientRequestId AS uuid)
+                """,
+                new MapSqlParameterSource()
+                    .addValue("requestedBy", requestedBy)
+                    .addValue("clientRequestId", clientRequestId),
+                (rs, rowNum) -> mapSummary(rs));
+            return Optional.ofNullable(summary);
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
     public List<PricingRequestItemDto> findItems(long pricingRequestId) {
         return jdbc.query("""
             SELECT pricing_request_item_id, pricing_request_id, source_ticket_item_id, product_id, variant_id,
-                   brand, model, color, texture, size, factory,
+                   brand, model, product_description, color, texture, size, factory,
                    requested_qty, requested_qty_sqm, requested_unit, quantity_type,
                    target_delivery_date, delivery_location, special_requirement, sort_order
               FROM sales.pricing_request_item
@@ -422,6 +443,7 @@ public class PricingRequestRepository {
             variantId,
             rs.getString("brand"),
             rs.getString("model"),
+            rs.getString("product_description"),
             rs.getString("color"),
             rs.getString("texture"),
             rs.getString("size"),

@@ -258,6 +258,7 @@ class PricingRequestControllerTest {
             {
               "recipientType": "BUYER",
               "recipientContactId": 1,
+              "clientRequestId": "55555555-5555-5555-5555-555555555555",
               "items": [
                 {
                   "requestedQty": 1,
