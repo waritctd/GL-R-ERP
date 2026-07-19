@@ -3,6 +3,7 @@ package th.co.glr.hr.pricingrequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -151,7 +152,7 @@ class PricingRequestServiceTest {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         CreatePricingRequestRequest request = new CreatePricingRequestRequest(
             PricingRequestRecipient.BUYER, 1L, null, null, null, "DOLLARS", null,
-            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
+            clientRequestId(), List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
         assertBadRequest(() -> service.createDraft(10L, request, salesActor));
         verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
     }
@@ -234,6 +235,16 @@ class PricingRequestServiceTest {
     }
 
     @Test
+    void createDraft_rejectsItemIdentifiedByFactoryAlone() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
+            List.of(new PricingRequestItemRequest(null, null, null, null, null, null, null, null, null, "Factory only",
+                new BigDecimal("1"), null, "PIECE", QuantityType.REFERENCE, null, null, null)));
+        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
+        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
+    }
+
+    @Test
     void createDraft_acceptsItemIdentifiedBySourceTicketItemIdAlone() {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of(501L));
@@ -279,18 +290,64 @@ class PricingRequestServiceTest {
     }
 
     @Test
-    void createDraft_acceptsItemIdentifiedBySpecialRequirementAlone() {
+    void createDraft_rejectsItemIdentifiedBySpecialRequirementAlone() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
+            List.of(itemRequestWithIdentity(null, null, null, null, "กระเบื้องลายไม้สีเข้ม ผิวด้าน")));
+        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
+        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
+    }
+
+    @Test
+    void createDraft_acceptsItemIdentifiedByProductDescriptionAlone() {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(itemRequestWithIdentity(null, null, null, null, "กระเบื้องลายไม้สีเข้ม ผิวด้าน")));
+            List.of(itemRequestWithIdentity(null, null, null, null, null, "กระเบื้องพอร์ซเลน 60x60 สีขาว")));
         when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-
         service.createDraft(10L, request, salesActor);
 
         verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+    }
+
+    @Test
+    void createDraft_rejectsMalformedClientRequestId() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        CreatePricingRequestRequest request = new CreatePricingRequestRequest(
+            PricingRequestRecipient.BUYER, 1L, null, null, null, null, null, "not-a-uuid",
+            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
+
+        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
+
+        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
+    }
+
+    @Test
+    void createDraft_idempotentReplayReturnsExistingWithoutDuplicateInsertOrEvent() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        PricingRequestSummaryDto existing = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        when(requestRepo.findByClientRequestId(1L, clientRequestId())).thenReturn(Optional.of(existing));
+        when(requestRepo.findItems(20L)).thenReturn(List.of());
+        when(requestRepo.findEvents(20L)).thenReturn(List.of());
+
+        var replay = service.createDraft(10L, sampleCreateRequest(), salesActor);
+
+        assertThat(replay.summary().id()).isEqualTo(20L);
+        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
+        verify(requestRepo, never()).addEvent(anyLong(), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createDraft_rejectsClientRequestIdReplayedForDifferentTicket() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        PricingRequestSummaryDto existing = stubPricingRequest(20L, 99L, 1L, PricingRequestStatus.DRAFT);
+        when(requestRepo.findByClientRequestId(1L, clientRequestId())).thenReturn(Optional.of(existing));
+
+        assertConflict(() -> service.createDraft(10L, sampleCreateRequest(), salesActor));
+
+        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
     }
 
     @Test
@@ -301,9 +358,23 @@ class PricingRequestServiceTest {
         // validated them at write time.
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItems(20L)).thenReturn(List.of(itemDtoWithIdentity(null, null, "Brand only", null, null)));
+        when(requestRepo.findItems(20L)).thenReturn(List.of(itemDtoWithIdentity(null, null, "Brand only", null, null, null)));
         assertBadRequest(() -> service.submit(20L, salesActor));
         verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void submit_acceptsPreExistingDraftWithProductDescriptionOnly() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.findItems(20L)).thenReturn(List.of(
+            itemDtoWithIdentity(null, null, null, null, null, "กระเบื้องพอร์ซเลน 60x60 สีขาว")));
+        when(requestRepo.transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null))
+            .thenReturn(1);
+
+        service.submit(20L, salesActor);
+
+        verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
     }
 
     // ── recipient contact ownership (Part 2) ────────────────────────────────
@@ -396,9 +467,9 @@ class PricingRequestServiceTest {
     // happy path, had a service-level test before this.
 
     @Test
-    void updateDraft_rejectsNonOwnerSales() {
+    void updateDraft_otherSalesCannotDiscoverAnotherRepsDraft() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        assertForbidden(() -> service.updateDraft(20L, sampleUpdateRequest(), otherSales));
+        assertNotFound(() -> service.updateDraft(20L, sampleUpdateRequest(), otherSales));
         verify(requestRepo, never()).updateDraft(anyLong(), any());
     }
 
@@ -605,9 +676,9 @@ class PricingRequestServiceTest {
     }
 
     @Test
-    void submit_rejectsNonOwnerSales() {
+    void submit_otherSalesCannotDiscoverAnotherRepsDraft() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
-        assertForbidden(() -> service.submit(20L, otherSales));
+        assertNotFound(() -> service.submit(20L, otherSales));
         verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
     }
 
@@ -652,9 +723,9 @@ class PricingRequestServiceTest {
     }
 
     @Test
-    void cancel_rejectsNonOwnerSales() {
+    void cancel_otherSalesCannotDiscoverAnotherRepsDraft() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        assertForbidden(() -> service.cancel(20L, cancelRequest(), otherSales));
+        assertNotFound(() -> service.cancel(20L, cancelRequest(), otherSales));
         verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
     }
 
@@ -687,8 +758,14 @@ class PricingRequestServiceTest {
     // ── read scoping ─────────────────────────────────────────────────────
 
     @Test
-    void get_salesCannotViewOthersDeal() {
+    void get_otherSalesCannotDiscoverAnotherRepsDraft_returns404() {
         stubPricingRequest(20L, 10L, 99L, PricingRequestStatus.DRAFT);
+        assertNotFound(() -> service.get(20L, salesActor));
+    }
+
+    @Test
+    void get_otherSalesCannotReadAnotherRepsSubmittedRequest_returns403() {
+        stubPricingRequest(20L, 10L, 99L, PricingRequestStatus.SUBMITTED);
         assertForbidden(() -> service.get(20L, salesActor));
     }
 
@@ -702,7 +779,7 @@ class PricingRequestServiceTest {
     // comment for why (403 would confirm the row exists and let a non-owner
     // probe ids for other reps' drafts).
     @Test
-    void get_importCannotViewAnotherRepsDraft() {
+    void get_importCannotSeeDraft_returns404() {
         stubPricingRequest(20L, 10L, 99L, PricingRequestStatus.DRAFT);
         assertNotFound(() -> service.get(20L, importActor));
     }
@@ -716,13 +793,13 @@ class PricingRequestServiceTest {
     }
 
     @Test
-    void get_accountCannotViewAnotherRepsDraft() {
+    void get_accountRejected() {
         stubPricingRequest(20L, 10L, 99L, PricingRequestStatus.DRAFT);
-        assertNotFound(() -> service.get(20L, accountActor));
+        assertForbidden(() -> service.get(20L, accountActor));
     }
 
     @Test
-    void get_ceoCanViewAnotherRepsDraft() {
+    void get_ceoCanSeeDraft() {
         stubPricingRequest(20L, 10L, 99L, PricingRequestStatus.DRAFT);
         when(requestRepo.findItems(20L)).thenReturn(List.of());
         when(requestRepo.findEvents(20L)).thenReturn(List.of());
@@ -730,7 +807,7 @@ class PricingRequestServiceTest {
     }
 
     @Test
-    void get_salesManagerCanViewAnotherRepsDraft() {
+    void get_salesManagerCanSeeDraft() {
         stubPricingRequest(20L, 10L, 99L, PricingRequestStatus.DRAFT);
         when(requestRepo.findItems(20L)).thenReturn(List.of());
         when(requestRepo.findEvents(20L)).thenReturn(List.of());
@@ -738,7 +815,7 @@ class PricingRequestServiceTest {
     }
 
     @Test
-    void get_owningSalesRepCanViewOwnDraft() {
+    void get_ownerSalesCanSeeOwnDraft() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
         when(requestRepo.findItems(20L)).thenReturn(List.of());
         when(requestRepo.findEvents(20L)).thenReturn(List.of());
@@ -784,9 +861,9 @@ class PricingRequestServiceTest {
     }
 
     @Test
-    void list_accountHasNoDraftOversightAndIsNotOwnerFiltered() {
-        service.list(null, null, true, accountActor);
-        verify(requestRepo).findSummaries(null, null, null, true, false, 5L);
+    void list_accountRejected() {
+        assertForbidden(() -> service.list(null, null, true, accountActor));
+        verify(requestRepo, never()).findSummaries(any(), any(), any(), anyBoolean(), anyBoolean(), any());
     }
 
     // listForTicket is a separate read path from get()/list() and must honour the
@@ -800,11 +877,10 @@ class PricingRequestServiceTest {
     }
 
     @Test
-    void listForTicket_accountDoesNotSeeDraftRequestsOnTicket() {
+    void listForTicket_accountRejected() {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        PricingRequestSummaryDto draft = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        when(requestRepo.findByTicket(10L)).thenReturn(List.of(draft));
-        assertThat(service.listForTicket(10L, accountActor)).isEmpty();
+        assertForbidden(() -> service.listForTicket(10L, accountActor));
+        verify(requestRepo, never()).findByTicket(anyLong());
     }
 
     @Test
@@ -903,6 +979,21 @@ class PricingRequestServiceTest {
         assertForbidden(() -> service.pickup(20L, ceoActor));
         assertForbidden(() -> service.pickup(20L, accountActor));
         verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void accountCannotMutateAnyPricingRequestAction() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED, 3L);
+
+        assertForbidden(() -> service.updateDraft(20L, sampleUpdateRequest(), accountActor));
+        assertForbidden(() -> service.submit(20L, accountActor));
+        assertForbidden(() -> service.pickup(20L, accountActor));
+        assertForbidden(() -> service.requestInformation(20L, moreInfoRequest(), accountActor));
+        assertForbidden(() -> service.respondInformation(20L, respondRequest(), accountActor));
+        assertForbidden(() -> service.cancel(20L, cancelRequest(), accountActor));
+
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+        verify(requestRepo, never()).updateDraft(anyLong(), any());
     }
 
     @Test
@@ -1288,28 +1379,40 @@ class PricingRequestServiceTest {
 
     private static PricingRequestItemDto sampleItem(Long sourceTicketItemId) {
         return new PricingRequestItemDto(1L, 20L, sourceTicketItemId, null, null,
-            "Brand", "Model", null, null, null, null,
+            "Brand", "Model", null, null, null, null, null,
             new BigDecimal("1"), null, "PIECE", QuantityType.REFERENCE,
             null, null, null, 0);
     }
 
     private static PricingRequestItemRequest sampleItemRequest(Long sourceTicketItemId, String quantityType) {
-        return new PricingRequestItemRequest(sourceTicketItemId, null, null, "Brand", "Model", null, null, null, null,
+        return new PricingRequestItemRequest(sourceTicketItemId, null, null, "Brand", "Model", null, null, null, null, null,
             new BigDecimal("1"), null, "PIECE", quantityType, null, null, null);
     }
 
     /** Lets each Part 1 identity test set exactly one identifying field and leave the rest null. */
     private static PricingRequestItemRequest itemRequestWithIdentity(Long sourceTicketItemId, Long productId,
                                                                      String brand, String model, String specialRequirement) {
-        return new PricingRequestItemRequest(sourceTicketItemId, productId, null, brand, model, null, null, null, null,
+        return itemRequestWithIdentity(sourceTicketItemId, productId, brand, model, specialRequirement, null);
+    }
+
+    private static PricingRequestItemRequest itemRequestWithIdentity(Long sourceTicketItemId, Long productId,
+                                                                     String brand, String model, String specialRequirement,
+                                                                     String productDescription) {
+        return new PricingRequestItemRequest(sourceTicketItemId, productId, null, brand, model, productDescription, null, null, null, null,
             new BigDecimal("1"), null, "PIECE", QuantityType.REFERENCE, null, null, specialRequirement);
     }
 
     /** Same as {@link #sampleItem}, but with every identity field controllable for the Part 1 submit-recheck tests. */
     private static PricingRequestItemDto itemDtoWithIdentity(Long sourceTicketItemId, Long productId,
                                                              String brand, String model, String specialRequirement) {
+        return itemDtoWithIdentity(sourceTicketItemId, productId, brand, model, specialRequirement, null);
+    }
+
+    private static PricingRequestItemDto itemDtoWithIdentity(Long sourceTicketItemId, Long productId,
+                                                             String brand, String model, String specialRequirement,
+                                                             String productDescription) {
         return new PricingRequestItemDto(1L, 20L, sourceTicketItemId, productId, null,
-            brand, model, null, null, null, null,
+            brand, model, productDescription, null, null, null, null,
             new BigDecimal("1"), null, "PIECE", QuantityType.REFERENCE,
             null, null, specialRequirement, 0);
     }
@@ -1318,7 +1421,11 @@ class PricingRequestServiceTest {
                                                              String recipientLabel,
                                                              List<PricingRequestItemRequest> items) {
         return new CreatePricingRequestRequest(recipientType, recipientContactId, recipientLabel, null, null, null,
-            null, items);
+            null, clientRequestId(), items);
+    }
+
+    private static String clientRequestId() {
+        return "11111111-1111-1111-1111-111111111111";
     }
 
     private static CreatePricingRequestRequest sampleCreateRequest() {

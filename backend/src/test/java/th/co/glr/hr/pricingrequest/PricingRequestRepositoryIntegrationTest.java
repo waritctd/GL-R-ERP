@@ -35,12 +35,14 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
     private EmployeeRepository employees;
     private long salesActorId;
     private long ticketId;
+    private int clientRequestSeq;
 
     @BeforeEach
     void wireRepositories() {
         requests = new PricingRequestRepository(jdbc);
         tickets = new TicketRepository(jdbc);
         employees = new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
+        clientRequestSeq = 1000;
 
         salesActorId = createEmployee("พนักงานขาย ทดสอบ", "sales@glr.co.th");
         ticketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), salesActorId, "พนักงานขาย ทดสอบ");
@@ -60,7 +62,7 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
     void create_thenFindSummaryAndItems_roundTripsWithOrderedItemsAndCorrectItemCount() {
         CreatePricingRequestRequest create = new CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", null,
-            new BigDecimal("100.00"), " thb ", "note text",
+            new BigDecimal("100.00"), " thb ", "note text", clientRequestId("1"),
             List.of(item("Toyota", "1"), item("Honda", "2"), item("Mazda", "3")));
 
         long id = requests.create(ticketId, requests.nextRequestCode(), create, salesActorId);
@@ -78,18 +80,50 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
         assertThat(items).hasSize(3);
         assertThat(items).extracting(PricingRequestItemDto::model)
             .containsExactly("1", "2", "3"); // sort_order preserves list order
+        assertThat(items).extracting(PricingRequestItemDto::productDescription)
+            .containsExactly("Toyota 1", "Honda 2", "Mazda 3");
         assertThat(items).extracting(PricingRequestItemDto::sortOrder).containsExactly(0, 1, 2);
     }
 
     @Test
     void create_withBlankTargetCurrency_storesNull() {
         CreatePricingRequestRequest create = new CreatePricingRequestRequest(
-            PricingRequestRecipient.OWNER, null, null, null, null, "   ", null,
+            PricingRequestRecipient.OWNER, null, null, null, null, "   ", null, clientRequestId("2"),
             List.of(item("Toyota", "1")));
 
         long id = requests.create(ticketId, requests.nextRequestCode(), create, salesActorId);
 
         assertThat(requests.findSummary(id).orElseThrow().targetCurrency()).isNull();
+    }
+
+    @Test
+    void findByClientRequestId_returnsExistingRequestForSameRequestedByAndKey() {
+        CreatePricingRequestRequest create = new CreatePricingRequestRequest(
+            PricingRequestRecipient.OWNER, null, "Owner Co.", null, null, null, null, clientRequestId("20"),
+            List.of(item("Toyota", "1")));
+        long id = requests.create(ticketId, requests.nextRequestCode(), create, salesActorId);
+
+        assertThat(requests.findByClientRequestId(salesActorId, clientRequestId("20")))
+            .map(PricingRequestSummaryDto::id)
+            .contains(id);
+    }
+
+    @Test
+    void uniqueIndex_rejectsSameRequestedByAndClientRequestIdButAllowsDifferentRequestedBy() {
+        String clientRequestId = clientRequestId("21");
+        CreatePricingRequestRequest create = new CreatePricingRequestRequest(
+            PricingRequestRecipient.OWNER, null, "Owner Co.", null, null, null, null, clientRequestId,
+            List.of(item("Toyota", "1")));
+        requests.create(ticketId, requests.nextRequestCode(), create, salesActorId);
+
+        assertThatThrownBy(() -> requests.create(ticketId, requests.nextRequestCode(), create, salesActorId))
+            .isInstanceOf(DataIntegrityViolationException.class);
+
+        long otherSalesActorId = createEmployee("พนักงานขาย คนที่สาม", "sales3@glr.co.th");
+        long otherTicketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), otherSalesActorId, "พนักงานขาย คนที่สาม");
+        long otherId = requests.create(otherTicketId, requests.nextRequestCode(), create, otherSalesActorId);
+
+        assertThat(requests.findSummary(otherId)).isPresent();
     }
 
     @Test
@@ -175,7 +209,7 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
         long cancelledId = createDraft();
         requests.transition(cancelledId, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, salesActorId);
         long otherActorRequestId = requests.create(otherTicketId, requests.nextRequestCode(),
-            new CreatePricingRequestRequest(PricingRequestRecipient.OWNER, null, null, null, null, null, null,
+            new CreatePricingRequestRequest(PricingRequestRecipient.OWNER, null, null, null, null, null, null, clientRequestId("3"),
                 List.of(item("Toyota", "1"))),
             otherSalesActorId);
 
@@ -269,7 +303,7 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
     void updateDraft_fullyReplacesEditableFields_includingClearingAFieldToNull_andOnlyAppliesToDraftRows() {
         long id = requests.create(ticketId, requests.nextRequestCode(),
             new CreatePricingRequestRequest(PricingRequestRecipient.DESIGNER, null, "Designer Co.", null,
-                new BigDecimal("100.00"), "thb", "first note", List.of(item("Toyota", "1"))),
+                new BigDecimal("100.00"), "thb", "first note", clientRequestId("4"), List.of(item("Toyota", "1"))),
             salesActorId);
 
         // Full replacement: recipientType actually changes (DESIGNER -> OWNER,
@@ -346,7 +380,7 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
 
     private long createDraft() {
         CreatePricingRequestRequest create = new CreatePricingRequestRequest(
-            PricingRequestRecipient.DESIGNER, null, null, null, null, null, null,
+            PricingRequestRecipient.DESIGNER, null, null, null, null, null, null, clientRequestId(String.valueOf(++clientRequestSeq)),
             List.of(item("Toyota", "1")));
         return requests.create(ticketId, requests.nextRequestCode(), create, salesActorId);
     }
@@ -363,7 +397,11 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
     }
 
     private PricingRequestItemRequest item(String brand, String model) {
-        return new PricingRequestItemRequest(null, null, null, brand, model, null, null, null, null,
+        return new PricingRequestItemRequest(null, null, null, brand, model, brand + " " + model, null, null, null, null,
             new BigDecimal("1"), null, "PIECE", QuantityType.REFERENCE, null, null, null);
+    }
+
+    private String clientRequestId(String suffix) {
+        return "22222222-2222-2222-2222-" + String.format("%012d", Long.parseLong(suffix));
     }
 }

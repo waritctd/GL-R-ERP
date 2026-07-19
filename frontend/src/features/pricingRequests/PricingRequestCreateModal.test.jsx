@@ -73,8 +73,8 @@ describe('PricingRequestCreateModal', () => {
     expect(createFn).not.toHaveBeenCalled();
   });
 
-  // Mirrors PricingRequestService.validateItems (Part 1 of the review-remediation
-  // plan): a line with no sourceTicketItemId/productId/model/specialRequirement
+  // Mirrors PricingRequestService.validateItems: a line with no
+  // sourceTicketItemId/productId/model/productDescription
   // does not identify a product. Unlike the two tests above, this is reported
   // per-row (attached to the specific item), not as a single form banner.
   it('blocks an item with no identity field and shows the error on that specific row', async () => {
@@ -88,17 +88,46 @@ describe('PricingRequestCreateModal', () => {
     expect(createFn).not.toHaveBeenCalled();
   });
 
-  it('clears the row error once a model is filled in, and allows submission', async () => {
+  it('keeps specialRequirement separate from product identity', async () => {
+    const { createFn } = renderModal({ ticketItems: [] });
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fireEvent.change(screen.getByLabelText('ข้อกำหนดพิเศษ'), { target: { value: 'ส่งด่วน' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+
+    const rowError = await screen.findByRole('alert');
+    expect(rowError.textContent).toContain('ต้องระบุสินค้าที่ต้องการเสนอราคา');
+    expect(createFn).not.toHaveBeenCalled();
+  });
+
+  it('clears the row error once productDescription is filled in, and allows submission', async () => {
     const { createFn } = renderModal({ ticketItems: [] });
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
     await screen.findByRole('alert');
 
-    fireEvent.change(screen.getByLabelText('รุ่น'), { target: { value: 'Model X' } });
+    fireEvent.change(screen.getByLabelText('รายละเอียดสินค้า'), { target: { value: 'กระเบื้องพอร์ซเลน 60x60 สีขาว' } });
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
 
     await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    expect(createFn).toHaveBeenCalledWith(expect.objectContaining({
+      clientRequestId: expect.stringMatching(/^[0-9a-f-]{36}$/i),
+      items: [expect.objectContaining({ productDescription: 'กระเบื้องพอร์ซเลน 60x60 สีขาว' })],
+    }));
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('reuses the same clientRequestId when a lost create response is retried', async () => {
+    const createFn = vi.fn().mockRejectedValue(new Error('lost response'));
+    renderModal({ createFn });
+
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await screen.findByRole('alert');
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(2));
+    expect(createFn.mock.calls[1][0].clientRequestId).toBe(createFn.mock.calls[0][0].clientRequestId);
   });
 
   // Fix 1 (review-remediation plan): "Create and submit" used to call createFn
@@ -158,7 +187,8 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
       },
       items: [{
         id: 5, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1', color: 'ขาว',
-        texture: 'ด้าน', size: '60x60', factory: 'SCG Ceramics', requestedQty: 20, requestedUnit: 'แผ่น',
+        productDescription: 'กระเบื้องพื้น SCG A1', texture: 'ด้าน', size: '60x60', factory: 'SCG Ceramics',
+        requestedQty: 20, requestedUnit: 'แผ่น',
         quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: null, specialRequirement: null,
       }],
       ...overrides,
@@ -181,6 +211,7 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
     expect(screen.getByDisplayValue('เจ้าของโครงการ ข.')).not.toBeNull();
     expect(screen.getByDisplayValue('20')).not.toBeNull();
     expect(screen.getByDisplayValue('โน้ตเดิม')).not.toBeNull();
+    expect(screen.getByDisplayValue('กระเบื้องพื้น SCG A1')).not.toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
 
@@ -188,6 +219,7 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
       recipientType: 'OWNER',
       recipientLabel: 'เจ้าของโครงการ ข.',
       note: 'โน้ตเดิม',
+      items: [expect.objectContaining({ productDescription: 'กระเบื้องพื้น SCG A1' })],
     })));
     expect(onCreated).toHaveBeenCalledTimes(1);
   });

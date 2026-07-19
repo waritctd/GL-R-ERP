@@ -8,8 +8,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,7 +58,7 @@ public class PricingRequestService {
     // sales_manager stays read-only oversight here too — never add it to
     // SALES_ROLES/IMPORT_ROLES.
     private static final Set<String> VIEWER_ROLES =
-        Set.of("sales", "import", "ceo", "account", "sales_manager");
+        Set.of("sales", "import", "ceo", "sales_manager");
     /** Bounded retry count for {@link #cancelOpenForTicket}'s per-row compare-and-set. */
     private static final int CANCEL_MAX_ATTEMPTS = 3;
 
@@ -80,10 +82,15 @@ public class PricingRequestService {
     public PricingRequestDetailDto createDraft(long ticketId, CreatePricingRequestRequest request, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto ticket = requireTicket(ticketId);
-        requireActive(ticket);
         if (ticket.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
+        String clientRequestId = validateClientRequestId(request.clientRequestId());
+        PricingRequestSummaryDto existing = existingForClientRequest(actor.id(), clientRequestId);
+        if (existing != null) {
+            return detail(requireSameTicket(existing, ticketId).id());
+        }
+        requireActive(ticket);
         // Validate BEFORE persisting — an unvalidated value hits a CHECK
         // constraint in the repository and fails closed (500), same reasoning
         // as TicketService.create's Priority guard.
@@ -95,7 +102,16 @@ public class PricingRequestService {
         validateSourceItemsBelongToTicket(ticketId, request.items());
 
         String requestCode = requests.nextRequestCode();
-        long id = requests.create(ticketId, requestCode, request, actor.id());
+        long id;
+        try {
+            id = requests.create(ticketId, requestCode, request, actor.id());
+        } catch (DataIntegrityViolationException e) {
+            existing = existingForClientRequest(actor.id(), clientRequestId);
+            if (existing != null) {
+                return detail(requireSameTicket(existing, ticketId).id());
+            }
+            throw e;
+        }
         requests.addEvent(id, ticketId, actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_CREATED, null, PricingRequestStatus.DRAFT, null, null);
         // Deliberately no notification, no ticket status change, no sales_stage
@@ -221,7 +237,7 @@ public class PricingRequestService {
         Set<Long> seenSourceItemIds = new HashSet<>();
         for (int i = 0; i < items.size(); i++) {
             PricingRequestItemDto item = items.get(i);
-            if (!isProductIdentified(item.sourceTicketItemId(), item.productId(), item.model(), item.specialRequirement())) {
+            if (!isProductIdentified(item.sourceTicketItemId(), item.productId(), item.model(), item.productDescription())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, identityErrorMessage(i));
             }
             if (item.sourceTicketItemId() != null && !seenSourceItemIds.add(item.sourceTicketItemId())) {
@@ -548,9 +564,6 @@ public class PricingRequestService {
         requireRole(actor, VIEWER_ROLES);
         PricingRequestSummaryDto summary = requests.findSummary(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Pricing request not found"));
-        if ("sales".equals(actor.role()) && summary.ticketCreatedById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
-        }
         // A DRAFT is the rep's private scratchpad (see this class's Javadoc) — only
         // the owning sales rep and managerial oversight (ceo/sales_manager) may see
         // it. import/account must not, even though they can see every other status.
@@ -560,6 +573,9 @@ public class PricingRequestService {
         // from "no such id", which is what we want a non-owner to see.
         if (PricingRequestStatus.DRAFT.equals(summary.status()) && !canSeeDraft(actor, summary)) {
             throw new ApiException(HttpStatus.NOT_FOUND, "Pricing request not found");
+        }
+        if ("sales".equals(actor.role()) && summary.ticketCreatedById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
         return summary;
     }
@@ -602,16 +618,16 @@ public class PricingRequestService {
             if (!QuantityType.isValid(item.quantityType())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown quantity type '" + item.quantityType() + "'");
             }
-            if (!isProductIdentified(item.sourceTicketItemId(), item.productId(), item.model(), item.specialRequirement())) {
+            if (!isProductIdentified(item.sourceTicketItemId(), item.productId(), item.model(), item.productDescription())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, identityErrorMessage(i));
             }
         }
     }
 
     /**
-     * Shared identity predicate for Part 1 of the review-remediation plan:
+     * Shared identity predicate for product identity:
      * an item must actually name a product somehow — an existing deal line,
-     * a catalog reference, a model name, or a free-text special requirement.
+     * a catalog reference, a model name, or a dedicated product description.
      * Brand alone is deliberately NOT sufficient (a brand with no model does
      * not identify a product), so this checks the other four fields only.
      *
@@ -621,8 +637,32 @@ public class PricingRequestService {
      * record types with no shared interface, so callers extract the four
      * relevant fields themselves rather than this method taking either DTO.
      */
-    private static boolean isProductIdentified(Long sourceTicketItemId, Long productId, String model, String specialRequirement) {
-        return sourceTicketItemId != null || productId != null || hasText(model) || hasText(specialRequirement);
+    private static boolean isProductIdentified(Long sourceTicketItemId, Long productId, String model, String productDescription) {
+        return sourceTicketItemId != null || productId != null || hasText(model) || hasText(productDescription);
+    }
+
+    private String validateClientRequestId(String clientRequestId) {
+        if (!hasText(clientRequestId)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId must be a UUID");
+        }
+        try {
+            return UUID.fromString(clientRequestId).toString();
+        } catch (IllegalArgumentException e) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId must be a UUID");
+        }
+    }
+
+    private PricingRequestSummaryDto existingForClientRequest(long requestedBy, String clientRequestId) {
+        var existing = requests.findByClientRequestId(requestedBy, clientRequestId);
+        return existing == null ? null : existing.orElse(null);
+    }
+
+    private PricingRequestSummaryDto requireSameTicket(PricingRequestSummaryDto existing, long ticketId) {
+        if (existing.ticketId() != ticketId) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "clientRequestId has already been used for a different ticket");
+        }
+        return existing;
     }
 
     private static boolean hasText(String value) {

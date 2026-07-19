@@ -305,12 +305,15 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(persistedAssignedImportId).isEqualTo(importUserId);
     }
 
-    // ── extra: a second sales rep cannot read the first rep's pricing requests ──
+    // ── extra: a second sales rep cannot discover draft, then cannot read submitted ──
 
     @Test
     void aSecondSalesRep_cannotReadTheFirstReps_pricingRequest() {
         long designerId = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
 
+        assertThatThrownBy(() -> pricingRequestService.get(designerId, secondSalesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+        pricingRequestService.submit(designerId, salesActor);
         assertThatThrownBy(() -> pricingRequestService.get(designerId, secondSalesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThatThrownBy(() -> pricingRequestService.listForTicket(ticketId, secondSalesActor))
@@ -322,19 +325,19 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
     private CreatePricingRequestRequest designerCreateRequest() {
         return new CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
-            new BigDecimal("1000.00"), "THB", "note for designer",
+            new BigDecimal("1000.00"), "THB", "note for designer", "33333333-3333-3333-3333-333333333333",
             List.of(pricingItem("Toyota", "Hilux")));
     }
 
     private CreatePricingRequestRequest buyerCreateRequest() {
         return new CreatePricingRequestRequest(
             PricingRequestRecipient.BUYER, null, "Buyer Co.", LocalDate.now().plusDays(21),
-            new BigDecimal("1200.00"), "THB", "note for buyer",
+            new BigDecimal("1200.00"), "THB", "note for buyer", "44444444-4444-4444-4444-444444444444",
             List.of(pricingItem("Honda", "Civic")));
     }
 
     private PricingRequestItemRequest pricingItem(String brand, String model) {
-        return new PricingRequestItemRequest(null, null, null, brand, model, null, null, null, null,
+        return new PricingRequestItemRequest(null, null, null, brand, model, brand + " " + model, null, null, null, null,
             new BigDecimal("1"), null, "PIECE", QuantityType.REFERENCE, null, null, null);
     }
 

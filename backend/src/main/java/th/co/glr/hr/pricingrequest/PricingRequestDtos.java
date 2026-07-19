@@ -48,6 +48,7 @@ public final class PricingRequestDtos {
         Long variantId,
         String brand,
         String model,
+        String productDescription,
         String color,
         String texture,
         String size,

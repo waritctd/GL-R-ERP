@@ -20,10 +20,18 @@ async function ownedActiveTicketWithItems() {
   return ticket;
 }
 
+let clientRequestSeq = 0;
+
+function nextClientRequestId() {
+  clientRequestSeq += 1;
+  return `66666666-6666-4666-8666-${String(clientRequestSeq).padStart(12, '0')}`;
+}
+
 function validPayload(sourceItem) {
   return {
     recipientType: 'DESIGNER',
     recipientLabel: 'ผู้ออกแบบทดสอบ',
+    clientRequestId: nextClientRequestId(),
     items: [{
       sourceTicketItemId: sourceItem.id,
       brand: sourceItem.brand,
@@ -80,15 +88,26 @@ describe('mockApi.pricingRequests.create item validation', () => {
     await expect(api.pricingRequests.create(ticket.summary.id, payload)).rejects.toThrow();
   });
 
-  it('accepts an item identified only by specialRequirement, with no sourceTicketItemId/model/brand', async () => {
+  it('rejects an item identified only by specialRequirement, with no sourceTicketItemId/model/brand', async () => {
     const ticket = await ownedActiveTicketWithItems();
     const payload = validPayload(ticket.items[0]);
     payload.items[0].sourceTicketItemId = null;
     payload.items[0].brand = null;
     payload.items[0].model = null;
     payload.items[0].specialRequirement = 'กระเบื้องลายไม้สีเข้ม ผิวด้าน';
+    await expect(api.pricingRequests.create(ticket.summary.id, payload)).rejects.toThrow();
+  });
+
+  it('accepts an item identified only by productDescription', async () => {
+    const ticket = await ownedActiveTicketWithItems();
+    const payload = validPayload(ticket.items[0]);
+    payload.items[0].sourceTicketItemId = null;
+    payload.items[0].brand = null;
+    payload.items[0].model = null;
+    payload.items[0].productDescription = 'กระเบื้องพอร์ซเลน 60x60 สีขาว';
     const { pricingRequest } = await api.pricingRequests.create(ticket.summary.id, payload);
     expect(pricingRequest.summary.status).toBe('DRAFT');
+    expect(pricingRequest.items[0].productDescription).toBe('กระเบื้องพอร์ซเลน 60x60 สีขาว');
   });
 
   // submit()'s own re-check against the persisted items (mirroring
@@ -100,6 +119,26 @@ describe('mockApi.pricingRequests.create item validation', () => {
   // mutated back into the mock's own store. That asymmetry is expected: the
   // real-world scenario is a row that predates this rule in a persisted
   // database, which a fresh in-memory mock session has no equivalent of.
+});
+
+describe('mockApi.pricingRequests create idempotency', () => {
+  it('same user and same clientRequestId returns the existing request without a duplicate CREATED event or item rows', async () => {
+    const ticket = await ownedActiveTicketWithItems();
+    const payload = validPayload(ticket.items[0]);
+    const first = await api.pricingRequests.create(ticket.summary.id, payload);
+    const second = await api.pricingRequests.create(ticket.summary.id, payload);
+
+    expect(second.pricingRequest.summary.id).toBe(first.pricingRequest.summary.id);
+    expect(second.pricingRequest.events.filter((e) => e.eventKind === 'PRICING_REQUEST_CREATED')).toHaveLength(1);
+    expect(second.pricingRequest.items).toHaveLength(first.pricingRequest.items.length);
+  });
+
+  it('same user and different clientRequestId creates a separate request', async () => {
+    const ticket = await ownedActiveTicketWithItems();
+    const first = await api.pricingRequests.create(ticket.summary.id, validPayload(ticket.items[0]));
+    const second = await api.pricingRequests.create(ticket.summary.id, validPayload(ticket.items[0]));
+    expect(second.pricingRequest.summary.id).not.toBe(first.pricingRequest.summary.id);
+  });
 });
 
 // Review-remediation plan Commit D, part 1: the DB column is

@@ -23,6 +23,7 @@ function emptyItemFromTicketItem(ticketItem) {
     productId: null,
     brand: ticketItem?.brand ?? '',
     model: ticketItem?.model ?? '',
+    productDescription: '',
     color: ticketItem?.color ?? '',
     texture: ticketItem?.texture ?? '',
     size: ticketItem?.size ?? '',
@@ -48,6 +49,7 @@ function itemFromExisting(item) {
     productId: item?.productId ?? null,
     brand: item?.brand ?? '',
     model: item?.model ?? '',
+    productDescription: item?.productDescription ?? '',
     color: item?.color ?? '',
     texture: item?.texture ?? '',
     size: item?.size ?? '',
@@ -83,15 +85,20 @@ function itemFromExisting(item) {
  */
 // Mirrors PricingRequestService.validateItems (Part 1 of the review-remediation
 // plan): an item must actually name a product somehow — a link back to a deal
-// line, a catalog product, a model name, or a free-text special requirement.
+// line, a catalog product, a model name, or a dedicated product description.
 // Brand alone is deliberately NOT enough (a brand with no model does not
 // identify a product). This modal has no productId field yet (no catalog
 // picker — see the class doc below), so in practice this reduces to
-// sourceTicketItemId / model / specialRequirement, but the productId check is
+// sourceTicketItemId / model / productDescription, but the productId check is
 // kept here to stay byte-for-byte in sync with the backend predicate.
 function itemIdentityValid(item) {
   return Boolean(item.sourceTicketItemId) || Boolean(item.productId)
-    || Boolean(item.model?.trim()) || Boolean(item.specialRequirement?.trim());
+    || Boolean(item.model?.trim()) || Boolean(item.productDescription?.trim());
+}
+
+function generateClientRequestId() {
+  return globalThis.crypto?.randomUUID?.()
+    ?? '00000000-0000-4000-8000-' + String(Date.now()).slice(-12).padStart(12, '0');
 }
 
 export function PricingRequestCreateModal({
@@ -108,6 +115,7 @@ export function PricingRequestCreateModal({
   ));
   const [targetCurrency, setTargetCurrency] = useState(() => initialSummary?.targetCurrency ?? 'THB');
   const [note, setNote] = useState(() => initialSummary?.note ?? '');
+  const [clientRequestId] = useState(() => generateClientRequestId());
   const [items, setItems] = useState(() => {
     if (isEdit) {
       return initialValue?.items?.length ? initialValue.items.map(itemFromExisting) : [emptyItemFromTicketItem(null)];
@@ -134,7 +142,7 @@ export function PricingRequestCreateModal({
 
   function updateItem(index, field, value) {
     setItems((cur) => cur.map((item, i) => (i === index ? { ...item, [field]: value } : item)));
-    if (['sourceTicketItemId', 'model', 'specialRequirement'].includes(field)) {
+    if (['sourceTicketItemId', 'productId', 'model', 'productDescription'].includes(field)) {
       setItemErrors((cur) => {
         if (!(index in cur)) return cur;
         const next = { ...cur };
@@ -176,8 +184,8 @@ export function PricingRequestCreateModal({
     return Object.keys(next).length === 0;
   }
 
-  function buildPayload() {
-    return {
+  function buildPayload({ includeClientRequestId = false } = {}) {
+    const payload = {
       recipientType,
       recipientLabel: recipientLabel.trim(),
       requiredDate: requiredDate || null,
@@ -189,6 +197,7 @@ export function PricingRequestCreateModal({
         productId: item.productId ?? null,
         brand: item.brand?.trim() || null,
         model: item.model?.trim() || null,
+        productDescription: item.productDescription?.trim() || null,
         color: item.color?.trim() || null,
         texture: item.texture?.trim() || null,
         size: item.size?.trim() || null,
@@ -201,6 +210,8 @@ export function PricingRequestCreateModal({
         specialRequirement: item.specialRequirement?.trim() || null,
       })),
     };
+    if (includeClientRequestId) payload.clientRequestId = clientRequestId;
+    return payload;
   }
 
   // Fix 1 (review-remediation plan): both create-mode actions below share the
@@ -225,7 +236,7 @@ export function PricingRequestCreateModal({
       if (createdId != null) {
         if (updateFn) await updateFn(createdId, buildPayload());
       } else {
-        const created = await createFn(buildPayload());
+        const created = await createFn(buildPayload({ includeClientRequestId: true }));
         const id = created?.pricingRequest?.summary?.id;
         if (id != null) setCreatedId(id);
       }
@@ -249,7 +260,7 @@ export function PricingRequestCreateModal({
       if (id != null) {
         if (updateFn) await updateFn(id, buildPayload());
       } else {
-        const created = await createFn(buildPayload());
+        const created = await createFn(buildPayload({ includeClientRequestId: true }));
         id = created?.pricingRequest?.summary?.id;
         if (id != null) setCreatedId(id);
       }
@@ -391,6 +402,10 @@ export function PricingRequestCreateModal({
                   <label className="flex flex-col gap-1 text-xs">
                     รุ่น
                     <input value={item.model} onChange={(e) => updateItem(index, 'model', e.target.value)} />
+                  </label>
+                  <label className="col-span-2 flex flex-col gap-1 text-xs sm:col-span-3">
+                    รายละเอียดสินค้า
+                    <input value={item.productDescription} onChange={(e) => updateItem(index, 'productDescription', e.target.value)} />
                   </label>
                   <label className="flex flex-col gap-1 text-xs">
                     สี
