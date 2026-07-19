@@ -100,8 +100,23 @@ export function FormField({ label, htmlFor, id, error, hint, required = false, c
     <div className="form-field">
       {label ? (
         <label htmlFor={fieldId}>
-          {label}
-          {required ? <span className="field-required" aria-hidden="true"> *</span> : null}
+          {/*
+            The global `label { display: grid }` rule (styles.css) is relied
+            on elsewhere to stack a label's own text above its control when
+            both are children of the same <label> (see e.g. AttendancePage,
+            CommissionPage). Under that rule every direct child — including
+            a bare text node — becomes its own grid item, so if the label
+            text and the required-marker <span> were direct siblings here,
+            grid would lay them out as two stacked items with a 7px gap
+            between them instead of on one line. Wrapping both in a single
+            inline element keeps them as one grid item, so they render
+            inline as originally intended, without touching the shared
+            global rule.
+          */}
+          <span className="form-field__label-text">
+            {label}
+            {required ? <span className="field-required" aria-hidden="true"> *</span> : null}
+          </span>
         </label>
       ) : null}
       {augmentedChildren}

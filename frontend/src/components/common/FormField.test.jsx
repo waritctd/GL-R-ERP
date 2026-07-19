@@ -141,4 +141,51 @@ describe('FormField', () => {
 
     expect(screen.getByLabelText('เดี่ยว').getAttribute('aria-invalid')).toBe('true');
   });
+
+  // Regression test for the label/required-marker stacking bug: the global
+  // `label { display: grid; gap: 7px }` rule (styles.css) turns every
+  // *direct* child of a <label> — including a bare text node — into its own
+  // grid item. The original markup rendered the label text and the
+  // `.field-required` marker as two direct siblings of <label>, which meant
+  // grid treated them as two stacked items with a 7px gap, pushing the "*"
+  // onto its own line below the label text instead of inline after it.
+  //
+  // jsdom does not run real layout, so this can't assert on
+  // getBoundingClientRect (it will always report zeroes). Instead this
+  // asserts the *structural* precondition that determines the CSS Grid
+  // outcome: a <label> must have exactly one direct in-flow node (element or
+  // non-whitespace text) for grid to have nothing to stack. That is a proxy
+  // for "renders on one line", not a pixel measurement of it — but it is an
+  // exact proxy for this specific bug, because it is precisely the condition
+  // the `label { display: grid }` rule keys off. It would not catch a
+  // *different* mechanism of visual stacking (e.g. width/overflow wrapping),
+  // but it fails on exactly the markup shape that caused this regression and
+  // passes only once the label text and marker share a single wrapper.
+  it('keeps the label text and the required marker as a single grid item so they render on one line', () => {
+    const { container } = render(
+      <FormField label="ชื่อ-นามสกุล" htmlFor="nameRequired" required>
+        <input id="nameRequired" />
+      </FormField>,
+    );
+
+    const label = container.querySelector('label');
+    const directInFlowNodes = Array.from(label.childNodes).filter((node) => {
+      if (node.nodeType === Node.TEXT_NODE) return node.textContent.trim() !== '';
+      return node.nodeType === Node.ELEMENT_NODE;
+    });
+
+    // Old (buggy) markup produced 2 here: the label text node and the
+    // `.field-required` <span> as direct siblings of <label>, which is what
+    // made CSS Grid stack them with `gap: 7px` between them.
+    expect(directInFlowNodes).toHaveLength(1);
+
+    // The single grid item must still contain both the label text and the
+    // (still hidden-from-AT) required marker — i.e. this isn't passing by
+    // having silently dropped the asterisk.
+    const wrapper = directInFlowNodes[0];
+    expect(wrapper.textContent).toBe('ชื่อ-นามสกุล *');
+    const marker = wrapper.querySelector('.field-required');
+    expect(marker).toBeTruthy();
+    expect(marker.getAttribute('aria-hidden')).toBe('true');
+  });
 });
