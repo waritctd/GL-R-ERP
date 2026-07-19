@@ -64,15 +64,9 @@ class LatenessNeverAffectsPayrollTest {
             .isEmpty();
     }
 
-    /** The migration must keep saying why, so the constraint survives a schema refactor. */
-    @Test
-    void theMigrationRecordsTheLegalConstraintOnBothColumns() throws IOException {
-        String migration = Files.readString(
-            Path.of("src/main/resources/db/migration/V60__attendance_daily_activation.sql"),
-            StandardCharsets.UTF_8);
-
-        assertThat(migration).contains("§76");
-        assertThat(migration).contains("COMMENT ON COLUMN hr.attendance_daily.late_minutes");
-        assertThat(migration).contains("COMMENT ON COLUMN hr.attendance_daily.early_leave_minutes");
-    }
+    // The companion assertion — that the migration itself records §76 in COMMENT ON COLUMN — lives
+    // with that migration on chore/attendance-daily-migration-hold. It is held back because
+    // applying a version above the in-flight sales migrations (V56-V59) would make Flyway silently
+    // ignore theirs: out-of-order is off and prod runs with validation disabled. The guard above is
+    // the one that actually matters, and it does not depend on the migration.
 }
