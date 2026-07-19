@@ -68,7 +68,7 @@ class LatenessNeverAffectsPayrollTest {
     @Test
     void theMigrationRecordsTheLegalConstraintOnBothColumns() throws IOException {
         String migration = Files.readString(
-            Path.of("src/main/resources/db/migration/V55__attendance_daily_activation.sql"),
+            Path.of("src/main/resources/db/migration/V56__attendance_daily_activation.sql"),
             StandardCharsets.UTF_8);
 
         assertThat(migration).contains("§76");
