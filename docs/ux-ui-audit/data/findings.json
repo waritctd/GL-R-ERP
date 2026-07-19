@@ -32,7 +32,7 @@
       "date": "2026-07-18",
       "phaseB": {
         "branch": "fix/ux-audit-phase-2",
-        "status": "in progress",
+        "status": "complete — not pushed",
         "fixed": [
           "UX-09",
           "UX-07",
@@ -40,11 +40,10 @@
           "UX-12",
           "UX-08",
           "UX-38",
-          "UX-03"
-        ],
-        "remaining": [
+          "UX-03",
           "UX-04"
         ],
+        "remaining": [],
         "newFindings": [
           "UX-37 (open)",
           "UX-38 (fixed)"
@@ -62,6 +61,9 @@
         },
         "regressionsCaught": [
           "required asterisk stacked onto its own line (global label{display:grid}) — introduced by UX-12, fixed in 2ec3dcb, verified by real layout measurement 41px->17px"
+        ],
+        "stillOpen": [
+          "UX-37 (P3, XS — logged during Phase B, not fixed)"
         ]
       }
     }
@@ -174,7 +176,10 @@
       ],
       "validation": "Log in as CEO; confirm no dashboard stat implies an action CEO cannot reach.",
       "effort": "M",
-      "confidence": "High"
+      "confidence": "High",
+      "fixed": true,
+      "fixedIn": "6df5135",
+      "fixNote": "Three surfaces fixed on one principle — pending-work counts a role cannot reach are hidden, informational metrics stay as read-only context. The profile-requests card is hidden for roles without review access; ActionQueue items carry an explicit actionable flag (deliberate, because the notifications item has no destination yet IS actionable via the topbar bell, so inferring from a missing link would have wrongly dropped it); and quick actions plus the ดูทั้งหมด link — which had no gating at all — now filter through canAccessPath, the same predicate RequireAccess uses, so the dashboard can no longer offer a destination the router rejects. Verified live: CEO quick actions went 4 to 1, ดูทั้งหมด is no longer rendered, no unreachable queue row remains, and headcount is retained; HR is unchanged across all 8 cards, all 4 quick actions and ดูทั้งหมด. Both gates are mutation-tested."
     },
     {
       "id": "UX-05",
