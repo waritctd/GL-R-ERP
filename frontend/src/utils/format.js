@@ -81,8 +81,12 @@ export function pricingRequestStatusLabel(status) {
   const map = {
     DRAFT: { label: 'แบบร่าง', tone: 'neutral' },
     SUBMITTED: { label: 'รอ Import รับเรื่อง', tone: 'warning' },
-    IMPORT_REVIEWING: { label: 'Import กำลังเสนอราคา', tone: 'info' },
+    IMPORT_REVIEWING: { label: 'Import ตรวจคำขอราคา', tone: 'info' },
+    AWAITING_FACTORY_RESPONSE: { label: 'รอราคาโรงงาน', tone: 'warning' },
+    COSTING_IN_PROGRESS: { label: 'กำลังร่างต้นทุน', tone: 'info' },
+    READY_FOR_CEO_REVIEW: { label: 'ส่งให้ CEO ตรวจแล้ว', tone: 'success' },
     MORE_INFO_REQUIRED: { label: 'รอข้อมูลเพิ่มเติม', tone: 'warning' },
+    SUPERSEDED: { label: 'ถูกแทนที่แล้ว', tone: 'neutral' },
     CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },
   };
   return map[status] ?? { label: status || '-', tone: 'neutral' };

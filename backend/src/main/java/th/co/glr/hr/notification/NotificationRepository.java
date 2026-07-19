@@ -84,18 +84,28 @@ public class NotificationRepository {
     // Ticket-event types are short machine codes (e.g. "PRICE_PROPOSED"); hr.notification.title is
     // NOT NULL and human-facing, so map each to a short Thai label. Unmapped types (new ticket event
     // kinds added later) fall back to a generic title rather than failing the insert.
-    private static final Map<String, String> TICKET_EVENT_TITLES = Map.of(
-        "SUBMITTED", "มีคำขอราคาใหม่",
-        "PRICE_PROPOSED", "รอการอนุมัติราคา",
-        "APPROVED", "ราคาได้รับการอนุมัติ",
-        "REJECTED", "ราคาถูกตีกลับ",
-        "REVISION_REQUESTED", "ขอแก้ไขเอกสาร",
+    private static final Map<String, String> TICKET_EVENT_TITLES = Map.ofEntries(
+        Map.entry("SUBMITTED", "มีคำขอราคาใหม่"),
+        Map.entry("PRICE_PROPOSED", "รอการอนุมัติราคา"),
+        Map.entry("APPROVED", "ราคาได้รับการอนุมัติ"),
+        Map.entry("REJECTED", "ราคาถูกตีกลับ"),
+        Map.entry("REVISION_REQUESTED", "ขอแก้ไขเอกสาร"),
         // PricingRequestService.submit()/pickup() — added distinct from the
         // legacy "SUBMITTED" entry above (which collides with
         // TicketEventKind.SUBMITTED) so a pricing-request notification is no
         // longer indistinguishable from a ticket-submitted one.
-        "PRICING_REQUEST_SUBMITTED", "มีคำขอราคาใหม่",
-        "PICKED_UP", "คำขอราคาถูกรับเรื่องแล้ว"
+        Map.entry("PRICING_REQUEST_SUBMITTED", "มีคำขอราคาใหม่"),
+        Map.entry("PICKED_UP", "คำขอราคาถูกรับเรื่องแล้ว"),
+        Map.entry("FACTORY_EMAIL_READY", "ร่างอีเมลโรงงานพร้อมตรวจ"),
+        Map.entry("FACTORY_EMAIL_SENT", "ส่งคำขอโรงงานแล้ว"),
+        Map.entry("FACTORY_RESPONSE_RECEIVED", "ได้รับราคาโรงงานแล้ว"),
+        Map.entry("FACTORY_NEGOTIATION_STARTED", "เริ่มเจรจากับโรงงาน"),
+        Map.entry("FACTORY_RESPONSE_READY_FOR_COSTING", "ราคาโรงงานพร้อมคำนวณต้นทุน"),
+        Map.entry("FACTORY_RESPONSE_REVISED", "ราคาโรงงานมีฉบับแก้ไข"),
+        Map.entry("FACTORY_NOT_AVAILABLE", "โรงงานไม่สามารถเสนอราคาได้"),
+        Map.entry("PRICING_COSTING_STARTED", "เริ่มร่างต้นทุน"),
+        Map.entry("PRICING_COSTING_CALCULATED", "คำนวณต้นทุนแล้ว"),
+        Map.entry("PRICING_COSTING_SUBMITTED", "ส่งต้นทุนให้ CEO แล้ว")
     );
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {
