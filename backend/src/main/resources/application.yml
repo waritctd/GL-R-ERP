@@ -81,7 +81,10 @@ app:
   leave:
     advance-notice-days: ${APP_LEAVE_ADVANCE_NOTICE_DAYS:7}
   overtime:
-    advance-notice-days: ${APP_OVERTIME_ADVANCE_NOTICE_DAYS:3}
+    # Advance notice was removed on CEO instruction; same-day and retroactive requests are allowed
+    # when the reason explains why. APP_OVERTIME_ADVANCE_NOTICE_DAYS is no longer read — remove it
+    # from any deployment environment that still sets it.
+    retroactive-window-days: ${APP_OVERTIME_RETROACTIVE_WINDOW_DAYS:60}
   uploads-dir: ${APP_UPLOADS_DIR:./uploads}
   bot:
     api-token: ${BOT_API_TOKEN:}

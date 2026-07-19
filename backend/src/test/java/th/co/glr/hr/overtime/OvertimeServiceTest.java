@@ -3,9 +3,11 @@ package th.co.glr.hr.overtime;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -109,7 +111,7 @@ class OvertimeServiceTest {
     }
 
     @Test
-    void directManagersCanSubmitOvertimeForReportsWithAdvanceNotice() {
+    void directManagersCanSubmitOvertimeForReports() {
         LocalDate workDate = LocalDate.now().plusDays(4);
         OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
         SubmitOvertimeRequest request = new SubmitOvertimeRequest(
@@ -133,21 +135,92 @@ class OvertimeServiceTest {
     }
 
     @Test
-    void submitRequiresThreeDayAdvanceNotice() {
-        SubmitOvertimeRequest request = new SubmitOvertimeRequest(
-            null,
-            LocalDate.now().plusDays(2),
-            OffsetDateTime.now().plusDays(2),
-            OffsetDateTime.now().plusDays(2).plusHours(2),
-            "WORKDAY",
-            "Too soon"
-        );
+    void submitAllowsSameDayOvertime() {
+        SubmitOvertimeRequest request = backdatedSubmit(0, "Same day");
+        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+        when(overtimeRepository.create(eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY), any(LocalDate.class)))
+            .thenReturn(60L);
+        when(overtimeRepository.findById(60L)).thenReturn(Optional.of(requestDto(60L, 10L, "SUBMITTED")));
+
+        assertThat(overtimeService.submit(request, user("employee", 10L)).id()).isEqualTo(60L);
+    }
+
+    // The rule the CEO asked for: an employee may file their own overtime after the fact.
+    // Before this change the service returned 403 unless a manager filed it for them.
+    @Test
+    void employeesCanSelfFileRetroactiveOvertimeWithDetailedReason() {
+        SubmitOvertimeRequest request = backdatedSubmit(2, "Emergency line stoppage, filed late after the shift ended");
+        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+        when(overtimeRepository.create(eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY), any(LocalDate.class)))
+            .thenReturn(61L);
+        when(overtimeRepository.findById(61L)).thenReturn(Optional.of(requestDto(61L, 10L, "SUBMITTED")));
+
+        assertThat(overtimeService.submit(request, user("employee", 10L)).id()).isEqualTo(61L);
+    }
+
+    @Test
+    void retroactiveOvertimeRequiresDetailedReason() {
+        SubmitOvertimeRequest request = backdatedSubmit(2, "OT");
         when(overtimeRepository.employeeExists(10L)).thenReturn(true);
 
         assertThatThrownBy(() -> overtimeService.submit(request, user("employee", 10L)))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void retroactiveOvertimeBeyondTheWindowIsRejected() {
+        SubmitOvertimeRequest request = backdatedSubmit(120, "Found an unclaimed shift while tidying up old records");
+        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+
+        assertThatThrownBy(() -> overtimeService.submit(request, user("employee", 10L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    // Payroll derives overtime by payroll_month and writes a period once, so a request landing in a
+    // processed month would be approved and then never paid.
+    @Test
+    void retroactiveOvertimeIntoProcessedPayrollMonthIsRejected() {
+        SubmitOvertimeRequest request = backdatedSubmit(2, "Filed late after the customer escalation closed");
+        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+        when(overtimeRepository.payrollMonthProcessed(request.workDate().withDayOfMonth(1))).thenReturn(true);
+
+        assertThatThrownBy(() -> overtimeService.submit(request, user("employee", 10L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    // A request filed before the cut-off can still reach approval after payroll has run.
+    @Test
+    void managerApprovalIntoProcessedPayrollMonthIsRejected() {
+        OvertimeRequestDto submitted = requestDto(78L, 10L, "SUBMITTED");
+        when(overtimeRepository.findById(78L)).thenReturn(Optional.of(submitted));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, null, true)));
+        when(overtimeRepository.payrollMonthProcessed(submitted.workDate().withDayOfMonth(1))).thenReturn(true);
+
+        assertThatThrownBy(() -> overtimeService.approve(78L, new ReviewOvertimeRequest("ok"), user("employee", 99L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.CONFLICT);
+        verify(overtimeRepository, never())
+            .managerApprove(anyLong(), anyLong(), any(OvertimeCalculation.class), any(BigDecimal.class), anyString());
+    }
+
+    @Test
+    void ceoApprovalIntoProcessedPayrollMonthIsRejected() {
+        OvertimeRequestDto managerApproved = requestDto(79L, 10L, "MANAGER_APPROVED");
+        when(overtimeRepository.findById(79L)).thenReturn(Optional.of(managerApproved));
+        when(overtimeRepository.payrollMonthProcessed(managerApproved.workDate().withDayOfMonth(1))).thenReturn(true);
+
+        assertThatThrownBy(() -> overtimeService.approve(79L, new ReviewOvertimeRequest("ok"), user("ceo", 500L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.CONFLICT);
+        verify(overtimeRepository, never()).ceoApprove(anyLong(), anyLong(), anyString());
     }
 
     @Test
@@ -163,7 +236,10 @@ class OvertimeServiceTest {
                 OffsetDateTime.parse("2026-07-15T08:05:00+07:00"),
                 OffsetDateTime.parse("2026-07-15T19:40:00+07:00")
             )));
-        when(overtimeRepository.managerApprove(eq(77L), eq(99L), any(OvertimeCalculation.class), eq("ok")))
+        when(overtimeRepository.findSalaryBasisAsOf(10L, LocalDate.parse("2026-07-15")))
+            .thenReturn(new BigDecimal("30000.00"));
+        when(overtimeRepository.managerApprove(
+                eq(77L), eq(99L), any(OvertimeCalculation.class), eq(new BigDecimal("30000.00")), eq("ok")))
             .thenReturn(1);
         when(overtimeRepository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
         UserPrincipal actor = user("employee", 99L);
@@ -171,7 +247,8 @@ class OvertimeServiceTest {
         OvertimeRequestDto result = overtimeService.approve(77L, new ReviewOvertimeRequest("ok"), actor);
 
         ArgumentCaptor<OvertimeCalculation> captor = ArgumentCaptor.forClass(OvertimeCalculation.class);
-        verify(overtimeRepository).managerApprove(eq(77L), eq(99L), captor.capture(), eq("ok"));
+        verify(overtimeRepository).managerApprove(
+            eq(77L), eq(99L), captor.capture(), eq(new BigDecimal("30000.00")), eq("ok"));
         OvertimeCalculation calculation = captor.getValue();
         assertThat(result.status()).isEqualTo("MANAGER_APPROVED");
         assertThat(calculation.actualStartAt()).isEqualTo(OffsetDateTime.parse("2026-07-15T18:00:00+07:00"));
@@ -271,13 +348,18 @@ class OvertimeServiceTest {
         when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, null, 5L, true)));
         when(overtimeRepository.findAttendanceBounds(eq(10L), any(OffsetDateTime.class), any(OffsetDateTime.class)))
             .thenReturn(Optional.empty());
-        when(overtimeRepository.managerApprove(eq(77L), eq(88L), any(OvertimeCalculation.class), eq("ok"))).thenReturn(1);
+        when(overtimeRepository.findSalaryBasisAsOf(10L, LocalDate.parse("2026-07-15")))
+            .thenReturn(new BigDecimal("30000.00"));
+        when(overtimeRepository.managerApprove(
+                eq(77L), eq(88L), any(OvertimeCalculation.class), any(BigDecimal.class), eq("ok")))
+            .thenReturn(1);
         when(overtimeRepository.findCeoApproverEmployeeIds()).thenReturn(List.of());
 
         OvertimeRequestDto result = overtimeService.approve(77L, new ReviewOvertimeRequest("ok"), manager(88L, 5L));
 
         assertThat(result.status()).isEqualTo("MANAGER_APPROVED");
-        verify(overtimeRepository).managerApprove(eq(77L), eq(88L), any(OvertimeCalculation.class), eq("ok"));
+        verify(overtimeRepository).managerApprove(
+            eq(77L), eq(88L), any(OvertimeCalculation.class), any(BigDecimal.class), eq("ok"));
     }
 
     @Test
@@ -360,6 +442,13 @@ class OvertimeServiceTest {
             "WORKDAY",
             "Customer shipment"
         );
+    }
+
+    /** A self-filed request {@code daysAgo} in the past (0 = today), with the given reason. */
+    private SubmitOvertimeRequest backdatedSubmit(int daysAgo, String reason) {
+        LocalDate workDate = LocalDate.now().minusDays(daysAgo);
+        OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
+        return new SubmitOvertimeRequest(null, workDate, startAt, startAt.plusHours(2), "WORKDAY", reason);
     }
 
     private OvertimeRequestDto requestDto(long id, long employeeId, String status) {

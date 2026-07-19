@@ -1,5 +1,6 @@
 package th.co.glr.hr.overtime;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -22,6 +23,8 @@ public class OvertimeService {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
     private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo");
     private static final int ATTENDANCE_LOOKAROUND_HOURS = 16;
+    /** A backdated request has to say why it is backdated, not just "OT". */
+    private static final int BACKDATED_REASON_MIN_LENGTH = 20;
 
     private final OvertimeRepository overtimeRepository;
     private final AuditService auditService;
@@ -88,8 +91,7 @@ public class OvertimeService {
         long employeeId = resolveTargetEmployee(request.employeeId(), user);
         validateEmployee(employeeId);
         validatePlannedWindow(request);
-        validateAdvanceNotice(request);
-        validateRetroactiveSubmission(request, employeeId, actorEmployeeId, user);
+        validateRetroactiveWindow(request);
 
         int plannedMinutes = minutesBetween(request.plannedStartAt(), request.plannedEndAt());
         LocalDate payrollMonth = request.workDate().withDayOfMonth(1);
@@ -122,9 +124,11 @@ public class OvertimeService {
             Long actorEmployeeId,
             OvertimeRequestDto existing) {
         requireManager(existing.employeeId(), user);
+        requirePayrollMonthOpen(existing.workDate());
 
         OvertimeCalculation calculation = calculate(existing);
-        int updated = overtimeRepository.managerApprove(id, actorEmployeeId, calculation, note(request));
+        BigDecimal salaryBasis = overtimeRepository.findSalaryBasisAsOf(existing.employeeId(), existing.workDate());
+        int updated = overtimeRepository.managerApprove(id, actorEmployeeId, calculation, salaryBasis, note(request));
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "Overtime request has already been reviewed");
         }
@@ -141,6 +145,7 @@ public class OvertimeService {
             Long actorEmployeeId,
             OvertimeRequestDto existing) {
         requireCeo(user);
+        requirePayrollMonthOpen(existing.workDate());
 
         int updated = overtimeRepository.ceoApprove(id, actorEmployeeId, note(request));
         if (updated != 1) {
@@ -306,31 +311,50 @@ public class OvertimeService {
         }
     }
 
-    private void validateAdvanceNotice(SubmitOvertimeRequest request) {
-        int advanceNoticeDays = Math.max(0, appProperties.getOvertime().getAdvanceNoticeDays());
-        LocalDate earliestWorkDate = LocalDate.now(BUSINESS_ZONE).plusDays(advanceNoticeDays);
-        if (request.workDate().isBefore(earliestWorkDate)) {
-            throw new ApiException(
-                HttpStatus.BAD_REQUEST,
-                "Overtime must be submitted at least " + advanceNoticeDays + " days before the work date"
-            );
-        }
-    }
-
-    private void validateRetroactiveSubmission(
-            SubmitOvertimeRequest request,
-            long employeeId,
-            long actorEmployeeId,
-            UserPrincipal user) {
+    /**
+     * Bounds a retroactive request. Advance notice was removed on CEO instruction — anyone may file
+     * for today or for a past date, including for themselves — so the only remaining limits are
+     * that the claim must still be payable and that the employee has explained why it is late.
+     */
+    private void validateRetroactiveWindow(SubmitOvertimeRequest request) {
         LocalDate today = LocalDate.now(BUSINESS_ZONE);
         if (!request.workDate().isBefore(today)) {
             return;
         }
-        if (employeeId == actorEmployeeId) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Retroactive overtime must be submitted by the employee's manager");
+        int windowDays = Math.max(0, appProperties.getOvertime().getRetroactiveWindowDays());
+        if (request.workDate().isBefore(today.minusDays(windowDays))) {
+            throw new ApiException(
+                HttpStatus.BAD_REQUEST,
+                "Overtime can only be filed up to " + windowDays + " days after the work date"
+            );
         }
-        if (!managesEmployee(employeeId, user)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only the employee's manager can submit retroactive overtime");
+        String reason = request.reason() == null ? "" : request.reason().trim();
+        if (reason.length() < BACKDATED_REASON_MIN_LENGTH) {
+            throw new ApiException(
+                HttpStatus.BAD_REQUEST,
+                "A retroactive overtime request must explain clearly why it is late (at least "
+                    + BACKDATED_REASON_MIN_LENGTH + " characters)"
+            );
+        }
+        requirePayrollMonthOpen(request.workDate());
+    }
+
+    /**
+     * Refuses to touch a work date whose payroll month has already been processed.
+     *
+     * <p>Payroll derives overtime by {@code payroll_month} and a processed period is inserted once,
+     * so a request that lands in a closed month is approved and then never paid — silently. This
+     * runs at submit and again at each approval stage, because a request filed before the cut-off
+     * can still be approved after it.
+     */
+    private void requirePayrollMonthOpen(LocalDate workDate) {
+        LocalDate payrollMonth = workDate.withDayOfMonth(1);
+        if (overtimeRepository.payrollMonthProcessed(payrollMonth)) {
+            throw new ApiException(
+                HttpStatus.CONFLICT,
+                "Payroll for " + payrollMonth.getYear() + "-" + payrollMonth.getMonthValue()
+                    + " has already been processed; this overtime can no longer be paid"
+            );
         }
     }
 

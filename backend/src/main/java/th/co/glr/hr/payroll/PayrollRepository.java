@@ -55,8 +55,12 @@ public class PayrollRepository {
     public Map<Long, BigDecimal> findApprovedOvertimePayByEmployee(LocalDate payrollMonth) {
         return jdbc.query("""
             SELECT ot.employee_id,
+                   -- ot.salary_basis is the authority: it was frozen at manager approval, resolved
+                   -- as of the work date, so a later salary change never re-prices approved work.
+                   -- The employee join/COALESCE is only a safety net for rows approved before that
+                   -- column existed (or any NULL that slips through).
                    COALESCE(SUM((ot.payable_minutes::numeric / 60)
-                       * ((COALESCE(e.current_salary, 0) / 30 / 8) * ot.pay_rate_multiplier)), 0) AS overtime_pay
+                       * ((COALESCE(ot.salary_basis, e.current_salary, 0) / 30 / 8) * ot.pay_rate_multiplier)), 0) AS overtime_pay
               FROM hr.overtime_request ot
               JOIN hr.employee e ON e.employee_id = ot.employee_id
              WHERE ot.status = 'APPROVED'
