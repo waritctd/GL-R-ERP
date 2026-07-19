@@ -9,6 +9,8 @@ import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.attendance.daily.AttendanceDailyService;
+import th.co.glr.hr.attendance.daily.EmployeeDay;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -25,16 +27,19 @@ public class OvertimeService {
     private final AuditService auditService;
     private final NotificationService notificationService;
     private final AppProperties appProperties;
+    private final AttendanceDailyService attendanceDailyService;
 
     public OvertimeService(
             OvertimeRepository overtimeRepository,
             AuditService auditService,
             NotificationService notificationService,
-            AppProperties appProperties) {
+            AppProperties appProperties,
+            AttendanceDailyService attendanceDailyService) {
         this.overtimeRepository = overtimeRepository;
         this.auditService = auditService;
         this.notificationService = notificationService;
         this.appProperties = appProperties;
+        this.attendanceDailyService = attendanceDailyService;
     }
 
     public List<OvertimeRequestDto> list(
@@ -144,7 +149,21 @@ public class OvertimeService {
         OvertimeRequestDto after = requireRequest(id);
         auditService.record(user, "CEO_APPROVE_OVERTIME_REQUEST", "overtime_request", id, existing, after);
         notifyCeoApproved(after);
+        syncAttendanceDay(after);
         return after;
+    }
+
+    /**
+     * Re-derives the attendance day so its overtime minutes and badge match the request's new state.
+     *
+     * <p>Called only where a request enters or leaves {@code APPROVED} — CEO approval and
+     * cancellation. Rejection needs no sync: a request can only be rejected from SUBMITTED or
+     * MANAGER_APPROVED, neither of which ever contributed minutes, so the stored figure is already
+     * correct.
+     */
+    private void syncAttendanceDay(OvertimeRequestDto request) {
+        attendanceDailyService.recalculate(
+            new EmployeeDay(request.employeeId(), request.workDate()));
     }
 
     @Transactional
@@ -218,6 +237,8 @@ public class OvertimeService {
         }
         OvertimeRequestDto after = requireRequest(id);
         auditService.record(user, "CANCEL_OVERTIME_REQUEST", "overtime_request", id, existing, after);
+        // Cancelling an already-APPROVED request removes minutes the day had been credited with.
+        syncAttendanceDay(after);
         return after;
     }
 

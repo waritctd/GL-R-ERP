@@ -16,6 +16,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
+import th.co.glr.hr.attendance.daily.AttendanceDailyService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
@@ -23,7 +24,12 @@ import th.co.glr.hr.config.AppProperties;
 class AttendanceServiceTest {
     private final AttendanceRepository attendanceRepository = mock(AttendanceRepository.class);
     private final AppProperties properties = new AppProperties();
-    private final AttendanceService attendanceService = new AttendanceService(attendanceRepository, new AttendanceDatParser(), properties);
+    // The daily roll-up is exercised for real in AttendanceDailyCalculatorTest and the
+    // Testcontainers integration tests; here it is stubbed so these cases stay about punch
+    // ingestion and scoping.
+    private final AttendanceDailyService dailyService = mock(AttendanceDailyService.class);
+    private final AttendanceService attendanceService =
+        new AttendanceService(attendanceRepository, new AttendanceDatParser(), properties, dailyService);
 
     @BeforeEach
     void resetToken() {

@@ -7,12 +7,19 @@ import java.security.SecureRandom;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.attendance.daily.AttendanceDailyDto;
+import th.co.glr.hr.attendance.daily.AttendanceDailyFilter;
+import th.co.glr.hr.attendance.daily.AttendanceDailyService;
+import th.co.glr.hr.attendance.daily.AttendanceEmployeeOption;
+import th.co.glr.hr.attendance.daily.EmployeeDay;
+import th.co.glr.hr.attendance.daily.UnmappedBadge;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
@@ -28,14 +35,71 @@ public class AttendanceService {
     private final AttendanceRepository attendanceRepository;
     private final AttendanceDatParser datParser;
     private final AppProperties properties;
+    private final AttendanceDailyService dailyService;
 
     public AttendanceService(
             AttendanceRepository attendanceRepository,
             AttendanceDatParser datParser,
-            AppProperties properties) {
+            AppProperties properties,
+            AttendanceDailyService dailyService) {
         this.attendanceRepository = attendanceRepository;
         this.datParser = datParser;
         this.properties = properties;
+        this.dailyService = dailyService;
+    }
+
+    /** The day view, scoped to what the caller may see. */
+    public List<AttendanceDailyDto> listDaily(
+            UserPrincipal user, LocalDate fromDate, LocalDate toDate, Long requestedEmployeeId) {
+        LocalDate today = LocalDate.now(DEFAULT_WORK_DATE_ZONE);
+        LocalDate effectiveTo = toDate == null ? today : toDate;
+        LocalDate effectiveFrom = fromDate == null ? effectiveTo.withDayOfMonth(1) : fromDate;
+        if (effectiveTo.isBefore(effectiveFrom)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "toDate must be on or after fromDate");
+        }
+        // employees × days: an unbounded range is a genuine latency/memory hazard company-wide.
+        if (ChronoUnit.DAYS.between(effectiveFrom, effectiveTo) >= AttendanceDailyService.MAX_RANGE_DAYS) {
+            throw new ApiException(
+                HttpStatus.BAD_REQUEST,
+                "Date range must be shorter than " + AttendanceDailyService.MAX_RANGE_DAYS + " days");
+        }
+
+        AttendanceScope scope = resolveScope(user, requestedEmployeeId);
+        return dailyService.list(new AttendanceDailyFilter(
+            scope.employeeId(), scope.divisionId(), effectiveFrom, effectiveTo));
+    }
+
+    /**
+     * Badges that scanned but match no employee. HR/CEO only — this is a data-repair queue, not
+     * something an employee can act on.
+     */
+    public List<UnmappedBadge> listUnmappedBadges(LocalDate fromDate, LocalDate toDate) {
+        LocalDate today = LocalDate.now(DEFAULT_WORK_DATE_ZONE);
+        LocalDate effectiveTo = toDate == null ? today : toDate;
+        LocalDate effectiveFrom = fromDate == null ? effectiveTo.withDayOfMonth(1) : fromDate;
+        return dailyService.listUnmappedBadges(effectiveFrom, effectiveTo);
+    }
+
+    /**
+     * Employees the caller may filter by. Mirrors the overtime picker's self/direct-report/division
+     * scope — {@code useHrData}'s employee list is HR-only, so a ฝ่าย manager would otherwise get a
+     * one-entry picker that cannot pick any of their team.
+     */
+    public List<AttendanceEmployeeOption> listEmployeeOptions(UserPrincipal user) {
+        boolean includeAll = canViewAll(user);
+        Long managerDivisionId = user.manager() ? user.divisionId() : null;
+        return dailyService.listEmployeeOptions(user.employeeId(), managerDivisionId, includeAll);
+    }
+
+    /** Re-derives daily rows for a range. HR/CEO only; also the historical backfill entry point. */
+    public int recalculateDaily(LocalDate fromDate, LocalDate toDate, Long employeeId) {
+        if (fromDate == null || toDate == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "fromDate and toDate are required");
+        }
+        if (toDate.isBefore(fromDate)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "toDate must be on or after fromDate");
+        }
+        return dailyService.recalculateRange(fromDate, toDate, employeeId);
     }
 
     @Transactional
@@ -48,6 +112,9 @@ public class AttendanceService {
         if (punchId == null) {
             return new AttendancePunchResponse(null, false, "duplicate");
         }
+        // Keep the day view current as scans arrive. Only the affected day is re-derived, and an
+        // unmapped badge yields no pair, so this is a no-op until the badge is mapped.
+        dailyService.recalculateForPunches(List.of(punchId));
         return new AttendancePunchResponse(punchId, true, "inserted");
     }
 
@@ -82,6 +149,11 @@ public class AttendanceService {
             parseResult.errors().size()
         );
 
+        // Roll up once for the whole imported span, collapsing to distinct employee-days. Doing this
+        // per punch instead would turn a 10,000-row import into 10,000 recalculations of a few
+        // hundred days.
+        recalculateImportedSpan(parseResult);
+
         return new AttendanceImportResponse(
             importId,
             "imported",
@@ -106,26 +178,73 @@ public class AttendanceService {
         }
         int limit = requestedLimit == null ? 500 : Math.max(1, Math.min(requestedLimit, 2_000));
 
-        Long employeeId = requestedEmployeeId;
-        Long divisionId = null;
-        if (!VIEW_ALL_ROLES.contains(user.role())) {
-            if (user.employeeId() == null) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "User is not linked to an employee");
+        AttendanceScope scope = resolveScope(user, requestedEmployeeId);
+
+        return attendanceRepository.findPunches(new AttendancePunchFilter(
+            scope.employeeId(), scope.divisionId(), effectiveFrom, effectiveTo, limit));
+    }
+
+    /**
+     * Resolves which employees' attendance {@code user} may read.
+     *
+     * <p>The single source of truth for attendance authorization — punch list, day view, unmapped
+     * badges and the employee picker all route through here. Keep it that way: a second copy of
+     * these rules would drift, and a drift here leaks other people's attendance rather than
+     * throwing.
+     *
+     * <ul>
+     *   <li>hr/ceo — company-wide, and may request any employee.
+     *   <li>ฝ่าย manager — their whole division. A requested employeeId narrows <em>within</em> the
+     *       division because both predicates AND, so an out-of-division id matches nothing instead
+     *       of leaking.
+     *   <li>everyone else — forced to their own employee id; asking for someone else is a 403.
+     * </ul>
+     */
+    AttendanceScope resolveScope(UserPrincipal user, Long requestedEmployeeId) {
+        if (VIEW_ALL_ROLES.contains(user.role())) {
+            return requestedEmployeeId == null
+                ? AttendanceScope.all()
+                : new AttendanceScope(requestedEmployeeId, null);
+        }
+        if (user.employeeId() == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "User is not linked to an employee");
+        }
+        if (user.manager() && user.divisionId() != null) {
+            return AttendanceScope.division(requestedEmployeeId, user.divisionId());
+        }
+        if (requestedEmployeeId != null && !requestedEmployeeId.equals(user.employeeId())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        return AttendanceScope.self(user.employeeId());
+    }
+
+    /** True when the caller may see company-wide data (and so the unmapped-badge queue). */
+    boolean canViewAll(UserPrincipal user) {
+        return VIEW_ALL_ROLES.contains(user.role());
+    }
+
+    /**
+     * Rolls up every employee-day covered by an import, in one pass.
+     *
+     * <p>Scoped to the span the file actually covers rather than the whole table. The set of
+     * employee-days is resolved from the database rather than from the parsed rows because the .dat
+     * carries badge codes, not employee ids — a badge only becomes a person after resolution.
+     */
+    private void recalculateImportedSpan(DatParseResult parseResult) {
+        LocalDate from = null;
+        LocalDate to = null;
+        for (NormalizedAttendancePunch punch : parseResult.punches()) {
+            LocalDate workDate = punch.workDate();
+            if (from == null || workDate.isBefore(from)) {
+                from = workDate;
             }
-            if (user.manager() && user.divisionId() != null) {
-                // ฝ่าย managers see their whole division; a requested employeeId narrows within it
-                // (an out-of-division employeeId simply matches nothing, so no data leaks).
-                divisionId = user.divisionId();
-            } else {
-                if (requestedEmployeeId != null && !requestedEmployeeId.equals(user.employeeId())) {
-                    throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
-                }
-                employeeId = user.employeeId();
+            if (to == null || workDate.isAfter(to)) {
+                to = workDate;
             }
         }
-
-        return attendanceRepository.findPunches(
-            new AttendancePunchFilter(employeeId, divisionId, effectiveFrom, effectiveTo, limit));
+        if (from != null) {
+            dailyService.recalculateRange(from, to, null);
+        }
     }
 
     /** Active scanners/locations available as an import source. */
@@ -156,6 +275,12 @@ public class AttendanceService {
             } else {
                 unmatched++;
             }
+        }
+        if (updated > 0) {
+            // Punches that were unmapped now resolve to a person. Without this their days would
+            // stay permanently blank in the day view — the badge would be "fixed" while the
+            // attendance it unlocked never appeared.
+            dailyService.recalculateAllHistory();
         }
         return new AttendanceCardBackfillResponse(updated, skipped, unmatched);
     }
