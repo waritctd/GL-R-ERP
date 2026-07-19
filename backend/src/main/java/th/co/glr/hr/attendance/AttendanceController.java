@@ -70,6 +70,63 @@ public class AttendanceController {
         return attendanceService.backfillCardNumbers(request);
     }
 
+    /**
+     * The day view. No role gate here on purpose — {@code AttendanceService.resolveScope} decides
+     * what the caller sees (hr/ceo: everyone, ฝ่าย manager: their division, otherwise: themselves),
+     * exactly as {@code /punches} does.
+     */
+    @GetMapping("/daily")
+    AttendanceDailyResponse listDaily(
+            @RequestParam(value = "from", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            java.time.LocalDate fromDate,
+            @RequestParam(value = "to", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            java.time.LocalDate toDate,
+            @RequestParam(value = "employeeId", required = false) Long employeeId,
+            @RequestParam(value = "divisionId", required = false) Long divisionId,
+            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new AttendanceDailyResponse(
+            attendanceService.listDaily(user, fromDate, toDate, employeeId, divisionId));
+    }
+
+    /** Badges that scanned but match no employee — a data-repair queue, so HR/CEO only. */
+    @GetMapping("/unmapped")
+    AttendanceUnmappedResponse listUnmapped(
+            @RequestParam(value = "from", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            java.time.LocalDate fromDate,
+            @RequestParam(value = "to", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            java.time.LocalDate toDate,
+            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, "hr", "ceo");
+        return new AttendanceUnmappedResponse(attendanceService.listUnmappedBadges(fromDate, toDate));
+    }
+
+    /**
+     * Employees the caller may filter by. Session-scoped rather than role-gated: everyone gets a
+     * list, it is just narrower for non-HR callers.
+     */
+    @GetMapping("/employees")
+    AttendanceEmployeesResponse listEmployeeOptions(HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new AttendanceEmployeesResponse(attendanceService.listEmployeeOptions(user));
+    }
+
+    /** Re-derives daily rows for a range; also the historical backfill entry point. HR/CEO only. */
+    @PostMapping("/daily/recalculate")
+    AttendanceRecalculateResponse recalculateDaily(
+            @Valid @RequestBody AttendanceRecalculateRequest request,
+            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, "hr", "ceo");
+        return new AttendanceRecalculateResponse(attendanceService.recalculateDaily(
+            request.fromDate(), request.toDate(), request.employeeId()));
+    }
+
     @GetMapping("/punches")
     AttendancePunchesResponse listPunches(
             @RequestParam(value = "from", required = false)

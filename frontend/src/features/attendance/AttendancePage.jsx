@@ -1,22 +1,22 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/index.js';
 import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
-import { DesktopOnlyNotice } from '../../components/common/DesktopOnlyNotice.jsx';
 import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { PageStack, StatGrid } from '../../components/common/Layout.jsx';
+import { PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
-import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { useIsMobile } from '../../hooks/useIsMobile.js';
-
-const todayIso = () => new Date().toISOString().slice(0, 10);
-const monthStartIso = () => {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-};
+import {
+  attendanceFlagLabels,
+  attendanceStatusLabel,
+  bangkokMonthStartIso,
+  bangkokTodayIso,
+  formatBangkokTime,
+  formatDuration,
+  formatShortDate,
+} from '../../utils/format.js';
 
 // Reproduces `.filter-bar` for this page's native <form onSubmit> (Enter-to-submit
 // needed); Layout.jsx's FilterBar only renders a <div> — same pattern established in
@@ -25,103 +25,118 @@ const FILTER_BAR_CLASS =
   'flex flex-wrap gap-[10px] items-center bg-surface border border-border rounded-md p-[14px]';
 
 /**
- * Mobile record card for a punch record. The desktop grid's 6 columns
- * (`reflow-cards` today stacks every column as its own labeled row, which is
- * usable but noisy for a scan-history list). This keeps only what identifies
- * the punch and lets someone spot a mismapped scan at a glance: who, when,
- * employee code, and where it came from.
+ * Which view of attendance this user gets. Mirrors `dashboardMode()` in EmployeeDashboard so the
+ * two surfaces agree on who counts as a manager, and mirrors the backend's own three-way scope
+ * (hr/ceo = everyone, ฝ่าย manager = their division, otherwise = self).
  */
-function AttendanceCard({ punch }) {
-  const unresolved = !punch.employee_id;
-  return (
-    <>
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <strong className="min-w-0 truncate text-sm font-extrabold text-text">
-          {punch.employee_name || 'ยังไม่แมปพนักงาน'}
-        </strong>
-        <span className="shrink-0 text-right text-xs text-text-muted">
-          {formatPunchDateTime(punch.punch_time)}
-        </span>
-      </div>
-
-      {unresolved ? (
-        <StatusBadge tone="warning">รหัส {punch.employee_code || '-'} ไม่ตรงกับพนักงาน</StatusBadge>
-      ) : null}
-
-      <span className="min-w-0 truncate text-xs text-text-muted">
-        {[punch.employee_code, punch.site_code || punch.device_name || punch.device_code]
-          .filter(Boolean)
-          .join(' · ')}
-      </span>
-
-      {punch.position_th || punch.nick_name ? (
-        <span className="min-w-0 truncate text-2xs text-text-muted">
-          {[punch.nick_name, punch.position_th].filter(Boolean).join(' · ')}
-        </span>
-      ) : null}
-    </>
-  );
+function attendanceMode(user) {
+  if (hasPermission(user.role, 'canViewAllAttendance')) return 'company';
+  if (user?.manager) return 'manager';
+  return 'employee';
 }
 
-export function AttendancePage({ user, employees, showToast }) {
-  const isMobile = useIsMobile();
-  // HR/executives see everyone; ฝ่าย managers get the same view scoped to their division
-  // (the backend limits the results to the manager's division).
-  const canViewAll = hasPermission(user.role, 'canViewAllAttendance') || Boolean(user.manager);
+/**
+ * The date window the page may show.
+ *
+ * Deliberately capped at the current month. Backfill computes all of history, but presenting years
+ * of never-before-reviewed "late" days on day one would be a personnel problem rather than a
+ * feature; older months are a later UI change, not a recompute.
+ */
+function monthBounds() {
+  return { start: bangkokMonthStartIso(), today: bangkokTodayIso() };
+}
+
+export function AttendancePage({ user, showToast }) {
+  const mode = attendanceMode(user);
+  const isSelfView = mode === 'employee';
   const canImport = hasPermission(user.role, 'canImportAttendance');
-  const [filters, setFilters] = useState({
-    from: monthStartIso(),
-    to: todayIso(),
-    employeeId: '',
-    limit: 500,
-  });
-  const [punches, setPunches] = useState([]);
+  const canSeeUnmapped = hasPermission(user.role, 'canViewAllAttendance');
+  const { start: monthStart, today } = useMemo(() => monthBounds(), []);
+
+  // Employees read their own month at a glance; everyone else answers "who is late today", so
+  // they get a single day plus a stepper.
+  const [selectedDate, setSelectedDate] = useState(today);
+  const [employeeId, setEmployeeId] = useState('');
+  // HR/CEO only. A ฝ่าย manager is already pinned to their own division server-side, so offering
+  // them this control would imply a reach they don't have.
+  const [divisionId, setDivisionId] = useState('');
+  const [days, setDays] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [employeeOptions, setEmployeeOptions] = useState([]);
+  const [unmapped, setUnmapped] = useState([]);
+  const [unmappedOpen, setUnmappedOpen] = useState(false);
+  const [expandedKey, setExpandedKey] = useState(null);
+  const [punchesByKey, setPunchesByKey] = useState({});
+
+  const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [lastImport, setLastImport] = useState(null);
   const [devices, setDevices] = useState([]);
   const [importDeviceCode, setImportDeviceCode] = useState('');
 
-  const sortedEmployees = useMemo(
-    () => [...employees].sort((a, b) => (a.nameTh || '').localeCompare(b.nameTh || '', 'th')),
-    [employees],
-  );
-  const uniqueEmployees = useMemo(() => new Set(punches.map((punch) => punch.employee_id).filter(Boolean)).size, [punches]);
-  const unresolvedCount = punches.filter((punch) => !punch.employee_id).length;
-  // Multiple scanners/locations feed this table; summarise how many distinct sites appear in the results.
-  const sourceSummary = useMemo(() => {
-    const sites = new Set(punches.map((punch) => punch.site_code).filter(Boolean));
-    if (sites.size === 0) return { value: '-', helper: 'ยังไม่มีข้อมูล' };
-    if (sites.size === 1) return { value: [...sites][0], helper: 'สถานที่เดียว' };
-    return { value: `${sites.size} สถานที่`, helper: 'หลายเครื่องสแกน' };
-  }, [punches]);
+  const range = isSelfView
+    ? { from: monthStart, to: today }
+    : { from: selectedDate, to: selectedDate };
 
-  async function loadPunches(nextFilters = filters) {
+  const loadDays = useCallback(async () => {
     setLoading(true);
     try {
-      const params = {
-        from: nextFilters.from,
-        to: nextFilters.to,
-        limit: nextFilters.limit,
-        ...(canViewAll && nextFilters.employeeId ? { employeeId: nextFilters.employeeId } : {}),
-      };
-      const response = await api.attendance.list(params);
-      setPunches(response.punches || []);
+      const response = await api.attendance.daily({
+        from: range.from,
+        to: range.to,
+        ...(employeeId ? { employeeId } : {}),
+        ...(divisionId ? { divisionId } : {}),
+      });
+      setDays(response.days || []);
+      setExpandedKey(null);
     } catch (error) {
       showToast('error', error.message || 'โหลดข้อมูลเวลาทำงานไม่สำเร็จ');
     } finally {
       setLoading(false);
     }
-  }
+  }, [range.from, range.to, employeeId, divisionId, showToast]);
 
   useEffect(() => {
-    loadPunches();
-  }, []);
+    loadDays();
+  }, [loadDays]);
 
-  // Load the registered scanners so HR/C-level can attribute an import to the right location.
+  // A ฝ่าย manager's picker cannot come from the shared `employees` prop — that list is HR-only,
+  // so it holds exactly one entry for them. This endpoint returns their actual team.
   useEffect(() => {
-    if (!canImport) return;
+    if (isSelfView) return undefined;
+    let cancelled = false;
+    api.attendance.employees()
+      .then((response) => {
+        if (!cancelled) setEmployeeOptions(response.employees || []);
+      })
+      .catch(() => {
+        if (!cancelled) setEmployeeOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isSelfView]);
+
+  // Unmapped scans can never appear in a day view (they have no employee), so surface them
+  // separately or someone's attendance goes missing with no signal at all.
+  useEffect(() => {
+    if (!canSeeUnmapped) return undefined;
+    let cancelled = false;
+    api.attendance.unmapped({ from: range.from, to: range.to })
+      .then((response) => {
+        if (!cancelled) setUnmapped(response.badges || []);
+      })
+      .catch(() => {
+        if (!cancelled) setUnmapped([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canSeeUnmapped, range.from, range.to]);
+
+  useEffect(() => {
+    if (!canImport) return undefined;
     let cancelled = false;
     api.attendance.devices()
       .then((response) => {
@@ -138,13 +153,38 @@ export function AttendancePage({ user, employees, showToast }) {
     };
   }, [canImport]);
 
-  function updateFilter(field, value) {
-    setFilters((current) => ({ ...current, [field]: value }));
+  const rowKey = (day) => `${day.employee_id}:${day.work_date}`;
+
+  async function toggleExpanded(day) {
+    // A day with no scans has nothing to reveal; opening an empty panel and firing a request for it
+    // is worse than not responding to the click.
+    if (!day.punch_count) return;
+    const key = rowKey(day);
+    if (expandedKey === key) {
+      setExpandedKey(null);
+      return;
+    }
+    setExpandedKey(key);
+    if (punchesByKey[key]) return;
+    try {
+      const response = await api.attendance.list({
+        from: day.work_date,
+        to: day.work_date,
+        employeeId: day.employee_id,
+      });
+      setPunchesByKey((current) => ({ ...current, [key]: response.punches || [] }));
+    } catch (error) {
+      showToast('error', error.message || 'โหลดรายการสแกนไม่สำเร็จ');
+    }
   }
 
-  async function submitFilters(event) {
-    event.preventDefault();
-    await loadPunches(filters);
+  function stepDay(deltaDays) {
+    const next = new Date(`${selectedDate}T00:00:00+07:00`);
+    next.setDate(next.getDate() + deltaDays);
+    const iso = next.toISOString().slice(0, 10);
+    // Clamp to the current month in both directions — see monthBounds().
+    if (iso < monthStart || iso > today) return;
+    setSelectedDate(iso);
   }
 
   async function importFile(event) {
@@ -161,7 +201,6 @@ export function AttendancePage({ user, employees, showToast }) {
     setImporting(true);
     try {
       const content = await selectedFile.text();
-      const detectedRange = dateRangeFromDatContent(content);
       const response = await api.attendance.importDat({
         site_code: device.site_code,
         device_code: device.device_code,
@@ -169,13 +208,11 @@ export function AttendancePage({ user, employees, showToast }) {
         content,
       });
       setLastImport(response);
-      showToast('success', response.status === 'duplicate_file' ? 'ไฟล์นี้เคยนำเข้าแล้ว' : 'นำเข้าไฟล์เวลาเรียบร้อย');
-
-      const nextFilters = detectedRange
-        ? { ...filters, from: detectedRange.from, to: detectedRange.to, employeeId: '' }
-        : filters;
-      setFilters(nextFilters);
-      await loadPunches(nextFilters);
+      showToast(
+        'success',
+        response.status === 'duplicate_file' ? 'ไฟล์นี้เคยนำเข้าแล้ว' : 'นำเข้าไฟล์เวลาเรียบร้อย',
+      );
+      await loadDays();
     } catch (error) {
       showToast('error', error.message || 'นำเข้าไฟล์ไม่สำเร็จ');
     } finally {
@@ -183,187 +220,427 @@ export function AttendancePage({ user, employees, showToast }) {
     }
   }
 
+  const columns = useMemo(
+    () => (isSelfView ? selfColumns : teamColumns),
+    [isSelfView],
+  );
+
+  // Derived from the employees the caller may already see, so the filter can never offer a ฝ่าย
+  // whose people they cannot read. Sorted by name; unnamed divisions are dropped rather than
+  // rendered as a blank option.
+  const divisionOptions = useMemo(() => {
+    const byId = new Map();
+    employeeOptions.forEach((option) => {
+      if (option.division_id && option.division_name && !byId.has(option.division_id)) {
+        byId.set(option.division_id, option.division_name);
+      }
+    });
+    return [...byId.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'th'));
+  }, [employeeOptions]);
+
+  // A manager already sees exactly one division, so the control would be a no-op for them.
+  const showDivisionFilter = canSeeUnmapped && divisionOptions.length > 1;
+
+  const employeePickerOptions = useMemo(
+    () => (divisionId
+      ? employeeOptions.filter((option) => String(option.division_id) === String(divisionId))
+      : employeeOptions),
+    [employeeOptions, divisionId],
+  );
+
+  const unmappedTotal = unmapped.reduce((sum, badge) => sum + (badge.punch_count || 0), 0);
+
   return (
     <PageStack>
       <PageHeader
         title="เวลาทำงาน"
-        subtitle={canViewAll ? 'ตรวจสอบประวัติการสแกนของพนักงานทุกคน' : 'ตรวจสอบประวัติการสแกนของคุณ'}
+        subtitle={
+          isSelfView
+            ? 'เวลาเข้า-ออกงานของคุณในเดือนนี้'
+            : 'เวลาเข้า-ออกงานรายวัน'
+        }
         actions={(
-          <Button variant="secondary" onClick={() => loadPunches(filters)} disabled={loading}>
+          <Button variant="secondary" onClick={loadDays} disabled={loading}>
             <Icon name="refresh" />
             รีเฟรช
           </Button>
         )}
       />
-      {isMobile && <DesktopOnlyNotice />}
 
-      <StatGrid>
-        <StatCard label="รายการในช่วงที่เลือก" value={punches.length} helper="Punch records" icon="calendar" tone="indigo" />
-        <StatCard label="พนักงานที่พบ" value={uniqueEmployees} helper={canViewAll ? 'จากผลลัพธ์ปัจจุบัน' : 'บัญชีของคุณ'} icon="users" tone="teal" />
-        <StatCard label="ยังไม่แมปพนักงาน" value={unresolvedCount} helper="badge_card_no ไม่ตรง" icon="badge" tone="amber" />
-        <StatCard label="แหล่งข้อมูล" value={sourceSummary.value} helper={sourceSummary.helper} icon="clock" tone="rose" />
-      </StatGrid>
-
-      <form className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
-        <label>
-          จากวันที่
-          <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
-        </label>
-        <label>
-          ถึงวันที่
-          <input type="date" value={filters.to} onChange={(event) => updateFilter('to', event.target.value)} />
-        </label>
-        {canViewAll ? (
-          <label>
-            พนักงาน
-            <select value={filters.employeeId} onChange={(event) => updateFilter('employeeId', event.target.value)}>
-              <option value="">ทุกคน</option>
-              {sortedEmployees.map((employee) => (
-                <option key={employee.id} value={employee.id}>{employee.nameTh} · {employee.code}</option>
+      {canSeeUnmapped && unmapped.length > 0 ? (
+        <div className="rounded-md border border-warning-border bg-warning-bg p-[14px]">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span className="text-sm text-text">
+              <strong>มี {unmappedTotal} รายการสแกนที่ยังไม่ระบุพนักงาน</strong>
+              {' '}
+              จาก {unmapped.length} บัตร — เวลาทำงานเหล่านี้จะยังไม่ปรากฏในตาราง
+            </span>
+            <Button variant="secondary" onClick={() => setUnmappedOpen((open) => !open)}>
+              {unmappedOpen ? 'ซ่อน' : 'ตรวจสอบและแก้ไข'}
+            </Button>
+          </div>
+          {unmappedOpen ? (
+            <ul className="mt-3 grid gap-2">
+              {unmapped.map((badge) => (
+                <li
+                  key={badge.badge_code}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-sm border border-border bg-surface px-3 py-2 text-xs"
+                >
+                  <code className="font-bold">{badge.badge_code}</code>
+                  <span className="text-text-muted">
+                    {badge.punch_count} ครั้ง · {formatShortDate(badge.first_seen)}
+                    {' – '}
+                    {formatShortDate(badge.last_seen)} · {badge.site_code || '-'}
+                  </span>
+                </li>
               ))}
-            </select>
-          </label>
-        ) : null}
-        <label>
-          จำนวน
-          <select value={filters.limit} onChange={(event) => updateFilter('limit', Number(event.target.value))}>
-            <option value={100}>100</option>
-            <option value={500}>500</option>
-            <option value={1000}>1,000</option>
-            <option value={2000}>2,000</option>
-          </select>
-        </label>
-        <Button type="submit" disabled={loading}>
-          <Icon name="search" />
-          ค้นหา
-        </Button>
-      </form>
+              <li className="text-2xs text-text-muted">
+                แก้ไขได้โดยตั้งค่ารหัสบัตร (badge_card_no) ของพนักงานให้ตรงกับรหัสข้างต้น
+                ที่หน้าข้อมูลพนักงาน
+              </li>
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
 
       {canImport ? (
-        <form className="attendance-import-panel" onSubmit={importFile}>
-          <div>
-            <strong>นำเข้าไฟล์ Attendance (.dat)</strong>
-            <small>เฉพาะ HR / ผู้บริหาร</small>
-          </div>
-          <label className="attendance-import-device">
-            เครื่องสแกน / สถานที่
-            <select value={importDeviceCode} onChange={(event) => setImportDeviceCode(event.target.value)}>
-              {devices.length === 0 ? (
-                <option value="">ไม่พบเครื่องสแกน</option>
-              ) : (
-                devices.map((device) => (
-                  <option key={device.device_code} value={device.device_code}>
-                    {device.site_name} · {device.device_name}
-                  </option>
-                ))
-              )}
-            </select>
-          </label>
-          <FileUploadField
-            id="attendance-import-file"
-            accept=".dat,text/plain"
-            onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
-            helperText="ไฟล์ .dat"
-          />
-          <Button type="submit" variant="success" className="max-[720px]:min-h-11 max-[720px]:w-full" disabled={importing || !selectedFile || !importDeviceCode}>
-            <Icon name="plus" />
-            {importing ? 'กำลังนำเข้า' : 'นำเข้า'}
-          </Button>
-          {lastImport ? (
-            <span className="attendance-import-result">
-              {lastImport.status}: เพิ่ม {lastImport.inserted_punch_count} · ข้าม {lastImport.skipped_punch_count} · ผิดพลาด {lastImport.error_count}
+        <div className="rounded-md border border-border bg-surface">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-3 px-[14px] py-3 text-left"
+            onClick={() => setImportOpen((open) => !open)}
+            aria-expanded={importOpen}
+          >
+            <span className="text-sm font-bold text-text">นำเข้าไฟล์ Attendance (.dat)</span>
+            <span className="text-xs text-text-muted">
+              {importOpen ? 'ซ่อน' : 'เฉพาะ HR / ผู้บริหาร'}
             </span>
+          </button>
+          {importOpen ? (
+            <form className="attendance-import-panel border-t border-border" onSubmit={importFile}>
+              <label className="attendance-import-device">
+                เครื่องสแกน / สถานที่
+                <select
+                  value={importDeviceCode}
+                  onChange={(event) => setImportDeviceCode(event.target.value)}
+                >
+                  {devices.length === 0 ? (
+                    <option value="">ไม่พบเครื่องสแกน</option>
+                  ) : (
+                    devices.map((device) => (
+                      <option key={device.device_code} value={device.device_code}>
+                        {device.site_name} · {device.device_name}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </label>
+              <FileUploadField
+                id="attendance-import-file"
+                accept=".dat,text/plain"
+                onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
+                helperText="ไฟล์ .dat"
+              />
+              <Button
+                type="submit"
+                variant="success"
+                className="max-[720px]:min-h-11 max-[720px]:w-full"
+                disabled={importing || !selectedFile || !importDeviceCode}
+              >
+                <Icon name="plus" />
+                {importing ? 'กำลังนำเข้า' : 'นำเข้า'}
+              </Button>
+              {lastImport ? (
+                <span className="attendance-import-result">
+                  {lastImport.status}: เพิ่ม {lastImport.inserted_punch_count} · ข้าม{' '}
+                  {lastImport.skipped_punch_count} · ผิดพลาด {lastImport.error_count}
+                </span>
+              ) : null}
+            </form>
           ) : null}
-        </form>
+        </div>
+      ) : null}
+
+      {!isSelfView ? (
+        <div className={FILTER_BAR_CLASS}>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => stepDay(-1)}
+              disabled={loading || selectedDate <= monthStart}
+              aria-label="วันก่อนหน้า"
+            >
+              <Icon name="chevronLeft" />
+            </Button>
+            <label className="m-0">
+              วันที่
+              <input
+                type="date"
+                value={selectedDate}
+                min={monthStart}
+                max={today}
+                onChange={(event) => setSelectedDate(event.target.value || today)}
+              />
+            </label>
+            <Button
+              variant="secondary"
+              onClick={() => stepDay(1)}
+              disabled={loading || selectedDate >= today}
+              aria-label="วันถัดไป"
+            >
+              <Icon name="chevronRight" />
+            </Button>
+          </div>
+          {showDivisionFilter ? (
+            <label>
+              ฝ่าย
+              <select
+                value={divisionId}
+                onChange={(event) => {
+                  setDivisionId(event.target.value);
+                  // The chosen person may not belong to the new ฝ่าย; clearing avoids a filter pair
+                  // that silently matches nothing.
+                  setEmployeeId('');
+                }}
+              >
+                <option value="">ทุกฝ่าย</option>
+                {divisionOptions.map((division) => (
+                  <option key={division.id} value={division.id}>{division.name}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          {employeePickerOptions.length > 1 ? (
+            <label>
+              พนักงาน
+              <select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}>
+                <option value="">ทุกคน</option>
+                {employeePickerOptions.map((option) => (
+                  <option key={option.employee_id} value={option.employee_id}>
+                    {option.employee_name} · {option.employee_code}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+        </div>
       ) : null}
 
       <DataTable
-        columns={attendanceColumns}
-        rows={punches}
-        getRowKey={(punch) => punch.punch_id}
-        gridClassName="grid-cols-[1.6fr_1.3fr_0.9fr_1.2fr] max-[900px]:min-w-[780px] reflow-cards"
-        mobileCard={(punch) => <AttendanceCard punch={punch} />}
-        pageSize={50}
-        searchable
+        columns={columns}
+        rows={days}
+        getRowKey={rowKey}
+        // Status is the reason this page exists, so it gets the widest share and the time columns
+        // are held narrow. Without this the status column was pushed off-screen at tablet width,
+        // which hid every late/early/OT badge on the page.
+        gridClassName={
+          isSelfView
+            ? 'grid-cols-[0.7fr_0.45fr_0.45fr_0.35fr_2.05fr] reflow-cards'
+            : 'grid-cols-[1.3fr_0.45fr_0.45fr_0.35fr_2.05fr] max-[900px]:min-w-[720px] reflow-cards'
+        }
+        mobileCard={(day) => <AttendanceDayCard day={day} isSelfView={isSelfView} />}
+        pageSize={isSelfView ? 31 : 50}
+        searchable={!isSelfView}
         searchPlaceholder="ค้นหาพนักงาน / รหัส / ชื่อเล่น"
         loading={loading}
+        onRowClick={toggleExpanded}
+        renderExpanded={(day) =>
+          expandedKey === rowKey(day) ? (
+            <PunchDetail punches={punchesByKey[rowKey(day)]} />
+          ) : null
+        }
         emptyState={{
           icon: 'calendar',
           title: 'ไม่พบข้อมูลเวลา',
-          description: 'ลองเปลี่ยนช่วงวันที่หรือนำเข้าไฟล์ .dat',
+          description: isSelfView
+            ? 'ยังไม่มีการสแกนในเดือนนี้'
+            : 'ลองเปลี่ยนวันที่ หรือนำเข้าไฟล์ .dat',
         }}
       />
     </PageStack>
   );
 }
 
-const attendanceColumns = [
+/**
+ * The raw scans behind a day — what settles "the system says 17:32, why?".
+ *
+ * <p>Someone may badge in and out several times a day (lunch, moving between sites). The first and
+ * last scan are what became the เข้า/ออก columns, so they are labelled as such; everything between
+ * is marked ระหว่างวัน. Without the labels this is just a list of times that silently repeats the
+ * two values already shown on the row.
+ */
+function PunchDetail({ punches }) {
+  if (!punches) {
+    return <span className="text-xs text-text-muted">กำลังโหลดรายการสแกน…</span>;
+  }
+  if (punches.length === 0) {
+    return <span className="text-xs text-text-muted">ไม่มีรายการสแกนในวันนี้</span>;
+  }
+  return (
+    <ul className="grid gap-1">
+      {punches.map((punch, index) => {
+        const role = punchRole(index, punches.length);
+        return (
+          <li key={punch.punch_id} className="flex flex-wrap items-baseline gap-2 text-xs text-text-muted">
+            <span className={`w-[68px] shrink-0 ${role.muted ? 'text-text-muted' : 'text-text-secondary'}`}>
+              {role.label}
+            </span>
+            <strong className="text-text">{formatBangkokTime(punch.punch_time)}</strong>
+            <span>{punch.site_code || '-'}</span>
+            <span>{punch.device_name || punch.device_code || '-'}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/**
+ * Which of the day's scans a punch is. A single scan is deliberately left unlabelled — the day row
+ * already says which side is missing, and calling a lone punch "เข้า" would assert a direction the
+ * data does not carry.
+ */
+function punchRole(index, total) {
+  if (total === 1) return { label: '', muted: true };
+  if (index === 0) return { label: 'เข้า', muted: false };
+  if (index === total - 1) return { label: 'ออก', muted: false };
+  return { label: 'ระหว่างวัน', muted: true };
+}
+
+function StatusCell({ day }) {
+  const flags = attendanceFlagLabels(day);
+  if (flags.length === 0) {
+    const status = attendanceStatusLabel(day.status);
+    if (day.status === 'NO_RECORD') return <span className="text-text-muted">-</span>;
+    return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
+  }
+  return (
+    <span className="flex flex-wrap gap-1">
+      {flags.map((flag) => (
+        <StatusBadge key={flag.key} tone={flag.tone}>{flag.label}</StatusBadge>
+      ))}
+    </span>
+  );
+}
+
+function AttendanceDayCard({ day, isSelfView }) {
+  // A day with no scans should read as one quiet line, not as a card full of dashes — on a phone
+  // every empty day costs a full card, and "รวม - ชม." plus a bare "-" is three ways of saying
+  // "nothing happened".
+  const hasTimes = Boolean(day.check_in || day.check_out);
+  return (
+    <>
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <strong className="min-w-0 truncate text-sm font-extrabold text-text">
+          {isSelfView ? formatShortDate(day.work_date) : day.employee_name || '-'}
+        </strong>
+        {hasTimes ? (
+          <span className="shrink-0 text-right text-xs text-text-muted">
+            {formatBangkokTime(day.check_in)} – {formatBangkokTime(day.check_out)}
+          </span>
+        ) : null}
+      </div>
+      {!isSelfView ? (
+        <span className="min-w-0 truncate text-xs text-text-muted">
+          {[day.employee_code, formatShortDate(day.work_date)].filter(Boolean).join(' · ')}
+        </span>
+      ) : null}
+      {day.total_minutes != null ? (
+        <span className="text-xs text-text-muted">รวม {formatDuration(day.total_minutes)} ชม.</span>
+      ) : null}
+      {day.status === 'NO_RECORD' && !hasTimes ? (
+        <span className="text-xs text-text-muted">ไม่มีข้อมูล</span>
+      ) : (
+        <span className="flex flex-wrap items-center gap-1.5">
+          <StatusCell day={day} />
+          <MidDayPunchChip day={day} />
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * Marks days that hold more than the two scans already shown in the เข้า/ออก columns, so the ones
+ * worth opening are findable without clicking rows at random. An ordinary in/out day stays clean —
+ * which is what gives the chip its meaning.
+ */
+function MidDayPunchChip({ day }) {
+  if (!day.punch_count || day.punch_count <= 2) return null;
+  return (
+    <span className="inline-flex items-center gap-1 rounded-sm bg-surface-subtle px-1.5 py-0.5 text-2xs text-text-muted">
+      <Icon name="chevronDown" size={11} />
+      {day.punch_count} ครั้ง
+    </span>
+  );
+}
+
+const statusColumn = {
+  key: 'status',
+  header: 'สถานะ',
+  render: (day) => (
+    <span className="flex flex-wrap items-center gap-1.5">
+      <StatusCell day={day} />
+      <MidDayPunchChip day={day} />
+    </span>
+  ),
+};
+
+const timeColumns = [
+  {
+    key: 'check_in',
+    header: 'เข้า',
+    sortable: true,
+    sortAccessor: (day) => day.check_in || '',
+    render: (day) => <strong>{formatBangkokTime(day.check_in)}</strong>,
+  },
+  {
+    key: 'check_out',
+    header: 'ออก',
+    sortable: true,
+    sortAccessor: (day) => day.check_out || '',
+    render: (day) => <strong>{formatBangkokTime(day.check_out)}</strong>,
+  },
+  {
+    key: 'total_minutes',
+    header: 'ชม.',
+    sortable: true,
+    sortAccessor: (day) => day.total_minutes ?? -1,
+    render: (day) => <span>{formatDuration(day.total_minutes)}</span>,
+  },
+];
+
+const selfColumns = [
+  {
+    key: 'work_date',
+    header: 'วันที่',
+    sortable: true,
+    sortAccessor: (day) => day.work_date,
+    render: (day) => <strong>{formatShortDate(day.work_date)}</strong>,
+  },
+  ...timeColumns,
+  statusColumn,
+];
+
+const teamColumns = [
   {
     key: 'employee_name',
     header: 'พนักงาน',
     sortable: true,
-    sortAccessor: (punch) => punch.employee_name || 'ยังไม่แมปพนักงาน',
-    searchAccessor: (punch) => [punch.employee_name, punch.nick_name, punch.position_th].filter(Boolean).join(' '),
-    render: (punch) => (
+    sortAccessor: (day) => day.employee_name || '',
+    searchAccessor: (day) =>
+      [day.employee_name, day.nick_name, day.employee_code, day.position_th]
+        .filter(Boolean)
+        .join(' '),
+    render: (day) => (
       <span>
-        <strong>{punch.employee_name || 'ยังไม่แมปพนักงาน'}</strong>
-        {!punch.employee_id ? (
-          <StatusBadge tone="warning">ไม่พบพนักงาน</StatusBadge>
-        ) : (
-          <small>{[punch.nick_name, punch.position_th].filter(Boolean).join(' · ') || '-'}</small>
-        )}
+        <strong>{day.employee_name || '-'}</strong>
+        <small>{[day.nick_name, day.employee_code].filter(Boolean).join(' · ') || '-'}</small>
       </span>
     ),
   },
-  {
-    key: 'punch_time',
-    header: 'เวลา',
-    sortable: true,
-    sortAccessor: (punch) => punch.punch_time,
-    render: (punch) => (
-      <span>
-        <strong>{formatPunchDateTime(punch.punch_time)}</strong>
-        <small>{punch.work_date}</small>
-      </span>
-    ),
-  },
-  {
-    key: 'employee_code',
-    header: 'รหัสพนักงาน',
-    searchAccessor: (punch) => punch.employee_code || '',
-    render: (punch) => <code>{punch.employee_code || '-'}</code>,
-  },
-  {
-    key: 'site',
-    header: 'ไซต์ / อุปกรณ์',
-    render: (punch) => (
-      <span>
-        <strong>{punch.site_code || '-'}</strong>
-        <small>{punch.device_name || punch.device_code || '-'}</small>
-      </span>
-    ),
-  },
+  ...timeColumns,
+  statusColumn,
 ];
-
-function formatPunchDateTime(value) {
-  if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '-';
-  return new Intl.DateTimeFormat('th-TH', {
-    dateStyle: 'medium',
-    timeStyle: 'medium',
-    hour12: false,
-  }).format(date);
-}
-
-function dateRangeFromDatContent(content) {
-  const dates = content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => line.split('\t')[1]?.slice(0, 10))
-    .filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))
-    .sort();
-  if (dates.length === 0) return null;
-  return { from: dates[0], to: dates[dates.length - 1] };
-}
