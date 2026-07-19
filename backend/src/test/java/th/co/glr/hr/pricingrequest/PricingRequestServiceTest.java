@@ -641,7 +641,7 @@ class PricingRequestServiceTest {
     }
 
     @Test
-    void submit_notifiesImportOnceAndNeverCeo() {
+    void submit_notifiesImportAndCeoWithPricingRequestLinks() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItems(20L)).thenReturn(List.of(sampleItem(null)));
@@ -650,12 +650,10 @@ class PricingRequestServiceTest {
 
         service.submit(20L, salesActor);
 
-        // Review-remediation plan Commit D: must be "PRICING_REQUEST_SUBMITTED",
-        // NOT the bare "SUBMITTED" also used by TicketEventKind.SUBMITTED — a
-        // pricing-request notification must be distinguishable from a
-        // ticket-submitted one in hr.notification.type.
-        verify(notifRepo, times(1)).notifyByRole(eq("import"), eq(10L), eq("PRICING_REQUEST_SUBMITTED"), any());
-        verify(notifRepo, never()).notifyByRole(eq("ceo"), anyLong(), any(), any());
+        verify(notifRepo, times(1)).notifyByRoleForPricingRequest(
+            eq("import"), eq(20L), eq("PRICING_REQUEST_SUBMITTED"), any());
+        verify(notifRepo, times(1)).notifyByRoleForPricingRequest(
+            eq("ceo"), eq(20L), eq(PricingRequestEventKind.PRICING_REQUEST_SUBMITTED), any());
     }
 
     @Test
@@ -1063,7 +1061,9 @@ class PricingRequestServiceTest {
         verify(requestRepo).addEvent(eq(20L), eq(10L), eq(3L), any(),
             eq(PricingRequestEventKind.PRICING_REQUEST_PICKED_UP), eq(PricingRequestStatus.SUBMITTED),
             eq(PricingRequestStatus.IMPORT_REVIEWING), eq(null), eq(null));
-        verify(notifRepo).notifyEmployee(eq(1L), eq(10L), eq("PICKED_UP"), any());
+        verify(notifRepo).notifyEmployeeForPricingRequest(eq(1L), eq(20L), eq("PICKED_UP"), any());
+        verify(notifRepo).notifyByRoleForPricingRequest(
+            eq("ceo"), eq(20L), eq(PricingRequestEventKind.PRICING_REQUEST_PICKED_UP), any());
         // The landmine guard: this repository call must be the ONLY interaction with
         // TicketRepository — pickup must never write sales.ticket.assigned_to. The
         // real end-to-end assertion (assigned_to IS NULL after a real pickup) lives
@@ -1143,7 +1143,9 @@ class PricingRequestServiceTest {
         verify(requestRepo).addEvent(eq(20L), eq(10L), eq(3L), any(),
             eq(PricingRequestEventKind.MORE_INFO_REQUESTED), eq(PricingRequestStatus.IMPORT_REVIEWING),
             eq(PricingRequestStatus.MORE_INFO_REQUIRED), eq("กรุณาระบุขนาดสินค้าเพิ่มเติม"), any());
-        verify(notifRepo).notifyEmployee(eq(1L), eq(10L), eq("MORE_INFO_REQUIRED"), any());
+        verify(notifRepo).notifyEmployeeForPricingRequest(eq(1L), eq(20L), eq("MORE_INFO_REQUIRED"), any());
+        verify(notifRepo).notifyByRoleForPricingRequest(
+            eq("ceo"), eq(20L), eq(PricingRequestEventKind.MORE_INFO_REQUESTED), any());
     }
 
     // ── respondInformation ──────────────────────────────────────────────────
@@ -1203,7 +1205,9 @@ class PricingRequestServiceTest {
         verify(requestRepo).addEvent(eq(20L), eq(10L), eq(1L), any(),
             eq(PricingRequestEventKind.MORE_INFO_RESPONDED), eq(PricingRequestStatus.MORE_INFO_REQUIRED),
             eq(PricingRequestStatus.IMPORT_REVIEWING), any(), eq(null));
-        verify(notifRepo).notifyEmployee(eq(3L), eq(10L), eq("MORE_INFO_RESPONDED"), any());
+        verify(notifRepo).notifyEmployeeForPricingRequest(eq(3L), eq(20L), eq("MORE_INFO_RESPONDED"), any());
+        verify(notifRepo).notifyByRoleForPricingRequest(
+            eq("ceo"), eq(20L), eq(PricingRequestEventKind.MORE_INFO_RESPONDED), any());
     }
 
     @Test

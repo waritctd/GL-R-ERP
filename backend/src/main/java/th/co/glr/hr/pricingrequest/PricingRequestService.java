@@ -264,17 +264,10 @@ public class PricingRequestService {
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_SUBMITTED, PricingRequestStatus.DRAFT,
             PricingRequestStatus.SUBMITTED, null, null);
-        // NotificationRepository.notifyByRole hardcodes link = "/tickets/{ticketId}"
-        // (there is no pricing-request-specific route yet), so this deep-links to
-        // the deal page rather than the request itself. Known limitation — a
-        // request-specific deep link is a follow-up, not part of this branch.
-        // Type is "PRICING_REQUEST_SUBMITTED", NOT "SUBMITTED" — the latter is
-        // also TicketEventKind.SUBMITTED, which would make a pricing-request
-        // notification indistinguishable from a ticket-submitted one in
-        // hr.notification.type (no DB CHECK constraint on that column, so a new
-        // value here is safe).
-        notifications.notifyByRole("import", summary.ticketId(), "PRICING_REQUEST_SUBMITTED",
+        notifications.notifyByRoleForPricingRequest("import", summary.id(), "PRICING_REQUEST_SUBMITTED",
             "ใบขอราคา " + summary.requestCode() + " รอการรับเรื่อง");
+        notifyCeo(summary, PricingRequestEventKind.PRICING_REQUEST_SUBMITTED,
+            "ใบขอราคา " + summary.requestCode() + " ถูกส่งเข้าสู่ Pricing workflow");
         return detail(id);
     }
 
@@ -305,8 +298,10 @@ public class PricingRequestService {
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_PICKED_UP, PricingRequestStatus.SUBMITTED,
             PricingRequestStatus.IMPORT_REVIEWING, null, null);
-        notifications.notifyEmployee(summary.requestedById(), summary.ticketId(), "PICKED_UP",
+        notifications.notifyEmployeeForPricingRequest(summary.requestedById(), summary.id(), "PICKED_UP",
             "ใบขอราคา " + summary.requestCode() + " ถูกรับเรื่องแล้ว");
+        notifyCeo(summary, PricingRequestEventKind.PRICING_REQUEST_PICKED_UP,
+            "ใบขอราคา " + summary.requestCode() + " ถูกรับเรื่องโดย Import");
         return detail(id);
     }
 
@@ -327,8 +322,10 @@ public class PricingRequestService {
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.MORE_INFO_REQUESTED, summary.status(),
             PricingRequestStatus.MORE_INFO_REQUIRED, request.message(), toDueDateMetadataJson(request.dueDate()));
-        notifications.notifyEmployee(summary.requestedById(), summary.ticketId(), "MORE_INFO_REQUIRED",
+        notifications.notifyEmployeeForPricingRequest(summary.requestedById(), summary.id(), "MORE_INFO_REQUIRED",
             "ใบขอราคา " + summary.requestCode() + " ต้องการข้อมูลเพิ่มเติม");
+        notifyCeo(summary, PricingRequestEventKind.MORE_INFO_REQUESTED,
+            "ใบขอราคา " + summary.requestCode() + " ถูกขอข้อมูลเพิ่มเติมจาก Sales");
         return detail(id);
     }
 
@@ -360,9 +357,11 @@ public class PricingRequestService {
         // inside the call itself. Should not happen once a request has been through
         // pickup(), but a defensive check here costs nothing.
         if (summary.assignedImportId() != null) {
-            notifications.notifyEmployee(summary.assignedImportId(), summary.ticketId(), "MORE_INFO_RESPONDED",
+            notifications.notifyEmployeeForPricingRequest(summary.assignedImportId(), summary.id(), "MORE_INFO_RESPONDED",
                 "ใบขอราคา " + summary.requestCode() + " ได้รับข้อมูลเพิ่มเติมแล้ว");
         }
+        notifyCeo(summary, PricingRequestEventKind.MORE_INFO_RESPONDED,
+            "ใบขอราคา " + summary.requestCode() + " ได้รับข้อมูลเพิ่มเติมจาก Sales");
         return detail(id);
     }
 
@@ -394,6 +393,8 @@ public class PricingRequestService {
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_CANCELLED, summary.status(), PricingRequestStatus.CANCELLED,
             request.reason(), metadataJson);
+        notifyCeo(summary, PricingRequestEventKind.PRICING_REQUEST_CANCELLED,
+            "ใบขอราคา " + summary.requestCode() + " ถูกยกเลิก");
         return detail(id);
     }
 
@@ -586,6 +587,10 @@ public class PricingRequestService {
         return summary.ticketCreatedById() == actor.id()
             || "ceo".equals(actor.role())
             || "sales_manager".equals(actor.role());
+    }
+
+    private void notifyCeo(PricingRequestSummaryDto summary, String type, String message) {
+        notifications.notifyByRoleForPricingRequest("ceo", summary.id(), type, message);
     }
 
     private TicketSummaryDto requireTicket(long ticketId) {

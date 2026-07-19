@@ -3,7 +3,7 @@
 Date: 2026-07-20
 Branch: `feat/sales-factory-quote-costing`
 Base before work: `ba9836f` (`feat/sales-pricing-request-foundation`, stacked on latest `origin/main` at the start of the task)
-Primary migrations: `V61__factory_quote_costing_foundation.sql`, `V62__pricing_step2_review_hardening.sql`
+Primary migrations: `V61__factory_quote_costing_foundation.sql`, `V62__pricing_step2_review_hardening.sql`, `V63__pricing_step2_units_and_notifications.sql`
 
 ## Scope Implemented
 
@@ -11,6 +11,7 @@ Primary migrations: `V61__factory_quote_costing_foundation.sql`, `V62__pricing_s
 - Preserved Step 1 deal/ticket behavior: no automatic deal stage/status changes and no mutation of legacy ticket item price fields during factory quote/costing work.
 - Preserved confidentiality boundaries: Sales and Sales Manager cannot read raw factory quote/costing data; Import and CEO can read the raw quote/costing history.
 - Added frontend route/API/query key coverage, mock API behavior, and a first-pass Step 2 detail workspace for Sales, Import, and CEO visibility.
+- Added review follow-ups for catalog product selection, editable factory email drafts, explicit confirmation dialogs, department-wide Import labels, pricing-request notification links, CEO visibility, direct manual factory responses, canonical quote/costing unit handling, and costing idempotency replay protection.
 
 ## Business Rules Captured
 
@@ -33,12 +34,14 @@ Primary migrations: `V61__factory_quote_costing_foundation.sql`, `V62__pricing_s
   - Adds catalog snapshot placeholders on `sales.pricing_request_item`.
 - `backend/src/main/resources/db/migration/V62__pricing_step2_review_hardening.sql`
   - Adds database invariants for costing idempotency, costing item uniqueness, current factory quote uniqueness, and factory quote client request replay protection.
+- `backend/src/main/resources/db/migration/V63__pricing_step2_units_and_notifications.sql`
+  - Normalizes quote/costing item units to canonical `PER_SQM`, `PER_PIECE`, `PER_BOX`, and `PER_LINEAR_M` values before adding database constraints.
 - `backend/src/main/java/th/co/glr/hr/factoryquote/*`
   - Adds controller, service, repository, DTO/request records, and status enum for factory quote lifecycle.
-  - Hardens send idempotency, response revisions after CEO submission, factory grouping from catalog-resolved factory snapshots, and ready-for-costing item completeness checks.
+  - Hardens send auditing/notifications, direct manual responses from Import review, response revisions after CEO submission, factory grouping from catalog-resolved factory snapshots, canonical response-unit validation, and ready-for-costing item completeness checks.
 - `backend/src/main/java/th/co/glr/hr/pricingcosting/*`
   - Adds controller, service, repository, DTO/request records, and status enum for costing lifecycle.
-  - Hardens draft idempotency, stale/open draft handling, explicit recalculation, required factory configuration, and BOT FX validation for non-THB currencies.
+  - Hardens draft idempotency replay checks, stale/open draft handling, explicit recalculation, canonical unit conversion, required factory configuration, and BOT FX validation for non-THB currencies.
 - `backend/src/main/java/th/co/glr/hr/pricingrequest/PricingRequestRepository.java`
   - Snapshots active catalog base price/factory data before submission and preserves Sales-visible catalog price context.
 - `backend/src/main/java/th/co/glr/hr/pricingrequest/PricingRequestStatus.java`
@@ -46,7 +49,7 @@ Primary migrations: `V61__factory_quote_costing_foundation.sql`, `V62__pricing_s
 - `backend/src/main/java/th/co/glr/hr/pricingrequest/PricingRequestEventKind.java`
   - Adds Step 2 event kinds.
 - `backend/src/main/java/th/co/glr/hr/notification/NotificationRepository.java`
-  - Adds Thai notification titles for Step 2 actions.
+  - Adds Thai notification titles for Step 2 actions and pricing-request links for Import/CEO notifications.
 - `backend/src/test/java/th/co/glr/hr/pricingrequest/PricingFactoryQuoteCostingIntegrationTest.java`
   - Covers the revised acceptance scenario end to end with real PostgreSQL/Testcontainers.
 
@@ -64,6 +67,8 @@ Primary migrations: `V61__factory_quote_costing_foundation.sql`, `V62__pricing_s
 - `frontend/src/app/permissions.js`
 
 These add API access, mock behavior, queue-to-detail links, permissions, and the first usable detail workspace. Sales sees catalog base price/progress and information-response actions; Import can generate/send factory requests, record revisions, mark ready, create/recalculate costings, request information, and submit to CEO; CEO has read-only review visibility.
+
+The create/edit modal now includes a catalog price picker so Sales can submit catalog-backed product lines with base-price snapshots instead of relying only on free-text descriptions.
 
 ## Verification Completed
 
@@ -83,6 +88,7 @@ These add API access, mock behavior, queue-to-detail links, permissions, and the
 - Catalog base price/factory snapshots are now populated for selected catalog products, but legacy/free-text request items remain allowed for compatibility.
 - Factory response attachments are still represented only as notes/structured item fields in this pass; no document upload surface was added.
 - A full customer-change pricing request revision endpoint/workflow has not yet been added.
+- Factory email dispatch still happens through the current mail call path rather than a durable transactional outbox; status/audit/notification behavior is hardened, but full outbox-based exactly-once delivery remains deferred.
 
 ## Suggested Next Prompt
 

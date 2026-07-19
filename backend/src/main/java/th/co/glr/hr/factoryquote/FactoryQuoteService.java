@@ -41,6 +41,7 @@ public class FactoryQuoteService {
         PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
         PricingRequestStatus.COSTING_IN_PROGRESS);
     private static final Set<String> RESPONSE_STATUSES = Set.of(
+        PricingRequestStatus.IMPORT_REVIEWING,
         PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
         PricingRequestStatus.COSTING_IN_PROGRESS,
         PricingRequestStatus.READY_FOR_CEO_REVIEW);
@@ -148,16 +149,20 @@ public class FactoryQuoteService {
             throw new ApiException(HttpStatus.CONFLICT, "Only draft factory quote emails can be sent");
         }
         factoryEmail.send(summary.ticketId(), quote.factoryName(), emailTo, subject, body);
-        if (PricingRequestStatus.IMPORT_REVIEWING.equals(summary.status())) {
-            pricingRequests.transition(summary.id(), PricingRequestStatus.IMPORT_REVIEWING,
+        String toStatus = summary.status();
+        if (PricingRequestStatus.IMPORT_REVIEWING.equals(summary.status())
+                || PricingRequestStatus.COSTING_IN_PROGRESS.equals(summary.status())) {
+            int transitioned = pricingRequests.transition(summary.id(), summary.status(),
                 PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
+            if (transitioned == 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
+            }
+            toStatus = PricingRequestStatus.AWAITING_FACTORY_RESPONSE;
         }
-        if (!PricingRequestStatus.AWAITING_FACTORY_RESPONSE.equals(summary.status())) {
-            addEvent(summary, actor, PricingRequestEventKind.FACTORY_EMAIL_SENT, summary.status(),
-                PricingRequestStatus.AWAITING_FACTORY_RESPONSE, "Factory request sent to " + quote.factoryName());
-            notifyCeo(summary, PricingRequestEventKind.FACTORY_EMAIL_SENT,
-                "ใบขอราคา " + summary.requestCode() + " ส่งคำขอโรงงาน " + quote.factoryName());
-        }
+        addEvent(summary, actor, PricingRequestEventKind.FACTORY_EMAIL_SENT, summary.status(),
+            toStatus, "Factory request sent to " + quote.factoryName());
+        notifyCeo(summary, PricingRequestEventKind.FACTORY_EMAIL_SENT,
+            "ใบขอราคา " + summary.requestCode() + " ส่งคำขอโรงงาน " + quote.factoryName());
         return requireQuote(quoteId);
     }
 
@@ -171,7 +176,7 @@ public class FactoryQuoteService {
         PricingRequestSummaryDto summary = requirePricingRequest(current.pricingRequestId());
         requireMutablePricingRequest(summary, RESPONSE_STATUSES);
         requireActiveDeal(summary.ticketId());
-        validateResponseItems(current, request.items());
+        List<ReceiveFactoryQuoteItemRequest> normalizedItems = validateAndNormalizeResponseItems(current, request.items());
 
         FactoryQuoteDto saved;
         if (Set.of(FactoryQuoteStatus.DRAFT, FactoryQuoteStatus.REQUESTED).contains(current.status())) {
@@ -180,9 +185,18 @@ public class FactoryQuoteService {
             if (rows == 0) {
                 throw new ApiException(HttpStatus.CONFLICT, "Factory quote was changed by another user");
             }
-            quotes.replaceResponseItems(quoteId, request.items());
+            quotes.replaceResponseItems(quoteId, normalizedItems);
+            String toStatus = summary.status();
+            if (PricingRequestStatus.IMPORT_REVIEWING.equals(summary.status())) {
+                int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.IMPORT_REVIEWING,
+                    PricingRequestStatus.COSTING_IN_PROGRESS, null, null);
+                if (transitioned == 0) {
+                    throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
+                }
+                toStatus = PricingRequestStatus.COSTING_IN_PROGRESS;
+            }
             saved = requireQuote(quoteId);
-            addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_RECEIVED, summary.status(), summary.status(),
+            addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_RECEIVED, summary.status(), toStatus,
                 "Factory response received from " + current.factoryName());
             notifyCeo(summary, PricingRequestEventKind.FACTORY_RESPONSE_RECEIVED,
                 "ใบขอราคา " + summary.requestCode() + " ได้รับราคาจาก " + current.factoryName());
@@ -191,17 +205,19 @@ public class FactoryQuoteService {
             quotes.supersede(current.id());
             long newId = quotes.createRevision(current, request.supplierQuoteRef(), request.defaultCurrency(),
                 request.paymentTerms(), request.leadTimeText(), request.revisionReason(), request.negotiationNote(), actor.id());
-            quotes.replaceResponseItems(newId, request.items());
+            quotes.replaceResponseItems(newId, normalizedItems);
             quotes.markOpenCostingsStale(summary.id(), "Factory quote revision changed");
+            String toStatus = summary.status();
             if (PricingRequestStatus.READY_FOR_CEO_REVIEW.equals(summary.status())) {
                 int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.READY_FOR_CEO_REVIEW,
                     PricingRequestStatus.COSTING_IN_PROGRESS, null, null);
                 if (transitioned == 0) {
                     throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
                 }
+                toStatus = PricingRequestStatus.COSTING_IN_PROGRESS;
             }
             saved = requireQuote(newId);
-            addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_REVISED, summary.status(), summary.status(),
+            addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_REVISED, summary.status(), toStatus,
                 "Factory response revised for " + current.factoryName());
             notifyCeo(summary, PricingRequestEventKind.FACTORY_RESPONSE_REVISED,
                 "ใบขอราคา " + summary.requestCode() + " มีราคาฉบับปรับปรุงจาก " + current.factoryName());
@@ -278,7 +294,10 @@ public class FactoryQuoteService {
         return byFactory;
     }
 
-    private void validateResponseItems(FactoryQuoteDto quote, List<ReceiveFactoryQuoteItemRequest> responseItems) {
+    private List<ReceiveFactoryQuoteItemRequest> validateAndNormalizeResponseItems(
+        FactoryQuoteDto quote,
+        List<ReceiveFactoryQuoteItemRequest> responseItems
+    ) {
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
         Map<Long, PricingRequestItemDto> requestItemsById = new HashMap<>();
         for (PricingRequestItemDto item : pricingRequests.findItems(summary.id())) {
@@ -293,6 +312,7 @@ public class FactoryQuoteService {
         if (!received.equals(expected)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Factory response must include exactly the quote's request items");
         }
+        List<ReceiveFactoryQuoteItemRequest> normalized = new ArrayList<>();
         for (ReceiveFactoryQuoteItemRequest responseItem : responseItems) {
             PricingRequestItemDto requestItem = requestItemsById.get(responseItem.pricingRequestItemId());
             if (requestItem == null) {
@@ -302,7 +322,34 @@ public class FactoryQuoteService {
             if (!quote.factoryName().equals(itemFactory)) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "Factory response item belongs to a different factory");
             }
+            String unitBasis = canonicalUnit(responseItem.unitBasis());
+            String quotedUnit = canonicalUnit(responseItem.quotedUnit());
+            if ("PER_BOX".equals(unitBasis) && responseItem.piecesPerBox() == null) {
+                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "PER_BOX factory response items require piecesPerBox");
+            }
+            if ("PER_SQM".equals(unitBasis) && responseItem.sqmPerUnit() == null) {
+                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "PER_SQM factory response items require sqmPerUnit");
+            }
+            normalized.add(new ReceiveFactoryQuoteItemRequest(
+                responseItem.pricingRequestItemId(),
+                responseItem.supplierProductCode(),
+                responseItem.supplierProductDescription(),
+                responseItem.quotedQuantity(),
+                quotedUnit,
+                unitBasis,
+                responseItem.rawUnitPrice(),
+                responseItem.currency(),
+                responseItem.minimumOrderQuantity(),
+                responseItem.sqmPerUnit(),
+                responseItem.piecesPerBox(),
+                responseItem.leadTimeText(),
+                responseItem.availabilityNote(),
+                responseItem.lineNote()
+            ));
         }
+        return normalized;
     }
 
     private PricingRequestSummaryDto requirePricingRequest(long pricingRequestId) {
@@ -344,7 +391,7 @@ public class FactoryQuoteService {
     }
 
     private void notifyCeo(PricingRequestSummaryDto summary, String type, String message) {
-        notifications.notifyByRole("ceo", summary.ticketId(), type, message);
+        notifications.notifyByRoleForPricingRequest("ceo", summary.id(), type, message);
     }
 
     private String emailBody(PricingRequestSummaryDto summary, String factoryName, List<PricingRequestItemDto> items) {
@@ -376,5 +423,24 @@ public class FactoryQuoteService {
             return first.trim();
         }
         return fallback != null && !fallback.isBlank() ? fallback.trim() : null;
+    }
+
+    private String canonicalUnit(String value) {
+        if (value == null || value.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Factory quote unit must not be blank");
+        }
+        String normalized = value.trim().toUpperCase();
+        return switch (normalized) {
+            case "PER_SQM" -> "PER_SQM";
+            case "PER_PIECE" -> "PER_PIECE";
+            case "PER_BOX" -> "PER_BOX";
+            case "PER_LINEAR_M" -> "PER_LINEAR_M";
+            case "SQM", "SQ.M", "M2", "M²" -> "PER_SQM";
+            case "PIECE", "PCS", "PC", "EACH" -> "PER_PIECE";
+            case "BOX" -> "PER_BOX";
+            case "LINEAR_M", "LINEAR_METER", "METER", "METRE" -> "PER_LINEAR_M";
+            default -> throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Unsupported factory quote unit '" + value + "'");
+        };
     }
 }
