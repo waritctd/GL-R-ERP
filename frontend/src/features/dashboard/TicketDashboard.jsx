@@ -64,6 +64,13 @@ export function TicketDashboard({ user, employee, showToast }) {
     queryKey: queryKeys.ticketList(''),
     queryFn: () => api.tickets.list({}),
   });
+  // Commit 6: summary.submitted is permanently 0 for new deals now that ticket
+  // creation no longer auto-submits (TicketService.create/submit, commit 5) —
+  // "รอรับเรื่อง (Import)" now counts the PricingRequest queue instead.
+  const pricingQueueQuery = useQuery({
+    queryKey: queryKeys.pricingRequestQueue({ status: 'SUBMITTED' }),
+    queryFn: () => api.pricingRequests.queue({ status: 'SUBMITTED', activeOnly: true }).then((r) => r.items ?? []),
+  });
 
   const summaryPayload = summaryQuery.data;
   const nextSummary = useMemo(
@@ -97,15 +104,17 @@ export function TicketDashboard({ user, employee, showToast }) {
   // viewer cannot act on (e.g. "submitted" for a sales rep, who is waiting
   // on Import) is intentionally left non-clickable, not omitted — showing it
   // as a clickable action would misrepresent whose job it is.
-  const canPickup = hasPermission(user.role, 'canPickupTickets');
+  // No canPickupTickets here any more: the "รอรับเรื่อง" surfaces below now point
+  // at the PricingRequest queue, which gates on canViewPricingRequestQueue.
   const canApprove = hasPermission(user.role, 'canApproveReject');
   const canQuote = hasPermission(user.role, 'canGenerateQuotation');
+  const canViewPricingQueue = hasPermission(user.role, 'canViewPricingRequestQueue');
   // Each card navigates straight to its matching TicketListPage status tab
   // (see STATUS_TABS in TicketListPage.jsx) instead of the unfiltered list —
   // previously every card landed on "ทั้งหมด" and made the user re-apply the
   // exact filter the card already named.
   const queueItems = summary ? [
-    { key: 'submitted', label: 'รอรับเรื่อง (Import)', value: summary.submitted, to: canPickup ? () => navigate('/tickets') : undefined },
+    { key: 'submitted', label: 'รอรับเรื่อง (Import)', value: pricingQueueQuery.data?.length ?? 0, to: canViewPricingQueue ? () => navigate('/pricing-requests') : undefined },
     { key: 'priceProposed', label: 'รอการอนุมัติราคา (CEO)', value: summary.priceProposed, to: canApprove ? () => navigate('/tickets') : undefined },
     { key: 'approved', label: 'อนุมัติแล้ว รอออกใบเสนอราคา', value: summary.approved, to: canQuote ? () => navigate('/tickets') : undefined },
     { key: 'notifications', label: 'แจ้งเตือนยังไม่อ่าน', value: notifications?.unread ?? 0 },
@@ -152,7 +161,10 @@ export function TicketDashboard({ user, employee, showToast }) {
 
           <div className="stat-grid">
             <StatCard icon="fileText"  label="เปิดอยู่ทั้งหมด"   value={summary.totalOpen}       helper="Total open"         tone="indigo" onClick={() => navigate('/tickets')} />
-            <StatCard icon="clock"     label="รอรับเรื่อง"         value={summary.submitted}       helper="Submitted"          tone="amber"  onClick={canPickup ? () => navigate('/tickets') : undefined} />
+            {/* Same reason as the ActionQueue entry above: summary.submitted is
+                permanently 0 for new deals since ticket creation stopped
+                auto-submitting, so this tile counts the PricingRequest queue. */}
+            <StatCard icon="clock"     label="รอรับเรื่อง"         value={pricingQueueQuery.data?.length ?? 0} helper="Pricing requests" tone="amber"  onClick={canViewPricingQueue ? () => navigate('/pricing-requests') : undefined} />
             <StatCard icon="users"     label="กำลังดำเนินการ"     value={summary.inReview}        helper="In review"          tone="blue"   onClick={() => navigate('/tickets')} />
             <StatCard icon="clipboard" label="รอการอนุมัติ"        value={summary.priceProposed}   helper="Awaiting approval"  tone="amber"  onClick={canApprove ? () => navigate('/tickets') : undefined} />
           </div>

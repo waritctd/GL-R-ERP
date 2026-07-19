@@ -22,6 +22,7 @@ import {
   ticketStatusLabel,
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
+import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
 import { CancelDealModal } from './CancelDealModal.jsx';
 import { DealStagePanel } from './DealStagePanel.jsx';
 
@@ -286,6 +287,16 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     enabled: !!ticketId && !!ticket,
   });
   const deliveryRecords = deliveriesQuery.data ?? [];
+
+  // Commit 6: the deal's own pricing requests — read here (not inside
+  // PricingRequestPanel) so DealStagePanel's substep strip can also key off
+  // the most recent one, without a second fetch of the same list.
+  const pricingRequestsQuery = useQuery({
+    queryKey: queryKeys.pricingRequestsByTicket(ticketId),
+    queryFn: () => api.pricingRequests.listForTicket(ticketId).then((r) => r.items ?? []),
+    enabled: !!ticketId && !!ticket,
+  });
+  const pricingRequests = pricingRequestsQuery.data ?? [];
 
   useEffect(() => {
     if (ticketQuery.error) showToast('error', ticketQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
@@ -562,9 +573,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // quote stages.
   const EDITABLE_STATUSES = ['draft', 'submitted', 'in_review', 'price_proposed'];
   const can = {
-    // Submit is only meaningful once the deal has product lines — the backend
-    // 400s an item-less submit (mirrors TicketService.submit).
-    submit:            hasAction('SUBMIT') && st === 'draft' && isOwner && ROLE_PERMISSIONS.canCreateTickets.includes(role) && items.length > 0,
+    // Ticket-level submit is retired (commit 5/6) — pricing now starts on a
+    // PricingRequest (see PricingRequestPanel below the items table), not on
+    // the ticket itself.
     pickup:            hasAction('PICKUP') && st === 'submitted'       && ROLE_PERMISSIONS.canPickupTickets.includes(role),
     propose:           hasAction('PROPOSE_PRICE') && ['in_review', 'price_proposed', 'approved'].includes(st) && ROLE_PERMISSIONS.canProposePrices.includes(role),
     calculatePrices:   hasAction('CALCULATE_PRICES') && st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
@@ -622,7 +633,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // reject/pickup/... in src/api/mockApi.js) so the wording matches what the
   // button actually does. Never invents an owner or action the data can't support.
   const NEXT_ACTION_STEPS = [
-    ['submit',           'ส่งขอราคา — รายการสินค้าพร้อมแล้ว ส่งให้ฝ่ายนำเข้าเสนอราคาได้เลย'],
     ['reject',           st === 'price_proposed' ? 'ตรวจสอบราคาที่เสนอ แล้วอนุมัติหรือตีกลับให้ Import แก้ไข' : null],
     ['approve',          st === 'price_proposed' ? 'ตรวจสอบราคาที่เสนอ แล้วอนุมัติหรือตีกลับให้ Import แก้ไข' : null],
     ['pickup',           'รับมอบหมายใบขอราคานี้เพื่อเริ่มเสนอราคา'],
@@ -665,13 +675,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // steps (ออกใบแจ้งยอดมัดจำ, IR) are NOT repeated here — they already sit in the
   // stage panel's docs row and the guidance line points at them. CEO price
   // approve/reject keeps its dedicated decision panel below.
-  const primaryAction = can.submit ? (
-    <button type="button" className="primary-button" disabled={actionLoading}
-      onClick={() => doAction(() => api.tickets.submit(ticketId), 'ส่งขอราคาแล้ว')}>
-      <Icon name="check" size={14} />
-      ส่งขอราคา (เริ่มเสนอราคา)
-    </button>
-  ) : can.pickup ? (
+  const primaryAction = can.pickup ? (
     <button type="button" className="primary-button" disabled={actionLoading}
       onClick={() => doAction(() => api.tickets.pickup(ticketId), 'รับมอบหมายแล้ว')}>
       <Icon name="check" size={14} />
@@ -1150,6 +1154,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         user={user}
         summary={summary}
         availableActions={availableActions}
+        pricingRequests={pricingRequests}
         primaryAction={primaryAction}
         guidance={nextAction ?? waitingHint}
         actionLoading={actionLoading}
@@ -2045,6 +2050,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               </>
             )}
           </section>
+
+          <PricingRequestPanel ticketId={ticketId} deal={summary} ticketItems={items} user={user} />
 
           {/* D9: Price formula breakdown */}
           {showBreakdown && priceBreakdown.length > 0 && (

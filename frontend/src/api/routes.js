@@ -144,6 +144,25 @@ export const API_ROUTES = {
     commit: (versionId) => `/api/price-import/commit/${versionId}`,
     profile: (factoryId) => `/api/price-import/profile/${factoryId}`,
   },
+  // Mirrors PricingRequestController: ticket-scoped create/list live under
+  // /api/tickets/{ticketId}/..., everything else is its own /api/pricing-requests/... resource.
+  pricingRequests: {
+    listForTicket: (ticketId) => `/api/tickets/${ticketId}/pricing-requests`,
+    create: (ticketId) => `/api/tickets/${ticketId}/pricing-requests`,
+    queue: (params = {}) => {
+      const p = new URLSearchParams();
+      if (params.status) p.set('status', params.status);
+      if (params.assignedImportId) p.set('assignedImportId', params.assignedImportId);
+      if (params.activeOnly !== undefined) p.set('activeOnly', String(params.activeOnly));
+      return `/api/pricing-requests${p.toString() ? `?${p}` : ''}`;
+    },
+    detail: (id) => `/api/pricing-requests/${id}`,
+    submit: (id) => `/api/pricing-requests/${id}/submit`,
+    pickup: (id) => `/api/pricing-requests/${id}/pickup`,
+    requestInformation: (id) => `/api/pricing-requests/${id}/request-information`,
+    respondInformation: (id) => `/api/pricing-requests/${id}/respond-information`,
+    cancel: (id) => `/api/pricing-requests/${id}/cancel`,
+  },
 };
 
 export const ROLE_PERMISSIONS = {
@@ -183,4 +202,10 @@ export const ROLE_PERMISSIONS = {
   canManagePayroll: ['hr'],
   canManagePriceImport: ['ceo', 'import'],
   canManageCatalogProducts: ['ceo', 'import'],
+  // Import's PricingRequest queue (/pricing-requests). Mirrors
+  // PricingRequestService.VIEWER_ROLES minus 'sales'/'account' — this key is
+  // about who sees the cross-deal QUEUE page, not who may view/act on a single
+  // pricing request (sales still sees its own deal's requests via
+  // PricingRequestPanel, gated by ticket ownership, not this key).
+  canViewPricingRequestQueue: ['import', 'ceo', 'sales_manager'],
 };

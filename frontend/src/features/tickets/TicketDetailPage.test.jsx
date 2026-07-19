@@ -39,6 +39,12 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       factoryConfigs: {
         list: vi.fn(),
       },
+      // Commit 6: PricingRequestPanel (mounted below the items table) and
+      // DealStagePanel's substep strip both read this list.
+      pricingRequests: {
+        listForTicket: vi.fn(),
+        get: vi.fn(),
+      },
     },
   };
 });
@@ -142,6 +148,7 @@ describe('TicketDetailPage', () => {
     api.tickets.revision.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.overrideItemPrice.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.editItems.mockResolvedValue({ ticket: buildTicket() });
+    api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
   });
 
   it('renders a ticket from a mocked api.tickets.get', async () => {
