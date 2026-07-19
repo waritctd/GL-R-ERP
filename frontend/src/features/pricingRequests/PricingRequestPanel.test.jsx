@@ -109,6 +109,33 @@ describe('PricingRequestPanel', () => {
     expect(screen.getByText('สร้างคำขอราคา (ร่าง)')).not.toBeNull();
   });
 
+  it('shows productDescription as the item identity when brand and model are blank', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary()] });
+    api.pricingRequests.get.mockResolvedValue({
+      pricingRequest: {
+        summary: summary(),
+        items: [{
+          id: 11,
+          brand: null,
+          model: null,
+          productDescription: 'Porcelain anti-slip tile 60x60 cm',
+          color: null,
+          texture: null,
+          size: null,
+          requestedQty: 12,
+          requestedUnit: 'กล่อง',
+          quantityType: 'ESTIMATE',
+        }],
+        events: [],
+      },
+    });
+    renderPanel({ user: { id: 3, name: 'Import', role: 'import' } });
+
+    fireEvent.click(await screen.findByText('PCR-2026-0001'));
+
+    expect(await screen.findByText('Porcelain anti-slip tile 60x60 cm')).not.toBeNull();
+  });
+
   it('lets the owner submit an existing DRAFT request to Import', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'DRAFT' })] });
     api.pricingRequests.submit.mockResolvedValue({

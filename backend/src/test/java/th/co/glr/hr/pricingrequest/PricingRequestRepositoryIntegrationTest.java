@@ -109,15 +109,15 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
     }
 
     @Test
-    void uniqueIndex_rejectsSameRequestedByAndClientRequestIdButAllowsDifferentRequestedBy() {
+    void create_returnsZeroForDuplicateSameRequestedByAndClientRequestIdButAllowsDifferentRequestedBy() {
         String clientRequestId = clientRequestId("21");
         CreatePricingRequestRequest create = new CreatePricingRequestRequest(
             PricingRequestRecipient.OWNER, null, "Owner Co.", null, null, null, null, clientRequestId,
             List.of(item("Toyota", "1")));
-        requests.create(ticketId, requests.nextRequestCode(), create, salesActorId);
+        long firstId = requests.create(ticketId, requests.nextRequestCode(), create, salesActorId);
 
-        assertThatThrownBy(() -> requests.create(ticketId, requests.nextRequestCode(), create, salesActorId))
-            .isInstanceOf(DataIntegrityViolationException.class);
+        assertThat(requests.create(ticketId, requests.nextRequestCode(), create, salesActorId)).isZero();
+        assertThat(requests.findItems(firstId)).hasSize(1);
 
         long otherSalesActorId = createEmployee("พนักงานขาย คนที่สาม", "sales3@glr.co.th");
         long otherTicketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), otherSalesActorId, "พนักงานขาย คนที่สาม");

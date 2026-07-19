@@ -12,7 +12,6 @@ import java.util.Optional;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestEventDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
@@ -68,8 +67,7 @@ public class PricingRequestRepository {
 
     public long create(long ticketId, String requestCode, CreatePricingRequestRequest request, long actorId) {
         String targetCurrency = normalizeCurrency(request.targetCurrency());
-        GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
-        jdbc.update("""
+        List<Long> ids = jdbc.query("""
             INSERT INTO sales.pricing_request
                 (request_code, ticket_id, recipient_type, recipient_contact_id, recipient_label,
                  status, requested_by, required_date, customer_target_price, target_currency, note,
@@ -78,6 +76,10 @@ public class PricingRequestRepository {
                 (:requestCode, :ticketId, :recipientType, :recipientContactId, :recipientLabel,
                  'DRAFT', :requestedBy, :requiredDate, :customerTargetPrice, :targetCurrency, :note,
                  CAST(:clientRequestId AS uuid))
+            ON CONFLICT (requested_by, client_request_id)
+            WHERE client_request_id IS NOT NULL
+            DO NOTHING
+            RETURNING pricing_request_id
             """,
             new MapSqlParameterSource()
                 .addValue("requestCode", requestCode)
@@ -91,8 +93,11 @@ public class PricingRequestRepository {
                 .addValue("targetCurrency", targetCurrency)
                 .addValue("note", request.note())
                 .addValue("clientRequestId", request.clientRequestId()),
-            keyHolder, new String[]{"pricing_request_id"});
-        long pricingRequestId = keyHolder.getKey().longValue();
+            (rs, rowNum) -> rs.getLong("pricing_request_id"));
+        if (ids.isEmpty()) {
+            return 0L;
+        }
+        long pricingRequestId = ids.get(0);
         replaceItems(pricingRequestId, request.items());
         return pricingRequestId;
     }

@@ -11,7 +11,6 @@ import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -102,15 +101,13 @@ public class PricingRequestService {
         validateSourceItemsBelongToTicket(ticketId, request.items());
 
         String requestCode = requests.nextRequestCode();
-        long id;
-        try {
-            id = requests.create(ticketId, requestCode, request, actor.id());
-        } catch (DataIntegrityViolationException e) {
+        long id = requests.create(ticketId, requestCode, request, actor.id());
+        if (id == 0L) {
             existing = existingForClientRequest(actor.id(), clientRequestId);
             if (existing != null) {
                 return detail(requireSameTicket(existing, ticketId).id());
             }
-            throw e;
+            throw new ApiException(HttpStatus.CONFLICT, "clientRequestId has already been used");
         }
         requests.addEvent(id, ticketId, actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_CREATED, null, PricingRequestStatus.DRAFT, null, null);
