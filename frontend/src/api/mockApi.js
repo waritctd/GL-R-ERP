@@ -1028,6 +1028,184 @@ function dashboardEmployeeScope(user) {
   return { label: employee ? 'self' : 'none', employees: employee ? [employee] : [] };
 }
 
+/**
+ * Who this caller may see, mirroring AttendanceService.resolveScope. A non-manager asking for
+ * someone else is a 403; a manager is silently narrowed to their division instead.
+ */
+function mockAttendanceScope(user, params = {}) {
+  if (['hr', 'ceo'].includes(user.role)) {
+    const requested = params.employeeId ? Number(params.employeeId) : null;
+    return {
+      employees: requested
+        ? db.employees.filter((employee) => employee.id === requested)
+        : db.employees,
+    };
+  }
+  if (!user.employeeId) fail('User is not linked to an employee', 400);
+  if (dashboardManager(user) && dashboardDivisionId(user)) {
+    const division = db.employees.filter(
+      (employee) => employee.divisionId === dashboardDivisionId(user),
+    );
+    const requested = params.employeeId ? Number(params.employeeId) : null;
+    // Both predicates AND, so an out-of-division id matches nothing rather than leaking.
+    return { employees: requested ? division.filter((e) => e.id === requested) : division };
+  }
+  if (params.employeeId && Number(params.employeeId) !== user.employeeId) fail('Forbidden', 403);
+  const self = employeeForUser(user);
+  return { employees: self ? [self] : [] };
+}
+
+const MOCK_UNMAPPED_BADGES = [
+  {
+    badge_code: '8801',
+    punch_count: 12,
+    first_seen: '2026-07-02T08:11:00+07:00',
+    last_seen: '2026-07-17T17:48:00+07:00',
+    site_code: 'SHOWROOM',
+  },
+  {
+    badge_code: '9042',
+    punch_count: 3,
+    first_seen: '2026-07-09T08:31:00+07:00',
+    last_seen: '2026-07-11T17:22:00+07:00',
+    site_code: 'WAREHOUSE',
+  },
+];
+
+function isoDate(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function bangkokStamp(date, hour, minute) {
+  return `${isoDate(date)}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+07:00`;
+}
+
+/**
+ * The eight shapes the day table has to render, cycled deterministically by (employee, day) so a
+ * given date always looks the same and every badge is reachable without hunting.
+ */
+const MOCK_DAY_SHAPES = [
+  { kind: 'present', inAt: [8, 24], outAt: [17, 35] },
+  { kind: 'late', inAt: [8, 47], outAt: [17, 32], late: 17 },
+  { kind: 'early', inAt: [8, 28], outAt: [16, 20], early: 70 },
+  { kind: 'missingOut', inAt: [8, 31], outAt: null },
+  { kind: 'overtime', inAt: [8, 20], outAt: [19, 0], overtime: 90 },
+  { kind: 'present', inAt: [8, 12], outAt: [17, 40] },
+  { kind: 'workedLate', inAt: [8, 26], outAt: [18, 40] },
+  { kind: 'missingIn', inAt: null, outAt: [17, 25] },
+  { kind: 'none' },
+];
+
+function mockAttendanceDays(employees, from, to) {
+  const days = [];
+  for (let cursor = new Date(to); cursor >= from; cursor.setDate(cursor.getDate() - 1)) {
+    const date = new Date(cursor);
+    const weekend = date.getDay() === 0 || date.getDay() === 6;
+    employees.forEach((employee, index) => {
+      const shape = weekend
+        ? { kind: 'nonWorkday' }
+        : MOCK_DAY_SHAPES[(date.getDate() + index) % MOCK_DAY_SHAPES.length];
+      days.push(mockAttendanceDay(employee, date, shape, weekend));
+    });
+  }
+  return days;
+}
+
+function mockAttendanceDay(employee, date, shape, weekend) {
+  const base = {
+    employee_id: employee.id,
+    employee_code: employee.code,
+    employee_name: employee.nameTh,
+    nick_name: employee.nickname ?? null,
+    position_th: employee.positionTh ?? null,
+    work_date: isoDate(date),
+    is_workday: !weekend,
+    check_in: null,
+    check_out: null,
+    total_minutes: null,
+    late_minutes: 0,
+    early_leave_minutes: 0,
+    overtime_minutes: 0,
+    punch_count: 0,
+    site_code: null,
+    status: 'NO_RECORD',
+    flags: [],
+    is_manual_override: false,
+    notes: null,
+  };
+
+  if (shape.kind === 'none') return base;
+  if (shape.kind === 'nonWorkday') {
+    return { ...base, status: 'NON_WORKDAY', flags: ['NON_WORKDAY'] };
+  }
+
+  const checkIn = shape.inAt ? bangkokStamp(date, shape.inAt[0], shape.inAt[1]) : null;
+  const checkOut = shape.outAt ? bangkokStamp(date, shape.outAt[0], shape.outAt[1]) : null;
+  const flags = [];
+  let status = 'PRESENT';
+
+  if (!checkIn) {
+    status = 'MISSING_CHECK_IN';
+    flags.push('MISSING_CHECK_IN');
+  } else if (!checkOut) {
+    status = 'MISSING_CHECK_OUT';
+    flags.push('MISSING_CHECK_OUT');
+  }
+  if (shape.late) {
+    status = 'LATE';
+    flags.push('LATE');
+  }
+  if (shape.early) flags.push('EARLY_LEAVE');
+  if (shape.overtime) flags.push('OVERTIME_APPROVED');
+  if (shape.kind === 'workedLate') flags.push('WORKED_LATE_UNAPPROVED');
+
+  const totalMinutes = checkIn && checkOut
+    ? (shape.outAt[0] * 60 + shape.outAt[1]) - (shape.inAt[0] * 60 + shape.inAt[1])
+    : null;
+
+  return {
+    ...base,
+    check_in: checkIn,
+    check_out: checkOut,
+    total_minutes: totalMinutes,
+    late_minutes: shape.late ?? 0,
+    early_leave_minutes: shape.early ?? 0,
+    overtime_minutes: shape.overtime ?? 0,
+    punch_count: (checkIn ? 1 : 0) + (checkOut ? 1 : 0),
+    site_code: 'SHOWROOM',
+    status,
+    flags,
+  };
+}
+
+/** The raw scans behind one day, for the drill-down. */
+function mockAttendancePunches(employees, params) {
+  const workDate = params.from || params.to;
+  if (!workDate || employees.length === 0) return [];
+  const date = new Date(workDate);
+  const weekend = date.getDay() === 0 || date.getDay() === 6;
+  if (weekend) return [];
+
+  return employees.flatMap((employee, index) => {
+    const shape = MOCK_DAY_SHAPES[(date.getDate() + index) % MOCK_DAY_SHAPES.length];
+    if (shape.kind === 'none' || shape.kind === 'nonWorkday') return [];
+    const stamps = [shape.inAt, shape.outAt].filter(Boolean);
+    return stamps.map((stamp, position) => ({
+      punch_id: employee.id * 1000 + date.getDate() * 10 + position,
+      employee_id: employee.id,
+      employee_code: employee.code,
+      employee_name: employee.nameTh,
+      nick_name: employee.nickname ?? null,
+      position_th: employee.positionTh ?? null,
+      punch_time: bangkokStamp(date, stamp[0], stamp[1]),
+      work_date: isoDate(date),
+      site_code: 'SHOWROOM',
+      device_code: 'SHOWROOM_SC700',
+      device_name: 'เครื่องสแกนโชว์รูม',
+    }));
+  });
+}
+
 function dashboardHeadcount(user) {
   const company = ['hr', 'ceo'].includes(user.role);
   const manager = dashboardManager(user);
@@ -3028,26 +3206,54 @@ export const api = {
     },
   },
 
-  // No seeded punch/device data yet — these return empty results so HR-core
-  // pages degrade to their built-in empty state instead of crashing on the
-  // missing namespace (real backend implementation is in hrApi.js).
-  // Mirrors AttendanceController + AttendanceService (attendance/): `list` has
-  // no top-level role gate — AttendanceService.listPunches scopes by role
-  // instead (hr/ceo see all; a ฝ่าย manager — dashboardManager() — is scoped to
-  // their division with no 403; everyone else is 403'd for requesting another
-  // employeeId, matching AttendanceService.java:111-121). `devices` and
-  // `importDat` are both hr/ceo-only at the controller
-  // (AttendanceController.java:47-62).
+  // Mirrors AttendanceController + AttendanceService (attendance/).
+  //
+  // `daily` and `list` have no top-level role gate — AttendanceService.resolveScope
+  // scopes by role instead (hr/ceo see all; a ฝ่าย manager — dashboardManager() —
+  // is scoped to their division with no 403; everyone else is 403'd for requesting
+  // another employeeId). `unmapped`, `devices`, `importDat` and `backfillCards` are
+  // hr/ceo-only at the controller (AttendanceController.java).
+  //
+  // Days are generated rather than stored so the fixture never goes stale, and the
+  // pattern deliberately produces every flag the UI renders — on time, late, early
+  // out, missing each scan, approved OT, unapproved late stay, non-workday and
+  // no-record — so the whole status vocabulary is reachable in mock mode.
+  //
+  // AUTHZ IS NOT AUTHORITATIVE HERE: verify permission behaviour against the Java
+  // service, never against this file.
   attendance: {
+    async daily(params = {}) {
+      const user = requireSession();
+      const scope = mockAttendanceScope(user, params);
+      const to = params.to ? new Date(params.to) : new Date();
+      const from = params.from ? new Date(params.from) : new Date(to.getFullYear(), to.getMonth(), 1);
+      return delay({ days: mockAttendanceDays(scope.employees, from, to) });
+    },
+    // Backs the per-day drill-down: the raw scans behind one day's first/last.
     async list(params = {}) {
       const user = requireSession();
-      if (!['hr', 'ceo'].includes(user.role)) {
-        if (!user.employeeId) fail('User is not linked to an employee', 400);
-        if (!(dashboardManager(user) && dashboardDivisionId(user))) {
-          if (params.employeeId && Number(params.employeeId) !== user.employeeId) fail('Forbidden', 403);
-        }
-      }
-      return delay({ punches: [] });
+      const scope = mockAttendanceScope(user, params);
+      return delay({ punches: mockAttendancePunches(scope.employees, params) });
+    },
+    async unmapped() {
+      hasRole('hr', 'ceo');
+      return delay({ badges: MOCK_UNMAPPED_BADGES });
+    },
+    async employees() {
+      const user = requireSession();
+      return delay({
+        employees: mockAttendanceScope(user, {}).employees.map((employee) => ({
+          employee_id: employee.id,
+          employee_code: employee.code,
+          employee_name: employee.nameTh,
+          nick_name: employee.nickname ?? null,
+          department_name: employee.departmentTh ?? null,
+        })),
+      });
+    },
+    async backfillCards() {
+      hasRole('hr', 'ceo');
+      throw new Error('แก้ไขการแมปบัตรไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
     async devices() {
       hasRole('hr', 'ceo');
