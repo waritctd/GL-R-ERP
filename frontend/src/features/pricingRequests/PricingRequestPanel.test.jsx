@@ -16,6 +16,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         listForTicket: vi.fn(),
         get: vi.fn(),
         create: vi.fn(),
+        update: vi.fn(),
         submit: vi.fn(),
         cancel: vi.fn(),
         respondInformation: vi.fn(),
@@ -119,6 +120,48 @@ describe('PricingRequestPanel', () => {
     fireEvent.click(submitButton);
 
     await waitFor(() => expect(api.pricingRequests.submit).toHaveBeenCalledWith(1));
+  });
+
+  // Fix 2 (review-remediation plan): a saved draft had no path to fix a wrong
+  // quantity/recipient/date before this — only submit or cancel. The edit
+  // modal reuses PricingRequestCreateModal in mode="edit", seeded from
+  // api.pricingRequests.get, and calls update() with the full editable
+  // representation (full-replacement PUT, not a sparse patch).
+  it('lets the owner edit an existing DRAFT via "แก้ไขร่าง", seeding the modal from the request detail', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'DRAFT' })] });
+    api.pricingRequests.get.mockResolvedValue({
+      pricingRequest: {
+        summary: summary({ status: 'DRAFT', recipientLabel: 'ผู้ออกแบบ ก.' }),
+        items: [{ id: 11, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60', requestedQty: 10, requestedUnit: 'แผ่น', quantityType: 'ESTIMATE' }],
+        events: [],
+      },
+    });
+    api.pricingRequests.update.mockResolvedValue({
+      pricingRequest: { summary: summary({ status: 'DRAFT' }), items: [], events: [] },
+    });
+    renderPanel();
+
+    const editButton = await screen.findByRole('button', { name: 'แก้ไขร่าง' });
+    fireEvent.click(editButton);
+
+    await waitFor(() => expect(api.pricingRequests.get).toHaveBeenCalledWith(1));
+    expect(await screen.findByDisplayValue('ผู้ออกแบบ ก.')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+    await waitFor(() => expect(api.pricingRequests.update).toHaveBeenCalledWith(1, expect.objectContaining({
+      recipientLabel: 'ผู้ออกแบบ ก.',
+    })));
+  });
+
+  // canUpdatePricingRequest is DRAFT-only (mirrors PricingRequestService.updateDraft)
+  // — once submitted, editing must disappear the same way "ส่งให้ Import" does.
+  it('does not offer "แก้ไขร่าง" once a request is past DRAFT', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'SUBMITTED' })] });
+    renderPanel();
+
+    await screen.findByText('PCR-2026-0001');
+    expect(screen.queryByRole('button', { name: 'แก้ไขร่าง' })).toBeNull();
   });
 
   it('never offers "ส่งให้ Import" once a request is past DRAFT, even for the CEO (cancel is still allowed)', async () => {

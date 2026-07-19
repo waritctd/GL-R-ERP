@@ -9,7 +9,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
 import {
   canCancelPricingRequest, canCreatePricingRequest, canRequestInformation, canRespondInformation,
-  canSubmitPricingRequest, pricingRequestRecipientLabel, quantityTypeLabel,
+  canSubmitPricingRequest, canUpdatePricingRequest, pricingRequestRecipientLabel, quantityTypeLabel,
 } from './pricingRequestMeta.js';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 
@@ -39,6 +39,7 @@ export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user }) 
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
+  const [editingId, setEditingId] = useState(null); // pricing request id being edited (Fix 2), or null
   const [respondDraft, setRespondDraft] = useState(null); // { id, response }
   const [cancelDraft, setCancelDraft] = useState(null); // { id, reason }
   const [requestInfoDraft, setRequestInfoDraft] = useState(null); // { id, message, dueDate }
@@ -54,6 +55,15 @@ export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user }) 
     queryKey: queryKeys.pricingRequestDetail(expandedId),
     queryFn: () => api.pricingRequests.get(expandedId).then((r) => r.pricingRequest),
     enabled: expandedId != null,
+  });
+
+  // Shares its query key with detailQuery above when expandedId === editingId
+  // (both key off queryKeys.pricingRequestDetail(id)), so expanding a row and
+  // then editing it reuses the same cached fetch rather than doubling up.
+  const editDetailQuery = useQuery({
+    queryKey: queryKeys.pricingRequestDetail(editingId),
+    queryFn: () => api.pricingRequests.get(editingId).then((r) => r.pricingRequest),
+    enabled: editingId != null,
   });
 
   function invalidate() {
@@ -129,8 +139,13 @@ export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user }) 
                   </span>
                 </button>
 
-                {(canSubmitPricingRequest(user, pr) || canRequestInformation(user, pr) || canRespondInformation(user, pr) || canCancelPricingRequest(user, pr)) ? (
+                {(canUpdatePricingRequest(user, pr) || canSubmitPricingRequest(user, pr) || canRequestInformation(user, pr) || canRespondInformation(user, pr) || canCancelPricingRequest(user, pr)) ? (
                   <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2">
+                    {canUpdatePricingRequest(user, pr) ? (
+                      <button type="button" className="secondary-button" onClick={() => setEditingId(pr.id)}>
+                        แก้ไขร่าง
+                      </button>
+                    ) : null}
                     {canSubmitPricingRequest(user, pr) ? (
                       <button
                         type="button"
@@ -213,7 +228,27 @@ export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user }) 
           onCreated={() => { setCreateOpen(false); invalidate(); }}
           createFn={(payload) => api.pricingRequests.create(ticketId, payload)}
           submitFn={(id) => api.pricingRequests.submit(id)}
+          // Wired even in create mode so the modal's duplicate-draft retry
+          // guard (Fix 1) can push a retry's edits onto an already-created
+          // draft via PUT instead of calling createFn a second time.
+          updateFn={(id, payload) => api.pricingRequests.update(id, payload)}
         />
+      ) : null}
+
+      {editingId != null ? (
+        editDetailQuery.data ? (
+          <PricingRequestCreateModal
+            mode="edit"
+            initialValue={editDetailQuery.data}
+            onClose={() => setEditingId(null)}
+            onCreated={() => { setEditingId(null); invalidate(); }}
+            updateFn={(id, payload) => api.pricingRequests.update(id, payload)}
+          />
+        ) : (
+          <Modal title="แก้ไขร่างใบขอราคา" onClose={() => setEditingId(null)}>
+            <p className="text-xs text-text-muted">กำลังโหลด...</p>
+          </Modal>
+        )
       ) : null}
 
       {respondDraft ? (

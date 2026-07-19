@@ -49,21 +49,6 @@ export function quantityTypeLabel(value) {
   return QUANTITY_TYPE_OPTIONS.find((q) => q.code === value)?.label ?? value ?? '-';
 }
 
-// The internal DRAFT->SUBMITTED->IMPORT_REVIEWING journey, rendered as
-// progress chips inside DealStagePanel (replaces the old ticket.status-keyed
-// PRICING_SUBSTEPS, which is permanently stuck at 'draft' now that ticket
-// creation no longer auto-submits — see TicketService.create/submit,
-// commit 5). MORE_INFO_REQUIRED is a lateral detour (back to
-// IMPORT_REVIEWING), not forward progress, but still needs its own chip so a
-// request waiting on the sales rep doesn't misleadingly render as
-// "IMPORT_REVIEWING done".
-export const PRICING_REQUEST_SUBSTEPS = [
-  { code: 'DRAFT', label: 'ร่างคำขอราคา' },
-  { code: 'SUBMITTED', label: 'ส่งให้ Import แล้ว' },
-  { code: 'IMPORT_REVIEWING', label: 'Import กำลังเสนอราคา' },
-  { code: 'MORE_INFO_REQUIRED', label: 'รอข้อมูลเพิ่มเติม' },
-];
-
 /** Mirrors PricingRequestService.createDraft: sales (deal owner), deal must be ACTIVE. */
 export function canCreatePricingRequest(user, deal) {
   return user?.role === 'sales' && deal?.createdById != null
@@ -112,8 +97,34 @@ export function canCancelPricingRequest(user, pr) {
   return isOwnerOrCeo && canTransition(pr.status, 'CANCELLED');
 }
 
-/** Most recent (highest id) pricing request for a deal, or null if none exist. */
-export function latestPricingRequest(pricingRequests = []) {
-  if (!pricingRequests.length) return null;
-  return [...pricingRequests].sort((a, b) => b.id - a.id)[0];
+/**
+ * Deal-level pricing-request summary for DealStagePanel's glance strip (Fix 3
+ * of the review-remediation plan). Replaces the old `latestPricingRequest`
+ * (highest-id-wins) reduction, which was actively misleading in two ways: (a)
+ * a DRAFT created after an active IMPORT_REVIEWING request has a higher id
+ * and hid the request Import is actually working on, and (b) a cancelled
+ * newest request made the whole strip vanish even though an older request
+ * was still live. This surfaces every non-CANCELLED request instead of
+ * picking one "latest" — CANCELLED requests are dead ends with nothing left
+ * to track, so they're the one status intentionally excluded.
+ *
+ * Returns null when there is nothing live to show (no requests at all, or
+ * every request is CANCELLED) so the caller can render nothing, same as
+ * before.
+ */
+export function activePricingRequestsSummary(pricingRequests = []) {
+  const active = pricingRequests.filter((pr) => pr.status !== 'CANCELLED');
+  if (active.length === 0) return null;
+  const counts = {};
+  for (const pr of active) {
+    counts[pr.status] = (counts[pr.status] ?? 0) + 1;
+  }
+  return {
+    total: active.length,
+    counts,
+    // Stable order (creation order, oldest first) rather than re-sorting by
+    // status, so the strip doesn't reshuffle every time one request's status
+    // changes.
+    requests: [...active].sort((a, b) => a.id - b.id),
+  };
 }

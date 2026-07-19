@@ -4,9 +4,11 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
   dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, depositPolicyLabel,
-  formatThaiDate, overdueBadgeLabel, paymentStageLabel, tenderRequirementLabel,
+  formatThaiDate, overdueBadgeLabel, paymentStageLabel, pricingRequestStatusLabel, tenderRequirementLabel,
 } from '../../utils/format.js';
-import { latestPricingRequest, PRICING_REQUEST_SUBSTEPS } from '../pricingRequests/pricingRequestMeta.js';
+import {
+  activePricingRequestsSummary, PRICING_REQUEST_STATUSES, pricingRequestRecipientLabel,
+} from '../pricingRequests/pricingRequestMeta.js';
 import { DealStageStepper, PhaseTracker } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
 import {
@@ -45,6 +47,42 @@ function SubstepChips({ label, steps, currentCode }) {
             {done ? <Icon name="check" size={11} /> : null}
             {step.label}
           </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Deal-level pricing-request glance strip (Fix 3 of the review-remediation
+ * plan): a roll-up count line, plus one "recipient → status" line per
+ * non-CANCELLED request. Deliberately compact — PricingRequestPanel's cards
+ * (items, event log, actions) remain the source of truth for detail; this
+ * only needs to answer "is there pricing work in flight on this deal, and
+ * with whom" at a glance, without reducing several requests to one.
+ */
+function PricingRequestSummaryStrip({ summary }) {
+  const rollupParts = PRICING_REQUEST_STATUSES
+    .filter((status) => status !== 'CANCELLED' && summary.counts[status])
+    .map((status) => `${pricingRequestStatusLabel(status).label} ${summary.counts[status]}`);
+  const rollupText = [`ใบขอราคา ${summary.total} รายการ`, ...rollupParts].join(' · ');
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-2xs font-bold text-text-muted">การขอราคา:</span>
+        <span className="text-2xs text-text-muted">{rollupText}</span>
+      </div>
+      {summary.requests.map((pr) => {
+        const status = pricingRequestStatusLabel(pr.status);
+        return (
+          <div key={pr.id} className="flex flex-wrap items-center gap-1.5 pl-1">
+            <span className="text-2xs text-text-muted">
+              {pricingRequestRecipientLabel(pr.recipientType)}
+              {pr.recipientLabel ? ` · ${pr.recipientLabel}` : ''}
+            </span>
+            <Icon name="chevronRight" size={10} className="text-text-muted" />
+            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+          </div>
         );
       })}
     </div>
@@ -99,16 +137,18 @@ export function DealStagePanel({
     : null;
   const nextHint = rawNextHint && rawNextHint !== guidance ? rawNextHint : null;
 
-  // Sub-status chip rows — the inner journey of the current stage:
-  // • การขอราคา: the PricingRequest aggregate's own DRAFT->SUBMITTED->
-  //   IMPORT_REVIEWING(<->MORE_INFO_REQUIRED) journey (commit 6) — keyed off
-  //   the deal's most recently created pricing request, NOT ticket.status
-  //   (which is permanently stuck at 'draft' now that ticket creation no
-  //   longer auto-submits; see TicketService.create/submit, commit 5).
-  //   Renders nothing when the deal has no pricing requests yet.
+  // Sub-status rows — the inner journey of the current stage:
+  // • การขอราคา: every non-CANCELLED PricingRequest on this deal (Fix 3 of the
+  //   review-remediation plan), NOT ticket.status (which is permanently stuck
+  //   at 'draft' now that ticket creation no longer auto-submits; see
+  //   TicketService.create/submit, commit 5) and NOT just "the latest one" —
+  //   reducing several concurrent requests to a single highest-id winner used
+  //   to hide a live IMPORT_REVIEWING request behind a newer DRAFT, or hide
+  //   the whole strip behind a newer CANCELLED one. Renders nothing when the
+  //   deal has no requests, or every request is CANCELLED.
   // • การชำระเงิน / การนำเข้า: replace the old Track P / Track F steppers.
-  const latestRequest = latestPricingRequest(pricingRequests);
-  const showPricingChips = latestRequest != null && latestRequest.status !== 'CANCELLED';
+  const pricingSummary = activePricingRequestsSummary(pricingRequests);
+  const showPricingChips = pricingSummary != null;
   const showPaymentChips = summary.paymentStatus != null;
   const derivedPayment = paymentStageLabel(summary.paymentStage);
   const showImportChips = summary.fulfillmentStatus != null;
@@ -237,7 +277,7 @@ export function DealStagePanel({
             {(showPricingChips || showPaymentChips || showImportChips) ? (
               <div className="flex flex-col gap-1.5">
                 {showPricingChips ? (
-                  <SubstepChips label="การขอราคา:" steps={PRICING_REQUEST_SUBSTEPS} currentCode={latestRequest.status} />
+                  <PricingRequestSummaryStrip summary={pricingSummary} />
                 ) : null}
                 {showPaymentChips ? (
                   depositBypassesNotice(summary.depositPolicy) ? null : (

@@ -3989,13 +3989,30 @@ export const api = {
 
     async update(id, payload) {
       // Mirrors PricingRequestService.updateDraft: owner sales, DRAFT only.
+      // Review-remediation plan Fix 2 made this a FULL-REPLACEMENT PUT (in
+      // sync with PricingRequestRepository.updateDraft dropping its COALESCE)
+      // — every editable scalar field is validated and applied unconditionally
+      // against the payload exactly as sent, never merged with the existing
+      // row first. This mock used to distinguish `undefined` (field omitted,
+      // "leave unchanged") from `null` (field explicitly cleared) for these
+      // columns, which was actually MORE permissive than the real
+      // UpdatePricingRequestRequest Java record ever was: Jackson deserializes
+      // a missing JSON key the same way it deserializes an explicit `null` —
+      // there is no wire-level way to distinguish the two on the real
+      // backend — so "omitted" and "null" must collapse to the same outcome
+      // here too. recipientType is additionally required (recipient_type is
+      // NOT NULL in the real schema), validated unconditionally like create().
       const user = hasRole('sales');
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (ticket?.createdById !== user.id) fail('Forbidden', 403);
       if (pr.status !== 'DRAFT') fail(`Expected status 'DRAFT' but pricing request is '${pr.status}'`, 409);
-      if (payload.recipientType != null && !PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
+      if (!payload.recipientType?.trim()) fail('recipientType must not be blank', 400);
+      if (!PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
         fail(`Unknown recipient type '${payload.recipientType}'`, 400);
+      }
+      if (payload.recipientContactId == null && !payload.recipientLabel?.trim()) {
+        fail('ต้องระบุผู้รับคำขอราคา (recipientContactId หรือ recipientLabel)', 400);
       }
       if (payload.items != null) {
         requirePricingRequestItemFieldsValid(payload.items);
@@ -4014,20 +4031,14 @@ export const api = {
       if (payload.targetCurrency != null && payload.targetCurrency.trim().length !== 3) {
         fail('targetCurrency must be a 3-letter currency code', 400);
       }
-      const effectiveContactId = payload.recipientContactId !== undefined ? payload.recipientContactId : pr.recipientContactId;
-      const effectiveLabel = payload.recipientLabel !== undefined ? payload.recipientLabel : pr.recipientLabel;
-      if ((payload.recipientContactId !== undefined || payload.recipientLabel !== undefined)
-          && effectiveContactId == null && !effectiveLabel?.trim()) {
-        fail('ต้องระบุผู้รับคำขอราคา (recipientContactId หรือ recipientLabel)', 400);
-      }
 
-      if (payload.recipientType !== undefined) pr.recipientType = payload.recipientType;
-      if (payload.recipientContactId !== undefined) pr.recipientContactId = payload.recipientContactId;
-      if (payload.recipientLabel !== undefined) pr.recipientLabel = payload.recipientLabel;
-      if (payload.requiredDate !== undefined) pr.requiredDate = payload.requiredDate;
-      if (payload.customerTargetPrice !== undefined) pr.customerTargetPrice = payload.customerTargetPrice;
-      if (payload.targetCurrency !== undefined) pr.targetCurrency = payload.targetCurrency;
-      if (payload.note !== undefined) pr.note = payload.note;
+      pr.recipientType = payload.recipientType;
+      pr.recipientContactId = payload.recipientContactId ?? null;
+      pr.recipientLabel = payload.recipientLabel ?? null;
+      pr.requiredDate = payload.requiredDate ?? null;
+      pr.customerTargetPrice = payload.customerTargetPrice ?? null;
+      pr.targetCurrency = payload.targetCurrency ?? null;
+      pr.note = payload.note ?? null;
       if (payload.items != null) {
         pr.items = payload.items.map((item, i) => ({
           id: mockPricingRequestItemSeq++,

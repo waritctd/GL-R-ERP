@@ -20,6 +20,7 @@ function quantityForTicketItem(ticketItem) {
 function emptyItemFromTicketItem(ticketItem) {
   return {
     sourceTicketItemId: ticketItem?.id ?? null,
+    productId: null,
     brand: ticketItem?.brand ?? '',
     model: ticketItem?.model ?? '',
     color: ticketItem?.color ?? '',
@@ -35,13 +36,46 @@ function emptyItemFromTicketItem(ticketItem) {
   };
 }
 
+// Edit mode (Fix 2 of the review-remediation plan) seeds its rows from a
+// persisted PricingRequestItemDto instead of a ticket_item — same target
+// shape as emptyItemFromTicketItem, but every field already has a value
+// (including productId, which this modal never sets itself — no catalog
+// picker yet, see the class doc below — but must round-trip unchanged if an
+// item already carries one, or editing would silently erase that identity).
+function itemFromExisting(item) {
+  return {
+    sourceTicketItemId: item?.sourceTicketItemId ?? null,
+    productId: item?.productId ?? null,
+    brand: item?.brand ?? '',
+    model: item?.model ?? '',
+    color: item?.color ?? '',
+    texture: item?.texture ?? '',
+    size: item?.size ?? '',
+    factory: item?.factory ?? '',
+    requestedQty: item?.requestedQty ?? 1,
+    requestedUnit: item?.requestedUnit ?? '',
+    quantityType: item?.quantityType ?? 'ESTIMATE',
+    targetDeliveryDate: item?.targetDeliveryDate ?? '',
+    deliveryLocation: item?.deliveryLocation ?? '',
+    specialRequirement: item?.specialRequirement ?? '',
+  };
+}
+
 /**
- * Create/submit modal for a new PricingRequest (commit 6). No attachments —
- * explicitly cut from scope (see handoff). Item rows seed from the deal's
- * existing ticket_item rows (carrying sourceTicketItemId so Import can trace
- * a request line back to the original product line), but every field stays
- * editable — PricingRequestItemRequest carries its own independent
- * descriptive copy, not a read-only mirror of ticket_item.
+ * Create/submit modal for a new PricingRequest (commit 6), extended in the
+ * review-remediation plan (Fix 2) to double as the edit modal for an existing
+ * DRAFT: pass `mode="edit"` + `initialValue` (that request's summary + items,
+ * as returned by `api.pricingRequests.get`) and `updateFn` instead of
+ * `createFn`/`submitFn`. One component, not a forked near-duplicate — create
+ * and edit differ only in how the form seeds its initial state and what the
+ * footer buttons do; every field, validation, and row layout below is shared.
+ *
+ * No attachments — explicitly cut from scope (see handoff). Item rows seed
+ * from the deal's existing ticket_item rows in create mode (carrying
+ * sourceTicketItemId so Import can trace a request line back to the original
+ * product line) or from the request's own persisted items in edit mode, but
+ * every field stays editable either way — PricingRequestItemRequest carries
+ * its own independent descriptive copy, not a read-only mirror of ticket_item.
  *
  * recipientContactId (a real customer-contact picker) is not wired up yet —
  * recipientLabel (free text) is the only way to identify a recipient today.
@@ -60,23 +94,43 @@ function itemIdentityValid(item) {
     || Boolean(item.model?.trim()) || Boolean(item.specialRequirement?.trim());
 }
 
-export function PricingRequestCreateModal({ ticketItems = [], onClose, onCreated, createFn, submitFn }) {
-  const [recipientType, setRecipientType] = useState('DESIGNER');
-  const [recipientLabel, setRecipientLabel] = useState('');
-  const [requiredDate, setRequiredDate] = useState('');
-  const [customerTargetPrice, setCustomerTargetPrice] = useState('');
-  const [targetCurrency, setTargetCurrency] = useState('THB');
-  const [note, setNote] = useState('');
-  const [items, setItems] = useState(() => (
-    ticketItems.length ? ticketItems.map(emptyItemFromTicketItem) : [emptyItemFromTicketItem(null)]
+export function PricingRequestCreateModal({
+  ticketItems = [], onClose, onCreated, createFn, submitFn,
+  mode = 'create', initialValue = null, updateFn,
+}) {
+  const isEdit = mode === 'edit';
+  const initialSummary = initialValue?.summary ?? null;
+  const [recipientType, setRecipientType] = useState(() => initialSummary?.recipientType ?? 'DESIGNER');
+  const [recipientLabel, setRecipientLabel] = useState(() => initialSummary?.recipientLabel ?? '');
+  const [requiredDate, setRequiredDate] = useState(() => initialSummary?.requiredDate ?? '');
+  const [customerTargetPrice, setCustomerTargetPrice] = useState(() => (
+    initialSummary?.customerTargetPrice != null ? String(initialSummary.customerTargetPrice) : ''
   ));
+  const [targetCurrency, setTargetCurrency] = useState(() => initialSummary?.targetCurrency ?? 'THB');
+  const [note, setNote] = useState(() => initialSummary?.note ?? '');
+  const [items, setItems] = useState(() => {
+    if (isEdit) {
+      return initialValue?.items?.length ? initialValue.items.map(itemFromExisting) : [emptyItemFromTicketItem(null)];
+    }
+    return ticketItems.length ? ticketItems.map(emptyItemFromTicketItem) : [emptyItemFromTicketItem(null)];
+  });
   const [error, setError] = useState('');
+  // Informational (non-error) banner — currently only used by the create-mode
+  // duplicate-draft guard below, to tell the user a retry is reusing the
+  // draft it already created rather than making a second one.
+  const [info, setInfo] = useState('');
   // Per-row identity errors (keyed by item index), separate from the
   // form-level `error` banner above — unlike the other validation rules,
   // this one is attached to the specific line that is missing an identity so
   // the user knows which row to fix, not just that "a" row is wrong.
   const [itemErrors, setItemErrors] = useState({});
   const [saving, setSaving] = useState(false);
+  // Fix 1 (review-remediation plan): once createFn has succeeded once, its
+  // resulting id is held here so a retry (create succeeded, then submitFn
+  // failed — or the user switches from "submit" to "save draft" after that
+  // failure) reuses the same draft instead of calling createFn again and
+  // orphaning a duplicate. Always null in edit mode (there is no create step).
+  const [createdId, setCreatedId] = useState(null);
 
   function updateItem(index, field, value) {
     setItems((cur) => cur.map((item, i) => (i === index ? { ...item, [field]: value } : item)));
@@ -132,6 +186,7 @@ export function PricingRequestCreateModal({ ticketItems = [], onClose, onCreated
       note: note.trim() || null,
       items: items.map((item) => ({
         sourceTicketItemId: item.sourceTicketItemId ?? null,
+        productId: item.productId ?? null,
         brand: item.brand?.trim() || null,
         model: item.model?.trim() || null,
         color: item.color?.trim() || null,
@@ -148,14 +203,32 @@ export function PricingRequestCreateModal({ ticketItems = [], onClose, onCreated
     };
   }
 
+  // Fix 1 (review-remediation plan): both create-mode actions below share the
+  // same duplicate-draft guard. If createFn already succeeded once (createdId
+  // is set) — either because a prior "ส่งให้ Import" attempt created the
+  // draft and then failed at the submit step, or the user clicked "บันทึกร่าง"
+  // again after that — neither handler calls createFn a second time. Instead
+  // they push the CURRENT form state onto the existing draft via updateFn
+  // (update-then-submit/save, not "reset createdId and create fresh"): the
+  // user may well have edited the form to fix whatever made the first attempt
+  // fail (e.g. a validation error), and discarding createdId would silently
+  // resurrect the create-twice bug this fix exists to close. onCreated() still
+  // fires either way so the caller's normal close+refresh flow is unchanged.
   async function handleSaveDraft() {
     const validationError = validate();
     if (validationError) { setError(validationError); return; }
     if (!validateItemIdentities()) return;
     setError('');
+    setInfo(createdId != null ? 'ร่างถูกสร้างแล้ว กำลังบันทึกการเปลี่ยนแปลง' : '');
     setSaving(true);
     try {
-      await createFn(buildPayload());
+      if (createdId != null) {
+        if (updateFn) await updateFn(createdId, buildPayload());
+      } else {
+        const created = await createFn(buildPayload());
+        const id = created?.pricingRequest?.summary?.id;
+        if (id != null) setCreatedId(id);
+      }
       onCreated();
     } catch (err) {
       setError(err.message || 'สร้างใบขอราคาไม่สำเร็จ');
@@ -169,10 +242,17 @@ export function PricingRequestCreateModal({ ticketItems = [], onClose, onCreated
     if (validationError) { setError(validationError); return; }
     if (!validateItemIdentities()) return;
     setError('');
+    setInfo(createdId != null ? 'ร่างถูกสร้างแล้ว กำลังส่งให้ Import' : '');
     setSaving(true);
     try {
-      const created = await createFn(buildPayload());
-      const id = created?.pricingRequest?.summary?.id;
+      let id = createdId;
+      if (id != null) {
+        if (updateFn) await updateFn(id, buildPayload());
+      } else {
+        const created = await createFn(buildPayload());
+        id = created?.pricingRequest?.summary?.id;
+        if (id != null) setCreatedId(id);
+      }
       if (id != null) await submitFn(id);
       onCreated();
     } catch (err) {
@@ -182,12 +262,40 @@ export function PricingRequestCreateModal({ ticketItems = [], onClose, onCreated
     }
   }
 
+  // Edit mode (Fix 2): a straight update of the persisted DRAFT — no create
+  // step, no submit step, just PUT the full editable representation.
+  async function handleUpdate() {
+    const validationError = validate();
+    if (validationError) { setError(validationError); return; }
+    if (!validateItemIdentities()) return;
+    setError('');
+    setSaving(true);
+    try {
+      await updateFn(initialSummary.id, buildPayload());
+      onCreated();
+    } catch (err) {
+      setError(err.message || 'บันทึกการแก้ไขไม่สำเร็จ');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <Modal
-      title="สร้างใบขอราคา"
-      subtitle="ส่งรายการสินค้าให้ฝ่ายนำเข้าเสนอราคา — ไม่รองรับไฟล์แนบในขั้นนี้"
+      title={isEdit ? 'แก้ไขร่างใบขอราคา' : 'สร้างใบขอราคา'}
+      subtitle={isEdit
+        ? 'แก้ไขรายละเอียดใบขอราคานี้ก่อนส่งให้ Import — บันทึกแล้วยังคงเป็นร่างจนกว่าจะกดส่ง'
+        : 'ส่งรายการสินค้าให้ฝ่ายนำเข้าเสนอราคา — ไม่รองรับไฟล์แนบในขั้นนี้'}
       onClose={onClose}
-      footer={(
+      footer={isEdit ? (
+        <>
+          <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>ยกเลิก</button>
+          <button type="button" className="primary-button" disabled={saving} onClick={handleUpdate}>
+            <Icon name="check" size={14} />
+            {saving ? 'กำลังบันทึก...' : 'บันทึกการแก้ไข'}
+          </button>
+        </>
+      ) : (
         <>
           <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>ยกเลิก</button>
           <button type="button" className="secondary-button" disabled={saving} onClick={handleSaveDraft}>
@@ -334,6 +442,7 @@ export function PricingRequestCreateModal({ ticketItems = [], onClose, onCreated
           </div>
         </div>
 
+        {info ? <div className="text-xs font-bold text-info" role="status">{info}</div> : null}
         {error ? <div className="form-error" role="alert">{error}</div> : null}
       </div>
     </Modal>

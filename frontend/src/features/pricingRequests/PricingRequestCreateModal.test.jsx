@@ -100,4 +100,109 @@ describe('PricingRequestCreateModal', () => {
     await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole('alert')).toBeNull();
   });
+
+  // Fix 1 (review-remediation plan): "Create and submit" used to call createFn
+  // unconditionally, so a create-succeeds-then-submit-fails retry produced a
+  // second orphaned DRAFT. The retry must reuse the id createFn already
+  // returned and push the current form state onto it via updateFn instead.
+  it('does not create a second draft when submitFn fails after create succeeds — retry reuses the same id', async () => {
+    const createFn = vi.fn().mockResolvedValue({ pricingRequest: { summary: { id: 42 } } });
+    const submitFn = vi.fn()
+      .mockRejectedValueOnce(new Error('network error'))
+      .mockResolvedValueOnce({});
+    const updateFn = vi.fn().mockResolvedValue({});
+    renderModal({ createFn, submitFn, updateFn });
+
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    await screen.findByRole('alert'); // submitFn's rejection surfaces as the error banner
+
+    // Retry: must NOT call createFn again (that would orphan a 2nd DRAFT).
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+
+    await waitFor(() => expect(submitFn).toHaveBeenCalledTimes(2));
+    expect(createFn).toHaveBeenCalledTimes(1);
+    expect(submitFn).toHaveBeenNthCalledWith(2, 42);
+    expect(updateFn).toHaveBeenCalledWith(42, expect.any(Object));
+  });
+
+  it('shows an informational message on retry so it does not look like a second draft might be created', async () => {
+    const createFn = vi.fn().mockResolvedValue({ pricingRequest: { summary: { id: 42 } } });
+    const submitFn = vi.fn().mockRejectedValueOnce(new Error('network error')).mockResolvedValueOnce({});
+    const updateFn = vi.fn().mockResolvedValue({});
+    renderModal({ createFn, submitFn, updateFn });
+
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+    await screen.findByRole('alert');
+
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+
+    expect(await screen.findByRole('status')).not.toBeNull();
+  });
+});
+
+describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
+  function editInitialValue(overrides = {}) {
+    return {
+      summary: {
+        id: 77,
+        recipientType: 'OWNER',
+        recipientLabel: 'เจ้าของโครงการ ข.',
+        requiredDate: '2026-08-01',
+        customerTargetPrice: 500,
+        targetCurrency: 'USD',
+        note: 'โน้ตเดิม',
+      },
+      items: [{
+        id: 5, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1', color: 'ขาว',
+        texture: 'ด้าน', size: '60x60', factory: 'SCG Ceramics', requestedQty: 20, requestedUnit: 'แผ่น',
+        quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: null, specialRequirement: null,
+      }],
+      ...overrides,
+    };
+  }
+
+  it('seeds every field from initialValue and calls updateFn with the full payload on save', async () => {
+    const updateFn = vi.fn().mockResolvedValue({});
+    const onCreated = vi.fn();
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={editInitialValue()}
+        onClose={vi.fn()}
+        onCreated={onCreated}
+        updateFn={updateFn}
+      />,
+    );
+
+    expect(screen.getByDisplayValue('เจ้าของโครงการ ข.')).not.toBeNull();
+    expect(screen.getByDisplayValue('20')).not.toBeNull();
+    expect(screen.getByDisplayValue('โน้ตเดิม')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+    await waitFor(() => expect(updateFn).toHaveBeenCalledWith(77, expect.objectContaining({
+      recipientType: 'OWNER',
+      recipientLabel: 'เจ้าของโครงการ ข.',
+      note: 'โน้ตเดิม',
+    })));
+    expect(onCreated).toHaveBeenCalledTimes(1);
+  });
+
+  it('has no "ส่งให้ Import"/"บันทึกร่าง" buttons — editing a draft never submits or re-creates it', () => {
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={editInitialValue()}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /ส่งให้ Import/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'บันทึกร่าง' })).toBeNull();
+  });
 });
