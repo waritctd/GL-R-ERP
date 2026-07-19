@@ -1,0 +1,20 @@
+[
+  "desktop/hr-employee-detail.png",
+  "modals/hr-employee-create.png",
+  "modals/hr-employee-create-validation.png",
+  "states/employee-not-found.png",
+  "desktop/hr-payroll-populated.png",
+  "modals/hr-payroll-confirm.png",
+  "states/sales-ticket-list-populated.png",
+  "desktop/sales-ticket-detail.png",
+  "modals/sales-ticket-create.png",
+  "modals/employee-change-request.png",
+  "modals/leave-form-validation.png",
+  "states/login-invalid-credentials.png",
+  "mobile/hr-nav-drawer.png",
+  "mobile/hr-payroll-desktoponly.png",
+  "mobile/sales-ticket-detail.png",
+  "modals/ceo-notification-dropdown.png",
+  "tablet/hr-dashboard.png",
+  "tablet/hr-employees.png"
+]

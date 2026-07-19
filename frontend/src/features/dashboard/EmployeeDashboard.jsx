@@ -9,7 +9,7 @@ import { Avatar } from '../../components/common/Avatar.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
-import { hasPermission } from '../../app/permissions.js';
+import { hasPermission, canAccessPath } from '../../app/permissions.js';
 import { SALES_ENABLED } from '../../app/features.js';
 import { ActionQueue } from './ActionQueue.jsx';
 
@@ -71,7 +71,13 @@ function dashboardCards(mode, summary, pendingCount, { navigate, access }) {
     return [
       { icon: 'users', label: 'พนักงาน Active', value: numberValue(headcount.active), helper: 'Headcount', tone: 'indigo', onClick: go('/employees', access.employees()) },
       { icon: 'clipboard', label: 'รออนุมัติทั้งหมด', value: numberValue(pending.total), helper: 'Approvals', tone: 'rose' },
-      { icon: 'userCog', label: 'แก้ไขข้อมูล', value: numberValue(pending.profileRequests), helper: 'Profile requests', tone: 'amber', onClick: go('/requests', access.reviewRequests()) },
+      // Pending-work card (UX-04): "N need your review" is a false call to action for a
+      // role with no path to `/requests` — hide it rather than render it inert. This is
+      // unlike the headcount/attendance/notifications cards above and below, which are
+      // read-only context a viewer legitimately wants even without an onClick.
+      ...(access.reviewRequests() ? [
+        { icon: 'userCog', label: 'แก้ไขข้อมูล', value: numberValue(pending.profileRequests), helper: 'Profile requests', tone: 'amber', onClick: go('/requests', access.reviewRequests()) },
+      ] : []),
       { icon: 'clock', label: 'OT รออนุมัติ', value: numberValue(pending.overtime), helper: 'Overtime', tone: 'blue', onClick: go('/overtime', access.overtime()) },
       { icon: 'calendar', label: 'ลารออนุมัติ', value: numberValue(pending.leave), helper: 'Leave', tone: 'teal', onClick: go('/leave', access.leave()) },
       { icon: 'badgeCheck', label: 'มาวันนี้', value: numberValue(attendance.todayPresent), helper: 'Attendance', tone: 'teal', onClick: go('/attendance', access.attendance()) },
@@ -116,13 +122,20 @@ function actionQueueItems(mode, summary, { navigate, access }) {
   const notifications = summary?.notifications ?? {};
   const go = (path, allowed) => (allowed ? () => navigate(path) : undefined);
   const items = [
-    { key: 'profileRequests', label: 'คำขอแก้ไขข้อมูลรออนุมัติ', value: numberValue(pending.profileRequests), to: go('/requests', access.reviewRequests()) },
-    { key: 'overtime', label: 'OT รออนุมัติ', value: numberValue(pending.overtime), to: go('/overtime', access.overtime()) },
-    { key: 'leave', label: 'ลารออนุมัติ', value: numberValue(pending.leave), to: go('/leave', access.leave()) },
-    { key: 'commissions', label: 'ค่าคอมมิชชั่นรออนุมัติ', value: numberValue(pending.commissions), to: go('/commissions', access.commissions()) },
-    { key: 'notifications', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread) },
+    // `actionable` is the explicit "the viewer has a way to act on this" signal (UX-04).
+    // It is deliberately separate from `to`: `to` is only the in-panel navigation target,
+    // and `notifications` below proves the two diverge — it has no `to` (the topbar bell
+    // dropdown is its only UI) yet is still actionable, so filtering on "has a `to`" would
+    // wrongly drop it. Filtered here (not in ActionQueue) because `access` — the only
+    // source of truth for reachability — is already in scope, keeping ActionQueue a plain
+    // renderer of whatever list it's handed.
+    { key: 'profileRequests', label: 'คำขอแก้ไขข้อมูลรออนุมัติ', value: numberValue(pending.profileRequests), to: go('/requests', access.reviewRequests()), actionable: access.reviewRequests() },
+    { key: 'overtime', label: 'OT รออนุมัติ', value: numberValue(pending.overtime), to: go('/overtime', access.overtime()), actionable: access.overtime() },
+    { key: 'leave', label: 'ลารออนุมัติ', value: numberValue(pending.leave), to: go('/leave', access.leave()), actionable: access.leave() },
+    { key: 'commissions', label: 'ค่าคอมมิชชั่นรออนุมัติ', value: numberValue(pending.commissions), to: go('/commissions', access.commissions()), actionable: access.commissions() },
+    { key: 'notifications', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread), actionable: true },
   ];
-  return items;
+  return items.filter((item) => item.actionable);
 }
 
 function downloadBlob(blob, filename) {
@@ -150,7 +163,12 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
     : mode === 'manager'
       ? `${employee?.positionTh || 'Manager'} · ${employee?.divisionTh || ''}`
       : `${employee?.positionTh || ''} · ${employee?.divisionTh || ''}`;
-  const quickActions = mode === 'company'
+  // UX-04 (part 2): quickActions is filtered through `canAccessPath` — the
+  // exact predicate the router (RequireAccess) uses — so this panel can never
+  // offer a destination the router will reject. Filtering here, not by
+  // hand-picking per role, is what keeps this list from drifting out of sync
+  // with the router the way the stat cards/ActionQueue previously did.
+  const quickActionCandidates = mode === 'company'
     ? [
       ['/hr', 'ภาพรวม HR'],
       ['/employees', 'รายชื่อพนักงาน'],
@@ -163,6 +181,11 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
       ['/overtime', 'รายการ OT'],
       ['/leave', 'รายการลา'],
     ];
+  const quickActions = quickActionCandidates.filter(([path]) => canAccessPath(path, user));
+  // Same predicate gates "ดูทั้งหมด" — company mode points at /requests, which
+  // a CEO cannot reach (canReviewProfileRequests is hr-only).
+  const requestsFeedPath = mode === 'company' ? '/requests' : '/my-requests';
+  const canViewRequestsFeed = canAccessPath(requestsFeedPath, user);
   const latestPayrollPeriodId = dashboardSummary?.latestPayrollPeriodId;
   const ownPayslipMutation = useMutation({
     mutationFn: (periodId) => api.payroll.downloadOwnPayslip(periodId),
@@ -223,17 +246,21 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
       </StatGrid>
 
       <div className={DASHBOARD_GRID}>
-        <Panel title="การดำเนินการด่วน">
-          <div className="action-list">
-            {quickActions.map(([path, label]) => (
-              <button type="button" key={path} onClick={() => navigate(path)}>{label}</button>
-            ))}
-          </div>
-        </Panel>
+        {quickActions.length > 0 ? (
+          <Panel title="การดำเนินการด่วน">
+            <div className="action-list">
+              {quickActions.map(([path, label]) => (
+                <button type="button" key={path} onClick={() => navigate(path)}>{label}</button>
+              ))}
+            </div>
+          </Panel>
+        ) : null}
 
         <Panel
           title={mode === 'company' ? 'คำขอล่าสุด' : 'คำขอล่าสุดของฉัน'}
-          actions={<Button type="button" variant="text" onClick={() => navigate(mode === 'company' ? '/requests' : '/my-requests')}>ดูทั้งหมด</Button>}
+          actions={canViewRequestsFeed ? (
+            <Button type="button" variant="text" onClick={() => navigate(requestsFeedPath)}>ดูทั้งหมด</Button>
+          ) : null}
         >
           <div className="request-feed">
             {profileRequests.length === 0 ? (

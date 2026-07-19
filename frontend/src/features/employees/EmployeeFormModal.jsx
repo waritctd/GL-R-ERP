@@ -110,7 +110,7 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
       )}
     >
       <FormGrid as="form" id="employee-form" onSubmit={handleSubmit(submit)} noValidate>
-        <FormField label="ชื่อ-นามสกุล" htmlFor="employee-nameTh" error={errors.nameTh?.message}>
+        <FormField label="ชื่อ-นามสกุล" htmlFor="employee-nameTh" error={errors.nameTh?.message} required>
           <input
             id="employee-nameTh"
             {...register('nameTh')}
@@ -125,7 +125,7 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
         <FormField label="ชื่อเล่น" htmlFor="employee-nickName">
           <input id="employee-nickName" {...register('nickName')} />
         </FormField>
-        <FormField label="อีเมล" htmlFor="employee-email" error={errors.email?.message}>
+        <FormField label="อีเมล" htmlFor="employee-email" error={errors.email?.message} required>
           <input
             id="employee-email"
             type="email"
@@ -135,7 +135,7 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
             required
           />
         </FormField>
-        <FormField label="เบอร์โทร" htmlFor="employee-phone" error={errors.phone?.message}>
+        <FormField label="เบอร์โทร" htmlFor="employee-phone" error={errors.phone?.message} required>
           <input
             id="employee-phone"
             {...register('phone')}

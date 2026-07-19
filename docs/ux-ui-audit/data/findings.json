@@ -1,0 +1,1057 @@
+{
+  "meta": {
+    "product": "GL&R-ERP — HR + Sales/CRM portal",
+    "branch": "docs/main-db-reverify",
+    "commit": "a82cb76",
+    "date": "2026-07-18",
+    "environment": "Local mock frontend (frontend-mock, VITE_USE_MOCKS=true, http://localhost:5200)",
+    "browser": "Chromium 133 (Playwright 1.49 headless) + in-app Browser pane",
+    "roles_tested": [
+      "hr",
+      "employee",
+      "sales",
+      "sales_manager",
+      "import",
+      "account",
+      "ceo"
+    ],
+    "authz_caveat": "mockApi.js authorization is NOT authoritative (per CLAUDE.md). Permission-shaped findings are noted as frontend/mock-only and must be re-verified against the Spring services.",
+    "remediation": {
+      "phase": "Phase A / Phase 1",
+      "branch": "fix/ux-audit-phase-1",
+      "status": "complete — not pushed",
+      "fixed": [
+        "UX-02",
+        "UX-06",
+        "UX-19",
+        "UX-34"
+      ],
+      "withdrawn": [
+        "UX-01"
+      ],
+      "date": "2026-07-18",
+      "phaseB": {
+        "branch": "fix/ux-audit-phase-2",
+        "status": "complete — not pushed",
+        "fixed": [
+          "UX-09",
+          "UX-07",
+          "UX-27",
+          "UX-12",
+          "UX-08",
+          "UX-38",
+          "UX-03",
+          "UX-04"
+        ],
+        "remaining": [],
+        "newFindings": [
+          "UX-37 (open)",
+          "UX-38 (fixed)"
+        ],
+        "uxo3Slices": {
+          "done": [
+            "ProductFormModal",
+            "TicketCreateModal",
+            "CeoSettings editor",
+            "DepositNoticePage",
+            "TicketDetailPage modals",
+            "TicketDetailPage inline forms"
+          ],
+          "remaining": []
+        },
+        "regressionsCaught": [
+          "required asterisk stacked onto its own line (global label{display:grid}) — introduced by UX-12, fixed in fe8ede7, verified by real layout measurement 41px->17px"
+        ],
+        "stillOpen": [
+          "UX-37 (P3, XS — logged during Phase B, not fixed)"
+        ]
+      }
+    }
+  },
+  "findings": [
+    {
+      "id": "UX-01",
+      "title": "[WITHDRAWN — false positive] Ticket detail appeared to render a huge empty scroll region below content",
+      "severity": "WITHDRAWN",
+      "category": "Withdrawn / measurement artifact",
+      "route": "/tickets/:id",
+      "viewport": "Desktop + Mobile",
+      "role": "sales, import, account, ceo, sales_manager",
+      "frequency": "n/a",
+      "evidence": [
+        "screenshots/mobile/sales-ticket-detail.png"
+      ],
+      "observed": "RETRACTED. This was reported as a P1 on the basis of fullPage:true screenshots showing content ending ~800px into a ~2,164px page (mobile) and ~730px into ~2,737px (desktop). Re-verification by driving the real inner scroll container disproves it: this app scrolls an inner .content-scroll element, not the document, so document.scrollHeight does not represent content height and fullPage capture pads the remainder as blank. Scrolling .content-scroll to its true bottom shows content filling it completely — mobile on-hold deal: scrollHeight 2,847 / clientHeight 778, gap between last content and scroller bottom = -1,320px (i.e. content fills and exceeds the fold, no gap); desktop pending deal: 2,570 / 834, gap -1,381px. Confirmed visually at the scrolled bottom: the attachments panel, full event timeline and comment box render to the container edge.",
+      "impact": "None. Real users never see a dead zone; they scroll the inner container normally. The defect was an artifact of the audit capture method, not of the product.",
+      "root_cause": "Audit tooling error: fullPage screenshots were treated as evidence of content height in an app whose scrolling happens in an inner overflow container.",
+      "principle": "n/a — withdrawn",
+      "recommendation": "No product change required. Lesson for future audits of this codebase: do NOT use fullPage screenshots to reason about content height here; measure the .content-scroll container (scrollHeight/clientHeight) or scroll it explicitly before capturing.",
+      "acceptance": [
+        "No action — finding withdrawn."
+      ],
+      "validation": "Reproduced the disproof: scroll .content-scroll to scrollHeight and measure the gap between the lowest rendered element and the container bottom; expect no positive gap.",
+      "effort": "—",
+      "confidence": "High (that it is a false positive)",
+      "withdrawn": true
+    },
+    {
+      "id": "UX-02",
+      "title": "HR approves/rejects profile-change requests with no confirmation step",
+      "severity": "P1",
+      "category": "Error prevention / Destructive action",
+      "route": "/requests",
+      "viewport": "Desktop",
+      "role": "hr",
+      "frequency": "Always",
+      "evidence": [
+        "screenshots/desktop/hr-requests.png"
+      ],
+      "observed": "In ProfileRequestsPage the row 'อนุมัติ' (approve) and 'ปฏิเสธ' (reject) buttons call onReview(id, decision) directly — no ConfirmDialog, no undo. A single mis-click commits an irreversible decision that mutates the employee master record.",
+      "impact": "HR can approve or reject the wrong request with one accidental tap, with no recovery. Approvals write to employee data; rejections are terminal for the requester.",
+      "root_cause": "Decision buttons were wired straight to the mutation; the app's ConfirmDialog pattern (used by OT/leave/payroll/commission) was not applied here.",
+      "principle": "Error prevention; user control and freedom",
+      "recommendation": "Wrap approve/reject in the shared ConfirmDialog. Reject should require a reason (as OT/leave reject already does). Consider an inline 'undo' toast for approve.",
+      "acceptance": [
+        "Approve and reject both open a confirmation before mutating.",
+        "Reject requires a reason string.",
+        "Pattern matches OT/leave reject dialogs."
+      ],
+      "validation": "On /requests click reject then approve; confirm a dialog intercepts each and cancel aborts the mutation.",
+      "effort": "S",
+      "confidence": "High",
+      "fixed": true,
+      "fixedIn": "0e4d2f5",
+      "fixNote": "Approve/reject now gated behind ConfirmDialog; reject requires a reason, persisted via the existing reviewerNote contract. Verified live (13/13 UI checks) + mutation-tested."
+    },
+    {
+      "id": "UX-03",
+      "title": "Sales-stack forms show errors only as toasts/one-line strings, without accessible inline field errors",
+      "severity": "P1",
+      "category": "Forms / Accessibility",
+      "route": "/tickets (create), /tickets/:id, /tickets/:id/deposit, /catalog, /ceo-settings",
+      "viewport": "Desktop + Mobile",
+      "role": "sales, import, ceo",
+      "frequency": "Often",
+      "evidence": [
+        "screenshots/modals/sales-ticket-create.png",
+        "screenshots/modals/hr-employee-create-validation.png"
+      ],
+      "observed": "HR/leave/overtime/employee/password forms use react-hook-form + zod with per-field inline errors wired to aria-invalid / aria-describedby (see hr-employee-create-validation.png). The sales stack (TicketCreateModal, TicketDetailPage inline forms, DepositNoticePage, ProductFormModal, CeoSettings editor) uses imperative validation that surfaces a single toast or one 'form-error' line — e.g. 'กรุณากรอกข้อมูลสินค้าให้ครบทุกช่องในรายการที่ N' — with no field-level highlighting or screen-reader association.",
+      "impact": "On the long 'สร้างดีลใหม่' form (customer + project + multiple product rows) a user gets a generic error and must hunt for the offending field. Screen-reader users get no programmatic error-to-field link (WCAG 3.3.1). Two different validation UXs also raise the learning cost.",
+      "root_cause": "The sales stack predates/bypassed the zod+FormField convention adopted by the HR core.",
+      "principle": "Error prevention; help users recognize/recover from errors; WCAG 2.2 AA 3.3.1",
+      "recommendation": "Migrate sales forms to FormField + zod (or at least attach inline errors + aria-invalid to the specific invalid inputs and scroll the first error into view).",
+      "acceptance": [
+        "Each invalid field shows an inline message tied via aria-describedby and marked aria-invalid.",
+        "First error is scrolled into view on submit.",
+        "Behaviour matches the HR create-employee modal."
+      ],
+      "validation": "Submit an empty TicketCreateModal; verify each required field (customer, project, product rows) shows an inline error and the first is focused/scrolled to.",
+      "effort": "L",
+      "confidence": "High",
+      "fixNote": "CLOSED — all 5 surfaces migrated, in reviewable slices. ProductFormModal to react-hook-form + zod + FormField [16c1cc4]. TicketCreateModal, the headline case, now emits keyed per-field zod errors with aria wiring and scroll+focus to the first invalid field [4585aee] — verified live that a blank item row flags six fields individually instead of one generic bottom-of-form string. CeoSettings FX override and its six pricing fields [12833f7], with FX keyed per currency so errors never cross rows. DepositNoticePage validated at ISSUE rather than SAVE so drafts stay incrementally savable, with validation running before the confirm dialog opens [8fcb0d0]. TicketDetailPage split in two: its 4 modal validations [e741db5] and its 4 inline page-body validations [1406b63]. Zero toast-only client validations remain in the sales stack. Every guard is mutation-tested — neutering each one fails its corresponding test.",
+      "fixedIn": "16c1cc4, 4585aee, 12833f7, 8fcb0d0, e741db5, 1406b63",
+      "fixed": true
+    },
+    {
+      "id": "UX-04",
+      "title": "Company dashboard shows HR headcount & approval stats to roles that have no path to act on them",
+      "severity": "P2",
+      "category": "Navigation / Information architecture",
+      "route": "/",
+      "viewport": "Desktop",
+      "role": "ceo",
+      "frequency": "Always",
+      "evidence": [
+        "screenshots/desktop/ceo-dashboard.png"
+      ],
+      "observed": "The shared EmployeeDashboard renders company HR StatCards (28 พนักงาน Active, 4 รออนุมัติทั้งหมด, OT/leave counts) for CEO, but CEO's sidebar has no Employees / HR overview / Requests / Payroll links, and those cards are non-navigable for CEO. The metric is a dead end — visible but not drillable.",
+      "impact": "CEO sees numbers that imply an action ('4 approvals') with no way to reach them, creating confusion and eroding trust in the dashboard's usefulness.",
+      "root_cause": "One dashboard component is reused across all roles; stat visibility is not gated to the viewer's actual navigation rights.",
+      "principle": "Match between system and real world; visibility of system status without dead ends",
+      "recommendation": "Either hide stats the role can't reach, or make each stat's drill-through available to that role. Prefer a role-scoped dashboard card set.",
+      "acceptance": [
+        "Every stat shown on a role's dashboard is either actionable by that role or clearly labelled read-only.",
+        "No non-navigable 'pending' counts are shown to roles that cannot act."
+      ],
+      "validation": "Log in as CEO; confirm no dashboard stat implies an action CEO cannot reach.",
+      "effort": "M",
+      "confidence": "High",
+      "fixed": true,
+      "fixedIn": "a50b266",
+      "fixNote": "Three surfaces fixed on one principle — pending-work counts a role cannot reach are hidden, informational metrics stay as read-only context. The profile-requests card is hidden for roles without review access; ActionQueue items carry an explicit actionable flag (deliberate, because the notifications item has no destination yet IS actionable via the topbar bell, so inferring from a missing link would have wrongly dropped it); and quick actions plus the ดูทั้งหมด link — which had no gating at all — now filter through canAccessPath, the same predicate RequireAccess uses, so the dashboard can no longer offer a destination the router rejects. Verified live: CEO quick actions went 4 to 1, ดูทั้งหมด is no longer rendered, no unreachable queue row remains, and headcount is retained; HR is unchanged across all 8 cards, all 4 quick actions and ดูทั้งหมด. Both gates are mutation-tested."
+    },
+    {
+      "id": "UX-05",
+      "title": "Wide config/data tables clip their action column on mobile instead of reflowing",
+      "severity": "P2",
+      "category": "Tables / Mobile",
+      "route": "/ceo-settings",
+      "viewport": "390x844",
+      "role": "ceo",
+      "frequency": "Always",
+      "evidence": [
+        "screenshots/mobile/ceo-settings.png"
+      ],
+      "observed": "The FX-rate table (5 cols) compresses into 390px and the 'Override' action column is clipped at the right edge; the price-formula table below has 8 columns and overflows further. Neither reflows to the card pattern that AttendancePage/PriceImport use on mobile.",
+      "impact": "A CEO cannot reliably tap 'Override' / 'แก้ไข' from a phone because the control is partly off-screen; horizontal reading of an 8-column pricing table on mobile is impractical.",
+      "root_cause": "CeoSettings tables are hand-rolled without the DataTable mobileCard treatment or a horizontal-scroll affordance.",
+      "principle": "Fitts's Law; responsive reflow over shrink-to-fit",
+      "recommendation": "Give these tables a card/stacked reflow on mobile, or wrap in an overflow-x container with a visible scroll affordance and keep the action column sticky.",
+      "acceptance": [
+        "No action control is clipped at ≤390px.",
+        "Rows are fully readable via card reflow or an intentional horizontal scroller."
+      ],
+      "validation": "Open /ceo-settings at 390px; confirm every Override/แก้ไข button is fully visible and tappable.",
+      "effort": "M",
+      "confidence": "High"
+    },
+    {
+      "id": "UX-06",
+      "title": "Login error message appears in English inside an all-Thai interface",
+      "severity": "P2",
+      "category": "Content / i18n",
+      "route": "/ (login)",
+      "viewport": "Desktop + Mobile",
+      "role": "all",
+      "frequency": "Occasionally",
+      "evidence": [
+        "screenshots/states/login-invalid-credentials.png"
+      ],
+      "observed": "A failed login shows the red banner 'Invalid email or inactive user' in English while every other string on the page is Thai. (Surfaced from the mock's error message; the message string is passed straight through to the banner.)",
+      "impact": "Thai-speaking staff hit an untranslated system message at the most anxiety-prone moment (can't log in), which reads as a raw error and lowers trust.",
+      "root_cause": "The auth error string is not localized; App passes error.message verbatim to the banner.",
+      "principle": "Match between system and the real world; consistency and standards",
+      "recommendation": "Localize auth errors to Thai (e.g. 'อีเมลหรือรหัสผ่านไม่ถูกต้อง'). Verify the Spring AuthService returns a localized/neutral message too, since production may differ from the mock.",
+      "acceptance": [
+        "All login error states render Thai copy.",
+        "No raw English/system strings surface on the login screen."
+      ],
+      "validation": "Enter bad credentials on the real backend and the mock; confirm Thai copy in both.",
+      "effort": "S",
+      "confidence": "High",
+      "fixed": true,
+      "fixedIn": "8521d72",
+      "fixNote": "Login errors mapped to Thai by HTTP status; mock 401s collapsed to match AuthService (removes a user-enumeration divergence). Verified live."
+    },
+    {
+      "id": "UX-07",
+      "title": "Product-delete uses a native window.confirm instead of the app's styled ConfirmDialog",
+      "severity": "P2",
+      "category": "Consistency / Destructive action",
+      "route": "/price-import",
+      "viewport": "Desktop",
+      "role": "import, ceo",
+      "frequency": "Occasionally",
+      "evidence": [],
+      "observed": "PriceImportPage deletes a product via native window.confirm ('ยืนยันลบ \"{name}\"?'), whereas every other destructive action in the app uses the branded ConfirmDialog (with reason capture, focus trap, consistent buttons).",
+      "impact": "The unstyled OS dialog breaks visual trust, cannot capture a reason, and is inconsistent with the delete pattern users learn elsewhere. Native confirms are also easy to reflexively dismiss.",
+      "root_cause": "Legacy shortcut not migrated to ConfirmDialog.",
+      "principle": "Consistency and standards; error prevention",
+      "recommendation": "Replace window.confirm with ConfirmDialog (tone=danger), matching the attachment-delete / cancel-ticket dialogs.",
+      "acceptance": [
+        "Product delete opens the app ConfirmDialog.",
+        "No window.confirm/window.alert remain in the frontend."
+      ],
+      "validation": "Delete a product on /price-import; verify the styled dialog appears and cancel aborts.",
+      "effort": "S",
+      "confidence": "High",
+      "fixed": true,
+      "fixedIn": "2495c40",
+      "fixNote": "window.confirm replaced with the branded ConfirmDialog (tone=danger). No native confirm/alert/prompt remains in frontend/src. Verified live."
+    },
+    {
+      "id": "UX-08",
+      "title": "CEO settings config editor is a bespoke overlay, not the shared accessible Modal",
+      "severity": "P2",
+      "category": "Accessibility / Consistency",
+      "route": "/ceo-settings",
+      "viewport": "Desktop + Mobile",
+      "role": "ceo",
+      "frequency": "Occasionally",
+      "evidence": [
+        "screenshots/desktop/ceo-ceo-settings.png"
+      ],
+      "observed": "The per-country price-config editor renders as a hand-rolled fixed overlay rather than the shared Modal component, so it lacks the Modal's focus trap, Escape-to-close, role=dialog/aria-modal semantics, and focus restoration.",
+      "impact": "Keyboard and screen-reader users editing pricing (a high-value, high-risk action) get no focus containment or dialog semantics; focus can escape to the page behind.",
+      "root_cause": "Custom overlay built inline instead of reusing Modal.",
+      "principle": "WCAG 2.2 AA 2.4.3 focus order / 4.1.2; consistency",
+      "recommendation": "Reimplement the config editor on the shared Modal (as the FX inline-edit and other dialogs use).",
+      "acceptance": [
+        "Config editor has role=dialog, aria-modal, focus trap, Escape close, focus restore.",
+        "Tab cannot reach the page behind while it is open."
+      ],
+      "validation": "Open the price-config editor, Tab through it, press Escape; confirm containment and restore.",
+      "effort": "M",
+      "confidence": "High",
+      "fixed": true,
+      "fixedIn": "12833f7",
+      "fixNote": "Rebuilt on the shared Modal. Verified live: role=dialog, aria-modal=true, focus stays inside across 25 Tab presses, Escape closes. Previously the overlay reported zero [role=dialog] nodes, so keyboard focus escaped to the page behind while the CEO edited pricing."
+    },
+    {
+      "id": "UX-09",
+      "title": "Salary & sensitive-data sections are hidden from everyone (undefined permission key)",
+      "severity": "P2",
+      "category": "Data / Correctness",
+      "route": "/employees/:id",
+      "viewport": "Desktop",
+      "role": "hr",
+      "frequency": "Always",
+      "evidence": [
+        "screenshots/desktop/hr-employees.png"
+      ],
+      "observed": "EmployeeDetailPage gates the salary block and the 'ข้อมูลอ่อนไหว' tab on canViewSensitiveEmployeeData, but that key is not defined in ROLE_PERMISSIONS, so hasPermission() returns false for every role — including HR. Yet the employee LIST shows a เงินเดือน (salary) column openly. So HR sees salaries in the list but not on the detail page.",
+      "impact": "HR loses expected access to salary/national-ID/tax on the detail record (a regression), while the list still exposes salary — an inconsistent and confusing data-visibility model.",
+      "root_cause": "Missing permission definition (typo/omission) for canViewSensitiveEmployeeData.",
+      "principle": "Consistency and standards; least-surprise",
+      "recommendation": "Define canViewSensitiveEmployeeData for hr/admin (and align with backend). Reconcile list-vs-detail salary visibility so both obey the same rule.",
+      "acceptance": [
+        "HR can view the salary section and sensitive tab on the detail page.",
+        "List and detail apply the same salary-visibility rule.",
+        "Backend authorization matches."
+      ],
+      "validation": "As HR open an employee detail; confirm salary + sensitive tab render; confirm a non-privileged role does not.",
+      "effort": "S",
+      "confidence": "Medium",
+      "fixed": true,
+      "fixedIn": "2495c40",
+      "fixNote": "canViewSensitiveEmployeeData defined as [hr], mirroring EmployeeController requireAnyRole(hr). Verified live: salary + populated sensitive tab visible to HR."
+    },
+    {
+      "id": "UX-10",
+      "title": "Payroll and Attendance are unusable on mobile (Desktop-only)",
+      "severity": "P2",
+      "category": "Mobile",
+      "route": "/payroll, /attendance",
+      "viewport": "390x844",
+      "role": "hr, ceo",
+      "frequency": "Always",
+      "evidence": [
+        "screenshots/mobile/hr-payroll-desktoponly.png"
+      ],
+      "observed": "Both pages render a DesktopOnlyNotice on small screens instead of a usable UI. This is a deliberate, communicated limitation, but it means two core HR-admin tasks cannot be done on a phone at all.",
+      "impact": "HR cannot preview/process payroll or review attendance away from a desktop. Acceptable as a stopgap, but it caps the portal's mobile usefulness for its power users.",
+      "root_cause": "Dense financial tables were scoped desktop-only rather than reflowed.",
+      "principle": "Flexibility and efficiency of use",
+      "recommendation": "Longer term, provide at least a read-only mobile view (payroll totals, attendance lookup). Keep the notice for editing-heavy actions.",
+      "acceptance": [
+        "A read-only mobile summary exists for payroll and attendance, or the limitation is explicitly product-accepted."
+      ],
+      "validation": "Open /payroll and /attendance at 390px; confirm either a usable read view or a clear, intentional notice.",
+      "effort": "L",
+      "confidence": "High"
+    },
+    {
+      "id": "UX-11",
+      "title": "Two parallel button systems (cva component vs legacy CSS classes) drift apart",
+      "severity": "P2",
+      "category": "Design system",
+      "route": "global (sales stack)",
+      "viewport": "Desktop + Mobile",
+      "role": "all",
+      "frequency": "Always",
+      "evidence": [
+        "screenshots/desktop/sales-ticket-detail.png"
+      ],
+      "observed": "Button.jsx (Tailwind/cva, with a 44px mobile touch floor) coexists with legacy .primary-button/.secondary-button/.danger-button classes still used across 9 sales files (TicketDetailPage ~64 uses, DealStagePanel 14, TicketCreateModal 7, etc.). The mobile 44px floor had to be patched separately for the legacy path.",
+      "impact": "Buttons drift in padding, focus ring, hover and touch-target size between HR and sales screens; every button change must be made twice.",
+      "root_cause": "Incomplete migration to the Button component.",
+      "principle": "Consistency and standards",
+      "recommendation": "Migrate legacy button classes to the Button component; delete the duplicate CSS once unused.",
+      "acceptance": [
+        "Sales-stack buttons use the Button component.",
+        "No .primary-button/.secondary-button/.danger-button class usages remain.",
+        "Focus ring and 44px floor are uniform."
+      ],
+      "validation": "grep the codebase for the legacy classes → zero matches; visually diff a sales button vs an HR button.",
+      "effort": "L",
+      "confidence": "High"
+    },
+    {
+      "id": "UX-12",
+      "title": "Required fields are not marked until the user submits and fails",
+      "severity": "P3",
+      "category": "Forms",
+      "route": "/employees (create), most forms",
+      "viewport": "Desktop + Mobile",
+      "role": "hr, employee, sales",
+      "frequency": "Always",
+      "evidence": [
+        "screenshots/modals/hr-employee-create.png",
+        "screenshots/modals/hr-employee-create-validation.png"
+      ],
+      "observed": "The create-employee modal shows no required-field markers up front; ชื่อ-นามสกุล / อีเมล / เบอร์โทร only reveal they are required after a failed submit (as red inline errors). The default ฝ่าย is pre-selected to the first option ('AC-ฝ่ายบัญชี') rather than an empty placeholder.",
+      "impact": "Users can't tell which fields are mandatory before attempting to save, causing avoidable submit-fail loops; a pre-filled department risks silently wrong data.",
+      "root_cause": "Required markers are rendered only in the error path; selects default to index 0.",
+      "principle": "Error prevention; recognition over recall",
+      "recommendation": "Show a required marker (*) with aria-required on mandatory fields at render; use an unselected placeholder for ฝ่าย that forces a choice.",
+      "acceptance": [
+        "Required fields show a marker before submit.",
+        "Selects with no sensible default start unselected."
+      ],
+      "validation": "Open the create modal; confirm required fields are marked before any submit.",
+      "effort": "S",
+      "confidence": "High",
+      "fixed": true,
+      "fixedIn": "7faf31c",
+      "fixNote": "required prop applied where the zod schema unconditionally requires the field. Verified live: markers + aria-required present before any submit."
+    },
+    {
+      "id": "UX-13",
+      "title": "Role quick-login buttons: icon is left-aligned while the label is centered",
+      "severity": "P3",
+      "category": "Visual hierarchy",
+      "route": "/ (login)",
+      "viewport": "Desktop + Mobile",
+      "role": "all",
+      "frequency": "Always (demo)",
+      "evidence": [
+        "screenshots/states/login-invalid-credentials.png"
+      ],
+      "observed": "Each DEMO quick-login card places its icon flush-left and its title text centered, leaving a large gap between them; the icon and label don't read as one unit.",
+      "impact": "The mismatched alignment looks unfinished and slows scanning of the role list.",
+      "root_cause": "Icon and centered label share a row without a consistent left-aligned content group.",
+      "principle": "Gestalt proximity/alignment",
+      "recommendation": "Left-align the icon+title+helper as one group (icon, then text stack) so each card reads as a single control.",
+      "acceptance": [
+        "Icon and label form one left-aligned group with consistent spacing."
+      ],
+      "validation": "Inspect the login page; confirm aligned role cards.",
+      "effort": "XS",
+      "confidence": "High"
+    },
+    {
+      "id": "UX-14",
+      "title": "Login left brand panel is a large empty area on desktop",
+      "severity": "P4",
+      "category": "Visual hierarchy",
+      "route": "/ (login)",
+      "viewport": "Desktop",
+      "role": "all",
+      "frequency": "Always",
+      "evidence": [
+        "screenshots/states/login-invalid-credentials.png"
+      ],
+      "observed": "On ≥1024px the left ~50% of the login card holds only a small top-left logo; the rest is blank white, unbalancing the composition.",
+      "impact": "Wasted space and a slightly unpolished first impression; no brand or product framing where the eye lands first.",
+      "root_cause": "Brand panel content was never added.",
+      "principle": "Aesthetic and minimalist design (balance)",
+      "recommendation": "Add a brand illustration, product tagline, or environment/status note to the panel, or narrow the card on desktop.",
+      "acceptance": [
+        "The brand panel carries meaningful content or the layout is rebalanced."
+      ],
+      "validation": "View login at 1440x900.",
+      "effort": "S",
+      "confidence": "Medium"
+    },
+    {
+      "id": "UX-15",
+      "title": "Truncated button label 'นโยบายมัดจำ…' hides the action's meaning",
+      "severity": "P3",
+      "category": "Content / Microcopy",
+      "route": "/tickets/:id",
+      "viewport": "Desktop + Mobile",
+      "role": "sales, import, ceo",
+      "frequency": "Occasionally",
+      "evidence": [
+        "screenshots/desktop/sales-ticket-detail.png"
+      ],
+      "observed": "In DealStagePanel a control renders as 'นโยบายมัดจำ…' with an ellipsis clipping the label, so the user can't read what it opens (a deposit-policy dialog).",
+      "impact": "Ambiguous control; users may avoid or mis-use the deposit-policy action.",
+      "root_cause": "Fixed-width button truncates its text instead of sizing to content or wrapping.",
+      "principle": "Recognition over recall; visibility of system status",
+      "recommendation": "Let the label wrap or size to content (e.g. 'ตั้งค่านโยบายมัดจำ'); avoid mid-word ellipsis on primary controls.",
+      "acceptance": [
+        "The full action label is readable at all supported widths."
+      ],
+      "validation": "Open a deal at desktop and 390px; confirm the label is complete.",
+      "effort": "XS",
+      "confidence": "High"
+    },
+    {
+      "id": "UX-16",
+      "title": "Status is conveyed by color alone in timeline dots and current-step border",
+      "severity": "P2",
+      "category": "Accessibility",
+      "route": "/tickets/:id (timeline)",
+      "viewport": "Desktop + Mobile",
+      "role": "sales, import, ceo",
+      "frequency": "Often",
+      "evidence": [
+        "screenshots/desktop/sales-ticket-detail.png"
+      ],
+      "observed": "Event-timeline dots differ only by color (transition/comment/created/success = 4 hues on 8px dots) and the 'current step' is signalled only by a colored left border. There is no shape/icon/text token on the marker itself.",
+      "impact": "Color-blind users cannot distinguish event types or the current step from the marker (WCAG 1.4.1 use of color). Adjacent text helps but the status glyph itself is color-only.",
+      "root_cause": "Markers encode meaning purely in color.",
+      "principle": "WCAG 2.2 AA 1.4.1 (use of color)",
+      "recommendation": "Add a shape/icon or text label to each event type and mark the current step with an icon or 'ปัจจุบัน' label in addition to color.",
+      "acceptance": [
+        "Every status marker is distinguishable without color (icon/shape/text)."
+      ],
+      "validation": "Grayscale the timeline; confirm event types and current step remain distinguishable.",
+      "effort": "S",
+      "confidence": "High"
+    },
+    {
+      "id": "UX-17",
+      "title": "Two tone vocabularies and per-feature status mappings invite drift",
+      "severity": "P3",
+      "category": "Design system",
+      "route": "global",
+      "viewport": "Desktop",
+      "role": "all",
+      "frequency": "Always",
+      "evidence": [
+        "screenshots/desktop/ceo-dashboard.png"
+      ],
+      "observed": "StatCard uses color names (indigo/teal/amber/blue/rose) while StatusBadge uses semantic names (success/warning/danger/info); the same green has three aliases and 'danger' maps to rose in one system, danger in the other. Each feature (OT/leave/commission/requests/tickets) also computes its own status→{label,tone} instead of a shared helper.",
+      "impact": "Inconsistent status colors across screens and a real risk that a 'danger' state renders a non-alarming hue somewhere; maintenance is error-prone.",
+      "root_cause": "No single tokenized status scale or shared status-mapping utility.",
+      "principle": "Consistency and standards",
+      "recommendation": "Adopt one semantic tone scale for both stat and badge systems and centralize status→{label,tone} in utils.",
+      "acceptance": [
+        "One tone vocabulary drives StatCard and StatusBadge.",
+        "A shared helper maps each domain status to label+tone."
+      ],
+      "validation": "Compare a 'rejected'/'danger' state across OT, leave, commission, requests, tickets for identical color.",
+      "effort": "M",
+      "confidence": "High"
+    },
+    {
+      "id": "UX-18",
+      "title": "Sales pages hard-code hex colors instead of design tokens",
+      "severity": "P3",
+      "category": "Design system",
+      "route": "/tickets/:id, /tickets (create), /commissions, /tickets/:id/deposit",
+      "viewport": "Desktop",
+      "role": "sales, import, ceo",
+      "frequency": "Always",
+      "evidence": [
+        "screenshots/desktop/sales-ticket-detail.png"
+      ],
+      "observed": "TicketDetailPage carries ~264 inline style blocks, TicketCreateModal ~111, DepositNoticePage ~77, with literal hex values (#64748b, #f8fafc, #e6eaf0…) that duplicate existing CSS variables (--color-text-muted, --color-surface-muted, --color-border).",
+      "impact": "Theme/token changes (and any future dark mode) won't reach these screens; subtle color drift vs the tokenized HR pages.",
+      "root_cause": "Inline styling instead of tokens/utilities during the sales build.",
+      "principle": "Consistency and standards; maintainability",
+      "recommendation": "Replace inline hex with tokens/Tailwind utilities as the sales stack is refactored (reviewable slices).",
+      "acceptance": [
+        "Sales pages reference tokens/utilities; no literal duplicates of existing color vars."
+      ],
+      "validation": "grep inline hex in the sales feature files trends toward zero.",
+      "effort": "L",
+      "confidence": "High"
+    },
+    {
+      "id": "UX-19",
+      "title": "Route guards are missing for /ceo-settings and /catalog (nav-gated only)",
+      "severity": "P2",
+      "category": "Navigation / Authorization (frontend)",
+      "route": "/ceo-settings, /catalog, /attendance",
+      "viewport": "Desktop",
+      "role": "all authenticated",
+      "frequency": "Edge case",
+      "evidence": [
+        "screenshots/desktop/ceo-ceo-settings.png"
+      ],
+      "observed": "These routes sit outside RequireAccess, so canAccessPath returns true for any signed-in user reaching the URL directly; the sidebar merely hides them. A non-CEO who types /ceo-settings loads the pricing-config UI (App.jsx even comments this for /ceo-settings).",
+      "impact": "The CEO pricing-config screen (FX overrides, margin formulas) is loadable by any authenticated role via URL. Whether a save succeeds depends on the backend, but the UI and data are exposed. Front-end authz gap.",
+      "root_cause": "Routes placed outside the guarded RequireAccess subtree.",
+      "principle": "Error prevention; least privilege (defense in depth)",
+      "recommendation": "Add PATH_GUARDS for /ceo-settings (role===ceo) and scope /catalog appropriately; keep server-side authz as the real gate. (Verify the Spring endpoints reject non-CEO writes — mock authz is not authoritative.)",
+      "acceptance": [
+        "Direct navigation to /ceo-settings by a non-CEO redirects to /.",
+        "Backend rejects unauthorized pricing writes."
+      ],
+      "validation": "As a non-CEO role, navigate to /ceo-settings by URL; confirm redirect; attempt a save against the real backend and confirm 403.",
+      "effort": "S",
+      "confidence": "High",
+      "fixed": true,
+      "fixedIn": "8521d72",
+      "fixNote": "PATH_GUARDS entry for /ceo-settings + route moved inside RequireAccess. Verified live: 6 non-CEO roles redirect, CEO retains access. /catalog + /attendance deliberately unchanged (UX-20)."
+    },
+    {
+      "id": "UX-20",
+      "title": "'Product catalog' appears in navigation for every role, including plain staff",
+      "severity": "P3",
+      "category": "Navigation / IA",
+      "route": "/catalog (nav)",
+      "viewport": "Desktop + Mobile",
+      "role": "employee (and all)",
+      "frequency": "Always",
+      "evidence": [
+        "screenshots/mobile/hr-nav-drawer.png",
+        "screenshots/modals/leave-form-validation.png"
+      ],
+      "observed": "The 'แคตตาล็อกสินค้า / Product catalog' item shows for all roles whenever SALES_ENABLED, so a general employee's nav includes a sales product-price catalog alongside their self-service items.",
+      "impact": "Adds an irrelevant destination to non-sales personas, cluttering navigation and implying access to pricing that isn't part of their job.",
+      "root_cause": "Catalog nav is gated only by the feature flag, not by role.",
+      "principle": "Match between system and real world; minimalist navigation (Hick's Law)",
+      "recommendation": "Gate the catalog nav (and route) to sales-related roles, or move it under a Sales section that non-sales roles don't see.",
+      "acceptance": [
+        "Plain employees no longer see the Product catalog nav item unless their role warrants it."
+      ],
+      "validation": "Log in as employee; confirm the catalog item is absent (or intentionally kept per product decision).",
+      "effort": "S",
+      "confidence": "Medium"
+    },
+    {
+      "id": "UX-21",
+      "title": "App chrome is branded 'GL&R HR' / 'HR Portal' on sales and pricing screens",
+      "severity": "P3",
+      "category": "Content / Trust",
+      "route": "global",
+      "viewport": "Desktop + Mobile",
+      "role": "sales, import, account, ceo",
+      "frequency": "Always",
+      "evidence": [
+        "screenshots/mobile/sales-ticket-detail.png",
+        "screenshots/mobile/ceo-settings.png"
+      ],
+      "observed": "The sidebar reads 'HR Portal' and the topbar 'GL&R HR' even when a sales rep is on the deal pipeline or a CEO is editing pricing formulas. The product is an HR + Sales/CRM portal.",
+      "impact": "Sales/finance users see an 'HR' product label over their non-HR work, which feels mismatched and undercuts the portal's broader identity.",
+      "root_cause": "Brand strings predate the sales/CRM expansion.",
+      "principle": "Match between system and real world; consistency",
+      "recommendation": "Use a product-neutral brand ('GL&R Portal') or contextualize the header to the active area.",
+      "acceptance": [
+        "Chrome branding no longer says 'HR' on non-HR surfaces."
+      ],
+      "validation": "Visit a sales and a pricing screen; confirm neutral/contextual branding.",
+      "effort": "XS",
+      "confidence": "High"
+    },
+    {
+      "id": "UX-22",
+      "title": "Pipeline phase labels truncate on mobile ('ประมูลแล…', 'คำสั่งซื้อแล…')",
+      "severity": "P3",
+      "category": "Mobile / Content",
+      "route": "/tickets/:id",
+      "viewport": "390x844",
+      "role": "sales, import, ceo",
+      "frequency": "Always",
+      "evidence": [
+        "screenshots/mobile/sales-ticket-detail.png"
+      ],
+      "observed": "The 5-phase tracker squeezes five labels across 390px, truncating each mid-word (เฟส 3 'ประมูลแล…', เฟส 4 'คำสั่งซื้อแล…', เฟส 5 'ส่งมอบแ…').",
+      "impact": "Users can't read the phase names on mobile, weakening the pipeline's at-a-glance value on the device most likely used in the field.",
+      "root_cause": "A 5-across horizontal tracker doesn't fit narrow widths.",
+      "principle": "Legibility; content priority on small screens",
+      "recommendation": "On mobile, show the active phase name in full (with a compact 1–5 indicator) or allow horizontal scroll with full labels.",
+      "acceptance": [
+        "The current phase name is fully readable at ≤390px."
+      ],
+      "validation": "Open a deal at 390px; confirm the active phase label is complete.",
+      "effort": "S",
+      "confidence": "High"
+    },
+    {
+      "id": "UX-23",
+      "title": "Closed-paid deal still shows delivery '0 / 800' in a warning color",
+      "severity": "P3",
+      "category": "Content / Data trust",
+      "route": "/tickets/:id",
+      "viewport": "Desktop + Mobile",
+      "role": "sales, import, ceo",
+      "frequency": "Occasionally",
+      "evidence": [
+        "screenshots/mobile/sales-ticket-detail.png"
+      ],
+      "observed": "A deal marked 'ดีลเสร็จสมบูรณ์ — เก็บเงินครบแล้ว' (complete, fully paid) simultaneously shows ส่งมอบ 0/800 in an amber badge, i.e. nothing delivered. The two signals contradict each other.",
+      "impact": "Conflicting completion vs delivery status makes the record look wrong and erodes trust in the pipeline data. (May be seed-data shape, but the UI does not reconcile or explain it.)",
+      "root_cause": "Delivery counter and lifecycle 'done' state are computed independently with no consistency guard/annotation.",
+      "principle": "Visibility of system status; error prevention",
+      "recommendation": "Reconcile delivery vs closed state (or annotate legitimately-closed-without-delivery cases, e.g. cancelled/stock deals) so the badges don't contradict.",
+      "acceptance": [
+        "A completed deal's delivery indicator is consistent with its lifecycle, or clearly explained."
+      ],
+      "validation": "Inspect closed deals; confirm no contradictory delivery/complete badges.",
+      "effort": "M",
+      "confidence": "Medium"
+    },
+    {
+      "id": "UX-24",
+      "title": "No dark mode; single light color-scheme only",
+      "severity": "P4",
+      "category": "Design system / Accessibility",
+      "route": "global",
+      "viewport": "Desktop + Mobile",
+      "role": "all",
+      "frequency": "Always",
+      "evidence": [],
+      "observed": "index.css declares color-scheme: light only with a flat ~90-variable palette and no dark tokens.",
+      "impact": "No dark theme for low-light use or user preference; not a WCAG failure but a comfort/accessibility gap.",
+      "root_cause": "Tokens are single-theme.",
+      "principle": "User control and preference",
+      "recommendation": "If prioritized, introduce a tiered token scale with a dark variant behind prefers-color-scheme.",
+      "acceptance": [
+        "A dark theme renders correctly, or dark mode is explicitly out of scope."
+      ],
+      "validation": "Toggle OS dark mode; observe.",
+      "effort": "L",
+      "confidence": "High"
+    },
+    {
+      "id": "UX-25",
+      "title": "Collapsible section titles are not headings (flat heading hierarchy)",
+      "severity": "P3",
+      "category": "Accessibility",
+      "route": "/employees/:id, /payroll, /tickets/:id",
+      "viewport": "Desktop",
+      "role": "hr, sales",
+      "frequency": "Often",
+      "evidence": [],
+      "observed": "CollapsibleSection renders its title as a <span> inside a <button> rather than a heading, so screen-reader users can't navigate these major sections by heading; PageHeader is <h1>, panels are <h2>, but collapsibles break the outline.",
+      "impact": "Screen-reader heading navigation skips large, important sections (salary, adjustments, deal panels), slowing non-visual use.",
+      "root_cause": "Title markup is a span, not an <h*>.",
+      "principle": "WCAG 2.2 AA 1.3.1 / 2.4.6",
+      "recommendation": "Wrap collapsible titles in an appropriate heading level (button inside heading) to keep a coherent outline.",
+      "acceptance": [
+        "Each collapsible section title is a heading in the document outline."
+      ],
+      "validation": "Run a heading-outline check on /employees/:id and /payroll.",
+      "effort": "S",
+      "confidence": "Medium"
+    },
+    {
+      "id": "UX-26",
+      "title": "Login-success toast lingers across the first navigation",
+      "severity": "P4",
+      "category": "Feedback",
+      "route": "global (post-login)",
+      "viewport": "Desktop + Mobile",
+      "role": "all",
+      "frequency": "Always",
+      "evidence": [
+        "screenshots/desktop/hr-employees.png",
+        "screenshots/mobile/hr-nav-drawer.png"
+      ],
+      "observed": "The 'เข้าสู่ระบบสำเร็จ' success toast remains visible after the app has already routed to the dashboard/other pages, appearing over unrelated content.",
+      "impact": "Minor: a stale confirmation floats over the next screen; slightly distracting, implies the toast isn't tied to context.",
+      "root_cause": "Toast auto-dismiss window outlasts the immediate post-login transition.",
+      "principle": "Visibility of system status (timeliness)",
+      "recommendation": "Shorten the toast or dismiss it on route change after login.",
+      "acceptance": [
+        "The login toast clears promptly and doesn't overlay subsequent navigations."
+      ],
+      "validation": "Log in and immediately navigate; confirm the toast is gone.",
+      "effort": "XS",
+      "confidence": "Medium"
+    },
+    {
+      "id": "UX-27",
+      "title": "FormField does not auto-associate aria-invalid / aria-describedby",
+      "severity": "P3",
+      "category": "Accessibility",
+      "route": "global (forms)",
+      "viewport": "Desktop",
+      "role": "all",
+      "frequency": "Often",
+      "evidence": [
+        "screenshots/modals/hr-employee-create-validation.png"
+      ],
+      "observed": "FormField renders <label htmlFor> and an error <p role=alert id={id}-error>, but callers must wire aria-invalid and aria-describedby manually; where they forget, the error text isn't programmatically tied to the input.",
+      "impact": "Inconsistent screen-reader error association across forms; a foot-gun that guarantees some fields lack proper error semantics.",
+      "root_cause": "Association not injected by the component.",
+      "principle": "WCAG 2.2 AA 3.3.1 / 4.1.2; consistency",
+      "recommendation": "Have FormField inject aria-invalid and aria-describedby onto its child input automatically when an error is present.",
+      "acceptance": [
+        "Any FormField with an error exposes aria-invalid=true and aria-describedby to its input without caller wiring."
+      ],
+      "validation": "Inspect a failed field's DOM for the aria attributes across several forms.",
+      "effort": "M",
+      "confidence": "Medium",
+      "fixed": true,
+      "fixedIn": "7faf31c",
+      "fixNote": "FormField now auto-injects aria-invalid / aria-describedby / aria-required via safe id-matching, merging rather than clobbering. Verified live: 3/3 invalid fields point at real error elements."
+    },
+    {
+      "id": "UX-28",
+      "title": "Bilingual microcopy is applied inconsistently (English labels amid Thai UI)",
+      "severity": "P3",
+      "category": "Content / Consistency",
+      "route": "/payroll, /commissions, global",
+      "viewport": "Desktop",
+      "role": "hr, sales",
+      "frequency": "Often",
+      "evidence": [
+        "screenshots/mobile/hr-payroll-desktoponly.png"
+      ],
+      "observed": "Amid Thai UI, several controls/labels are English: 'Payroll Processing', 'Process Payroll', 'Bank file', 'Email payslips', 'Simulator', 'Invoice Number', role labels in uppercase Latin (HR/SALES/CEO). No consistent rule for when English is used.",
+      "impact": "Mixed language raises reading effort for Thai staff and looks unpolished; some terms may be unclear to non-English speakers.",
+      "root_cause": "No enforced copy/i18n convention.",
+      "principle": "Consistency and standards; match with real world",
+      "recommendation": "Define a copy convention (Thai-first with optional English subtitle) and translate primary action labels.",
+      "acceptance": [
+        "Primary actions and page titles follow one language convention consistently."
+      ],
+      "validation": "Review payroll/commission labels for consistent Thai-first copy.",
+      "effort": "M",
+      "confidence": "Medium"
+    },
+    {
+      "id": "UX-29",
+      "title": "Dead / duplicated CSS in the legacy stylesheet",
+      "severity": "P4",
+      "category": "Design system / Maintainability",
+      "route": "n/a (code)",
+      "viewport": "n/a",
+      "role": "n/a",
+      "frequency": "n/a",
+      "evidence": [],
+      "observed": "styles.css re-declares the entire :root token block already emitted by @theme (one copy is dead), and .tabs/.status-tabs/.status-tab (~75 lines) have zero JSX references (tab strips are now built with Tailwind on NavLink).",
+      "impact": "Maintenance noise and risk of editing the dead copy; larger CSS payload.",
+      "root_cause": "Incomplete cleanup during the Tailwind migration.",
+      "principle": "Maintainability",
+      "recommendation": "Remove the duplicate :root block and the unused tab classes (carefully, with a visual pass).",
+      "acceptance": [
+        "No duplicate token block; no unreferenced tab CSS."
+      ],
+      "validation": "grep the removed selectors → zero references; visual regression clean.",
+      "effort": "S",
+      "confidence": "High"
+    },
+    {
+      "id": "UX-30",
+      "title": "Deal-list phase cards double as filters but progress bars rely on color/segments only",
+      "severity": "P3",
+      "category": "Tables / Visual hierarchy",
+      "route": "/tickets",
+      "viewport": "Desktop + Mobile",
+      "role": "sales, import, ceo",
+      "frequency": "Often",
+      "evidence": [
+        "screenshots/states/sales-ticket-list-populated.png"
+      ],
+      "observed": "The deal list's ความคืบหน้า (progress) column is a segmented color bar with no numeric/textual stage on the bar itself (the stage number lives in a separate status cell). The phase summary cards act as toggle filters (good), but the active-filter state relies on subtle styling.",
+      "impact": "Progress is harder to read at a glance for color-blind users and when scanning many rows; the filter-active state can be missed.",
+      "root_cause": "Progress encoded as color segments; filter selection styled subtly.",
+      "principle": "WCAG 1.4.1; visibility of system status",
+      "recommendation": "Add a stage count/label to the progress bar (e.g. '14/14') and strengthen the active-filter treatment (aria-pressed is present; make it visually unmistakable).",
+      "acceptance": [
+        "Progress is readable without color.",
+        "Active phase filter is clearly indicated."
+      ],
+      "validation": "Grayscale the list; confirm progress and active filter remain clear.",
+      "effort": "S",
+      "confidence": "Medium"
+    },
+    {
+      "id": "UX-31",
+      "title": "The awaited role action is not the prominent CTA — it's buried below other panels or collapsed",
+      "severity": "P2",
+      "category": "Task flow / Visual hierarchy",
+      "route": "/tickets/:id",
+      "viewport": "Desktop + Mobile",
+      "role": "import, ceo",
+      "frequency": "Always (per stage)",
+      "evidence": [
+        "screenshots/flow/32-ceo-approval-panel.png",
+        "screenshots/flow/14-ceo-deal2-approval.png",
+        "screenshots/flow/16-ceo-reject-inline.png",
+        "screenshots/flow/24-import-propose-price-mode.png"
+      ],
+      "observed": "When a deal is waiting on a specific role, the top pipeline panel does NOT surface that role's action as the primary button. A CEO on a deal 'awaiting price approval' sees a prominent 'เลื่อนไป: เจ้าของอนุมัติสเปค' (advance stage) button at top, while the actual approve/reject panel ('การอนุมัติราคา') sits below the pipeline, payment AND delivery panels. An Import user on a deal awaiting price proposal sees a disabled 'ขั้นถัดไปอัปเดตโดยฝ่ายขาย' pill at top; the real 'propose price' action is a collapsed row and an items-panel edit mode ('ยืนยันราคาเสนอ') far down the page.",
+      "impact": "The person who is supposed to act must scroll past unrelated panels to find their action, and the most prominent button often does something else (advance the stage). This slows every hand-off in the pipeline and invites the wrong action (advancing instead of approving).",
+      "root_cause": "The primary-action slot is driven by stage progression, not by 'what is this viewer being asked to do'; role-specific actions live in their own panels lower in the DOM.",
+      "principle": "Visibility of the primary action; match between system and task; Fitts's Law",
+      "recommendation": "Surface the current viewer's awaited action as the page's primary CTA (sticky action bar or top of the pipeline panel), e.g. 'อนุมัติราคา' for CEO and 'เสนอราคา' for Import when the deal is waiting on them; de-emphasize generic stage-advance.",
+      "acceptance": [
+        "When a deal awaits the viewer's role, that action is the top/most-prominent control.",
+        "The user does not have to scroll past unrelated panels to act."
+      ],
+      "validation": "Open a deal awaiting CEO approval as CEO and awaiting proposal as Import; confirm the awaited action is the primary CTA above the fold.",
+      "effort": "M",
+      "confidence": "High"
+    },
+    {
+      "id": "UX-32",
+      "title": "Deal status badge contradicts the underlying document / pipeline state",
+      "severity": "P2",
+      "category": "Data / Trust",
+      "route": "/tickets, /tickets/:id, /tickets/:id/deposit",
+      "viewport": "Desktop + Mobile",
+      "role": "sales, import, account, ceo",
+      "frequency": "Occasionally",
+      "evidence": [
+        "screenshots/flow/21-sales-deposit-notice-issued.png",
+        "screenshots/flow/08-import-deal7-detail.png"
+      ],
+      "observed": "Deal #8 is badged 'ออกใบแจ้งยอดแล้ว' (deposit notice issued), but opening its deposit-notice page shows the empty state 'ยังไม่มีใบแจ้งยอดเงินรับมัดจำ — สร้างเอกสารฉบับร่าง' (no deposit notice yet). Separately, a deal badged 'รอรับเรื่องจากฝ่าย Import' (awaiting Import pickup) presented the Import user a disabled 'ขั้นถัดไปอัปเดตโดยฝ่ายขาย' (Sales's turn) action. The legacy status enum can disagree with the actual document/pipeline state.",
+      "impact": "Users can't trust the status badge — a deal that claims a document exists opens to 'none', and a badge that says 'your turn' shows no action. This undermines confidence in the whole pipeline's data.",
+      "root_cause": "A legacy ticket.status field is maintained alongside the newer pipeline stage + document records and they can drift; no reconciliation/guard. (Observed on the mock — confirm against real backend seed/state machine.)",
+      "principle": "Visibility of system status; consistency; error prevention",
+      "recommendation": "Derive the status badge from the authoritative pipeline/document state (single source of truth) or add an invariant check; never show 'issued' when no document row exists.",
+      "acceptance": [
+        "A deal badged 'deposit issued' always opens to an existing deposit document.",
+        "Status badge, pipeline stage, and document existence never contradict."
+      ],
+      "validation": "For each deal, cross-check the list badge against the detail pipeline stage and the deposit page; confirm no contradictions.",
+      "effort": "M",
+      "confidence": "Medium"
+    },
+    {
+      "id": "UX-33",
+      "title": "Deal-flow forms (propose price, quotation) use toast-only validation and a stray English label",
+      "severity": "P3",
+      "category": "Forms / Content",
+      "route": "/tickets/:id (quotation, propose-price)",
+      "viewport": "Desktop + Mobile",
+      "role": "sales, import",
+      "frequency": "Often",
+      "evidence": [
+        "screenshots/flow/07-sales-quotation-modal.png",
+        "screenshots/flow/25-import-propose-price-filled.png"
+      ],
+      "observed": "The quotation modal ('ออกใบเสนอราคา') and the propose-price edit mode surface errors only via toast / a single line, with no per-field required markers (recipient, name, terms). The quotation modal also mixes an English 'Lead time' label into an otherwise Thai form. This is the deal-flow instance of the app-wide sales-form validation gap.",
+      "impact": "On multi-field issuance forms, users don't know which fields are required until submit fails, and a lone English label adds reading friction — during the money-issuing steps of the deal, where correctness matters most.",
+      "root_cause": "Sales-stack forms use imperative validation + untranslated labels (see UX-03, UX-28).",
+      "principle": "Error prevention; consistency; match with real world",
+      "recommendation": "Apply the same inline/required-marker treatment as HR forms (UX-03/UX-12) and translate 'Lead time' → 'ระยะเวลาผลิต/ส่งมอบ'.",
+      "acceptance": [
+        "Quotation and propose-price forms show required markers and inline errors.",
+        "No stray English labels in the deal-flow forms."
+      ],
+      "validation": "Submit an empty quotation modal; confirm inline errors and Thai labels.",
+      "effort": "S",
+      "confidence": "High"
+    },
+    {
+      "id": "UX-34",
+      "title": "\"Final Payment\" marks a deal fully paid in one click — no confirmation, no receipt detail, no undo",
+      "severity": "P1",
+      "category": "Error prevention / Financial integrity",
+      "route": "/tickets/:id",
+      "viewport": "Desktop + Mobile",
+      "role": "account, ceo",
+      "frequency": "Occasionally (but irreversible)",
+      "evidence": [
+        "screenshots/states/account-final-payment-no-confirm.png",
+        "screenshots/flow/36-account-payment-modal.png",
+        "screenshots/modals/mgr-ot-approve-confirm.png"
+      ],
+      "observed": "On deal 13 (Mega Bangna Retail, PR-2026-0013) the account role clicked \"ยืนยันชำระครบ (Final Payment)\" and the deal was immediately marked settled: the payment panel flipped to ยอดที่ต้องชำระ ฿132,500 / ชำระแล้ว ฿132,500 / คงเหลือ ฿0 with a ชำระครบแล้ว success toast. No confirmation dialog appeared (verified programmatically: no .modal-backdrop or [role=dialog]), and no receipt details were captured — whereas the parallel \"บันทึกรับชำระเงิน\" action opens a proper modal requiring type, amount, date, reference and an over-payment checkbox.",
+      "impact": "An accountant or CEO can financially settle a deal worth ฿132,500 with one mis-click, with no confirmation and no undo, and with no receipt reference recorded against the ledger. It is the least-guarded action in the app while being one of the most consequential, and it bypasses the receipt trail the guarded path enforces.",
+      "root_cause": "The stage-advance shortcut button calls the mutation directly instead of routing through the payment modal or a ConfirmDialog.",
+      "principle": "Error prevention; user control and freedom — the app already does this correctly elsewhere (the OT approve dialog states its exact consequence)",
+      "recommendation": "Route Final Payment through a ConfirmDialog that states the amount and consequence (mirroring ยืนยันการอนุมัติ OT), or better, require the same receipt fields as บันทึกรับชำระเงิน so a reference is always recorded.",
+      "acceptance": [
+        "Final Payment opens a confirmation stating the amount being settled and what changes.",
+        "Cancel aborts with no state change.",
+        "A receipt reference is recorded (or the action is explicitly marked as an adjustment)."
+      ],
+      "validation": "As account, click ยืนยันชำระครบ on an outstanding deal; confirm a dialog intercepts, cancel leaves คงเหลือ unchanged, and confirming records a ledger entry.",
+      "effort": "S",
+      "confidence": "High",
+      "fixed": true,
+      "fixedIn": "bd8195c",
+      "fixNote": "Final Payment gated behind ConfirmDialog stating the real outstanding amount (reuses summary.amountOutstanding) and irreversibility. Verified live (9/9) + mutation-tested."
+    },
+    {
+      "id": "UX-35",
+      "title": "Deposit-notice CTA is enabled on a paused deal and fails only after clicking, with an internal-jargon error",
+      "severity": "P2",
+      "category": "Error prevention / Content",
+      "route": "/tickets/:ticketId/deposit",
+      "viewport": "Desktop + Mobile",
+      "role": "sales, account",
+      "frequency": "Always on on-hold/dormant deals",
+      "evidence": [
+        "screenshots/states/sales-deposit-after-create-draft.png",
+        "screenshots/flow/20-account-deposit-notice.png"
+      ],
+      "observed": "On deal 11 (a DORMANT/on-hold deal) the deposit-notice page shows its empty state — ยังไม่มีใบแจ้งยอดเงินรับมัดจำ — with สร้างเอกสารฉบับร่าง presented as an enabled primary CTA. Clicking it creates nothing and raises the toast \"ดีลไม่ได้อยู่ในสถานะ ACTIVE (DORMANT) จึงแก้ไขขั้นตอนนี้ไม่ได้\". The empty state gives no prior indication the deal is paused, and the button remains enabled after the failure.",
+      "impact": "The user is invited to take an action that was never possible, and is refused only afterwards by a message that exposes internal state names (ACTIVE / DORMANT) instead of telling them what to do next (resume the deal). On a paused deal this is a guaranteed dead end.",
+      "root_cause": "The CTA is rendered from document-absence alone; the deal lifecycle state is only checked server-side on submit.",
+      "principle": "Error prevention over error messages; match between system and the real world (no internal jargon)",
+      "recommendation": "Disable the CTA when the deal is not ACTIVE and explain inline (e.g. \"ดีลนี้ถูกพักไว้ — กดดำเนินการต่อก่อนจึงจะสร้างเอกสารได้\") with a link/action to resume; rewrite the toast in user language without raw state names.",
+      "acceptance": [
+        "On a non-ACTIVE deal the create CTA is disabled or replaced by a resume affordance.",
+        "The explanation names the situation in user language, not ACTIVE/DORMANT.",
+        "No enabled control produces a guaranteed failure."
+      ],
+      "validation": "Open /tickets/<dormant-deal>/deposit; confirm the CTA is not an enabled dead end and the copy explains the pause.",
+      "effort": "S",
+      "confidence": "High"
+    },
+    {
+      "id": "UX-36",
+      "title": "Thai text is set at Latin type metrics — px sizes down to 11px with 1.6 leading",
+      "severity": "P2",
+      "category": "Visual design / Typography / i18n",
+      "route": "global",
+      "viewport": "Desktop + Mobile",
+      "role": "all",
+      "frequency": "Always",
+      "evidence": [
+        "screenshots/desktop/ceo-dashboard.png",
+        "screenshots/desktop/sales-ticket-detail.png",
+        "screenshots/mobile/hr-nav-drawer.png"
+      ],
+      "observed": "The type scale in index.css is hard-coded in px (2xs 11, xs 12, sm 13, md 14, lg 16, xl 22, 2xl 26, 3xl 28, 4xl 34) with body line-height 1.6 — Latin defaults applied to a Thai-first UI. Thai stacks vowels above consonants and tone marks above those, plus below-vowels, so it occupies more vertical space per line than Latin at the same size. The app puts its densest, most-read secondary text in the 11–13px band: record meta lines (สร้างโดย … · 1 พ.ค. 2569), the English nav subtitles, table meta, helper text and chip labels.",
+      "impact": "Diacritics crowd and can clip in the 11–13px band, and 1.6 leading is tight for stacked Thai marks. This degrades legibility of exactly the text users scan most — on the primary working screens, for every role, and worst on mobile and for older staff. There are also no weight tokens, so weights are hardcoded 400–900 inline, giving inconsistent emphasis.",
+      "root_cause": "The scale was authored with Latin metrics (px values + a single 1.6 leading) and never adjusted for Thai script; no Thai-specific leading token exists.",
+      "principle": "Legibility; accessibility of text (WCAG 1.4.4 resize/readability); match to the real user context",
+      "recommendation": "Raise the body floor to 14px, set Thai body leading to ~1.75–1.9, express sizes in rem so browser text-size settings apply, and add explicit weight tokens. Reserve 11–12px for genuinely non-essential text or drop those steps entirely.",
+      "acceptance": [
+        "No essential UI text renders below 14px.",
+        "Thai body line-height is >= 1.7.",
+        "Tone marks and upper vowels are not clipped at any scale step.",
+        "Text scales with browser font-size settings (rem, not px).",
+        "Verified at 390px and at 200% browser zoom."
+      ],
+      "validation": "Render a diacritic-heavy Thai string (e.g. ที่ปรึกษาการเงิน, ผู้จัดการฝ่าย) at every scale step on light and muted backgrounds; inspect for clipping/crowding; re-check at 200% zoom.",
+      "effort": "M",
+      "confidence": "Medium"
+    },
+    {
+      "id": "UX-37",
+      "title": "Change-password form accepts an EMPTY new password client-side (schema guard omitted)",
+      "severity": "P3",
+      "category": "Forms / Validation",
+      "route": "ChangePasswordModal (forced password gate)",
+      "viewport": "Desktop + Mobile",
+      "role": "all",
+      "frequency": "Edge case",
+      "evidence": [],
+      "observed": "In ChangePasswordModal the zod schema declares newPassword as a bare z.string() with no .min(1) — unlike currentPassword and confirmPassword, which both carry .min(1). Every superRefine check (length, mismatch, reuse) is additionally guarded by `data.newPassword.length > 0`, so all of them are skipped when the field is empty. Verified by parsing the schema directly: {currentPassword:\"oldpass123\", newPassword:\"\", confirmPassword:\"x\"} returns success=true, while a short non-empty password is correctly rejected. Surfaced while marking required fields for UX-12.",
+      "impact": "A user can submit the change-password form with an empty new password and pass client validation. The server does reject it (mockApi and the Java service both enforce a minimum length), so no weak password is ever set — but the user hits a raw server error banner instead of an inline field error, and this happens on the FORCED password-change gate, i.e. at a security checkpoint where a confusing failure is worst. The asymmetry with confirmPassword makes this look like an omission rather than a deliberate choice.",
+      "root_cause": "Missing .min(1) on newPassword, combined with length>0 guards on every superRefine rule.",
+      "principle": "Error prevention; consistency (the sibling fields are guarded)",
+      "recommendation": "Add .min(1) to newPassword with a Thai required message, matching currentPassword/confirmPassword. Re-check the superRefine guards afterwards so the length/mismatch/reuse rules still fire correctly. Then mark the field required in the UI (deferred from UX-12 for exactly this reason).",
+      "acceptance": [
+        "Submitting an empty new password shows an inline required error, not a server error.",
+        "The field carries a required marker and aria-required.",
+        "Short/mismatched/reused passwords still produce their existing specific messages."
+      ],
+      "validation": "Parse the schema with an empty newPassword and expect success=false; then drive the forced gate and confirm an inline error.",
+      "effort": "XS",
+      "confidence": "High"
+    },
+    {
+      "id": "UX-38",
+      "title": "Clearing a CEO pricing field silently saved 0 (no validation on the price-config editor)",
+      "severity": "P2",
+      "category": "Data integrity / Forms",
+      "route": "/ceo-settings",
+      "viewport": "Desktop + Mobile",
+      "role": "ceo",
+      "frequency": "Edge case, high consequence",
+      "evidence": [],
+      "observed": "The price-config editor had no validation on any of its six pricing inputs. saveConfig built its payload with Number(configDraft.field), and Number(\"\") === 0 — so clearing a field and saving persisted 0 for that pricing input, with a success toast and no warning. Discovered while implementing UX-03 slice 3.",
+      "impact": "A zeroed marginPct or freightPerSqm would silently under-price every subsequent deal for that country, and the CIF calculation would keep using it as a legitimate value. The CEO gets a success message either way, so the corruption is invisible until margins are reconciled.",
+      "root_cause": "No validation layer on the config editor, combined with JavaScript coercing an empty string to 0.",
+      "principle": "Error prevention; data integrity over silent coercion",
+      "recommendation": "Require each pricing field to be non-empty and a number >= 0, block the save, and show the error inline on the offending field.",
+      "acceptance": [
+        "A blank pricing field is rejected inline and the save is blocked.",
+        "The percentage round-trip (x100 in / 100 out) is unchanged.",
+        "No pricing field can persist as 0 unless the CEO explicitly typed 0."
+      ],
+      "validation": "Clear a pricing field and save; expect an inline error and no API call. Confirm a deliberately typed 0 still saves.",
+      "effort": "S",
+      "confidence": "High",
+      "fixed": true,
+      "fixedIn": "12833f7",
+      "fixNote": "Fixed in the same commit as UX-08 / UX-03 slice 3. Blank fields now rejected inline with role=alert; verified live (cfg-freightPerSqm flagged, save blocked, dialog stayed open) and mutation-tested — relaxing the schema fails the guard test."
+    }
+  ]
+}

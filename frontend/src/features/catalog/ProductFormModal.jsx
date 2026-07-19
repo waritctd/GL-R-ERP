@@ -1,45 +1,75 @@
 import { useState } from 'react';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
 import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
+import { FormField } from '../../components/common/FormField.jsx';
+
+// UX-03: the only validation rule this form has ever had — price is required
+// and must be > 0. Every other field is genuinely optional; do not add
+// required-ness here without an explicit product decision, it would block
+// legitimate saves (many catalog rows are missing grade/collection/etc).
+const productFormSchema = z.object({
+  productCode: z.string(),
+  grade: z.string(),
+  collection: z.string(),
+  productName: z.string(),
+  color: z.string(),
+  surface: z.string(),
+  sizeRaw: z.string(),
+  price: z.string().refine((value) => value !== '' && Number(value) > 0, 'กรุณาใส่ราคา'),
+  currency: z.string(),
+  priceUnit: z.string(),
+});
 
 export function ProductFormModal({ product, factoryId, onClose, onSaved }) {
   const isEdit = !!product?.priceId;
-  const [form, setForm] = useState({
-    productCode: product?.productCode ?? '',
-    grade:       product?.grade       ?? '',
-    collection:  product?.collection  ?? '',
-    productName: product?.productName ?? '',
-    color:       product?.color       ?? '',
-    surface:     product?.surface     ?? '',
-    sizeRaw:     product?.sizeRaw     ?? '',
-    price:       product?.price != null ? String(product.price) : '',
-    currency:    product?.currency    ?? 'EUR',
-    priceUnit:   product?.priceUnit   ?? 'per_sqm',
-  });
   const [saving, setSaving] = useState(false);
-  const [error, setError]   = useState('');
+  const [submitError, setSubmitError] = useState('');
 
-  const set = (field) => (e) => setForm((prev) => ({ ...prev, [field]: e.target.value }));
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+  } = useForm({
+    resolver: zodResolver(productFormSchema),
+    defaultValues: {
+      productCode: product?.productCode ?? '',
+      grade:       product?.grade       ?? '',
+      collection:  product?.collection  ?? '',
+      productName: product?.productName ?? '',
+      color:       product?.color       ?? '',
+      surface:     product?.surface     ?? '',
+      sizeRaw:     product?.sizeRaw     ?? '',
+      price:       product?.price != null ? String(product.price) : '',
+      currency:    product?.currency    ?? 'EUR',
+      priceUnit:   product?.priceUnit   ?? 'per_sqm',
+    },
+    mode: 'onChange',
+    reValidateMode: 'onChange',
+  });
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    if (!form.price || Number(form.price) <= 0) { setError('กรุณาใส่ราคา'); return; }
+  async function submit(values) {
+    setSubmitError('');
+    // Payload shape is an API contract detail — preserved byte-identical to
+    // the pre-migration hand-rolled version: every text field normalises
+    // '' -> null, price becomes a Number, currency/priceUnit pass through.
+    const payload = {
+      productCode: values.productCode || null,
+      grade:       values.grade       || null,
+      collection:  values.collection  || null,
+      productName: values.productName || null,
+      color:       values.color       || null,
+      surface:     values.surface     || null,
+      sizeRaw:     values.sizeRaw     || null,
+      price:       Number(values.price),
+      currency:    values.currency,
+      priceUnit:   values.priceUnit,
+    };
     setSaving(true);
-    setError('');
     try {
-      const payload = {
-        productCode: form.productCode || null,
-        grade:       form.grade       || null,
-        collection:  form.collection  || null,
-        productName: form.productName || null,
-        color:       form.color       || null,
-        surface:     form.surface     || null,
-        sizeRaw:     form.sizeRaw     || null,
-        price:       Number(form.price),
-        currency:    form.currency,
-        priceUnit:   form.priceUnit,
-      };
       if (isEdit) {
         await api.catalog.updateProduct(product.priceId, payload);
       } else {
@@ -47,7 +77,7 @@ export function ProductFormModal({ product, factoryId, onClose, onSaved }) {
       }
       onSaved();
     } catch (err) {
-      setError(err.message || 'บันทึกไม่สำเร็จ');
+      setSubmitError(err.message || 'บันทึกไม่สำเร็จ');
     } finally {
       setSaving(false);
     }
@@ -66,80 +96,65 @@ export function ProductFormModal({ product, factoryId, onClose, onSaved }) {
         </>
       }
     >
-      <form id="product-form" onSubmit={handleSubmit} className="space-y-3">
+      <form id="product-form" onSubmit={handleSubmit(submit)} className="space-y-3" noValidate>
         <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label htmlFor="pf-code" className="block text-sm font-medium mb-1">รหัสสินค้า</label>
-            <input id="pf-code" type="text" className="input w-full" value={form.productCode} onChange={set('productCode')} />
-          </div>
-          <div>
-            <label htmlFor="pf-grade" className="block text-sm font-medium mb-1">Grade</label>
-            <input id="pf-grade" type="text" className="input w-full" value={form.grade} onChange={set('grade')} />
-          </div>
+          <FormField label="รหัสสินค้า" htmlFor="pf-code">
+            <input id="pf-code" type="text" {...register('productCode')} />
+          </FormField>
+          <FormField label="Grade" htmlFor="pf-grade">
+            <input id="pf-grade" type="text" {...register('grade')} />
+          </FormField>
         </div>
-        <div>
-          <label htmlFor="pf-collection" className="block text-sm font-medium mb-1">Collection</label>
-          <input id="pf-collection" type="text" className="input w-full" value={form.collection} onChange={set('collection')} />
-        </div>
-        <div>
-          <label htmlFor="pf-name" className="block text-sm font-medium mb-1">ชื่อสินค้า</label>
-          <input id="pf-name" type="text" className="input w-full" value={form.productName} onChange={set('productName')} />
-        </div>
+        <FormField label="Collection" htmlFor="pf-collection">
+          <input id="pf-collection" type="text" {...register('collection')} />
+        </FormField>
+        <FormField label="ชื่อสินค้า" htmlFor="pf-name">
+          <input id="pf-name" type="text" {...register('productName')} />
+        </FormField>
         <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label htmlFor="pf-color" className="block text-sm font-medium mb-1">สี</label>
-            <input id="pf-color" type="text" className="input w-full" value={form.color} onChange={set('color')} />
-          </div>
-          <div>
-            <label htmlFor="pf-surface" className="block text-sm font-medium mb-1">ผิว</label>
-            <input id="pf-surface" type="text" className="input w-full" value={form.surface} onChange={set('surface')} />
-          </div>
+          <FormField label="สี" htmlFor="pf-color">
+            <input id="pf-color" type="text" {...register('color')} />
+          </FormField>
+          <FormField label="ผิว" htmlFor="pf-surface">
+            <input id="pf-surface" type="text" {...register('surface')} />
+          </FormField>
         </div>
-        <div>
-          <label htmlFor="pf-size" className="block text-sm font-medium mb-1">ขนาด</label>
+        <FormField label="ขนาด" htmlFor="pf-size">
           <input
             id="pf-size"
             type="text"
-            className="input w-full"
-            value={form.sizeRaw}
-            onChange={set('sizeRaw')}
             placeholder="เช่น 60x60, 30x90"
+            {...register('sizeRaw')}
           />
-        </div>
+        </FormField>
         <div className="grid grid-cols-3 gap-3">
-          <div>
-            <label htmlFor="pf-price" className="block text-sm font-medium mb-1">ราคา *</label>
+          <FormField label="ราคา" htmlFor="pf-price" error={errors.price?.message} required>
             <input
               id="pf-price"
               type="number"
               step="0.01"
               min="0"
-              className="input w-full"
-              value={form.price}
-              onChange={set('price')}
-              required
+              {...register('price')}
             />
-          </div>
-          <div>
-            <label htmlFor="pf-currency" className="block text-sm font-medium mb-1">สกุลเงิน</label>
-            <select id="pf-currency" className="input w-full" value={form.currency} onChange={set('currency')}>
+          </FormField>
+          <FormField label="สกุลเงิน" htmlFor="pf-currency">
+            <select id="pf-currency" {...register('currency')}>
               <option>EUR</option>
               <option>USD</option>
               <option>THB</option>
               <option>GBP</option>
             </select>
-          </div>
-          <div>
-            <label htmlFor="pf-unit" className="block text-sm font-medium mb-1">หน่วย</label>
-            <select id="pf-unit" className="input w-full" value={form.priceUnit} onChange={set('priceUnit')}>
+          </FormField>
+          <FormField label="หน่วย" htmlFor="pf-unit">
+            <select id="pf-unit" {...register('priceUnit')}>
               <option value="per_sqm">ม²</option>
               <option value="per_piece">แผ่น</option>
               <option value="per_box">กล่อง</option>
               <option value="per_linear_m">ม.</option>
             </select>
-          </div>
+          </FormField>
         </div>
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {submitError && <p className="text-sm text-red-600" role="alert">{submitError}</p>}
       </form>
     </Modal>
   );

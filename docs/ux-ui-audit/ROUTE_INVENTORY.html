@@ -1,0 +1,87 @@
+<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Route &amp; Interaction Inventory</title><style>
+*{box-sizing:border-box}
+:root{--ink:#0f172a;--ink2:#334155;--muted:#64748b;--faint:#94a3b8;--bg:#f6f8fb;--surface:#fff;--border:#e6eaf0;--brand:#4f46e5;--brand2:#6366f1;--radius:12px}
+html{scroll-behavior:smooth}
+body{margin:0;font-family:'Sarabun',system-ui,-apple-system,'Segoe UI',sans-serif;color:var(--ink);background:var(--bg);line-height:1.6;font-size:15px}
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+header.hero{background:linear-gradient(135deg,#111827,#312e81);color:#fff;padding:48px 0 40px}
+header.hero .wrap{padding:0 24px}
+.hero h1{font-size:30px;margin:0 0 6px;font-weight:800;letter-spacing:-.5px}
+.hero .sub{color:#c7d2fe;font-size:16px;margin:0 0 18px}
+.hero .metaline{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13px;color:#e0e7ff}
+.hero .metaline b{color:#fff;font-weight:600}
+nav.toc{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--border);padding:10px 0}
+nav.toc .wrap{display:flex;flex-wrap:wrap;gap:6px}
+nav.toc a{font-size:12.5px;color:var(--ink2);text-decoration:none;padding:5px 10px;border-radius:999px;border:1px solid var(--border);background:#fff;white-space:nowrap}
+nav.toc a:hover{border-color:var(--brand);color:var(--brand)}
+main{padding:32px 0 80px}
+section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:26px 30px;margin:0 0 22px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+section>h2{font-size:22px;margin:0 0 4px;font-weight:800;letter-spacing:-.3px;scroll-margin-top:60px}
+section>.lead{color:var(--muted);margin:0 0 18px;font-size:14px}
+h3{font-size:17px;margin:26px 0 10px;font-weight:700}
+h4{font-size:15px;margin:18px 0 8px;font-weight:700;color:var(--ink2)}
+p{margin:0 0 12px}
+a{color:var(--brand)}
+table{width:100%;border-collapse:collapse;margin:12px 0 18px;font-size:13.5px}
+th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--border);vertical-align:top}
+th{background:#f8fafc;font-weight:700;color:var(--ink2);font-size:12.5px;text-transform:uppercase;letter-spacing:.03em}
+tr:hover td{background:#fbfcff}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:700;letter-spacing:.02em}
+.rate{display:inline-flex;align-items:center;gap:6px;font-weight:700}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:1fr 1fr}
+.g4{grid-template-columns:repeat(4,1fr)}
+.card{border:1px solid var(--border);border-radius:10px;padding:14px 16px;background:#fbfcff}
+.card .n{font-size:26px;font-weight:800}
+.card .l{font-size:12.5px;color:var(--muted)}
+.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:14px 0}
+.kpi{border:1px solid var(--border);border-radius:10px;padding:12px;text-align:center;background:#fff}
+.kpi .v{font-size:24px;font-weight:800}
+.kpi .k{font-size:12px;color:var(--muted)}
+.finding{border:1px solid var(--border);border-left-width:5px;border-radius:10px;padding:18px 20px;margin:16px 0;background:#fff;scroll-margin-top:60px}
+.finding h3{margin:0 0 10px;font-size:16.5px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.finding h3 .fid{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--muted)}
+.meta-row{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;color:var(--muted);margin:0 0 12px;padding-bottom:12px;border-bottom:1px dashed var(--border)}
+.meta-row b{color:var(--ink2)}
+.finding dl{display:grid;grid-template-columns:150px 1fr;gap:4px 14px;margin:0}
+.finding dt{font-weight:700;color:var(--ink2);font-size:13px}
+.finding dd{margin:0;font-size:13.8px}
+.finding ul{margin:4px 0;padding-left:20px}
+.finding .ev{margin-top:12px}
+.finding .ev img{max-width:100%;border:1px solid var(--border);border-radius:8px;margin-top:6px;display:block}
+.thumb{max-width:340px}
+figure{margin:0 0 14px}
+figure img{width:100%;border:1px solid var(--border);border-radius:8px;display:block}
+figcaption{font-size:12px;color:var(--muted);margin-top:6px}
+.gallery{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.pill{padding:2px 8px;border-radius:6px;font-size:11.5px;font-weight:600;background:#eef2ff;color:#4338ca}
+.ok{color:#15803d}.warn{color:#b45309}.bad{color:#b91c1c}
+.callout{border-radius:10px;padding:14px 16px;margin:14px 0;font-size:13.5px}
+.callout.info{background:#eff6ff;border:1px solid #bfdbfe}
+.callout.warn{background:#fffbeb;border:1px solid #fbbf24}
+ul.clean{list-style:none;padding:0;margin:0}
+ul.clean li{padding:6px 0;border-bottom:1px solid var(--border)}
+ul.clean li:last-child{border:0}
+code{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;background:#f1f5f9;padding:1px 5px;border-radius:4px}
+footer{color:var(--muted);font-size:12.5px;text-align:center;padding:30px 0}
+@media(max-width:820px){.g2,.g4,.kpis,.gallery{grid-template-columns:1fr 1fr}.finding dl{grid-template-columns:1fr}.hero h1{font-size:24px}}
+@media(max-width:520px){.g4,.kpis,.gallery{grid-template-columns:1fr}}
+@media print{nav.toc{display:none}section{break-inside:avoid;box-shadow:none}}
+</style></head><body><header class="hero"><div class="wrap"><h1>Route &amp; Interaction Inventory</h1><p class="sub"><a href="UX_UI_AUDIT_REPORT.html" style="color:#c7d2fe">← Back to main report</a> · GL&amp;R-ERP UX/UI Audit · 2026-07-18</p></div></header><main><div class="wrap">
+<section><h2>App shell & navigation</h2>
+<p class="lead">Persistent AppShell: sidebar nav, topbar (mobile menu toggle, title <code>GL&amp;R HR</code> + role label, user, NotificationBell, logout), content in an ErrorBoundary+Suspense. Mobile = focus-trapped off-canvas drawer.</p>
+<div class="scroll"><table><thead><tr><th>Nav item</th><th>Path</th><th>Shown when</th></tr></thead><tbody><tr><td>แดชบอร์ด / Dashboard</td><td>/</td><td>always</td></tr><tr><td>ภาพรวม HR / HR overview</td><td>/hr</td><td>canViewEmployees (hr)</td></tr><tr><td>งานขาย / Sales</td><td>/tickets</td><td>canViewTickets & SALES_ENABLED</td></tr><tr><td>ตั้งค่าราคา / CEO price config</td><td>/ceo-settings</td><td>role===ceo & SALES_ENABLED</td></tr><tr><td>แคตตาล็อกสินค้า / Product catalog</td><td>/catalog</td><td>SALES_ENABLED (all roles) ⚠</td></tr><tr><td>นำเข้าราคา / Price import</td><td>/price-import</td><td>canManagePriceImport (ceo/import)</td></tr><tr><td>ค่าคอมมิชชัน / Commissions</td><td>/commissions</td><td>canViewCommissions</td></tr><tr><td>เงินเดือน / Payroll</td><td>/payroll</td><td>canManagePayroll (hr)</td></tr><tr><td>พนักงานทั้งหมด / Employees</td><td>/employees</td><td>canViewEmployees (hr)</td></tr><tr><td>เวลาทำงาน / Attendance</td><td>/attendance</td><td>always</td></tr><tr><td>ล่วงเวลา / Overtime</td><td>/overtime</td><td>employeeId or canViewAllOvertime</td></tr><tr><td>วันลา / Leave</td><td>/leave</td><td>employeeId or canViewAllLeave</td></tr><tr><td>คำขอแก้ไขข้อมูล / Profile requests</td><td>/requests</td><td>canReviewProfileRequests (hr); badge=pending</td></tr><tr><td>ข้อมูลของฉัน / My profile</td><td>/profile</td><td>employeeId</td></tr><tr><td>คำขอของฉัน / My requests</td><td>/my-requests</td><td>canSubmitProfileRequests (employee); badge=pending</td></tr></tbody></table></div>
+<div class="callout warn">⚠ marks findings referenced in the main report: catalog shown to all roles (UX-20); requests approve/reject unguarded (UX-02); product delete via native confirm (UX-07); CeoSettings bespoke overlay (UX-08) &amp; missing route guard (UX-19).</div>
+</section>
+<section><h2>Per-page inventory</h2>
+<p class="lead">Every route/page with its components, modals, states, and destructive-action handling. UI strings quoted from source.</p>
+<div class="scroll"><table><thead><tr><th>Route / Component</th><th>Feature</th><th>Main task</th><th>Key components</th><th>Modals</th><th>States</th><th>Destructive / confirm</th></tr></thead><tbody><tr><td><code>/ (login)</code></td><td>LoginPage</td><td>Sign in</td><td>Native email+password form (required); role quick-login (mock) for 7 roles</td><td>—</td><td>Error banner (English "Invalid email or inactive user")</td><td>none</td></tr><tr><td><code>ChangePasswordModal</code></td><td>auth</td><td>Forced/optional password change</td><td>zod: current, new(min8), confirm; cross-field mismatch/reuse</td><td>Focus-trapped dialog; forced mode undismissable</td><td>role=alert banner</td><td>none</td></tr><tr><td><code>/</code></td><td>EmployeeDashboard</td><td>Role-adaptive landing</td><td>StatCards (clickable if role has access), quick actions, recent requests</td><td>—</td><td>Empty "ยังไม่มีคำขอล่าสุด"</td><td>none</td></tr><tr><td><code>/hr</code></td><td>HrDashboard</td><td>Company HR overview</td><td>ActionQueue, 2 StatGrids, dept bars, recent feed</td><td>—</td><td>—</td><td>none</td></tr><tr><td><code>/employees</code></td><td>EmployeeListPage</td><td>Browse employees</td><td>DataTable (12/pg), 4 filter selects + search; salary column visible</td><td>EmployeeFormModal (create)</td><td>Empty "ไม่พบพนักงาน"; DataTable loading</td><td>none</td></tr><tr><td><code>/employees/:id</code></td><td>EmployeeDetailPage</td><td>View/edit employee</td><td>Tabs (personal/employment/history/sensitive); CollapsibleSections; salary gated on undefined perm</td><td>EmployeeFormModal (edit)</td><td>Loading &amp; not-found EmptyStates</td><td>none</td></tr><tr><td><code>/requests</code></td><td>ProfileRequestsPage</td><td>HR review profile changes</td><td>Grid table; approve/reject per row</td><td>—</td><td>Empty "ยังไม่มีคำขอ"</td><td>⚠ approve/reject fire with NO confirm</td></tr><tr><td><code>/my-requests</code></td><td>MyRequestsPage</td><td>Track own requests</td><td>Grid table</td><td>—</td><td>Empty "ยังไม่มีคำขอแก้ไข"</td><td>none</td></tr><tr><td><code>/profile</code></td><td>ProfilePage</td><td>Own profile + request edits</td><td>DetailHero, editable contact list</td><td>ChangeRequestModal (zod)</td><td>—</td><td>none</td></tr><tr><td><code>/attendance</code></td><td>AttendancePage</td><td>Punch records + .dat import</td><td>DesktopOnlyNotice(mobile); StatGrid; filters; DataTable(50/pg) mobileCard; import form</td><td>—</td><td>Empty "ไม่พบข้อมูลเวลา"; error toast</td><td>none</td></tr><tr><td><code>/overtime</code></td><td>OvertimePage</td><td>Submit/approve OT</td><td>StatGrid; filters; zod submit form; grid table</td><td>ConfirmDialog ×3 (approve/reject-reason/cancel)</td><td>Loading + empty EmptyStates</td><td>reject/cancel guarded by ConfirmDialog</td></tr><tr><td><code>/leave</code></td><td>LeavePage</td><td>Submit/approve leave</td><td>Quota cards; zod form w/ file upload; calendar; grid table</td><td>ConfirmDialog ×3</td><td>Loading + empty EmptyStates</td><td>reject/cancel guarded</td></tr><tr><td><code>/payroll</code></td><td>PayrollPage</td><td>Process monthly payroll</td><td>DesktopOnlyNotice(mobile); StatGrid; DataTable(25); per-employee adjustments aside</td><td>ConfirmDialog "ประมวลผลเงินเดือน" (irreversible)</td><td>Empty "ยังไม่มีข้อมูลเงินเดือน"</td><td>process guarded (danger)</td></tr><tr><td><code>/ticket-overview</code></td><td>TicketDashboard</td><td>Sales pipeline overview</td><td>SalesTabs; ActionQueue; 3 StatGrids; recent panel</td><td>—</td><td>Skeleton loading; error toast</td><td>none</td></tr><tr><td><code>/tickets</code></td><td>TicketListPage</td><td>Deal list</td><td>SalesTabs; 6 phase filter cards; lifecycle+flag chips; DataTable(ticket) + DealCard mobile; URL-persisted filters</td><td>TicketCreateModal</td><td>Empty "ไม่มีดีล" (context-varying)</td><td>none</td></tr><tr><td><code>/tickets/:id</code></td><td>TicketDetailPage (~2350 lines)</td><td>Drive the whole deal lifecycle</td><td>DealStagePanel(14 stages); payment/delivery/approval/items panels; attachments; quotations; timeline+comments</td><td>quotation, payment, billing, delivery, stock, UpdateStage, MarkLost, deposit-policy, note modals</td><td>Full skeleton; not-found EmptyState; many error toasts</td><td>cancel + delete-file via ConfirmDialog; reject inline</td></tr><tr><td><code>/tickets/:id/deposit</code></td><td>DepositNoticePage</td><td>Create/issue deposit notice</td><td>Native form; editable line items; note templates; deposit % toggles; live preview iframe</td><td>—</td><td>Skeleton; load-error &amp; no-doc EmptyStates</td><td>issue guarded (irreversible ConfirmDialog)</td></tr><tr><td><code>/commissions</code></td><td>CommissionPage</td><td>Commission invoices + approval</td><td>StatGrid; zod-ish submit form + file; DataTable(20); inline deductions editor; payroll view for HR</td><td>ConfirmDialog ×3 (approve/clawback/reject)</td><td>Empty + payroll skeleton</td><td>approve/reject/clawback guarded</td></tr><tr><td><code>/price-import</code></td><td>PriceImportPage</td><td>Upload price lists + products</td><td>Factory select; file upload; products table + cards; versions panel</td><td>AddFactoryModal; ProductFormModal</td><td>Empty product list; loading</td><td>⚠ product delete uses native window.confirm; commit guarded</td></tr><tr><td><code>/catalog</code></td><td>CatalogSearchPage</td><td>Search active products</td><td>Search form; results table/cards</td><td>ProductFormModal (edit)</td><td>Loading; no-results; pre-search hint</td><td>none</td></tr><tr><td><code>/ceo-settings</code></td><td>CeoSettingsPage</td><td>FX rates + pricing config</td><td>FX table (inline Override edit); price-formula table</td><td>⚠ bespoke fixed overlay (not shared Modal)</td><td>Loading; error toasts</td><td>none; ⚠ no route guard</td></tr></tbody></table></div>
+</section>
+<section><h2>Cross-cutting notes</h2>
+<ul><li><b>Undefined permission:</b> <code>canViewSensitiveEmployeeData</code> is not in ROLE_PERMISSIONS → salary/sensitive tab hidden for everyone (UX-09).</li>
+<li><b>Confirm-dialog inconsistency:</b> most destructive actions use ConfirmDialog; ProfileRequests has none; PriceImport uses native <code>window.confirm</code>.</li>
+<li><b>Validation split:</b> HR/leave/OT/employee/password use react-hook-form + zod with accessible inline errors; the sales stack uses imperative validation + toast/one-line strings (UX-03).</li>
+<li><b>Route-guard gaps:</b> <code>/ceo-settings</code>, <code>/catalog</code>, <code>/attendance</code> sit outside RequireAccess (nav-gated only).</li></ul>
+</section></div></main><footer>GL&amp;R-ERP UX/UI Audit appendix · 2026-07-18</footer></body></html>

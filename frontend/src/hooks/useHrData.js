@@ -77,7 +77,9 @@ export function useHrData({ user, showToast }) {
   });
 
   const reviewProfileRequestMutation = useMutation({
-    mutationFn: ({ id, status }) => api.profileRequests.update(id, { status }).then((response) => response.profileRequest),
+    mutationFn: ({ id, status, reviewerNote }) => api.profileRequests
+      .update(id, reviewerNote ? { status, reviewerNote } : { status })
+      .then((response) => response.profileRequest),
     onSuccess: (profileRequest, { status }) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.profileRequests() });
       showToast(status === 'approved' ? 'success' : 'info', status === 'approved' ? 'อนุมัติคำขอแล้ว' : 'ปฏิเสธคำขอแล้ว');
@@ -103,6 +105,6 @@ export function useHrData({ user, showToast }) {
     createEmployee: (payload) => createEmployeeMutation.mutateAsync(payload),
     updateEmployee: (id, payload) => updateEmployeeMutation.mutateAsync({ id, payload }),
     createProfileRequest: (payload) => createProfileRequestMutation.mutateAsync(payload),
-    reviewProfileRequest: (id, status) => reviewProfileRequestMutation.mutateAsync({ id, status }),
+    reviewProfileRequest: (id, status, reviewerNote) => reviewProfileRequestMutation.mutateAsync({ id, status, reviewerNote }),
   };
 }

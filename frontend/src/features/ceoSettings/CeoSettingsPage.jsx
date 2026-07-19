@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Modal } from '../../components/common/Modal.jsx';
+import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 
 function pctDisplay(val) {
   return val != null ? `${(Number(val) * 100).toFixed(2)}%` : '-';
@@ -11,15 +16,130 @@ function moneyDisplay(val) {
   return val != null ? Number(val).toLocaleString('th-TH', { minimumFractionDigits: 2 }) : '-';
 }
 
+// UX-03 slice 3: every pricing input must be a real, non-negative number.
+// Before this, an empty field silently became Number('') === 0 on save —
+// a blank freight/margin field would zero out that input and under-price
+// every deal for the country, with no warning. Do not weaken this to allow
+// blank values; do not change the >= 0 bound without an explicit pricing
+// decision.
+const numberFieldSchema = z
+  .string()
+  .refine((value) => value !== '' && !Number.isNaN(Number(value)) && Number(value) >= 0, 'กรุณากรอกตัวเลขที่ถูกต้อง (ตั้งแต่ 0 ขึ้นไป)');
+
+const configFormSchema = z.object({
+  freightPerSqm: numberFieldSchema,
+  insurancePerSqm: numberFieldSchema,
+  inlandFactoryToPortPerSqm: numberFieldSchema,
+  inlandPortToWarehousePerSqm: numberFieldSchema,
+  importDutyPct: numberFieldSchema,
+  marginPct: numberFieldSchema,
+});
+
+const CONFIG_FIELDS = [
+  { key: 'freightPerSqm', label: 'ค่าขนส่งทางเรือ (THB/ตร.ม.)', suffix: 'บาท/ตร.ม.' },
+  { key: 'insurancePerSqm', label: 'ค่าประกันภัย (THB/ตร.ม.)', suffix: 'บาท/ตร.ม.' },
+  { key: 'inlandFactoryToPortPerSqm', label: 'ขนส่ง โรงงาน→ท่าเรือ (THB/ตร.ม.)', suffix: 'บาท/ตร.ม.' },
+  { key: 'inlandPortToWarehousePerSqm', label: 'ขนส่ง ท่าเรือ→โกดัง (THB/ตร.ม.)', suffix: 'บาท/ตร.ม.' },
+  { key: 'importDutyPct', label: 'อัตราภาษีนำเข้า (%)', suffix: '%' },
+  { key: 'marginPct', label: 'Margin (%)', suffix: '%' },
+];
+
+// UX-08: real dialog (role="dialog", aria-modal, focus trap, Escape,
+// focus-restore) via the shared Modal, instead of the old hand-rolled
+// position:fixed overlay. Form state now lives here (react-hook-form +
+// zod), separate from CeoSettingsPage so the parent only owns the mutation.
+function ConfigEditModal({ config, saving, onClose, onSubmit }) {
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+  } = useForm({
+    resolver: zodResolver(configFormSchema),
+    defaultValues: {
+      freightPerSqm: String(config.freightPerSqm),
+      insurancePerSqm: String(config.insurancePerSqm),
+      inlandFactoryToPortPerSqm: String(config.inlandFactoryToPortPerSqm),
+      inlandPortToWarehousePerSqm: String(config.inlandPortToWarehousePerSqm),
+      // NON-NEGOTIABLE (pricing round-trip): stored fraction -> displayed
+      // percent. Do not change this scaling.
+      importDutyPct: String(Number(config.importDutyPct) * 100),
+      marginPct: String(Number(config.marginPct) * 100),
+    },
+    mode: 'onChange',
+    reValidateMode: 'onChange',
+  });
+
+  function submit(values) {
+    const payload = {
+      country: config.country,
+      freightPerSqm: Number(values.freightPerSqm),
+      insurancePerSqm: Number(values.insurancePerSqm),
+      inlandFactoryToPortPerSqm: Number(values.inlandFactoryToPortPerSqm),
+      inlandPortToWarehousePerSqm: Number(values.inlandPortToWarehousePerSqm),
+      // NON-NEGOTIABLE (pricing round-trip): displayed percent -> stored
+      // fraction. Do not change this scaling, the payload key names, or
+      // api.priceCalcConfigs.update's shape.
+      importDutyPct: Number(values.importDutyPct) / 100,
+      marginPct: Number(values.marginPct) / 100,
+    };
+    onSubmit(payload);
+  }
+
+  return (
+    <Modal
+      title={`แก้ไข config — ${config.country}`}
+      subtitle="(จะบันทึกเป็นเวอร์ชันใหม่)"
+      onClose={onClose}
+      footer={
+        <>
+          <button type="button" className="secondary-button" onClick={onClose}>ยกเลิก</button>
+          <button type="submit" form="config-edit-form" className="primary-button" disabled={saving}>
+            {saving ? 'กำลังบันทึก...' : 'บันทึกเวอร์ชันใหม่'}
+          </button>
+        </>
+      }
+    >
+      <form id="config-edit-form" onSubmit={handleSubmit(submit)} noValidate>
+        <div style={{ display: 'grid', gap: 12 }}>
+          {CONFIG_FIELDS.map(({ key, label, suffix }) => (
+            <FormField key={key} label={label} htmlFor={`cfg-${key}`} error={errors[key]?.message}>
+              {/*
+                FormField's automatic aria-invalid/aria-describedby wiring
+                only augments a DIRECT child whose id matches htmlFor — the
+                input here is nested inside a wrapper div (to sit next to
+                the unit suffix), so it's wired by hand instead, same as
+                FormField's other manual-wiring callers.
+              */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input
+                  id={`cfg-${key}`}
+                  type="number" step="0.01" min="0"
+                  style={{ flex: 1 }}
+                  aria-invalid={errors[key] ? true : undefined}
+                  aria-describedby={errors[key] ? fieldErrorId(`cfg-${key}`) : undefined}
+                  {...register(key)}
+                />
+                <span style={{ color: 'var(--color-text-muted)', fontSize: 12, minWidth: 70 }}>{suffix}</span>
+              </div>
+            </FormField>
+          ))}
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 export function CeoSettingsPage({ showToast }) {
   const queryClient = useQueryClient();
 
   // FX rate inline edit: currency → draftRate string
   const [editFx, setEditFx] = useState({});          // currency → string
+  // UX-03: per-currency inline validation error, keyed the same way so one
+  // row's error can never bleed onto another row.
+  const [fxErrors, setFxErrors] = useState({});       // currency → message
 
   // Config edit modal state
   const [editingConfig, setEditingConfig] = useState(null);  // PriceCalcConfigDto or null
-  const [configDraft, setConfigDraft] = useState({});
 
   const fxRatesQuery = useQuery({
     queryKey: queryKeys.fxRates(),
@@ -59,52 +179,40 @@ export function CeoSettingsPage({ showToast }) {
     return saveFxRateMutation.isPending && saveFxRateMutation.variables?.currency === currency;
   }
 
+  function clearFxError(currency) {
+    setFxErrors((p) => {
+      if (!(currency in p)) return p;
+      const n = { ...p };
+      delete n[currency];
+      return n;
+    });
+  }
+
   function saveFxRate(currency) {
     const val = editFx[currency];
     if (!val || isNaN(Number(val)) || Number(val) <= 0) {
-      showToast('error', 'กรุณากรอกอัตราแลกเปลี่ยนที่ถูกต้อง');
+      // UX-03: surfaced inline on this row's input (aria-invalid +
+      // aria-describedby -> role="alert"), not toast-only.
+      setFxErrors((p) => ({ ...p, [currency]: 'กรุณากรอกอัตราแลกเปลี่ยนที่ถูกต้อง' }));
       return;
     }
+    clearFxError(currency);
     saveFxRateMutation.mutate({ currency, rateToThb: Number(val) });
   }
 
   function openConfigEdit(cfg) {
     setEditingConfig(cfg);
-    setConfigDraft({
-      country:                    cfg.country,
-      freightPerSqm:              String(cfg.freightPerSqm),
-      insurancePerSqm:            String(cfg.insurancePerSqm),
-      inlandFactoryToPortPerSqm:  String(cfg.inlandFactoryToPortPerSqm),
-      inlandPortToWarehousePerSqm: String(cfg.inlandPortToWarehousePerSqm),
-      importDutyPct:              String(Number(cfg.importDutyPct) * 100),
-      marginPct:                  String(Number(cfg.marginPct) * 100),
-    });
   }
 
   const saveConfigMutation = useMutation({
     mutationFn: (payload) => api.priceCalcConfigs.update(payload),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.priceCalcConfigs() });
-      showToast('success', `บันทึก config ประเทศ ${configDraft.country} (เวอร์ชันใหม่) แล้ว`);
+      showToast('success', `บันทึก config ประเทศ ${variables.country} (เวอร์ชันใหม่) แล้ว`);
       setEditingConfig(null);
     },
     onError: (e) => showToast('error', e.message || 'บันทึกไม่สำเร็จ'),
   });
-
-  function saveConfig() {
-    const payload = {
-      country:                    configDraft.country,
-      freightPerSqm:              Number(configDraft.freightPerSqm),
-      insurancePerSqm:            Number(configDraft.insurancePerSqm),
-      inlandFactoryToPortPerSqm:  Number(configDraft.inlandFactoryToPortPerSqm),
-      inlandPortToWarehousePerSqm: Number(configDraft.inlandPortToWarehousePerSqm),
-      importDutyPct:              Number(configDraft.importDutyPct) / 100,
-      marginPct:                  Number(configDraft.marginPct) / 100,
-    };
-    saveConfigMutation.mutate(payload);
-  }
-
-  const savingConfig = saveConfigMutation.isPending;
 
   if (loading) return <div style={{ padding: 40, color: 'var(--color-text-muted)' }}>กำลังโหลด...</div>;
 
@@ -137,6 +245,9 @@ export function CeoSettingsPage({ showToast }) {
             {fxRates.map((fx) => {
               const isEditing = editFx[fx.currency] !== undefined;
               const isBot = fx.source === 'BOT';
+              const fxError = fxErrors[fx.currency];
+              const fxInputId = `fx-rate-${fx.currency}`;
+              const fxErrorId = `${fxInputId}-error`;
               return (
                 <tr key={fx.currency} style={{ borderBottom: '1px solid var(--color-surface-subtle)' }}>
                   <td style={{ padding: '8px 16px', fontWeight: 700 }}>
@@ -144,24 +255,40 @@ export function CeoSettingsPage({ showToast }) {
                   </td>
                   <td style={{ padding: '8px 16px' }}>
                     {isEditing ? (
-                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                        <input
-                          type="number" step="0.0001" min="0"
-                          value={editFx[fx.currency]}
-                          onChange={(e) => setEditFx((p) => ({ ...p, [fx.currency]: e.target.value }))}
-                          style={{ width: 100, padding: '4px 8px', border: '1px solid var(--color-info-border-strong)', borderRadius: 4, fontSize: 13 }}
-                        />
-                        <button type="button" className="primary-button"
-                          style={{ fontSize: 12, padding: '4px 10px' }}
-                          disabled={isSavingFx(fx.currency)}
-                          onClick={() => saveFxRate(fx.currency)}>
-                          {isSavingFx(fx.currency) ? '...' : 'บันทึก'}
-                        </button>
-                        <button type="button" className="secondary-button"
-                          style={{ fontSize: 12, padding: '4px 10px' }}
-                          onClick={() => setEditFx((p) => { const n = { ...p }; delete n[fx.currency]; return n; })}>
-                          ยกเลิก
-                        </button>
+                      <div>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                          <input
+                            id={fxInputId}
+                            type="number" step="0.0001" min="0"
+                            value={editFx[fx.currency]}
+                            onChange={(e) => {
+                              setEditFx((p) => ({ ...p, [fx.currency]: e.target.value }));
+                              clearFxError(fx.currency);
+                            }}
+                            aria-invalid={fxError ? true : undefined}
+                            aria-describedby={fxError ? fxErrorId : undefined}
+                            style={{ width: 100, padding: '4px 8px', border: `1px solid ${fxError ? 'var(--color-danger)' : 'var(--color-info-border-strong)'}`, borderRadius: 4, fontSize: 13 }}
+                          />
+                          <button type="button" className="primary-button"
+                            style={{ fontSize: 12, padding: '4px 10px' }}
+                            disabled={isSavingFx(fx.currency)}
+                            onClick={() => saveFxRate(fx.currency)}>
+                            {isSavingFx(fx.currency) ? '...' : 'บันทึก'}
+                          </button>
+                          <button type="button" className="secondary-button"
+                            style={{ fontSize: 12, padding: '4px 10px' }}
+                            onClick={() => {
+                              setEditFx((p) => { const n = { ...p }; delete n[fx.currency]; return n; });
+                              clearFxError(fx.currency);
+                            }}>
+                            ยกเลิก
+                          </button>
+                        </div>
+                        {fxError && (
+                          <p id={fxErrorId} role="alert" style={{ margin: '4px 0 0', color: 'var(--color-danger)', fontSize: 11, fontWeight: 600 }}>
+                            {fxError}
+                          </p>
+                        )}
                       </div>
                     ) : (
                       <strong>{fx.currency === 'THB' ? '1.0000' : moneyDisplay(fx.rateToThb)}</strong>
@@ -235,43 +362,12 @@ export function CeoSettingsPage({ showToast }) {
 
       {/* Config Edit Modal */}
       {editingConfig && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div style={{ background: 'var(--color-surface)', borderRadius: 12, padding: 24, width: 480, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
-            <h3 style={{ margin: '0 0 16px', fontSize: 16, fontWeight: 700 }}>
-              แก้ไข config — {editingConfig.country}
-              <span style={{ fontSize: 11, color: 'var(--color-text-muted)', fontWeight: 400, marginLeft: 8 }}>(จะบันทึกเป็นเวอร์ชันใหม่)</span>
-            </h3>
-            <div style={{ display: 'grid', gap: 12 }}>
-              {[
-                { key: 'freightPerSqm',             label: 'ค่าขนส่งทางเรือ (THB/ตร.ม.)', suffix: 'บาท/ตร.ม.' },
-                { key: 'insurancePerSqm',            label: 'ค่าประกันภัย (THB/ตร.ม.)',     suffix: 'บาท/ตร.ม.' },
-                { key: 'inlandFactoryToPortPerSqm',  label: 'ขนส่ง โรงงาน→ท่าเรือ (THB/ตร.ม.)', suffix: 'บาท/ตร.ม.' },
-                { key: 'inlandPortToWarehousePerSqm', label: 'ขนส่ง ท่าเรือ→โกดัง (THB/ตร.ม.)',  suffix: 'บาท/ตร.ม.' },
-                { key: 'importDutyPct',              label: 'อัตราภาษีนำเข้า (%)',           suffix: '%' },
-                { key: 'marginPct',                  label: 'Margin (%)',                    suffix: '%' },
-              ].map(({ key, label, suffix }) => (
-                <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                  <span style={{ fontWeight: 600 }}>{label}</span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <input
-                      type="number" step="0.01" min="0"
-                      value={configDraft[key] ?? ''}
-                      onChange={(e) => setConfigDraft((p) => ({ ...p, [key]: e.target.value }))}
-                      style={{ flex: 1 }}
-                    />
-                    <span style={{ color: 'var(--color-text-muted)', fontSize: 12, minWidth: 70 }}>{suffix}</span>
-                  </div>
-                </label>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
-              <button type="button" className="primary-button" disabled={savingConfig} onClick={saveConfig}>
-                {savingConfig ? 'กำลังบันทึก...' : 'บันทึกเวอร์ชันใหม่'}
-              </button>
-              <button type="button" className="secondary-button" onClick={() => setEditingConfig(null)}>ยกเลิก</button>
-            </div>
-          </div>
-        </div>
+        <ConfigEditModal
+          config={editingConfig}
+          saving={saveConfigMutation.isPending}
+          onClose={() => setEditingConfig(null)}
+          onSubmit={(payload) => saveConfigMutation.mutate(payload)}
+        />
       )}
     </div>
   );

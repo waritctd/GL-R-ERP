@@ -45,3 +45,6 @@ ERP Documentation/00_ALL_DOCS_BUNDLE.md
 .vercel/
 .vercel
 .env*
+
+# UX audit evidence — kept local only (large binaries; enable LFS before committing)
+docs/ux-ui-audit/screenshots/
