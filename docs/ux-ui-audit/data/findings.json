@@ -39,10 +39,10 @@
           "UX-27",
           "UX-12",
           "UX-08",
-          "UX-38"
+          "UX-38",
+          "UX-03"
         ],
         "remaining": [
-          "UX-03 (1 surface left)",
           "UX-04"
         ],
         "newFindings": [
@@ -54,11 +54,11 @@
             "ProductFormModal",
             "TicketCreateModal",
             "CeoSettings editor",
-            "DepositNoticePage"
-          ],
-          "remaining": [
+            "DepositNoticePage",
+            "TicketDetailPage modals",
             "TicketDetailPage inline forms"
-          ]
+          ],
+          "remaining": []
         },
         "regressionsCaught": [
           "required asterisk stacked onto its own line (global label{display:grid}) — introduced by UX-12, fixed in 2ec3dcb, verified by real layout measurement 41px->17px"
@@ -147,8 +147,9 @@
       "validation": "Submit an empty TicketCreateModal; verify each required field (customer, project, product rows) shows an inline error and the first is focused/scrolled to.",
       "effort": "L",
       "confidence": "High",
-      "fixNote": "IN PROGRESS, 4 of 5 surfaces. ProductFormModal migrated to react-hook-form + zod + FormField [310a032]. TicketCreateModal — the finding’s headline case — now produces keyed per-field zod errors with aria wiring and scroll+focus to the first invalid field [16895c5]; verified live that a blank item row flags six fields individually instead of one generic bottom-of-form string. CeoSettings FX override and the six pricing fields show inline per-field errors, FX keyed per currency so errors never leak across rows [e3281b9]. DepositNoticePage now validates at ISSUE rather than SAVE — the draft path stays permissive by design — requiring a customer name, at least one item with a description and qty, and a total above zero, with validation running before the confirm dialog opens [3937dc2]. Remaining surface: the TicketDetailPage inline forms.",
-      "fixedIn": "310a032, 16895c5, e3281b9, 3937dc2 [partial: 4 of 5 surfaces]"
+      "fixNote": "CLOSED — all 5 surfaces migrated, in reviewable slices. ProductFormModal to react-hook-form + zod + FormField [310a032]. TicketCreateModal, the headline case, now emits keyed per-field zod errors with aria wiring and scroll+focus to the first invalid field [16895c5] — verified live that a blank item row flags six fields individually instead of one generic bottom-of-form string. CeoSettings FX override and its six pricing fields [e3281b9], with FX keyed per currency so errors never cross rows. DepositNoticePage validated at ISSUE rather than SAVE so drafts stay incrementally savable, with validation running before the confirm dialog opens [3937dc2]. TicketDetailPage split in two: its 4 modal validations [e1f6c17] and its 4 inline page-body validations [6790ad8]. Zero toast-only client validations remain in the sales stack. Every guard is mutation-tested — neutering each one fails its corresponding test.",
+      "fixedIn": "310a032, 16895c5, e3281b9, 3937dc2, e1f6c17, 6790ad8",
+      "fixed": true
     },
     {
       "id": "UX-04",
