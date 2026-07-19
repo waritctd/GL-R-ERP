@@ -289,6 +289,34 @@ class AttendanceServiceTest {
         );
     }
 
+    @Test
+    void hrCanNarrowTheDayViewToOneDivision() {
+        AttendanceScope scope = attendanceService.resolveScope(user("hr", 1L), null, 42L);
+
+        assertThat(scope.divisionId()).isEqualTo(42L);
+        assertThat(scope.employeeId()).isNull();
+    }
+
+    /**
+     * The division filter is a convenience for roles that can already see everything — it must never
+     * become a way to look sideways. A ฝ่าย manager's division comes from their own principal, so a
+     * requested one is ignored outright rather than merged.
+     */
+    @Test
+    void aManagerCannotUseTheDivisionFilterToSeeAnotherDivision() {
+        AttendanceScope scope = attendanceService.resolveScope(manager("employee", 5L, 7L), null, 42L);
+
+        assertThat(scope.divisionId()).isEqualTo(7L);
+    }
+
+    @Test
+    void anEmployeeCannotUseTheDivisionFilterToWidenTheirScope() {
+        AttendanceScope scope = attendanceService.resolveScope(user("employee", 5L), null, 42L);
+
+        assertThat(scope.divisionId()).isNull();
+        assertThat(scope.employeeId()).isEqualTo(5L);
+    }
+
     private UserPrincipal user(String role, Long employeeId) {
         return new UserPrincipal(1L, role + "@glr.co.th", role, role, employeeId, true, LocalDate.now(), false, null, false);
     }

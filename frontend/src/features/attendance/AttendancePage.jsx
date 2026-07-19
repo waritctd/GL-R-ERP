@@ -57,6 +57,9 @@ export function AttendancePage({ user, showToast }) {
   // they get a single day plus a stepper.
   const [selectedDate, setSelectedDate] = useState(today);
   const [employeeId, setEmployeeId] = useState('');
+  // HR/CEO only. A ฝ่าย manager is already pinned to their own division server-side, so offering
+  // them this control would imply a reach they don't have.
+  const [divisionId, setDivisionId] = useState('');
   const [days, setDays] = useState([]);
   const [loading, setLoading] = useState(false);
   const [employeeOptions, setEmployeeOptions] = useState([]);
@@ -83,6 +86,7 @@ export function AttendancePage({ user, showToast }) {
         from: range.from,
         to: range.to,
         ...(employeeId ? { employeeId } : {}),
+        ...(divisionId ? { divisionId } : {}),
       });
       setDays(response.days || []);
       setExpandedKey(null);
@@ -91,7 +95,7 @@ export function AttendancePage({ user, showToast }) {
     } finally {
       setLoading(false);
     }
-  }, [range.from, range.to, employeeId, showToast]);
+  }, [range.from, range.to, employeeId, divisionId, showToast]);
 
   useEffect(() => {
     loadDays();
@@ -216,6 +220,31 @@ export function AttendancePage({ user, showToast }) {
   const columns = useMemo(
     () => (isSelfView ? selfColumns : teamColumns),
     [isSelfView],
+  );
+
+  // Derived from the employees the caller may already see, so the filter can never offer a ฝ่าย
+  // whose people they cannot read. Sorted by name; unnamed divisions are dropped rather than
+  // rendered as a blank option.
+  const divisionOptions = useMemo(() => {
+    const byId = new Map();
+    employeeOptions.forEach((option) => {
+      if (option.division_id && option.division_name && !byId.has(option.division_id)) {
+        byId.set(option.division_id, option.division_name);
+      }
+    });
+    return [...byId.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'th'));
+  }, [employeeOptions]);
+
+  // A manager already sees exactly one division, so the control would be a no-op for them.
+  const showDivisionFilter = canSeeUnmapped && divisionOptions.length > 1;
+
+  const employeePickerOptions = useMemo(
+    () => (divisionId
+      ? employeeOptions.filter((option) => String(option.division_id) === String(divisionId))
+      : employeeOptions),
+    [employeeOptions, divisionId],
   );
 
   const unmappedTotal = unmapped.reduce((sum, badge) => sum + (badge.punch_count || 0), 0);
@@ -361,12 +390,31 @@ export function AttendancePage({ user, showToast }) {
               <Icon name="chevronRight" />
             </Button>
           </div>
-          {employeeOptions.length > 1 ? (
+          {showDivisionFilter ? (
+            <label>
+              ฝ่าย
+              <select
+                value={divisionId}
+                onChange={(event) => {
+                  setDivisionId(event.target.value);
+                  // The chosen person may not belong to the new ฝ่าย; clearing avoids a filter pair
+                  // that silently matches nothing.
+                  setEmployeeId('');
+                }}
+              >
+                <option value="">ทุกฝ่าย</option>
+                {divisionOptions.map((division) => (
+                  <option key={division.id} value={division.id}>{division.name}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          {employeePickerOptions.length > 1 ? (
             <label>
               พนักงาน
               <select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}>
                 <option value="">ทุกคน</option>
-                {employeeOptions.map((option) => (
+                {employeePickerOptions.map((option) => (
                   <option key={option.employee_id} value={option.employee_id}>
                     {option.employee_name} · {option.employee_code}
                   </option>

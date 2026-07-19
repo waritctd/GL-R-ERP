@@ -263,6 +263,20 @@ class AttendanceDailyRepositoryIntegrationTest extends AbstractPostgresIntegrati
         assertThat(all).extracting(AttendanceEmployeeOption::employeeId).contains(stranger);
     }
 
+    /**
+     * Reads division_id, which is INTEGER in the schema — a blind (Long) cast throws at runtime.
+     * This runs on every recalculation, so it has to be exercised against a real result set.
+     */
+    @Test
+    void divisionLookupWidensTheIntegerColumnWithoutCasting() {
+        long division = insertDivision("SL4", "ฝ่ายขาย 4");
+        long withDivision = insertEmployee("E115", "E115", division, LocalDate.of(2020, 1, 1));
+        long withoutDivision = insertEmployee("E116", "E116", null, LocalDate.of(2020, 1, 1));
+
+        assertThat(repository.findDivisionId(withDivision)).isEqualTo(division);
+        assertThat(repository.findDivisionId(withoutDivision)).isNull();
+    }
+
     private void insertOvertime(long employeeId, LocalDate workDate, String status, int payable) {
         jdbc.update("""
             INSERT INTO hr.overtime_request (

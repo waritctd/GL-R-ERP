@@ -84,10 +84,11 @@ public class AttendanceController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
             java.time.LocalDate toDate,
             @RequestParam(value = "employeeId", required = false) Long employeeId,
+            @RequestParam(value = "divisionId", required = false) Long divisionId,
             HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new AttendanceDailyResponse(
-            attendanceService.listDaily(user, fromDate, toDate, employeeId));
+            attendanceService.listDaily(user, fromDate, toDate, employeeId, divisionId));
     }
 
     /** Badges that scanned but match no employee — a data-repair queue, so HR/CEO only. */

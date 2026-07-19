@@ -50,7 +50,11 @@ public class AttendanceService {
 
     /** The day view, scoped to what the caller may see. */
     public List<AttendanceDailyDto> listDaily(
-            UserPrincipal user, LocalDate fromDate, LocalDate toDate, Long requestedEmployeeId) {
+            UserPrincipal user,
+            LocalDate fromDate,
+            LocalDate toDate,
+            Long requestedEmployeeId,
+            Long requestedDivisionId) {
         LocalDate today = LocalDate.now(DEFAULT_WORK_DATE_ZONE);
         LocalDate effectiveTo = toDate == null ? today : toDate;
         LocalDate effectiveFrom = fromDate == null ? effectiveTo.withDayOfMonth(1) : fromDate;
@@ -64,7 +68,7 @@ public class AttendanceService {
                 "Date range must be shorter than " + AttendanceDailyService.MAX_RANGE_DAYS + " days");
         }
 
-        AttendanceScope scope = resolveScope(user, requestedEmployeeId);
+        AttendanceScope scope = resolveScope(user, requestedEmployeeId, requestedDivisionId);
         return dailyService.list(new AttendanceDailyFilter(
             scope.employeeId(), scope.divisionId(), effectiveFrom, effectiveTo));
     }
@@ -201,10 +205,23 @@ public class AttendanceService {
      * </ul>
      */
     AttendanceScope resolveScope(UserPrincipal user, Long requestedEmployeeId) {
+        return resolveScope(user, requestedEmployeeId, null);
+    }
+
+    /**
+     * As {@link #resolveScope(UserPrincipal, Long)}, plus an optional ฝ่าย narrowing.
+     *
+     * <p>{@code requestedDivisionId} is honoured <strong>only</strong> for hr/ceo, who can already
+     * see every division — for them it is a convenience filter, not a grant. A ฝ่าย manager's
+     * division is always taken from their own principal and the requested value is ignored
+     * outright, so the parameter can never widen anyone's access.
+     */
+    AttendanceScope resolveScope(UserPrincipal user, Long requestedEmployeeId, Long requestedDivisionId) {
         if (VIEW_ALL_ROLES.contains(user.role())) {
-            return requestedEmployeeId == null
-                ? AttendanceScope.all()
-                : new AttendanceScope(requestedEmployeeId, null);
+            if (requestedEmployeeId == null && requestedDivisionId == null) {
+                return AttendanceScope.all();
+            }
+            return new AttendanceScope(requestedEmployeeId, requestedDivisionId);
         }
         if (user.employeeId() == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "User is not linked to an employee");

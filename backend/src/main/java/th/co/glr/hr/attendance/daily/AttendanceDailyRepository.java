@@ -295,9 +295,11 @@ public class AttendanceDailyRepository {
                    concat_ws(' ', e.first_name_th, e.last_name_th) AS employee_name,
                    e.nickname AS nick_name,
                    dep.name_th AS department_name,
-                   e.division_id
+                   e.division_id,
+                   div.name_th AS division_name
               FROM hr.employee e
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
+              LEFT JOIN hr.division div ON div.division_id = e.division_id
              WHERE e.is_active = TRUE
             """);
 
@@ -315,7 +317,9 @@ public class AttendanceDailyRepository {
             rs.getString("employee_code"),
             rs.getString("employee_name"),
             rs.getString("nick_name"),
-            rs.getString("department_name")
+            rs.getString("department_name"),
+            nullableLong(rs.getObject("division_id")),
+            rs.getString("division_name")
         ));
     }
 
@@ -357,8 +361,16 @@ public class AttendanceDailyRepository {
         List<Long> found = jdbc.query(
             "SELECT division_id FROM hr.employee WHERE employee_id = :employeeId",
             new MapSqlParameterSource("employeeId", employeeId),
-            (rs, rowNum) -> (Long) rs.getObject("division_id")
+            (rs, rowNum) -> nullableLong(rs.getObject("division_id"))
         );
         return found.isEmpty() ? null : found.get(0);
+    }
+
+    /**
+     * {@code division_id} is INTEGER in the schema, so a blind {@code (Long)} cast throws
+     * ClassCastException at runtime. Widen through Number instead.
+     */
+    private static Long nullableLong(Object value) {
+        return value instanceof Number number ? number.longValue() : null;
     }
 }

@@ -1035,11 +1035,18 @@ function dashboardEmployeeScope(user) {
 function mockAttendanceScope(user, params = {}) {
   if (['hr', 'ceo'].includes(user.role)) {
     const requested = params.employeeId ? Number(params.employeeId) : null;
-    return {
-      employees: requested
-        ? db.employees.filter((employee) => employee.id === requested)
-        : db.employees,
-    };
+    // divisionId is a convenience filter for roles that already see everything — never a grant.
+    // Compared as a string: the demo dataset keys divisions by code ('HRD'), while the real schema
+    // uses an integer id. Number() would turn 'HRD' into NaN and silently disable the filter.
+    const requestedDivision = params.divisionId ? String(params.divisionId) : null;
+    let employees = db.employees;
+    if (requestedDivision) {
+      employees = employees.filter((employee) => String(employee.divisionId) === requestedDivision);
+    }
+    if (requested) {
+      employees = employees.filter((employee) => employee.id === requested);
+    }
+    return { employees };
   }
   if (!user.employeeId) fail('User is not linked to an employee', 400);
   if (dashboardManager(user) && dashboardDivisionId(user)) {
@@ -3248,6 +3255,8 @@ export const api = {
           employee_name: employee.nameTh,
           nick_name: employee.nickname ?? null,
           department_name: employee.departmentTh ?? null,
+          division_id: employee.divisionId ?? null,
+          division_name: employee.divisionTh ?? null,
         })),
       });
     },
