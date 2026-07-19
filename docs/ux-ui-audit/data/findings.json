@@ -46,6 +46,20 @@
         ],
         "newFindings": [
           "UX-37"
+        ],
+        "uxo3Slices": {
+          "done": [
+            "ProductFormModal"
+          ],
+          "remaining": [
+            "TicketCreateModal",
+            "DepositNoticePage",
+            "TicketDetailPage inline forms",
+            "CeoSettings editor"
+          ]
+        },
+        "regressionsCaught": [
+          "required asterisk stacked onto its own line (global label{display:grid}) — introduced by UX-12, fixed in 2ec3dcb, verified by real layout measurement 41px->17px"
         ]
       }
     }
@@ -130,7 +144,9 @@
       ],
       "validation": "Submit an empty TicketCreateModal; verify each required field (customer, project, product rows) shows an inline error and the first is focused/scrolled to.",
       "effort": "L",
-      "confidence": "High"
+      "confidence": "High",
+      "fixNote": "IN PROGRESS (1 of 5 surfaces). ProductFormModal migrated to react-hook-form + zod + FormField in 310a032 — price error now inline with aria-invalid/aria-describedby -> role=alert, payload shape preserved field-for-field. Remaining surfaces: TicketCreateModal, DepositNoticePage, TicketDetailPage inline forms, CeoSettings editor.",
+      "fixedIn": "310a032 (partial)"
     },
     {
       "id": "UX-04",
