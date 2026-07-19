@@ -49,10 +49,10 @@
         ],
         "uxo3Slices": {
           "done": [
-            "ProductFormModal"
+            "ProductFormModal",
+            "TicketCreateModal"
           ],
           "remaining": [
-            "TicketCreateModal",
             "DepositNoticePage",
             "TicketDetailPage inline forms",
             "CeoSettings editor"
@@ -145,8 +145,8 @@
       "validation": "Submit an empty TicketCreateModal; verify each required field (customer, project, product rows) shows an inline error and the first is focused/scrolled to.",
       "effort": "L",
       "confidence": "High",
-      "fixNote": "IN PROGRESS (1 of 5 surfaces). ProductFormModal migrated to react-hook-form + zod + FormField in 310a032 — price error now inline with aria-invalid/aria-describedby -> role=alert, payload shape preserved field-for-field. Remaining surfaces: TicketCreateModal, DepositNoticePage, TicketDetailPage inline forms, CeoSettings editor.",
-      "fixedIn": "310a032 (partial)"
+      "fixNote": "IN PROGRESS, 2 of 5 surfaces. ProductFormModal migrated to react-hook-form + zod + FormField [310a032]. TicketCreateModal — the finding’s headline case — now produces keyed per-field zod errors with aria-invalid / aria-describedby and scroll+focus to the first invalid field [16895c5]; verified live that a blank item row flags six fields individually rather than emitting one generic bottom-of-form string. react-hook-form was deliberately not forced onto TicketCreateModal’s async selectors and dynamic rows. Remaining surfaces: DepositNoticePage, TicketDetailPage inline forms, CeoSettings editor.",
+      "fixedIn": "310a032, 16895c5 [partial: 2 of 5 surfaces]"
     },
     {
       "id": "UX-04",
