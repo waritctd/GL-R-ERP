@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketListPage } from './TicketListPage.jsx';
@@ -38,6 +38,14 @@ const salesUser = {
   name: 'Sales ทดสอบ',
   role: 'sales',
 };
+
+// Commit 6: handleCreate now navigates to the new deal's page — MemoryRouter
+// doesn't touch window.location, so surface the current path via useLocation
+// for assertions instead.
+function LocationDisplay() {
+  const location = useLocation();
+  return <div data-testid="location-display">{location.pathname}</div>;
+}
 
 function renderTicketListPage() {
   const queryClient = new QueryClient({
@@ -123,7 +131,7 @@ describe('TicketListPage', () => {
         },
       ],
     });
-    api.tickets.create.mockResolvedValue({ ticket: { id: 502, code: 'PR-2026-0502' } });
+    api.tickets.create.mockResolvedValue({ ticket: { summary: { id: 502, code: 'PR-2026-0502' } } });
   });
 
   it('renders rows from a mocked api.tickets.list', async () => {
@@ -156,6 +164,30 @@ describe('TicketListPage', () => {
     await waitFor(() => expect(api.tickets.create).toHaveBeenCalledWith({ title: 'โครงการใหม่' }));
     await waitFor(() => expect(api.tickets.list).toHaveBeenCalledTimes(2));
     expect(showToast).toHaveBeenCalledWith('success', 'สร้างดีลเรียบร้อย');
+  });
+
+  // Commit 6: a newly created deal starts as an empty DRAFT with no
+  // price-request flow of its own (TicketService.create, commit 5) —
+  // handleCreate now lands the user on the deal page instead of just closing
+  // the modal, so the PricingRequestPanel prompt is the very next thing seen.
+  it('navigates to the new deal page after creating a ticket', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/tickets']}>
+          <TicketListPage user={salesUser} showToast={vi.fn()} />
+          <LocationDisplay />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText('บริษัท ทดสอบ จำกัด');
+    fireEvent.click(screen.getByRole('button', { name: /สร้างดีลใหม่/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันสร้าง (stub)' }));
+
+    await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets/502'));
   });
 
   it('filters by lifecycle, overdue, and partial delivery chips', async () => {

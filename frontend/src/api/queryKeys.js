@@ -27,4 +27,8 @@ export const queryKeys = {
   customersSearch: (q) => ['customers', 'search', q ?? ''],
   fxRates: () => ['fxRates'],
   priceCalcConfigs: () => ['priceCalcConfigs'],
+  // Commit 6 (pricing-request-foundation)
+  pricingRequestsByTicket: (ticketId) => ['pricingRequests', 'byTicket', ticketId],
+  pricingRequestQueue: (filters = {}) => ['pricingRequests', 'queue', filters.status ?? '', filters.assignedImportId ?? '', filters.activeOnly ?? true],
+  pricingRequestDetail: (id) => ['pricingRequests', 'detail', id],
 };

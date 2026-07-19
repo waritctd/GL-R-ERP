@@ -325,4 +325,20 @@ export const api = {
       body: JSON.parse(json),
     }),
   },
+  // Mirrors PricingRequestController + PricingRequestService (pricingrequest/).
+  // Detail-shaped responses (create/get/update/submit/pickup/requestInformation/
+  // respondInformation/cancel) come back wrapped as { pricingRequest }; list-shaped
+  // responses (listForTicket/queue) come back as { items }.
+  pricingRequests: {
+    listForTicket: (ticketId) => apiRequest(API_ROUTES.pricingRequests.listForTicket(ticketId)),
+    create: (ticketId, payload) => apiRequest(API_ROUTES.pricingRequests.create(ticketId), { method: 'POST', body: payload }),
+    queue: (params) => apiRequest(API_ROUTES.pricingRequests.queue(params)),
+    get: (id) => apiRequest(API_ROUTES.pricingRequests.detail(id)),
+    update: (id, payload) => apiRequest(API_ROUTES.pricingRequests.detail(id), { method: 'PUT', body: payload }),
+    submit: (id) => apiRequest(API_ROUTES.pricingRequests.submit(id), { method: 'POST' }),
+    pickup: (id) => apiRequest(API_ROUTES.pricingRequests.pickup(id), { method: 'POST' }),
+    requestInformation: (id, payload) => apiRequest(API_ROUTES.pricingRequests.requestInformation(id), { method: 'POST', body: payload }),
+    respondInformation: (id, payload) => apiRequest(API_ROUTES.pricingRequests.respondInformation(id), { method: 'POST', body: payload }),
+    cancel: (id, payload) => apiRequest(API_ROUTES.pricingRequests.cancel(id), { method: 'POST', body: payload }),
+  },
 };

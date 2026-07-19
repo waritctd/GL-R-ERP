@@ -214,10 +214,16 @@ export function TicketListPage({ user, showToast }) {
 
   const createMutation = useMutation({
     mutationFn: (payload) => api.tickets.create(payload),
-    onSuccess: () => {
+    onSuccess: (response) => {
       setCreating(false);
       showToast('success', 'สร้างดีลเรียบร้อย');
       invalidateTicketsList();
+      // Commit 6: a new deal starts as an empty DRAFT with no price-request
+      // flow of its own any more (see TicketService.create, commit 5) — land
+      // the user straight on the deal page, where PricingRequestPanel prompts
+      // them to create the pricing request that actually starts pricing.
+      const newTicketId = response?.ticket?.summary?.id;
+      if (newTicketId != null) navigate(`/tickets/${newTicketId}`);
     },
   });
 
@@ -227,7 +233,7 @@ export function TicketListPage({ user, showToast }) {
 
   return (
     <div className="page-stack">
-      <SalesTabs />
+      <SalesTabs role={user.role} />
       <PageHeader
         title="งานขาย"
         subtitle="ดีลทั้งหมด · 1 ดีล = 1 ใบขอราคา ภายใต้โครงการ"

@@ -24,6 +24,14 @@ import {
   LOST_REASONS as DEAL_LOST_REASONS,
   stageIndex as dealStageIndex,
 } from '../features/tickets/stageMeta.js';
+// PricingRequest (commit 6): status transition table + option lists shared
+// with the UI so the mock's gates can't drift from PricingRequestService's —
+// the authoritative rules live in the backend pricingrequest/ package.
+import {
+  canTransition as pricingRequestCanTransition,
+  QUANTITY_TYPE_OPTIONS as PRICING_REQUEST_QUANTITY_TYPE_OPTIONS,
+  RECIPIENT_OPTIONS as PRICING_REQUEST_RECIPIENT_OPTIONS,
+} from '../features/pricingRequests/pricingRequestMeta.js';
 
 const db = createDemoDatabase();
 
@@ -389,6 +397,99 @@ const mockNoteTemplates = [
 const mockDepositNotices = []; // used by both depositNotices and documents API groups
 let mockDocSeq = 1;
 let mockDocNumberSeq = 1;
+
+// PricingRequest (commit 6): one deal may have several pricing requests (one
+// per recipient / re-quote round). Stored as full detail records (summary
+// fields + items + its own event log) so buildPricingRequestDetail never has
+// to join across a second array.
+const mockPricingRequests = [];
+let mockPricingRequestSeq = 1;
+let mockPricingRequestItemSeq = 1;
+let mockPricingRequestEventSeq = 1;
+const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'account', 'sales_manager'];
+const PRICING_REQUEST_RECIPIENT_VALUES = PRICING_REQUEST_RECIPIENT_OPTIONS.map((o) => o.code);
+const PRICING_REQUEST_QUANTITY_TYPE_VALUES = PRICING_REQUEST_QUANTITY_TYPE_OPTIONS.map((o) => o.code);
+
+function nextPricingRequestCode() {
+  return `PCR-2026-${String(mockPricingRequestSeq).padStart(4, '0')}`;
+}
+
+function findPricingRequestRaw(id) {
+  const pr = mockPricingRequests.find((p) => p.id === Number(id));
+  if (!pr) fail('Pricing request not found', 404);
+  return pr;
+}
+
+function pushPricingRequestEvent(pr, actor, eventKind, fromStatus, toStatus, message = null, metadata = null) {
+  pr.events.push({
+    id: mockPricingRequestEventSeq++,
+    pricingRequestId: pr.id,
+    ticketId: pr.ticketId,
+    actorId: actor.id,
+    actorName: actor.name,
+    eventKind,
+    fromStatus,
+    toStatus,
+    message,
+    metadata,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+// Mirrors PricingRequestService.detail()'s join: the ticket a request belongs
+// to is looked up fresh every time (never cached on the request record), same
+// as PricingRequestSummaryDto's ticketCode/projectName/customerName/
+// ticketCreatedById fields.
+function buildPricingRequestSummary(pr) {
+  const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+  return {
+    id: pr.id,
+    requestCode: pr.requestCode,
+    ticketId: pr.ticketId,
+    ticketCode: ticket?.code ?? null,
+    projectName: ticket?.projectId ? (mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null) : null,
+    customerName: ticket?.customerName ?? null,
+    ticketCreatedById: ticket?.createdById ?? null,
+    recipientType: pr.recipientType,
+    recipientContactId: pr.recipientContactId ?? null,
+    recipientLabel: pr.recipientLabel ?? null,
+    status: pr.status,
+    requestedById: pr.requestedById,
+    requestedByName: pr.requestedByName,
+    assignedImportId: pr.assignedImportId ?? null,
+    assignedImportName: pr.assignedImportName ?? null,
+    requiredDate: pr.requiredDate ?? null,
+    customerTargetPrice: pr.customerTargetPrice ?? null,
+    targetCurrency: pr.targetCurrency ?? null,
+    note: pr.note ?? null,
+    itemCount: pr.items.length,
+    revisionNo: pr.revisionNo ?? 0,
+    parentPricingRequestId: pr.parentPricingRequestId ?? null,
+    submittedAt: pr.submittedAt ?? null,
+    pickedUpAt: pr.pickedUpAt ?? null,
+    cancelledAt: pr.cancelledAt ?? null,
+    createdAt: pr.createdAt,
+    updatedAt: pr.updatedAt,
+  };
+}
+
+function buildPricingRequestDetail(pr) {
+  return { summary: buildPricingRequestSummary(pr), items: pr.items, events: pr.events };
+}
+
+function requirePricingRequestViewable(id, user) {
+  if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('Forbidden', 403);
+  const pr = findPricingRequestRaw(id);
+  const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+  if (user.role === 'sales' && ticket?.createdById !== user.id) fail('Forbidden', 403);
+  return pr;
+}
+
+function requirePricingRequestDealActive(ticket) {
+  if ((ticket?.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+    fail(`ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket?.lifecycle}) จึงสร้าง/แก้ไขคำขอราคาไม่ได้`, 409);
+  }
+}
 
 function buildMockDoc(doc) {
   const items = doc.items ?? [];
@@ -1312,17 +1413,6 @@ function buildOvertimeRecord(record) {
   };
 }
 
-function doTransition(id, fromStatus, toStatus, kind, actor, message) {
-  const ticket = findTicketRaw(id);
-  requireActive(ticket);
-  verifyStatus(ticket, fromStatus);
-  ticket.status = toStatus;
-  ticket.updatedAt = new Date().toISOString().slice(0, 10);
-  if (toStatus === 'closed' || toStatus === 'cancelled') ticket.closedAt = ticket.updatedAt;
-  pushEvent(ticket, actor, kind, fromStatus, toStatus, message);
-  return { ticket: buildTicketDetail(ticket) };
-}
-
 function employeeWithRequestMeta(employee) {
   return {
     ...employee,
@@ -1684,7 +1774,9 @@ export const api = {
           || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')));
 
       if (active) {
-        if (owner && ticket.status === 'draft' && (ticket.items || []).length > 0) add('SUBMIT', 'operational', 'ส่งขอราคา');
+        // Ticket-level SUBMIT is retired (commit 5/6, superseded by the
+        // PricingRequest aggregate) — never advertised, so the UI never shows
+        // a button that would 409 on click.
         if (user.role === 'import' && ticket.status === 'submitted') add('PICKUP', 'operational', 'รับเรื่อง');
         if (user.role === 'import' && ['in_review', 'price_proposed', 'approved'].includes(ticket.status)) add('PROPOSE_PRICE', 'operational', 'เสนอราคา', { requiredFields: ['items'] });
         if (user.role === 'ceo' && ticket.status === 'price_proposed') {
@@ -1777,12 +1869,14 @@ export const api = {
       const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
       const code = `PR-2026-${String(nextId).padStart(4, '0')}`;
       const now = new Date().toISOString();
-      // Lightweight deal start (V50): no items → DRAFT at the lead stage, no
-      // import/CEO notification; items → the price-request flow as before.
-      const hasItems = (payload.items || []).length > 0;
+      // Every deal begins as a DRAFT at the lead stage, regardless of whether
+      // products were attached at creation time — pricing no longer starts at
+      // ticket creation (commit 5). Items attached here are preliminary deal
+      // products only; nothing reaches Import (no notification, no status
+      // change) until a PricingRequest is created and submitted separately.
       const ticket = {
         id: nextId, code, type: 'PRICE_REQUEST',
-        title: payload.title, status: hasItems ? 'submitted' : 'draft',
+        title: payload.title, status: 'draft',
         priority: payload.priority || 'NORMAL',
         createdById: user.id, createdByName: user.name,
         assignedToId: null, assignedToName: null,
@@ -1807,23 +1901,24 @@ export const api = {
           proposedPrice: null, approvedPrice: null,
           currency: item.currency || 'THB', sortOrder: i,
         })),
-        events: [hasItems
-          ? { id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'SUBMITTED', fromStatus: null, toStatus: 'submitted', message: null, createdAt: now }
-          : { id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: now }],
+        events: [{ id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: now }],
         quotation: null,
       };
       db.tickets.unshift(ticket);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
-    async submit(id) {
-      const user = hasRole('sales');
-      // Mirrors TicketService.submit: the price-request flow needs ≥1 product line.
-      const ticket = findTicketRaw(Number(id));
-      if ((ticket.items || []).length === 0) {
-        fail('ต้องเพิ่มรายการสินค้าอย่างน้อย 1 รายการก่อนส่งขอราคา', 400);
-      }
-      return delay(doTransition(Number(id), 'draft', 'submitted', 'SUBMITTED', user, null));
+    /**
+     * Deprecated: ticket-level price-request submission has been replaced by
+     * the PricingRequest aggregate (commit 5/6). 409s unconditionally, same as
+     * TicketService.submit — create a pricing request via
+     * api.pricingRequests.create + .submit instead.
+     */
+    async submit() {
+      // Mirrors TicketService.submit exactly: 409s unconditionally, regardless
+      // of status, role, or ownership — there is no more role-specific denial.
+      requireSession();
+      fail('การส่งขอราคาย้ายไปอยู่ที่ใบขอราคา (PCR) แล้ว — กรุณาสร้างใบขอราคาจากหน้าดีลแทน', 409);
     },
 
     async pickup(id) {
@@ -3735,6 +3830,311 @@ export const api = {
       hasRole('ceo', 'import');
       void json;
       return delay({ status: 'updated', factoryId: Number(factoryId) });
+    },
+  },
+
+  // Mirrors PricingRequestController + PricingRequestService (pricingrequest/).
+  pricingRequests: {
+    async listForTicket(ticketId) {
+      const user = requireSession();
+      if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('Forbidden', 403);
+      const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+      if (!ticket) fail('Ticket not found', 404);
+      // Mirrors PricingRequestService.listForTicket: sales may only see requests
+      // on tickets they created.
+      if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
+      const items = mockPricingRequests
+        .filter((pr) => pr.ticketId === Number(ticketId))
+        .map(buildPricingRequestSummary);
+      return delay({ items });
+    },
+
+    async queue(params = {}) {
+      const user = requireSession();
+      // Mirrors PricingRequestService.list: same viewer roles as a single
+      // request, plus sales is scoped to only its own created tickets.
+      if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('Forbidden', 403);
+      if (params.status && !['DRAFT', 'SUBMITTED', 'IMPORT_REVIEWING', 'MORE_INFO_REQUIRED', 'CANCELLED'].includes(params.status)) {
+        fail(`Unknown status '${params.status}'`, 400);
+      }
+      let list = mockPricingRequests;
+      if (user.role === 'sales') {
+        list = list.filter((pr) => db.tickets.find((t) => t.id === pr.ticketId)?.createdById === user.id);
+      }
+      if (params.status) list = list.filter((pr) => pr.status === params.status);
+      if (params.assignedImportId) list = list.filter((pr) => pr.assignedImportId === Number(params.assignedImportId));
+      const activeOnly = params.activeOnly === undefined || params.activeOnly === true || params.activeOnly === 'true';
+      if (activeOnly) {
+        list = list.filter((pr) => (db.tickets.find((t) => t.id === pr.ticketId)?.lifecycle ?? 'ACTIVE') === 'ACTIVE');
+      }
+      return delay({ items: list.map(buildPricingRequestSummary) });
+    },
+
+    async get(id) {
+      const user = requireSession();
+      const pr = requirePricingRequestViewable(id, user);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async create(ticketId, payload) {
+      // Mirrors PricingRequestService.createDraft: sales (deal owner), deal
+      // must be ACTIVE, and every field is validated BEFORE persisting.
+      const user = hasRole('sales');
+      const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+      if (!ticket) fail('Ticket not found', 404);
+      requirePricingRequestDealActive(ticket);
+      if (ticket.createdById !== user.id) fail('Forbidden', 403);
+      if (!PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
+        fail(`Unknown recipient type '${payload.recipientType}'`, 400);
+      }
+      if (!payload.items?.length) fail('items must not be empty', 400);
+      for (const item of payload.items) {
+        if (!PRICING_REQUEST_QUANTITY_TYPE_VALUES.includes(item.quantityType)) {
+          fail(`Unknown quantity type '${item.quantityType}'`, 400);
+        }
+      }
+      if (payload.targetCurrency && payload.targetCurrency.trim().length !== 3) {
+        fail('targetCurrency must be a 3-letter currency code', 400);
+      }
+      if (payload.recipientContactId == null && !payload.recipientLabel?.trim()) {
+        fail('ต้องระบุผู้รับคำขอราคา (recipientContactId หรือ recipientLabel)', 400);
+      }
+      const validSourceItemIds = new Set((ticket.items ?? []).map((i) => i.id));
+      for (const item of payload.items) {
+        if (item.sourceTicketItemId != null && !validSourceItemIds.has(item.sourceTicketItemId)) {
+          fail(`sourceTicketItemId ${item.sourceTicketItemId} does not belong to ticket ${ticketId}`, 400);
+        }
+      }
+
+      const now = new Date().toISOString();
+      const id = mockPricingRequestSeq++;
+      const requestCode = nextPricingRequestCode();
+      const items = payload.items.map((item, i) => ({
+        id: mockPricingRequestItemSeq++,
+        pricingRequestId: id,
+        sourceTicketItemId: item.sourceTicketItemId ?? null,
+        productId: item.productId ?? null,
+        variantId: item.variantId ?? null,
+        brand: item.brand ?? null,
+        model: item.model ?? null,
+        color: item.color ?? null,
+        texture: item.texture ?? null,
+        size: item.size ?? null,
+        factory: item.factory ?? null,
+        requestedQty: item.requestedQty,
+        requestedQtySqm: item.requestedQtySqm ?? null,
+        requestedUnit: item.requestedUnit,
+        quantityType: item.quantityType,
+        targetDeliveryDate: item.targetDeliveryDate ?? null,
+        deliveryLocation: item.deliveryLocation ?? null,
+        specialRequirement: item.specialRequirement ?? null,
+        sortOrder: i,
+      }));
+      const pr = {
+        id, requestCode, ticketId: Number(ticketId),
+        recipientType: payload.recipientType,
+        recipientContactId: payload.recipientContactId ?? null,
+        recipientLabel: payload.recipientLabel ?? null,
+        status: 'DRAFT',
+        requestedById: user.id, requestedByName: user.name,
+        assignedImportId: null, assignedImportName: null,
+        requiredDate: payload.requiredDate ?? null,
+        customerTargetPrice: payload.customerTargetPrice ?? null,
+        targetCurrency: payload.targetCurrency ?? null,
+        note: payload.note ?? null,
+        revisionNo: 0, parentPricingRequestId: null,
+        submittedAt: null, pickedUpAt: null, cancelledAt: null,
+        createdAt: now, updatedAt: now,
+        items, events: [],
+      };
+      // Deliberately no notification, no ticket status change — a draft is the
+      // rep's private scratchpad until submit() (mirrors createDraft's Javadoc).
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_CREATED', null, 'DRAFT');
+      mockPricingRequests.push(pr);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async update(id, payload) {
+      // Mirrors PricingRequestService.updateDraft: owner sales, DRAFT only.
+      const user = hasRole('sales');
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (pr.status !== 'DRAFT') fail(`Expected status 'DRAFT' but pricing request is '${pr.status}'`, 409);
+      if (payload.recipientType != null && !PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
+        fail(`Unknown recipient type '${payload.recipientType}'`, 400);
+      }
+      if (payload.items != null) {
+        for (const item of payload.items) {
+          if (!PRICING_REQUEST_QUANTITY_TYPE_VALUES.includes(item.quantityType)) {
+            fail(`Unknown quantity type '${item.quantityType}'`, 400);
+          }
+        }
+        const validSourceItemIds = new Set((ticket?.items ?? []).map((i) => i.id));
+        for (const item of payload.items) {
+          if (item.sourceTicketItemId != null && !validSourceItemIds.has(item.sourceTicketItemId)) {
+            fail(`sourceTicketItemId ${item.sourceTicketItemId} does not belong to ticket ${pr.ticketId}`, 400);
+          }
+        }
+      }
+      if (payload.targetCurrency != null && payload.targetCurrency.trim().length !== 3) {
+        fail('targetCurrency must be a 3-letter currency code', 400);
+      }
+      const effectiveContactId = payload.recipientContactId !== undefined ? payload.recipientContactId : pr.recipientContactId;
+      const effectiveLabel = payload.recipientLabel !== undefined ? payload.recipientLabel : pr.recipientLabel;
+      if ((payload.recipientContactId !== undefined || payload.recipientLabel !== undefined)
+          && effectiveContactId == null && !effectiveLabel?.trim()) {
+        fail('ต้องระบุผู้รับคำขอราคา (recipientContactId หรือ recipientLabel)', 400);
+      }
+
+      if (payload.recipientType !== undefined) pr.recipientType = payload.recipientType;
+      if (payload.recipientContactId !== undefined) pr.recipientContactId = payload.recipientContactId;
+      if (payload.recipientLabel !== undefined) pr.recipientLabel = payload.recipientLabel;
+      if (payload.requiredDate !== undefined) pr.requiredDate = payload.requiredDate;
+      if (payload.customerTargetPrice !== undefined) pr.customerTargetPrice = payload.customerTargetPrice;
+      if (payload.targetCurrency !== undefined) pr.targetCurrency = payload.targetCurrency;
+      if (payload.note !== undefined) pr.note = payload.note;
+      if (payload.items != null) {
+        pr.items = payload.items.map((item, i) => ({
+          id: mockPricingRequestItemSeq++,
+          pricingRequestId: pr.id,
+          sourceTicketItemId: item.sourceTicketItemId ?? null,
+          productId: item.productId ?? null,
+          variantId: item.variantId ?? null,
+          brand: item.brand ?? null,
+          model: item.model ?? null,
+          color: item.color ?? null,
+          texture: item.texture ?? null,
+          size: item.size ?? null,
+          factory: item.factory ?? null,
+          requestedQty: item.requestedQty,
+          requestedQtySqm: item.requestedQtySqm ?? null,
+          requestedUnit: item.requestedUnit,
+          quantityType: item.quantityType,
+          targetDeliveryDate: item.targetDeliveryDate ?? null,
+          deliveryLocation: item.deliveryLocation ?? null,
+          specialRequirement: item.specialRequirement ?? null,
+          sortOrder: i,
+        }));
+      }
+      pr.updatedAt = new Date().toISOString();
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_UPDATED', 'DRAFT', 'DRAFT');
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async submit(id) {
+      // Mirrors PricingRequestService.submit: owner sales, DRAFT only, deal
+      // ACTIVE, >=1 item, recipient identifiable, requiredDate not in the past,
+      // no duplicate sourceTicketItemId across lines.
+      const user = hasRole('sales');
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (pr.status !== 'DRAFT') fail(`Expected status 'DRAFT' but pricing request is '${pr.status}'`, 409);
+      requirePricingRequestDealActive(ticket);
+      if (pr.items.length === 0) fail('ต้องมีรายการสินค้าอย่างน้อย 1 รายการก่อนส่งคำขอราคา', 400);
+      if (pr.recipientContactId == null && !pr.recipientLabel?.trim()) fail('ต้องระบุผู้รับคำขอราคา', 400);
+      if (pr.requiredDate && new Date(pr.requiredDate) < new Date(new Date().toDateString())) {
+        fail('วันที่ต้องการต้องไม่ใช่วันที่ผ่านมาแล้ว', 400);
+      }
+      const seenSourceItemIds = new Set();
+      for (const item of pr.items) {
+        if (item.sourceTicketItemId != null) {
+          if (seenSourceItemIds.has(item.sourceTicketItemId)) fail('มีรายการอ้างอิงสินค้าเดิมซ้ำกัน', 400);
+          seenSourceItemIds.add(item.sourceTicketItemId);
+        }
+      }
+
+      const now = new Date().toISOString();
+      pr.status = 'SUBMITTED';
+      pr.submittedAt = now;
+      pr.updatedAt = now;
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_SUBMITTED', 'DRAFT', 'SUBMITTED');
+      // NotificationRepository.notifyByRole('import', ...) has no single mock
+      // equivalent (no per-role broadcast helper here) — hardcoded to the demo
+      // import user (id 7), same convention as the existing ceo hardcode
+      // (id 8) elsewhere in this file for PRICE_PROPOSED.
+      addNotification(7, pr.ticketId, ticket?.code, 'PRICING_REQUEST_SUBMITTED', `ใบขอราคา ${pr.requestCode} รอการรับเรื่อง`);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async pickup(id) {
+      // Mirrors PricingRequestService.pickup: any import user, SUBMITTED only.
+      // Assigns the PRICING REQUEST only — never sales.ticket.assigned_to (two
+      // pricing requests on the same deal may go to two different Import users).
+      const user = hasRole('import');
+      const pr = findPricingRequestRaw(id);
+      if (pr.status !== 'SUBMITTED') fail('Only a submitted pricing request can be picked up', 409);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      requirePricingRequestDealActive(ticket);
+      const now = new Date().toISOString();
+      pr.status = 'IMPORT_REVIEWING';
+      pr.assignedImportId = user.id;
+      pr.assignedImportName = user.name;
+      pr.pickedUpAt = now;
+      pr.updatedAt = now;
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_PICKED_UP', 'SUBMITTED', 'IMPORT_REVIEWING');
+      addNotification(pr.requestedById, pr.ticketId, ticket?.code, 'PRICING_REQUEST_PICKED_UP', `ใบขอราคา ${pr.requestCode} ถูกรับเรื่องแล้ว`);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async requestInformation(id, payload) {
+      // Mirrors PricingRequestService.requestInformation: only the ASSIGNED
+      // import user, IMPORT_REVIEWING only.
+      const user = hasRole('import');
+      const pr = findPricingRequestRaw(id);
+      if (pr.assignedImportId == null || pr.assignedImportId !== user.id) fail('Forbidden', 403);
+      if (pr.status !== 'IMPORT_REVIEWING') fail(`Expected status 'IMPORT_REVIEWING' but pricing request is '${pr.status}'`, 409);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      const now = new Date().toISOString();
+      pr.status = 'MORE_INFO_REQUIRED';
+      pr.updatedAt = now;
+      pushPricingRequestEvent(
+        pr, user, 'MORE_INFO_REQUESTED', 'IMPORT_REVIEWING', 'MORE_INFO_REQUIRED',
+        payload.message, payload.dueDate ? JSON.stringify({ dueDate: payload.dueDate }) : null,
+      );
+      addNotification(pr.requestedById, pr.ticketId, ticket?.code, 'MORE_INFO_REQUIRED', `ใบขอราคา ${pr.requestCode} ต้องการข้อมูลเพิ่มเติม`);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async respondInformation(id, payload) {
+      // Mirrors PricingRequestService.respondInformation: owner sales,
+      // MORE_INFO_REQUIRED only. Goes back to IMPORT_REVIEWING, not SUBMITTED —
+      // Import already owns this request; assignedImportId/pickedUpAt survive.
+      const user = hasRole('sales');
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (pr.status !== 'MORE_INFO_REQUIRED') fail(`Expected status 'MORE_INFO_REQUIRED' but pricing request is '${pr.status}'`, 409);
+      const now = new Date().toISOString();
+      pr.status = 'IMPORT_REVIEWING';
+      pr.updatedAt = now;
+      pushPricingRequestEvent(pr, user, 'MORE_INFO_RESPONDED', 'MORE_INFO_REQUIRED', 'IMPORT_REVIEWING', payload.response);
+      if (pr.assignedImportId != null) {
+        addNotification(pr.assignedImportId, pr.ticketId, ticket?.code, 'MORE_INFO_RESPONDED', `ใบขอราคา ${pr.requestCode} ได้รับข้อมูลเพิ่มเติมแล้ว`);
+      }
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async cancel(id, payload) {
+      // Mirrors PricingRequestService.cancel: owner sales OR ceo (an explicit
+      // override — unlike TicketService.cancel, which has none), any status the
+      // transition table allows into CANCELLED.
+      const user = requireSession();
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      const isOwnerOrCeo = user.role === 'ceo' || ticket?.createdById === user.id;
+      if (!isOwnerOrCeo) fail('Forbidden', 403);
+      if (!pricingRequestCanTransition(pr.status, 'CANCELLED')) {
+        fail(`Cannot cancel pricing request in status '${pr.status}'`, 409);
+      }
+      const now = new Date().toISOString();
+      const fromStatus = pr.status;
+      pr.status = 'CANCELLED';
+      pr.cancelledAt = now;
+      pr.updatedAt = now;
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_CANCELLED', fromStatus, 'CANCELLED', payload.reason, JSON.stringify({ reason: payload.reason }));
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
     },
   },
 

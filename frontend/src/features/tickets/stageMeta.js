@@ -154,14 +154,9 @@ export const PAYMENT_SUBSTEPS = [
   { code: 'FULLY_PAID',            label: 'ชำระครบแล้ว' },
 ];
 
-// Internal price workflow (keyed by ticket.status) — the inner journey of the
-// quote stages (S4+S5/QUOTE_DESIGN_SIDE, QUOTE_BUYER): sales requests the price,
-// Import proposes it, the CEO calculates/approves the confirmed price, and only
-// then can the quotation be issued. Draft sits before step 1.
-export const PRICING_SUBSTEPS = [
-  { code: 'submitted',        label: 'ส่งขอราคาแล้ว' },
-  { code: 'in_review',        label: 'Import กำลังเสนอราคา' },
-  { code: 'price_proposed',   label: 'รอ CEO อนุมัติราคา' },
-  { code: 'approved',         label: 'ราคายืนยันแล้ว' },
-  { code: 'quotation_issued', label: 'ออกใบเสนอราคาแล้ว' },
-];
+// The internal PricingRequest journey (DRAFT -> SUBMITTED -> IMPORT_REVIEWING
+// <-> MORE_INFO_REQUIRED) used to be keyed off ticket.status here as
+// PRICING_SUBSTEPS. Since commit 5 (ticket creation no longer auto-submits)
+// that status is permanently stuck at 'draft', so the substep labels moved to
+// PRICING_REQUEST_SUBSTEPS in features/pricingRequests/pricingRequestMeta.js,
+// keyed off the deal's most recent PricingRequest status instead.

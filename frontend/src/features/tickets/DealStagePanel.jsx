@@ -6,11 +6,12 @@ import {
   dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, depositPolicyLabel,
   formatThaiDate, overdueBadgeLabel, paymentStageLabel, tenderRequirementLabel,
 } from '../../utils/format.js';
+import { latestPricingRequest, PRICING_REQUEST_SUBSTEPS } from '../pricingRequests/pricingRequestMeta.js';
 import { DealStageStepper, PhaseTracker } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
 import {
   allowedTargetStages, canMarkLost, canSetStage, GATE_LABEL, nextStage,
-  PAYMENT_SUBSTEPS, PRICING_SUBSTEPS, PROCUREMENT_SUBSTEPS, stageMeta,
+  PAYMENT_SUBSTEPS, PROCUREMENT_SUBSTEPS, stageMeta,
 } from './stageMeta.js';
 import { UpdateStageModal } from './UpdateStageModal.jsx';
 
@@ -58,7 +59,7 @@ function SubstepChips({ label, steps, currentCode }) {
  * (docActions is rendered by the parent from its real `can` permission flags).
  */
 export function DealStagePanel({
-  user, summary, availableActions = [], docActions, primaryAction, guidance, actionLoading,
+  user, summary, availableActions = [], pricingRequests = [], docActions, primaryAction, guidance, actionLoading,
   deliveryProgress = null,
   onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement, onSetDepositPolicy,
 }) {
@@ -99,11 +100,15 @@ export function DealStagePanel({
   const nextHint = rawNextHint && rawNextHint !== guidance ? rawNextHint : null;
 
   // Sub-status chip rows — the inner journey of the current stage:
-  // • การขอราคา: the internal sales→Import→CEO confirmed-price flow that lives
-  //   inside the quote stages (until the customer confirms the order).
+  // • การขอราคา: the PricingRequest aggregate's own DRAFT->SUBMITTED->
+  //   IMPORT_REVIEWING(<->MORE_INFO_REQUIRED) journey (commit 6) — keyed off
+  //   the deal's most recently created pricing request, NOT ticket.status
+  //   (which is permanently stuck at 'draft' now that ticket creation no
+  //   longer auto-submits; see TicketService.create/submit, commit 5).
+  //   Renders nothing when the deal has no pricing requests yet.
   // • การชำระเงิน / การนำเข้า: replace the old Track P / Track F steppers.
-  const showPricingChips = ['submitted', 'in_review', 'price_proposed', 'approved'].includes(summary.status)
-    || (summary.status === 'quotation_issued' && summary.paymentStatus == null);
+  const latestRequest = latestPricingRequest(pricingRequests);
+  const showPricingChips = latestRequest != null && latestRequest.status !== 'CANCELLED';
   const showPaymentChips = summary.paymentStatus != null;
   const derivedPayment = paymentStageLabel(summary.paymentStage);
   const showImportChips = summary.fulfillmentStatus != null;
@@ -232,7 +237,7 @@ export function DealStagePanel({
             {(showPricingChips || showPaymentChips || showImportChips) ? (
               <div className="flex flex-col gap-1.5">
                 {showPricingChips ? (
-                  <SubstepChips label="การขอราคา:" steps={PRICING_SUBSTEPS} currentCode={summary.status} />
+                  <SubstepChips label="การขอราคา:" steps={PRICING_REQUEST_SUBSTEPS} currentCode={latestRequest.status} />
                 ) : null}
                 {showPaymentChips ? (
                   depositBypassesNotice(summary.depositPolicy) ? null : (

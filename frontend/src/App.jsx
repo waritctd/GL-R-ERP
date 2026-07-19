@@ -36,6 +36,7 @@ const DepositNoticePage = lazy(() => import('./features/deposits/DepositNoticePa
 const CeoSettingsPage = lazy(() => import('./features/ceoSettings/CeoSettingsPage.jsx').then(toDefault('CeoSettingsPage')));
 const PriceImportPage = lazy(() => import('./features/catalog/PriceImportPage.jsx').then(toDefault('PriceImportPage')));
 const CatalogSearchPage = lazy(() => import('./features/catalog/CatalogSearchPage.jsx').then(toDefault('CatalogSearchPage')));
+const PricingRequestQueuePage = lazy(() => import('./features/pricingRequests/PricingRequestQueuePage.jsx').then(toDefault('PricingRequestQueuePage')));
 
 // Thin wrappers that source the ticket id from the URL for the frozen sales
 // pages (they already fetch by id internally — branch 5 only rewires how the
@@ -285,6 +286,10 @@ export function App() {
                 <Route
                   path="/tickets/:ticketId/deposit"
                   element={<DepositNoticeRoute user={user} showToast={showToast} />}
+                />
+                <Route
+                  path="/pricing-requests"
+                  element={<PricingRequestQueuePage user={user} showToast={showToast} />}
                 />
                 <Route
                   path="/commissions"
