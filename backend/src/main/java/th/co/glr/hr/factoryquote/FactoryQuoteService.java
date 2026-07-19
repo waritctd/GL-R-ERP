@@ -7,15 +7,20 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
+import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.factory.FactoryConfigDto;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.factory.FactoryEmailService;
+import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteAttachmentDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
+import th.co.glr.hr.factoryquote.FactoryQuoteRepository.FactoryQuoteEmailDispatchDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkNotAvailableRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
@@ -57,16 +62,19 @@ public class FactoryQuoteService {
     private final FactoryConfigRepository factoryConfigs;
     private final FactoryEmailService factoryEmail;
     private final NotificationRepository notifications;
+    private final FileStorageService fileStorage;
 
     public FactoryQuoteService(FactoryQuoteRepository quotes, PricingRequestRepository pricingRequests,
                                TicketRepository tickets, FactoryConfigRepository factoryConfigs,
-                               FactoryEmailService factoryEmail, NotificationRepository notifications) {
+                               FactoryEmailService factoryEmail, NotificationRepository notifications,
+                               FileStorageService fileStorage) {
         this.quotes = quotes;
         this.pricingRequests = pricingRequests;
         this.tickets = tickets;
         this.factoryConfigs = factoryConfigs;
         this.factoryEmail = factoryEmail;
         this.notifications = notifications;
+        this.fileStorage = fileStorage;
     }
 
     @Transactional
@@ -128,7 +136,6 @@ public class FactoryQuoteService {
         return requireQuote(quoteId);
     }
 
-    @Transactional
     public FactoryQuoteDto send(long quoteId, SendFactoryQuoteRequest request, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
         FactoryQuoteDto quote = requireQuote(quoteId);
@@ -144,11 +151,103 @@ public class FactoryQuoteService {
         if (emailTo == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Factory email recipient is required");
         }
-        int rows = quotes.markRequested(quoteId, emailTo, subject, body, actor.id());
-        if (rows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "Only draft factory quote emails can be sent");
+        String clientRequestId = validateClientRequestId(request.clientRequestId());
+        FactoryQuoteEmailDispatchDto dispatch = dispatchForSend(quoteId, clientRequestId, emailTo, subject, body, actor);
+        if ("SENT".equals(dispatch.status()) || "SENDING".equals(dispatch.status())) {
+            return requireQuote(quoteId);
         }
-        factoryEmail.send(summary.ticketId(), quote.factoryName(), emailTo, subject, body);
+        if (quotes.claimDispatch(dispatch.id()) == 0) {
+            return requireQuote(quoteId);
+        }
+        try {
+            factoryEmail.send(summary.ticketId(), quote.factoryName(), dispatch.emailTo(), dispatch.emailSubject(), dispatch.emailBody());
+            finalizeSuccessfulSend(quoteId, dispatch, actor);
+        } catch (RuntimeException exception) {
+            quotes.markDispatchFailed(dispatch.id(), exception.getMessage());
+            throw exception;
+        }
+        return requireQuote(quoteId);
+    }
+
+    @Transactional
+    public FactoryQuoteAttachmentDto uploadAttachment(long quoteId, MultipartFile file, UserPrincipal actor) {
+        requireRole(actor, IMPORT_ROLES);
+        FactoryQuoteDto quote = requireQuote(quoteId);
+        PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
+        requireMutablePricingRequest(summary, MUTABLE_STATUSES);
+        requireActiveDeal(summary.ticketId());
+        FileStorageService.StoredFile stored = fileStorage.store("factory-quotes", quoteId, file, Set.of());
+        FactoryQuoteAttachmentDto attachment = quotes.saveAttachment(quoteId, stored.fileName(), stored.filePath(),
+            stored.mimeType(), stored.fileSize(), actor.id());
+        addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_RECEIVED, summary.status(), summary.status(),
+            "Factory quote attachment uploaded for " + quote.factoryName() + ": " + attachment.fileName());
+        return attachment;
+    }
+
+    public FactoryQuoteAttachmentDto getAttachment(long attachmentId, UserPrincipal actor) {
+        requireRole(actor, RAW_QUOTE_ROLES);
+        FactoryQuoteAttachmentDto attachment = quotes.findAttachment(attachmentId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Factory quote attachment not found"));
+        requireQuote(attachment.factoryQuoteId());
+        return attachment;
+    }
+
+    public String attachmentFilePath(long attachmentId, UserPrincipal actor) {
+        getAttachment(attachmentId, actor);
+        String path = quotes.findAttachmentFilePath(attachmentId);
+        if (path == null) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "Factory quote attachment file not found");
+        }
+        return path;
+    }
+
+    @Transactional
+    public void deleteAttachment(long attachmentId, UserPrincipal actor) {
+        requireRole(actor, IMPORT_ROLES);
+        FactoryQuoteAttachmentDto attachment = quotes.findAttachment(attachmentId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Factory quote attachment not found"));
+        FactoryQuoteDto quote = requireQuote(attachment.factoryQuoteId());
+        PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
+        requireMutablePricingRequest(summary, MUTABLE_STATUSES);
+        String path = quotes.findAttachmentFilePath(attachmentId);
+        quotes.deleteAttachment(attachmentId);
+        if (path != null) {
+            try {
+                java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(path));
+            } catch (java.io.IOException ignored) {
+                // Metadata removal is authoritative; a missing local file should not fail the workflow.
+            }
+        }
+    }
+
+    private FactoryQuoteEmailDispatchDto dispatchForSend(long quoteId, String clientRequestId, String emailTo,
+                                                         String subject, String body, UserPrincipal actor) {
+        FactoryQuoteEmailDispatchDto existingForClient = quotes.findDispatchByClientRequest(actor.id(), clientRequestId)
+            .orElse(null);
+        if (existingForClient != null) {
+            if (existingForClient.factoryQuoteId() != quoteId) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "clientRequestId has already been used for another factory quote");
+            }
+            return existingForClient;
+        }
+        FactoryQuoteEmailDispatchDto active = quotes.findActiveDispatch(quoteId).orElse(null);
+        if (active != null) {
+            return active;
+        }
+        return quotes.createDispatch(quoteId, clientRequestId, emailTo, subject, body, actor.id());
+    }
+
+    private void finalizeSuccessfulSend(long quoteId, FactoryQuoteEmailDispatchDto dispatch, UserPrincipal actor) {
+        FactoryQuoteDto quote = requireQuote(quoteId);
+        PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
+        int rows = quotes.markRequested(quoteId, dispatch.emailTo(), dispatch.emailSubject(), dispatch.emailBody(), actor.id());
+        if (rows == 0) {
+            FactoryQuoteDto latest = requireQuote(quoteId);
+            if (!FactoryQuoteStatus.REQUESTED.equals(latest.status())) {
+                throw new ApiException(HttpStatus.CONFLICT, "Only draft factory quote emails can be sent");
+            }
+        }
         String toStatus = summary.status();
         if (PricingRequestStatus.IMPORT_REVIEWING.equals(summary.status())
                 || PricingRequestStatus.COSTING_IN_PROGRESS.equals(summary.status())) {
@@ -163,7 +262,7 @@ public class FactoryQuoteService {
             toStatus, "Factory request sent to " + quote.factoryName());
         notifyCeo(summary, PricingRequestEventKind.FACTORY_EMAIL_SENT,
             "ใบขอราคา " + summary.requestCode() + " ส่งคำขอโรงงาน " + quote.factoryName());
-        return requireQuote(quoteId);
+        quotes.markDispatchSent(dispatch.id());
     }
 
     @Transactional
@@ -187,8 +286,9 @@ public class FactoryQuoteService {
             }
             quotes.replaceResponseItems(quoteId, normalizedItems);
             String toStatus = summary.status();
-            if (PricingRequestStatus.IMPORT_REVIEWING.equals(summary.status())) {
-                int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.IMPORT_REVIEWING,
+            if (PricingRequestStatus.IMPORT_REVIEWING.equals(summary.status())
+                    || PricingRequestStatus.AWAITING_FACTORY_RESPONSE.equals(summary.status())) {
+                int transitioned = pricingRequests.transition(summary.id(), summary.status(),
                     PricingRequestStatus.COSTING_IN_PROGRESS, null, null);
                 if (transitioned == 0) {
                     throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
@@ -442,5 +542,16 @@ public class FactoryQuoteService {
             default -> throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
                 "Unsupported factory quote unit '" + value + "'");
         };
+    }
+
+    private String validateClientRequestId(String clientRequestId) {
+        if (clientRequestId == null || clientRequestId.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId must be a UUID");
+        }
+        try {
+            return UUID.fromString(clientRequestId.trim()).toString();
+        } catch (IllegalArgumentException e) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId must be a UUID");
+        }
     }
 }

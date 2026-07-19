@@ -4,15 +4,26 @@ import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Map;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteAttachmentDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkNotAvailableRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
@@ -103,5 +114,39 @@ public class FactoryQuoteController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         return Map.of("factoryQuote", factoryQuotes.markNotAvailable(factoryQuoteId, request, user));
+    }
+
+    @PostMapping("/factory-quotes/{factoryQuoteId}/attachments")
+    Map<String, FactoryQuoteAttachmentDto> uploadAttachment(
+        @PathVariable long factoryQuoteId,
+        @RequestParam("file") MultipartFile file,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("attachment", factoryQuotes.uploadAttachment(factoryQuoteId, file, user));
+    }
+
+    @GetMapping("/factory-quote-attachments/{attachmentId}/file")
+    ResponseEntity<Resource> downloadAttachment(@PathVariable long attachmentId, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        FactoryQuoteAttachmentDto attachment = factoryQuotes.getAttachment(attachmentId, user);
+        String path = factoryQuotes.attachmentFilePath(attachmentId, user);
+        Resource resource = new FileSystemResource(path);
+        if (!resource.exists()) {
+            throw new ApiException(org.springframework.http.HttpStatus.NOT_FOUND, "Factory quote attachment file not found");
+        }
+        String mime = attachment.mimeType() != null ? attachment.mimeType() : MediaType.APPLICATION_OCTET_STREAM_VALUE;
+        return ResponseEntity.ok()
+            .contentType(MediaType.parseMediaType(mime))
+            .header(HttpHeaders.CONTENT_DISPOSITION,
+                ContentDisposition.attachment().filename(attachment.fileName()).build().toString())
+            .body(resource);
+    }
+
+    @DeleteMapping("/factory-quote-attachments/{attachmentId}")
+    Map<String, Boolean> deleteAttachment(@PathVariable long attachmentId, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        factoryQuotes.deleteAttachment(attachmentId, user);
+        return Map.of("ok", true);
     }
 }

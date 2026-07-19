@@ -21,7 +21,8 @@ public final class FactoryQuoteRequests {
     public record SendFactoryQuoteRequest(
         String emailTo,
         String emailSubject,
-        String emailBody
+        String emailBody,
+        @NotBlank String clientRequestId
     ) {}
 
     public record ReceiveFactoryQuoteRequest(

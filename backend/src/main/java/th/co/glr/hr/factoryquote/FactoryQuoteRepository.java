@@ -10,7 +10,9 @@ import java.util.Optional;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteAttachmentDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteItemDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
@@ -121,6 +123,115 @@ public class FactoryQuoteRepository {
                 .addValue("subject", subject)
                 .addValue("body", body)
                 .addValue("actorId", actorId));
+    }
+
+    public Optional<FactoryQuoteEmailDispatchDto> findDispatchByClientRequest(long actorId, String clientRequestId) {
+        try {
+            FactoryQuoteEmailDispatchDto dto = jdbc.queryForObject("""
+                SELECT factory_quote_email_dispatch_id, factory_quote_id, client_request_id::text AS client_request_id,
+                       status, email_to, email_subject, email_body, created_by, created_at,
+                       sending_at, sent_at, failed_at, failure_message
+                  FROM sales.factory_quote_email_dispatch
+                 WHERE created_by = :actorId
+                   AND client_request_id = CAST(:clientRequestId AS uuid)
+                """,
+                new MapSqlParameterSource()
+                    .addValue("actorId", actorId)
+                    .addValue("clientRequestId", clientRequestId),
+                (rs, rowNum) -> mapDispatch(rs));
+            return Optional.ofNullable(dto);
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    public FactoryQuoteEmailDispatchDto createDispatch(long quoteId, String clientRequestId, String emailTo,
+                                                       String subject, String body, long actorId) {
+        GeneratedKeyHolder key = new GeneratedKeyHolder();
+        jdbc.update("""
+            INSERT INTO sales.factory_quote_email_dispatch
+                (factory_quote_id, client_request_id, email_to, email_subject, email_body, created_by)
+            VALUES
+                (:quoteId, CAST(:clientRequestId AS uuid), :emailTo, :subject, :body, :actorId)
+            """,
+            new MapSqlParameterSource()
+                .addValue("quoteId", quoteId)
+                .addValue("clientRequestId", clientRequestId)
+                .addValue("emailTo", emailTo)
+                .addValue("subject", subject)
+                .addValue("body", body)
+                .addValue("actorId", actorId),
+            key, new String[]{"factory_quote_email_dispatch_id"});
+        return findDispatch(key.getKey().longValue()).orElseThrow();
+    }
+
+    public Optional<FactoryQuoteEmailDispatchDto> findActiveDispatch(long quoteId) {
+        try {
+            FactoryQuoteEmailDispatchDto dto = jdbc.queryForObject("""
+                SELECT factory_quote_email_dispatch_id, factory_quote_id, client_request_id::text AS client_request_id,
+                       status, email_to, email_subject, email_body, created_by, created_at,
+                       sending_at, sent_at, failed_at, failure_message
+                  FROM sales.factory_quote_email_dispatch
+                 WHERE factory_quote_id = :quoteId
+                   AND status IN ('PENDING', 'SENDING', 'SENT')
+                 ORDER BY factory_quote_email_dispatch_id DESC
+                 LIMIT 1
+                """, Map.of("quoteId", quoteId), (rs, rowNum) -> mapDispatch(rs));
+            return Optional.ofNullable(dto);
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    public Optional<FactoryQuoteEmailDispatchDto> findDispatch(long dispatchId) {
+        try {
+            FactoryQuoteEmailDispatchDto dto = jdbc.queryForObject("""
+                SELECT factory_quote_email_dispatch_id, factory_quote_id, client_request_id::text AS client_request_id,
+                       status, email_to, email_subject, email_body, created_by, created_at,
+                       sending_at, sent_at, failed_at, failure_message
+                  FROM sales.factory_quote_email_dispatch
+                 WHERE factory_quote_email_dispatch_id = :dispatchId
+                """, Map.of("dispatchId", dispatchId), (rs, rowNum) -> mapDispatch(rs));
+            return Optional.ofNullable(dto);
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    public int claimDispatch(long dispatchId) {
+        return jdbc.update("""
+            UPDATE sales.factory_quote_email_dispatch
+               SET status = 'SENDING',
+                   sending_at = now(),
+                   failed_at = NULL,
+                   failure_message = NULL
+             WHERE factory_quote_email_dispatch_id = :dispatchId
+               AND status IN ('PENDING', 'FAILED')
+            """, Map.of("dispatchId", dispatchId));
+    }
+
+    public void markDispatchSent(long dispatchId) {
+        jdbc.update("""
+            UPDATE sales.factory_quote_email_dispatch
+               SET status = 'SENT',
+                   sent_at = now(),
+                   failed_at = NULL,
+                   failure_message = NULL
+             WHERE factory_quote_email_dispatch_id = :dispatchId
+            """, Map.of("dispatchId", dispatchId));
+    }
+
+    public void markDispatchFailed(long dispatchId, String message) {
+        jdbc.update("""
+            UPDATE sales.factory_quote_email_dispatch
+               SET status = 'FAILED',
+                   failed_at = now(),
+                   failure_message = :message
+             WHERE factory_quote_email_dispatch_id = :dispatchId
+               AND status = 'SENDING'
+            """, new MapSqlParameterSource()
+                .addValue("dispatchId", dispatchId)
+                .addValue("message", message));
     }
 
     public int cancelOpenForPricingRequest(long pricingRequestId, String reason, long actorId) {
@@ -325,7 +436,7 @@ public class FactoryQuoteRepository {
     public Optional<FactoryQuoteDto> find(long quoteId) {
         try {
             FactoryQuoteDto quote = jdbc.queryForObject(baseSelect() + " WHERE fq.factory_quote_id = :quoteId",
-                Map.of("quoteId", quoteId), (rs, rowNum) -> mapQuote(rs, findItems(quoteId)));
+                Map.of("quoteId", quoteId), (rs, rowNum) -> mapQuote(rs, findItems(quoteId), findAttachments(quoteId)));
             return Optional.ofNullable(quote);
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
@@ -337,10 +448,10 @@ public class FactoryQuoteRepository {
              WHERE fq.pricing_request_id = :pricingRequestId
              ORDER BY fq.factory_name_snapshot, fq.revision_no
             """,
-            Map.of("pricingRequestId", pricingRequestId),
-            (rs, rowNum) -> {
-                long id = rs.getLong("factory_quote_id");
-                return mapQuote(rs, findItems(id));
+                Map.of("pricingRequestId", pricingRequestId),
+                (rs, rowNum) -> {
+                    long id = rs.getLong("factory_quote_id");
+                return mapQuote(rs, findItems(id), findAttachments(id));
             });
     }
 
@@ -353,7 +464,10 @@ public class FactoryQuoteRepository {
                    AND fq.status <> 'CANCELLED'
                 """,
                 Map.of("pricingRequestId", pricingRequestId, "factoryName", factoryName),
-                (rs, rowNum) -> mapQuote(rs, findItems(rs.getLong("factory_quote_id"))));
+                (rs, rowNum) -> {
+                    long id = rs.getLong("factory_quote_id");
+                    return mapQuote(rs, findItems(id), findAttachments(id));
+                });
             return Optional.ofNullable(quote);
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
@@ -373,6 +487,73 @@ public class FactoryQuoteRepository {
             """, Map.of("quoteId", quoteId), (rs, rowNum) -> mapItem(rs));
     }
 
+    public List<FactoryQuoteAttachmentDto> findAttachments(long quoteId) {
+        return jdbc.query("""
+            SELECT attachment_id, owner_id AS factory_quote_id, file_name, mime_type,
+                   file_size, uploaded_by, uploaded_at
+              FROM hr.file_attachment
+             WHERE domain = 'factory_quote'
+               AND owner_id = :quoteId
+             ORDER BY uploaded_at DESC, attachment_id DESC
+            """, Map.of("quoteId", quoteId), (rs, rowNum) -> mapAttachment(rs));
+    }
+
+    public FactoryQuoteAttachmentDto saveAttachment(long quoteId, String fileName, String filePath,
+                                                    String mimeType, Long fileSize, long uploadedBy) {
+        GeneratedKeyHolder key = new GeneratedKeyHolder();
+        jdbc.update("""
+            INSERT INTO hr.file_attachment
+                (domain, owner_id, file_name, file_path, mime_type, file_size, uploaded_by)
+            VALUES
+                ('factory_quote', :quoteId, :fileName, :filePath, :mimeType, :fileSize, :uploadedBy)
+            """,
+            new MapSqlParameterSource()
+                .addValue("quoteId", quoteId)
+                .addValue("fileName", fileName)
+                .addValue("filePath", filePath)
+                .addValue("mimeType", mimeType)
+                .addValue("fileSize", fileSize)
+                .addValue("uploadedBy", uploadedBy),
+            key, new String[]{"attachment_id"});
+        return findAttachment(key.getKey().longValue()).orElseThrow();
+    }
+
+    public Optional<FactoryQuoteAttachmentDto> findAttachment(long attachmentId) {
+        try {
+            FactoryQuoteAttachmentDto dto = jdbc.queryForObject("""
+                SELECT attachment_id, owner_id AS factory_quote_id, file_name, mime_type,
+                       file_size, uploaded_by, uploaded_at
+                  FROM hr.file_attachment
+                 WHERE attachment_id = :attachmentId
+                   AND domain = 'factory_quote'
+                """, Map.of("attachmentId", attachmentId), (rs, rowNum) -> mapAttachment(rs));
+            return Optional.ofNullable(dto);
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    public String findAttachmentFilePath(long attachmentId) {
+        try {
+            return jdbc.queryForObject("""
+                SELECT file_path
+                  FROM hr.file_attachment
+                 WHERE attachment_id = :attachmentId
+                   AND domain = 'factory_quote'
+                """, Map.of("attachmentId", attachmentId), String.class);
+        } catch (EmptyResultDataAccessException e) {
+            return null;
+        }
+    }
+
+    public void deleteAttachment(long attachmentId) {
+        jdbc.update("""
+            DELETE FROM hr.file_attachment
+             WHERE attachment_id = :attachmentId
+               AND domain = 'factory_quote'
+            """, Map.of("attachmentId", attachmentId));
+    }
+
     private String baseSelect() {
         return """
             SELECT factory_quote_id, quote_code, pricing_request_id, factory_id, factory_name_snapshot,
@@ -385,7 +566,8 @@ public class FactoryQuoteRepository {
             """;
     }
 
-    private FactoryQuoteDto mapQuote(ResultSet rs, List<FactoryQuoteItemDto> items) throws SQLException {
+    private FactoryQuoteDto mapQuote(ResultSet rs, List<FactoryQuoteItemDto> items,
+                                     List<FactoryQuoteAttachmentDto> attachments) throws SQLException {
         return new FactoryQuoteDto(
             rs.getLong("factory_quote_id"),
             rs.getString("quote_code"),
@@ -413,7 +595,8 @@ public class FactoryQuoteRepository {
             rs.getBoolean("is_current"),
             rs.getTimestamp("created_at").toInstant(),
             rs.getTimestamp("updated_at").toInstant(),
-            items
+            items,
+            attachments
         );
     }
 
@@ -445,6 +628,36 @@ public class FactoryQuoteRepository {
         return rs.wasNull() ? null : value;
     }
 
+    private FactoryQuoteAttachmentDto mapAttachment(ResultSet rs) throws SQLException {
+        return new FactoryQuoteAttachmentDto(
+            rs.getLong("attachment_id"),
+            rs.getLong("factory_quote_id"),
+            rs.getString("file_name"),
+            rs.getString("mime_type"),
+            nullableLong(rs, "file_size"),
+            rs.getLong("uploaded_by"),
+            rs.getTimestamp("uploaded_at").toInstant()
+        );
+    }
+
+    private FactoryQuoteEmailDispatchDto mapDispatch(ResultSet rs) throws SQLException {
+        return new FactoryQuoteEmailDispatchDto(
+            rs.getLong("factory_quote_email_dispatch_id"),
+            rs.getLong("factory_quote_id"),
+            rs.getString("client_request_id"),
+            rs.getString("status"),
+            rs.getString("email_to"),
+            rs.getString("email_subject"),
+            rs.getString("email_body"),
+            nullableLong(rs, "created_by"),
+            instant(rs, "created_at"),
+            instant(rs, "sending_at"),
+            instant(rs, "sent_at"),
+            instant(rs, "failed_at"),
+            rs.getString("failure_message")
+        );
+    }
+
     private java.time.Instant instant(ResultSet rs, String column) throws SQLException {
         Timestamp ts = rs.getTimestamp(column);
         return ts == null ? null : ts.toInstant();
@@ -457,4 +670,20 @@ public class FactoryQuoteRepository {
     private String normalizeCurrency(String currency) {
         return currency == null ? null : currency.trim().toUpperCase();
     }
+
+    public record FactoryQuoteEmailDispatchDto(
+        long id,
+        long factoryQuoteId,
+        String clientRequestId,
+        String status,
+        String emailTo,
+        String emailSubject,
+        String emailBody,
+        Long createdBy,
+        java.time.Instant createdAt,
+        java.time.Instant sendingAt,
+        java.time.Instant sentAt,
+        java.time.Instant failedAt,
+        String failureMessage
+    ) {}
 }

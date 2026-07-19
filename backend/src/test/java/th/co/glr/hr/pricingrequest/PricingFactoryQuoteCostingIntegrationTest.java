@@ -3,6 +3,8 @@ package th.co.glr.hr.pricingrequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -12,6 +14,8 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
+import org.springframework.mock.web.MockMultipartFile;
+import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactRepository;
@@ -26,6 +30,7 @@ import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
+import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteAttachmentDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
@@ -59,6 +64,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     private PricingRequestService pricingRequestService;
     private FactoryQuoteService factoryQuoteService;
     private PricingCostingService costingService;
+    private FactoryEmailService factoryEmail;
 
     private long salesRepId;
     private long importUserId;
@@ -88,9 +94,10 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         pricingRequestService = new PricingRequestService(
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc));
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
-        FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
+        factoryEmail = mock(FactoryEmailService.class);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications);
+            new FactoryConfigRepository(jdbc), factoryEmail, notifications,
+            new FileStorageService("/tmp/glr-pricing-test-uploads"));
         costingService = new PricingCostingService(new PricingCostingRepository(jdbc), pricingRequests,
             factoryQuotes, tickets, new FxRateRepository(jdbc), new PriceCalcConfigRepository(jdbc),
             new FactoryConfigRepository(jdbc), notifications);
@@ -148,11 +155,19 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         FactoryQuoteDto factoryB = quoteFor(drafts, "Factory B");
 
         factoryQuoteService.send(factoryA.id(),
-            new SendFactoryQuoteRequest("factory-a@example.com", null, null), secondImportActor);
+            new SendFactoryQuoteRequest("factory-a@example.com", null, null,
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"), secondImportActor);
         factoryQuoteService.send(factoryB.id(),
-            new SendFactoryQuoteRequest("factory-b@example.com", null, null), secondImportActor);
+            new SendFactoryQuoteRequest("factory-b@example.com", null, null,
+                "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"), secondImportActor);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*)
+              FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id
+               AND event_kind = 'FACTORY_EMAIL_SENT'
+            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(2L);
 
         FactoryQuoteDto factoryARevision1 = factoryQuoteService.receive(factoryA.id(),
             response("REF-A-1", "THB", "120.00", factoryA.items().get(0).pricingRequestItemId()), importActor);
@@ -268,6 +283,109 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThatThrownBy(() -> costingService.createDraft(secondPricingRequestId,
             new CreateCostingRequest("second", costingClientRequestId), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    @Test
+    void factoryQuoteSendIsIdempotentForClientRequestIdAndDoesNotSendTwice() {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId,
+            pricingRequest("33333333-3333-4333-8333-333333333333"), salesActor).summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
+
+        SendFactoryQuoteRequest send = new SendFactoryQuoteRequest("factory-a@example.com", "Subject", "Body",
+            "dddddddd-dddd-4ddd-8ddd-dddddddddddd");
+        factoryQuoteService.send(draft.id(), send, importActor);
+        factoryQuoteService.send(draft.id(), send, importActor);
+
+        verify(factoryEmail, times(1)).send(ticketId, "Factory A", "factory-a@example.com", "Subject", "Body");
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*)
+              FROM sales.factory_quote_email_dispatch
+             WHERE factory_quote_id = :quoteId
+               AND status = 'SENT'
+            """, Map.of("quoteId", draft.id()), Long.class)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*)
+              FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id
+               AND event_kind = 'FACTORY_EMAIL_SENT'
+            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
+    }
+
+    @Test
+    void directManualResponseFromDraftMovesPricingRequestToCostingInProgress() {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId,
+            pricingRequest("44444444-4444-4444-8444-444444444444"), salesActor).summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
+
+        factoryQuoteService.receive(draft.id(),
+            response("REF-DIRECT", "THB", "100.00", draft.items().get(0).pricingRequestItemId()), importActor);
+
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.COSTING_IN_PROGRESS);
+    }
+
+    @Test
+    void factoryQuoteAttachmentsAreRawQuoteOnlyAndVisibleToCeo() {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId,
+            pricingRequest("55555555-5555-4555-8555-555555555555"), salesActor).summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
+
+        FactoryQuoteAttachmentDto attachment = factoryQuoteService.uploadAttachment(draft.id(),
+            new MockMultipartFile("file", "factory-a.pdf", "application/pdf", "quote".getBytes()),
+            importActor);
+
+        assertThat(factoryQuoteService.get(draft.id(), ceoActor).attachments())
+            .extracting(FactoryQuoteAttachmentDto::id)
+            .contains(attachment.id());
+        assertThatThrownBy(() -> factoryQuoteService.getAttachment(attachment.id(), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    @Test
+    void unitConversionRejectsMissingBoxConversionBeforeCosting() {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId,
+            pricingRequest("66666666-6666-4666-8666-666666666666"), salesActor).summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
+
+        ReceiveFactoryQuoteRequest badBox = new ReceiveFactoryQuoteRequest("REF-BOX", "THB", "30 days", "45 days",
+            "revision", "note", List.of(new ReceiveFactoryQuoteItemRequest(
+                draft.items().get(0).pricingRequestItemId(), null, null, new BigDecimal("1.00"),
+                "PER_BOX", "PER_BOX", new BigDecimal("120.00"), "THB", null, null, null,
+                "45 days", null, null)));
+
+        assertThatThrownBy(() -> factoryQuoteService.receive(draft.id(), badBox, importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+    }
+
+    @Test
+    void customerChangeRevisionSupersedesPriorRequestAndCreatesNewDraftRevision() {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId,
+            pricingRequest("88888888-8888-4888-8888-888888888888"), salesActor).summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+
+        PricingRequestRequests.CustomerChangeRevisionRequest revision =
+            new PricingRequestRequests.CustomerChangeRevisionRequest(
+                "Customer changed size", "12121212-1212-4212-8212-121212121212",
+                PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(20),
+                new BigDecimal("1200.00"), "THB", "revision request",
+                List.of(pricingItem("SCG", "Tile A revised", "Factory A", new BigDecimal("12"))));
+        PricingRequestDtos.PricingRequestDetailDto created =
+            pricingRequestService.createCustomerChangeRevision(pricingRequestId, revision, salesActor);
+
+        assertThat(created.summary().status()).isEqualTo(PricingRequestStatus.DRAFT);
+        assertThat(created.summary().revisionNo()).isEqualTo(2);
+        assertThat(created.summary().parentPricingRequestId()).isEqualTo(pricingRequestId);
+        assertThat(pricingRequestService.get(pricingRequestId, ceoActor).summary().status())
+            .isEqualTo(PricingRequestStatus.SUPERSEDED);
     }
 
     private void markAllFactoriesReady(long pricingRequestId) {

@@ -361,6 +361,23 @@ export const api = {
     pickup: (id) => apiRequest(API_ROUTES.pricingRequests.pickup(id), { method: 'POST' }),
     requestInformation: (id, payload) => apiRequest(API_ROUTES.pricingRequests.requestInformation(id), { method: 'POST', body: payload }),
     respondInformation: (id, payload) => apiRequest(API_ROUTES.pricingRequests.respondInformation(id), { method: 'POST', body: payload }),
+    createCustomerChangeRevision: (id, payload) => apiRequest(API_ROUTES.pricingRequests.customerChangeRevision(id), { method: 'POST', body: payload }),
+    uploadFactoryQuoteAttachment: async (id, file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(API_ROUTES.pricingRequests.factoryQuoteAttachments(id), {
+        method: 'POST',
+        credentials: 'include',
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'Upload failed');
+      }
+      return res.json();
+    },
+    factoryQuoteAttachmentUrl: (id) => API_ROUTES.pricingRequests.factoryQuoteAttachmentFile(id),
+    deleteFactoryQuoteAttachment: (id) => apiRequest(API_ROUTES.pricingRequests.factoryQuoteAttachment(id), { method: 'DELETE' }),
     cancel: (id, payload) => apiRequest(API_ROUTES.pricingRequests.cancel(id), { method: 'POST', body: payload }),
   },
 };

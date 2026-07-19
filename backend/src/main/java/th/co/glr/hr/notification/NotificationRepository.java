@@ -95,6 +95,7 @@ public class NotificationRepository {
         // TicketEventKind.SUBMITTED) so a pricing-request notification is no
         // longer indistinguishable from a ticket-submitted one.
         Map.entry("PRICING_REQUEST_SUBMITTED", "มีคำขอราคาใหม่"),
+        Map.entry("PRICING_REQUEST_REVISED", "คำขอราคามี revision ใหม่"),
         Map.entry("PICKED_UP", "คำขอราคาถูกรับเรื่องแล้ว"),
         Map.entry("FACTORY_EMAIL_READY", "ร่างอีเมลโรงงานพร้อมตรวจ"),
         Map.entry("FACTORY_EMAIL_SENT", "ส่งคำขอโรงงานแล้ว"),

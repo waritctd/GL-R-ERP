@@ -410,6 +410,7 @@ const mockFactoryQuotes = [];
 const mockPricingCostings = [];
 let mockFactoryQuoteSeq = 1;
 let mockFactoryQuoteItemSeq = 1;
+let mockFactoryQuoteAttachmentSeq = 1;
 let mockPricingCostingSeq = 1;
 const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'sales_manager'];
 const PRICING_REQUEST_RECIPIENT_VALUES = PRICING_REQUEST_RECIPIENT_OPTIONS.map((o) => o.code);
@@ -4399,6 +4400,7 @@ export const api = {
           current: true,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
+          attachments: [],
           items: items.map((item, i) => ({
             id: mockFactoryQuoteItemSeq++,
             factoryQuoteId: quoteId,
@@ -4448,6 +4450,8 @@ export const api = {
       const user = hasRole('import');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
       if (!quote) fail('Factory quote not found', 404);
+      if (!payload.clientRequestId) fail('clientRequestId must be a UUID', 400);
+      if (quote.status === 'REQUESTED') return delay({ factoryQuote: quote });
       if (quote.status !== 'DRAFT') fail('Only draft factory quote emails can be sent', 409);
       quote.status = 'REQUESTED';
       quote.emailTo = payload.emailTo ?? quote.emailTo;
@@ -4458,8 +4462,9 @@ export const api = {
       quote.sentBy = user.id;
       quote.updatedAt = quote.emailSentAt;
       const pr = findPricingRequestRaw(quote.pricingRequestId);
-      if (pr.status === 'IMPORT_REVIEWING') pr.status = 'AWAITING_FACTORY_RESPONSE';
-      pushPricingRequestEvent(pr, user, 'FACTORY_EMAIL_SENT', 'IMPORT_REVIEWING', pr.status);
+      const fromStatus = pr.status;
+      if (['IMPORT_REVIEWING', 'COSTING_IN_PROGRESS'].includes(pr.status)) pr.status = 'AWAITING_FACTORY_RESPONSE';
+      pushPricingRequestEvent(pr, user, 'FACTORY_EMAIL_SENT', fromStatus, pr.status);
       return delay({ factoryQuote: quote });
     },
 
@@ -4496,6 +4501,7 @@ export const api = {
       };
       if (['DRAFT', 'REQUESTED'].includes(quote.status)) {
         applyResponse(quote);
+        if (['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'].includes(pr.status)) pr.status = 'COSTING_IN_PROGRESS';
         pushPricingRequestEvent(pr, user, 'FACTORY_RESPONSE_RECEIVED', pr.status, pr.status);
         return delay({ factoryQuote: quote });
       }
@@ -4546,6 +4552,35 @@ export const api = {
       quote.note = payload.reason;
       pushPricingRequestEvent(findPricingRequestRaw(quote.pricingRequestId), user, 'FACTORY_NOT_AVAILABLE', null, null, payload.reason);
       return delay({ factoryQuote: quote });
+    },
+
+    async uploadFactoryQuoteAttachment(id, file) {
+      hasRole('import');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
+      if (!quote) fail('Factory quote not found', 404);
+      const attachment = {
+        id: mockFactoryQuoteAttachmentSeq++,
+        factoryQuoteId: quote.id,
+        fileName: file?.name ?? 'attachment',
+        mimeType: file?.type ?? null,
+        fileSize: file?.size ?? null,
+        uploadedBy: sessionUser.id,
+        uploadedAt: new Date().toISOString(),
+      };
+      quote.attachments = [attachment, ...(quote.attachments ?? [])];
+      return delay({ attachment });
+    },
+
+    factoryQuoteAttachmentUrl(id) {
+      return `#mock-factory-quote-attachment-${id}`;
+    },
+
+    async deleteFactoryQuoteAttachment(id) {
+      hasRole('import');
+      for (const quote of mockFactoryQuotes) {
+        quote.attachments = (quote.attachments ?? []).filter((attachment) => attachment.id !== Number(id));
+      }
+      return delay({ ok: true });
     },
 
     async createCosting(id, payload = {}) {
@@ -4712,6 +4747,57 @@ export const api = {
         addNotification(pr.assignedImportId, pr.ticketId, ticket?.code, 'MORE_INFO_RESPONDED', `ใบขอราคา ${pr.requestCode} ได้รับข้อมูลเพิ่มเติมแล้ว`);
       }
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async createCustomerChangeRevision(id, payload) {
+      const user = hasRole('sales');
+      const parent = requirePricingRequestViewable(id, user);
+      const ticket = db.tickets.find((t) => t.id === parent.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (['DRAFT', 'CANCELLED', 'SUPERSEDED'].includes(parent.status)) {
+        fail('Customer-change revisions can only be created from an active submitted pricing request', 409);
+      }
+      if (!payload.revisionReason?.trim()) fail('revisionReason must not be blank', 400);
+      if (!payload.clientRequestId) fail('clientRequestId must be a UUID', 400);
+      if (!payload.items?.length) fail('items must not be empty', 400);
+      requirePricingRequestItemFieldsValid(payload.items ?? []);
+      const parentStatus = parent.status;
+      const revisionId = mockPricingRequestSeq++;
+      parent.status = 'SUPERSEDED';
+      parent.updatedAt = new Date().toISOString();
+      const now = new Date().toISOString();
+      const revision = {
+        ...parent,
+        id: revisionId,
+        requestCode: nextPricingRequestCode(),
+        status: 'DRAFT',
+        revisionNo: (parent.revisionNo ?? 1) + 1,
+        parentPricingRequestId: parent.id,
+        clientRequestId: payload.clientRequestId,
+        recipientType: payload.recipientType,
+        recipientContactId: payload.recipientContactId ?? null,
+        recipientLabel: payload.recipientLabel ?? null,
+        requiredDate: payload.requiredDate ?? null,
+        customerTargetPrice: payload.customerTargetPrice ?? null,
+        targetCurrency: normalizePricingRequestCurrency(payload.targetCurrency),
+        note: payload.note ?? null,
+        submittedAt: null,
+        pickedUpAt: null,
+        cancelledAt: null,
+        createdAt: now,
+        updatedAt: now,
+        items: (payload.items ?? []).map((item, i) => ({
+          id: mockPricingRequestItemSeq++,
+          pricingRequestId: revisionId,
+          ...item,
+          sortOrder: i,
+        })),
+        events: [],
+      };
+      mockPricingRequests.push(revision);
+      pushPricingRequestEvent(parent, user, 'PRICING_REQUEST_REVISED', parentStatus, 'SUPERSEDED', payload.revisionReason);
+      pushPricingRequestEvent(revision, user, 'PRICING_REQUEST_CREATED', null, 'DRAFT', payload.revisionReason);
+      return delay({ pricingRequest: buildPricingRequestDetail(revision) });
     },
 
     async cancel(id, payload) {

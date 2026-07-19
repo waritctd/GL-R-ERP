@@ -14,6 +14,10 @@ function isImport(user) {
   return user?.role === 'import';
 }
 
+function isSales(user) {
+  return user?.role === 'sales';
+}
+
 function canSeeRaw(user) {
   return user?.role === 'import' || user?.role === 'ceo';
 }
@@ -78,6 +82,39 @@ function cleanResponsePayload(draft) {
   };
 }
 
+function revisionPayload(summary, items, reason) {
+  return {
+    revisionReason: reason,
+    clientRequestId: generateClientRequestId(),
+    recipientType: summary.recipientType,
+    recipientContactId: summary.recipientContactId ?? null,
+    recipientLabel: summary.recipientLabel ?? null,
+    requiredDate: summary.requiredDate ?? null,
+    customerTargetPrice: summary.customerTargetPrice ?? null,
+    targetCurrency: summary.targetCurrency ?? 'THB',
+    note: summary.note ?? null,
+    items: (items ?? []).map((item) => ({
+      sourceTicketItemId: item.sourceTicketItemId ?? null,
+      productId: item.productId ?? null,
+      variantId: item.variantId ?? null,
+      brand: item.brand ?? item.catalogBrand ?? null,
+      model: item.model ?? item.catalogModel ?? null,
+      productDescription: item.productDescription ?? null,
+      color: item.color ?? null,
+      texture: item.texture ?? null,
+      size: item.size ?? null,
+      factory: item.factory ?? item.resolvedFactoryName ?? null,
+      requestedQty: item.requestedQty,
+      requestedQtySqm: item.requestedQtySqm ?? null,
+      requestedUnit: item.requestedUnit,
+      quantityType: item.quantityType,
+      targetDeliveryDate: item.targetDeliveryDate ?? null,
+      deliveryLocation: item.deliveryLocation ?? null,
+      specialRequirement: item.specialRequirement ?? null,
+    })),
+  };
+}
+
 export function PricingRequestDetailPage({ user, showToast }) {
   const { id } = useParams();
   const pricingRequestId = Number(id);
@@ -89,6 +126,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const [infoMessage, setInfoMessage] = useState('');
   const [salesResponse, setSalesResponse] = useState('');
   const [emailDrafts, setEmailDrafts] = useState({});
+  const [sendClientRequestIds, setSendClientRequestIds] = useState({});
+  const [revisionReason, setRevisionReason] = useState('');
   const [confirmAction, setConfirmAction] = useState(null);
 
   const detailQuery = useQuery({
@@ -133,6 +172,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
     emailTo: draft?.emailTo ?? quote.emailTo,
     emailSubject: draft?.emailSubject ?? quote.emailSubject,
     emailBody: draft?.emailBody ?? quote.emailBody,
+    clientRequestId: sendClientRequestIds[quote.id] ?? generateClientRequestId(),
   }), 'ส่งคำขอโรงงานแล้ว');
   const receiveQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.receiveFactoryQuote(quote.id, cleanResponsePayload(draft)), 'บันทึกราคาโรงงานแล้ว');
   const negotiateQuote = useActionMutation((quote) => api.pricingRequests.startFactoryNegotiation(quote.id, { note: quote.negotiationNote || 'Negotiation in progress' }), 'เริ่มเจรจาแล้ว');
@@ -142,6 +182,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const submitCosting = useActionMutation((costing) => api.pricingRequests.submitCosting(costing.id, { note: costingNote || null }), 'ส่งให้ CEO แล้ว');
   const requestInfo = useActionMutation(() => api.pricingRequests.requestInformation(pricingRequestId, { message: infoMessage }), 'ส่งคำขอข้อมูลแล้ว');
   const respondInfo = useActionMutation(() => api.pricingRequests.respondInformation(pricingRequestId, { response: salesResponse }), 'ส่งข้อมูลเพิ่มเติมแล้ว');
+  const uploadQuoteAttachment = useActionMutation(({ quote, file }) => api.pricingRequests.uploadFactoryQuoteAttachment(quote.id, file), 'แนบไฟล์ราคาโรงงานแล้ว');
+  const createRevision = useActionMutation(() => api.pricingRequests.createCustomerChangeRevision(
+    pricingRequestId,
+    revisionPayload(summary, request.items, revisionReason),
+  ).then((res) => {
+    const newId = res?.pricingRequest?.summary?.id;
+    if (newId) navigate(`/pricing-requests/${newId}`);
+    return res;
+  }), 'สร้าง revision ใหม่แล้ว');
 
   const request = detailQuery.data;
   const summary = request?.summary;
@@ -152,6 +201,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
     () => [...costings].reverse().find((costing) => ['DRAFT', 'CALCULATED'].includes(costing.status)),
     [costings],
   );
+  const canCreateCustomerRevision = isSales(user)
+    && summary?.ticketCreatedById === user?.employeeId
+    && !['DRAFT', 'CANCELLED', 'SUPERSEDED'].includes(summary?.status);
 
   if (detailQuery.isLoading) {
     return <div className="page-stack"><p className="text-sm text-text-muted">กำลังโหลด...</p></div>;
@@ -231,6 +283,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
         </section>
       ) : null}
 
+      {canCreateCustomerRevision ? (
+        <section className="table-panel">
+          <div className="panel-header"><h2>Customer Change Revision</h2></div>
+          <div className="flex flex-wrap gap-2 p-3">
+            <input className="form-input min-w-64" value={revisionReason} onChange={(e) => setRevisionReason(e.target.value)} placeholder="Revision reason" />
+            <button type="button" className="secondary-button" disabled={!revisionReason || createRevision.isPending} onClick={() => createRevision.mutate()}>
+              สร้าง revision
+            </button>
+          </div>
+        </section>
+      ) : null}
+
       {canSeeRaw(user) ? (
         <section className="table-panel">
           <div className="panel-header">
@@ -264,7 +328,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     <strong>{quote.factoryName}</strong>
                     <StatusBadge tone="neutral">Rev {quote.revisionNo}</StatusBadge>
                     <StatusBadge tone={quote.current ? 'success' : 'neutral'}>{quote.status}</StatusBadge>
-                    {isImport(user) && quote.status === 'DRAFT' ? <button type="button" className="secondary-button" onClick={() => setConfirmAction({ type: 'sendQuote', quote, emailDraft })}>ส่ง</button> : null}
+                    {isImport(user) && quote.status === 'DRAFT' ? <button type="button" className="secondary-button" onClick={() => {
+                      setSendClientRequestIds((cur) => ({ ...cur, [quote.id]: cur[quote.id] ?? generateClientRequestId() }));
+                      setConfirmAction({ type: 'sendQuote', quote, emailDraft });
+                    }}>ส่ง</button> : null}
                     {isImport(user) && ['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) && quote.current ? <button type="button" className="secondary-button" onClick={() => readyQuote.mutate(quote)}>พร้อม costing</button> : null}
                     {isImport(user) && quote.status === 'RESPONSE_RECEIVED' && quote.current ? <button type="button" className="secondary-button" onClick={() => negotiateQuote.mutate(quote)}>เจรจา</button> : null}
                   </div>
@@ -286,6 +353,32 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           Item #{line.pricingRequestItemId} · raw {formatCurrency(line.rawUnitPrice, line.currency)} · {line.unitBasis ?? '-'} · {line.sqmPerUnit ? `${line.sqmPerUnit} sqm/unit` : '-'}
                         </span>
                       ))}
+                    </div>
+                  ) : null}
+                  {(quote.attachments ?? []).length || isImport(user) ? (
+                    <div className="mt-3 border-t border-border-subtle pt-3">
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-semibold uppercase text-text-muted">Attachments</span>
+                        {isImport(user) ? (
+                          <label className="secondary-button cursor-pointer">
+                            <input type="file" className="hidden" onChange={(event) => {
+                              const file = event.target.files?.[0];
+                              if (file) uploadQuoteAttachment.mutate({ quote, file });
+                              event.target.value = '';
+                            }} />
+                            <Icon name="upload" size={13} />
+                            แนบไฟล์
+                          </label>
+                        ) : null}
+                      </div>
+                      <div className="flex flex-col gap-1 text-xs text-text-muted">
+                        {(quote.attachments ?? []).map((attachment) => (
+                          <a key={attachment.id} className="text-info underline" href={api.pricingRequests.factoryQuoteAttachmentUrl(attachment.id)} target="_blank" rel="noreferrer">
+                            {attachment.fileName}
+                          </a>
+                        ))}
+                        {(quote.attachments ?? []).length === 0 ? <span>-</span> : null}
+                      </div>
                     </div>
                   ) : null}
                   {isImport(user) && quote.current && ['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(quote.status) ? (
