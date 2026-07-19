@@ -71,7 +71,11 @@ public class FactoryQuoteRepository {
             INSERT INTO sales.factory_quote_item
                 (factory_quote_id, pricing_request_item_id, quoted_quantity, quoted_unit, unit_basis, sort_order)
             SELECT :quoteId, pri.pricing_request_item_id, pri.requested_qty, pri.requested_unit,
-                   pri.requested_unit, :sortOrder
+                   CASE
+                       WHEN LOWER(pri.requested_unit) IN ('sqm', 'sq.m', 'm2', 'm²', 'ตร.ม.') THEN 'PER_SQM'
+                       ELSE 'PER_PIECE'
+                   END,
+                   :sortOrder
               FROM sales.pricing_request_item pri
              WHERE pri.pricing_request_item_id = :pricingRequestItemId
             """, batch);

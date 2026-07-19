@@ -246,6 +246,40 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             .isZero();
     }
 
+    @Test
+    void costingCreateRejectsClientRequestReplayAcrossPricingRequests() {
+        long firstPricingRequestId = pricingRequestService.createDraft(ticketId,
+            pricingRequest("11111111-1111-4111-8111-111111111111"), salesActor).summary().id();
+        pricingRequestService.submit(firstPricingRequestId, salesActor);
+        pricingRequestService.pickup(firstPricingRequestId, importActor);
+        markAllFactoriesReady(firstPricingRequestId);
+
+        String costingClientRequestId = "99999999-9999-4999-8999-999999999999";
+        PricingCostingDto firstDraft = costingService.createDraft(firstPricingRequestId,
+            new CreateCostingRequest("first", costingClientRequestId), importActor);
+        assertThat(firstDraft.pricingRequestId()).isEqualTo(firstPricingRequestId);
+
+        long secondPricingRequestId = pricingRequestService.createDraft(ticketId,
+            pricingRequest("22222222-2222-4222-8222-222222222222"), salesActor).summary().id();
+        pricingRequestService.submit(secondPricingRequestId, salesActor);
+        pricingRequestService.pickup(secondPricingRequestId, importActor);
+        markAllFactoriesReady(secondPricingRequestId);
+
+        assertThatThrownBy(() -> costingService.createDraft(secondPricingRequestId,
+            new CreateCostingRequest("second", costingClientRequestId), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    private void markAllFactoriesReady(long pricingRequestId) {
+        List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
+        for (FactoryQuoteDto draft : drafts) {
+            FactoryQuoteDto response = factoryQuoteService.receive(draft.id(),
+                response("REF-" + draft.factoryName(), "THB", "100.00", draft.items().get(0).pricingRequestItemId()),
+                importActor);
+            factoryQuoteService.markReadyForCosting(response.id(), importActor);
+        }
+    }
+
     private FactoryQuoteDto quoteFor(List<FactoryQuoteDto> quotes, String factoryName) {
         return quotes.stream()
             .filter(quote -> factoryName.equals(quote.factoryName()))
@@ -262,9 +296,13 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     }
 
     private PricingRequestRequests.CreatePricingRequestRequest pricingRequest() {
+        return pricingRequest("77777777-7777-7777-7777-777777777777");
+    }
+
+    private PricingRequestRequests.CreatePricingRequestRequest pricingRequest(String clientRequestId) {
         return new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
-            new BigDecimal("1000.00"), "THB", "step 2 request", "77777777-7777-7777-7777-777777777777",
+            new BigDecimal("1000.00"), "THB", "step 2 request", clientRequestId,
             List.of(
                 pricingItem("SCG", "Tile A", "Factory A", new BigDecimal("10")),
                 pricingItem("Cotto", "Tile B", "Factory B", new BigDecimal("5"))));

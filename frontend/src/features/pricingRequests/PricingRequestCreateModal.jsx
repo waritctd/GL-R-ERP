@@ -1,7 +1,15 @@
 import { useState } from 'react';
+import { api } from '../../api/index.js';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { QUANTITY_TYPE_OPTIONS, RECIPIENT_OPTIONS } from './pricingRequestMeta.js';
+
+let pricingCatalogTimer = null;
+
+function debouncedCatalogSearch(query, callback) {
+  clearTimeout(pricingCatalogTimer);
+  pricingCatalogTimer = setTimeout(() => callback(query), 250);
+}
 
 // TicketItemDto's unitBasis is a code ('PIECE' | 'SQM'), never a display unit —
 // mirrors the label mapping TicketDetailPage already uses for the same field
@@ -21,6 +29,9 @@ function emptyItemFromTicketItem(ticketItem) {
   return {
     sourceTicketItemId: ticketItem?.id ?? null,
     productId: null,
+    catalogProductCode: '',
+    catalogBasePrice: null,
+    catalogCurrency: '',
     brand: ticketItem?.brand ?? '',
     model: ticketItem?.model ?? '',
     productDescription: '',
@@ -37,16 +48,16 @@ function emptyItemFromTicketItem(ticketItem) {
   };
 }
 
-// Edit mode (Fix 2 of the review-remediation plan) seeds its rows from a
-// persisted PricingRequestItemDto instead of a ticket_item — same target
-// shape as emptyItemFromTicketItem, but every field already has a value
-// (including productId, which this modal never sets itself — no catalog
-// picker yet, see the class doc below — but must round-trip unchanged if an
-// item already carries one, or editing would silently erase that identity).
+// Edit mode seeds its rows from a persisted PricingRequestItemDto instead of a
+// ticket_item. Existing catalog identity and catalog-price hints are preserved
+// so editing a draft does not erase its product snapshot.
 function itemFromExisting(item) {
   return {
     sourceTicketItemId: item?.sourceTicketItemId ?? null,
     productId: item?.productId ?? null,
+    catalogProductCode: item?.catalogProductCode ?? '',
+    catalogBasePrice: item?.catalogBasePrice ?? null,
+    catalogCurrency: item?.catalogCurrency ?? '',
     brand: item?.brand ?? '',
     model: item?.model ?? '',
     productDescription: item?.productDescription ?? '',
@@ -83,14 +94,9 @@ function itemFromExisting(item) {
  * recipientLabel (free text) is the only way to identify a recipient today.
  * PricingRequestService.validateRecipientIdentifiable accepts either.
  */
-// Mirrors PricingRequestService.validateItems (Part 1 of the review-remediation
-// plan): an item must actually name a product somehow — a link back to a deal
-// line, a catalog product, a model name, or a dedicated product description.
-// Brand alone is deliberately NOT enough (a brand with no model does not
-// identify a product). This modal has no productId field yet (no catalog
-// picker — see the class doc below), so in practice this reduces to
-// sourceTicketItemId / model / productDescription, but the productId check is
-// kept here to stay byte-for-byte in sync with the backend predicate.
+// Mirrors PricingRequestService.validateItems: an item must actually name a
+// product somehow: a deal line, catalog product, model name, or dedicated
+// product description. Brand alone is deliberately NOT enough.
 function itemIdentityValid(item) {
   return Boolean(item.sourceTicketItemId) || Boolean(item.productId)
     || Boolean(item.model?.trim()) || Boolean(item.productDescription?.trim());
@@ -139,9 +145,21 @@ export function PricingRequestCreateModal({
   // failure) reuses the same draft instead of calling createFn again and
   // orphaning a duplicate. Always null in edit mode (there is no create step).
   const [createdId, setCreatedId] = useState(null);
+  const [catalogQuery, setCatalogQuery] = useState({});
+  const [catalogResults, setCatalogResults] = useState({});
 
   function updateItem(index, field, value) {
-    setItems((cur) => cur.map((item, i) => (i === index ? { ...item, [field]: value } : item)));
+    setItems((cur) => cur.map((item, i) => {
+      if (i !== index) return item;
+      const next = { ...item, [field]: value };
+      if (['brand', 'model', 'productDescription', 'color', 'texture', 'size', 'factory'].includes(field)) {
+        next.productId = null;
+        next.catalogProductCode = '';
+        next.catalogBasePrice = null;
+        next.catalogCurrency = '';
+      }
+      return next;
+    }));
     if (['sourceTicketItemId', 'productId', 'model', 'productDescription'].includes(field)) {
       setItemErrors((cur) => {
         if (!(index in cur)) return cur;
@@ -158,6 +176,55 @@ export function PricingRequestCreateModal({
 
   function removeItem(index) {
     setItems((cur) => cur.filter((_, i) => i !== index));
+  }
+
+  function searchCatalog(index, value) {
+    setCatalogQuery((cur) => ({ ...cur, [index]: value }));
+    debouncedCatalogSearch(value, async (query) => {
+      if (!query.trim()) {
+        setCatalogResults((cur) => ({ ...cur, [index]: [] }));
+        return;
+      }
+      try {
+        const res = await api.catalog.prices(query, undefined, 20);
+        setCatalogResults((cur) => ({ ...cur, [index]: res.items ?? [] }));
+      } catch {
+        setCatalogResults((cur) => ({ ...cur, [index]: [] }));
+      }
+    });
+  }
+
+  function applyCatalogItem(index, product) {
+    setItems((cur) => cur.map((item, i) => {
+      if (i !== index) return item;
+      const priceUnit = String(product.priceUnit ?? '').toLowerCase();
+      return {
+        ...item,
+        productId: product.priceId ?? null,
+        catalogProductCode: product.productCode ?? '',
+        catalogBasePrice: product.price ?? null,
+        catalogCurrency: product.currency ?? '',
+        brand: product.factoryName ?? item.brand ?? '',
+        model: product.collection ?? product.productName ?? product.productCode ?? item.model ?? '',
+        productDescription: product.productName ?? product.productCode ?? item.productDescription ?? '',
+        color: product.color ?? '',
+        texture: product.surface ?? '',
+        size: product.sizeRaw ?? '',
+        factory: product.factoryName ?? '',
+        requestedUnit: priceUnit.includes('sqm') ? 'ตร.ม.' : item.requestedUnit,
+      };
+    }));
+    setCatalogQuery((cur) => ({
+      ...cur,
+      [index]: [product.productCode, product.collection, product.productName].filter(Boolean).join(' · '),
+    }));
+    setCatalogResults((cur) => ({ ...cur, [index]: [] }));
+    setItemErrors((cur) => {
+      if (!(index in cur)) return cur;
+      const next = { ...cur };
+      delete next[index];
+      return next;
+    });
   }
 
   function validate() {
@@ -394,6 +461,43 @@ export function PricingRequestCreateModal({
                 {itemErrors[index] ? (
                   <p role="alert" className="text-2xs font-bold text-danger-dark">{itemErrors[index]}</p>
                 ) : null}
+                <div className="relative">
+                  <label className="flex flex-col gap-1 text-xs">
+                    ค้นหา Catalog
+                    <input
+                      value={catalogQuery[index] ?? item.catalogProductCode ?? ''}
+                      onChange={(e) => searchCatalog(index, e.target.value)}
+                      placeholder="รหัสสินค้า / Collection / โรงงาน"
+                    />
+                  </label>
+                  {(catalogResults[index] ?? []).length > 0 ? (
+                    <div className="absolute left-0 right-0 top-full z-50 max-h-56 overflow-y-auto rounded-md border border-border bg-surface shadow-lg">
+                      {(catalogResults[index] ?? []).map((product) => (
+                        <button
+                          key={product.priceId}
+                          type="button"
+                          className="block w-full border-b border-border-subtle px-3 py-2 text-left text-xs hover:bg-surface-subtle"
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            applyCatalogItem(index, product);
+                          }}
+                        >
+                          <strong>{product.factoryName}</strong>
+                          {' · '}
+                          {[product.productCode, product.collection, product.productName].filter(Boolean).join(' · ') || '-'}
+                          <span className="ml-2 text-info">
+                            {product.price != null ? `${Number(product.price).toLocaleString('th-TH')} ${product.currency ?? ''}` : ''}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {item.productId ? (
+                    <p className="mt-1 text-2xs font-bold text-info">
+                      Catalog #{item.productId}{item.catalogBasePrice != null ? ` · ${Number(item.catalogBasePrice).toLocaleString('th-TH')} ${item.catalogCurrency}` : ''}
+                    </p>
+                  ) : null}
+                </div>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <label className="col-span-2 flex flex-col gap-1 text-xs sm:col-span-1">
                     ยี่ห้อ

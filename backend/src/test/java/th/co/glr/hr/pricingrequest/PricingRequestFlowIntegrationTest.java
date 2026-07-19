@@ -221,16 +221,12 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(statusAfter).isEqualTo(TicketStatus.DRAFT);
         assertThat(salesStageAfter).isEqualTo(salesStageBefore);
 
-        // Import notified, but never CEO — notifyByRole only reaches employees whose
-        // division source_code matches the role's filter (PCIM% for import, MD%/MN%
-        // for ceo), and neither sales rep nor CEO has such a division here, so a
-        // plain row-count proves both halves of the guarantee at once: exactly the
-        // one PCIM-division employee (import) got a row, nobody else did.
-        long notificationCount = jdbc.queryForObject("SELECT COUNT(*) FROM hr.notification", Map.of(), Long.class);
-        assertThat(notificationCount).isEqualTo(1);
-        Long notifiedEmployeeId = jdbc.queryForObject(
-            "SELECT employee_id FROM hr.notification LIMIT 1", Map.of(), Long.class);
-        assertThat(notifiedEmployeeId).isEqualTo(importUserId);
+        List<Long> notifiedEmployeeIds = jdbc.queryForList(
+            "SELECT employee_id FROM hr.notification ORDER BY employee_id", Map.of(), Long.class);
+        assertThat(notifiedEmployeeIds).containsExactly(importUserId, ceoUserId);
+        List<String> links = jdbc.queryForList(
+            "SELECT link FROM hr.notification ORDER BY employee_id", Map.of(), String.class);
+        assertThat(links).containsExactly("/pricing-requests/" + designerId, "/pricing-requests/" + designerId);
     }
 
     // ── 4. Import pickup assigns the request, never the deal (the landmine guard) ──

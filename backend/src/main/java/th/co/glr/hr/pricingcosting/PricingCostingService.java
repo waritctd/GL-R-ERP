@@ -88,7 +88,12 @@ public class PricingCostingService {
             costings.createDraft(pricingRequestId, request.note(), clientRequestId, actor.id());
         long costingId = created.costingId();
         if (!created.created()) {
-            return requireCosting(costingId);
+            PricingCostingDto existing = requireCosting(costingId);
+            if (existing.pricingRequestId() != pricingRequestId) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "clientRequestId has already been used for another pricing request");
+            }
+            return existing;
         }
         if (!PricingRequestStatus.COSTING_IN_PROGRESS.equals(summary.status())) {
             int transitioned = pricingRequests.transition(summary.id(), summary.status(),
@@ -135,6 +140,10 @@ public class PricingCostingService {
         }
         addEvent(summary, actor, PricingRequestEventKind.PRICING_COSTING_CALCULATED, summary.status(), summary.status(),
             "Costing recalculated");
+        if (PricingCostingStatus.DRAFT.equals(costing.status())) {
+            notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_CALCULATED,
+                "ใบขอราคา " + summary.requestCode() + " คำนวณต้นทุนแล้ว");
+        }
         return requireCosting(costingId);
     }
 
@@ -193,10 +202,7 @@ public class PricingCostingService {
             BigDecimal sqmPerUnit = source.quoteItem().sqmPerUnit() != null
                 ? source.quoteItem().sqmPerUnit()
                 : sqmPerUnit(source.requestItem());
-            BigDecimal goodsCost = source.quoteItem().rawUnitPrice().multiply(fx.rate());
-            if (isSqmUnit(source.quoteItem().unitBasis()) || isSqmUnit(source.quoteItem().quotedUnit())) {
-                goodsCost = goodsCost.multiply(sqmPerUnit);
-            }
+            BigDecimal goodsCost = goodsCostForUnit(source.quoteItem(), fx, sqmPerUnit);
             goodsCost = money4(goodsCost);
             BigDecimal freight = money4(config.freightPerSqm().multiply(sqmPerUnit));
             BigDecimal insurance = money4(config.insurancePerSqm().multiply(sqmPerUnit));
@@ -266,7 +272,8 @@ public class PricingCostingService {
                 .findFirst()
                 .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "Factory quote for " + factoryName + " does not cover item " + item.id()));
-            if (quoteItem.rawUnitPrice() == null || quoteItem.currency() == null || quoteItem.quotedUnit() == null) {
+            if (quoteItem.rawUnitPrice() == null || quoteItem.currency() == null
+                    || quoteItem.quotedUnit() == null || quoteItem.unitBasis() == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "Factory quote item " + quoteItem.id() + " is missing raw price, currency or unit");
             }
@@ -339,7 +346,7 @@ public class PricingCostingService {
     }
 
     private void notifyCeo(PricingRequestSummaryDto summary, String type, String message) {
-        notifications.notifyByRole("ceo", summary.ticketId(), type, message);
+        notifications.notifyByRoleForPricingRequest("ceo", summary.id(), type, message);
     }
 
     private BigDecimal sqmPerUnit(PricingRequestItemDto item) {
@@ -350,8 +357,25 @@ public class PricingCostingService {
         return ONE;
     }
 
-    private boolean isSqmUnit(String value) {
-        return value != null && value.toLowerCase().contains("sqm");
+    private BigDecimal goodsCostForUnit(FactoryQuoteItemDto quoteItem, FxSnapshot fx, BigDecimal sqmPerUnit) {
+        BigDecimal rawThb = quoteItem.rawUnitPrice().multiply(fx.rate());
+        return switch (quoteItem.unitBasis()) {
+            case "PER_SQM" -> rawThb.multiply(requirePositive(sqmPerUnit, "PER_SQM requires sqmPerUnit"));
+            case "PER_PIECE" -> rawThb;
+            case "PER_BOX" -> rawThb.divide(requirePositive(quoteItem.piecesPerBox(), "PER_BOX requires piecesPerBox"),
+                8, RoundingMode.HALF_UP);
+            case "PER_LINEAR_M" -> throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "PER_LINEAR_M costing requires a configured linear-metre conversion");
+            default -> throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Unsupported factory quote unit basis '" + quoteItem.unitBasis() + "'");
+        };
+    }
+
+    private BigDecimal requirePositive(BigDecimal value, String message) {
+        if (value == null || value.compareTo(ZERO) <= 0) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, message);
+        }
+        return value;
     }
 
     private BigDecimal money4(BigDecimal value) {

@@ -121,11 +121,32 @@ public class NotificationRepository {
                 .addValue("link", "/tickets/" + ticketId));
     }
 
+    public void notifyEmployeeForPricingRequest(long employeeId, long pricingRequestId, String type, String message) {
+        jdbc.update("""
+            INSERT INTO hr.notification (employee_id, type, title, message, link)
+            VALUES (:employeeId, :type, :title, :message, :link)
+            """,
+            new MapSqlParameterSource()
+                .addValue("employeeId", employeeId)
+                .addValue("type", type)
+                .addValue("title", ticketEventTitle(type))
+                .addValue("message", message)
+                .addValue("link", "/pricing-requests/" + pricingRequestId));
+    }
+
     /**
      * Notify all employees whose division maps to the given sales role.
      * Division mapping mirrors DivisionAccessPolicy — extended for sales module roles.
      */
     public void notifyByRole(String role, long ticketId, String type, String message) {
+        notifyByRoleInternal(role, type, message, "/tickets/" + ticketId);
+    }
+
+    public void notifyByRoleForPricingRequest(String role, long pricingRequestId, String type, String message) {
+        notifyByRoleInternal(role, type, message, "/pricing-requests/" + pricingRequestId);
+    }
+
+    private void notifyByRoleInternal(String role, String type, String message, String link) {
         String divisionFilter = switch (role) {
             case "import" -> "d.source_code ILIKE 'PCIM%'";
             case "ceo"    -> "d.source_code ILIKE 'MD%' OR d.source_code ILIKE 'MN%'";
@@ -145,7 +166,7 @@ public class NotificationRepository {
                 .addValue("type", type)
                 .addValue("title", ticketEventTitle(type))
                 .addValue("message", message)
-                .addValue("link", "/tickets/" + ticketId));
+                .addValue("link", link));
     }
 
     private String ticketEventTitle(String type) {

@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from '../../components/common/Icon.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
@@ -17,14 +18,21 @@ function canSeeRaw(user) {
   return user?.role === 'import' || user?.role === 'ceo';
 }
 
+const UNIT_OPTIONS = [
+  { code: 'PER_SQM', label: 'per sqm' },
+  { code: 'PER_PIECE', label: 'per piece' },
+  { code: 'PER_BOX', label: 'per box' },
+  { code: 'PER_LINEAR_M', label: 'per linear m' },
+];
+
 function defaultResponseItems(quote) {
   return (quote?.items ?? []).map((item) => ({
     pricingRequestItemId: item.pricingRequestItemId,
     supplierProductCode: item.supplierProductCode ?? '',
     supplierProductDescription: item.supplierProductDescription ?? '',
     quotedQuantity: item.quotedQuantity ?? 1,
-    quotedUnit: item.quotedUnit ?? 'piece',
-    unitBasis: item.unitBasis ?? item.quotedUnit ?? 'piece',
+    quotedUnit: item.quotedUnit ?? 'PER_PIECE',
+    unitBasis: item.unitBasis ?? item.quotedUnit ?? 'PER_PIECE',
     rawUnitPrice: item.rawUnitPrice ?? '',
     currency: item.currency ?? quote.defaultCurrency ?? 'THB',
     minimumOrderQuantity: item.minimumOrderQuantity ?? '',
@@ -39,6 +47,11 @@ function defaultResponseItems(quote) {
 function cleanNumber(value) {
   if (value === '' || value == null) return null;
   return Number(value);
+}
+
+function generateClientRequestId() {
+  return crypto.randomUUID?.()
+    ?? '00000000-0000-4000-8000-' + String(Date.now()).slice(-12).padStart(12, '0');
 }
 
 function formatCurrency(value, currency = 'THB') {
@@ -72,8 +85,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const queryClient = useQueryClient();
   const [responseDrafts, setResponseDrafts] = useState({});
   const [costingNote, setCostingNote] = useState('');
+  const [costingClientRequestId] = useState(() => generateClientRequestId());
   const [infoMessage, setInfoMessage] = useState('');
   const [salesResponse, setSalesResponse] = useState('');
+  const [emailDrafts, setEmailDrafts] = useState({});
+  const [confirmAction, setConfirmAction] = useState(null);
 
   const detailQuery = useQuery({
     queryKey: queryKeys.pricingRequestDetail(pricingRequestId),
@@ -112,15 +128,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
   }
 
   const generateDrafts = useActionMutation(() => api.pricingRequests.generateFactoryEmailDrafts(pricingRequestId), 'สร้างร่างอีเมลแล้ว');
-  const sendQuote = useActionMutation((quote) => api.pricingRequests.sendFactoryQuote(quote.id, {
-    emailTo: quote.emailTo,
-    emailSubject: quote.emailSubject,
-    emailBody: quote.emailBody,
+  const updateQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.updateFactoryQuote(quote.id, draft), 'บันทึกร่างอีเมลแล้ว');
+  const sendQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.sendFactoryQuote(quote.id, {
+    emailTo: draft?.emailTo ?? quote.emailTo,
+    emailSubject: draft?.emailSubject ?? quote.emailSubject,
+    emailBody: draft?.emailBody ?? quote.emailBody,
   }), 'ส่งคำขอโรงงานแล้ว');
   const receiveQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.receiveFactoryQuote(quote.id, cleanResponsePayload(draft)), 'บันทึกราคาโรงงานแล้ว');
   const negotiateQuote = useActionMutation((quote) => api.pricingRequests.startFactoryNegotiation(quote.id, { note: quote.negotiationNote || 'Negotiation in progress' }), 'เริ่มเจรจาแล้ว');
   const readyQuote = useActionMutation((quote) => api.pricingRequests.markFactoryQuoteReady(quote.id), 'พร้อมคำนวณต้นทุนแล้ว');
-  const createCosting = useActionMutation(() => api.pricingRequests.createCosting(pricingRequestId, { note: costingNote || null, clientRequestId: crypto.randomUUID?.() }), 'สร้างร่างต้นทุนแล้ว');
+  const createCosting = useActionMutation(() => api.pricingRequests.createCosting(pricingRequestId, { note: costingNote || null, clientRequestId: costingClientRequestId }), 'สร้างร่างต้นทุนแล้ว');
   const recalculateCosting = useActionMutation((costing) => api.pricingRequests.recalculateCosting(costing.id, { note: costingNote || null }), 'คำนวณต้นทุนแล้ว');
   const submitCosting = useActionMutation((costing) => api.pricingRequests.submitCosting(costing.id, { note: costingNote || null }), 'ส่งให้ CEO แล้ว');
   const requestInfo = useActionMutation(() => api.pricingRequests.requestInformation(pricingRequestId, { message: infoMessage }), 'ส่งคำขอข้อมูลแล้ว');
@@ -166,7 +183,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           <div className="text-sm"><strong>ดีล</strong> <Link to={`/tickets/${summary.ticketId}`} className="text-info underline">{summary.ticketCode}</Link></div>
           <div className="text-sm"><strong>ผู้รับ</strong> {pricingRequestRecipientLabel(summary.recipientType)}{summary.recipientLabel ? ` · ${summary.recipientLabel}` : ''}</div>
           <div className="text-sm"><strong>ต้องการภายใน</strong> {formatThaiDate(summary.requiredDate)}</div>
-          <div className="text-sm"><strong>Import</strong> {summary.assignedImportName ?? '-'}</div>
+          <div className="text-sm"><strong>Import</strong> ฝ่าย Import</div>
         </div>
       </section>
 
@@ -226,6 +243,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
           </div>
           <div className="flex flex-col gap-3 p-3">
             {factoryQuotes.map((quote) => {
+              const emailDraft = emailDrafts[quote.id] ?? {
+                emailTo: quote.emailTo ?? '',
+                emailSubject: quote.emailSubject ?? '',
+                emailBody: quote.emailBody ?? '',
+                note: quote.note ?? '',
+              };
               const draft = responseDrafts[quote.id] ?? {
                 supplierQuoteRef: quote.supplierQuoteRef ?? '',
                 defaultCurrency: quote.defaultCurrency ?? 'THB',
@@ -241,11 +264,30 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     <strong>{quote.factoryName}</strong>
                     <StatusBadge tone="neutral">Rev {quote.revisionNo}</StatusBadge>
                     <StatusBadge tone={quote.current ? 'success' : 'neutral'}>{quote.status}</StatusBadge>
-                    {isImport(user) && quote.status === 'DRAFT' ? <button type="button" className="secondary-button" onClick={() => sendQuote.mutate(quote)}>ส่ง</button> : null}
+                    {isImport(user) && quote.status === 'DRAFT' ? <button type="button" className="secondary-button" onClick={() => setConfirmAction({ type: 'sendQuote', quote, emailDraft })}>ส่ง</button> : null}
                     {isImport(user) && ['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) && quote.current ? <button type="button" className="secondary-button" onClick={() => readyQuote.mutate(quote)}>พร้อม costing</button> : null}
                     {isImport(user) && quote.status === 'RESPONSE_RECEIVED' && quote.current ? <button type="button" className="secondary-button" onClick={() => negotiateQuote.mutate(quote)}>เจรจา</button> : null}
                   </div>
                   <div className="mt-2 text-xs text-text-muted">{quote.emailTo ?? '-'} · {quote.supplierQuoteRef ?? '-'}</div>
+                  {isImport(user) && quote.status === 'DRAFT' ? (
+                    <div className="mt-3 grid gap-2 border-t border-border-subtle pt-3">
+                      <input className="form-input" value={emailDraft.emailTo} onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailTo: e.target.value } })} placeholder="Factory email recipient" />
+                      <input className="form-input" value={emailDraft.emailSubject} onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailSubject: e.target.value } })} placeholder="Subject" />
+                      <textarea className="form-input min-h-24" value={emailDraft.emailBody} onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailBody: e.target.value } })} placeholder="Email body" />
+                      <button type="button" className="secondary-button" disabled={updateQuote.isPending} onClick={() => updateQuote.mutate({ quote, draft: emailDraft })}>
+                        บันทึกร่างอีเมล
+                      </button>
+                    </div>
+                  ) : null}
+                  {quote.items?.length ? (
+                    <div className="mt-3 flex flex-col gap-1 border-t border-border-subtle pt-3 text-xs text-text-muted">
+                      {quote.items.map((line) => (
+                        <span key={line.id}>
+                          Item #{line.pricingRequestItemId} · raw {formatCurrency(line.rawUnitPrice, line.currency)} · {line.unitBasis ?? '-'} · {line.sqmPerUnit ? `${line.sqmPerUnit} sqm/unit` : '-'}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                   {isImport(user) && quote.current && ['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(quote.status) ? (
                     <div className="mt-3 flex flex-col gap-2 border-t border-border-subtle pt-3">
                       <div className="grid gap-2 md:grid-cols-4">
@@ -266,11 +308,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             items[index] = { ...line, currency: e.target.value };
                             setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
                           }} placeholder="Currency" />
-                          <input className="form-input" value={line.quotedUnit} onChange={(e) => {
+                          <select className="form-input" value={line.unitBasis} onChange={(e) => {
                             const items = [...draft.items];
                             items[index] = { ...line, quotedUnit: e.target.value, unitBasis: e.target.value };
                             setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                          }} placeholder="Unit" />
+                          }}>
+                            {UNIT_OPTIONS.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}
+                          </select>
                           <input className="form-input" value={line.sqmPerUnit} onChange={(e) => {
                             const items = [...draft.items];
                             items[index] = { ...line, sqmPerUnit: e.target.value };
@@ -309,7 +353,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   {isImport(user) && costing.id === latestOpenCosting?.id ? (
                     <>
                       <button type="button" className="secondary-button" onClick={() => recalculateCosting.mutate(costing)}>คำนวณใหม่</button>
-                      <button type="button" className="secondary-button" disabled={costing.status !== 'CALCULATED' || costing.stale} onClick={() => submitCosting.mutate(costing)}>Submit to CEO</button>
+                      <button type="button" className="secondary-button" disabled={costing.status !== 'CALCULATED' || costing.stale} onClick={() => setConfirmAction({ type: 'submitCosting', costing })}>Submit to CEO</button>
                     </>
                   ) : null}
                 </div>
@@ -326,6 +370,23 @@ export function PricingRequestDetailPage({ user, showToast }) {
           </div>
         </section>
       ) : null}
+
+      <ConfirmDialog
+        open={Boolean(confirmAction)}
+        title={confirmAction?.type === 'submitCosting' ? 'Submit costing to CEO' : 'ส่งอีเมลถึงโรงงาน'}
+        message={confirmAction?.type === 'submitCosting'
+          ? 'เมื่อ submit แล้ว costing version นี้จะแก้ไขไม่ได้'
+          : 'ยืนยันการส่งคำขอราคาให้โรงงานด้วยรายละเอียดอีเมลนี้'}
+        confirmLabel={confirmAction?.type === 'submitCosting' ? 'Submit to CEO' : 'ส่งอีเมล'}
+        busy={sendQuote.isPending || submitCosting.isPending}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={() => {
+          const action = confirmAction;
+          setConfirmAction(null);
+          if (action?.type === 'submitCosting') submitCosting.mutate(action.costing);
+          if (action?.type === 'sendQuote') sendQuote.mutate({ quote: action.quote, draft: action.emailDraft });
+        }}
+      />
     </div>
   );
 }
