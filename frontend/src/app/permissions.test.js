@@ -133,9 +133,14 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/leave', detached)).toBe(false);
   });
 
-  it('gates my-requests to roles that submit profile requests', () => {
+  // /my-requests is now an alias redirecting to /profile, so it must gate
+  // identically — anyone with an employee record, not just submitters. A
+  // stricter guard would 403 an HR user following an old notification link.
+  it('gates my-requests exactly like its /profile redirect target', () => {
     expect(canAccessPath('/my-requests', employee)).toBe(true);
-    expect(canAccessPath('/my-requests', hr)).toBe(false);
+    expect(canAccessPath('/my-requests', hr)).toBe(true);
+    expect(canAccessPath('/profile', hr)).toBe(true);
+    expect(canAccessPath('/my-requests', { role: 'sales', employeeId: null })).toBe(false);
   });
 
   it('scopes commissions to commission-viewing roles', () => {
