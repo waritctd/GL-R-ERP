@@ -12,7 +12,18 @@ Worked in a separate git worktree at `/Users/ploy_warit/Desktop/GL-R-ERP-employe
 `7771782` (`merge: UX/UI audit remediation Phases A + B`, = `origin/main` at branch time)
 
 ## Current Commit
-Not committed — working tree only, pending review.
+`7a8c917` — `db904ef` (the work) merged with `cc384aa` (PR #236, profile avatar dropdown) which
+landed on `main` mid-review. PR: https://github.com/waritctd/GL-R-ERP/pull/237
+
+The merge was clean but overlapped in two places worth knowing about:
+- `styles.css` — PR #236 also touched avatar styling. No conflict; `.avatar-xs` sits alongside the
+  existing `sm`/`md`/`lg`/`xl` steps and no existing rule was altered by either side.
+- `utils/format.js` — PR #236 changed it. `formatMoney` output is unaffected, and the new
+  employee-list test asserts through `formatMoney()` rather than a hardcoded string, so it tracks
+  any future format change automatically.
+- PR #236 **deleted** `MyRequestsPage.jsx` and folded it into `ProfilePage.jsx`. The pages still
+  depending on the shared `.reflow-cards` CSS are therefore: `AttendancePage`, `CommissionPage`,
+  `LeavePage`, `OvertimePage`, `ProfilePage`. Still 5 — do not delete that rule.
 
 ## Agent / Model Used
 Claude Opus 4.8
@@ -49,9 +60,16 @@ npm run lint && npm test && npm run build
 
 ## Test / Build Results
 - **Lint: pass** — 0 errors. 4 warnings, all pre-existing `react-hooks/exhaustive-deps` in `AttendancePage`/`CommissionPage`/`PayrollPage`, none in changed files.
-- **Frontend tests: pass** — 35 files, **207 tests** (up from 190; +16 employee-list, +1 DataTable). All pre-existing tests still green, including `DataTable`'s original 9 and the two `App.test.jsx` cases that render `/employees`.
-- **Build: pass** — `✓ built in 163ms`.
+- **Frontend tests: pass** — post-merge, 36 files / **214 tests** (pre-merge on this branch alone: 35 files / 207, up from 190 on base; +16 employee-list, +1 DataTable). `DataTable`'s original 9 and the two `App.test.jsx` cases that render `/employees` all still green.
+- **Build: pass.**
 - **Backend: not run.** No backend files were touched.
+
+⚠️ **Flaky test observed.** One post-merge local run reported 5 failing files (incl.
+`TicketDetailPage > delivery modal …` at 4.4s) while the machine was loaded by a dev server and
+other processes; the suite took 53s instead of ~9s. Two subsequent clean runs were fully green
+(36/36, 214/214), and CI was green. These look like timeout-sensitive tests under CPU contention,
+not a regression from this branch — but they are worth watching, since a loaded CI runner could
+reproduce them.
 
 ## Browser Verification (mock, `VITE_USE_MOCKS=true`)
 
