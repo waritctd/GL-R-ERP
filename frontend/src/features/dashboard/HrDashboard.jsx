@@ -94,8 +94,13 @@ export function HrDashboard({ employee, employees, profileRequests, dashboardSum
       <ActionQueue items={queueItems} />
 
       <StatGrid>
-        <StatCard icon="users" label="พนักงานทั้งหมด" value={dashboardStats.totalCount} helper="Total employees" tone="indigo" onClick={() => navigate('/employees')} />
-        <StatCard icon="badgeCheck" label="ทำงานปกติ" value={dashboardStats.activeCount} helper="Active" tone="teal" onClick={() => navigate('/employees')} />
+        {/* The list now defaults to currently-employed staff, so the total card has
+            to ask for every status explicitly or it would open a shorter list than
+            the number it advertises. `activeCount` counts `active` (ACT+PRB), which
+            is exactly the list's default — and why this card is labelled
+            ปฏิบัติงานอยู่ rather than ทำงานปกติ, which means ACT alone. */}
+        <StatCard icon="users" label="พนักงานทั้งหมด" value={dashboardStats.totalCount} helper="Total employees" tone="indigo" onClick={() => navigate('/employees?status=all')} />
+        <StatCard icon="badgeCheck" label="ปฏิบัติงานอยู่" value={dashboardStats.activeCount} helper="Active" tone="teal" onClick={() => navigate('/employees')} />
         <StatCard icon="clipboard" label="รออนุมัติทั้งหมด" value={dashboardStats.pendingCount} helper="Approvals" tone="rose" />
         <StatCard icon="badgeCheck" label="มาวันนี้" value={dashboardStats.todayPresent} helper="Attendance" tone="teal" onClick={() => navigate('/attendance')} />
       </StatGrid>
