@@ -748,6 +748,15 @@ textarea:focus {
   flex: 1;
 }
 
+/* The amount and its date/note are separate lines, not a run-on: without this
+   the inline <strong> and <small> collide ("฿104,6501 ม.ค. 2555"). Latent while
+   the section defaulted to collapsed; visible now that it always renders. */
+.salary-history > div > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .action-list button {
   min-height: 46px;
   border: 1px solid var(--color-border);
