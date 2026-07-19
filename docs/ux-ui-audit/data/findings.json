@@ -37,25 +37,27 @@
           "UX-09",
           "UX-07",
           "UX-27",
-          "UX-12"
+          "UX-12",
+          "UX-08",
+          "UX-38"
         ],
         "remaining": [
-          "UX-08",
-          "UX-03",
+          "UX-03 (2 surfaces left)",
           "UX-04"
         ],
         "newFindings": [
-          "UX-37"
+          "UX-37 (open)",
+          "UX-38 (fixed)"
         ],
         "uxo3Slices": {
           "done": [
             "ProductFormModal",
-            "TicketCreateModal"
+            "TicketCreateModal",
+            "CeoSettings editor"
           ],
           "remaining": [
             "DepositNoticePage",
-            "TicketDetailPage inline forms",
-            "CeoSettings editor"
+            "TicketDetailPage inline forms"
           ]
         },
         "regressionsCaught": [
@@ -145,8 +147,8 @@
       "validation": "Submit an empty TicketCreateModal; verify each required field (customer, project, product rows) shows an inline error and the first is focused/scrolled to.",
       "effort": "L",
       "confidence": "High",
-      "fixNote": "IN PROGRESS, 2 of 5 surfaces. ProductFormModal migrated to react-hook-form + zod + FormField [310a032]. TicketCreateModal — the finding’s headline case — now produces keyed per-field zod errors with aria-invalid / aria-describedby and scroll+focus to the first invalid field [16895c5]; verified live that a blank item row flags six fields individually rather than emitting one generic bottom-of-form string. react-hook-form was deliberately not forced onto TicketCreateModal’s async selectors and dynamic rows. Remaining surfaces: DepositNoticePage, TicketDetailPage inline forms, CeoSettings editor.",
-      "fixedIn": "310a032, 16895c5 [partial: 2 of 5 surfaces]"
+      "fixNote": "IN PROGRESS, 3 of 5 surfaces. ProductFormModal migrated to react-hook-form + zod + FormField [310a032]. TicketCreateModal — the finding’s headline case — now produces keyed per-field zod errors with aria wiring and scroll+focus to the first invalid field [16895c5]; verified live that a blank item row flags six fields individually instead of one generic bottom-of-form string. CeoSettings FX override and the six pricing fields now show inline per-field errors, FX keyed per currency so errors never leak across rows [e3281b9]. Remaining surfaces: DepositNoticePage, TicketDetailPage inline forms.",
+      "fixedIn": "310a032, 16895c5, e3281b9 [partial: 3 of 5 surfaces]"
     },
     {
       "id": "UX-04",
@@ -275,7 +277,10 @@
       ],
       "validation": "Open the price-config editor, Tab through it, press Escape; confirm containment and restore.",
       "effort": "M",
-      "confidence": "High"
+      "confidence": "High",
+      "fixed": true,
+      "fixedIn": "e3281b9",
+      "fixNote": "Rebuilt on the shared Modal. Verified live: role=dialog, aria-modal=true, focus stays inside across 25 Tab presses, Escape closes. Previously the overlay reported zero [role=dialog] nodes, so keyboard focus escaped to the page behind while the CEO edited pricing."
     },
     {
       "id": "UX-09",
@@ -1014,6 +1019,33 @@
       "validation": "Parse the schema with an empty newPassword and expect success=false; then drive the forced gate and confirm an inline error.",
       "effort": "XS",
       "confidence": "High"
+    },
+    {
+      "id": "UX-38",
+      "title": "Clearing a CEO pricing field silently saved 0 (no validation on the price-config editor)",
+      "severity": "P2",
+      "category": "Data integrity / Forms",
+      "route": "/ceo-settings",
+      "viewport": "Desktop + Mobile",
+      "role": "ceo",
+      "frequency": "Edge case, high consequence",
+      "evidence": [],
+      "observed": "The price-config editor had no validation on any of its six pricing inputs. saveConfig built its payload with Number(configDraft.field), and Number(\"\") === 0 — so clearing a field and saving persisted 0 for that pricing input, with a success toast and no warning. Discovered while implementing UX-03 slice 3.",
+      "impact": "A zeroed marginPct or freightPerSqm would silently under-price every subsequent deal for that country, and the CIF calculation would keep using it as a legitimate value. The CEO gets a success message either way, so the corruption is invisible until margins are reconciled.",
+      "root_cause": "No validation layer on the config editor, combined with JavaScript coercing an empty string to 0.",
+      "principle": "Error prevention; data integrity over silent coercion",
+      "recommendation": "Require each pricing field to be non-empty and a number >= 0, block the save, and show the error inline on the offending field.",
+      "acceptance": [
+        "A blank pricing field is rejected inline and the save is blocked.",
+        "The percentage round-trip (x100 in / 100 out) is unchanged.",
+        "No pricing field can persist as 0 unless the CEO explicitly typed 0."
+      ],
+      "validation": "Clear a pricing field and save; expect an inline error and no API call. Confirm a deliberately typed 0 still saves.",
+      "effort": "S",
+      "confidence": "High",
+      "fixed": true,
+      "fixedIn": "e3281b9",
+      "fixNote": "Fixed in the same commit as UX-08 / UX-03 slice 3. Blank fields now rejected inline with role=alert; verified live (cfg-freightPerSqm flagged, save blocked, dialog stayed open) and mutation-tested — relaxing the schema fails the guard test."
     }
   ]
 }
