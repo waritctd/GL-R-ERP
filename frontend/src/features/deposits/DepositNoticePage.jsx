@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { z } from 'zod';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
@@ -8,6 +9,7 @@ import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 
@@ -23,6 +25,79 @@ function money(v) {
   return Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// ── validation (UX-03) ──────────────────────────────────────────────────────
+// This gate fires ONLY from handleIssue() — never from handleSave() or the
+// preview path. This is a draft editor: users save partial drafts
+// incrementally, and blocking that would break a legitimate workflow.
+// Issuing is different — it is irreversible (fields become read-only) and it
+// advances the ticket's payment track, so it is the one action worth
+// validating before the confirm dialog even opens. Every field below is
+// hand-wired (not <FormField>): each candidate control already lives inside
+// a pre-existing `<label style={{...}}>` or a CSS-grid table row whose exact
+// markup this task must not restyle (UX-18 is a separate, out-of-scope
+// finding) — nesting <FormField>'s own <label> inside those would either
+// produce an invalid nested <label> or silently change spacing/typography.
+const customerNameSchema = z.string().trim().min(1, 'กรุณากรอกชื่อบริษัท / หน่วยงาน');
+
+function makeLineItemSchema(rowNumber) {
+  return z.object({
+    description: z.string(),
+    qty: z.union([z.string(), z.number()]).nullable().optional(),
+  }).superRefine((item, ctx) => {
+    if (!String(item.description ?? '').trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['description'], message: `กรุณากรอกรายละเอียดสินค้าในรายการที่ ${rowNumber}` });
+    }
+    if (!item.qty || Number(item.qty) <= 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['qty'], message: `กรุณากรอกจำนวนมากกว่า 0 ในรายการที่ ${rowNumber}` });
+    }
+  });
+}
+
+/**
+ * Validates the deposit notice at ISSUE time only. Returns every invalid
+ * field plus `order` — those same keys in on-screen top-to-bottom order — so
+ * handleIssue() can scroll/focus the first one without depending on zod's
+ * internal issue ordering.
+ */
+function validateIssueForm({ customerName, items, total }) {
+  const errors = {};
+  const order = [];
+
+  const nameResult = customerNameSchema.safeParse(customerName);
+  if (!nameResult.success) {
+    errors.customerName = nameResult.error.issues[0].message;
+    order.push('customerName');
+  }
+
+  if (items.length === 0) {
+    errors.items = 'กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ';
+    order.push('items');
+  } else {
+    items.forEach((item, index) => {
+      const result = makeLineItemSchema(index + 1).safeParse(item);
+      if (!result.success) {
+        for (const issue of result.error.issues) {
+          const key = `items.${index}.${issue.path[0]}`;
+          errors[key] = issue.message;
+          order.push(key);
+        }
+      }
+    });
+  }
+
+  // Rule 4: issuing a ฿0 deposit notice is meaningless and would still
+  // advance the ticket's payment track. Only checked once the rules above
+  // are otherwise satisfied — a ฿0 total caused by missing item data is
+  // already covered by those, and flagging it again here would just be a
+  // second message for the same root cause.
+  if (order.length === 0 && !(Number(total) > 0)) {
+    errors.total = 'ยอดเงินรวมต้องมากกว่า 0 บาท — กรุณาตรวจสอบราคาต่อหน่วยและจำนวนในรายการสินค้า';
+    order.push('total');
+  }
+
+  return { errors, order };
+}
+
 export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToast }) {
   const queryClient = useQueryClient();
   const [customerSearch, setCsSearch] = useState('');
@@ -30,6 +105,22 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   const [confirmIssue, setConfirmIssue] = useState(false);
   const [downloading, setDownloading] = useState(null); // 'xlsx' | 'pdf' | null
   const iframeRef = useRef(null);
+
+  // UX-03: per-field issue-validation errors, keyed 'customerName' | 'items'
+  // (at-least-one-line-item) | `items.<index>.<field>` | 'total'. Populated
+  // only by handleIssue() below — see the SCOPING DECISION comment on
+  // validateIssueForm(). fieldRefs holds the DOM node for each key so a
+  // failed issue attempt can scroll/focus the first invalid field.
+  const [fieldErrors, setFieldErrors] = useState({});
+  const fieldRefs = useRef({});
+  function clearFieldError(key) {
+    setFieldErrors((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }
 
   // form state
   const [form, setForm] = useState({
@@ -139,6 +230,10 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   const docSeedKey = doc ? `${doc.id}:${doc.version}:${doc.status}` : null;
   useEffect(() => {
     if (doc) populateForm(doc, customers);
+    // A reseed means a different document identity (or the same one flipping
+    // to ISSUED) — any leftover UX-03 issue-validation errors belong to the
+    // previous edit session and would otherwise linger on screen.
+    setFieldErrors({});
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately keyed on docSeedKey only, see comment above
   }, [docSeedKey]);
 
@@ -196,6 +291,23 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
 
   function handleIssue() {
     if (!doc) return;
+    // UX-03: validate before opening the confirm dialog — don't ask "are you
+    // sure?" for something that's then going to fail. `total` is read here
+    // (never written) from the money-math block below; see the HARD
+    // CONSTRAINT comment on that block.
+    const { errors, order } = validateIssueForm({ customerName: form.customerName, items: form.items, total });
+    if (order.length > 0) {
+      setFieldErrors(errors);
+      const node = fieldRefs.current[order[0]];
+      if (node) {
+        if (typeof node.scrollIntoView === 'function') {
+          node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        node.focus();
+      }
+      return;
+    }
+    setFieldErrors({});
     setConfirmIssue(true);
   }
 
@@ -228,6 +340,11 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
 
   function setField(key, value) {
     setForm((f) => ({ ...f, [key]: value }));
+    if (key === 'customerName') clearFieldError('customerName');
+    // The deposit % toggle feeds directly into `deposit`/`total` below —
+    // clear a stale "total must be > 0" error so it can be re-checked fresh
+    // on the next issue attempt.
+    if (key === 'depositPercent') clearFieldError('total');
   }
 
   function selectCustomer(c) {
@@ -238,6 +355,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
       customerAddress: [c.address, c.branch].filter(Boolean).join(' '),
     }));
     setCsSearch('');
+    clearFieldError('customerName');
   }
 
   function toggleNote(text) {
@@ -261,6 +379,11 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
         return updated;
       }),
     }));
+    if (key === 'description') clearFieldError(`items.${idx}.description`);
+    if (key === 'qty') clearFieldError(`items.${idx}.qty`);
+    // Any of these four feed into `total` below — clear a stale "total must
+    // be > 0" error so it's re-checked fresh on the next issue attempt.
+    if (['qty', 'unitPrice', 'netUnitPrice', 'discountLabel'].includes(key)) clearFieldError('total');
   }
 
   async function handleDownloadXlsx() {
@@ -489,9 +612,21 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               </div>
               <label style={{ fontSize: 12 }}>
                 ชื่อบริษัท / หน่วยงาน *
-                <input value={form.customerName} disabled={isIssued}
-                  onChange={(e) => setField('customerName', e.target.value)} placeholder="บริษัท..." />
+                <input
+                  id="doc-customer-name"
+                  ref={(el) => { fieldRefs.current.customerName = el; }}
+                  value={form.customerName} disabled={isIssued}
+                  onChange={(e) => setField('customerName', e.target.value)} placeholder="บริษัท..."
+                  aria-required="true"
+                  aria-invalid={fieldErrors.customerName ? true : undefined}
+                  aria-describedby={fieldErrors.customerName ? fieldErrorId('doc-customer-name') : undefined}
+                />
               </label>
+              {fieldErrors.customerName ? (
+                <p id={fieldErrorId('doc-customer-name')} role="alert" style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                  {fieldErrors.customerName}
+                </p>
+              ) : null}
               <label style={{ fontSize: 12 }}>
                 เลขประจำตัวผู้เสียภาษี
                 <input value={form.customerTaxId} disabled={isIssued}
@@ -520,7 +655,21 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           {/* Items table */}
           <section className="panel">
             <div className="panel-header"><h2>รายการสินค้า ({form.items.length} รายการ)</h2></div>
-            <div style={{ padding: '0 18px 14px' }}>
+            {/*
+              UX-03: this whole panel body is the scroll/focus target for the
+              "at least 1 line item" rule — there's no single input to point
+              at when the list is empty, so (like TicketCreateModal's project
+              selector) the wrapper itself carries aria-invalid/
+              aria-describedby and a tabIndex so it's focusable.
+            */}
+            <div
+              id="doc-items-panel"
+              ref={(el) => { fieldRefs.current.items = el; }}
+              tabIndex={-1}
+              aria-invalid={fieldErrors.items ? true : undefined}
+              aria-describedby={fieldErrors.items ? fieldErrorId('doc-items-panel') : undefined}
+              style={{ padding: '0 18px 14px' }}
+            >
               {/* Muted Floor fix: was Ink Faint (#94a3b8) on a table header label —
                   DESIGN.md specifies Ink Muted (#64748b) for `.table-head` overline text. */}
               <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) minmax(0,60px) minmax(0,80px) minmax(0,80px) minmax(0,80px)', gap: 6, padding: '8px 0', borderBottom: '1px solid var(--color-border)', fontSize: 11, fontWeight: 700, color: 'var(--color-text-muted)' }}>
@@ -541,12 +690,35 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                     </>
                   ) : (
                     <>
-                      <input value={it.description ?? ''} placeholder="รายละเอียดสินค้า"
-                        onChange={(e) => setItemField(idx, 'description', e.target.value)}
-                        style={{ fontSize: 12 }} />
-                      <input type="number" value={it.qty ?? ''} placeholder="จำนวน"
-                        onChange={(e) => setItemField(idx, 'qty', e.target.value)}
-                        style={{ fontSize: 12, textAlign: 'right' }} />
+                      <div>
+                        <input
+                          id={`doc-item-${idx}-description`}
+                          ref={(el) => { fieldRefs.current[`items.${idx}.description`] = el; }}
+                          value={it.description ?? ''} placeholder="รายละเอียดสินค้า"
+                          onChange={(e) => setItemField(idx, 'description', e.target.value)}
+                          aria-invalid={fieldErrors[`items.${idx}.description`] ? true : undefined}
+                          aria-describedby={fieldErrors[`items.${idx}.description`] ? fieldErrorId(`doc-item-${idx}-description`) : undefined}
+                          style={{ fontSize: 12, width: '100%', boxSizing: 'border-box' }} />
+                        {fieldErrors[`items.${idx}.description`] ? (
+                          <p id={fieldErrorId(`doc-item-${idx}-description`)} role="alert" style={{ margin: '2px 0 0', fontSize: 10, fontWeight: 700, color: 'var(--color-danger)' }}>
+                            {fieldErrors[`items.${idx}.description`]}
+                          </p>
+                        ) : null}
+                      </div>
+                      <div>
+                        <input type="number" value={it.qty ?? ''} placeholder="จำนวน"
+                          id={`doc-item-${idx}-qty`}
+                          ref={(el) => { fieldRefs.current[`items.${idx}.qty`] = el; }}
+                          onChange={(e) => setItemField(idx, 'qty', e.target.value)}
+                          aria-invalid={fieldErrors[`items.${idx}.qty`] ? true : undefined}
+                          aria-describedby={fieldErrors[`items.${idx}.qty`] ? fieldErrorId(`doc-item-${idx}-qty`) : undefined}
+                          style={{ fontSize: 12, textAlign: 'right', width: '100%', boxSizing: 'border-box' }} />
+                        {fieldErrors[`items.${idx}.qty`] ? (
+                          <p id={fieldErrorId(`doc-item-${idx}-qty`)} role="alert" style={{ margin: '2px 0 0', fontSize: 10, fontWeight: 700, color: 'var(--color-danger)' }}>
+                            {fieldErrors[`items.${idx}.qty`]}
+                          </p>
+                        ) : null}
+                      </div>
                       <input type="number" value={it.unitPrice ?? ''} placeholder="ราคา"
                         onChange={(e) => setItemField(idx, 'unitPrice', e.target.value)}
                         style={{ fontSize: 12, textAlign: 'right' }} />
@@ -562,10 +734,18 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               ))}
               {!isIssued && (
                 <button type="button" className="secondary-button" style={{ marginTop: 8, fontSize: 12 }}
-                  onClick={() => setForm((f) => ({ ...f, items: [...f.items, { seq: f.items.length + 1, description: '', qty: 1, unit: 'แผ่น', unitPrice: 0, netUnitPrice: 0 }] }))}>
+                  onClick={() => {
+                    setForm((f) => ({ ...f, items: [...f.items, { seq: f.items.length + 1, description: '', qty: 1, unit: 'แผ่น', unitPrice: 0, netUnitPrice: 0 }] }));
+                    clearFieldError('items');
+                  }}>
                   <Icon name="plus" size={12} /> เพิ่มรายการ
                 </button>
               )}
+              {fieldErrors.items ? (
+                <p id={fieldErrorId('doc-items-panel')} role="alert" style={{ margin: '8px 0 0', fontSize: 12, fontWeight: 700, color: 'var(--color-danger)' }}>
+                  {fieldErrors.items}
+                </p>
+              ) : null}
             </div>
           </section>
 
@@ -588,7 +768,20 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           {/* Summary + Deposit % */}
           <section className="panel">
             <div className="panel-header"><h2>สรุปยอด</h2></div>
-            <div style={{ padding: '14px 18px' }}>
+            {/*
+              UX-03: scroll/focus target for the "total must be > 0" rule —
+              total is a computed value with no single input of its own, so
+              (same technique as doc-items-panel above) this wrapper carries
+              the aria-invalid/aria-describedby contract itself.
+            */}
+            <div
+              id="doc-summary-panel"
+              ref={(el) => { fieldRefs.current.total = el; }}
+              tabIndex={-1}
+              aria-invalid={fieldErrors.total ? true : undefined}
+              aria-describedby={fieldErrors.total ? fieldErrorId('doc-summary-panel') : undefined}
+              style={{ padding: '14px 18px' }}
+            >
               {!isIssued && (
                 <label style={{ fontSize: 12, marginBottom: 12, display: 'block' }}>
                   % มัดจำ
@@ -619,6 +812,11 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                   <code className="font-mono" style={{ fontWeight: bold ? 700 : 400, color: bold ? 'var(--color-text)' : 'var(--color-text-secondary)' }}>{money(value)} บาท</code>
                 </div>
               ))}
+              {fieldErrors.total ? (
+                <p id={fieldErrorId('doc-summary-panel')} role="alert" style={{ margin: '8px 0 0', fontSize: 12, fontWeight: 700, color: 'var(--color-danger)' }}>
+                  {fieldErrors.total}
+                </p>
+              ) : null}
               {/* Next-action helper — describes exactly what api.depositNotices.issue
                   does (src/api/mockApi.js ~L2322-2345): assigns a real docNumber,
                   flips this document to ISSUED (fields above become read-only via

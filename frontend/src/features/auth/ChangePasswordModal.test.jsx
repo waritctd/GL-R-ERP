@@ -27,9 +27,9 @@ describe('ChangePasswordModal form validation', () => {
   it('blocks submit and shows the too-short message when new password is under 8 characters', async () => {
     const { onSubmit } = renderModal();
 
-    fireEvent.change(screen.getByLabelText('รหัสผ่านปัจจุบัน'), { target: { value: 'oldpass123' } });
+    fireEvent.change(screen.getByLabelText(/รหัสผ่านปัจจุบัน/), { target: { value: 'oldpass123' } });
     fireEvent.change(screen.getByLabelText('รหัสผ่านใหม่'), { target: { value: 'short1' } });
-    fireEvent.change(screen.getByLabelText('ยืนยันรหัสผ่านใหม่'), { target: { value: 'short1' } });
+    fireEvent.change(screen.getByLabelText(/ยืนยันรหัสผ่านใหม่/), { target: { value: 'short1' } });
 
     expect(await screen.findByText('รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร')).not.toBeNull();
 
@@ -46,7 +46,7 @@ describe('ChangePasswordModal form validation', () => {
 
     // Leave รหัสผ่านปัจจุบัน empty; fill a valid, matching new/confirm password.
     fireEvent.change(screen.getByLabelText('รหัสผ่านใหม่'), { target: { value: 'newpass123' } });
-    fireEvent.change(screen.getByLabelText('ยืนยันรหัสผ่านใหม่'), { target: { value: 'newpass123' } });
+    fireEvent.change(screen.getByLabelText(/ยืนยันรหัสผ่านใหม่/), { target: { value: 'newpass123' } });
 
     fireEvent.click(screen.getByRole('button', { name: /บันทึกรหัสผ่าน/ }));
 
@@ -58,9 +58,9 @@ describe('ChangePasswordModal form validation', () => {
   it('blocks submit and shows the mismatch message when confirm password does not match', async () => {
     const { onSubmit } = renderModal();
 
-    fireEvent.change(screen.getByLabelText('รหัสผ่านปัจจุบัน'), { target: { value: 'oldpass123' } });
+    fireEvent.change(screen.getByLabelText(/รหัสผ่านปัจจุบัน/), { target: { value: 'oldpass123' } });
     fireEvent.change(screen.getByLabelText('รหัสผ่านใหม่'), { target: { value: 'newpass123' } });
-    fireEvent.change(screen.getByLabelText('ยืนยันรหัสผ่านใหม่'), { target: { value: 'newpass456' } });
+    fireEvent.change(screen.getByLabelText(/ยืนยันรหัสผ่านใหม่/), { target: { value: 'newpass456' } });
 
     expect(await screen.findByText('รหัสผ่านใหม่และการยืนยันไม่ตรงกัน')).not.toBeNull();
 
@@ -75,9 +75,9 @@ describe('ChangePasswordModal form validation', () => {
   it('sends the existing change-password payload shape for a valid submit', async () => {
     const { onSubmit } = renderModal();
 
-    fireEvent.change(screen.getByLabelText('รหัสผ่านปัจจุบัน'), { target: { value: 'oldpass123' } });
+    fireEvent.change(screen.getByLabelText(/รหัสผ่านปัจจุบัน/), { target: { value: 'oldpass123' } });
     fireEvent.change(screen.getByLabelText('รหัสผ่านใหม่'), { target: { value: 'newpass123' } });
-    fireEvent.change(screen.getByLabelText('ยืนยันรหัสผ่านใหม่'), { target: { value: 'newpass123' } });
+    fireEvent.change(screen.getByLabelText(/ยืนยันรหัสผ่านใหม่/), { target: { value: 'newpass123' } });
 
     fireEvent.click(screen.getByRole('button', { name: /บันทึกรหัสผ่าน/ }));
 

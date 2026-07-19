@@ -74,7 +74,7 @@ describe('LeavePage form validation', () => {
   it('blocks submit when start date is before today', async () => {
     renderLeavePage();
 
-    const startInput = await screen.findByLabelText('วันที่เริ่ม');
+    const startInput = await screen.findByLabelText(/วันที่เริ่ม/);
     fireEvent.change(startInput, { target: { value: '2020-01-01' } });
 
     expect(await screen.findByText('วันที่เริ่มลาต้องไม่ก่อนวันนี้')).not.toBeNull();
@@ -93,9 +93,9 @@ describe('LeavePage form validation', () => {
     // Use a far-future date so the startDateInPast rule never makes this test
     // time-dependent (a fixed near-future date would start failing once it passes).
     const futureDate = '2099-12-31';
-    const startInput = await screen.findByLabelText('วันที่เริ่ม');
+    const startInput = await screen.findByLabelText(/วันที่เริ่ม/);
     fireEvent.change(startInput, { target: { value: futureDate } });
-    fireEvent.change(screen.getByLabelText('เหตุผลการลา'), { target: { value: 'ทดสอบระบบ' } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
     fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
 
     await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));

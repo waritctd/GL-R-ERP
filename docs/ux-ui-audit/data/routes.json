@@ -1,0 +1,268 @@
+[
+  {
+    "path": "/",
+    "name": "Employee/role dashboard",
+    "intended_access": "all",
+    "desktop_roles": [
+      "hr",
+      "employee",
+      "sales",
+      "sales_manager",
+      "import",
+      "account",
+      "ceo"
+    ],
+    "mobile_roles": [
+      "hr",
+      "employee",
+      "sales",
+      "sales_manager",
+      "import",
+      "account",
+      "ceo"
+    ]
+  },
+  {
+    "path": "/hr",
+    "name": "HR overview",
+    "intended_access": "hr",
+    "desktop_roles": [
+      "hr"
+    ],
+    "mobile_roles": [
+      "hr"
+    ]
+  },
+  {
+    "path": "/employees",
+    "name": "Employee master list",
+    "intended_access": "hr",
+    "desktop_roles": [
+      "hr"
+    ],
+    "mobile_roles": [
+      "hr"
+    ]
+  },
+  {
+    "path": "/requests",
+    "name": "Profile-change requests review",
+    "intended_access": "hr",
+    "desktop_roles": [
+      "hr"
+    ],
+    "mobile_roles": [
+      "hr"
+    ]
+  },
+  {
+    "path": "/my-requests",
+    "name": "My profile requests",
+    "intended_access": "employee",
+    "desktop_roles": [
+      "employee"
+    ],
+    "mobile_roles": [
+      "employee"
+    ]
+  },
+  {
+    "path": "/profile",
+    "name": "My profile",
+    "intended_access": "employee/hr/ceo/sales_manager",
+    "desktop_roles": [
+      "hr",
+      "employee",
+      "sales_manager",
+      "ceo"
+    ],
+    "mobile_roles": [
+      "hr",
+      "employee",
+      "sales_manager",
+      "ceo"
+    ]
+  },
+  {
+    "path": "/overtime",
+    "name": "Overtime requests",
+    "intended_access": "employeeId/hr/ceo",
+    "desktop_roles": [
+      "hr",
+      "employee",
+      "sales_manager",
+      "ceo"
+    ],
+    "mobile_roles": [
+      "hr",
+      "employee",
+      "sales_manager",
+      "ceo"
+    ]
+  },
+  {
+    "path": "/leave",
+    "name": "Leave requests",
+    "intended_access": "employeeId/hr/ceo",
+    "desktop_roles": [
+      "hr",
+      "employee",
+      "sales_manager",
+      "ceo"
+    ],
+    "mobile_roles": [
+      "hr",
+      "employee",
+      "sales_manager",
+      "ceo"
+    ]
+  },
+  {
+    "path": "/payroll",
+    "name": "Payroll processing",
+    "intended_access": "hr",
+    "desktop_roles": [
+      "hr"
+    ],
+    "mobile_roles": [
+      "hr"
+    ]
+  },
+  {
+    "path": "/attendance",
+    "name": "Attendance records",
+    "intended_access": "all (nav-gated)",
+    "desktop_roles": [
+      "hr",
+      "employee",
+      "sales",
+      "sales_manager",
+      "import",
+      "account",
+      "ceo"
+    ],
+    "mobile_roles": [
+      "hr",
+      "employee",
+      "sales",
+      "sales_manager",
+      "import",
+      "account",
+      "ceo"
+    ]
+  },
+  {
+    "path": "/ticket-overview",
+    "name": "Sales pipeline overview",
+    "intended_access": "ticket viewers",
+    "desktop_roles": [
+      "sales",
+      "sales_manager",
+      "import",
+      "account",
+      "ceo"
+    ],
+    "mobile_roles": [
+      "sales",
+      "sales_manager",
+      "import",
+      "account",
+      "ceo"
+    ]
+  },
+  {
+    "path": "/tickets",
+    "name": "Deal list",
+    "intended_access": "ticket viewers",
+    "desktop_roles": [
+      "sales",
+      "sales_manager",
+      "import",
+      "account",
+      "ceo"
+    ],
+    "mobile_roles": [
+      "sales",
+      "sales_manager",
+      "import",
+      "account",
+      "ceo"
+    ]
+  },
+  {
+    "path": "/commissions",
+    "name": "Commissions",
+    "intended_access": "sales/mgr/ceo/hr",
+    "desktop_roles": [
+      "hr",
+      "sales",
+      "sales_manager",
+      "ceo"
+    ],
+    "mobile_roles": [
+      "hr",
+      "sales",
+      "sales_manager",
+      "ceo"
+    ]
+  },
+  {
+    "path": "/price-import",
+    "name": "Price import & products",
+    "intended_access": "import/ceo",
+    "desktop_roles": [
+      "import",
+      "ceo"
+    ],
+    "mobile_roles": [
+      "import",
+      "ceo"
+    ]
+  },
+  {
+    "path": "/ceo-settings",
+    "name": "FX & pricing config",
+    "intended_access": "ceo (nav-gated, no route guard)",
+    "desktop_roles": [
+      "hr",
+      "employee",
+      "sales",
+      "sales_manager",
+      "import",
+      "account",
+      "ceo"
+    ],
+    "mobile_roles": [
+      "hr",
+      "employee",
+      "sales",
+      "sales_manager",
+      "import",
+      "account",
+      "ceo"
+    ]
+  },
+  {
+    "path": "/catalog",
+    "name": "Product catalog search",
+    "intended_access": "all (nav-gated)",
+    "desktop_roles": [
+      "hr",
+      "employee",
+      "sales",
+      "sales_manager",
+      "import",
+      "account",
+      "ceo"
+    ],
+    "mobile_roles": [
+      "hr",
+      "employee",
+      "sales",
+      "sales_manager",
+      "import",
+      "account",
+      "ceo"
+    ]
+  }
+]

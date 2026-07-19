@@ -28,6 +28,16 @@ describe('hasPermission', () => {
     expect(hasPermission('sales', 'canManageCatalogProducts')).toBe(false);
     expect(hasPermission('employee', 'canManageCatalogProducts')).toBe(false);
   });
+
+  it('scopes sensitive employee data (salary, salary history, PDPA tab) to hr only (UX-09)', () => {
+    expect(hasPermission('hr', 'canViewSensitiveEmployeeData')).toBe(true);
+    expect(hasPermission('employee', 'canViewSensitiveEmployeeData')).toBe(false);
+    expect(hasPermission('sales', 'canViewSensitiveEmployeeData')).toBe(false);
+    expect(hasPermission('sales_manager', 'canViewSensitiveEmployeeData')).toBe(false);
+    expect(hasPermission('ceo', 'canViewSensitiveEmployeeData')).toBe(false);
+    expect(hasPermission('import', 'canViewSensitiveEmployeeData')).toBe(false);
+    expect(hasPermission('account', 'canViewSensitiveEmployeeData')).toBe(false);
+  });
 });
 
 describe('allowedRoute', () => {
@@ -142,10 +152,19 @@ describe('canAccessPath', () => {
   });
 
   it('allows unguarded and unknown paths for any authenticated user', () => {
-    // `/` and `/attendance` are open to everyone; `/ceo-settings` is nav-gated
-    // only (no allowedRoute guard historically) so canAccessPath lets it through.
+    // `/` and `/attendance` are intentionally open to every authenticated user
+    // (UX-20 tracks whether that should change) — not covered by this fix.
     expect(canAccessPath('/', employee)).toBe(true);
     expect(canAccessPath('/attendance', employee)).toBe(true);
-    expect(canAccessPath('/ceo-settings', employee)).toBe(true);
+  });
+
+  it('gates ceo-settings to the ceo role, matching the sidebar nav condition (UX-19)', () => {
+    expect(canAccessPath('/ceo-settings', ceo)).toBe(true);
+    expect(canAccessPath('/ceo-settings', hr)).toBe(false);
+    expect(canAccessPath('/ceo-settings', employee)).toBe(false);
+    expect(canAccessPath('/ceo-settings', sales)).toBe(false);
+    expect(canAccessPath('/ceo-settings', importer)).toBe(false);
+    expect(canAccessPath('/ceo-settings', { role: 'account', employeeId: 3 })).toBe(false);
+    expect(canAccessPath('/ceo-settings', { role: 'sales_manager', employeeId: 4 })).toBe(false);
   });
 });

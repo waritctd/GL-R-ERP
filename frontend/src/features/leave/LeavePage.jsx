@@ -507,7 +507,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
               <input id="leave-employee-display" value={currentEmployee?.nameTh || user.name || '-'} disabled />
             </FormField>
           )}
-          <FormField label="ประเภทการลา" htmlFor="leave-type-code" error={errors.leaveTypeCode?.message}>
+          <FormField label="ประเภทการลา" htmlFor="leave-type-code" error={errors.leaveTypeCode?.message} required>
             <select
               id="leave-type-code"
               {...register('leaveTypeCode')}
@@ -529,6 +529,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
             label="วันที่เริ่ม"
             htmlFor="leave-start-date"
             error={startDateError}
+            required
           >
             <input
               id="leave-start-date"
@@ -540,7 +541,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
               required
             />
           </FormField>
-          <FormField label="วันที่สิ้นสุด" htmlFor="leave-end-date" error={errors.endDate?.message}>
+          <FormField label="วันที่สิ้นสุด" htmlFor="leave-end-date" error={errors.endDate?.message} required>
             <input
               id="leave-end-date"
               type="date"
@@ -561,7 +562,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
             />
           </FormField>
           <div className={formGridSpan2}>
-            <FormField label="เหตุผลการลา" htmlFor="leave-reason" error={errors.reason?.message}>
+            <FormField label="เหตุผลการลา" htmlFor="leave-reason" error={errors.reason?.message} required>
               <textarea
                 id="leave-reason"
                 className={errors.reason ? 'is-invalid' : ''}

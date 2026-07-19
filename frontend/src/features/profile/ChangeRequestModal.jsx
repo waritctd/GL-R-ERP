@@ -47,7 +47,7 @@ export function ChangeRequestModal({ requestField, onClose, onSubmit }) {
           ค่าเดิม
           <input value={requestField.oldValue} readOnly />
         </label>
-        <FormField label="ค่าใหม่" htmlFor="change-request-new-value" error={errors.newValue?.message}>
+        <FormField label="ค่าใหม่" htmlFor="change-request-new-value" error={errors.newValue?.message} required>
           <textarea
             id="change-request-new-value"
             rows="3"

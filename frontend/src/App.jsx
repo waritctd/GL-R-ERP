@@ -124,7 +124,14 @@ export function App() {
       setUser(response.user);
       showToast('success', 'เข้าสู่ระบบสำเร็จ');
     } catch (error) {
-      setLoginError(error.message || 'เข้าสู่ระบบไม่สำเร็จ');
+      // Never surface the raw server message on the login screen (it's English —
+      // see AuthService.INVALID_CREDENTIALS / mockApi's matching 401). Map by
+      // HTTP status (client.js's ApiError carries one) to Thai copy instead.
+      setLoginError(
+        error.status === 401
+          ? 'อีเมลหรือรหัสผ่านไม่ถูกต้อง'
+          : 'เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง'
+      );
     } finally {
       setLoading(false);
     }
@@ -231,7 +238,7 @@ export function App() {
             />
             <Route
               path="/requests"
-              element={<ProfileRequestsPage profileRequests={profileRequests} onReview={reviewProfileRequest} />}
+              element={<ProfileRequestsPage profileRequests={profileRequests} onReview={reviewProfileRequest} showToast={showToast} />}
             />
             <Route
               path="/my-requests"
@@ -287,6 +294,10 @@ export function App() {
                   path="/price-import"
                   element={<PriceImportPage showToast={showToast} />}
                 />
+                <Route
+                  path="/ceo-settings"
+                  element={<CeoSettingsPage showToast={showToast} />}
+                />
               </>
             )}
           </Route>
@@ -295,10 +306,6 @@ export function App() {
             path="/attendance"
             element={<AttendancePage user={user} employees={employees} showToast={showToast} />}
           />
-          {/* /ceo-settings had no allowedRoute guard historically (nav-gated only). */}
-          {SALES_ENABLED && (
-            <Route path="/ceo-settings" element={<CeoSettingsPage showToast={showToast} />} />
-          )}
           {SALES_ENABLED && (
             <Route path="/catalog" element={<CatalogSearchPage user={user} showToast={showToast} />} />
           )}

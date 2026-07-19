@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
+import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
@@ -150,6 +151,56 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const [reviseScope, setReviseScope] = useState('QTY_OR_NOTE');
   const [reviseReason, setReviseReason] = useState('');
 
+  // UX-03 (slice 5a + 5b): inline field-level validation for the quotation /
+  // payment / delivery modals, plus (5b) the reject/revise inline forms, the
+  // per-item CEO price override, and the edit-items quantities. One shared
+  // dict, keyed per-form/per-row so a stale error can never bleed into
+  // another: 'quotation.recipientType' | 'quotation.amendmentReason' |
+  // 'payment.amount' | 'delivery.lines' (a group-level rule with no single
+  // owning field — same convention DepositNoticePage.jsx uses for its
+  // 'items' key) | 'reject.reason' | 'revise.reason' |
+  // 'override.<itemId>' (per-item — see handleOverridePrice) |
+  // 'editItems.qty.<rowIndex>' (per-row — see the edit-items save handler).
+  // fieldRefs holds the DOM node for each key so a failed submit can
+  // scroll/focus the first invalid control. Same shape as the fieldErrors/
+  // fieldRefs/clearFieldError pattern already used in TicketCreateModal.jsx,
+  // CeoSettingsPage.jsx and DepositNoticePage.jsx on this branch.
+  const [fieldErrors, setFieldErrors] = useState({});
+  const fieldRefs = useRef({});
+  function clearFieldError(key) {
+    setFieldErrors((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }
+  // Sets exactly one key. Used (instead of setFieldErrorsForPrefix) for the
+  // per-item override.<itemId> key: itemIds are numeric, and
+  // setFieldErrorsForPrefix's startsWith match would treat 'override.1' as a
+  // prefix of 'override.10' — silently wiping out a different item's error.
+  // clearFieldError above is exact-match-safe already; this is its setter
+  // counterpart.
+  function setFieldError(key, message) {
+    setFieldErrors((prev) => ({ ...prev, [key]: message }));
+  }
+  // Replaces every fieldErrors key under `prefix` with `errors` in one go —
+  // used both to report a fresh validation failure for one modal (errors
+  // non-empty) and to clear that modal's errors on open/close/success
+  // (errors = {}), without touching any other modal's keys.
+  function setFieldErrorsForPrefix(prefix, errors) {
+    setFieldErrors((prev) => {
+      const kept = Object.fromEntries(Object.entries(prev).filter(([k]) => !k.startsWith(prefix)));
+      return { ...kept, ...errors };
+    });
+  }
+  function focusFirstInvalid(key) {
+    const node = fieldRefs.current[key];
+    if (!node) return;
+    if (typeof node.scrollIntoView === 'function') node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    node.focus();
+  }
+
   // Quotation recipient/terms form (Phase 2 recipient-scoped chains)
   const [quotationModal, setQuotationModal] = useState(null); // { defaultRecipientType, amendmentRequired } | null
   const [quotationDraft, setQuotationDraft] = useState({
@@ -188,7 +239,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const [commentText, setCommentText] = useState('');
 
   // Confirmation dialogs (state-driven, replaces native browser confirm)
-  const [confirm, setConfirm] = useState(null); // { kind: 'deleteAttachment', id, name } | { kind: 'cancelTicket' } | null
+  const [confirm, setConfirm] = useState(null); // { kind: 'deleteAttachment', id, name } | { kind: 'cancelTicket' } | { kind: 'finalPayment' } | null
 
   // Download busy-state — keyed so each quotation/format pair (and the
   // remaining-invoice download) gets its own disabled+label state instead of
@@ -283,6 +334,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   // Same UI-draft reset the old doAction ran on every successful action.
   function resetActionDrafts() {
+    // UX-03: a successful action closes every modal below (quotation/payment/
+    // delivery among them) — clear every field error along with them so a
+    // stale one can never greet the user on the next open.
+    setFieldErrors({});
     setProposeMode(false);
     setEditMode(false);
     setEditDraft([]);
@@ -361,6 +416,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     onSuccess: (response, { itemId }) => {
       applyTicketUpdate(response.ticket);
       setOverrideDraft((p) => { const n = { ...p }; delete n[itemId]; return n; });
+      clearFieldError(`override.${itemId}`);
       showToast('success', 'บันทึกราคา override แล้ว');
     },
     onError: (err) => showToast('error', err.message || 'บันทึกไม่สำเร็จ'),
@@ -643,7 +699,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     </button>
   ) : can.confirmFinalPayment ? (
     <button type="button" className="primary-button" disabled={actionLoading}
-      onClick={() => doAction(() => api.tickets.confirmFinalPayment(ticketId), 'ชำระครบแล้ว')}>
+      onClick={() => setConfirm({ kind: 'finalPayment' })}>
       ยืนยันชำระครบ (Final Payment)
     </button>
   ) : can.close ? (
@@ -757,10 +813,16 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   async function handleOverridePrice(itemId) {
     const draft = overrideDraft[itemId];
+    const key = `override.${itemId}`;
+    // UX-03 (slice 5b): the error is per-item — keyed by itemId (exact-match
+    // setFieldError, not a prefix) so an invalid price on one row's input
+    // can never mark another row's input.
     if (!draft?.price || isNaN(Number(draft.price)) || Number(draft.price) <= 0) {
-      showToast('error', 'กรุณากรอกราคา override ที่ถูกต้อง');
+      setFieldError(key, 'กรุณากรอกราคา override ที่ถูกต้อง');
+      focusFirstInvalid(key);
       return;
     }
+    clearFieldError(key);
     try {
       await overrideMutation.mutateAsync({
         itemId,
@@ -790,6 +852,18 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     } catch { /* onError above already toasted */ } finally {
       setConfirm(null);
     }
+  }
+
+  // UX-34: Final Payment used to fire straight off the primary-action button
+  // with no confirmation — the least-guarded action in the app despite being
+  // one of the most financially consequential (auto-records a full BALANCE
+  // receipt server-side, see TicketService.confirmFinalPayment). Routed
+  // through the same confirm-dialog + doAction pattern as cancelTicket below:
+  // doAction already swallows/toasts its own error, so unconditionally
+  // closing the dialog afterwards matches that existing behavior.
+  async function confirmFinalPaymentAction() {
+    await doAction(() => api.tickets.confirmFinalPayment(ticketId), 'ชำระครบแล้ว');
+    setConfirm(null);
   }
 
   async function handleDownloadQuotation(quotationId, number, format) {
@@ -823,17 +897,31 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       amendmentReason: '',
     });
     setQuotationModal({ amendmentRequired });
+    // UX-03: reset on open so a stale error from a previous attempt never
+    // greets the user on reopen.
+    setFieldErrorsForPrefix('quotation.', {});
+  }
+
+  function closeQuotationModal() {
+    setQuotationModal(null);
+    setFieldErrorsForPrefix('quotation.', {});
   }
 
   async function submitQuotation() {
+    const errors = {};
     if (!quotationDraft.recipientType) {
-      showToast('error', 'กรุณาเลือกผู้รับใบเสนอราคา');
-      return;
+      errors['quotation.recipientType'] = 'กรุณาเลือกผู้รับใบเสนอราคา';
     }
     if (quotationModal?.amendmentRequired && !quotationDraft.amendmentReason.trim()) {
-      showToast('error', 'กรุณาระบุเหตุผลการแก้ไขใบเสนอราคา');
+      errors['quotation.amendmentReason'] = 'กรุณาระบุเหตุผลการแก้ไขใบเสนอราคา';
+    }
+    const order = Object.keys(errors);
+    if (order.length > 0) {
+      setFieldErrorsForPrefix('quotation.', errors);
+      focusFirstInvalid(order[0]);
       return;
     }
+    setFieldErrorsForPrefix('quotation.', {});
     const payload = Object.fromEntries(Object.entries(quotationDraft).map(([key, value]) => [
       key,
       typeof value === 'string' && value.trim() === '' ? null : value,
@@ -868,7 +956,12 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   }
 
   async function handleReject() {
-    if (!rejectReason.trim()) { showToast('error', 'กรุณาระบุเหตุผลในการตีกลับ'); return; }
+    if (!rejectReason.trim()) {
+      setFieldError('reject.reason', 'กรุณาระบุเหตุผลในการตีกลับ');
+      focusFirstInvalid('reject.reason');
+      return;
+    }
+    clearFieldError('reject.reason');
     await doAction(() => api.tickets.reject(ticketId, { reason: rejectReason.trim() }), 'ตีกลับใบขอราคาแล้ว');
   }
 
@@ -880,9 +973,11 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   async function handleRecordPayment() {
     const amount = Number(paymentDraft.amount);
     if (!amount || amount <= 0) {
-      showToast('error', 'กรุณากรอกยอดรับชำระ');
+      setFieldErrorsForPrefix('payment.', { 'payment.amount': 'กรุณากรอกยอดรับชำระ' });
+      focusFirstInvalid('payment.amount');
       return;
     }
+    setFieldErrorsForPrefix('payment.', {});
     const payload = {
       kind: paymentDraft.kind,
       amount,
@@ -910,9 +1005,11 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       .map((item) => ({ itemId: item.id, qty: Number(deliveryDraft.lines[item.id] || 0) }))
       .filter((line) => line.qty > 0);
     if (lines.length === 0) {
-      showToast('error', 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ');
+      setFieldErrorsForPrefix('delivery.', { 'delivery.lines': 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ' });
+      focusFirstInvalid('delivery.lines');
       return;
     }
+    setFieldErrorsForPrefix('delivery.', {});
     await doAction(() => api.tickets.recordDelivery(ticketId, {
       source: deliveryDraft.source,
       note: deliveryDraft.note.trim() || null,
@@ -951,6 +1048,14 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       allowOverpayment: false,
     });
     setPaymentModal(true);
+    // UX-03: reset on open so a stale error from a previous attempt never
+    // greets the user on reopen.
+    setFieldErrorsForPrefix('payment.', {});
+  }
+
+  function closePaymentModal() {
+    setPaymentModal(false);
+    setFieldErrorsForPrefix('payment.', {});
   }
 
   function openDeliveryModal() {
@@ -961,6 +1066,14 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     });
     setDeliveryDraft({ source, note: '', lines });
     setDeliveryModal(true);
+    // UX-03: reset on open so a stale error from a previous attempt never
+    // greets the user on reopen.
+    setFieldErrorsForPrefix('delivery.', {});
+  }
+
+  function closeDeliveryModal() {
+    setDeliveryModal(false);
+    setFieldErrorsForPrefix('delivery.', {});
   }
 
   function openStockModal() {
@@ -1251,7 +1364,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 )}
                 {can.reject && (
                   <button type="button" className="secondary-button" disabled={actionLoading}
-                    onClick={() => setShowRejectForm(true)}
+                    onClick={() => { setShowRejectForm(true); clearFieldError('reject.reason'); }}
                     style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}>
                     <Icon name="close" size={14} />
                     ไม่อนุมัติ
@@ -1263,15 +1376,27 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <label style={{ fontSize: 13, fontWeight: 600 }}>
                   เหตุผลในการตีกลับ *
-                  <textarea rows={2} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)}
-                    placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }} />
+                  <textarea rows={2}
+                    id="reject-reason"
+                    ref={(el) => { fieldRefs.current['reject.reason'] = el; }}
+                    value={rejectReason}
+                    onChange={(e) => { setRejectReason(e.target.value); clearFieldError('reject.reason'); }}
+                    placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }}
+                    aria-invalid={fieldErrors['reject.reason'] ? true : undefined}
+                    aria-describedby={fieldErrors['reject.reason'] ? fieldErrorId('reject-reason') : undefined}
+                  />
+                  {fieldErrors['reject.reason'] ? (
+                    <p id={fieldErrorId('reject-reason')} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                      {fieldErrors['reject.reason']}
+                    </p>
+                  ) : null}
                 </label>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button type="button" className="secondary-button" onClick={handleReject} disabled={actionLoading}
                     style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}>
                     ยืนยันไม่อนุมัติ
                   </button>
-                  <button type="button" className="secondary-button" onClick={() => { setShowRejectForm(false); setRejectReason(''); }} disabled={actionLoading}>
+                  <button type="button" className="secondary-button" onClick={() => { setShowRejectForm(false); setRejectReason(''); clearFieldError('reject.reason'); }} disabled={actionLoading}>
                     ยกเลิก
                   </button>
                 </div>
@@ -1310,7 +1435,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
             {can.revise && !showReviseForm && (
               <button type="button" className="secondary-button" disabled={actionLoading}
-                onClick={() => setShowReviseForm(true)}>
+                onClick={() => { setShowReviseForm(true); clearFieldError('revise.reason'); }}>
                 <Icon name="pencil" size={14} />
                 ขอแก้ไข (Revise)
               </button>
@@ -1322,6 +1447,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   setEditDraft(items.map((item) => ({ ...item })));
                   setEditNote('');
                   setEditMode(true);
+                  setFieldErrorsForPrefix('editItems.qty.', {});
                 }}>
                 <Icon name="pencil" size={14} />
                 แก้ไขรายการสินค้า
@@ -1359,19 +1485,40 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               ))}
               <label style={{ fontSize: 13, fontWeight: 600 }}>
                 เหตุผลการแก้ไข *
-                <textarea rows={2} value={reviseReason} onChange={(e) => setReviseReason(e.target.value)}
-                  placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }} />
+                <textarea rows={2}
+                  id="revise-reason"
+                  ref={(el) => { fieldRefs.current['revise.reason'] = el; }}
+                  value={reviseReason}
+                  onChange={(e) => { setReviseReason(e.target.value); clearFieldError('revise.reason'); }}
+                  placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }}
+                  aria-invalid={fieldErrors['revise.reason'] ? true : undefined}
+                  aria-describedby={fieldErrors['revise.reason'] ? fieldErrorId('revise-reason') : undefined}
+                />
+                {fieldErrors['revise.reason'] ? (
+                  <p id={fieldErrorId('revise-reason')} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                    {fieldErrors['revise.reason']}
+                  </p>
+                ) : null}
               </label>
               <div style={{ display: 'flex', gap: 8 }}>
+                {/* This button is already disabled={!reviseReason.trim()} (unchanged
+                    below), so the guard inside onClick is defensive/unreachable
+                    through the UI — wired for consistency with the other 3 forms
+                    in this slice, not because a user can trigger it here. */}
                 <button type="button" className="primary-button" disabled={actionLoading || !reviseReason.trim()}
                   onClick={() => {
-                    if (!reviseReason.trim()) { showToast('error', 'กรุณาระบุเหตุผล'); return; }
+                    if (!reviseReason.trim()) {
+                      setFieldError('revise.reason', 'กรุณาระบุเหตุผล');
+                      focusFirstInvalid('revise.reason');
+                      return;
+                    }
+                    clearFieldError('revise.reason');
                     doAction(() => api.tickets.revision(ticketId, { scope: reviseScope, reason: reviseReason.trim() }), 'ส่งคำขอแก้ไขแล้ว');
                   }}>
                   ยืนยันขอแก้ไข
                 </button>
                 <button type="button" className="secondary-button" disabled={actionLoading}
-                  onClick={() => { setShowReviseForm(false); setReviseReason(''); }}>
+                  onClick={() => { setShowReviseForm(false); setReviseReason(''); clearFieldError('revise.reason'); }}>
                   ยกเลิก
                 </button>
               </div>
@@ -1410,7 +1557,26 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                       <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)' }}>รายการที่ {index + 1}</span>
                       {editDraft.length > 1 && (
                         <button type="button" className="icon-button" style={{ color: 'var(--color-danger)' }} aria-label={`ลบรายการที่ ${index + 1}`}
-                          onClick={() => setEditDraft((d) => d.filter((_, i) => i !== index))}>
+                          onClick={() => {
+                            setEditDraft((d) => d.filter((_, i) => i !== index));
+                            // Removing a row shifts every later row's index down by
+                            // one — reindex their qty errors along with it so an
+                            // error never ends up pinned to the wrong (now
+                            // different) row.
+                            setFieldErrors((prev) => {
+                              let changed = false;
+                              const next = {};
+                              Object.entries(prev).forEach(([k, v]) => {
+                                const m = k.match(/^editItems\.qty\.(\d+)$/);
+                                if (!m) { next[k] = v; return; }
+                                const idx = Number(m[1]);
+                                if (idx === index) { changed = true; return; }
+                                if (idx > index) { next[`editItems.qty.${idx - 1}`] = v; changed = true; return; }
+                                next[k] = v;
+                              });
+                              return changed ? next : prev;
+                            });
+                          }}>
                           <Icon name="close" size={14} />
                         </button>
                       )}
@@ -1463,12 +1629,25 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                           <label style={{ margin: 0 }}>
                             <span style={{ fontSize: 12 }}>จำนวน (แผ่น)</span>
                             <input type="number" value={item.qty ?? ''} step="1"
-                              onChange={(e) => setEditDraft((d) => d.map((r, ri) => {
-                                if (ri !== index) return r;
-                                const u = { ...r, qty: e.target.value };
-                                if (r.sqmPerPiece && e.target.value) u.qtySqm = (Number(e.target.value) * r.sqmPerPiece).toFixed(3);
-                                return u;
-                              }))} />
+                              id={`edit-item-qty-${index}`}
+                              ref={(el) => { fieldRefs.current[`editItems.qty.${index}`] = el; }}
+                              onChange={(e) => {
+                                setEditDraft((d) => d.map((r, ri) => {
+                                  if (ri !== index) return r;
+                                  const u = { ...r, qty: e.target.value };
+                                  if (r.sqmPerPiece && e.target.value) u.qtySqm = (Number(e.target.value) * r.sqmPerPiece).toFixed(3);
+                                  return u;
+                                }));
+                                clearFieldError(`editItems.qty.${index}`);
+                              }}
+                              aria-invalid={fieldErrors[`editItems.qty.${index}`] ? true : undefined}
+                              aria-describedby={fieldErrors[`editItems.qty.${index}`] ? fieldErrorId(`edit-item-qty-${index}`) : undefined}
+                            />
+                            {fieldErrors[`editItems.qty.${index}`] ? (
+                              <p id={fieldErrorId(`edit-item-qty-${index}`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                                {fieldErrors[`editItems.qty.${index}`]}
+                              </p>
+                            ) : null}
                           </label>
                           <div style={{ margin: 0 }}>
                             <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>พื้นที่รวม (ตร.ม.)</span>
@@ -1481,13 +1660,30 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                         <>
                           <label style={{ margin: 0 }}>
                             <span style={{ fontSize: 12 }}>พื้นที่ (ตร.ม.)</span>
+                            {/* Governs qty when this row is in SQM mode (qty is
+                                derived from qtySqm × sqmPerPiece below) — so the
+                                per-row qty error, if any, attaches here rather
+                                than to a non-editable derived display. */}
                             <input type="number" value={item.qtySqm ?? ''} min="0" step="0.001"
-                              onChange={(e) => setEditDraft((d) => d.map((r, ri) => {
-                                if (ri !== index) return r;
-                                const u = { ...r, qtySqm: e.target.value };
-                                if (r.sqmPerPiece && e.target.value) u.qty = Math.ceil(Number(e.target.value) / r.sqmPerPiece);
-                                return u;
-                              }))} />
+                              id={`edit-item-qtysqm-${index}`}
+                              ref={(el) => { fieldRefs.current[`editItems.qty.${index}`] = el; }}
+                              onChange={(e) => {
+                                setEditDraft((d) => d.map((r, ri) => {
+                                  if (ri !== index) return r;
+                                  const u = { ...r, qtySqm: e.target.value };
+                                  if (r.sqmPerPiece && e.target.value) u.qty = Math.ceil(Number(e.target.value) / r.sqmPerPiece);
+                                  return u;
+                                }));
+                                clearFieldError(`editItems.qty.${index}`);
+                              }}
+                              aria-invalid={fieldErrors[`editItems.qty.${index}`] ? true : undefined}
+                              aria-describedby={fieldErrors[`editItems.qty.${index}`] ? fieldErrorId(`edit-item-qtysqm-${index}`) : undefined}
+                            />
+                            {fieldErrors[`editItems.qty.${index}`] ? (
+                              <p id={fieldErrorId(`edit-item-qtysqm-${index}`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                                {fieldErrors[`editItems.qty.${index}`]}
+                              </p>
+                            ) : null}
                           </label>
                           <div style={{ margin: 0 }}>
                             <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>จำนวน (แผ่น)</span>
@@ -1521,10 +1717,24 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button type="button" className="primary-button" disabled={actionLoading}
                     onClick={() => {
-                      if (editDraft.some((item) => !item.qty || Number(item.qty) <= 0)) {
-                        showToast('error', 'กรุณากรอกจำนวนสินค้าให้ครบทุกรายการ');
+                      // UX-03 (slice 5b): this used to be one toast covering every
+                      // row ("กรุณากรอกจำนวนสินค้าให้ครบทุกรายการ") — the exact
+                      // "one message for many fields" defect the finding names.
+                      // Flag each offending row's own qty input instead, keyed by
+                      // row index, so the user sees exactly which rows are wrong.
+                      const qtyErrors = {};
+                      editDraft.forEach((item, i) => {
+                        if (!item.qty || Number(item.qty) <= 0) {
+                          qtyErrors[`editItems.qty.${i}`] = 'กรุณากรอกจำนวนสินค้าของรายการนี้ให้ถูกต้อง';
+                        }
+                      });
+                      const order = Object.keys(qtyErrors);
+                      if (order.length > 0) {
+                        setFieldErrorsForPrefix('editItems.qty.', qtyErrors);
+                        focusFirstInvalid(order[0]);
                         return;
                       }
+                      setFieldErrorsForPrefix('editItems.qty.', {});
                       doAction(() => api.tickets.editItems(ticketId, {
                         items: editDraft.map((item) => ({
                           brand: item.brand, model: item.model, color: item.color,
@@ -1542,7 +1752,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                     บันทึกการแก้ไข
                   </button>
                   <button type="button" className="secondary-button" disabled={actionLoading}
-                    onClick={() => { setEditMode(false); setEditDraft([]); setEditNote(''); }}>
+                    onClick={() => { setEditMode(false); setEditDraft([]); setEditNote(''); setFieldErrorsForPrefix('editItems.qty.', {}); }}>
                     ยกเลิก
                   </button>
                 </div>
@@ -1714,10 +1924,22 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                             overrideDraft[item.id] !== undefined ? (
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
                                 <input type="number" step="0.01" min="0"
+                                  id={`override-price-${item.id}`}
+                                  ref={(el) => { fieldRefs.current[`override.${item.id}`] = el; }}
                                   placeholder="ราคา override"
                                   value={overrideDraft[item.id]?.price ?? ''}
-                                  onChange={(e) => setOverrideDraft((p) => ({ ...p, [item.id]: { ...p[item.id], price: e.target.value } }))}
+                                  onChange={(e) => {
+                                    setOverrideDraft((p) => ({ ...p, [item.id]: { ...p[item.id], price: e.target.value } }));
+                                    clearFieldError(`override.${item.id}`);
+                                  }}
+                                  aria-invalid={fieldErrors[`override.${item.id}`] ? true : undefined}
+                                  aria-describedby={fieldErrors[`override.${item.id}`] ? fieldErrorId(`override-price-${item.id}`) : undefined}
                                   style={{ width: 90, padding: '2px 6px', fontSize: 12, border: '1px solid var(--color-override-border)', borderRadius: 4 }} />
+                                {fieldErrors[`override.${item.id}`] ? (
+                                  <p id={fieldErrorId(`override-price-${item.id}`)} role="alert" style={{ margin: 0, width: 90, fontSize: 10, fontWeight: 700, color: 'var(--color-danger)' }}>
+                                    {fieldErrors[`override.${item.id}`]}
+                                  </p>
+                                ) : null}
                                 <input type="text" placeholder="เหตุผล (ถ้ามี)"
                                   value={overrideDraft[item.id]?.reason ?? ''}
                                   onChange={(e) => setOverrideDraft((p) => ({ ...p, [item.id]: { ...p[item.id], reason: e.target.value } }))}
@@ -1731,7 +1953,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                                   </button>
                                   <button type="button" className="secondary-button"
                                     style={{ fontSize: 10, padding: '2px 6px' }}
-                                    onClick={() => setOverrideDraft((p) => { const n = { ...p }; delete n[item.id]; return n; })}>
+                                    onClick={() => {
+                                      setOverrideDraft((p) => { const n = { ...p }; delete n[item.id]; return n; });
+                                      clearFieldError(`override.${item.id}`);
+                                    }}>
                                     ✕
                                   </button>
                                 </div>
@@ -1739,7 +1964,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                             ) : (
                               <button type="button" className="secondary-button"
                                 style={{ fontSize: 10, padding: '2px 8px', marginTop: 4, display: 'block' }}
-                                onClick={() => setOverrideDraft((p) => ({ ...p, [item.id]: { price: item.calcedPrice != null ? String(item.calcedPrice) : '', reason: '' } }))}>
+                                onClick={() => {
+                                  setOverrideDraft((p) => ({ ...p, [item.id]: { price: item.calcedPrice != null ? String(item.calcedPrice) : '', reason: '' } }));
+                                  clearFieldError(`override.${item.id}`);
+                                }}>
                                 override
                               </button>
                             )
@@ -2058,10 +2286,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       {quotationModal && (
         <Modal
           title="ออกใบเสนอราคา"
-          onClose={() => setQuotationModal(null)}
+          onClose={closeQuotationModal}
           footer={(
           <>
-            <button type="button" className="secondary-button" onClick={() => setQuotationModal(null)}>
+            <button type="button" className="secondary-button" onClick={closeQuotationModal}>
               ยกเลิก
             </button>
             <button type="button" className="primary-button" disabled={actionLoading} onClick={submitQuotation}>
@@ -2075,6 +2303,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
             ผู้รับใบเสนอราคา
             <select
+              id="quotation-recipient-type"
+              ref={(el) => { fieldRefs.current['quotation.recipientType'] = el; }}
               value={quotationDraft.recipientType}
               onChange={(e) => {
                 const recipientType = e.target.value;
@@ -2082,12 +2312,20 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   (q.recipientType ?? 'UNSPECIFIED') === recipientType && q.docStatus === 'ACCEPTED');
                 setQuotationDraft((draft) => ({ ...draft, recipientType }));
                 setQuotationModal((modal) => ({ ...(modal ?? {}), amendmentRequired: chainAccepted || summary.paymentStatus != null }));
+                clearFieldError('quotation.recipientType');
               }}
+              aria-invalid={fieldErrors['quotation.recipientType'] ? true : undefined}
+              aria-describedby={fieldErrors['quotation.recipientType'] ? fieldErrorId('quotation-recipient-type') : undefined}
             >
               <option value="DESIGNER">ผู้ออกแบบ</option>
               <option value="OWNER">เจ้าของ</option>
               <option value="BUYER">ผู้ซื้อ-ผู้รับเหมา</option>
             </select>
+            {fieldErrors['quotation.recipientType'] ? (
+              <p id={fieldErrorId('quotation-recipient-type')} role="alert" style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                {fieldErrors['quotation.recipientType']}
+              </p>
+            ) : null}
           </label>
           <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
             ชื่อผู้รับ/บริษัท
@@ -2119,8 +2357,22 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           {quotationModal?.amendmentRequired && (
             <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
               เหตุผลการแก้ไข
-              <textarea rows={3} value={quotationDraft.amendmentReason}
-                onChange={(e) => setQuotationDraft((draft) => ({ ...draft, amendmentReason: e.target.value }))} />
+              <textarea rows={3}
+                id="quotation-amendment-reason"
+                ref={(el) => { fieldRefs.current['quotation.amendmentReason'] = el; }}
+                value={quotationDraft.amendmentReason}
+                onChange={(e) => {
+                  setQuotationDraft((draft) => ({ ...draft, amendmentReason: e.target.value }));
+                  clearFieldError('quotation.amendmentReason');
+                }}
+                aria-invalid={fieldErrors['quotation.amendmentReason'] ? true : undefined}
+                aria-describedby={fieldErrors['quotation.amendmentReason'] ? fieldErrorId('quotation-amendment-reason') : undefined}
+              />
+              {fieldErrors['quotation.amendmentReason'] ? (
+                <p id={fieldErrorId('quotation-amendment-reason')} role="alert" style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                  {fieldErrors['quotation.amendmentReason']}
+                </p>
+              ) : null}
             </label>
           )}
           </div>
@@ -2130,10 +2382,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       {paymentModal && (
         <Modal
           title="บันทึกรับชำระเงิน"
-          onClose={() => setPaymentModal(false)}
+          onClose={closePaymentModal}
           footer={(
             <>
-              <button type="button" className="secondary-button" onClick={() => setPaymentModal(false)}>ยกเลิก</button>
+              <button type="button" className="secondary-button" onClick={closePaymentModal}>ยกเลิก</button>
               <button type="button" className="primary-button" disabled={actionLoading} onClick={handleRecordPayment}>
                 บันทึก
               </button>
@@ -2152,8 +2404,22 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
               <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
                 จำนวนเงิน
-                <input type="number" min="0" step="0.01" value={paymentDraft.amount}
-                  onChange={(e) => setPaymentDraft((draft) => ({ ...draft, amount: e.target.value }))} />
+                <input type="number" min="0" step="0.01"
+                  id="payment-amount"
+                  ref={(el) => { fieldRefs.current['payment.amount'] = el; }}
+                  value={paymentDraft.amount}
+                  onChange={(e) => {
+                    setPaymentDraft((draft) => ({ ...draft, amount: e.target.value }));
+                    clearFieldError('payment.amount');
+                  }}
+                  aria-invalid={fieldErrors['payment.amount'] ? true : undefined}
+                  aria-describedby={fieldErrors['payment.amount'] ? fieldErrorId('payment-amount') : undefined}
+                />
+                {fieldErrors['payment.amount'] ? (
+                  <p id={fieldErrorId('payment-amount')} role="alert" style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                    {fieldErrors['payment.amount']}
+                  </p>
+                ) : null}
               </label>
               <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
                 วันที่รับเงิน
@@ -2230,10 +2496,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       {deliveryModal && (
         <Modal
           title="บันทึกการส่งสินค้า"
-          onClose={() => setDeliveryModal(false)}
+          onClose={closeDeliveryModal}
           footer={(
             <>
-              <button type="button" className="secondary-button" onClick={() => setDeliveryModal(false)}>ยกเลิก</button>
+              <button type="button" className="secondary-button" onClick={closeDeliveryModal}>ยกเลิก</button>
               <button type="button" className="primary-button" disabled={actionLoading} onClick={handleRecordDelivery}>
                 บันทึก
               </button>
@@ -2249,7 +2515,21 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 <option value="STOCK">STOCK</option>
               </select>
             </label>
-            <div style={{ display: 'grid', gap: 8 }}>
+            {/*
+              UX-03: "at least 1 line item with qty > 0" is a group-level rule
+              with no single owning field — like DepositNoticePage's
+              doc-items-panel, the wrapper itself is the scroll/focus target,
+              carrying aria-invalid/aria-describedby and a tabIndex so a plain
+              div is focusable.
+            */}
+            <div
+              id="delivery-lines-panel"
+              ref={(el) => { fieldRefs.current['delivery.lines'] = el; }}
+              tabIndex={-1}
+              aria-invalid={fieldErrors['delivery.lines'] ? true : undefined}
+              aria-describedby={fieldErrors['delivery.lines'] ? fieldErrorId('delivery-lines-panel') : undefined}
+              style={{ display: 'grid', gap: 8 }}
+            >
               {items.map((item) => {
                 const remaining = Math.max(0, Number(item.qty || 0) - Number(item.qtyDelivered || 0));
                 return (
@@ -2264,13 +2544,26 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 	                    <input type="number" min="0" max={remaining} step="0.01"
                         aria-label={`จำนวนส่งมอบ ${item.brand} ${item.model || ''}`}
 	                      value={deliveryDraft.lines[item.id] ?? ''}
-                      onChange={(e) => setDeliveryDraft((draft) => ({
-                        ...draft,
-                        lines: { ...draft.lines, [item.id]: e.target.value },
-                      }))} />
+                      onChange={(e) => {
+                        const { value } = e.target;
+                        setDeliveryDraft((draft) => ({
+                          ...draft,
+                          lines: { ...draft.lines, [item.id]: value },
+                        }));
+                        // The group rule is "at least one line qty > 0" — the
+                        // instant THIS line goes positive that rule is
+                        // satisfied regardless of the other lines' values
+                        // (they were all <=0 for the error to have fired).
+                        if (Number(value) > 0) clearFieldError('delivery.lines');
+                      }} />
                   </label>
                 );
               })}
+              {fieldErrors['delivery.lines'] ? (
+                <p id={fieldErrorId('delivery-lines-panel')} role="alert" style={{ margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--color-danger)' }}>
+                  {fieldErrors['delivery.lines']}
+                </p>
+              ) : null}
             </div>
             <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
               หมายเหตุ
@@ -2343,6 +2636,41 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           await doAction(() => api.tickets.cancel(ticketId), 'ยกเลิกใบขอราคาแล้ว');
           setConfirm(null);
         }}
+      />
+
+      <ConfirmDialog
+        open={confirm?.kind === 'finalPayment'}
+        tone="danger"
+        title="ยืนยันการรับชำระครบถ้วน"
+        message={(() => {
+          // Same summary.amountOutstanding the การชำระเงิน panel above renders
+          // as "คงเหลือ" (line ~1091) — reused as-is, not recomputed, so this
+          // dialog can never disagree with the panel the user just looked at.
+          const outstanding = Number(summary.amountOutstanding ?? 0);
+          const hasOutstanding = outstanding > 0;
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <p className="confirm-dialog-message" style={{ margin: 0 }}>
+                {hasOutstanding
+                  ? 'ระบบจะบันทึกรับชำระส่วนที่เหลือเต็มจำนวนเป็นรายการ BALANCE แล้วทำเครื่องหมายดีลนี้ว่าชำระครบแล้ว'
+                  : 'ยอดคงเหลือเป็นศูนย์อยู่แล้ว ระบบจะทำเครื่องหมายดีลนี้ว่าชำระครบแล้วโดยไม่บันทึกรายการรับชำระใหม่'}
+              </p>
+              {hasOutstanding && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700, borderTop: '1px solid var(--color-border)', paddingTop: 8 }}>
+                  <span>ยอดที่จะบันทึกเป็นรับชำระ (คงเหลือ)</span>
+                  <span className="font-mono">{formatMoney(outstanding)}</span>
+                </div>
+              )}
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--color-icon-muted)' }}>
+                สถานะการชำระเงินจะเปลี่ยนเป็น &quot;ชำระครบแล้ว&quot; และไม่สามารถย้อนกลับได้
+              </p>
+            </div>
+          );
+        })()}
+        confirmLabel="ยืนยันชำระครบ"
+        busy={actionLoading}
+        onConfirm={confirmFinalPaymentAction}
+        onCancel={() => setConfirm(null)}
       />
     </div>
   );

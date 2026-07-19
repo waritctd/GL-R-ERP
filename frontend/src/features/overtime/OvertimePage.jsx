@@ -439,7 +439,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
               <input id="ot-employee-display" value={currentEmployee?.nameTh || user.name || '-'} disabled />
             </FormField>
           )}
-          <FormField label="วันที่ทำ OT" htmlFor="ot-work-date" error={errors.workDate?.message}>
+          <FormField label="วันที่ทำ OT" htmlFor="ot-work-date" error={errors.workDate?.message} required>
             <input
               id="ot-work-date"
               type="date"
@@ -449,7 +449,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
               required
             />
           </FormField>
-          <FormField label="ประเภท OT" htmlFor="ot-day-type" error={errors.dayType?.message}>
+          <FormField label="ประเภท OT" htmlFor="ot-day-type" error={errors.dayType?.message} required>
             <select
               id="ot-day-type"
               {...register('dayType')}
@@ -462,7 +462,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
               <option value="HOLIDAY">วันหยุด/วันหยุดนักขัตฤกษ์ · 3x</option>
             </select>
           </FormField>
-          <FormField label="เริ่ม" htmlFor="ot-planned-start" error={errors.plannedStartAt?.message}>
+          <FormField label="เริ่ม" htmlFor="ot-planned-start" error={errors.plannedStartAt?.message} required>
             <input
               id="ot-planned-start"
               type="datetime-local"
@@ -477,6 +477,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
             label="สิ้นสุด"
             htmlFor="ot-planned-end"
             error={plannedEndError}
+            required
           >
             <input
               id="ot-planned-end"
@@ -489,7 +490,7 @@ export function OvertimePage({ user, currentEmployee, showToast }) {
             />
           </FormField>
           <div className={formGridSpan2}>
-            <FormField label="เหตุผลความจำเป็น" htmlFor="ot-reason" error={errors.reason?.message}>
+            <FormField label="เหตุผลความจำเป็น" htmlFor="ot-reason" error={errors.reason?.message} required>
               <textarea
                 id="ot-reason"
                 className={errors.reason ? 'is-invalid' : ''}

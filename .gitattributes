@@ -1,0 +1,1 @@
+docs/ux-ui-audit/screenshots/**/*.png filter=lfs diff=lfs merge=lfs -text

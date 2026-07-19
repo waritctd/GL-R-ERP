@@ -1,0 +1,2018 @@
+[
+  {
+    "role": "hr",
+    "route": "dashboard",
+    "path": "/",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": "screenshots/desktop/hr-dashboard.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "hr",
+    "path": "/hr",
+    "finalPath": "/hr",
+    "vp": "desktop",
+    "file": "screenshots/desktop/hr-hr.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "employees",
+    "path": "/employees",
+    "finalPath": "/employees",
+    "vp": "desktop",
+    "file": "screenshots/desktop/hr-employees.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "requests",
+    "path": "/requests",
+    "finalPath": "/requests",
+    "vp": "desktop",
+    "file": "screenshots/desktop/hr-requests.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "my-requests",
+    "path": "/my-requests",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "hr",
+    "route": "profile",
+    "path": "/profile",
+    "finalPath": "/profile",
+    "vp": "desktop",
+    "file": "screenshots/desktop/hr-profile.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "overtime",
+    "path": "/overtime",
+    "finalPath": "/overtime",
+    "vp": "desktop",
+    "file": "screenshots/desktop/hr-overtime.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "leave",
+    "path": "/leave",
+    "finalPath": "/leave",
+    "vp": "desktop",
+    "file": "screenshots/desktop/hr-leave.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "payroll",
+    "path": "/payroll",
+    "finalPath": "/payroll",
+    "vp": "desktop",
+    "file": "screenshots/desktop/hr-payroll.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "attendance",
+    "path": "/attendance",
+    "finalPath": "/attendance",
+    "vp": "desktop",
+    "file": "screenshots/desktop/hr-attendance.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "ticket-overview",
+    "path": "/ticket-overview",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "hr",
+    "route": "tickets",
+    "path": "/tickets",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "hr",
+    "route": "commissions",
+    "path": "/commissions",
+    "finalPath": "/commissions",
+    "vp": "desktop",
+    "file": "screenshots/desktop/hr-commissions.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "price-import",
+    "path": "/price-import",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "hr",
+    "route": "ceo-settings",
+    "path": "/ceo-settings",
+    "finalPath": "/ceo-settings",
+    "vp": "desktop",
+    "file": "screenshots/desktop/hr-ceo-settings.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "catalog",
+    "path": "/catalog",
+    "finalPath": "/catalog",
+    "vp": "desktop",
+    "file": "screenshots/desktop/hr-catalog.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "dashboard",
+    "path": "/",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": "screenshots/mobile/hr-dashboard.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "hr",
+    "path": "/hr",
+    "finalPath": "/hr",
+    "vp": "mobile",
+    "file": "screenshots/mobile/hr-hr.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "employees",
+    "path": "/employees",
+    "finalPath": "/employees",
+    "vp": "mobile",
+    "file": "screenshots/mobile/hr-employees.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "requests",
+    "path": "/requests",
+    "finalPath": "/requests",
+    "vp": "mobile",
+    "file": "screenshots/mobile/hr-requests.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "my-requests",
+    "path": "/my-requests",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "hr",
+    "route": "profile",
+    "path": "/profile",
+    "finalPath": "/profile",
+    "vp": "mobile",
+    "file": "screenshots/mobile/hr-profile.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "overtime",
+    "path": "/overtime",
+    "finalPath": "/overtime",
+    "vp": "mobile",
+    "file": "screenshots/mobile/hr-overtime.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "leave",
+    "path": "/leave",
+    "finalPath": "/leave",
+    "vp": "mobile",
+    "file": "screenshots/mobile/hr-leave.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "payroll",
+    "path": "/payroll",
+    "finalPath": "/payroll",
+    "vp": "mobile",
+    "file": "screenshots/mobile/hr-payroll.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "attendance",
+    "path": "/attendance",
+    "finalPath": "/attendance",
+    "vp": "mobile",
+    "file": "screenshots/mobile/hr-attendance.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "ticket-overview",
+    "path": "/ticket-overview",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "hr",
+    "route": "tickets",
+    "path": "/tickets",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "hr",
+    "route": "commissions",
+    "path": "/commissions",
+    "finalPath": "/commissions",
+    "vp": "mobile",
+    "file": "screenshots/mobile/hr-commissions.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "price-import",
+    "path": "/price-import",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "hr",
+    "route": "ceo-settings",
+    "path": "/ceo-settings",
+    "finalPath": "/ceo-settings",
+    "vp": "mobile",
+    "file": "screenshots/mobile/hr-ceo-settings.png",
+    "redirected": false
+  },
+  {
+    "role": "hr",
+    "route": "catalog",
+    "path": "/catalog",
+    "finalPath": "/catalog",
+    "vp": "mobile",
+    "file": "screenshots/mobile/hr-catalog.png",
+    "redirected": false
+  },
+  {
+    "role": "employee",
+    "route": "dashboard",
+    "path": "/",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": "screenshots/desktop/employee-dashboard.png",
+    "redirected": false
+  },
+  {
+    "role": "employee",
+    "route": "hr",
+    "path": "/hr",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "employee",
+    "route": "employees",
+    "path": "/employees",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "employee",
+    "route": "requests",
+    "path": "/requests",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "employee",
+    "route": "my-requests",
+    "path": "/my-requests",
+    "finalPath": "/my-requests",
+    "vp": "desktop",
+    "file": "screenshots/desktop/employee-my-requests.png",
+    "redirected": false
+  },
+  {
+    "role": "employee",
+    "route": "profile",
+    "path": "/profile",
+    "finalPath": "/profile",
+    "vp": "desktop",
+    "file": "screenshots/desktop/employee-profile.png",
+    "redirected": false
+  },
+  {
+    "role": "employee",
+    "route": "overtime",
+    "path": "/overtime",
+    "finalPath": "/overtime",
+    "vp": "desktop",
+    "file": "screenshots/desktop/employee-overtime.png",
+    "redirected": false
+  },
+  {
+    "role": "employee",
+    "route": "leave",
+    "path": "/leave",
+    "finalPath": "/leave",
+    "vp": "desktop",
+    "file": "screenshots/desktop/employee-leave.png",
+    "redirected": false
+  },
+  {
+    "role": "employee",
+    "route": "payroll",
+    "path": "/payroll",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "employee",
+    "route": "attendance",
+    "path": "/attendance",
+    "finalPath": "/attendance",
+    "vp": "desktop",
+    "file": "screenshots/desktop/employee-attendance.png",
+    "redirected": false
+  },
+  {
+    "role": "employee",
+    "route": "ticket-overview",
+    "path": "/ticket-overview",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "employee",
+    "route": "tickets",
+    "path": "/tickets",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "employee",
+    "route": "commissions",
+    "path": "/commissions",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "employee",
+    "route": "price-import",
+    "path": "/price-import",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "employee",
+    "route": "ceo-settings",
+    "path": "/ceo-settings",
+    "finalPath": "/ceo-settings",
+    "vp": "desktop",
+    "file": "screenshots/desktop/employee-ceo-settings.png",
+    "redirected": false
+  },
+  {
+    "role": "employee",
+    "route": "catalog",
+    "path": "/catalog",
+    "finalPath": "/catalog",
+    "vp": "desktop",
+    "file": "screenshots/desktop/employee-catalog.png",
+    "redirected": false
+  },
+  {
+    "role": "employee",
+    "route": "dashboard",
+    "path": "/",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": "screenshots/mobile/employee-dashboard.png",
+    "redirected": false
+  },
+  {
+    "role": "employee",
+    "route": "hr",
+    "path": "/hr",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "employee",
+    "route": "employees",
+    "path": "/employees",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "employee",
+    "route": "requests",
+    "path": "/requests",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "employee",
+    "route": "my-requests",
+    "path": "/my-requests",
+    "finalPath": "/my-requests",
+    "vp": "mobile",
+    "file": "screenshots/mobile/employee-my-requests.png",
+    "redirected": false
+  },
+  {
+    "role": "employee",
+    "route": "profile",
+    "path": "/profile",
+    "finalPath": "/profile",
+    "vp": "mobile",
+    "file": "screenshots/mobile/employee-profile.png",
+    "redirected": false
+  },
+  {
+    "role": "employee",
+    "route": "overtime",
+    "path": "/overtime",
+    "finalPath": "/overtime",
+    "vp": "mobile",
+    "file": "screenshots/mobile/employee-overtime.png",
+    "redirected": false
+  },
+  {
+    "role": "employee",
+    "route": "leave",
+    "path": "/leave",
+    "finalPath": "/leave",
+    "vp": "mobile",
+    "file": "screenshots/mobile/employee-leave.png",
+    "redirected": false
+  },
+  {
+    "role": "employee",
+    "route": "payroll",
+    "path": "/payroll",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "employee",
+    "route": "attendance",
+    "path": "/attendance",
+    "finalPath": "/attendance",
+    "vp": "mobile",
+    "file": "screenshots/mobile/employee-attendance.png",
+    "redirected": false
+  },
+  {
+    "role": "employee",
+    "route": "ticket-overview",
+    "path": "/ticket-overview",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "employee",
+    "route": "tickets",
+    "path": "/tickets",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "employee",
+    "route": "commissions",
+    "path": "/commissions",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "employee",
+    "route": "price-import",
+    "path": "/price-import",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "employee",
+    "route": "ceo-settings",
+    "path": "/ceo-settings",
+    "finalPath": "/ceo-settings",
+    "vp": "mobile",
+    "file": "screenshots/mobile/employee-ceo-settings.png",
+    "redirected": false
+  },
+  {
+    "role": "employee",
+    "route": "catalog",
+    "path": "/catalog",
+    "finalPath": "/catalog",
+    "vp": "mobile",
+    "file": "screenshots/mobile/employee-catalog.png",
+    "redirected": false
+  },
+  {
+    "role": "sales",
+    "route": "dashboard",
+    "path": "/",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales-dashboard.png",
+    "redirected": false
+  },
+  {
+    "role": "sales",
+    "route": "hr",
+    "path": "/hr",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "employees",
+    "path": "/employees",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "requests",
+    "path": "/requests",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "my-requests",
+    "path": "/my-requests",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "profile",
+    "path": "/profile",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "overtime",
+    "path": "/overtime",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "leave",
+    "path": "/leave",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "payroll",
+    "path": "/payroll",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "attendance",
+    "path": "/attendance",
+    "finalPath": "/attendance",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales-attendance.png",
+    "redirected": false
+  },
+  {
+    "role": "sales",
+    "route": "ticket-overview",
+    "path": "/ticket-overview",
+    "finalPath": "/ticket-overview",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales-ticket-overview.png",
+    "redirected": false
+  },
+  {
+    "role": "sales",
+    "route": "tickets",
+    "path": "/tickets",
+    "finalPath": "/tickets",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales-tickets.png",
+    "redirected": false
+  },
+  {
+    "role": "sales",
+    "route": "commissions",
+    "path": "/commissions",
+    "finalPath": "/commissions",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales-commissions.png",
+    "redirected": false
+  },
+  {
+    "role": "sales",
+    "route": "price-import",
+    "path": "/price-import",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "ceo-settings",
+    "path": "/ceo-settings",
+    "finalPath": "/ceo-settings",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales-ceo-settings.png",
+    "redirected": false
+  },
+  {
+    "role": "sales",
+    "route": "catalog",
+    "path": "/catalog",
+    "finalPath": "/catalog",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales-catalog.png",
+    "redirected": false
+  },
+  {
+    "role": "sales",
+    "route": "dashboard",
+    "path": "/",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales-dashboard.png",
+    "redirected": false
+  },
+  {
+    "role": "sales",
+    "route": "hr",
+    "path": "/hr",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "employees",
+    "path": "/employees",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "requests",
+    "path": "/requests",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "my-requests",
+    "path": "/my-requests",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "profile",
+    "path": "/profile",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "overtime",
+    "path": "/overtime",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "leave",
+    "path": "/leave",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "payroll",
+    "path": "/payroll",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "attendance",
+    "path": "/attendance",
+    "finalPath": "/attendance",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales-attendance.png",
+    "redirected": false
+  },
+  {
+    "role": "sales",
+    "route": "ticket-overview",
+    "path": "/ticket-overview",
+    "finalPath": "/ticket-overview",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales-ticket-overview.png",
+    "redirected": false
+  },
+  {
+    "role": "sales",
+    "route": "tickets",
+    "path": "/tickets",
+    "finalPath": "/tickets",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales-tickets.png",
+    "redirected": false
+  },
+  {
+    "role": "sales",
+    "route": "commissions",
+    "path": "/commissions",
+    "finalPath": "/commissions",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales-commissions.png",
+    "redirected": false
+  },
+  {
+    "role": "sales",
+    "route": "price-import",
+    "path": "/price-import",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales",
+    "route": "ceo-settings",
+    "path": "/ceo-settings",
+    "finalPath": "/ceo-settings",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales-ceo-settings.png",
+    "redirected": false
+  },
+  {
+    "role": "sales",
+    "route": "catalog",
+    "path": "/catalog",
+    "finalPath": "/catalog",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales-catalog.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "dashboard",
+    "path": "/",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales_manager-dashboard.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "hr",
+    "path": "/hr",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales_manager",
+    "route": "employees",
+    "path": "/employees",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales_manager",
+    "route": "requests",
+    "path": "/requests",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales_manager",
+    "route": "my-requests",
+    "path": "/my-requests",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales_manager",
+    "route": "profile",
+    "path": "/profile",
+    "finalPath": "/profile",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales_manager-profile.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "overtime",
+    "path": "/overtime",
+    "finalPath": "/overtime",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales_manager-overtime.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "leave",
+    "path": "/leave",
+    "finalPath": "/leave",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales_manager-leave.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "payroll",
+    "path": "/payroll",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales_manager",
+    "route": "attendance",
+    "path": "/attendance",
+    "finalPath": "/attendance",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales_manager-attendance.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "ticket-overview",
+    "path": "/ticket-overview",
+    "finalPath": "/ticket-overview",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales_manager-ticket-overview.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "tickets",
+    "path": "/tickets",
+    "finalPath": "/tickets",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales_manager-tickets.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "commissions",
+    "path": "/commissions",
+    "finalPath": "/commissions",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales_manager-commissions.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "price-import",
+    "path": "/price-import",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales_manager",
+    "route": "ceo-settings",
+    "path": "/ceo-settings",
+    "finalPath": "/ceo-settings",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales_manager-ceo-settings.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "catalog",
+    "path": "/catalog",
+    "finalPath": "/catalog",
+    "vp": "desktop",
+    "file": "screenshots/desktop/sales_manager-catalog.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "dashboard",
+    "path": "/",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales_manager-dashboard.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "hr",
+    "path": "/hr",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales_manager",
+    "route": "employees",
+    "path": "/employees",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales_manager",
+    "route": "requests",
+    "path": "/requests",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales_manager",
+    "route": "my-requests",
+    "path": "/my-requests",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales_manager",
+    "route": "profile",
+    "path": "/profile",
+    "finalPath": "/profile",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales_manager-profile.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "overtime",
+    "path": "/overtime",
+    "finalPath": "/overtime",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales_manager-overtime.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "leave",
+    "path": "/leave",
+    "finalPath": "/leave",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales_manager-leave.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "payroll",
+    "path": "/payroll",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales_manager",
+    "route": "attendance",
+    "path": "/attendance",
+    "finalPath": "/attendance",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales_manager-attendance.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "ticket-overview",
+    "path": "/ticket-overview",
+    "finalPath": "/ticket-overview",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales_manager-ticket-overview.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "tickets",
+    "path": "/tickets",
+    "finalPath": "/tickets",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales_manager-tickets.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "commissions",
+    "path": "/commissions",
+    "finalPath": "/commissions",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales_manager-commissions.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "price-import",
+    "path": "/price-import",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "sales_manager",
+    "route": "ceo-settings",
+    "path": "/ceo-settings",
+    "finalPath": "/ceo-settings",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales_manager-ceo-settings.png",
+    "redirected": false
+  },
+  {
+    "role": "sales_manager",
+    "route": "catalog",
+    "path": "/catalog",
+    "finalPath": "/catalog",
+    "vp": "mobile",
+    "file": "screenshots/mobile/sales_manager-catalog.png",
+    "redirected": false
+  },
+  {
+    "role": "import",
+    "route": "dashboard",
+    "path": "/",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": "screenshots/desktop/import-dashboard.png",
+    "redirected": false
+  },
+  {
+    "role": "import",
+    "route": "hr",
+    "path": "/hr",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "employees",
+    "path": "/employees",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "requests",
+    "path": "/requests",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "my-requests",
+    "path": "/my-requests",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "profile",
+    "path": "/profile",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "overtime",
+    "path": "/overtime",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "leave",
+    "path": "/leave",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "payroll",
+    "path": "/payroll",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "attendance",
+    "path": "/attendance",
+    "finalPath": "/attendance",
+    "vp": "desktop",
+    "file": "screenshots/desktop/import-attendance.png",
+    "redirected": false
+  },
+  {
+    "role": "import",
+    "route": "ticket-overview",
+    "path": "/ticket-overview",
+    "finalPath": "/ticket-overview",
+    "vp": "desktop",
+    "file": "screenshots/desktop/import-ticket-overview.png",
+    "redirected": false
+  },
+  {
+    "role": "import",
+    "route": "tickets",
+    "path": "/tickets",
+    "finalPath": "/tickets",
+    "vp": "desktop",
+    "file": "screenshots/desktop/import-tickets.png",
+    "redirected": false
+  },
+  {
+    "role": "import",
+    "route": "commissions",
+    "path": "/commissions",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "price-import",
+    "path": "/price-import",
+    "finalPath": "/price-import",
+    "vp": "desktop",
+    "file": "screenshots/desktop/import-price-import.png",
+    "redirected": false
+  },
+  {
+    "role": "import",
+    "route": "ceo-settings",
+    "path": "/ceo-settings",
+    "finalPath": "/ceo-settings",
+    "vp": "desktop",
+    "file": "screenshots/desktop/import-ceo-settings.png",
+    "redirected": false
+  },
+  {
+    "role": "import",
+    "route": "catalog",
+    "path": "/catalog",
+    "finalPath": "/catalog",
+    "vp": "desktop",
+    "file": "screenshots/desktop/import-catalog.png",
+    "redirected": false
+  },
+  {
+    "role": "import",
+    "route": "dashboard",
+    "path": "/",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": "screenshots/mobile/import-dashboard.png",
+    "redirected": false
+  },
+  {
+    "role": "import",
+    "route": "hr",
+    "path": "/hr",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "employees",
+    "path": "/employees",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "requests",
+    "path": "/requests",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "my-requests",
+    "path": "/my-requests",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "profile",
+    "path": "/profile",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "overtime",
+    "path": "/overtime",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "leave",
+    "path": "/leave",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "payroll",
+    "path": "/payroll",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "attendance",
+    "path": "/attendance",
+    "finalPath": "/attendance",
+    "vp": "mobile",
+    "file": "screenshots/mobile/import-attendance.png",
+    "redirected": false
+  },
+  {
+    "role": "import",
+    "route": "ticket-overview",
+    "path": "/ticket-overview",
+    "finalPath": "/ticket-overview",
+    "vp": "mobile",
+    "file": "screenshots/mobile/import-ticket-overview.png",
+    "redirected": false
+  },
+  {
+    "role": "import",
+    "route": "tickets",
+    "path": "/tickets",
+    "finalPath": "/tickets",
+    "vp": "mobile",
+    "file": "screenshots/mobile/import-tickets.png",
+    "redirected": false
+  },
+  {
+    "role": "import",
+    "route": "commissions",
+    "path": "/commissions",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "import",
+    "route": "price-import",
+    "path": "/price-import",
+    "finalPath": "/price-import",
+    "vp": "mobile",
+    "file": "screenshots/mobile/import-price-import.png",
+    "redirected": false
+  },
+  {
+    "role": "import",
+    "route": "ceo-settings",
+    "path": "/ceo-settings",
+    "finalPath": "/ceo-settings",
+    "vp": "mobile",
+    "file": "screenshots/mobile/import-ceo-settings.png",
+    "redirected": false
+  },
+  {
+    "role": "import",
+    "route": "catalog",
+    "path": "/catalog",
+    "finalPath": "/catalog",
+    "vp": "mobile",
+    "file": "screenshots/mobile/import-catalog.png",
+    "redirected": false
+  },
+  {
+    "role": "account",
+    "route": "dashboard",
+    "path": "/",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": "screenshots/desktop/account-dashboard.png",
+    "redirected": false
+  },
+  {
+    "role": "account",
+    "route": "hr",
+    "path": "/hr",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "employees",
+    "path": "/employees",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "requests",
+    "path": "/requests",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "my-requests",
+    "path": "/my-requests",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "profile",
+    "path": "/profile",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "overtime",
+    "path": "/overtime",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "leave",
+    "path": "/leave",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "payroll",
+    "path": "/payroll",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "attendance",
+    "path": "/attendance",
+    "finalPath": "/attendance",
+    "vp": "desktop",
+    "file": "screenshots/desktop/account-attendance.png",
+    "redirected": false
+  },
+  {
+    "role": "account",
+    "route": "ticket-overview",
+    "path": "/ticket-overview",
+    "finalPath": "/ticket-overview",
+    "vp": "desktop",
+    "file": "screenshots/desktop/account-ticket-overview.png",
+    "redirected": false
+  },
+  {
+    "role": "account",
+    "route": "tickets",
+    "path": "/tickets",
+    "finalPath": "/tickets",
+    "vp": "desktop",
+    "file": "screenshots/desktop/account-tickets.png",
+    "redirected": false
+  },
+  {
+    "role": "account",
+    "route": "commissions",
+    "path": "/commissions",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "price-import",
+    "path": "/price-import",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "ceo-settings",
+    "path": "/ceo-settings",
+    "finalPath": "/ceo-settings",
+    "vp": "desktop",
+    "file": "screenshots/desktop/account-ceo-settings.png",
+    "redirected": false
+  },
+  {
+    "role": "account",
+    "route": "catalog",
+    "path": "/catalog",
+    "finalPath": "/catalog",
+    "vp": "desktop",
+    "file": "screenshots/desktop/account-catalog.png",
+    "redirected": false
+  },
+  {
+    "role": "account",
+    "route": "dashboard",
+    "path": "/",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": "screenshots/mobile/account-dashboard.png",
+    "redirected": false
+  },
+  {
+    "role": "account",
+    "route": "hr",
+    "path": "/hr",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "employees",
+    "path": "/employees",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "requests",
+    "path": "/requests",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "my-requests",
+    "path": "/my-requests",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "profile",
+    "path": "/profile",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "overtime",
+    "path": "/overtime",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "leave",
+    "path": "/leave",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "payroll",
+    "path": "/payroll",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "attendance",
+    "path": "/attendance",
+    "finalPath": "/attendance",
+    "vp": "mobile",
+    "file": "screenshots/mobile/account-attendance.png",
+    "redirected": false
+  },
+  {
+    "role": "account",
+    "route": "ticket-overview",
+    "path": "/ticket-overview",
+    "finalPath": "/ticket-overview",
+    "vp": "mobile",
+    "file": "screenshots/mobile/account-ticket-overview.png",
+    "redirected": false
+  },
+  {
+    "role": "account",
+    "route": "tickets",
+    "path": "/tickets",
+    "finalPath": "/tickets",
+    "vp": "mobile",
+    "file": "screenshots/mobile/account-tickets.png",
+    "redirected": false
+  },
+  {
+    "role": "account",
+    "route": "commissions",
+    "path": "/commissions",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "price-import",
+    "path": "/price-import",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "account",
+    "route": "ceo-settings",
+    "path": "/ceo-settings",
+    "finalPath": "/ceo-settings",
+    "vp": "mobile",
+    "file": "screenshots/mobile/account-ceo-settings.png",
+    "redirected": false
+  },
+  {
+    "role": "account",
+    "route": "catalog",
+    "path": "/catalog",
+    "finalPath": "/catalog",
+    "vp": "mobile",
+    "file": "screenshots/mobile/account-catalog.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "dashboard",
+    "path": "/",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": "screenshots/desktop/ceo-dashboard.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "hr",
+    "path": "/hr",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "ceo",
+    "route": "employees",
+    "path": "/employees",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "ceo",
+    "route": "requests",
+    "path": "/requests",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "ceo",
+    "route": "my-requests",
+    "path": "/my-requests",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "ceo",
+    "route": "profile",
+    "path": "/profile",
+    "finalPath": "/profile",
+    "vp": "desktop",
+    "file": "screenshots/desktop/ceo-profile.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "overtime",
+    "path": "/overtime",
+    "finalPath": "/overtime",
+    "vp": "desktop",
+    "file": "screenshots/desktop/ceo-overtime.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "leave",
+    "path": "/leave",
+    "finalPath": "/leave",
+    "vp": "desktop",
+    "file": "screenshots/desktop/ceo-leave.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "payroll",
+    "path": "/payroll",
+    "finalPath": "/",
+    "vp": "desktop",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "ceo",
+    "route": "attendance",
+    "path": "/attendance",
+    "finalPath": "/attendance",
+    "vp": "desktop",
+    "file": "screenshots/desktop/ceo-attendance.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "ticket-overview",
+    "path": "/ticket-overview",
+    "finalPath": "/ticket-overview",
+    "vp": "desktop",
+    "file": "screenshots/desktop/ceo-ticket-overview.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "tickets",
+    "path": "/tickets",
+    "finalPath": "/tickets",
+    "vp": "desktop",
+    "file": "screenshots/desktop/ceo-tickets.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "commissions",
+    "path": "/commissions",
+    "finalPath": "/commissions",
+    "vp": "desktop",
+    "file": "screenshots/desktop/ceo-commissions.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "price-import",
+    "path": "/price-import",
+    "finalPath": "/price-import",
+    "vp": "desktop",
+    "file": "screenshots/desktop/ceo-price-import.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "ceo-settings",
+    "path": "/ceo-settings",
+    "finalPath": "/ceo-settings",
+    "vp": "desktop",
+    "file": "screenshots/desktop/ceo-ceo-settings.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "catalog",
+    "path": "/catalog",
+    "finalPath": "/catalog",
+    "vp": "desktop",
+    "file": "screenshots/desktop/ceo-catalog.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "dashboard",
+    "path": "/",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": "screenshots/mobile/ceo-dashboard.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "hr",
+    "path": "/hr",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "ceo",
+    "route": "employees",
+    "path": "/employees",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "ceo",
+    "route": "requests",
+    "path": "/requests",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "ceo",
+    "route": "my-requests",
+    "path": "/my-requests",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "ceo",
+    "route": "profile",
+    "path": "/profile",
+    "finalPath": "/profile",
+    "vp": "mobile",
+    "file": "screenshots/mobile/ceo-profile.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "overtime",
+    "path": "/overtime",
+    "finalPath": "/overtime",
+    "vp": "mobile",
+    "file": "screenshots/mobile/ceo-overtime.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "leave",
+    "path": "/leave",
+    "finalPath": "/leave",
+    "vp": "mobile",
+    "file": "screenshots/mobile/ceo-leave.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "payroll",
+    "path": "/payroll",
+    "finalPath": "/",
+    "vp": "mobile",
+    "file": null,
+    "redirected": true
+  },
+  {
+    "role": "ceo",
+    "route": "attendance",
+    "path": "/attendance",
+    "finalPath": "/attendance",
+    "vp": "mobile",
+    "file": "screenshots/mobile/ceo-attendance.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "ticket-overview",
+    "path": "/ticket-overview",
+    "finalPath": "/ticket-overview",
+    "vp": "mobile",
+    "file": "screenshots/mobile/ceo-ticket-overview.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "tickets",
+    "path": "/tickets",
+    "finalPath": "/tickets",
+    "vp": "mobile",
+    "file": "screenshots/mobile/ceo-tickets.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "commissions",
+    "path": "/commissions",
+    "finalPath": "/commissions",
+    "vp": "mobile",
+    "file": "screenshots/mobile/ceo-commissions.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "price-import",
+    "path": "/price-import",
+    "finalPath": "/price-import",
+    "vp": "mobile",
+    "file": "screenshots/mobile/ceo-price-import.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "ceo-settings",
+    "path": "/ceo-settings",
+    "finalPath": "/ceo-settings",
+    "vp": "mobile",
+    "file": "screenshots/mobile/ceo-ceo-settings.png",
+    "redirected": false
+  },
+  {
+    "role": "ceo",
+    "route": "catalog",
+    "path": "/catalog",
+    "finalPath": "/catalog",
+    "vp": "mobile",
+    "file": "screenshots/mobile/ceo-catalog.png",
+    "redirected": false
+  }
+]

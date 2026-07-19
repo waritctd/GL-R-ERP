@@ -66,8 +66,8 @@ describe('OvertimePage form validation', () => {
   it('blocks submit when planned end is not after planned start', async () => {
     renderOvertimePage();
 
-    const startInput = await screen.findByLabelText('เริ่ม');
-    const endInput = screen.getByLabelText('สิ้นสุด');
+    const startInput = await screen.findByLabelText(/^เริ่ม/);
+    const endInput = screen.getByLabelText(/สิ้นสุด/);
     const submitButton = screen.getByRole('button', { name: /ส่งคำขอ/ });
 
     fireEvent.change(startInput, { target: { value: '2026-07-07T20:00' } });
@@ -84,8 +84,8 @@ describe('OvertimePage form validation', () => {
   it('sends the existing overtime payload shape for a valid submit', async () => {
     renderOvertimePage();
 
-    fireEvent.change(await screen.findByLabelText('วันที่ทำ OT'), { target: { value: '2026-07-07' } });
-    fireEvent.change(screen.getByLabelText('เหตุผลความจำเป็น'), { target: { value: 'ทดสอบระบบ' } });
+    fireEvent.change(await screen.findByLabelText(/วันที่ทำ OT/), { target: { value: '2026-07-07' } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลความจำเป็น/), { target: { value: 'ทดสอบระบบ' } });
     fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
 
     await waitFor(() => expect(api.overtime.create).toHaveBeenCalledTimes(1));

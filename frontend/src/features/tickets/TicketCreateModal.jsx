@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { z } from 'zod';
 import { api } from '../../api/index.js';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
+import { fieldErrorId } from '../../components/common/FormField.jsx';
 
 const emptyItem = () => ({ brand: '', model: '', color: '', texture: '', size: '', factory: '', unitBasis: 'PIECE', qty: 1, qtySqm: '', sqmPerPiece: null });
 
@@ -11,10 +13,111 @@ function debouncedCatalogSearch(q, cb) {
   _catalogTimer = setTimeout(() => cb(q), 280);
 }
 
+// ── validation (UX-03) ──────────────────────────────────────────────────────
+// Mirrors the rules that used to live inline in submit() as a sequence of
+// "first failing check wins, generic message" early-returns. The *conditions*
+// are unchanged; what changed is the shape of the result — every invalid
+// field is now reported (keyed the same way as `fieldErrors` state below:
+// 'customer', 'project', `items.<index>.<field>`), so a long form doesn't
+// force the user to fix-and-resubmit one message at a time.
+//
+// Rule 3 used to fire ONE message for five different blank fields in a row
+// ("กรุณากรอกข้อมูลสินค้าให้ครบทุกช่องในรายการที่ N"). That text can't serve
+// as a per-field message (it doesn't say *which* field), so each field below
+// gets its own "กรุณากรอก<label>" text instead — new wording, but the same
+// required-ness rule. Rules 1/2/4/5's original strings are preserved
+// verbatim.
+const REQUIRED_ITEM_FIELD_LABELS = {
+  brand: 'ชื่อยี่ห้อ',
+  model: 'ชื่อรุ่น / Collection',
+  color: 'สี',
+  texture: 'เนื้อผิว',
+  size: 'ขนาด',
+};
+
+function makeItemSchema(rowNumber) {
+  return z.object({
+    brand: z.string(),
+    model: z.string(),
+    color: z.string(),
+    texture: z.string(),
+    size: z.string(),
+    unitBasis: z.string().optional(),
+    qty: z.union([z.string(), z.number()]).nullable().optional(),
+    qtySqm: z.union([z.string(), z.number()]).nullable().optional(),
+  }).superRefine((item, ctx) => {
+    for (const field of Object.keys(REQUIRED_ITEM_FIELD_LABELS)) {
+      if (!String(item[field] ?? '').trim()) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: `กรุณากรอก${REQUIRED_ITEM_FIELD_LABELS[field]}` });
+      }
+    }
+    const basis = item.unitBasis || 'PIECE';
+    if (basis === 'PIECE' && (!item.qty || Number(item.qty) <= 0)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['qty'], message: `กรุณากรอกจำนวน (แผ่น) ในรายการที่ ${rowNumber}` });
+    }
+    if (basis === 'SQM' && (!item.qtySqm || Number(item.qtySqm) <= 0)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['qtySqm'], message: `กรุณากรอกพื้นที่ (ตร.ม.) ในรายการที่ ${rowNumber}` });
+    }
+  });
+}
+
+const customerRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกบริษัท/ลูกค้า');
+// Mirrors TicketService.create: every new deal belongs to a โครงการ.
+const projectRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกโครงการ (1 ดีล = 1 ใบขอราคา ภายใต้โครงการ)');
+
+/**
+ * Validates the whole form and returns every invalid field, plus `order`:
+ * those same keys in on-screen top-to-bottom order, so submit() can focus
+ * the first one without depending on zod's internal issue ordering (a
+ * root-level check runs after nested array elements are validated, which
+ * would put item errors before customer/project if we relied on it).
+ */
+function validateTicketForm({ customer, project, items }) {
+  const errors = {};
+  const order = [];
+
+  const customerResult = customerRequiredSchema.safeParse(customer);
+  if (!customerResult.success) {
+    errors.customer = customerResult.error.issues[0].message;
+    order.push('customer');
+  }
+
+  // A project can only be chosen once a customer is selected (the picker
+  // doesn't even render before then) — like the original sequential checks,
+  // only flag it once the customer is valid.
+  if (customerResult.success) {
+    const projectResult = projectRequiredSchema.safeParse(project);
+    if (!projectResult.success) {
+      errors.project = projectResult.error.issues[0].message;
+      order.push('project');
+    }
+  }
+
+  items.forEach((item, index) => {
+    const itemResult = makeItemSchema(index + 1).safeParse(item);
+    if (!itemResult.success) {
+      for (const issue of itemResult.error.issues) {
+        const key = `items.${index}.${issue.path[0]}`;
+        errors[key] = issue.message;
+        order.push(key);
+      }
+    }
+  });
+
+  return { errors, order };
+}
+
 // ── small sub-components ──────────────────────────────────────────────────────
 
-function SearchSelect({ label, value, onSelect, placeholder, options, onSearch, searchValue, onSearchChange, loading, renderOption, renderValue, createNewLabel, onCreateNew }) {
+function SearchSelect({ id, label, value, onSelect, placeholder, options, onSearch, searchValue, onSearchChange, loading, renderOption, renderValue, createNewLabel, onCreateNew, inputRef, error }) {
   const [open, setOpen] = useState(false);
+  // Hand-wired aria contract (no <FormField> here — the control renders
+  // either a value chip or a search input depending on state, which doesn't
+  // fit FormField's single-child-with-matching-id model). Same contract as
+  // FormField: aria-invalid + aria-describedby pointing at a role="alert"
+  // error paragraph, using the same `${id}-error` id convention via
+  // fieldErrorId so screen readers get field/error association (WCAG 3.3.1).
+  const errorId = error && id ? fieldErrorId(id) : undefined;
   return (
     <div style={{ position: 'relative' }}>
       <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>{label}</span>
@@ -28,12 +131,17 @@ function SearchSelect({ label, value, onSelect, placeholder, options, onSearch, 
       ) : (
         <div style={{ position: 'relative' }}>
           <input
+            id={id}
+            ref={inputRef}
             value={searchValue}
             onChange={(e) => { onSearchChange(e.target.value); onSearch(e.target.value); setOpen(true); }}
             onFocus={() => { onSearch(searchValue); setOpen(true); }}
             onBlur={() => setTimeout(() => setOpen(false), 150)}
             placeholder={placeholder}
             style={{ width: '100%', boxSizing: 'border-box' }}
+            aria-required="true"
+            aria-invalid={error ? true : undefined}
+            aria-describedby={errorId}
           />
           {open && (
             <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.1)', maxHeight: 220, overflowY: 'auto' }}>
@@ -64,6 +172,9 @@ function SearchSelect({ label, value, onSelect, placeholder, options, onSearch, 
           )}
         </div>
       )}
+      {error ? (
+        <p id={errorId} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{error}</p>
+      ) : null}
     </div>
   );
 }
@@ -76,7 +187,24 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   // price-request flow begins later once items are added and submitted.
   const [items, setItems] = useState(() => initialItems?.length ? initialItems : []);
   const [loading, setLoading] = useState(false);
+  // Form-level: submit/API failures (สร้างใบขอราคาไม่สำเร็จ, สร้างโครงการไม่สำเร็จ,
+  // เพิ่มผู้ติดต่อไม่สำเร็จ). Kept separate from `fieldErrors` — those are two
+  // different kinds of problem and shouldn't share one string.
   const [error, setError] = useState('');
+  // Field-level: keyed 'customer' | 'project' | `items.<index>.<field>`.
+  // See validateTicketForm() above for how this is populated.
+  const [fieldErrors, setFieldErrors] = useState({});
+  // DOM node per fieldErrors key, so submit() can scroll+focus the first
+  // invalid field on a form long enough that the error can be off-screen.
+  const fieldRefs = useRef({});
+  function clearFieldError(key) {
+    setFieldErrors((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }
 
   // customer / project / contact state
   const [customerSearch, setCustomerSearch] = useState('');
@@ -139,6 +267,13 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   }
 
   function updateItem(index, field, value) {
+    clearFieldError(`items.${index}.${field}`);
+    // unitBasis flips which of qty/qtySqm is required — clear both so a
+    // stale error from the basis the user just left doesn't linger.
+    if (field === 'unitBasis') {
+      clearFieldError(`items.${index}.qty`);
+      clearFieldError(`items.${index}.qtySqm`);
+    }
     setItems((cur) => cur.map((item, i) => {
       if (i !== index) return item;
       const updated = { ...item, [field]: value };
@@ -173,6 +308,9 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         qtySqm:      newQtySqm,
       };
     }));
+    // Catalog pick fills brand/model/color/texture/size in one shot — clear
+    // any of those five that were previously flagged as blank.
+    ['brand', 'model', 'color', 'texture', 'size'].forEach((f) => clearFieldError(`items.${index}.${f}`));
     setCatalogResults([]);
     setCatalogFocus(null);
   }
@@ -200,6 +338,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       const proj = res.project;
       setProjectOptions((prev) => [...prev, proj]);
       setSelectedProject(proj);
+      clearFieldError('project');
       setNewProjectName('');
       setShowNewProject(false);
     } catch (err) {
@@ -217,6 +356,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       const cust = res.customer;
       setCustomerOptions((prev) => [...prev, cust]);
       setSelectedCustomer(cust);
+      clearFieldError('customer');
       setShowNewCustomer(false);
       setNewCustomer({ name: '', taxId: '', branch: 'สำนักงานใหญ่', address: '', phone: '' });
     } finally {
@@ -243,25 +383,27 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
   async function submit(event) {
     event.preventDefault();
-    if (!selectedCustomer) { setError('กรุณาเลือกบริษัท/ลูกค้า'); return; }
-    // Mirrors TicketService.create: every new deal belongs to a โครงการ.
-    if (!selectedProject) { setError('กรุณาเลือกโครงการ (1 ดีล = 1 ใบขอราคา ภายใต้โครงการ)'); return; }
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      const basis = item.unitBasis || 'PIECE';
-      if (!item.brand.trim() || !item.model.trim() || !item.color.trim() || !item.texture.trim() || !item.size.trim()) {
-        setError(`กรุณากรอกข้อมูลสินค้าให้ครบทุกช่องในรายการที่ ${i + 1}`);
-        return;
+    const { errors: nextFieldErrors, order } = validateTicketForm({
+      customer: selectedCustomer,
+      project: selectedProject,
+      items,
+    });
+    if (order.length > 0) {
+      setFieldErrors(nextFieldErrors);
+      setError('');
+      // Acceptance criterion: don't make the user hunt on a long form —
+      // jump straight to (and focus) the first invalid field, in the same
+      // top-to-bottom order validateTicketForm() reports them in.
+      const node = fieldRefs.current[order[0]];
+      if (node) {
+        if (typeof node.scrollIntoView === 'function') {
+          node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        node.focus();
       }
-      if (basis === 'PIECE' && (!item.qty || Number(item.qty) <= 0)) {
-        setError(`กรุณากรอกจำนวน (แผ่น) ในรายการที่ ${i + 1}`);
-        return;
-      }
-      if (basis === 'SQM' && (!item.qtySqm || Number(item.qtySqm) <= 0)) {
-        setError(`กรุณากรอกพื้นที่ (ตร.ม.) ในรายการที่ ${i + 1}`);
-        return;
-      }
+      return;
     }
+    setFieldErrors({});
     setError('');
     setLoading(true);
     try {
@@ -305,7 +447,16 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         </>
       )}
     >
-      <form id="ticket-create-form" className="form-grid" onSubmit={submit}>
+      {/*
+        noValidate: several inputs below still carry the native `required`
+        attribute (kept for its own semantics), but our own submit() is now
+        the single source of truth for validation. Without noValidate, the
+        browser's built-in constraint validation would intercept a genuinely
+        empty required field and block the 'submit' event entirely — meaning
+        our aria-wired per-field errors and scroll-to-first-invalid below
+        would never run for exactly the case they exist to handle.
+      */}
+      <form id="ticket-create-form" className="form-grid" onSubmit={submit} noValidate>
 
         {/* ── Section 1: Customer / Project / Contact ── */}
         <div className="span-2" style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: 8, background: '#f8fafc' }}>
@@ -313,9 +464,10 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
           {/* Customer picker */}
           <SearchSelect
+            id="customer-select"
             label="บริษัท / ลูกค้า *"
             value={selectedCustomer}
-            onSelect={(c) => { setSelectedCustomer(c); if (c) setShowNewCustomer(false); }}
+            onSelect={(c) => { setSelectedCustomer(c); if (c) { setShowNewCustomer(false); clearFieldError('customer'); } }}
             placeholder="พิมพ์ค้นหาชื่อบริษัท..."
             options={customerOptions}
             onSearch={searchCustomers}
@@ -331,6 +483,8 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             renderValue={(c) => <span><strong>{c.name}</strong>{c.taxId ? <span style={{ color: '#64748b', fontSize: 12, marginLeft: 6 }}>({c.taxId})</span> : null}</span>}
             createNewLabel="สร้างบริษัท / ลูกค้าใหม่"
             onCreateNew={() => setShowNewCustomer(true)}
+            inputRef={(el) => { fieldRefs.current.customer = el; }}
+            error={fieldErrors.customer}
           />
 
           {/* Inline new-customer form */}
@@ -372,7 +526,18 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
           {/* Project selector */}
           {selectedCustomer && (
-            <div>
+            // Hand-wired aria contract: this control is a set of pill buttons,
+            // not a single input FormField can attach aria-* to, so the
+            // group container carries aria-invalid/aria-describedby (like a
+            // <fieldset>) and is the scroll+focus target — tabIndex={-1}
+            // makes a plain <div> programmatically focusable for that.
+            <div
+              id="project-field"
+              ref={(el) => { fieldRefs.current.project = el; }}
+              tabIndex={-1}
+              aria-invalid={fieldErrors.project ? true : undefined}
+              aria-describedby={fieldErrors.project ? fieldErrorId('project-field') : undefined}
+            >
               <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>โครงการ *</span>
               {selectedProject ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', fontSize: 13 }}>
@@ -388,7 +553,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                     {projectOptions.map((p) => (
                       <button key={p.id} type="button"
                         style={{ padding: '4px 10px', border: '1px solid #cbd5e1', borderRadius: 20, fontSize: 12, background: '#fff', cursor: 'pointer' }}
-                        onClick={() => setSelectedProject(p)}>
+                        onClick={() => { setSelectedProject(p); clearFieldError('project'); }}>
                         {p.name}
                       </button>
                     ))}
@@ -409,6 +574,9 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   )}
                 </div>
               )}
+              {fieldErrors.project ? (
+                <p id={fieldErrorId('project-field')} role="alert" style={{ margin: '6px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{fieldErrors.project}</p>
+              ) : null}
             </div>
           )}
 
@@ -492,7 +660,14 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   <button
                     type="button"
                     className="icon-button"
-                    onClick={() => setItems((cur) => cur.filter((_, i) => i !== index))}
+                    onClick={() => {
+                      setItems((cur) => cur.filter((_, i) => i !== index));
+                      // Removing a row shifts every later row's index, so a
+                      // stale error keyed to the old index would otherwise
+                      // render against the wrong row after this. Item errors
+                      // are cheap to re-derive on the next submit.
+                      setFieldErrors((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => !k.startsWith('items.'))));
+                    }}
                     title="ลบรายการ"
                     aria-label={`ลบรายการที่ ${index + 1}`}
                     style={{ color: '#ef4444' }}
@@ -507,13 +682,21 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                 <div style={{ position: 'relative', margin: 0 }}>
                   <span style={{ fontSize: 12, display: 'block', marginBottom: 3 }}>ชื่อยี่ห้อ *</span>
                   <input
+                    id={`item-${index}-brand`}
+                    ref={(el) => { fieldRefs.current[`items.${index}.brand`] = el; }}
                     value={item.brand}
                     onChange={(e) => onBrandInput(index, e.target.value)}
                     onFocus={() => { setCatalogFocus({ index, field: 'brand' }); if (item.brand) onBrandInput(index, item.brand); }}
                     onBlur={() => setTimeout(() => setCatalogFocus(null), 180)}
                     placeholder="เช่น SCG, Cotto, Panaria"
                     required
+                    aria-required="true"
+                    aria-invalid={fieldErrors[`items.${index}.brand`] ? true : undefined}
+                    aria-describedby={fieldErrors[`items.${index}.brand`] ? fieldErrorId(`item-${index}-brand`) : undefined}
                   />
+                  {fieldErrors[`items.${index}.brand`] ? (
+                    <p id={fieldErrorId(`item-${index}-brand`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{fieldErrors[`items.${index}.brand`]}</p>
+                  ) : null}
                   {catalogFocus?.index === index && catalogFocus?.field === 'brand' && catalogResults.length > 0 && (
                     <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 60, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.12)', maxHeight: 200, overflowY: 'auto' }}>
                       {catalogResults.map((cat) => (
@@ -543,13 +726,21 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                 <div style={{ position: 'relative', margin: 0 }}>
                   <span style={{ fontSize: 12, display: 'block', marginBottom: 3 }}>ชื่อรุ่น / Collection *</span>
                   <input
+                    id={`item-${index}-model`}
+                    ref={(el) => { fieldRefs.current[`items.${index}.model`] = el; }}
                     value={item.model}
                     onChange={(e) => onModelInput(index, e.target.value)}
                     onFocus={() => { setCatalogFocus({ index, field: 'model' }); if (item.model) onModelInput(index, item.model); }}
                     onBlur={() => setTimeout(() => setCatalogFocus(null), 180)}
                     placeholder="เช่น Stone, Elegance, L-Trim..."
                     required
+                    aria-required="true"
+                    aria-invalid={fieldErrors[`items.${index}.model`] ? true : undefined}
+                    aria-describedby={fieldErrors[`items.${index}.model`] ? fieldErrorId(`item-${index}-model`) : undefined}
                   />
+                  {fieldErrors[`items.${index}.model`] ? (
+                    <p id={fieldErrorId(`item-${index}-model`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{fieldErrors[`items.${index}.model`]}</p>
+                  ) : null}
                   {catalogFocus?.index === index && catalogFocus?.field === 'model' && catalogResults.length > 0 && (
                     <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 60, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.12)', maxHeight: 200, overflowY: 'auto' }}>
                       {catalogResults.map((cat) => (
@@ -577,15 +768,54 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                 </div>
                 <label style={{ margin: 0 }}>
                   <span style={{ fontSize: 12 }}>สี *</span>
-                  <input value={item.color} onChange={(e) => updateItem(index, 'color', e.target.value)} placeholder="เช่น ขาว, เทา, ครีม" required />
+                  <input
+                    id={`item-${index}-color`}
+                    ref={(el) => { fieldRefs.current[`items.${index}.color`] = el; }}
+                    value={item.color}
+                    onChange={(e) => updateItem(index, 'color', e.target.value)}
+                    placeholder="เช่น ขาว, เทา, ครีม"
+                    required
+                    aria-required="true"
+                    aria-invalid={fieldErrors[`items.${index}.color`] ? true : undefined}
+                    aria-describedby={fieldErrors[`items.${index}.color`] ? fieldErrorId(`item-${index}-color`) : undefined}
+                  />
+                  {fieldErrors[`items.${index}.color`] ? (
+                    <p id={fieldErrorId(`item-${index}-color`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{fieldErrors[`items.${index}.color`]}</p>
+                  ) : null}
                 </label>
                 <label style={{ margin: 0 }}>
                   <span style={{ fontSize: 12 }}>เนื้อผิว *</span>
-                  <input value={item.texture} onChange={(e) => updateItem(index, 'texture', e.target.value)} placeholder="เช่น ด้าน, มัน, หยาบ" required />
+                  <input
+                    id={`item-${index}-texture`}
+                    ref={(el) => { fieldRefs.current[`items.${index}.texture`] = el; }}
+                    value={item.texture}
+                    onChange={(e) => updateItem(index, 'texture', e.target.value)}
+                    placeholder="เช่น ด้าน, มัน, หยาบ"
+                    required
+                    aria-required="true"
+                    aria-invalid={fieldErrors[`items.${index}.texture`] ? true : undefined}
+                    aria-describedby={fieldErrors[`items.${index}.texture`] ? fieldErrorId(`item-${index}-texture`) : undefined}
+                  />
+                  {fieldErrors[`items.${index}.texture`] ? (
+                    <p id={fieldErrorId(`item-${index}-texture`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{fieldErrors[`items.${index}.texture`]}</p>
+                  ) : null}
                 </label>
                 <label style={{ margin: 0 }}>
                   <span style={{ fontSize: 12 }}>ขนาด *</span>
-                  <input value={item.size} onChange={(e) => updateItem(index, 'size', e.target.value)} placeholder="เช่น 60x60, 30x60 ซม." required />
+                  <input
+                    id={`item-${index}-size`}
+                    ref={(el) => { fieldRefs.current[`items.${index}.size`] = el; }}
+                    value={item.size}
+                    onChange={(e) => updateItem(index, 'size', e.target.value)}
+                    placeholder="เช่น 60x60, 30x60 ซม."
+                    required
+                    aria-required="true"
+                    aria-invalid={fieldErrors[`items.${index}.size`] ? true : undefined}
+                    aria-describedby={fieldErrors[`items.${index}.size`] ? fieldErrorId(`item-${index}-size`) : undefined}
+                  />
+                  {fieldErrors[`items.${index}.size`] ? (
+                    <p id={fieldErrorId(`item-${index}-size`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{fieldErrors[`items.${index}.size`]}</p>
+                  ) : null}
                 </label>
                 <label style={{ margin: 0 }}>
                   <span style={{ fontSize: 12 }}>โรงงาน</span>
@@ -617,8 +847,17 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                     <label style={{ margin: 0 }}>
                       <span style={{ fontSize: 12 }}>จำนวน (แผ่น) *</span>
                       <input type="number" value={item.qty} step="1"
+                        id={`item-${index}-qty`}
+                        ref={(el) => { fieldRefs.current[`items.${index}.qty`] = el; }}
                         onChange={(e) => updateItem(index, 'qty', e.target.value)}
-                        placeholder="จำนวนแผ่น" required />
+                        placeholder="จำนวนแผ่น" required
+                        aria-required="true"
+                        aria-invalid={fieldErrors[`items.${index}.qty`] ? true : undefined}
+                        aria-describedby={fieldErrors[`items.${index}.qty`] ? fieldErrorId(`item-${index}-qty`) : undefined}
+                      />
+                      {fieldErrors[`items.${index}.qty`] ? (
+                        <p id={fieldErrorId(`item-${index}-qty`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{fieldErrors[`items.${index}.qty`]}</p>
+                      ) : null}
                     </label>
                     <div style={{ margin: 0 }}>
                       <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>พื้นที่รวม (ตร.ม.)</span>
@@ -632,8 +871,17 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                     <label style={{ margin: 0 }}>
                       <span style={{ fontSize: 12 }}>พื้นที่ (ตร.ม.) *</span>
                       <input type="number" value={item.qtySqm} min="0" step="0.001"
+                        id={`item-${index}-qtySqm`}
+                        ref={(el) => { fieldRefs.current[`items.${index}.qtySqm`] = el; }}
                         onChange={(e) => updateItem(index, 'qtySqm', e.target.value)}
-                        placeholder="เช่น 120.500" required />
+                        placeholder="เช่น 120.500" required
+                        aria-required="true"
+                        aria-invalid={fieldErrors[`items.${index}.qtySqm`] ? true : undefined}
+                        aria-describedby={fieldErrors[`items.${index}.qtySqm`] ? fieldErrorId(`item-${index}-qtySqm`) : undefined}
+                      />
+                      {fieldErrors[`items.${index}.qtySqm`] ? (
+                        <p id={fieldErrorId(`item-${index}-qtySqm`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{fieldErrors[`items.${index}.qtySqm`]}</p>
+                      ) : null}
                     </label>
                     <div style={{ margin: 0 }}>
                       <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>จำนวน (แผ่น)</span>
@@ -659,7 +907,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           <textarea value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} rows={2} placeholder="ข้อมูลเพิ่มเติม (ถ้ามี)" />
         </label>
 
-        {error ? <div className="form-error span-2">{error}</div> : null}
+        {error ? <div className="form-error span-2" role="alert">{error}</div> : null}
       </form>
     </Modal>
   );
