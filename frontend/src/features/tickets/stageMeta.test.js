@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  allowedTargetStages, canMarkLost, canSetStage, nextStage, SALES_STAGES,
-  stageIndex,
+  allowedTargetStages, canMarkLost, canSetStage, isRoutineBackwardMove, nextStage,
+  SALES_STAGES, stageIndex,
 } from './stageMeta.js';
 
 // NOTE: these gates only drive what the UI offers — the authoritative rules are
@@ -63,6 +63,16 @@ describe('stageMeta', () => {
     expect(canMarkLost(otherSales, deal)).toBe(false);
     expect(canMarkLost(importUser, deal)).toBe(false);
     expect(canMarkLost(accountUser, deal)).toBe(false);
+  });
+
+  it('treats S4 → S3 as routine, every other backward move as an exception', () => {
+    // The designer is normally quoted before signing off the spec, so
+    // QUOTE_DESIGN_SIDE → SPEC_APPROVED must not demand a written reason.
+    expect(isRoutineBackwardMove('QUOTE_DESIGN_SIDE', 'SPEC_APPROVED')).toBe(true);
+    // One adjacent pair only — not a general relaxation, and not symmetric.
+    expect(isRoutineBackwardMove('SPEC_APPROVED', 'QUOTE_DESIGN_SIDE')).toBe(false);
+    expect(isRoutineBackwardMove('QUOTE_DESIGN_SIDE', 'PRESENTATION')).toBe(false);
+    expect(isRoutineBackwardMove('OWNER_SIGNOFF', 'SPEC_APPROVED')).toBe(false);
   });
 
   it("another rep's deal offers a plain sales user nothing", () => {

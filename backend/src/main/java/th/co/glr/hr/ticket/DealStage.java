@@ -53,6 +53,25 @@ public final class DealStage {
         return ORDER.indexOf(stage);
     }
 
+    /**
+     * Backward moves that are a normal part of the sales flow, and so do not
+     * require a written reason.
+     *
+     * QUOTE_DESIGN_SIDE (S4+S5) sits after SPEC_APPROVED (S3) in {@link #ORDER},
+     * but the business's most common path quotes the designer *before* the
+     * designer signs off the spec — the flow analysis gives the fullest route as
+     * S1 → S2 → S4 → S3 → S5. Treating that everyday step as an exception to be
+     * justified in writing puts friction on the default path.
+     *
+     * Deliberately an allowlist of one adjacent pair rather than a reordering of
+     * {@link #ORDER}: the order is mirrored by the V50 CHECK constraint, the uat
+     * seeds, the frontend stage metadata and every historical sales_stage value,
+     * so renumbering carries far more risk than this ergonomic fix is worth.
+     */
+    public static boolean isRoutineBackwardMove(String fromStage, String toStage) {
+        return QUOTE_DESIGN_SIDE.equals(fromStage) && SPEC_APPROVED.equals(toStage);
+    }
+
     public static boolean isValid(String stage) {
         return stage != null && ORDER.contains(stage);
     }

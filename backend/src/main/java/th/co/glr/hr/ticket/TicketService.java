@@ -967,7 +967,8 @@ public class TicketService {
         if (targetStage.equals(s.salesStage())) {
             throw new ApiException(HttpStatus.CONFLICT, "Deal is already in stage " + targetStage);
         }
-        boolean backward = DealStage.indexOf(targetStage) < DealStage.indexOf(s.salesStage());
+        boolean backward = DealStage.indexOf(targetStage) < DealStage.indexOf(s.salesStage())
+            && !DealStage.isRoutineBackwardMove(s.salesStage(), targetStage);
         boolean skipForward = DealStage.indexOf(targetStage) - DealStage.indexOf(s.salesStage()) > 1;
         if (backward && (note == null || note.isBlank())) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
@@ -1521,12 +1522,24 @@ public class TicketService {
         return s.createdById() == actor.id() && (legacyOk || dualTrackOk);
     }
 
+    /**
+     * The delivery half of the manual {@link #close} gate: the customer must actually
+     * have the goods.
+     *
+     * This previously also accepted GOODS_RECEIVED with no delivery records, justified
+     * as a concession to "legacy coarse deals". That justification did not hold:
+     * legacy tickets close through the {@code legacyOk} branch (status=DOCUMENT_ISSUED),
+     * which never consults this predicate at all. The only deals the concession ever
+     * reached were modern dual-track ones (status=QUOTATION_ISSUED) — and for those it
+     * was simply wrong. GOODS_RECEIVED means the goods reached GLR's own warehouse
+     * (S17); the customer has received nothing. A fully-paid deal in that state was
+     * closeable to COMPLETED with zero delivered units.
+     *
+     * Now aligned with {@link #maybeAdvanceClosedPaid}, so the manual and automatic
+     * paths agree on what "delivered" means.
+     */
     private boolean deliveryGateComplete(TicketSummaryDto s) {
-        if (FulfilmentStatus.FULLY_DELIVERED.equals(s.fulfillmentStatus())) {
-            return true;
-        }
-        return FulfilmentStatus.GOODS_RECEIVED.equals(s.fulfillmentStatus())
-            && !tickets.hasDeliveries(s.id());
+        return FulfilmentStatus.FULLY_DELIVERED.equals(s.fulfillmentStatus());
     }
 
     /**
@@ -1535,13 +1548,11 @@ public class TicketService {
      * (FULLY_DELIVERED). CLOSED_PAID (S20) must not be reachable on payment alone
      * while goods are still undelivered.
      *
-     * This is deliberately STRICTER than {@link #deliveryGateComplete} (used by the
-     * manual {@link #close}): that predicate also accepts a legacy coarse deal at
-     * GOODS_RECEIVED with no delivery records, but GOODS_RECEIVED only means the
-     * goods reached GLR's warehouse (S17) — nothing has been handed to the
-     * customer. Auto-advancing on that would skip DELIVERED (S19) for a fully-paid
-     * deal whose stock is sitting in our warehouse, which is exactly the bug this
-     * gate exists to prevent. {@code paymentFullyPaid} is passed explicitly because
+     * This now matches {@link #deliveryGateComplete} (used by the manual
+     * {@link #close}); that predicate used to be looser, accepting GOODS_RECEIVED
+     * with no delivery records, so the manual path could complete a deal this gate
+     * would have refused. Both now require FULLY_DELIVERED.
+     * {@code paymentFullyPaid} is passed explicitly because
      * the in-hand summary at the payment call sites was loaded before the FULLY_PAID
      * write in the same transaction; fulfilment status is read live from s.
      */

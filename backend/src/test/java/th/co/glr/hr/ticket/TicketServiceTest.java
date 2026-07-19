@@ -1252,6 +1252,30 @@ class TicketServiceTest {
     }
 
     @Test
+    void updateStage_quoteDesignSideBackToSpecApproved_needsNoNote() {
+        // S4 → S3 is the business's everyday path (S1 → S2 → S4 → S3 → S5): the
+        // designer is quoted before signing off the spec. It is "backward" only
+        // because of where the two sit in ORDER, so it must not demand a reason.
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.QUOTE_DESIGN_SIDE, null);
+
+        service.updateStage(10L, DealStage.SPEC_APPROVED, null, salesActor);
+
+        verify(ticketRepo).updateSalesStage(10L, DealStage.SPEC_APPROVED);
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(), eq(TicketEventKind.STAGE_CHANGED),
+            eq(DealStage.QUOTE_DESIGN_SIDE), eq(DealStage.SPEC_APPROVED), isNull());
+    }
+
+    @Test
+    void updateStage_otherBackwardMovesStillRequireNote() {
+        // The exemption is one adjacent pair, not a general relaxation.
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.QUOTE_DESIGN_SIDE, null);
+        assertBadRequest(() -> service.updateStage(10L, DealStage.PRESENTATION, null, salesActor));
+
+        stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.OWNER_SIGNOFF, null);
+        assertBadRequest(() -> service.updateStage(11L, DealStage.SPEC_APPROVED, null, salesActor));
+    }
+
+    @Test
     void updateStage_multiStepForwardRequiresNote() {
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.PRESENTATION, null);
 
@@ -1542,13 +1566,17 @@ class TicketServiceTest {
     }
 
     @Test
-    void close_dualTrackComplete_transitionsToClosed() {
+    void close_dualTrackAtGoodsReceived_isRefused() {
+        // GOODS_RECEIVED means the goods reached GLR's own warehouse (S17) — the
+        // customer has received nothing. A fully-paid deal in that state used to
+        // close to COMPLETED with zero delivered units, because the manual gate
+        // accepted GOODS_RECEIVED-with-no-deliveries while the auto-advance gate
+        // (maybeAdvanceClosedPaid) refused it. Both now require FULLY_DELIVERED.
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", "GOODS_RECEIVED");
 
-        service.close(10L, salesActor);
+        assertConflict(() -> service.close(10L, salesActor));
 
-        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.CLOSED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.CLOSED), isNull());
+        verify(ticketRepo, never()).updateLifecycle(eq(10L), eq(DealLifecycle.COMPLETED));
     }
 
     @Test
