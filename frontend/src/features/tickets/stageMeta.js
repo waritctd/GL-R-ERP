@@ -71,6 +71,19 @@ export function nextStage(code) {
   return idx >= 0 && idx < SALES_STAGES.length - 1 ? SALES_STAGES[idx + 1] : null;
 }
 
+/**
+ * Backward moves that are a normal part of the sales flow, so they don't need a
+ * written reason. Mirrors DealStage.isRoutineBackwardMove (backend ticket/).
+ *
+ * QUOTE_DESIGN_SIDE (S4+S5) sits after SPEC_APPROVED (S3) in the pipeline order,
+ * but the common business path quotes the designer before the designer signs off
+ * the spec (S1 → S2 → S4 → S3 → S5). Demanding a justification for that everyday
+ * step puts friction on the default path.
+ */
+export function isRoutineBackwardMove(fromStage, toStage) {
+  return fromStage === 'QUOTE_DESIGN_SIDE' && toStage === 'SPEC_APPROVED';
+}
+
 export function phaseOf(code) {
   const meta = stageMeta(code);
   return meta ? SALES_PHASES.find((p) => p.id === meta.phase) : null;

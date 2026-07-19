@@ -19,6 +19,7 @@ import { createDemoDatabase } from '../data/demoData.js';
 import {
   canMarkLost as dealCanMarkLost,
   canSetStage as dealCanSetStage,
+  isRoutineBackwardMove,
   LOST_REASONS as DEAL_LOST_REASONS,
   stageIndex as dealStageIndex,
 } from '../features/tickets/stageMeta.js';
@@ -593,18 +594,18 @@ function deliveryRecordsForTicket(ticketId) {
     .map((record) => structuredClone(record));
 }
 
-function deliveryComplete(status, ticketId = null) {
-  if (status === 'FULLY_DELIVERED') return true;
-  if (status !== 'GOODS_RECEIVED') return false;
-  if (ticketId == null) return true;
-  return !(db.deliveryRecords ?? []).some((record) => record.ticketId === Number(ticketId));
+// Mirrors TicketService.deliveryGateComplete. Previously this also accepted
+// GOODS_RECEIVED with no delivery records; that concession was justified as a
+// legacy allowance but legacy tickets close via the DOCUMENT_ISSUED branch and
+// never reach this predicate, so it only ever loosened modern dual-track deals —
+// letting a fully-paid deal close with the goods still in GLR's own warehouse.
+function deliveryComplete(status) {
+  return status === 'FULLY_DELIVERED';
 }
 
 // Mirrors TicketService.maybeAdvanceClosedPaid: CLOSED_PAID (S20) requires BOTH
 // gates — payment fully paid AND goods actually delivered (FULLY_DELIVERED).
-// Stricter than deliveryComplete (which accepts a legacy GOODS_RECEIVED deal for
-// the manual close): GOODS_RECEIVED means goods are only in GLR's warehouse, so
-// auto-advancing on it would skip DELIVERED for a fully-paid, undelivered deal.
+// Now the same rule the manual close uses; the two agree on "delivered".
 function maybeAdvanceClosedPaid(ticket, user) {
   if (ticket.paymentStatus === 'FULLY_PAID' && ticket.fulfillmentStatus === 'FULLY_DELIVERED') {
     autoAdvanceStage(ticket, 'CLOSED_PAID', user);
@@ -1691,7 +1692,7 @@ export const api = {
           || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
         if (['account', 'ceo'].includes(user.role) && finalPaymentAllowed) add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
         if (ticket.createdById === user.id && ((ticket.status === 'document_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID'))
-          || (ticket.status === 'quotation_issued' && ticket.paymentStatus === 'FULLY_PAID' && deliveryComplete(ticket.fulfillmentStatus, ticket.id)))) add('CLOSE', 'operational', 'ปิดงาน');
+          || (ticket.status === 'quotation_issued' && ticket.paymentStatus === 'FULLY_PAID' && deliveryComplete(ticket.fulfillmentStatus)))) add('CLOSE', 'operational', 'ปิดงาน');
         if (ticket.createdById === user.id && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
         if (owner && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(ticket.status)) add('EDIT_ITEMS', 'operational', 'แก้ไขรายการ');
         for (const stage of ['LEAD_APPROACH','PRESENTATION','SPEC_APPROVED','QUOTE_DESIGN_SIDE','OWNER_SIGNOFF','AWAITING_BUYER','QUOTE_BUYER','NEGOTIATION','ORDER_RECEIVED','DEPOSIT_RECEIVED','PROCUREMENT','DELIVERY_SCHEDULING','DELIVERED','CLOSED_PAID']) {
@@ -2084,12 +2085,12 @@ export const api = {
       requireActive(ticket);
       // Mirrors TicketService.close(): legacy document_issued path (pre-dual-track
       // tickets only, or fully paid), or the dual-track completion
-      // (quotation_issued + FULLY_PAID + GOODS_RECEIVED).
+      // (quotation_issued + FULLY_PAID + FULLY_DELIVERED).
       const legacyOk = ticket.status === 'document_issued'
         && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID');
       const dualTrackOk = ticket.status === 'quotation_issued'
         && ticket.paymentStatus === 'FULLY_PAID'
-        && deliveryComplete(ticket.fulfillmentStatus, ticket.id);
+        && deliveryComplete(ticket.fulfillmentStatus);
       if (!legacyOk && !dualTrackOk) {
         fail('Cannot close: require paymentStatus=FULLY_PAID and delivery complete', 409);
       }
@@ -2301,7 +2302,8 @@ export const api = {
       if (!dealCanSetStage(user, ticket, payload.stage)) fail('Forbidden', 403);
       if (ticket.lostReason != null) fail('ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ', 409);
       if (ticket.salesStage === payload.stage) fail(`Deal is already in stage ${payload.stage}`, 409);
-      const backward = dealStageIndex(payload.stage) < dealStageIndex(ticket.salesStage);
+      const backward = dealStageIndex(payload.stage) < dealStageIndex(ticket.salesStage)
+        && !isRoutineBackwardMove(ticket.salesStage, payload.stage);
       const skipForward = dealStageIndex(payload.stage) - dealStageIndex(ticket.salesStage) > 1;
       if (backward && !(payload.note || '').trim()) fail('การย้อนสถานะกลับต้องระบุเหตุผล', 400);
       if (skipForward && !(payload.note || '').trim()) fail('การข้ามขั้นตอนต้องระบุเหตุผล', 400);
