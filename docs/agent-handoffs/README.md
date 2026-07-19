@@ -62,8 +62,18 @@ Every agent must:
 
 ## Test / Build Results
 - Frontend build: pass/fail/not run
-- Backend tests: pass/fail/not run
+- Backend tests: pass/fail/not run (state whether integration tests ran or were skipped)
 - Lint: pass/fail/not run
+
+## Authz Evidence
+<One of:>
+- No authorization change in this task.
+- Verified against the real Java service: <test class> (real Postgres, real service + repository).
+- UNVERIFIED — mock-only (`VITE_USE_MOCKS=true`). Permission behaviour is NOT confirmed.
+
+<Any change touching a role gate, a scope/filter, or who may read/write whose rows requires the
+first or second answer. mockApi.js authz only approximates the Java services — see CLAUDE.md,
+"Permission changes must ship evidence".>
 
 ## Decisions Made
 - ...

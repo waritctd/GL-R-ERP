@@ -1,7 +1,7 @@
 # 84 — feat/sales-audit-trail
 
 **Branch:** `feat/sales-audit-trail` — **stacked**: 81 → 82 → 83 → 84. Merge in that order.
-**Migration:** V57 · **Date:** 2026-07-19 · **Status:** committed, not pushed
+**Migration:** V58 · **Date:** 2026-07-19 · **Status:** committed, not pushed
 
 ## Why
 
@@ -18,7 +18,7 @@ status change to its quotation / receipt / delivery meant matching timestamps or
 
 ## What changed
 
-**V57** adds `reopened_at` + `reopen_count` on `sales.ticket`, and
+**V58** adds `reopened_at` + `reopen_count` on `sales.ticket`, and
 `related_document_type` + `related_document_id` on `sales.ticket_event` with a CHECK
 enforcing *both columns or neither* plus a closed type vocabulary, and a partial index.
 
@@ -57,7 +57,7 @@ rather than the generic not-active one.
 
 ## Results
 
-- **Backend 534 pass**, 0 failures. V57 applies clean in the full V1..V57 + V900..V909 chain.
+- **Backend 534 pass**, 0 failures. V58 applies clean in the full V1..V58 + V900..V909 chain.
 - **Frontend 191 pass**, lint 0 errors (4 pre-existing warnings), build clean.
 - New backend tests: a reopened deal is fully operable (stage change + losable again), stage
   writes are still refused while actually lost, and a **Testcontainers** test that the document
@@ -73,7 +73,7 @@ regressions the guard migration was meant to prevent.
 
 - **Semantic change to `lost_reason`.** Any future reader must use the lifecycle. Called out
   above and in code comments at each site.
-- Deals reopened *before* V57 have already lost their reason — unrecoverable, not backfilled.
+- Deals reopened *before* V58 have already lost their reason — unrecoverable, not backfilled.
 - Historical events keep NULL document linkage; no reconstruction from timestamps was attempted.
 - The document link is **polymorphic with no FK**. Callers must not assume the row still exists.
 - The mock does not model `related_document_*` (it has no document-link consumer yet); the DB
@@ -84,9 +84,9 @@ regressions the guard migration was meant to prevent.
 | Branch | Scope | State |
 |---|---|---|
 | 81 `fix/sales-transition-gates` | close gate + stage-order friction | committed |
-| 82 `feat/sales-close-verification` | V55, three-party close | committed |
-| 83 `feat/sales-cancel-reason` | V56, structured cancel reason | committed |
-| 84 `feat/sales-audit-trail` | V57, reopen history + document linkage | committed |
+| 82 `feat/sales-close-verification` | V56, three-party close | committed |
+| 83 `feat/sales-cancel-reason` | V57, structured cancel reason | committed |
+| 84 `feat/sales-audit-trail` | V58, reopen history + document linkage | committed |
 | D1 typed `ADJUSTMENT` reason | not started | deferred |
 | D2 aging / collections / write-off | **blocked on a business decision** | deferred |
 | Tier 3 quotation identity | recipient-as-party, per-quotation quantities | **unscoped, needs its own design round** |

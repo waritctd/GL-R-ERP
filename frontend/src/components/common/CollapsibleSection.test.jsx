@@ -50,4 +50,16 @@ describe('CollapsibleSection', () => {
     );
     expect(screen.queryByText('ซ่อนอยู่')).toBeNull();
   });
+
+  it('renders a heading with no disclosure control when collapsible is false', () => {
+    render(
+      <CollapsibleSection title="ค่าตอบแทน" collapsible={false}>
+        <p>฿149,500</p>
+      </CollapsibleSection>,
+    );
+
+    expect(screen.getByRole('heading', { name: 'ค่าตอบแทน' })).toBeTruthy();
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.getByText('฿149,500')).toBeTruthy();
+  });
 });

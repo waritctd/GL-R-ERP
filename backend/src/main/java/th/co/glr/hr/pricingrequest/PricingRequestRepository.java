@@ -21,7 +21,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequ
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 
 /**
- * Persistence for the PricingRequest aggregate (V58): {@code sales.pricing_request},
+ * Persistence for the PricingRequest aggregate (V59): {@code sales.pricing_request},
  * {@code sales.pricing_request_item}, {@code sales.pricing_request_event}.
  *
  * <p><strong>CRITICAL INVARIANT:</strong> this repository must NEVER call

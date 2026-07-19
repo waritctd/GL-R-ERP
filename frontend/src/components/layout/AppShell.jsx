@@ -3,13 +3,13 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { SALES_ENABLED } from '../../app/features.js';
 import { hasPermission } from '../../app/permissions.js';
 import { roleLabel } from '../../utils/format.js';
-import { Avatar } from '../common/Avatar.jsx';
 import { Button } from '../common/Button.jsx';
 import { ErrorBoundary } from '../common/ErrorBoundary.jsx';
 import { RouteFallback } from '../common/RouteFallback.jsx';
 import { Icon } from '../common/Icon.jsx';
 import { NotificationBell } from '../common/NotificationBell.jsx';
 import { Sidebar } from './Sidebar.jsx';
+import { UserMenu } from './UserMenu.jsx';
 
 export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -41,9 +41,10 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     { path: '/attendance', label: 'เวลาทำงาน', helper: 'Attendance', icon: 'calendar', show: true },
     { path: '/overtime', label: 'ล่วงเวลา', helper: 'Overtime', icon: 'clock', show: !!user.employeeId || hasPermission(user.role, 'canViewAllOvertime') },
     { path: '/leave', label: 'วันลา', helper: 'Leave', icon: 'clipboard', show: !!user.employeeId || hasPermission(user.role, 'canViewAllLeave') },
+    // ข้อมูลของฉัน / คำขอของฉัน are deliberately absent: personal admin lives in
+    // the topbar UserMenu, and the two pages are merged into /profile. /requests
+    // stays here because an HR review queue is work, not personal admin.
     { path: '/requests', label: 'คำขอแก้ไขข้อมูล', helper: 'Profile requests', icon: 'clipboard', show: hasPermission(user.role, 'canReviewProfileRequests'), badge: pendingRequestCount },
-    { path: '/profile', label: 'ข้อมูลของฉัน', helper: 'My profile', icon: 'badge', show: !!user.employeeId },
-    { path: '/my-requests', label: 'คำขอของฉัน', helper: 'My requests', icon: 'clock', show: hasPermission(user.role, 'canSubmitProfileRequests'), badge: pendingRequestCount },
   ].filter((item) => item.show);
 
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);
@@ -153,11 +154,14 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
               <strong>{employee?.nameTh || user.name}</strong>
               <span>{user.email}</span>
             </div>
-            <Avatar employee={employee} name={user.name} size="sm" />
             <NotificationBell onNavigate={(link) => navigate(link)} />
-            <Button variant="icon" type="button" onClick={onLogout} title="ออกจากระบบ" aria-label="ออกจากระบบ">
-              <Icon name="logout" />
-            </Button>
+            <UserMenu
+              user={user}
+              employee={employee}
+              canViewProfile={!!user.employeeId}
+              onNavigate={(link) => navigate(link)}
+              onLogout={onLogout}
+            />
           </div>
         </header>
         <div className="content-scroll"><ErrorBoundary key={location.pathname}><Suspense fallback={<RouteFallback />}><Outlet /></Suspense></ErrorBoundary></div>

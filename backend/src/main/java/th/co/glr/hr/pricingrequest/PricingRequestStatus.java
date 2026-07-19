@@ -10,7 +10,7 @@ public final class PricingRequestStatus {
     public static final String MORE_INFO_REQUIRED    = "MORE_INFO_REQUIRED";
     public static final String CANCELLED             = "CANCELLED";
 
-    /** Exactly the set the DB's chk_pricing_request_status constraint (V58) accepts. */
+    /** Exactly the set the DB's chk_pricing_request_status constraint (V59) accepts. */
     public static final Set<String> VALUES = Set.of(
         DRAFT, SUBMITTED, IMPORT_REVIEWING, MORE_INFO_REQUIRED, CANCELLED);
 

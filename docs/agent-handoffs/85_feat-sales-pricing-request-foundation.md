@@ -1,7 +1,7 @@
 # 85 — feat/sales-pricing-request-foundation
 
-**Branch:** `feat/sales-pricing-request-foundation` (branched off `feat/sales-flow-remediation-part1`, not off `main`) · **Migration:** V58 only
-**Date:** 2026-07-20 · **Status:** Step 1 complete (7 commits) **plus a full review-remediation pass (commits A-F)**. Backend **679 tests green**, frontend **266 tests green**.
+**Branch:** `feat/sales-pricing-request-foundation` (branched off `feat/sales-flow-remediation-part1`, not off `main`) · **Migrations:** V59 pricing foundation + V60 product-description/idempotency after syncing main's V55 attendance migration
+**Date:** 2026-07-20 · **Status:** Synced with `origin/main`, pricing migrations renumbered after main's V55, and pricing-request SIT/full validation green. Backend **741 tests green**, frontend **298 tests green**.
 
 ## Review remediation (2026-07-20)
 
@@ -279,11 +279,11 @@ queue to "everything assigned to me plus everything unclaimed".
    `link = "/tickets/{id}"` and unmapped types fall back to the generic title
    "อัปเดตสถานะใบขอราคา". Fine while the panel lives on that page.
 7. **UAT/main DB rebuild is the agreed path** (existing ticket data on both is throwaway), which
-   dissolves the V58 out-of-order concern. Two boundaries: "safe to discard" scopes to `sales.*`
-   only — the main Supabase project still holds real payroll/HR records, and V58 is purely
-   additive so it deletes nothing; and when remigrating later, never edit an applied seed migration
+   dissolves the old pricing-request migration-order concern. Two boundaries: "safe to discard" scopes to `sales.*`
+   only — the main Supabase project still holds real payroll/HR records, and V59/V60 are purely
+   additive so they delete nothing; and when remigrating later, never edit an applied seed migration
    in place — add a forward-only `Vnnn` with env-distinct identifiers.
-8. **Handoffs 82/83/84's claim that V55-V57 were verified against the full V1..V54+V900..V909 uat
+8. **Handoffs 82/83/84's claim that V56-V58 were verified against the full V1..V55+V900..V909 uat
    chain is not verifiable from this branch** — `db/migration-uat/` exists only on `uat`. Treat as
    unproven; the rebuild settles it.
 9. **`sales_manager`** keeps read/oversight only — no new write permission was granted.
@@ -457,6 +457,115 @@ cd frontend && npm run lint && npm test && npm run build
   green when this session started; only Commit B is newly authored here.
 - Not committed or pushed (per the task instructions for this session) — working tree has the Commit
   B changes uncommitted on top of `2701a83`.
+
+## Main sync + SIT gate (2026-07-20)
+
+### Merge outcome
+
+- Fetched `origin` and merged `origin/main` into `feat/sales-pricing-request-foundation`.
+- Git reported exactly one textual conflict: `CLAUDE.md`.
+- Resolved `CLAUDE.md` by keeping both appended guidance sections: the existing backend
+  Testcontainers validation note and main's new authorization-evidence requirement. No business
+  logic was hand-resolved.
+- Confirmed no unmerged files remained after resolving `CLAUDE.md`.
+
+### Migration renumber
+
+Main added `backend/src/main/resources/db/migration/V55__attendance_daily_activation.sql`; that file
+was kept as-is. The pricing branch's unapplied migrations were moved forward with `git mv`:
+
+- `V55__close_verification.sql` -> `V56__close_verification.sql`
+- `V56__cancel_reason.sql` -> `V57__cancel_reason.sql`
+- `V57__audit_trail_integrity.sql` -> `V58__audit_trail_integrity.sql`
+- `V58__pricing_request_foundation.sql` -> `V59__pricing_request_foundation.sql`
+- `V59__pricing_request_product_description_idempotency.sql` -> `V60__pricing_request_product_description_idempotency.sql`
+
+Only prose/comment references were updated after:
+
+```bash
+rg -n "V55|V56|V57|V58|V59" docs/ backend/src/test/ backend/src/main/java/
+```
+
+### Pricing-request SIT coverage
+
+`PricingRequestFlowIntegrationTest` now proves the requested flows through the real Java service and
+real Postgres, never via `mockApi.js` authz:
+
+- Deal creation excludes Import notification recipients:
+  `createDeal_withThreeItems_startsAsDraftWithOneCreatedEventAndNoNotifications`
+- DRAFT visibility is private to owner/CEO/Sales Manager and hidden from Sales B + Import across list
+  and direct-read boundaries:
+  `draftPricingRequest_isPrivateToOwnerAndOversightUntilSubmitted`
+- Submit hands off to Import, Import can see/pick up, and the owner sees the state change:
+  `submittedPricingRequest_handsOffToImportAndReflectsPickupToOwner`
+- Information loop records Import request + Sales response and blocks no-stake principals:
+  `informationLoop_recordsBothTurnsAndRejectsPrincipalsWithNoStake`
+- Accounting can open deal/payment information but cannot read pricing requests:
+  `accountingCanReadDealPaymentInfoButCannotReadPricingRequests`
+- Idempotency is proven sequentially and under a two-thread race:
+  `sequentialCreateDraft_sameClientRequestId_returnsOneRequestWithOneItemSetAndOneCreatedEvent`
+  and `concurrentCreateDraft_sameClientRequestId_returnsOneRequestWithOneItemSetAndOneCreatedEvent`
+
+Full SIT report from the backend verify XML: 13 methods in
+`PricingRequestFlowIntegrationTest`, all passed, 0 skipped.
+
+### Commands run
+
+```bash
+git status --short --branch
+git fetch origin
+git merge origin/main
+git diff --name-only --diff-filter=U
+git mv backend/src/main/resources/db/migration/V59__pricing_request_product_description_idempotency.sql backend/src/main/resources/db/migration/V60__pricing_request_product_description_idempotency.sql
+git mv backend/src/main/resources/db/migration/V58__pricing_request_foundation.sql backend/src/main/resources/db/migration/V59__pricing_request_foundation.sql
+git mv backend/src/main/resources/db/migration/V57__audit_trail_integrity.sql backend/src/main/resources/db/migration/V58__audit_trail_integrity.sql
+git mv backend/src/main/resources/db/migration/V56__cancel_reason.sql backend/src/main/resources/db/migration/V57__cancel_reason.sql
+git mv backend/src/main/resources/db/migration/V55__close_verification.sql backend/src/main/resources/db/migration/V56__close_verification.sql
+rg -n "V55|V56|V57|V58|V59" docs/ backend/src/test/ backend/src/main/java/
+git diff --check
+docker info >/dev/null 2>&1 && echo "DOCKER: up — Testcontainers WILL run" || echo "DOCKER: DOWN — SIT/Flyway will SKIP, do not merge"
+cd backend && ./mvnw -Dtest=PricingRequestFlowIntegrationTest test
+cd backend && ./mvnw -B clean verify
+rg '<testcase ' backend/target/surefire-reports/TEST-th.co.glr.hr.pricingrequest.PricingRequestFlowIntegrationTest.xml
+cd frontend && npm run lint
+cd frontend && npm test
+cd frontend && npm run build
+```
+
+### Test / build results
+
+- Docker/Testcontainers preflight: `DOCKER: up — Testcontainers WILL run`.
+- Focused backend SIT: `PricingRequestFlowIntegrationTest` ran on Testcontainers Postgres with
+  Flyway V1..V60; 13 tests, 0 failures, 0 errors, 0 skipped.
+- Backend full verify: `./mvnw -B clean verify` ran Testcontainers Postgres and Flyway through
+  `V60__pricing_request_product_description_idempotency.sql`; 741 tests, 0 failures, 0 errors,
+  0 skipped; BUILD SUCCESS; Jacoco gate met.
+- Frontend lint: 0 errors, 3 warnings in existing commission/payroll hook-dependency lines.
+- Frontend tests: 42 files, 298 tests passed, including `src/api/contract.test.js`.
+- Frontend build: `vite build` succeeded.
+
+### Files changed in this sync pass
+
+- `CLAUDE.md` merge resolution: kept both validation/authz guidance sections.
+- Migration filenames V56-V60 as listed above; main's V55 attendance migration kept unchanged.
+- Prose/comment references in handoffs 82/83/84/85 and Java comments updated to the new migration
+  numbering.
+- `PricingRequestFlowIntegrationTest.java` extended with the real-service permission, visibility,
+  notification, handoff, bidirectional-info-loop, accounting, and idempotency/race coverage.
+- `origin/main` attendance/employees/profile changes were carried in by merge without hand editing.
+
+### Known risks / uncertainties
+
+- No pricing-request flow was left unverified by the Java SIT gate in this pass.
+- The historical product-scope risks below still apply: the pricing-request foundation does not yet
+  implement the later factory quote -> CEO approval -> quotation rebuild chain.
+- User requested a PR for human review and explicitly said not to merge to `main` in this session.
+
+### Next prompt
+
+Review the PR for `feat/sales-pricing-request-foundation`. If approved, merge it deliberately; if
+not, address review feedback on the same branch. After this lands, continue the next pricing-chain
+slice: factory quote -> CEO approval -> quotation rebuild.
 
 ### Recommended next agent
 

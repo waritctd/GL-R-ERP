@@ -281,10 +281,8 @@ public class AttendanceRepository {
     }
 
     public List<AttendancePunchDto> findPunches(AttendancePunchFilter filter) {
-        // Resolve the employee by the stored employee_id when present, otherwise fall back to matching
-        // the raw badge_code against either the card number OR the employee_code. Card readers report the
-        // card number while fingerprint/PIN punches report the employee_code, so a single-column match
-        // leaves half the punches unmapped — COALESCE here keeps historical rows resolving too.
+        // Badge resolution lives in AttendanceSql so the daily roll-up resolves punches identically;
+        // see the javadoc there for why the COALESCE fallback is needed.
         StringBuilder sql = new StringBuilder("""
             SELECT p.punch_id,
                    COALESCE(p.employee_id, e.employee_id) AS employee_id,
@@ -307,14 +305,9 @@ public class AttendanceRepository {
                    p.ingest_method,
                    p.created_at
               FROM hr.attendance_punch p
-              LEFT JOIN hr.employee e ON e.employee_id = COALESCE(
-                       p.employee_id,
-                       (SELECT em.employee_id
-                          FROM hr.employee em
-                         WHERE em.badge_card_no = p.badge_code
-                            OR em.employee_code = p.badge_code
-                         ORDER BY em.is_active DESC, em.employee_id
-                         LIMIT 1))
+            """
+            + AttendanceSql.RESOLVED_EMPLOYEE_JOIN
+            + """
               LEFT JOIN hr.position pos ON pos.position_id = e.position_id
               LEFT JOIN hr.attendance_device d ON d.device_id = p.device_id
              WHERE p.work_date BETWEEN :fromDate AND :toDate

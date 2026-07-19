@@ -38,13 +38,15 @@ const PATH_GUARDS = [
   { test: (p) => p === '/ticket-overview', can: (u) => hasPermission(u.role, 'canViewTickets') },
   { test: (p) => p === '/employees' || p.startsWith('/employees/'), can: (u) => hasPermission(u.role, 'canViewEmployees') },
   { test: (p) => p === '/requests', can: (u) => hasPermission(u.role, 'canReviewProfileRequests') },
-  { test: (p) => p === '/my-requests', can: (u) => hasPermission(u.role, 'canSubmitProfileRequests') },
+  // `/my-requests` is now an alias that redirects to `/profile`, so it has to
+  // gate identically — a stricter guard would 403 an HR user following an old
+  // notification link to a page they are allowed to see.
+  { test: (p) => p === '/my-requests' || p === '/profile', can: (u) => !!u.employeeId },
   { test: (p) => p === '/tickets' || p.startsWith('/tickets/'), can: (u) => hasPermission(u.role, 'canViewTickets') },
   { test: (p) => p === '/commissions', can: (u) => hasPermission(u.role, 'canViewCommissions') },
   { test: (p) => p === '/payroll', can: (u) => hasPermission(u.role, 'canManagePayroll') },
   { test: (p) => p === '/overtime', can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllOvertime') },
   { test: (p) => p === '/leave', can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllLeave') },
-  { test: (p) => p === '/profile', can: (u) => !!u.employeeId },
   { test: (p) => p === '/price-import', can: (u) => hasPermission(u.role, 'canManagePriceImport') },
   { test: (p) => p === '/pricing-requests', can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') },
   // Matches the sidebar's nav condition exactly (AppShell.jsx: `role === 'ceo'`).

@@ -49,7 +49,7 @@ need both signatures. Requiring an invoice would have stranded that data permane
 
 | File | Change |
 |---|---|
-| `V55__close_verification.sql` | + `close_confirmed_by/at` on `sales.ticket`, partial index for the CEO queue, `chk_event_kind` re-declared with `CLOSE_CONFIRMED` / `CLOSE_CONFIRM_REVOKED`. No backfill (closed deals keep NULL — attributing a confirmation to an accountant who never gave one would be a lie). |
+| `V56__close_verification.sql` | + `close_confirmed_by/at` on `sales.ticket`, partial index for the CEO queue, `chk_event_kind` re-declared with `CLOSE_CONFIRMED` / `CLOSE_CONFIRM_REVOKED`. No backfill (closed deals keep NULL — attributing a confirmation to an accountant who never gave one would be a lie). |
 | `AttachType.java` | new — PO / SIGNED_QUOTATION / **INVOICE** / OTHER |
 | `TicketService.java` | `close()` → `requireClosePrerequisites` + `confirmCloseReady` / `revokeCloseConfirmation` / `verifyClose`; `canClose` → three predicates; `CLOSE_CONFIRM_ROLES` |
 | `TicketController.java` | `POST /{id}/close` → `close/confirm`, `close/revoke`, `close/verify` |
@@ -63,7 +63,7 @@ need both signatures. Requiring an invoice would have stranded that data permane
 ## Results
 
 - **Backend 529 pass**, 0 failures. Integration tests **ran** on Testcontainers (not skipped);
-  V55 applies cleanly in the full V1..V55 + V900..V909 chain.
+  V56 applies cleanly in the full V1..V56 + V900..V909 chain after main's V55 attendance migration.
 - **Frontend 191 pass**, lint 0 errors (4 pre-existing warnings), build clean.
 
 ### Two bugs found by verification that tests did not catch
@@ -106,14 +106,14 @@ confirm button only appeared after navigating away and back.
 - **Not yet driven against the real backend** — the walk was on the mock, whose authz is not
   authoritative. The Java role checks are unit-tested (164 tests) but the end-to-end sequence
   should be re-run against a real deploy before release.
-- No uat seed touched, but V909 seeds closed deals; V55 adds nullable columns only.
+- No uat seed touched, but V909 seeds closed deals; V56 adds nullable columns only.
 
 ## Next prompt
 
 > Continue on a fresh branch `feat/sales-cancel-reason` off `main` (rebase after 81 and 82 land).
 > Read handoffs 81 and 82 first. `TicketService.cancel` takes only `(ticketId, actor)` — no
 > reason, null event message — so a cancelled deal carries zero explanation, unlike CLOSED_LOST.
-> Add **V56** with `cancel_reason` + `cancelled_at` on `sales.ticket` + a CHECK; add
+> Add **V57** with `cancel_reason` + `cancelled_at` on `sales.ticket` + a CHECK; add
 > `DealCancelReason` mirroring `DealLostReason.java` (`OWNER_CANCELLED`, `PROJECT_SUSPENDED`,
 > `BUDGET_CANCELLED`, `OTHER`); make it mandatory as `markLost` does. Thread through controller,
 > service, repository, `mockApi.js` and a modal copying `MarkLostModal.jsx`. Do not touch the

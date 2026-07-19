@@ -1023,7 +1023,7 @@ public class TicketService {
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireStageWriteAccess(s, targetStage, actor);
-        // Keyed on the lifecycle, not on lost_reason: since V57 the reason SURVIVES
+        // Keyed on the lifecycle, not on lost_reason: since V58 the reason SURVIVES
         // a reopen, so a live reopened deal still carries one. Checked before
         // requireActive so a lost deal gets this specific message.
         if (DealLifecycle.CLOSED_LOST.equals(s.lifecycle())) {
@@ -1107,7 +1107,7 @@ public class TicketService {
      */
     private void autoAdvanceStage(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
         // ACTIVE is the whole test. The old `lostReason != null` clause would now
-        // silently disable auto-advance on every reopened deal, since V57 keeps the
+        // silently disable auto-advance on every reopened deal, since V58 keeps the
         // reason after a reopen.
         if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
             return;

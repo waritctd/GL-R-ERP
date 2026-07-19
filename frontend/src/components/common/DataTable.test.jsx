@@ -224,4 +224,46 @@ describe('DataTable', () => {
       [rows[1], rows[0]],
     );
   });
+
+  // Controlled sort: callers that mirror sort state elsewhere (a URL param, an
+  // out-of-table select) pass `sort` and own the value; header clicks then report
+  // upwards instead of mutating internal state. Callers passing neither prop stay
+  // on the uncontrolled `initialSort` path, which the cases above cover.
+  it('renders the caller-supplied sort order and reports header clicks upward', () => {
+    const rows = makeRows(3);
+    const onSortChange = vi.fn();
+
+    const { container, rerender } = render(
+      <DataTable
+        columns={baseColumns}
+        rows={rows}
+        getRowKey={(row) => row.id}
+        gridClassName="employee-table"
+        sort={{ key: 'name', dir: 'desc' }}
+        onSortChange={onSortChange}
+      />,
+    );
+
+    const names = () => [...container.querySelectorAll('.data-row')].map((row) => row.textContent);
+    expect(names()[0]).toContain('Employee 03');
+
+    fireEvent.click(screen.getByText('Name'));
+    expect(onSortChange).toHaveBeenCalledWith({ key: 'name', dir: 'asc' });
+
+    // State lives with the caller, so nothing moves until the prop changes.
+    expect(names()[0]).toContain('Employee 03');
+
+    rerender(
+      <DataTable
+        columns={baseColumns}
+        rows={rows}
+        getRowKey={(row) => row.id}
+        gridClassName="employee-table"
+        sort={{ key: 'name', dir: 'asc' }}
+        onSortChange={onSortChange}
+      />,
+    );
+
+    expect(names()[0]).toContain('Employee 01');
+  });
 });

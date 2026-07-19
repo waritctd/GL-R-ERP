@@ -2,7 +2,7 @@
 
 **Branch:** `feat/sales-cancel-reason` — **stacked on `feat/sales-close-verification`** (82),
 which is stacked on `fix/sales-transition-gates` (81). Merge 81 → 82 → 83.
-**Migration:** V56 (V55 belongs to 82) · **Date:** 2026-07-19 · **Status:** committed, not pushed
+**Migration:** V57 (close verification is V56 after main's V55 attendance migration) · **Date:** 2026-07-19 · **Status:** committed, not pushed
 
 ## Why
 
@@ -17,7 +17,7 @@ poison win/loss reporting with deals that were never winnable.
 
 ## What changed
 
-- **V56**: `cancel_reason VARCHAR(40)` + `cancelled_at` on `sales.ticket`, CHECK on the four
+- **V57**: `cancel_reason VARCHAR(40)` + `cancelled_at` on `sales.ticket`, CHECK on the four
   codes. Nullable, **no backfill** — deals cancelled before this have no recorded reason and
   inventing one would be a fabrication; they read NULL, which is honest.
 - `DealCancelReason` mirroring `DealLostReason`: `OWNER_CANCELLED`, `PROJECT_SUSPENDED`,
@@ -39,7 +39,7 @@ was exactly this). Added.
 
 ## Files changed
 
-`V56__cancel_reason.sql` (new) · `DealCancelReason.java` (new) · `TicketService.cancel` ·
+`V57__cancel_reason.sql` (new) · `DealCancelReason.java` (new) · `TicketService.cancel` ·
 `TicketController` (+`CancelRequest`) · `TicketRepository.cancelDeal` + summary wiring ·
 `TicketSummaryDto` (+`cancelReason`, `cancelledAt`) · `hrApi.js` · `mockApi.js` (reason +
 owner gate + summary fields) · `stageMeta.js` (+`CANCEL_REASONS`) ·
@@ -47,8 +47,8 @@ owner gate + summary fields) · `stageMeta.js` (+`CANCEL_REASONS`) ·
 
 ## Results
 
-- **Backend 531 pass**, 0 failures. Integration tests ran on Testcontainers; V56 applies clean
-  in the full V1..V56 + V900..V909 chain.
+- **Backend 531 pass**, 0 failures. Integration tests ran on Testcontainers; V57 applies clean
+  in the full V1..V57 + V900..V909 chain.
 - **Frontend 191 pass**, lint 0 errors (4 pre-existing warnings), build clean.
 - New tests: reason is mandatory (null / empty / unknown code / **a lost code rejected as a
   cancel code** — the vocabularies are distinct), and reason+note both persist.
@@ -71,6 +71,6 @@ typing into the wrong element. Scope to `[role=dialog] textarea`.
 
 ## Next
 
-Branch C (`feat/sales-audit-trail`, V57) — preserve `lost_reason` across reopen, and add
+Branch C (`feat/sales-audit-trail`, V58) — preserve `lost_reason` across reopen, and add
 document linkage to `ticket_event`. Then **stop**: Part 2 (the sales-pathway UX audit) is not
 to start until the logic review is signed off.
