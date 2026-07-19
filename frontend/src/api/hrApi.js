@@ -110,7 +110,7 @@ export const api = {
       apiRequest(API_ROUTES.tickets.action(id, 'close/revoke'), { method: 'POST', body }),
     verifyClose: (id) =>
       apiRequest(API_ROUTES.tickets.action(id, 'close/verify'), { method: 'POST' }),
-    cancel: (id) => apiRequest(API_ROUTES.tickets.action(id, 'cancel'), { method: 'POST' }),
+    cancel: (id, body) => apiRequest(API_ROUTES.tickets.action(id, 'cancel'), { method: 'POST', body }),
     editItems: (id, payload) => apiRequest(API_ROUTES.tickets.editItems(id), { method: 'PATCH', body: payload }),
     comment: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'comments'), { method: 'POST', body: payload }),
     overrideItemPrice: (id, itemId, payload) => apiRequest(`/api/tickets/${id}/items/${itemId}/price-override`, { method: 'PUT', body: payload }),

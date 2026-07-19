@@ -41,7 +41,8 @@ public class TicketRepository {
                t.billing_date, t.due_date, t.credit_term_days,
                t.last_follow_up_at, t.next_follow_up_at,
                t.close_confirmed_at,
-               NULLIF(TRIM(CONCAT_WS(' ', ecc.first_name_th, ecc.last_name_th)), '') AS close_confirmed_by_name
+               NULLIF(TRIM(CONCAT_WS(' ', ecc.first_name_th, ecc.last_name_th)), '') AS close_confirmed_by_name,
+               t.cancel_reason, t.cancelled_at
           FROM sales.ticket t
           JOIN hr.employee ec ON ec.employee_id = t.created_by
           LEFT JOIN hr.employee ea ON ea.employee_id = t.assigned_to
@@ -777,7 +778,9 @@ public class TicketRepository {
             rs.getTimestamp("close_confirmed_at") != null
                 ? rs.getTimestamp("close_confirmed_at").toInstant() : null,
             rs.getString("close_confirmed_by_name"),
-            false
+            false,
+            rs.getString("cancel_reason"),
+            rs.getTimestamp("cancelled_at") != null ? rs.getTimestamp("cancelled_at").toInstant() : null
         );
     }
 
@@ -802,7 +805,8 @@ public class TicketRepository {
             s.depositPolicyReason(), s.entryChannel(), s.billingDate(), s.dueDate(),
             s.creditTermDays(), s.lastFollowUpAt(), s.nextFollowUpAt(),
             stage, payable, paid, outstanding, overdue,
-            s.closeConfirmedAt(), s.closeConfirmedByName(), hasInvoiceAttachment(s.id()));
+            s.closeConfirmedAt(), s.closeConfirmedByName(), hasInvoiceAttachment(s.id()),
+            s.cancelReason(), s.cancelledAt());
     }
 
     /**
@@ -867,6 +871,15 @@ public class TicketRepository {
             new MapSqlParameterSource()
                 .addValue("r", reason)
                 .addValue("lifecycle", DealLifecycle.CLOSED_LOST)
+                .addValue("id", ticketId));
+    }
+
+    /** Record why the opportunity went away. Lifecycle is set separately by the caller. */
+    public void cancelDeal(long ticketId, String reason) {
+        jdbc.update(
+            "UPDATE sales.ticket SET cancel_reason = :r, cancelled_at = now(), updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource()
+                .addValue("r", reason)
                 .addValue("id", ticketId));
     }
 

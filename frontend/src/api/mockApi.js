@@ -19,6 +19,7 @@ import { createDemoDatabase } from '../data/demoData.js';
 import {
   canMarkLost as dealCanMarkLost,
   canSetStage as dealCanSetStage,
+  CANCEL_REASONS as DEAL_CANCEL_REASONS,
   isRoutineBackwardMove,
   LOST_REASONS as DEAL_LOST_REASONS,
   stageIndex as dealStageIndex,
@@ -967,6 +968,8 @@ function buildTicketDetail(ticket) {
       depositPolicy: ticket.depositPolicy ?? 'REQUIRED',
       depositPolicyReason: ticket.depositPolicyReason ?? null,
       entryChannel: ticket.entryChannel ?? 'DESIGNER_LED',
+      cancelReason: ticket.cancelReason ?? null,
+      cancelledAt: ticket.cancelledAt ?? null,
       closeConfirmedAt: ticket.closeConfirmedAt ?? null,
       closeConfirmedByName: ticket.closeConfirmedByName ?? null,
       invoiceOnFile: hasInvoiceAttachment(ticket),
@@ -2360,16 +2363,28 @@ export const api = {
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
-    async cancel(id) {
+    // Mirrors TicketService.cancel. The reason is mandatory (V56) — a cancelled
+    // deal used to carry no explanation at all, unlike its CLOSED_LOST sibling.
+    async cancel(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
+      if (!DEAL_CANCEL_REASONS.some((r) => r.code === payload.reason)) {
+        fail(`Unknown cancel reason '${payload.reason}'`, 400);
+      }
       if (ticket.status === 'closed' || ticket.status === 'cancelled') fail('Cannot cancel', 409);
+      // Ownership gate — the Java service has always had this; the mock did not,
+      // which made it MORE permissive than production (the dangerous direction).
+      if (ticket.createdById !== user.id) fail('Forbidden', 403);
       const prev = ticket.status;
       ticket.status = 'cancelled';
       ticket.lifecycle = 'CANCELLED';
+      ticket.cancelReason = payload.reason;
+      ticket.cancelledAt = new Date().toISOString();
       ticket.closedAt = new Date().toISOString().slice(0, 10);
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'CANCELLED', prev, 'cancelled', null);
+      const note = (payload.note || '').trim();
+      pushEvent(ticket, user, 'CANCELLED', prev, 'cancelled',
+        note ? `ยกเลิกดีล (${payload.reason}) — ${note}` : `ยกเลิกดีล (${payload.reason})`);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 

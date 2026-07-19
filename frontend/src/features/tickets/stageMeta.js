@@ -52,6 +52,17 @@ export const LOST_REASONS = [
   { code: 'ALREADY_PURCHASED', label: 'ลูกค้าสั่งซื้อกระเบื้องไปหมดแล้ว' },
 ];
 
+/**
+ * Why the opportunity went away (V56) — distinct from LOST_REASONS, which is why
+ * we lost a deal we were competing for. Mirrors DealCancelReason (backend ticket/).
+ */
+export const CANCEL_REASONS = [
+  { code: 'OWNER_CANCELLED',   label: 'เจ้าของยกเลิกโครงการ' },
+  { code: 'PROJECT_SUSPENDED', label: 'โครงการถูกระงับไม่มีกำหนด' },
+  { code: 'BUDGET_CANCELLED',  label: 'งบประมาณถูกยกเลิก' },
+  { code: 'OTHER',             label: 'อื่น ๆ (ระบุในหมายเหตุ)' },
+];
+
 export const GATE_LABEL = {
   sales: 'ฝ่ายขาย',
   import: 'ฝ่ายนำเข้า',

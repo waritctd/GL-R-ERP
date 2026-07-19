@@ -1671,43 +1671,70 @@ class TicketServiceTest {
     @Test
     void cancel_ownerCanCancelFromDraft() {
         stubTicket(10L, 1L, TicketStatus.DRAFT);
-        service.cancel(10L, salesActor);
+        service.cancel(10L, DealCancelReason.OWNER_CANCELLED, null, salesActor);
         verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.CANCELLED), eq(TicketStatus.DRAFT), eq(TicketStatus.CANCELLED), isNull());
+            eq(TicketEventKind.CANCELLED), eq(TicketStatus.DRAFT), eq(TicketStatus.CANCELLED), anyString());
     }
 
     @Test
     void cancel_ownerCanCancelFromInReview() {
         stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
-        service.cancel(10L, salesActor);
+        service.cancel(10L, DealCancelReason.OWNER_CANCELLED, null, salesActor);
         verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.CANCELLED), eq(TicketStatus.IN_REVIEW), eq(TicketStatus.CANCELLED), isNull());
+            eq(TicketEventKind.CANCELLED), eq(TicketStatus.IN_REVIEW), eq(TicketStatus.CANCELLED), anyString());
     }
 
     @Test
     void cancel_ownerCanCancelFromPriceProposed() {
         stubTicket(10L, 1L, TicketStatus.PRICE_PROPOSED);
-        service.cancel(10L, salesActor);
+        service.cancel(10L, DealCancelReason.OWNER_CANCELLED, null, salesActor);
         verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.CANCELLED), eq(TicketStatus.PRICE_PROPOSED), eq(TicketStatus.CANCELLED), isNull());
+            eq(TicketEventKind.CANCELLED), eq(TicketStatus.PRICE_PROPOSED), eq(TicketStatus.CANCELLED), anyString());
     }
 
     @Test
     void cancel_rejectsAlreadyClosed() {
         stubTicket(10L, 1L, TicketStatus.CLOSED);
-        assertConflict(() -> service.cancel(10L, salesActor));
+        assertConflict(() -> service.cancel(10L, DealCancelReason.OWNER_CANCELLED, null, salesActor));
     }
 
     @Test
     void cancel_rejectsAlreadyCancelled() {
         stubTicket(10L, 1L, TicketStatus.CANCELLED);
-        assertConflict(() -> service.cancel(10L, salesActor));
+        assertConflict(() -> service.cancel(10L, DealCancelReason.OWNER_CANCELLED, null, salesActor));
     }
 
     @Test
     void cancel_rejectsNonOwner() {
         stubTicket(10L, 1L, TicketStatus.SUBMITTED);
-        assertForbidden(() -> service.cancel(10L, otherSales));
+        assertForbidden(() -> service.cancel(10L, DealCancelReason.OWNER_CANCELLED, null, otherSales));
+    }
+
+    @Test
+    void cancel_requiresAValidReason() {
+        // Mandatory, matching markLost: an optional reason gets skipped in practice
+        // and the gap it was added to close stays open.
+        stubTicket(10L, 1L, TicketStatus.DRAFT);
+        assertBadRequest(() -> service.cancel(10L, null, null, salesActor));
+        assertBadRequest(() -> service.cancel(10L, "", null, salesActor));
+        assertBadRequest(() -> service.cancel(10L, "MADE_UP_CODE", null, salesActor));
+        // A lost reason is not a cancel reason — the two vocabularies are distinct.
+        assertBadRequest(() -> service.cancel(10L, DealLostReason.PRICE, null, salesActor));
+        verify(ticketRepo, never()).cancelDeal(anyLong(), anyString());
+    }
+
+    @Test
+    void cancel_persistsReasonAndCarriesTheNoteIntoTheEvent() {
+        stubTicket(10L, 1L, TicketStatus.DRAFT);
+
+        service.cancel(10L, DealCancelReason.BUDGET_CANCELLED, "ลูกค้าตัดงบปี 2569", salesActor);
+
+        verify(ticketRepo).cancelDeal(10L, DealCancelReason.BUDGET_CANCELLED);
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(), eq(TicketEventKind.CANCELLED),
+            eq(TicketStatus.DRAFT), eq(TicketStatus.CANCELLED),
+            argThat(m -> m != null && m.contains(DealCancelReason.BUDGET_CANCELLED)
+                && m.contains("ลูกค้าตัดงบปี 2569")));
+        verify(ticketRepo).updateLifecycle(10L, DealLifecycle.CANCELLED);
     }
 
     // ── editItems ─────────────────────────────────────────────────────────
@@ -1985,7 +2012,7 @@ class TicketServiceTest {
         // Same reasoning as close(): cancel() is owner-gated only, and sales_manager
         // can never own a ticket, so it always 403s here.
         stubTicket(10L, 1L, TicketStatus.SUBMITTED);
-        assertForbidden(() -> service.cancel(10L, salesManagerActor));
+        assertForbidden(() -> service.cancel(10L, DealCancelReason.OWNER_CANCELLED, null, salesManagerActor));
     }
 
     @Test
@@ -2044,7 +2071,8 @@ class TicketServiceTest {
             DealLifecycle.ACTIVE, TenderRequirement.UNKNOWN, DepositPolicy.REQUIRED, null,
             EntryChannel.DESIGNER_LED, null, null, null, null, null,
             PaymentStage.FULLY_PAID, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false,
-            closeConfirmedAt, closeConfirmedAt == null ? null : "Account User", invoiceOnFile);
+            closeConfirmedAt, closeConfirmedAt == null ? null : "Account User", invoiceOnFile,
+            null, null);
         TicketDto ticket = new TicketDto(summary, List.of(), List.of(), null, List.of());
         when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
         return ticket;
@@ -2171,7 +2199,8 @@ class TicketServiceTest {
             s.entryChannel(), s.billingDate(), s.dueDate(), s.creditTermDays(), s.lastFollowUpAt(),
             s.nextFollowUpAt(), s.paymentStage(), s.amountPayable(), s.amountPaid(),
             s.amountOutstanding(), s.overdue(),
-            s.closeConfirmedAt(), s.closeConfirmedByName(), s.invoiceOnFile());
+            s.closeConfirmedAt(), s.closeConfirmedByName(), s.invoiceOnFile(),
+            s.cancelReason(), s.cancelledAt());
         return new TicketDto(summary, items, source.events(), source.quotation(), source.quotations());
     }
 
