@@ -426,7 +426,8 @@ public class TicketService {
             s.entryChannel(), s.billingDate(), s.dueDate(), s.creditTermDays(),
             s.lastFollowUpAt(), s.nextFollowUpAt(), s.paymentStage(), s.amountPayable(),
             s.amountPaid(), s.amountOutstanding(), s.overdue(),
-            s.closeConfirmedAt(), s.closeConfirmedByName(), s.invoiceOnFile());
+            s.closeConfirmedAt(), s.closeConfirmedByName(), s.invoiceOnFile(),
+            s.cancelReason(), s.cancelledAt());
     }
 
     /**
@@ -1230,8 +1231,22 @@ public class TicketService {
         return s == null || s.isBlank() ? null : s;
     }
 
+    /**
+     * Cancel a deal, recording why the opportunity went away.
+     *
+     * The reason is mandatory, matching {@link #markLost}: an optional one is
+     * skipped in practice and the gap it was added to close stays open.
+     *
+     * Ownership remains the only gate — cancel deliberately has no requireRole,
+     * as before. Tickets are created by sales, so the owner is a sales rep; this
+     * is noted rather than changed because tightening it is an authz decision,
+     * not a side effect of adding a reason column.
+     */
     @Transactional
-    public TicketDto cancel(long ticketId, UserPrincipal actor) {
+    public TicketDto cancel(long ticketId, String reason, String note, UserPrincipal actor) {
+        if (!DealCancelReason.isValid(reason)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown cancel reason '" + reason + "'");
+        }
         TicketDto ticket = requireTicket(ticketId);
         String currentStatus = ticket.summary().status();
         if (TicketStatus.CLOSED.equals(currentStatus) || TicketStatus.CANCELLED.equals(currentStatus)) {
@@ -1240,8 +1255,12 @@ public class TicketService {
         if (ticket.summary().createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
+        tickets.cancelDeal(ticketId, reason);
+        String message = blankToNull(note) == null
+            ? "ยกเลิกดีล (" + reason + ")"
+            : "ยกเลิกดีล (" + reason + ") — " + note.trim();
         tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.CANCELLED, currentStatus, TicketStatus.CANCELLED, null);
+            TicketEventKind.CANCELLED, currentStatus, TicketStatus.CANCELLED, message);
         tickets.updateLifecycle(ticketId, DealLifecycle.CANCELLED);
         return requireTicket(ticketId);
     }

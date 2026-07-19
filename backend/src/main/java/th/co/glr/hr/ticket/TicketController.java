@@ -255,9 +255,11 @@ public class TicketController {
     }
 
     @PostMapping("/{id}/cancel")
-    TicketDetailResponse cancel(@PathVariable long id, HttpSession session) {
+    TicketDetailResponse cancel(@PathVariable long id,
+                                @Valid @RequestBody CancelRequest request,
+                                HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.cancel(id, user));
+        return new TicketDetailResponse(ticketService.cancel(id, request.reason(), request.note(), user));
     }
 
     // ── Deal pipeline (V50) ─────────────────────────────────────────────────
@@ -343,6 +345,10 @@ public class TicketController {
 
     record MarkLostRequest(@jakarta.validation.constraints.NotBlank String reason,
                            @jakarta.validation.constraints.Size(max = 2000) String note) {}
+
+    /** Same shape as MarkLostRequest — cancel now carries a structured reason too (V56). */
+    record CancelRequest(@jakarta.validation.constraints.NotBlank String reason,
+                         @jakarta.validation.constraints.Size(max = 2000) String note) {}
 
     record ReopenRequest(@jakarta.validation.constraints.Size(max = 2000) String note) {}
 

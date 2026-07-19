@@ -55,7 +55,10 @@ public record TicketSummaryDto(
     Instant closeConfirmedAt,
     String closeConfirmedByName,
     /** An INVOICE attachment is on file — a prerequisite for confirming the close. */
-    boolean invoiceOnFile
+    boolean invoiceOnFile,
+    /** Why the opportunity went away (V56). Distinct from lostReason. */
+    String cancelReason,
+    Instant cancelledAt
 ) {
     public TicketSummaryDto(
         long id, String code, String type, String title, String status, String priority,
@@ -73,6 +76,6 @@ public record TicketSummaryDto(
             note, createdAt, updatedAt, closedAt, itemCount, hasEdits, paymentStatus, fulfillmentStatus,
             salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle, tenderRequirement, depositPolicy,
             depositPolicyReason, entryChannel, null, null, null, null, null, PaymentStage.NOT_REQUIRED,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false, null, null, false);
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false, null, null, false, null, null);
     }
 }

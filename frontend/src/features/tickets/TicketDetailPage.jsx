@@ -22,6 +22,7 @@ import {
   ticketStatusLabel,
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
+import { CancelDealModal } from './CancelDealModal.jsx';
 import { DealStagePanel } from './DealStagePanel.jsx';
 
 const EVENT_KIND_LABEL = {
@@ -2679,18 +2680,18 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         onConfirm={() => confirmDeleteAttachment(confirm?.id)}
       />
 
-      <ConfirmDialog
-        open={confirm?.kind === 'cancelTicket'}
-        tone="danger"
-        title="ยกเลิกใบขอราคา"
-        message="ยืนยันการยกเลิกใบขอราคานี้?"
-        busy={actionLoading}
-        onCancel={() => setConfirm(null)}
-        onConfirm={async () => {
-          await doAction(() => api.tickets.cancel(ticketId), 'ยกเลิกใบขอราคาแล้ว');
-          setConfirm(null);
-        }}
-      />
+      {/* A bare yes/no confirm can't capture WHY, and cancel is irreversible —
+          so this is the mark-lost modal's reason picker, not a ConfirmDialog. */}
+      {confirm?.kind === 'cancelTicket' && (
+        <CancelDealModal
+          submitting={actionLoading}
+          onClose={() => setConfirm(null)}
+          onSubmit={async (payload) => {
+            await doAction(() => api.tickets.cancel(ticketId, payload), 'ยกเลิกดีลแล้ว');
+            setConfirm(null);
+          }}
+        />
+      )}
 
       <ConfirmDialog
         open={confirm?.kind === 'finalPayment'}
