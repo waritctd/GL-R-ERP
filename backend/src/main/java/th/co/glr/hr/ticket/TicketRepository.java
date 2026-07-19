@@ -127,12 +127,13 @@ public class TicketRepository {
     public long create(CreateTicketRequest request, String code, long actorId, String actorName) {
         String priority = (request.priority() != null && !request.priority().isBlank())
             ? request.priority() : Priority.DEFAULT;
-        // V50 lightweight deal start: a deal created without items begins as a DRAFT
-        // at the lead stage — product items and the price-request flow come later
-        // (editItems then submit). A deal created WITH items enters the price-request
-        // flow immediately, exactly as before.
+        // Every deal begins as a DRAFT at the lead stage, regardless of whether
+        // products were attached at creation time. Items attached here are
+        // preliminary deal products only — pricing does not start until a
+        // PricingRequest is created and submitted against this ticket
+        // (see th.co.glr.hr.pricingrequest.PricingRequestService).
         boolean hasItems = request.items() != null && !request.items().isEmpty();
-        String status = hasItems ? TicketStatus.SUBMITTED : TicketStatus.DRAFT;
+        String status = TicketStatus.DRAFT;
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO sales.ticket
@@ -155,12 +156,8 @@ public class TicketRepository {
                     ? request.entryChannel() : EntryChannel.DESIGNER_LED),
             keyHolder, new String[]{"ticket_id"});
         long ticketId = keyHolder.getKey().longValue();
-        if (hasItems) {
-            insertItems(ticketId, request.items());
-            addEvent(ticketId, actorId, actorName, TicketEventKind.SUBMITTED, null, TicketStatus.SUBMITTED, null);
-        } else {
-            addEvent(ticketId, actorId, actorName, TicketEventKind.CREATED, null, TicketStatus.DRAFT, null);
-        }
+        if (hasItems) insertItems(ticketId, request.items());
+        addEvent(ticketId, actorId, actorName, TicketEventKind.CREATED, null, TicketStatus.DRAFT, null);
         return ticketId;
     }
 
