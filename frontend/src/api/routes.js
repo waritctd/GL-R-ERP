@@ -21,6 +21,7 @@ export const API_ROUTES = {
     punches: '/api/attendance/punches',
     unmapped: '/api/attendance/unmapped',
     employees: '/api/attendance/employees',
+    recalculate: '/api/attendance/daily/recalculate',
     cardsBackfill: '/api/attendance/cards/backfill',
     importDat: '/api/attendance/imports/dat',
     devices: '/api/attendance/devices',

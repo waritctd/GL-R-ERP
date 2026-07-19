@@ -34,6 +34,8 @@ export const api = {
     list: (params) => apiRequest(withQuery(API_ROUTES.attendance.punches, params)),
     unmapped: (params) => apiRequest(withQuery(API_ROUTES.attendance.unmapped, params)),
     employees: () => apiRequest(API_ROUTES.attendance.employees),
+    recalculate: (payload) =>
+      apiRequest(API_ROUTES.attendance.recalculate, { method: 'POST', body: payload }),
     backfillCards: (payload) =>
       apiRequest(API_ROUTES.attendance.cardsBackfill, { method: 'POST', body: payload }),
     importDat: (payload) => apiRequest(API_ROUTES.attendance.importDat, { method: 'POST', body: payload }),

@@ -3270,6 +3270,12 @@ export const api = {
         })),
       });
     },
+    async recalculate() {
+      hasRole('hr', 'ceo');
+      // The mock generates days on the fly, so there is nothing to roll up — report zero rather
+      // than pretending work happened. The real endpoint returns the count actually written.
+      return delay({ recalculatedDays: 0 });
+    },
     async backfillCards() {
       hasRole('hr', 'ceo');
       throw new Error('แก้ไขการแมปบัตรไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
