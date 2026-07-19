@@ -179,26 +179,62 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
                 List.of(item("Toyota", "1"))),
             otherSalesActorId);
 
+        // draftOversight=true / draftOwnerId=null throughout this test: it is
+        // exercising status/createdBy/activeDealsOnly filtering, not the DRAFT
+        // privacy clause (see findSummaries_hidesDraftUnlessOwnerOrOversight for
+        // that), so oversight=true keeps every row visible regardless of who
+        // created it, same as before that clause existed.
+
         // Default (status == null) excludes CANCELLED.
-        List<PricingRequestSummaryDto> defaultQueue = requests.findSummaries(null, null, null, false);
+        List<PricingRequestSummaryDto> defaultQueue = requests.findSummaries(null, null, null, false, true, null);
         assertThat(defaultQueue).extracting(PricingRequestSummaryDto::id).contains(draftId, otherActorRequestId);
         assertThat(defaultQueue).extracting(PricingRequestSummaryDto::id).doesNotContain(cancelledId);
 
         // Explicit status filter.
-        List<PricingRequestSummaryDto> cancelledOnly = requests.findSummaries(PricingRequestStatus.CANCELLED, null, null, false);
+        List<PricingRequestSummaryDto> cancelledOnly =
+            requests.findSummaries(PricingRequestStatus.CANCELLED, null, null, false, true, null);
         assertThat(cancelledOnly).extracting(PricingRequestSummaryDto::id).containsExactly(cancelledId);
 
         // createdByFilter hides the other sales rep's deal.
-        List<PricingRequestSummaryDto> scopedToSelf = requests.findSummaries(null, null, salesActorId, false);
+        List<PricingRequestSummaryDto> scopedToSelf = requests.findSummaries(null, null, salesActorId, false, true, null);
         assertThat(scopedToSelf).extracting(PricingRequestSummaryDto::id).contains(draftId);
         assertThat(scopedToSelf).extracting(PricingRequestSummaryDto::id).doesNotContain(otherActorRequestId);
 
         // activeDealsOnly drops requests once their ticket leaves ACTIVE lifecycle.
-        assertThat(requests.findSummaries(null, null, null, true))
+        assertThat(requests.findSummaries(null, null, null, true, true, null))
             .extracting(PricingRequestSummaryDto::id).contains(draftId);
         jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :id", Map.of("id", ticketId));
-        assertThat(requests.findSummaries(null, null, null, true))
+        assertThat(requests.findSummaries(null, null, null, true, true, null))
             .extracting(PricingRequestSummaryDto::id).doesNotContain(draftId);
+    }
+
+    @Test
+    void findSummaries_hidesDraftUnlessOwnerOrOversight() {
+        long draftId = createDraft(); // owned by salesActorId
+
+        // Non-owner, non-oversight caller (e.g. import/account reading the queue):
+        // the draft is hidden, both with no status filter and with an explicit
+        // status='DRAFT' filter — the new clause applies regardless of how the
+        // caller arrived at the row.
+        assertThat(requests.findSummaries(null, null, null, false, false, 999L))
+            .extracting(PricingRequestSummaryDto::id).doesNotContain(draftId);
+        assertThat(requests.findSummaries(PricingRequestStatus.DRAFT, null, null, false, false, 999L))
+            .extracting(PricingRequestSummaryDto::id).doesNotContain(draftId);
+
+        // The owner sees their own draft (draftOwnerId = salesActorId matches
+        // t.created_by), even with no oversight.
+        assertThat(requests.findSummaries(null, null, null, false, false, salesActorId))
+            .extracting(PricingRequestSummaryDto::id).contains(draftId);
+
+        // Oversight (ceo/sales_manager) sees it regardless of ownership.
+        assertThat(requests.findSummaries(null, null, null, false, true, 999L))
+            .extracting(PricingRequestSummaryDto::id).contains(draftId);
+
+        // Once the request leaves DRAFT, the clause no longer applies — a
+        // non-owner, non-oversight caller can see it like any other status.
+        requests.transition(draftId, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
+        assertThat(requests.findSummaries(null, null, null, false, false, 999L))
+            .extracting(PricingRequestSummaryDto::id).contains(draftId);
     }
 
     @Test

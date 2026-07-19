@@ -102,7 +102,12 @@ public class PricingRequestService {
         if ("sales".equals(actor.role()) && ticket.createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
-        return requests.findByTicket(ticketId);
+        // Separate read path from findSummaries/list — must apply the same DRAFT
+        // privacy rule so a request that's still a draft never leaks through the
+        // per-ticket view either (e.g. to import/account before the rep submits it).
+        return requests.findByTicket(ticketId).stream()
+            .filter(summary -> !PricingRequestStatus.DRAFT.equals(summary.status()) || canSeeDraft(actor, summary))
+            .toList();
     }
 
     public List<PricingRequestSummaryDto> list(String status, Long assignedImportId,
@@ -112,7 +117,9 @@ public class PricingRequestService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown status '" + status + "'");
         }
         Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
-        return requests.findSummaries(status, assignedImportId, createdByFilter, activeDealsOnly);
+        boolean draftOversight = "ceo".equals(actor.role()) || "sales_manager".equals(actor.role());
+        return requests.findSummaries(status, assignedImportId, createdByFilter, activeDealsOnly,
+            draftOversight, actor.id());
     }
 
     @Transactional
@@ -126,6 +133,8 @@ public class PricingRequestService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "Expected status 'DRAFT' but pricing request is '" + summary.status() + "'");
         }
+        TicketSummaryDto ticket = requireTicket(summary.ticketId());
+        requireActive(ticket);
         if (request.recipientType() != null) {
             validateRecipient(request.recipientType());
         }
@@ -259,6 +268,8 @@ public class PricingRequestService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "Expected status 'IMPORT_REVIEWING' but pricing request is '" + summary.status() + "'");
         }
+        TicketSummaryDto ticket = requireTicket(summary.ticketId());
+        requireActive(ticket);
         int rows = requests.transition(id, PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.MORE_INFO_REQUIRED,
             null, null);
         if (rows == 0) {
@@ -283,6 +294,8 @@ public class PricingRequestService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "Expected status 'MORE_INFO_REQUIRED' but pricing request is '" + summary.status() + "'");
         }
+        TicketSummaryDto ticket = requireTicket(summary.ticketId());
+        requireActive(ticket);
         // Goes back to IMPORT_REVIEWING, NOT SUBMITTED — Import already owns this
         // request. The repository's transition() COALESCE guards mean
         // assigned_import_id and picked_up_at survive this round trip unchanged;
@@ -309,6 +322,11 @@ public class PricingRequestService {
     @Transactional
     public PricingRequestDetailDto cancel(long id, CancelPricingRequestRequest request, UserPrincipal actor) {
         PricingRequestSummaryDto summary = requireViewable(id, actor);
+        // Deliberately NO requireTicket/requireActive here (unlike updateDraft/
+        // requestInformation/respondInformation): a request on a dead deal
+        // (ON_HOLD/DORMANT/etc.) must still be cancellable — that is the one
+        // mutation that should always be available on a stalled deal, not blocked
+        // by it. Do not add a lifecycle gate to this method.
         // Mirrors TicketService.cancel: ownership is the gate, not a role set —
         // extended here with an explicit CEO override (unlike TicketService.cancel,
         // which currently has none) so a manager can unwind an abandoned draft
@@ -357,6 +375,10 @@ public class PricingRequestService {
      */
     @Transactional
     public int cancelOpenForTicket(long ticketId, String reason, UserPrincipal actor) {
+        // Deliberately NO requireTicket/requireActive here: this method exists
+        // BECAUSE the deal just left ACTIVE (see the class Javadoc above) — a
+        // lifecycle gate would make the one caller that needs this cascade fail
+        // every time it runs. Do not add one.
         List<Long> openIds = requests.findOpenIdsForTicket(ticketId);
         String metadataJson = toDeadDealMetadataJson(reason);
         int cancelledCount = 0;
@@ -440,7 +462,24 @@ public class PricingRequestService {
         if ("sales".equals(actor.role()) && summary.ticketCreatedById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
+        // A DRAFT is the rep's private scratchpad (see this class's Javadoc) — only
+        // the owning sales rep and managerial oversight (ceo/sales_manager) may see
+        // it. import/account must not, even though they can see every other status.
+        // Respond 404, NOT 403: a 403 here would confirm to a non-owner that a
+        // pricing request with this id exists in SOME status, letting them probe
+        // ids to enumerate other reps' in-flight drafts. 404 is indistinguishable
+        // from "no such id", which is what we want a non-owner to see.
+        if (PricingRequestStatus.DRAFT.equals(summary.status()) && !canSeeDraft(actor, summary)) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "Pricing request not found");
+        }
         return summary;
+    }
+
+    /** Who may see a request while it is still in DRAFT status — see requireViewable. */
+    private boolean canSeeDraft(UserPrincipal actor, PricingRequestSummaryDto summary) {
+        return summary.ticketCreatedById() == actor.id()
+            || "ceo".equals(actor.role())
+            || "sales_manager".equals(actor.role());
     }
 
     private TicketSummaryDto requireTicket(long ticketId) {

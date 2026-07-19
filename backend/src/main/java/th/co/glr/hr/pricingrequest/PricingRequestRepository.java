@@ -267,7 +267,8 @@ public class PricingRequestRepository {
     }
 
     public List<PricingRequestSummaryDto> findSummaries(String status, Long assignedImportId,
-                                                         Long createdByFilter, boolean activeDealsOnly) {
+                                                         Long createdByFilter, boolean activeDealsOnly,
+                                                         boolean draftOversight, Long draftOwnerId) {
         StringBuilder sql = new StringBuilder(SUMMARY_SELECT).append(" WHERE 1=1 ");
         MapSqlParameterSource params = new MapSqlParameterSource();
         if (status != null) {
@@ -288,6 +289,17 @@ public class PricingRequestRepository {
         if (activeDealsOnly) {
             sql.append(" AND t.lifecycle = 'ACTIVE' ");
         }
+        // A DRAFT is the owning rep's private scratchpad (see PricingRequestService's
+        // class Javadoc) — it must never surface in any list for anyone else, no
+        // matter what status/assignedImportId/createdByFilter/activeDealsOnly the
+        // caller passed. draftOversight is true only for ceo/sales_manager (managerial
+        // oversight); everyone else only sees a DRAFT row when they are its owner
+        // (t.created_by = draftOwnerId, which the service always sets to the caller's
+        // own id). This is independent of createdByFilter above, which only applies to
+        // the "sales" role and is a distinct concern (own-deals-only scoping).
+        sql.append(" AND (pr.status <> 'DRAFT' OR :draftOversight = TRUE OR t.created_by = :draftOwnerId) ");
+        params.addValue("draftOversight", draftOversight);
+        params.addValue("draftOwnerId", draftOwnerId);
         sql.append(" ORDER BY pr.created_at DESC, pr.pricing_request_id DESC ");
         return jdbc.query(sql.toString(), params, (rs, rowNum) -> mapSummary(rs));
     }

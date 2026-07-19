@@ -80,6 +80,14 @@ class PricingRequestServiceTest {
     }
 
     @Test
+    void updateDraft_rejectsNonActiveDeal() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        stubTicket(10L, 1L, DealLifecycle.ON_HOLD);
+        assertConflict(() -> service.updateDraft(20L, sampleUpdateRequest(), salesActor));
+        verify(requestRepo, never()).updateDraft(anyLong(), any());
+    }
+
+    @Test
     void submit_rejectsNonSalesRoles() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
         assertForbidden(() -> service.submit(20L, importActor));
@@ -330,6 +338,24 @@ class PricingRequestServiceTest {
         assertConflict(() -> service.cancel(20L, cancelRequest(), salesActor));
     }
 
+    @Test
+    void cancel_succeedsOnNonActiveDealWithoutCheckingTicketLifecycle() {
+        // cancel() must remain callable no matter the deal's lifecycle — a request
+        // left over on a deal that just went ON_HOLD/DORMANT/lost must still be
+        // cancellable (see the comment on cancel() itself). Deliberately no
+        // stubTicket() call: if cancel() ever gained a requireTicket/requireActive
+        // check, ticketRepo.findById would return empty and this would blow up
+        // with 404 "Ticket not found" instead of succeeding.
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        when(requestRepo.transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 1L))
+            .thenReturn(1);
+
+        service.cancel(20L, cancelRequest(), salesActor);
+
+        verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 1L);
+        verify(ticketRepo, never()).findById(anyLong());
+    }
+
     // ── read scoping ─────────────────────────────────────────────────────
 
     @Test
@@ -338,12 +364,101 @@ class PricingRequestServiceTest {
         assertForbidden(() -> service.get(20L, salesActor));
     }
 
+    // This inverts the old get_importCanViewAnyDeal, which asserted the exact bug
+    // this class's own Javadoc disclaims ("a draft is the rep's private
+    // scratchpad until submit()"): import could previously read ANY rep's DRAFT
+    // by id. That was a real privacy bug, not a rule worth preserving — see
+    // requireViewable/canSeeDraft. Approved policy: DRAFT is visible only to its
+    // owning sales rep plus ceo/sales_manager oversight; NOT import, NOT account.
+    // A non-owner/non-oversight caller gets 404, not 403 — see requireViewable's
+    // comment for why (403 would confirm the row exists and let a non-owner
+    // probe ids for other reps' drafts).
     @Test
-    void get_importCanViewAnyDeal() {
+    void get_importCannotViewAnotherRepsDraft() {
         stubPricingRequest(20L, 10L, 99L, PricingRequestStatus.DRAFT);
+        assertNotFound(() -> service.get(20L, importActor));
+    }
+
+    @Test
+    void get_importCanViewOnceSubmitted() {
+        stubPricingRequest(20L, 10L, 99L, PricingRequestStatus.SUBMITTED);
         when(requestRepo.findItems(20L)).thenReturn(List.of());
         when(requestRepo.findEvents(20L)).thenReturn(List.of());
         assertThat(service.get(20L, importActor).summary().id()).isEqualTo(20L);
+    }
+
+    @Test
+    void get_accountCannotViewAnotherRepsDraft() {
+        stubPricingRequest(20L, 10L, 99L, PricingRequestStatus.DRAFT);
+        assertNotFound(() -> service.get(20L, accountActor));
+    }
+
+    @Test
+    void get_ceoCanViewAnotherRepsDraft() {
+        stubPricingRequest(20L, 10L, 99L, PricingRequestStatus.DRAFT);
+        when(requestRepo.findItems(20L)).thenReturn(List.of());
+        when(requestRepo.findEvents(20L)).thenReturn(List.of());
+        assertThat(service.get(20L, ceoActor).summary().id()).isEqualTo(20L);
+    }
+
+    @Test
+    void get_salesManagerCanViewAnotherRepsDraft() {
+        stubPricingRequest(20L, 10L, 99L, PricingRequestStatus.DRAFT);
+        when(requestRepo.findItems(20L)).thenReturn(List.of());
+        when(requestRepo.findEvents(20L)).thenReturn(List.of());
+        assertThat(service.get(20L, salesManagerActor).summary().id()).isEqualTo(20L);
+    }
+
+    @Test
+    void get_owningSalesRepCanViewOwnDraft() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        when(requestRepo.findItems(20L)).thenReturn(List.of());
+        when(requestRepo.findEvents(20L)).thenReturn(List.of());
+        assertThat(service.get(20L, salesActor).summary().id()).isEqualTo(20L);
+    }
+
+    // list()/findSummaries: another rep's DRAFT must never leak into the queue,
+    // regardless of the status filter used, unless the caller has oversight.
+    @Test
+    void list_importDoesNotSeeAnotherRepsDraft_statusFilterNull() {
+        when(requestRepo.findSummaries(null, null, null, true, false, 3L)).thenReturn(List.of());
+        assertThat(service.list(null, null, true, importActor)).isEmpty();
+        verify(requestRepo).findSummaries(null, null, null, true, false, 3L);
+    }
+
+    @Test
+    void list_importDoesNotSeeAnotherRepsDraft_statusFilterDraft() {
+        when(requestRepo.findSummaries(PricingRequestStatus.DRAFT, null, null, true, false, 3L)).thenReturn(List.of());
+        assertThat(service.list(PricingRequestStatus.DRAFT, null, true, importActor)).isEmpty();
+        verify(requestRepo).findSummaries(PricingRequestStatus.DRAFT, null, null, true, false, 3L);
+    }
+
+    @Test
+    void list_ceoSeesAnotherRepsDraft() {
+        PricingRequestSummaryDto draft = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        when(requestRepo.findSummaries(null, null, null, true, true, 4L)).thenReturn(List.of(draft));
+        assertThat(service.list(null, null, true, ceoActor))
+            .extracting(PricingRequestSummaryDto::id).contains(20L);
+        verify(requestRepo).findSummaries(null, null, null, true, true, 4L);
+    }
+
+    // listForTicket is a separate read path from get()/list() and must honour the
+    // same DRAFT-privacy rule.
+    @Test
+    void listForTicket_importDoesNotSeeDraftRequestsOnTicket() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        PricingRequestSummaryDto draft = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        when(requestRepo.findByTicket(10L)).thenReturn(List.of(draft));
+        assertThat(service.listForTicket(10L, importActor)).isEmpty();
+    }
+
+    @Test
+    void listForTicket_ceoSeesDraftRequestsOnTicket() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        PricingRequestSummaryDto draft = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        when(requestRepo.findByTicket(10L)).thenReturn(List.of(draft));
+        assertThat(service.listForTicket(10L, ceoActor))
+            .extracting(PricingRequestSummaryDto::id).containsExactly(20L);
     }
 
     @Test
@@ -362,13 +477,19 @@ class PricingRequestServiceTest {
     @Test
     void list_salesFiltersToOwnDeals() {
         service.list(null, null, true, salesActor);
-        verify(requestRepo).findSummaries(null, null, 1L, true);
+        // draftOversight=false (sales is not ceo/sales_manager), draftOwnerId=1L
+        // (salesActor's own id) — see findSummaries's Javadoc/clause comment.
+        verify(requestRepo).findSummaries(null, null, 1L, true, false, 1L);
     }
 
     @Test
     void list_nonSalesSeesAllDeals() {
         service.list(null, null, true, importActor);
-        verify(requestRepo).findSummaries(null, null, null, true);
+        // import is not ceo/sales_manager, so draftOversight=false — import still
+        // relies on the draftOwnerId=t.created_by match, which the DRAFT-hiding
+        // matrix below (list_import...) proves does NOT let import see another
+        // rep's draft.
+        verify(requestRepo).findSummaries(null, null, null, true, false, 3L);
     }
 
     @Test
@@ -386,9 +507,9 @@ class PricingRequestServiceTest {
         // proves the SERVICE actually passes activeDealsOnly through unmangled, and
         // that get(id) — which never touches deal lifecycle, only ownership/role —
         // still reaches the same request directly.
-        when(requestRepo.findSummaries(null, null, null, true)).thenReturn(List.of());
+        when(requestRepo.findSummaries(null, null, null, true, false, 3L)).thenReturn(List.of());
         PricingRequestSummaryDto onHoldDealRequest = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
-        when(requestRepo.findSummaries(null, null, null, false)).thenReturn(List.of(onHoldDealRequest));
+        when(requestRepo.findSummaries(null, null, null, false, false, 3L)).thenReturn(List.of(onHoldDealRequest));
         when(requestRepo.findItems(20L)).thenReturn(List.of());
         when(requestRepo.findEvents(20L)).thenReturn(List.of());
 
@@ -410,8 +531,16 @@ class PricingRequestServiceTest {
 
     @Test
     void pickup_rejectsNonSubmittedStatus() {
+        // Side effect of the Part 1 privacy fix: this pricing request is still
+        // DRAFT and importActor (id 3) is not its owner (id 1) nor ceo/
+        // sales_manager, so requireViewable now hides it from import entirely —
+        // 404, not the old 409 "Only a submitted pricing request can be picked
+        // up". That 409 message would have leaked the row's existence/status to
+        // an import user who should not even know a draft with this id exists;
+        // a still-DRAFT request literally cannot reach a submitted-only import
+        // yet, so 404 is the correct status once DRAFT is private.
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        assertConflict(() -> service.pickup(20L, importActor));
+        assertNotFound(() -> service.pickup(20L, importActor));
         verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
     }
 
@@ -492,6 +621,7 @@ class PricingRequestServiceTest {
     @Test
     void requestInformation_rejectsWhenTransitionRowsZero() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, 3L);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.transition(20L, PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.MORE_INFO_REQUIRED,
             null, null)).thenReturn(0);
         assertConflict(() -> service.requestInformation(20L, moreInfoRequest(), importActor));
@@ -499,8 +629,17 @@ class PricingRequestServiceTest {
     }
 
     @Test
+    void requestInformation_rejectsNonActiveDeal() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, 3L);
+        stubTicket(10L, 1L, DealLifecycle.ON_HOLD);
+        assertConflict(() -> service.requestInformation(20L, moreInfoRequest(), importActor));
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
     void requestInformation_assignedImportSucceedsAndNotifiesRequester() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, 3L);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.transition(20L, PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.MORE_INFO_REQUIRED,
             null, null)).thenReturn(1);
         when(requestRepo.findItems(20L)).thenReturn(List.of());
@@ -542,14 +681,24 @@ class PricingRequestServiceTest {
     @Test
     void respondInformation_rejectsWhenTransitionRowsZero() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, 3L);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.transition(20L, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.IMPORT_REVIEWING,
             null, null)).thenReturn(0);
         assertConflict(() -> service.respondInformation(20L, respondRequest(), salesActor));
     }
 
     @Test
+    void respondInformation_rejectsNonActiveDeal() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, 3L);
+        stubTicket(10L, 1L, DealLifecycle.ON_HOLD);
+        assertConflict(() -> service.respondInformation(20L, respondRequest(), salesActor));
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
     void respondInformation_goesToImportReviewingNotSubmittedAndNotifiesAssignedImport() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, 3L);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.transition(20L, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.IMPORT_REVIEWING,
             null, null)).thenReturn(1);
         when(requestRepo.findItems(20L)).thenReturn(List.of());
@@ -570,6 +719,7 @@ class PricingRequestServiceTest {
     @Test
     void respondInformation_guardsAgainstNullAssignedImport() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, null);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.transition(20L, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.IMPORT_REVIEWING,
             null, null)).thenReturn(1);
         when(requestRepo.findItems(20L)).thenReturn(List.of());
@@ -731,5 +881,11 @@ class PricingRequestServiceTest {
         assertThatThrownBy(action)
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    private static void assertNotFound(ThrowableAssert.ThrowingCallable action) {
+        assertThatThrownBy(action)
+            .isInstanceOfSatisfying(ApiException.class, e ->
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 }
