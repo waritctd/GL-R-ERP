@@ -25,7 +25,7 @@ const COLUMNS = [
     searchAccessor: (row) => row.requestCode,
     // A Link (not a whole-row onRowClick) so this table can carry a pickup
     // <button> per row without nesting one interactive element inside another.
-    render: (row) => <Link to={`/tickets/${row.ticketId}`} className="text-xs text-info underline"><code>{row.requestCode}</code></Link>,
+    render: (row) => <Link to={`/pricing-requests/${row.id}`} className="text-xs text-info underline"><code>{row.requestCode}</code></Link>,
   },
   {
     key: 'deal',
@@ -83,7 +83,7 @@ function QueueCard({ row, onPickup, canPickup, pickingUp }) {
   return (
     <>
       <div className="flex min-w-0 items-start justify-between gap-3">
-        <Link to={`/tickets/${row.ticketId}`} className="min-w-0 truncate text-xs text-info underline" onClick={(event) => event.stopPropagation()}>
+        <Link to={`/pricing-requests/${row.id}`} className="min-w-0 truncate text-xs text-info underline" onClick={(event) => event.stopPropagation()}>
           <code>{row.requestCode}</code>
         </Link>
         <StatusBadge tone={status.tone}>{status.label}</StatusBadge>

@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.UUID;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +45,11 @@ public class PricingCostingService {
     private static final BigDecimal ZERO = BigDecimal.ZERO;
     private static final Set<String> IMPORT_ROLES = Set.of("import");
     private static final Set<String> RAW_COSTING_ROLES = Set.of("import", "ceo");
+    private static final Set<String> COSTING_CREATE_STATUSES = Set.of(
+        PricingRequestStatus.IMPORT_REVIEWING,
+        PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
+        PricingRequestStatus.COSTING_IN_PROGRESS,
+        PricingRequestStatus.READY_FOR_CEO_REVIEW);
 
     private final PricingCostingRepository costings;
     private final PricingRequestRepository pricingRequests;
@@ -72,15 +78,24 @@ public class PricingCostingService {
     public PricingCostingDto createDraft(long pricingRequestId, CreateCostingRequest request, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
         PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
-        if (!Set.of(PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
-                PricingRequestStatus.COSTING_IN_PROGRESS).contains(summary.status())) {
+        if (!COSTING_CREATE_STATUSES.contains(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "Pricing request is not ready for costing");
         }
         requireActiveDeal(summary.ticketId());
         resolveSources(summary);
-        long costingId = costings.createDraft(pricingRequestId, request.note(), request.clientRequestId(), actor.id());
+        String clientRequestId = validateClientRequestId(request.clientRequestId());
+        PricingCostingRepository.CreateDraftResult created =
+            costings.createDraft(pricingRequestId, request.note(), clientRequestId, actor.id());
+        long costingId = created.costingId();
+        if (!created.created()) {
+            return requireCosting(costingId);
+        }
         if (!PricingRequestStatus.COSTING_IN_PROGRESS.equals(summary.status())) {
-            pricingRequests.transition(summary.id(), summary.status(), PricingRequestStatus.COSTING_IN_PROGRESS, null, null);
+            int transitioned = pricingRequests.transition(summary.id(), summary.status(),
+                PricingRequestStatus.COSTING_IN_PROGRESS, null, null);
+            if (transitioned == 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
+            }
         }
         addEvent(summary, actor, PricingRequestEventKind.PRICING_COSTING_STARTED, summary.status(),
             PricingRequestStatus.COSTING_IN_PROGRESS, "Costing draft created");
@@ -108,6 +123,9 @@ public class PricingCostingService {
             throw new ApiException(HttpStatus.CONFLICT, "Submitted costing is immutable");
         }
         PricingRequestSummaryDto summary = requirePricingRequest(costing.pricingRequestId());
+        if (!PricingRequestStatus.COSTING_IN_PROGRESS.equals(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "Pricing request must be COSTING_IN_PROGRESS before recalculation");
+        }
         requireActiveDeal(summary.ticketId());
         CalculationResult result = calculate(summary);
         costings.replaceItems(costingId, result.items());
@@ -117,8 +135,6 @@ public class PricingCostingService {
         }
         addEvent(summary, actor, PricingRequestEventKind.PRICING_COSTING_CALCULATED, summary.status(), summary.status(),
             "Costing recalculated");
-        notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_CALCULATED,
-            "ใบขอราคา " + summary.requestCode() + " คำนวณต้นทุนแล้ว");
         return requireCosting(costingId);
     }
 
@@ -162,13 +178,17 @@ public class PricingCostingService {
         BigDecimal total = ZERO;
         Instant calculatedAt = Instant.now();
         for (ResolvedSource source : sources) {
-            String country = factoryConfigs.findByName(source.quote().factoryName())
-                .map(FactoryConfigDto::country)
-                .orElse("Thailand");
+            FactoryConfigDto factoryConfig = factoryConfigs.findByName(source.quote().factoryName())
+                .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "ไม่พบ factory config สำหรับโรงงาน: " + source.quote().factoryName()));
+            String country = firstText(factoryConfig.country(), null);
+            if (country == null) {
+                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "factory config ของ " + source.quote().factoryName() + " ไม่มีประเทศ");
+            }
             PriceCalcConfigDto config = priceConfigs.findCurrentByCountry(country)
-                .orElseGet(() -> priceConfigs.findCurrentByCountry("Thailand")
-                    .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                        "ไม่พบ price config สำหรับประเทศ: " + country)));
+                .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "ไม่พบ price config สำหรับประเทศ: " + country));
             FxSnapshot fx = resolveFx(source.quoteItem().currency());
             BigDecimal sqmPerUnit = source.quoteItem().sqmPerUnit() != null
                 ? source.quoteItem().sqmPerUnit()
@@ -229,7 +249,7 @@ public class PricingCostingService {
     private List<ResolvedSource> resolveSources(PricingRequestSummaryDto summary) {
         List<ResolvedSource> result = new ArrayList<>();
         for (PricingRequestItemDto item : pricingRequests.findItems(summary.id())) {
-            String factoryName = firstText(item.factory(), null);
+            String factoryName = firstText(item.resolvedFactoryName(), item.factory());
             if (factoryName == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "Pricing request item " + item.id() + " has no resolved factory");
@@ -265,7 +285,26 @@ public class PricingCostingService {
         FxRateDto rate = fxRates.findByCurrency(currency)
             .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
                 "ไม่พบอัตราแลกเปลี่ยนสำหรับสกุลเงิน " + currency));
+        if (!"BOT".equalsIgnoreCase(rate.source()) || rate.fetchedAt() == null) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "อัตราแลกเปลี่ยน " + currency + " ต้องมาจาก BOT ก่อนคำนวณต้นทุน");
+        }
+        if (rate.effectiveDate() == null || rate.effectiveDate().isBefore(LocalDate.now().minusDays(7))) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "อัตราแลกเปลี่ยน BOT สำหรับ " + currency + " เก่าเกินไป");
+        }
         return new FxSnapshot(rate.rateToThb(), rate.source(), rate.effectiveDate(), rate.fetchedAt());
+    }
+
+    private String validateClientRequestId(String clientRequestId) {
+        if (clientRequestId == null || clientRequestId.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(clientRequestId.trim()).toString();
+        } catch (IllegalArgumentException e) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId must be a valid UUID");
+        }
     }
 
     private PricingRequestSummaryDto requirePricingRequest(long pricingRequestId) {

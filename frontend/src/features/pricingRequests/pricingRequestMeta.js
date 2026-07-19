@@ -87,11 +87,10 @@ export function canPickupPricingRequest(user, pr) {
   return user?.role === 'import' && pr?.status === 'SUBMITTED';
 }
 
-/** Mirrors PricingRequestService.requestInformation: the ASSIGNED import user, IMPORT_REVIEWING only. */
+/** Mirrors PricingRequestService.requestInformation: any import user in active Step 2 statuses. */
 export function canRequestInformation(user, pr) {
-  return user?.role === 'import' && pr?.assignedImportId != null
-    && Number(pr.assignedImportId) === Number(user.id)
-    && pr?.status === 'IMPORT_REVIEWING';
+  return user?.role === 'import'
+    && ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS'].includes(pr?.status);
 }
 
 /** Mirrors PricingRequestService.respondInformation: owner sales, MORE_INFO_REQUIRED only. */

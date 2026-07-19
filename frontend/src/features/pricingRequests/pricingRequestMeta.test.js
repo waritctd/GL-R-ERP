@@ -94,13 +94,17 @@ describe('canPickupPricingRequest', () => {
 });
 
 describe('canRequestInformation', () => {
-  it('allows only the ASSIGNED import user while IMPORT_REVIEWING', () => {
+  it('allows any import user while IMPORT_REVIEWING', () => {
     const reviewing = pr({ status: 'IMPORT_REVIEWING', assignedImportId: 5 });
     expect(canRequestInformation(importUser, reviewing)).toBe(true);
-    expect(canRequestInformation(otherImport, reviewing)).toBe(false);
+    expect(canRequestInformation(otherImport, reviewing)).toBe(true);
   });
-  it('rejects an unassigned request', () => {
-    expect(canRequestInformation(importUser, pr({ status: 'IMPORT_REVIEWING', assignedImportId: null }))).toBe(false);
+  it('allows an unassigned request', () => {
+    expect(canRequestInformation(importUser, pr({ status: 'IMPORT_REVIEWING', assignedImportId: null }))).toBe(true);
+  });
+  it('allows Step 2 in-progress statuses', () => {
+    expect(canRequestInformation(importUser, pr({ status: 'AWAITING_FACTORY_RESPONSE' }))).toBe(true);
+    expect(canRequestInformation(importUser, pr({ status: 'COSTING_IN_PROGRESS' }))).toBe(true);
   });
 });
 

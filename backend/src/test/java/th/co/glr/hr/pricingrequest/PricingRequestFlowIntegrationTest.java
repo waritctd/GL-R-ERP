@@ -414,17 +414,13 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     @Test
-    void informationLoop_recordsBothTurnsAndRejectsPrincipalsWithNoStake() {
+    void informationLoop_recordsBothTurnsAndAllowsDepartmentWideImport() {
         long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
         pricingRequestService.submit(id, salesActor);
         pricingRequestService.pickup(id, importActor);
 
-        assertThatThrownBy(() -> pricingRequestService.requestInformation(id,
-            new RequestMoreInformationRequest("อีกทีมขอแทรก", null), secondImportActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
         PricingRequestDetailDto infoRequested = pricingRequestService.requestInformation(id,
-            new RequestMoreInformationRequest("กรุณาระบุขนาดสินค้าเพิ่มเติม", null), importActor);
+            new RequestMoreInformationRequest("กรุณาระบุขนาดสินค้าเพิ่มเติม", null), secondImportActor);
         assertThat(infoRequested.summary().status()).isEqualTo(PricingRequestStatus.MORE_INFO_REQUIRED);
 
         assertThatThrownBy(() -> pricingRequestService.respondInformation(id,

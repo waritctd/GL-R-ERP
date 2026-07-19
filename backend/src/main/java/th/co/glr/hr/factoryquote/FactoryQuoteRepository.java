@@ -119,6 +119,24 @@ public class FactoryQuoteRepository {
                 .addValue("actorId", actorId));
     }
 
+    public int cancelOpenForPricingRequest(long pricingRequestId, String reason, long actorId) {
+        return jdbc.update("""
+            UPDATE sales.factory_quote
+               SET status = 'CANCELLED',
+                   is_current = FALSE,
+                   cancel_reason = :reason,
+                   cancelled_by = :actorId,
+                   cancelled_at = now(),
+                   updated_at = now()
+             WHERE pricing_request_id = :pricingRequestId
+               AND status IN ('DRAFT', 'REQUESTED')
+            """,
+            new MapSqlParameterSource()
+                .addValue("pricingRequestId", pricingRequestId)
+                .addValue("reason", reason)
+                .addValue("actorId", actorId));
+    }
+
     public int updateFirstResponse(long quoteId, String supplierQuoteRef, String currency, String paymentTerms,
                                    String leadTimeText, String revisionReason, String negotiationNote) {
         return jdbc.update("""
@@ -261,11 +279,17 @@ public class FactoryQuoteRepository {
              WHERE factory_quote_id = :quoteId
                AND status IN ('RESPONSE_RECEIVED', 'NEGOTIATING')
                AND is_current = TRUE
+               AND NOT EXISTS (
+                   SELECT 1 FROM sales.factory_quote_item fqi
+                    WHERE fqi.factory_quote_id = sales.factory_quote.factory_quote_id
+                      AND (fqi.raw_unit_price IS NULL
+                           OR fqi.currency IS NULL
+                           OR fqi.quoted_unit IS NULL
+                           OR fqi.unit_basis IS NULL)
+               )
                AND EXISTS (
                    SELECT 1 FROM sales.factory_quote_item fqi
                     WHERE fqi.factory_quote_id = sales.factory_quote.factory_quote_id
-                      AND fqi.raw_unit_price IS NOT NULL
-                      AND fqi.currency IS NOT NULL
                )
             """, Map.of("quoteId", quoteId));
     }

@@ -27,10 +27,18 @@ public class PricingCostingRepository {
         return "PCO-" + Year.now() + "-" + String.format("%04d", seq == null ? 0 : seq);
     }
 
-    public long createDraft(long pricingRequestId, String note, String clientRequestId, long actorId) {
+    public CreateDraftResult createDraft(long pricingRequestId, String note, String clientRequestId, long actorId) {
+        jdbc.query("SELECT pg_advisory_xact_lock(:pricingRequestId)",
+            Map.of("pricingRequestId", pricingRequestId), (rs, rowNum) -> 0);
+        if (clientRequestId != null && !clientRequestId.isBlank()) {
+            Optional<PricingCostingDto> replay = findByClientRequestId(actorId, clientRequestId);
+            if (replay.isPresent()) {
+                return new CreateDraftResult(replay.get().id(), false);
+            }
+        }
         Optional<PricingCostingDto> open = findOpen(pricingRequestId);
         if (open.isPresent()) {
-            return open.get().id();
+            return new CreateDraftResult(open.get().id(), false);
         }
         Integer nextVersion = jdbc.queryForObject("""
             SELECT COALESCE(MAX(version_no), 0) + 1
@@ -52,7 +60,24 @@ public class PricingCostingRepository {
                 .addValue("clientRequestId", clientRequestId)
                 .addValue("createdBy", actorId),
             Long.class);
-        return id == null ? 0L : id;
+        return new CreateDraftResult(id == null ? 0L : id, true);
+    }
+
+    public int cancelOpenForPricingRequest(long pricingRequestId, String reason, long actorId) {
+        return jdbc.update("""
+            UPDATE sales.pricing_costing
+               SET status = 'CANCELLED',
+                   stale = FALSE,
+                   stale_reason = :reason,
+                   submitted_by = COALESCE(submitted_by, :actorId),
+                   updated_at = now()
+             WHERE pricing_request_id = :pricingRequestId
+               AND status IN ('DRAFT', 'CALCULATED')
+            """,
+            new MapSqlParameterSource()
+                .addValue("pricingRequestId", pricingRequestId)
+                .addValue("reason", reason)
+                .addValue("actorId", actorId));
     }
 
     public void replaceItems(long costingId, List<PricingCostingWriteItem> items) {
@@ -144,6 +169,22 @@ public class PricingCostingRepository {
                    AND pc.status IN ('DRAFT', 'CALCULATED')
                 """,
                 Map.of("pricingRequestId", pricingRequestId), (rs, rowNum) -> mapCosting(rs, findItems(rs.getLong("pricing_costing_id"))));
+            return Optional.ofNullable(dto);
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    public Optional<PricingCostingDto> findByClientRequestId(long createdBy, String clientRequestId) {
+        try {
+            PricingCostingDto dto = jdbc.queryForObject(baseSelect() + """
+                 WHERE pc.created_by = :createdBy
+                   AND pc.client_request_id = CAST(:clientRequestId AS uuid)
+                """,
+                new MapSqlParameterSource()
+                    .addValue("createdBy", createdBy)
+                    .addValue("clientRequestId", clientRequestId),
+                (rs, rowNum) -> mapCosting(rs, findItems(rs.getLong("pricing_costing_id"))));
             return Optional.ofNullable(dto);
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
@@ -323,4 +364,6 @@ public class PricingCostingRepository {
                 .addValue("calculationSnapshot", calculationSnapshot == null ? "{}" : calculationSnapshot);
         }
     }
+
+    public record CreateDraftResult(long costingId, boolean created) {}
 }
