@@ -306,8 +306,9 @@ public class TicketService {
             + (request.amendmentReason() != null && !request.amendmentReason().isBlank()
                 ? " — amendment: " + request.amendmentReason().trim()
                 : "");
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.QUOTATION_ISSUED, fromStatus, TicketStatus.QUOTATION_ISSUED, eventMessage);
+        tickets.addEventWithDocument(ticketId, actor.id(), actor.name(),
+            TicketEventKind.QUOTATION_ISSUED, fromStatus, TicketStatus.QUOTATION_ISSUED, eventMessage,
+            RelatedDocumentType.QUOTATION, created.id());
         if (QuotationRecipient.DESIGNER.equals(recipientType) || QuotationRecipient.OWNER.equals(recipientType)) {
             autoAdvanceStage(s, DealStage.QUOTE_DESIGN_SIDE, actor);
         } else if (QuotationRecipient.BUYER.equals(recipientType)) {
@@ -771,19 +772,21 @@ public class TicketService {
         if ("WAREHOUSE".equals(source) && !warehouseDeliveryAvailable(s, ticket.summary().id())) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องรับสินค้าเข้าโกดังก่อนส่งจาก WAREHOUSE");
         }
-        tickets.insertDeliveryRecord(s.id(), source, actor.id(), request.note(), normalized);
+        long deliveryId = tickets.insertDeliveryRecord(s.id(), source, actor.id(), request.note(), normalized);
         TicketDto updated = requireTicket(s.id());
         TicketSummaryDto updatedSummary = updated.summary();
         boolean fullyDelivered = updated.items().stream()
             .allMatch(item -> nullToZero(item.qtyDelivered()).compareTo(nullToZero(item.qty())) >= 0);
         String message = deliveryMessage(updated.items(), normalized);
-        tickets.addEvent(s.id(), actor.id(), actor.name(),
-            TicketEventKind.DELIVERY_RECORDED, updatedSummary.status(), updatedSummary.status(), message);
+        tickets.addEventWithDocument(s.id(), actor.id(), actor.name(),
+            TicketEventKind.DELIVERY_RECORDED, updatedSummary.status(), updatedSummary.status(), message,
+            RelatedDocumentType.DELIVERY_RECORD, deliveryId);
         if (fullyDelivered) {
             tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.FULLY_DELIVERED);
-            tickets.addEvent(s.id(), actor.id(), actor.name(),
+            tickets.addEventWithDocument(s.id(), actor.id(), actor.name(),
                 TicketEventKind.DELIVERY_COMPLETED, updatedSummary.status(), updatedSummary.status(),
-                completing ? "ส่งมอบครบจากปุ่ม completeDelivery" : message);
+                completing ? "ส่งมอบครบจากปุ่ม completeDelivery" : message,
+                RelatedDocumentType.DELIVERY_RECORD, deliveryId);
             autoAdvanceStage(updatedSummary, DealStage.DELIVERED, actor);
             // Second CLOSED_PAID gate: a deal paid in full before delivery closes
             // exactly when delivery completes (reload so fulfilment reflects the
@@ -873,8 +876,9 @@ public class TicketService {
                 "การรับชำระเกินยอดต้องระบุเหตุผล");
         }
         String receiptRef = blankToNull(request.receiptRef());
+        long receiptId;
         try {
-            tickets.insertPaymentReceipt(ticketId, kind, amount, actor.id(), request.receivedAt(),
+            receiptId = tickets.insertPaymentReceipt(ticketId, kind, amount, actor.id(), request.receivedAt(),
                 note, request.depositNoticeId(), receiptRef);
         } catch (DataIntegrityViolationException e) {
             if (receiptRef != null) {
@@ -882,10 +886,11 @@ public class TicketService {
             }
             throw e;
         }
-        tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.PAYMENT_RECORDED,
+        tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.PAYMENT_RECORDED,
             s.status(), s.status(),
             "kind=" + kind + ", amount=" + amount + ", paid=" + newPaid + ", payable=" + payable
-                + (note != null ? " — " + note : ""));
+                + (note != null ? " — " + note : ""),
+            RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
         reconcilePaymentStatus(ticketId, actor);
         return requireTicket(ticketId);
     }
@@ -1022,11 +1027,14 @@ public class TicketService {
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireStageWriteAccess(s, targetStage, actor);
-        requireActive(s);
-        if (s.lostReason() != null) {
+        // Keyed on the lifecycle, not on lost_reason: since V57 the reason SURVIVES
+        // a reopen, so a live reopened deal still carries one. Checked before
+        // requireActive so a lost deal gets this specific message.
+        if (DealLifecycle.CLOSED_LOST.equals(s.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ");
         }
+        requireActive(s);
         if (targetStage.equals(s.salesStage())) {
             throw new ApiException(HttpStatus.CONFLICT, "Deal is already in stage " + targetStage);
         }
@@ -1055,7 +1063,9 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         requireActive(s);
-        if (s.lostReason() != null) {
+        // Lifecycle, not lost_reason — a reopened deal is ACTIVE and still carries
+        // the reason it was lost for last time; it must be losable again.
+        if (DealLifecycle.CLOSED_LOST.equals(s.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT, "Deal is already marked lost");
         }
         tickets.markDealLost(ticketId, reason);
@@ -1085,7 +1095,10 @@ public class TicketService {
      * strictly forward (monotonic — re-running a transition can never regress).
      */
     private void autoAdvanceStage(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
-        if (!DealLifecycle.ACTIVE.equals(s.lifecycle()) || s.lostReason() != null) {
+        // ACTIVE is the whole test. The old `lostReason != null` clause would now
+        // silently disable auto-advance on every reopened deal, since V57 keeps the
+        // reason after a reopen.
+        if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
             return;
         }
         if (DealStage.indexOf(targetStage) <= DealStage.indexOf(s.salesStage())) {

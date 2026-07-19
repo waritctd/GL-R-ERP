@@ -909,7 +909,9 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
 // Deal pipeline (V50): mirrors TicketService.autoAdvanceStage — monotonic
 // forward-only, no-op while lost. Called from the 4 milestone transitions.
 function autoAdvanceStage(ticket, targetStage, user) {
-  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE' || ticket.lostReason != null) return;
+  // ACTIVE is the whole test — since V57 lost_reason SURVIVES a reopen, so keying
+  // on it would silently disable auto-advance on every reopened deal.
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
   if (dealStageIndex(targetStage) <= dealStageIndex(ticket.salesStage)) return;
   const fromStage = ticket.salesStage;
   ticket.salesStage = targetStage;
@@ -962,6 +964,7 @@ function buildTicketDetail(ticket) {
       paymentStatus: ticket.paymentStatus ?? null,
       fulfillmentStatus: ticket.fulfillmentStatus ?? null,
       salesStage: ticket.salesStage, lostReason: ticket.lostReason ?? null,
+      reopenedAt: ticket.reopenedAt ?? null, reopenCount: ticket.reopenCount ?? 0,
       lostAt: ticket.lostAt ?? null, stageUpdatedAt: ticket.stageUpdatedAt ?? ticket.updatedAt,
       lifecycle: ticket.lifecycle ?? 'ACTIVE',
       tenderRequirement: ticket.tenderRequirement ?? 'UNKNOWN',
@@ -2569,7 +2572,8 @@ export const api = {
       requireActive(ticket);
       if (dealStageIndex(payload.stage) < 0) fail(`Unknown stage '${payload.stage}'`, 400);
       if (!dealCanSetStage(user, ticket, payload.stage)) fail('Forbidden', 403);
-      if (ticket.lostReason != null) fail('ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ', 409);
+      // Lifecycle, not lostReason: a reopened deal is ACTIVE and keeps its reason (V57).
+      if (ticket.lifecycle === 'CLOSED_LOST') fail('ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ', 409);
       if (ticket.salesStage === payload.stage) fail(`Deal is already in stage ${payload.stage}`, 409);
       const backward = dealStageIndex(payload.stage) < dealStageIndex(ticket.salesStage)
         && !isRoutineBackwardMove(ticket.salesStage, payload.stage);
@@ -2589,7 +2593,7 @@ export const api = {
       requireActive(ticket);
       if (!DEAL_LOST_REASONS.some((r) => r.code === payload.reason)) fail(`Unknown lost reason '${payload.reason}'`, 400);
       if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
-      if (ticket.lostReason != null) fail('Deal is already marked lost', 409);
+      if (ticket.lifecycle === 'CLOSED_LOST') fail('Deal is already marked lost', 409);
       ticket.lostReason = payload.reason;
       ticket.lostAt = new Date().toISOString();
       ticket.lifecycle = 'CLOSED_LOST';
@@ -2605,9 +2609,12 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
       if (ticket.lifecycle !== 'CLOSED_LOST' || ticket.lostReason == null) fail('Deal is not marked lost', 409);
-      ticket.lostReason = null;
-      ticket.lostAt = null;
+      // lostReason/lostAt deliberately PRESERVED (V57): erasing them left the row
+      // indistinguishable from one never lost, so "why did we lose this before we
+      // reopened it" needed parsing Thai free text out of an event message.
       ticket.lifecycle = 'ACTIVE';
+      ticket.reopenedAt = new Date().toISOString();
+      ticket.reopenCount = (ticket.reopenCount ?? 0) + 1;
       ticket.stageUpdatedAt = new Date().toISOString();
       pushEvent(ticket, user, 'REOPENED', ticket.salesStage, ticket.salesStage, (payload.note || '').trim() || null);
       return delay({ ticket: buildTicketDetail(ticket) });

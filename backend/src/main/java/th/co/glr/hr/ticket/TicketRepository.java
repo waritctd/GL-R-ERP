@@ -166,18 +166,32 @@ public class TicketRepository {
 
     public void addEvent(long ticketId, long actorId, String actorName,
                          String kind, String fromStatus, String toStatus, String message) {
-        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message, null);
+        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message, null,
+            null, null);
     }
 
     public void addEventWithSnapshot(long ticketId, long actorId, String actorName,
                                      String kind, String fromStatus, String toStatus,
                                      String message, String itemSnapshotJson) {
-        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message, itemSnapshotJson);
+        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message,
+            itemSnapshotJson, null, null);
+    }
+
+    /**
+     * Record an event AND the document it produced (V57), so "which receipt did
+     * this payment event write" is a query rather than a timestamp match.
+     */
+    public void addEventWithDocument(long ticketId, long actorId, String actorName,
+                                     String kind, String fromStatus, String toStatus,
+                                     String message, String documentType, Long documentId) {
+        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message, null,
+            documentType, documentId);
     }
 
     private void addEventInternal(long ticketId, long actorId, String actorName,
                                    String kind, String fromStatus, String toStatus,
-                                   String message, String itemSnapshotJson) {
+                                   String message, String itemSnapshotJson,
+                                   String documentType, Long documentId) {
         if (toStatus != null) {
             // toStatus doubles as the event's "to" timeline label AND, for genuine
             // status transitions, the ticket's new status. Deal-pipeline events
@@ -214,13 +228,17 @@ public class TicketRepository {
             .addValue("kind", kind)
             .addValue("fromStatus", fromStatus)
             .addValue("toStatus", toStatus)
-            .addValue("message", message);
+            .addValue("message", message)
+            .addValue("documentType", documentType)
+            .addValue("documentId", documentId);
 
         if (itemSnapshotJson == null) {
             jdbc.update("""
                 INSERT INTO sales.ticket_event
-                    (ticket_id, actor_id, actor_name, kind, from_status, to_status, message)
-                VALUES (:ticketId, :actorId, :actorName, :kind, :fromStatus, :toStatus, :message)
+                    (ticket_id, actor_id, actor_name, kind, from_status, to_status, message,
+                     related_document_type, related_document_id)
+                VALUES (:ticketId, :actorId, :actorName, :kind, :fromStatus, :toStatus, :message,
+                        :documentType, :documentId)
                 """, params);
             return;
         }
@@ -228,8 +246,10 @@ public class TicketRepository {
         params.addValue("itemSnapshot", itemSnapshotJson);
         jdbc.update("""
             INSERT INTO sales.ticket_event
-                (ticket_id, actor_id, actor_name, kind, from_status, to_status, message, item_snapshot)
-            VALUES (:ticketId, :actorId, :actorName, :kind, :fromStatus, :toStatus, :message, :itemSnapshot::jsonb)
+                (ticket_id, actor_id, actor_name, kind, from_status, to_status, message, item_snapshot,
+                 related_document_type, related_document_id)
+            VALUES (:ticketId, :actorId, :actorName, :kind, :fromStatus, :toStatus, :message,
+                    :itemSnapshot::jsonb, :documentType, :documentId)
             """, params);
     }
 
@@ -883,9 +903,27 @@ public class TicketRepository {
                 .addValue("id", ticketId));
     }
 
+    /**
+     * Reopen a lost deal — **without erasing why it was lost**.
+     *
+     * This used to null lost_reason/lost_at, leaving a row indistinguishable
+     * from one that was never lost; the reason survived only inside a Thai
+     * free-text event message. The values now stay readable and reopened_at /
+     * reopen_count record that the deal came back, so "reopened deals we
+     * previously lost on PRICE" is a plain query.
+     *
+     * lifecycle=ACTIVE is what makes the deal live again; `lost_reason != null`
+     * no longer implies "currently lost" — check the lifecycle for that.
+     */
     public void clearDealLost(long ticketId) {
-        jdbc.update(
-            "UPDATE sales.ticket SET lost_reason = NULL, lost_at = NULL, lifecycle = :lifecycle, stage_updated_at = now() WHERE ticket_id = :id",
+        jdbc.update("""
+            UPDATE sales.ticket
+               SET lifecycle = :lifecycle,
+                   reopened_at = now(),
+                   reopen_count = reopen_count + 1,
+                   stage_updated_at = now()
+             WHERE ticket_id = :id
+            """,
             new MapSqlParameterSource()
                 .addValue("lifecycle", DealLifecycle.ACTIVE)
                 .addValue("id", ticketId));

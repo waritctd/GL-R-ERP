@@ -63,8 +63,11 @@ function DaysBadge({ stageUpdatedAt }) {
   );
 }
 
+// NOTE: 'lost' keys on lifecycle, never on lostReason. Since V57 the reason
+// SURVIVES a reopen, so a live reopened deal still carries one — testing the
+// reason would render it as เสียงาน and drop it out of the phase counts.
 function DealStageCell({ deal }) {
-  if (deal.lifecycle === 'CLOSED_LOST' || deal.lostReason) {
+  if (deal.lifecycle === 'CLOSED_LOST') {
     const lost = dealLostReasonLabel(deal.lostReason);
     return <StatusBadge tone="danger">เสียงาน · {lost.label}</StatusBadge>;
   }
@@ -103,7 +106,7 @@ function DealCard({ deal }) {
       ) : null}
 
       <DealStageCell deal={deal} />
-      <StageProgressBar salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST' || !!deal.lostReason} />
+      <StageProgressBar salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST'} />
 
       <span className="min-w-0 truncate text-xs text-text-muted">
         {[deal.createdByName, formatThaiDate(deal.createdAt)].filter(Boolean).join(' · ')}
@@ -145,7 +148,7 @@ export function TicketListPage({ user, showToast }) {
     const counts = {};
     for (const phase of SALES_PHASES) counts[phase.id] = 0;
     for (const deal of allDeals) {
-      if (deal.lifecycle === 'ACTIVE' && !deal.lostReason) {
+      if (deal.lifecycle === 'ACTIVE') {
         const meta = stageMeta(deal.salesStage);
         if (meta) counts[meta.phase] += 1;
       }
@@ -163,7 +166,7 @@ export function TicketListPage({ user, showToast }) {
       COMPLETED: 0,
     };
     for (const deal of allDeals) {
-      const key = deal.lifecycle === 'CLOSED_LOST' || deal.lostReason ? 'CLOSED_LOST' : deal.lifecycle;
+      const key = deal.lifecycle;
       if (Object.hasOwn(counts, key)) counts[key] += 1;
     }
     return counts;
@@ -176,12 +179,12 @@ export function TicketListPage({ user, showToast }) {
 
   const deals = useMemo(() => {
     return allDeals.filter((deal) => {
-      const lost = deal.lifecycle === 'CLOSED_LOST' || deal.lostReason;
+      const lost = deal.lifecycle === 'CLOSED_LOST';
       // Phase cards are the active-pipeline funnel (counts are ACTIVE-only), so the phase
       // filter matches on ACTIVE too — paused/terminal deals are reached via the lifecycle
       // chips below. This keeps each phase card's count equal to the rows it filters to.
       const phaseOk = !phaseFilter
-        || (deal.lifecycle === 'ACTIVE' && !deal.lostReason && stageMeta(deal.salesStage)?.phase === Number(phaseFilter));
+        || (deal.lifecycle === 'ACTIVE' && stageMeta(deal.salesStage)?.phase === Number(phaseFilter));
       const lifeOk = !lifecycleFilter || (lifecycleFilter === 'CLOSED_LOST' ? lost : deal.lifecycle === lifecycleFilter);
       const flagOk = !flagFilter
         || (flagFilter === 'overdue' && deal.overdue)
@@ -366,13 +369,13 @@ const DEAL_COLUMNS = [
     key: 'stage',
     header: 'สถานะดีล',
     sortable: true,
-    sortAccessor: (deal) => (deal.lostReason ? -1 : stageMeta(deal.salesStage)?.no ?? 0),
+    sortAccessor: (deal) => (deal.lifecycle === 'CLOSED_LOST' ? -1 : stageMeta(deal.salesStage)?.no ?? 0),
     render: (deal) => <DealStageCell deal={deal} />,
   },
   {
     key: 'progress',
     header: 'ความคืบหน้า',
-    render: (deal) => <StageProgressBar salesStage={deal.salesStage} lost={!!deal.lostReason} />,
+    render: (deal) => <StageProgressBar salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST'} />,
   },
   {
     key: 'date',
