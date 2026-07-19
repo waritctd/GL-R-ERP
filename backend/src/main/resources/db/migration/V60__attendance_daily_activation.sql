@@ -1,11 +1,21 @@
 -- Activates hr.attendance_daily, which V7 created but nothing has ever written to.
 --
--- NUMBERING: this was authored as V55 because the repo tip was V54 — but the hosted database was
--- already at V55 ("quotation doc terms", applied 2026-07-18 from a branch that had not merged).
--- Flyway saw version 55 as applied and, with validate-on-migrate off on the prod profile, skipped
--- this file silently: the index and comments below never got created and nothing failed loudly.
--- Pick migration numbers from what is APPLIED (hr.flyway_schema_history on each environment), not
--- from the highest file in the repo — branches deploy ahead of main here.
+-- NUMBERING — why this is V60 and not V55.
+--
+-- Authored as V55 because the repo tip was V54. But the hosted database was already at V55
+-- ("quotation doc terms", applied 2026-07-18 from a branch that had not merged), so Flyway saw
+-- version 55 as applied and — with validate-on-migrate off on the prod profile — skipped this file
+-- silently. The index and comments below were never created and nothing failed loudly.
+--
+-- V56–V59 are already claimed by the in-flight sales branches (close_verification, cancel_reason,
+-- audit_trail_integrity, pricing_request_foundation), so taking any of those would collide the
+-- moment they merge. V60 was the first version free against all three at once: current main, both
+-- deployed databases, and every open branch.
+--
+-- Two rules follow from this, and the gap at V55 in this repo is deliberate evidence of both:
+--   1. Pick the number from what is APPLIED (hr.flyway_schema_history per environment), not from
+--      the highest file in the repo — branches deploy ahead of main in this project.
+--   2. Also check every open branch, not just main, or you collide on merge instead of on deploy.
 --
 -- No structural change: every column this feature needs already exists on the V7 table, and the
 -- constraints there (ux_attendance_daily_employee_date, chk_attendance_daily_checkout_after_checkin,
