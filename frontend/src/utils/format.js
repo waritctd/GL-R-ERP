@@ -14,6 +14,22 @@ export function formatShortDate(value) {
   return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear() + 543}`;
 }
 
+/**
+ * Canonical address formatter; do not re-add a page-local version.
+ *
+ * `currentAddress` is four separate fields (line1/district/province/postalCode),
+ * and rendering only `line1` silently dropped the district, province and postcode.
+ * Empty parts are filtered out because a newly created employee gets '' for
+ * everything but `line1` (mockApi) — joining blindly would leave stray spaces.
+ */
+export function formatAddress(address) {
+  if (!address) return '-';
+  const parts = [address.line1, address.district, address.province, address.postalCode]
+    .map((part) => (typeof part === 'string' ? part.trim() : part))
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join(' ') : '-';
+}
+
 export function formatMoney(value) {
   if (value === null || value === undefined || value === '') return '-';
   return `฿${Number(value).toLocaleString('en-US')}`;

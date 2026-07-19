@@ -167,14 +167,48 @@ describe('EmployeeDashboard — company mode, HR (regression guard)', () => {
   });
 });
 
-describe('EmployeeDashboard — employee mode (unaffected by canAccessPath filtering)', () => {
-  it('renders all four self-service quick actions and "ดูทั้งหมด"', () => {
+describe('EmployeeDashboard — employee mode: three-tier hierarchy', () => {
+  // The quick-actions panel offered only duplicate navigation (every target was
+  // already in the sidebar or the pending rows), so employee mode drops it.
+  it('renders no quick-actions panel', () => {
     renderDashboard({ user: employeeUser, dashboardSummary: undefined });
-    const actions = within(quickActionsSection());
-    expect(actions.getByText('ดูข้อมูลของฉัน').closest('button')).not.toBeNull();
-    expect(actions.getByText('ติดตามคำขอแก้ไข').closest('button')).not.toBeNull();
-    expect(actions.getByText('รายการ OT').closest('button')).not.toBeNull();
-    expect(actions.getByText('รายการลา').closest('button')).not.toBeNull();
-    expect(screen.getByText('ดูทั้งหมด')).not.toBeNull();
+    expect(quickActionsSection()).toBeNull();
+  });
+
+  // Tier 1: position/division/tenure live beside the person, not as stat cards
+  // that repeated the identity line and forced text into a numeric slot.
+  it('shows employment facts as a definition list, not stat cards', () => {
+    renderDashboard({ user: employeeUser, dashboardSummary: undefined });
+    const term = screen.getAllByText('ตำแหน่ง').find((el) => el.tagName === 'DT');
+    expect(term).toBeDefined();
+    expect(statCardLabel('ตำแหน่ง')).toBeUndefined();
+    expect(statCardLabel('สังกัด')).toBeUndefined();
+    expect(statCardLabel('อายุงาน')).toBeUndefined();
+  });
+
+  // Tier 3 is the core fix: a zero must not carry the same weight as a real
+  // count, otherwise nothing on the page leads.
+  it('renders a zero pending count as a muted dash and a real count as a badge', () => {
+    renderDashboard({
+      user: employeeUser,
+      dashboardSummary: { pendingApprovals: { overtime: 0, leave: 2, profileRequests: 0 }, notifications: { unread: 0 } },
+    });
+    const pendingPanel = screen.getByText('รอดำเนินการ').closest('section');
+    const rows = within(pendingPanel);
+
+    expect(rows.getByText('ลาของฉัน')).not.toBeNull();
+    expect(rows.getByText('2 รายการ')).not.toBeNull();
+    // Three zero rows (OT, profile requests, notifications) all render as dashes.
+    expect(rows.getAllByText('—')).toHaveLength(3);
+  });
+
+  it('links the profile-requests row to /profile, which absorbed /my-requests', () => {
+    renderDashboard({
+      user: employeeUser,
+      dashboardSummary: { pendingApprovals: { profileRequests: 1 }, notifications: { unread: 0 } },
+    });
+    const pendingPanel = screen.getByText('รอดำเนินการ').closest('section');
+    const row = within(pendingPanel).getByText('คำขอแก้ไขข้อมูล').closest('button');
+    expect(row).not.toBeNull();
   });
 });
