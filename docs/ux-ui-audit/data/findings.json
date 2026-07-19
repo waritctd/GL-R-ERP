@@ -60,7 +60,7 @@
           "remaining": []
         },
         "regressionsCaught": [
-          "required asterisk stacked onto its own line (global label{display:grid}) — introduced by UX-12, fixed in 2ec3dcb, verified by real layout measurement 41px->17px"
+          "required asterisk stacked onto its own line (global label{display:grid}) — introduced by UX-12, fixed in fe8ede7, verified by real layout measurement 41px->17px"
         ],
         "stillOpen": [
           "UX-37 (P3, XS — logged during Phase B, not fixed)"
@@ -120,7 +120,7 @@
       "effort": "S",
       "confidence": "High",
       "fixed": true,
-      "fixedIn": "cf5759d",
+      "fixedIn": "0e4d2f5",
       "fixNote": "Approve/reject now gated behind ConfirmDialog; reject requires a reason, persisted via the existing reviewerNote contract. Verified live (13/13 UI checks) + mutation-tested."
     },
     {
@@ -149,8 +149,8 @@
       "validation": "Submit an empty TicketCreateModal; verify each required field (customer, project, product rows) shows an inline error and the first is focused/scrolled to.",
       "effort": "L",
       "confidence": "High",
-      "fixNote": "CLOSED — all 5 surfaces migrated, in reviewable slices. ProductFormModal to react-hook-form + zod + FormField [310a032]. TicketCreateModal, the headline case, now emits keyed per-field zod errors with aria wiring and scroll+focus to the first invalid field [16895c5] — verified live that a blank item row flags six fields individually instead of one generic bottom-of-form string. CeoSettings FX override and its six pricing fields [e3281b9], with FX keyed per currency so errors never cross rows. DepositNoticePage validated at ISSUE rather than SAVE so drafts stay incrementally savable, with validation running before the confirm dialog opens [3937dc2]. TicketDetailPage split in two: its 4 modal validations [e1f6c17] and its 4 inline page-body validations [6790ad8]. Zero toast-only client validations remain in the sales stack. Every guard is mutation-tested — neutering each one fails its corresponding test.",
-      "fixedIn": "310a032, 16895c5, e3281b9, 3937dc2, e1f6c17, 6790ad8",
+      "fixNote": "CLOSED — all 5 surfaces migrated, in reviewable slices. ProductFormModal to react-hook-form + zod + FormField [16c1cc4]. TicketCreateModal, the headline case, now emits keyed per-field zod errors with aria wiring and scroll+focus to the first invalid field [4585aee] — verified live that a blank item row flags six fields individually instead of one generic bottom-of-form string. CeoSettings FX override and its six pricing fields [12833f7], with FX keyed per currency so errors never cross rows. DepositNoticePage validated at ISSUE rather than SAVE so drafts stay incrementally savable, with validation running before the confirm dialog opens [8fcb0d0]. TicketDetailPage split in two: its 4 modal validations [e741db5] and its 4 inline page-body validations [1406b63]. Zero toast-only client validations remain in the sales stack. Every guard is mutation-tested — neutering each one fails its corresponding test.",
+      "fixedIn": "16c1cc4, 4585aee, 12833f7, 8fcb0d0, e741db5, 1406b63",
       "fixed": true
     },
     {
@@ -178,7 +178,7 @@
       "effort": "M",
       "confidence": "High",
       "fixed": true,
-      "fixedIn": "6df5135",
+      "fixedIn": "a50b266",
       "fixNote": "Three surfaces fixed on one principle — pending-work counts a role cannot reach are hidden, informational metrics stay as read-only context. The profile-requests card is hidden for roles without review access; ActionQueue items carry an explicit actionable flag (deliberate, because the notifications item has no destination yet IS actionable via the topbar bell, so inferring from a missing link would have wrongly dropped it); and quick actions plus the ดูทั้งหมด link — which had no gating at all — now filter through canAccessPath, the same predicate RequireAccess uses, so the dashboard can no longer offer a destination the router rejects. Verified live: CEO quick actions went 4 to 1, ดูทั้งหมด is no longer rendered, no unreachable queue row remains, and headcount is retained; HR is unchanged across all 8 cards, all 4 quick actions and ดูทั้งหมด. Both gates are mutation-tested."
     },
     {
@@ -231,7 +231,7 @@
       "effort": "S",
       "confidence": "High",
       "fixed": true,
-      "fixedIn": "2ee6706",
+      "fixedIn": "8521d72",
       "fixNote": "Login errors mapped to Thai by HTTP status; mock 401s collapsed to match AuthService (removes a user-enumeration divergence). Verified live."
     },
     {
@@ -257,7 +257,7 @@
       "effort": "S",
       "confidence": "High",
       "fixed": true,
-      "fixedIn": "899ade1",
+      "fixedIn": "2495c40",
       "fixNote": "window.confirm replaced with the branded ConfirmDialog (tone=danger). No native confirm/alert/prompt remains in frontend/src. Verified live."
     },
     {
@@ -285,7 +285,7 @@
       "effort": "M",
       "confidence": "High",
       "fixed": true,
-      "fixedIn": "e3281b9",
+      "fixedIn": "12833f7",
       "fixNote": "Rebuilt on the shared Modal. Verified live: role=dialog, aria-modal=true, focus stays inside across 25 Tab presses, Escape closes. Previously the overlay reported zero [role=dialog] nodes, so keyboard focus escaped to the page behind while the CEO edited pricing."
     },
     {
@@ -314,7 +314,7 @@
       "effort": "S",
       "confidence": "Medium",
       "fixed": true,
-      "fixedIn": "899ade1",
+      "fixedIn": "2495c40",
       "fixNote": "canViewSensitiveEmployeeData defined as [hr], mirroring EmployeeController requireAnyRole(hr). Verified live: salary + populated sensitive tab visible to HR."
     },
     {
@@ -393,7 +393,7 @@
       "effort": "S",
       "confidence": "High",
       "fixed": true,
-      "fixedIn": "f8b95ee",
+      "fixedIn": "7faf31c",
       "fixNote": "required prop applied where the zod schema unconditionally requires the field. Verified live: markers + aria-required present before any submit."
     },
     {
@@ -566,7 +566,7 @@
       "effort": "S",
       "confidence": "High",
       "fixed": true,
-      "fixedIn": "2ee6706",
+      "fixedIn": "8521d72",
       "fixNote": "PATH_GUARDS entry for /ceo-settings + route moved inside RequireAccess. Verified live: 6 non-CEO roles redirect, CEO retains access. /catalog + /attendance deliberately unchanged (UX-20)."
     },
     {
@@ -760,7 +760,7 @@
       "effort": "M",
       "confidence": "Medium",
       "fixed": true,
-      "fixedIn": "f8b95ee",
+      "fixedIn": "7faf31c",
       "fixNote": "FormField now auto-injects aria-invalid / aria-describedby / aria-required via safe id-matching, merging rather than clobbering. Verified live: 3/3 invalid fields point at real error elements."
     },
     {
@@ -942,7 +942,7 @@
       "effort": "S",
       "confidence": "High",
       "fixed": true,
-      "fixedIn": "b6faef0",
+      "fixedIn": "bd8195c",
       "fixNote": "Final Payment gated behind ConfirmDialog stating the real outstanding amount (reuses summary.amountOutstanding) and irreversibility. Verified live (9/9) + mutation-tested."
     },
     {
@@ -1050,7 +1050,7 @@
       "effort": "S",
       "confidence": "High",
       "fixed": true,
-      "fixedIn": "e3281b9",
+      "fixedIn": "12833f7",
       "fixNote": "Fixed in the same commit as UX-08 / UX-03 slice 3. Blank fields now rejected inline with role=alert; verified live (cfg-freightPerSqm flagged, save blocked, dialog stayed open) and mutation-tested — relaxing the schema fails the guard test."
     }
   ]

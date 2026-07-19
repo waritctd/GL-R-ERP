@@ -12,10 +12,10 @@ Feeder branch merged in: `fix/ux-02-profile-request-confirm`
 
 ## Current Commits
 ```
-b6faef0 fix(tickets): gate Final Payment behind a confirmation stating the amount (UX-34)
-2ee6706 fix(auth,routing): localize login errors + guard /ceo-settings (UX-06, UX-19)
-e154ed7 merge(ux-audit): UX-02 profile-request confirmation into phase-1 integration branch
-cf5759d fix(profile-requests): gate approve/reject behind ConfirmDialog (UX-02)
+bd8195c fix(tickets): gate Final Payment behind a confirmation stating the amount (UX-34)
+8521d72 fix(auth,routing): localize login errors + guard /ceo-settings (UX-06, UX-19)
+(merge commit linearised during the Git LFS history rewrite)
+0e4d2f5 fix(profile-requests): gate approve/reject behind ConfirmDialog (UX-02)
 ```
 **Not pushed. Not merged to main.**
 

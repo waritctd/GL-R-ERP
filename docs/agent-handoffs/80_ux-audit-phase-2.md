@@ -7,7 +7,7 @@ Execute **Phase B (core workflow usability)** of the UX/UI audit remediation roa
 `fix/ux-audit-phase-2` (off `fix/ux-audit-phase-1`, which is off `main`)
 
 ## Base Commit
-`3874264` (tip of `fix/ux-audit-phase-1`)
+`44abb98` (tip of `fix/ux-audit-phase-1`)
 
 ## Agent / Model Used
 Claude Sonnet implemented each slice; Claude Opus scoped every slice, reviewed every claim, re-ran all commands, drove each fix in the live mock, and mutation-tested every new guard.
@@ -18,24 +18,24 @@ Claude Sonnet implemented each slice; Claude Opus scoped every slice, reviewed e
 ## Delivered
 | ID | Sev | Fix | Commit |
 |---|---|---|---|
-| UX-09 | P2 | `canViewSensitiveEmployeeData` was defined nowhere, hiding salary + the PDPA tab from everyone incl. HR | `899ade1` |
-| UX-07 | P2 | `window.confirm` → branded ConfirmDialog; zero native dialogs remain | `899ade1` |
-| UX-27 | P3 | `FormField` auto-injects `aria-invalid` / `aria-describedby` / `aria-required` | `f8b95ee` |
-| UX-12 | P3 | Required markers render before submit, with `aria-required` | `f8b95ee` |
-| UX-08 | P2 | CEO price-config editor rebuilt on the shared `Modal` (was a bespoke overlay with no dialog semantics) | `e3281b9` |
-| **UX-38** | P2 | **Found during remediation** — clearing a CEO pricing field silently persisted `0` | `e3281b9` |
+| UX-09 | P2 | `canViewSensitiveEmployeeData` was defined nowhere, hiding salary + the PDPA tab from everyone incl. HR | `2495c40` |
+| UX-07 | P2 | `window.confirm` → branded ConfirmDialog; zero native dialogs remain | `2495c40` |
+| UX-27 | P3 | `FormField` auto-injects `aria-invalid` / `aria-describedby` / `aria-required` | `7faf31c` |
+| UX-12 | P3 | Required markers render before submit, with `aria-required` | `7faf31c` |
+| UX-08 | P2 | CEO price-config editor rebuilt on the shared `Modal` (was a bespoke overlay with no dialog semantics) | `12833f7` |
+| **UX-38** | P2 | **Found during remediation** — clearing a CEO pricing field silently persisted `0` | `12833f7` |
 | **UX-03** | **P1** | **All 5 sales-stack surfaces migrated** — see below | 5 commits |
-| UX-04 | P2 | Dashboard no longer offers stats/actions a role cannot reach | `6df5135` |
+| UX-04 | P2 | Dashboard no longer offers stats/actions a role cannot reach | `a50b266` |
 
 ### UX-03 slices (the P1)
 | Surface | Commit |
 |---|---|
-| ProductFormModal → react-hook-form + zod + FormField | `310a032` |
-| TicketCreateModal (headline case) — keyed per-field zod errors, scroll+focus | `16895c5` |
-| CeoSettings FX override + 6 pricing fields | `e3281b9` |
-| DepositNoticePage — validated at **issue**, not save | `3937dc2` |
-| TicketDetailPage — 4 modal validations | `e1f6c17` |
-| TicketDetailPage — 4 inline page forms | `6790ad8` |
+| ProductFormModal → react-hook-form + zod + FormField | `16c1cc4` |
+| TicketCreateModal (headline case) — keyed per-field zod errors, scroll+focus | `4585aee` |
+| CeoSettings FX override + 6 pricing fields | `12833f7` |
+| DepositNoticePage — validated at **issue**, not save | `8fcb0d0` |
+| TicketDetailPage — 4 modal validations | `e741db5` |
+| TicketDetailPage — 4 inline page forms | `1406b63` |
 
 **Zero toast-only client validations remain in the sales stack.**
 
@@ -50,7 +50,7 @@ Claude Sonnet implemented each slice; Claude Opus scoped every slice, reviewed e
 ## Bugs Found During Remediation
 - **UX-38 (P2, fixed)** — `saveConfig` did `Number(field)` and `Number('') === 0`, so clearing a CEO pricing input persisted `0` with a success toast. A zeroed margin or freight would have under-priced every deal for that country, invisibly.
 - **UX-37 (P3, still open, XS)** — the change-password schema has `newPassword: z.string()` with no `.min(1)` (unlike its two siblings) and every `superRefine` rule is guarded on `length > 0`, so an **empty** new password passes client validation. Proven by parsing the schema. The server rejects it, so no weak password is set, but the user hits a raw server error at the forced password gate.
-- **A regression I shipped and then caught** — `2ec3dcb`. Marking fields required (UX-12) exposed that the global `label { display: grid; gap: 7px }` makes the label text and the `*` span separate grid rows, so the asterisk rendered on its own line across 15 fields in 5 forms. Fixed by wrapping both in one span. Measured: label height 41px → 17px, asterisk offset 24px → 0px.
+- **A regression I shipped and then caught** — `fe8ede7`. Marking fields required (UX-12) exposed that the global `label { display: grid; gap: 7px }` makes the label text and the `*` span separate grid rows, so the asterisk rendered on its own line across 15 fields in 5 forms. Fixed by wrapping both in one span. Measured: label height 41px → 17px, asterisk offset 24px → 0px.
 
 ## Commands Run
 ```bash
