@@ -309,6 +309,20 @@ public class PricingRequestRepository {
             (rs, rowNum) -> rs.getLong("pricing_request_id"));
     }
 
+    /**
+     * The ticket_item ids that legally belong to this ticket — used by the
+     * service layer to validate a pricing-request item's sourceTicketItemId
+     * before persisting (commit 3). Lives here rather than on TicketRepository
+     * because this repository's only consumer for the query is PricingRequest
+     * validation; no ticket workflow needs it.
+     */
+    public List<Long> findItemIdsForTicket(long ticketId) {
+        return jdbc.query(
+            "SELECT item_id FROM sales.ticket_item WHERE ticket_id = :ticketId",
+            Map.of("ticketId", ticketId),
+            (rs, rowNum) -> rs.getLong("item_id"));
+    }
+
     // --- private helpers ---
 
     private String normalizeCurrency(String targetCurrency) {
