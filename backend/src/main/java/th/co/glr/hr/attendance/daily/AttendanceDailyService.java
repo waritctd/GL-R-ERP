@@ -5,6 +5,7 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -73,13 +74,36 @@ public class AttendanceDailyService {
         return repository.upsertAll(records);
     }
 
-    /** Recalculates every employee-day with punches in the range. Idempotent; safe to re-run. */
+    /**
+     * Recalculates every employee-day with punches in the range. Idempotent; safe to re-run.
+     *
+     * <p>Loads punches, divisions and approved overtime in <strong>three</strong> queries rather
+     * than three per employee-day. A full historical backfill covers thousands of days; the
+     * per-day form meant ~14,000 round trips inside one transaction, which on a hosted database
+     * exceeds the request timeout and rolls the entire job back — writing nothing, and reporting
+     * nothing useful about why.
+     */
     @Transactional
     public int recalculateRange(LocalDate fromDate, LocalDate toDate, Long employeeId) {
-        List<EmployeeDay> pairs = repository.findPairsWithPunches(fromDate, toDate).stream()
-            .filter(pair -> employeeId == null || pair.employeeId() == employeeId)
-            .toList();
-        return recalculateAll(pairs);
+        Map<EmployeeDay, List<PunchRecord>> punchesByDay =
+            repository.findPunchesInRange(fromDate, toDate, employeeId);
+        if (punchesByDay.isEmpty()) {
+            return 0;
+        }
+        Map<Long, Long> divisionByEmployee = repository.findDivisionIdsByEmployee();
+        Map<EmployeeDay, Integer> overtimeByDay =
+            repository.findApprovedOvertimeMinutesInRange(fromDate, toDate);
+
+        List<AttendanceDailyRecord> records = new ArrayList<>(punchesByDay.size());
+        punchesByDay.forEach((day, punches) -> records.add(calculator.calculate(
+            day.employeeId(),
+            day.workDate(),
+            punches,
+            scheduleResolver.resolve(
+                day.employeeId(), divisionByEmployee.get(day.employeeId()), day.workDate()),
+            overtimeByDay.getOrDefault(day, 0)
+        )));
+        return repository.upsertAll(records);
     }
 
     /** Recalculates the days touched by a specific set of punches. */
