@@ -24,7 +24,6 @@ const EmployeeListPage = lazy(() => import('./features/employees/EmployeeListPag
 const EmployeeDetailPage = lazy(() => import('./features/employees/EmployeeDetailPage.jsx').then(toDefault('EmployeeDetailPage')));
 const ProfileRequestsPage = lazy(() => import('./features/profileRequests/ProfileRequestsPage.jsx').then(toDefault('ProfileRequestsPage')));
 const ProfilePage = lazy(() => import('./features/profile/ProfilePage.jsx').then(toDefault('ProfilePage')));
-const MyRequestsPage = lazy(() => import('./features/profile/MyRequestsPage.jsx').then(toDefault('MyRequestsPage')));
 const AttendancePage = lazy(() => import('./features/attendance/AttendancePage.jsx').then(toDefault('AttendancePage')));
 const OvertimePage = lazy(() => import('./features/overtime/OvertimePage.jsx').then(toDefault('OvertimePage')));
 const LeavePage = lazy(() => import('./features/leave/LeavePage.jsx').then(toDefault('LeavePage')));
@@ -240,10 +239,10 @@ export function App() {
               path="/requests"
               element={<ProfileRequestsPage profileRequests={profileRequests} onReview={reviewProfileRequest} showToast={showToast} />}
             />
-            <Route
-              path="/my-requests"
-              element={<MyRequestsPage profileRequests={ownRequests} />}
-            />
+            {/* The request table now lives on /profile. This route stays
+                registered as an alias so existing notification deep-links
+                resolve instead of falling through to the 404 route. */}
+            <Route path="/my-requests" element={<Navigate to="/profile" replace />} />
             <Route
               path="/profile"
               element={(
