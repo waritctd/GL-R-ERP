@@ -3,6 +3,7 @@ package th.co.glr.hr.ticket;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -681,25 +682,105 @@ class TicketServiceTest {
     // ── close ─────────────────────────────────────────────────────────────
 
     @Test
-    void close_documentIssuedByOwner_transitionsToClosed() {
-        stubTicket(10L, 1L, TicketStatus.DOCUMENT_ISSUED);
-
-        service.close(10L, salesActor);
-
-        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.CLOSED), eq(TicketStatus.DOCUMENT_ISSUED), eq(TicketStatus.CLOSED), isNull());
+    void close_isNoLongerAvailableToSales() {
+        // A deal counts as closed only when goods are delivered, the balance is paid,
+        // the invoice is on file, ฝ่ายบัญชี has confirmed and the CEO has verified.
+        // The sales owner is not part of that sequence any more.
+        stubReadyToConfirm(10L);
+        assertForbidden(() -> service.confirmCloseReady(10L, salesActor));
+        assertForbidden(() -> service.verifyClose(10L, salesActor));
+        stubAwaitingCeo(11L);
+        assertForbidden(() -> service.verifyClose(11L, salesActor));
     }
 
     @Test
-    void close_rejectsNonOwner() {
-        stubTicket(10L, 1L, TicketStatus.DOCUMENT_ISSUED);
-        assertForbidden(() -> service.close(10L, otherSales));
+    void confirmCloseReady_byAccount_recordsConfirmationWithoutClosing() {
+        stubReadyToConfirm(10L);
+
+        service.confirmCloseReady(10L, accountActor);
+
+        verify(ticketRepo).confirmClose(10L, accountActor.id());
+        verify(ticketRepo).addEvent(eq(10L), eq(accountActor.id()), anyString(),
+            eq(TicketEventKind.CLOSE_CONFIRMED), anyString(), anyString(), anyString());
+        // Confirmation alone must not complete the deal.
+        verify(ticketRepo, never()).updateLifecycle(eq(10L), eq(DealLifecycle.COMPLETED));
     }
 
     @Test
-    void close_rejectsWrongStatus() {
-        stubTicket(10L, 1L, TicketStatus.APPROVED);
-        assertConflict(() -> service.close(10L, salesActor));
+    void confirmCloseReady_refusedWithoutInvoiceOnFile() {
+        // The invoice is produced externally and uploaded; without it there is nothing
+        // to verify against.
+        stubCloseDeal(10L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID",
+            FulfilmentStatus.FULLY_DELIVERED, null, false);
+
+        assertConflict(() -> service.confirmCloseReady(10L, accountActor));
+
+        verify(ticketRepo, never()).confirmClose(anyLong(), anyLong());
+    }
+
+    @Test
+    void confirmCloseReady_refusedWhenGoodsNotDelivered() {
+        stubCloseDeal(10L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID",
+            FulfilmentStatus.GOODS_RECEIVED, null, true);
+        assertConflict(() -> service.confirmCloseReady(10L, accountActor));
+    }
+
+    @Test
+    void verifyClose_byCeoAfterAccountConfirmation_completesTheDeal() {
+        stubAwaitingCeo(10L);
+
+        service.verifyClose(10L, ceoActor);
+
+        verify(ticketRepo).addEvent(eq(10L), eq(ceoActor.id()), anyString(),
+            eq(TicketEventKind.CLOSED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.CLOSED),
+            anyString());
+        verify(ticketRepo).updateLifecycle(10L, DealLifecycle.COMPLETED);
+    }
+
+    @Test
+    void verifyClose_refusedBeforeAccountConfirms() {
+        stubReadyToConfirm(10L);
+        assertConflict(() -> service.verifyClose(10L, ceoActor));
+        verify(ticketRepo, never()).updateLifecycle(eq(10L), eq(DealLifecycle.COMPLETED));
+    }
+
+    @Test
+    void ceoCannotSignBothHalves() {
+        // Two signatures means two people. ACCOUNT_ROLES includes ceo as a money
+        // fallback; CLOSE_CONFIRM_ROLES deliberately does not, or the CEO could
+        // confirm and verify alone.
+        stubReadyToConfirm(10L);
+        assertForbidden(() -> service.confirmCloseReady(10L, ceoActor));
+    }
+
+    @Test
+    void verifyClose_reChecksPrerequisitesSoAStaleConfirmationCannotSlipThrough() {
+        // Confirmed, then the deal regressed (refund / returned delivery) before the
+        // CEO acted. The CEO verifies, never overrides.
+        stubCloseDeal(10L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT",
+            FulfilmentStatus.FULLY_DELIVERED, Instant.now(), true);
+
+        assertConflict(() -> service.verifyClose(10L, ceoActor));
+
+        verify(ticketRepo, never()).updateLifecycle(eq(10L), eq(DealLifecycle.COMPLETED));
+    }
+
+    @Test
+    void revokeCloseConfirmation_clearsTheCeoQueue() {
+        stubAwaitingCeo(10L);
+
+        service.revokeCloseConfirmation(10L, "ลูกค้าขอคืนสินค้า", accountActor);
+
+        verify(ticketRepo).clearCloseConfirmation(10L);
+        verify(ticketRepo).addEvent(eq(10L), eq(accountActor.id()), anyString(),
+            eq(TicketEventKind.CLOSE_CONFIRM_REVOKED), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void confirmCloseReady_rejectsWrongStatus() {
+        stubCloseDeal(10L, TicketStatus.APPROVED, "FULLY_PAID",
+            FulfilmentStatus.FULLY_DELIVERED, null, true);
+        assertConflict(() -> service.confirmCloseReady(10L, accountActor));
     }
 
     // ── dual-track lifecycle (payment + fulfillment) ──────────────────────
@@ -733,35 +814,28 @@ class TicketServiceTest {
     //  single action that advances the payment track to DEPOSIT_NOTICE_ISSUED.)
 
     @Test
-    void close_legacyDocumentIssuedWithNullPayment_stillCloses() {
-        // Pre-dual-track tickets (paymentStatus never set) keep the legacy close path.
-        stubTicketWithTracks(10L, 1L, TicketStatus.DOCUMENT_ISSUED, null, null);
+    void close_legacyDocumentIssuedWithNullPayment_stillClosesViaTheTwoSignatures() {
+        // Pre-dual-track tickets (paymentStatus never set) predate the delivery and
+        // invoice tracks, so those prerequisites are waived — but they still need
+        // both signatures. Waiving them entirely would strand this old data.
+        stubCloseDeal(10L, TicketStatus.DOCUMENT_ISSUED, null, null, null, false);
+        service.confirmCloseReady(10L, accountActor);
+        verify(ticketRepo).confirmClose(10L, accountActor.id());
 
-        service.close(10L, salesActor);
-
-        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.CLOSED), eq(TicketStatus.DOCUMENT_ISSUED), eq(TicketStatus.CLOSED), isNull());
+        stubCloseDeal(10L, TicketStatus.DOCUMENT_ISSUED, null, null, Instant.now(), false);
+        service.verifyClose(10L, ceoActor);
+        verify(ticketRepo).updateLifecycle(10L, DealLifecycle.COMPLETED);
     }
 
     @Test
     void close_legacyDocumentIssuedMidPaymentTrack_isRefused() {
         // The bypass from the audit: a mid-track ticket flipped to document_issued
         // must not close unpaid.
-        stubTicketWithTracks(10L, 1L, TicketStatus.DOCUMENT_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
-        assertConflict(() -> service.close(10L, salesActor));
+        stubCloseDeal(10L, TicketStatus.DOCUMENT_ISSUED, "DEPOSIT_NOTICE_ISSUED", null, null, true);
+        assertConflict(() -> service.confirmCloseReady(10L, accountActor));
 
-        stubTicketWithTracks(10L, 1L, TicketStatus.DOCUMENT_ISSUED, "DEPOSIT_PAID", "SHIPPING");
-        assertConflict(() -> service.close(10L, salesActor));
-    }
-
-    @Test
-    void close_legacyDocumentIssuedFullyPaid_closes() {
-        stubTicketWithTracks(10L, 1L, TicketStatus.DOCUMENT_ISSUED, "FULLY_PAID", "GOODS_RECEIVED");
-
-        service.close(10L, salesActor);
-
-        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.CLOSED), eq(TicketStatus.DOCUMENT_ISSUED), eq(TicketStatus.CLOSED), isNull());
+        stubCloseDeal(10L, TicketStatus.DOCUMENT_ISSUED, "DEPOSIT_PAID", "SHIPPING", null, true);
+        assertConflict(() -> service.confirmCloseReady(10L, accountActor));
     }
 
     @Test
@@ -1572,41 +1646,24 @@ class TicketServiceTest {
         // close to COMPLETED with zero delivered units, because the manual gate
         // accepted GOODS_RECEIVED-with-no-deliveries while the auto-advance gate
         // (maybeAdvanceClosedPaid) refused it. Both now require FULLY_DELIVERED.
-        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", "GOODS_RECEIVED");
+        stubCloseDeal(10L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", "GOODS_RECEIVED", null, true);
 
-        assertConflict(() -> service.close(10L, salesActor));
+        assertConflict(() -> service.confirmCloseReady(10L, accountActor));
 
         verify(ticketRepo, never()).updateLifecycle(eq(10L), eq(DealLifecycle.COMPLETED));
     }
 
     @Test
-    void close_dualTrackCompleteWithDeliveryRecords_transitionsToClosed() {
-        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", FulfilmentStatus.FULLY_DELIVERED);
-
-        service.close(10L, salesActor);
-
-        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.CLOSED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.CLOSED), isNull());
-    }
-
-    @Test
     void close_dualTrackRejectsWhenPaymentIncomplete() {
-        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
-        assertConflict(() -> service.close(10L, salesActor));
+        stubCloseDeal(10L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT",
+            "GOODS_RECEIVED", null, true);
+        assertConflict(() -> service.confirmCloseReady(10L, accountActor));
     }
 
     @Test
     void close_dualTrackRejectsWhenFulfillmentIncomplete() {
-        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", "SHIPPING");
-        assertConflict(() -> service.close(10L, salesActor));
-    }
-
-    @Test
-    void close_rejectsGoodsReceivedWhenDeliveryRecordsAreInUseButNotComplete() {
-        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", "GOODS_RECEIVED");
-        when(ticketRepo.hasDeliveries(10L)).thenReturn(true);
-
-        assertConflict(() -> service.close(10L, salesActor));
+        stubCloseDeal(10L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", "SHIPPING", null, true);
+        assertConflict(() -> service.confirmCloseReady(10L, accountActor));
     }
 
     // ── cancel ────────────────────────────────────────────────────────────
@@ -1915,12 +1972,12 @@ class TicketServiceTest {
 
     @Test
     void close_rejectsSalesManagerRole() {
-        // close() has NO role gate — only ownership. sales_manager can never be the
-        // createdById of any ticket (it has no create access), so the owner check
-        // alone suffices to deny it here; confirmed by stubbing a ticket owned by
-        // someone else and asserting 403.
-        stubTicket(10L, 1L, TicketStatus.DOCUMENT_ISSUED);
-        assertForbidden(() -> service.close(10L, salesManagerActor));
+        // The close sequence is account → ceo; sales_manager is read+comment
+        // oversight and appears in neither half.
+        stubReadyToConfirm(10L);
+        assertForbidden(() -> service.confirmCloseReady(10L, salesManagerActor));
+        stubAwaitingCeo(11L);
+        assertForbidden(() -> service.verifyClose(11L, salesManagerActor));
     }
 
     @Test
@@ -1970,6 +2027,39 @@ class TicketServiceTest {
 
     private TicketDto stubTicket(long ticketId, long createdById, String status) {
         return stubTicketWithItems(ticketId, createdById, status, List.of());
+    }
+
+    /**
+     * Close-flow stub (V55): the compat constructor can't express close_confirmed_at
+     * or invoice_on_file, and both drive the three-party gate.
+     */
+    private TicketDto stubCloseDeal(long ticketId, String status, String paymentStatus,
+                                    String fulfillmentStatus, Instant closeConfirmedAt,
+                                    boolean invoiceOnFile) {
+        TicketSummaryDto summary = new TicketSummaryDto(
+            ticketId, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", status, "NORMAL",
+            1L, "Sales User", null, null, "Test Customer", null, null, null, null, null, null,
+            Instant.now(), Instant.now(), null, 0, false, paymentStatus, fulfillmentStatus,
+            DealStage.DELIVERED, null, null, Instant.now(),
+            DealLifecycle.ACTIVE, TenderRequirement.UNKNOWN, DepositPolicy.REQUIRED, null,
+            EntryChannel.DESIGNER_LED, null, null, null, null, null,
+            PaymentStage.FULLY_PAID, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false,
+            closeConfirmedAt, closeConfirmedAt == null ? null : "Account User", invoiceOnFile);
+        TicketDto ticket = new TicketDto(summary, List.of(), List.of(), null, List.of());
+        when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
+        return ticket;
+    }
+
+    /** A dual-track deal that satisfies every prerequisite, not yet confirmed. */
+    private TicketDto stubReadyToConfirm(long ticketId) {
+        return stubCloseDeal(ticketId, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID",
+            FulfilmentStatus.FULLY_DELIVERED, null, true);
+    }
+
+    /** The same deal after ฝ่ายบัญชี has signed off — awaiting CEO verification. */
+    private TicketDto stubAwaitingCeo(long ticketId) {
+        return stubCloseDeal(ticketId, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID",
+            FulfilmentStatus.FULLY_DELIVERED, Instant.now(), true);
     }
 
     private TicketDto stubTicketWithItems(long ticketId, long createdById, String status, List<TicketItemDto> items) {
@@ -2080,7 +2170,8 @@ class TicketServiceTest {
             s.lifecycle(), s.tenderRequirement(), s.depositPolicy(), s.depositPolicyReason(),
             s.entryChannel(), s.billingDate(), s.dueDate(), s.creditTermDays(), s.lastFollowUpAt(),
             s.nextFollowUpAt(), s.paymentStage(), s.amountPayable(), s.amountPaid(),
-            s.amountOutstanding(), s.overdue());
+            s.amountOutstanding(), s.overdue(),
+            s.closeConfirmedAt(), s.closeConfirmedByName(), s.invoiceOnFile());
         return new TicketDto(summary, items, source.events(), source.quotation(), source.quotations());
     }
 

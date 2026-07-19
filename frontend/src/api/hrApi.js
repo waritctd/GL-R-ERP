@@ -102,7 +102,14 @@ export const api = {
     markQuotationSent: (id, quotationId, payload = {}) => apiRequest(API_ROUTES.tickets.quotationStatus(id, quotationId, 'sent'), { method: 'POST', body: payload }),
     markQuotationAccepted: (id, quotationId, payload = {}) => apiRequest(API_ROUTES.tickets.quotationStatus(id, quotationId, 'accepted'), { method: 'POST', body: payload }),
     markQuotationRejected: (id, quotationId, payload = {}) => apiRequest(API_ROUTES.tickets.quotationStatus(id, quotationId, 'rejected'), { method: 'POST', body: payload }),
-    close: (id) => apiRequest(API_ROUTES.tickets.action(id, 'close'), { method: 'POST' }),
+    // Three-party close (V55): ฝ่ายบัญชี confirms, then the CEO verifies. There is no
+    // single-step close any more — sales is not part of the sequence.
+    confirmCloseReady: (id) =>
+      apiRequest(API_ROUTES.tickets.action(id, 'close/confirm'), { method: 'POST' }),
+    revokeCloseConfirmation: (id, body) =>
+      apiRequest(API_ROUTES.tickets.action(id, 'close/revoke'), { method: 'POST', body }),
+    verifyClose: (id) =>
+      apiRequest(API_ROUTES.tickets.action(id, 'close/verify'), { method: 'POST' }),
     cancel: (id) => apiRequest(API_ROUTES.tickets.action(id, 'cancel'), { method: 'POST' }),
     editItems: (id, payload) => apiRequest(API_ROUTES.tickets.editItems(id), { method: 'PATCH', body: payload }),
     comment: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'comments'), { method: 'POST', body: payload }),

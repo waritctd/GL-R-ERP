@@ -32,6 +32,11 @@ public class TicketService {
     private static final Set<String> FULFILMENT_ROLES = Set.of("import", "ceo");
     // Money-receipt confirmations belong to ฝ่ายบัญชี (accounting), with CEO as fallback.
     private static final Set<String> ACCOUNT_ROLES = Set.of("account", "ceo");
+    // Step 1 of the three-party close. Deliberately EXCLUDES ceo, unlike ACCOUNT_ROLES:
+    // the CEO signs the second half (verifyClose), so letting them sign the first half
+    // too would collapse a two-signature gate into one person. Same reasoning as
+    // CommissionService's manager→ceo chain. Do not "fix" this by reusing ACCOUNT_ROLES.
+    private static final Set<String> CLOSE_CONFIRM_ROLES = Set.of("account");
     // Who may read tickets at all. Mirrors the frontend's canViewTickets and the mock's
     // list/get gates — hr/employee have no business reading customer pricing.
     // sales_manager is read+comment-only oversight (a project-manager-style follow-up
@@ -420,23 +425,24 @@ public class TicketService {
             s.lifecycle(), s.tenderRequirement(), s.depositPolicy(), s.depositPolicyReason(),
             s.entryChannel(), s.billingDate(), s.dueDate(), s.creditTermDays(),
             s.lastFollowUpAt(), s.nextFollowUpAt(), s.paymentStage(), s.amountPayable(),
-            s.amountPaid(), s.amountOutstanding(), s.overdue());
+            s.amountPaid(), s.amountOutstanding(), s.overdue(),
+            s.closeConfirmedAt(), s.closeConfirmedByName(), s.invoiceOnFile());
     }
 
-    @Transactional
-    public TicketDto close(long ticketId, UserPrincipal actor) {
-        TicketDto ticket = requireTicket(ticketId);
-        TicketSummaryDto s = ticket.summary();
-        requireActive(s);
-        if (s.createdById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
-        }
+    /**
+     * Closing is a three-party sequence, not one person's decision: the goods must
+     * be delivered, the balance paid, the invoice on file, ฝ่ายบัญชี must confirm,
+     * and the CEO must verify. Sales no longer closes deals.
+     *
+     * Throws if the deal is not ready; returns quietly if it is.
+     */
+    private void requireClosePrerequisites(TicketSummaryDto s) {
         String st = s.status();
         // Legacy path: status=DOCUMENT_ISSUED — only for pre-dual-track tickets
         // (paymentStatus never set) or fully-paid ones. A mid-track ticket that
         // reached document_issued must NOT close unpaid (2026-07-16 audit finding #3);
-        // recover it via revision or cancel.
-        // Dual-track path: both tracks complete.
+        // recover it via revision or cancel. These predate the delivery and invoice
+        // tracks entirely, so requiring either would strand them permanently.
         boolean legacyOk = TicketStatus.DOCUMENT_ISSUED.equals(st)
             && (s.paymentStatus() == null || "FULLY_PAID".equals(s.paymentStatus()));
         boolean dualTrackOk = TicketStatus.QUOTATION_ISSUED.equals(st)
@@ -444,13 +450,69 @@ public class TicketService {
             && deliveryGateComplete(s);
         if (!legacyOk && !dualTrackOk) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "Cannot close: require paymentStatus=FULLY_PAID and delivery complete");
+                "ปิดงานไม่ได้: ต้องรับเงินครบและส่งมอบสินค้าครบก่อน");
         }
         if (s.amountOutstanding() != null && s.amountOutstanding().signum() > 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "Cannot close: ยังมียอดค้างชำระ");
+            throw new ApiException(HttpStatus.CONFLICT, "ปิดงานไม่ได้: ยังมียอดค้างชำระ");
         }
+        // The invoice is produced externally and uploaded here; legacy deals predate it.
+        if (dualTrackOk && !s.invoiceOnFile()) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ปิดงานไม่ได้: ยังไม่ได้แนบใบกำกับภาษี (ฝ่ายบัญชีต้องอัปโหลดก่อน)");
+        }
+    }
+
+    /** ฝ่ายบัญชี confirms the deal is ready to close. Step 1 of 2. */
+    @Transactional
+    public TicketDto confirmCloseReady(long ticketId, UserPrincipal actor) {
+        requireRole(actor, CLOSE_CONFIRM_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
+        if (s.closeConfirmedAt() != null) {
+            throw new ApiException(HttpStatus.CONFLICT, "ยืนยันปิดงานไปแล้ว — รอ CEO ตรวจสอบ");
+        }
+        requireClosePrerequisites(s);
+        tickets.confirmClose(ticketId, actor.id());
         tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.CLOSED, st, TicketStatus.CLOSED, null);
+            TicketEventKind.CLOSE_CONFIRMED, s.status(), s.status(),
+            "ฝ่ายบัญชียืนยันพร้อมปิดงาน — รอ CEO ตรวจสอบ");
+        return requireTicket(ticketId);
+    }
+
+    /** Withdraw the confirmation before the CEO acts (account or CEO). */
+    @Transactional
+    public TicketDto revokeCloseConfirmation(long ticketId, String note, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
+        if (s.closeConfirmedAt() == null) {
+            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ยังไม่ได้ยืนยันปิดงาน");
+        }
+        tickets.clearCloseConfirmation(ticketId);
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.CLOSE_CONFIRM_REVOKED, s.status(), s.status(), blankToNull(note));
+        return requireTicket(ticketId);
+    }
+
+    /**
+     * CEO verifies and the deal is closed. Step 2 of 2.
+     *
+     * The CEO verifies, never overrides: every prerequisite is re-checked here, so
+     * a deal that regressed between the two signatures (a refund, a returned
+     * delivery, a deleted invoice) cannot slip through on a stale confirmation.
+     */
+    @Transactional
+    public TicketDto verifyClose(long ticketId, UserPrincipal actor) {
+        requireRole(actor, CEO_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
+        if (s.closeConfirmedAt() == null) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ปิดงานไม่ได้: ต้องให้ฝ่ายบัญชียืนยันก่อน");
+        }
+        requireClosePrerequisites(s);
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.CLOSED, s.status(), TicketStatus.CLOSED, "CEO ตรวจสอบและปิดงาน");
         tickets.updateLifecycle(ticketId, DealLifecycle.COMPLETED);
         return requireTicket(ticketId);
     }
@@ -1400,7 +1462,15 @@ public class TicketService {
         if (ACCOUNT_ROLES.contains(actor.role()) && canConfirmFinalPaymentNow(s)) {
             actions.add(new TicketActionDto("FINAL_PAYMENT", "payment", "รับเงินครบ"));
         }
-        if (canClose(s, actor)) actions.add(new TicketActionDto("CLOSE", "operational", "ปิดงาน"));
+        if (canConfirmClose(s, actor)) {
+            actions.add(new TicketActionDto("CONFIRM_CLOSE", "operational", "ยืนยันพร้อมปิดงาน"));
+        }
+        if (canRevokeCloseConfirmation(s, actor)) {
+            actions.add(new TicketActionDto("REVOKE_CLOSE_CONFIRM", "operational", "ยกเลิกการยืนยันปิดงาน"));
+        }
+        if (canVerifyClose(s, actor)) {
+            actions.add(new TicketActionDto("VERIFY_CLOSE", "operational", "ตรวจสอบและปิดงาน"));
+        }
         if (canCancel(s, actor)) actions.add(new TicketActionDto("CANCEL", "operational", "ยกเลิก"));
         if (canEditItems(s, actor)) actions.add(new TicketActionDto("EDIT_ITEMS", "operational", "แก้ไขรายการ"));
     }
@@ -1513,13 +1583,34 @@ public class TicketService {
         return FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()) || stockAvailable || warehouseAvailable;
     }
 
-    private boolean canClose(TicketSummaryDto s, UserPrincipal actor) {
-        boolean legacyOk = TicketStatus.DOCUMENT_ISSUED.equals(s.status())
-            && (s.paymentStatus() == null || "FULLY_PAID".equals(s.paymentStatus()));
-        boolean dualTrackOk = TicketStatus.QUOTATION_ISSUED.equals(s.status())
-            && "FULLY_PAID".equals(s.paymentStatus())
-            && deliveryGateComplete(s);
-        return s.createdById() == actor.id() && (legacyOk || dualTrackOk);
+    /** Prerequisites only — the role checks live on each action below. */
+    private boolean closeReady(TicketSummaryDto s) {
+        try {
+            requireClosePrerequisites(s);
+            return true;
+        } catch (ApiException e) {
+            return false;
+        }
+    }
+
+    private boolean canConfirmClose(TicketSummaryDto s, UserPrincipal actor) {
+        return CLOSE_CONFIRM_ROLES.contains(actor.role())
+            && DealLifecycle.ACTIVE.equals(s.lifecycle())
+            && s.closeConfirmedAt() == null
+            && closeReady(s);
+    }
+
+    private boolean canRevokeCloseConfirmation(TicketSummaryDto s, UserPrincipal actor) {
+        return ACCOUNT_ROLES.contains(actor.role())
+            && DealLifecycle.ACTIVE.equals(s.lifecycle())
+            && s.closeConfirmedAt() != null;
+    }
+
+    private boolean canVerifyClose(TicketSummaryDto s, UserPrincipal actor) {
+        return CEO_ROLES.contains(actor.role())
+            && DealLifecycle.ACTIVE.equals(s.lifecycle())
+            && s.closeConfirmedAt() != null
+            && closeReady(s);
     }
 
     /**

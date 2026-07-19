@@ -49,6 +49,9 @@ public final class TicketEventKind {
     public static final String STOCK_RESERVED         = "STOCK_RESERVED";
     public static final String DELIVERY_RECORDED      = "DELIVERY_RECORDED";
     public static final String DELIVERY_COMPLETED     = "DELIVERY_COMPLETED";
+    // Three-party close (V55). CLOSED is now written only by the CEO's verification.
+    public static final String CLOSE_CONFIRMED        = "CLOSE_CONFIRMED";
+    public static final String CLOSE_CONFIRM_REVOKED  = "CLOSE_CONFIRM_REVOKED";
 
     private TicketEventKind() {}
 }

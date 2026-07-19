@@ -50,7 +50,12 @@ public record TicketSummaryDto(
     BigDecimal amountPayable,
     BigDecimal amountPaid,
     BigDecimal amountOutstanding,
-    boolean overdue
+    boolean overdue,
+    /** ฝ่ายบัญชี's close confirmation; non-null means the deal is awaiting CEO verification. */
+    Instant closeConfirmedAt,
+    String closeConfirmedByName,
+    /** An INVOICE attachment is on file — a prerequisite for confirming the close. */
+    boolean invoiceOnFile
 ) {
     public TicketSummaryDto(
         long id, String code, String type, String title, String status, String priority,
@@ -68,6 +73,6 @@ public record TicketSummaryDto(
             note, createdAt, updatedAt, closedAt, itemCount, hasEdits, paymentStatus, fulfillmentStatus,
             salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle, tenderRequirement, depositPolicy,
             depositPolicyReason, entryChannel, null, null, null, null, null, PaymentStage.NOT_REQUIRED,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false);
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false, null, null, false);
     }
 }
