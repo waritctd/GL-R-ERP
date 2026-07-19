@@ -499,7 +499,7 @@ function requirePricingRequestDealActive(ticket) {
 // dangerous direction (issue #199): it would accept a blank unit / zero qty
 // that the real backend 400s on.
 function requirePricingRequestItemFieldsValid(items) {
-  for (const item of items) {
+  items.forEach((item, index) => {
     if (item.requestedQty == null || !(Number(item.requestedQty) >= 0.0001)) {
       fail('requestedQty must be at least 0.0001', 400);
     }
@@ -509,7 +509,18 @@ function requirePricingRequestItemFieldsValid(items) {
     if (!item.quantityType?.trim()) {
       fail('quantityType must not be blank', 400);
     }
-  }
+    // Mirrors PricingRequestService.validateItems: an item must actually name
+    // a product somehow — a link to an existing deal line, a catalog
+    // product, a model name, or a free-text special requirement. Brand alone
+    // is deliberately NOT sufficient (a brand with no model does not
+    // identify a product), so Import never receives a request for a line
+    // nobody can actually source.
+    const identified = item.sourceTicketItemId != null || item.productId != null
+      || Boolean(item.model?.trim()) || Boolean(item.specialRequirement?.trim());
+    if (!identified) {
+      fail(`รายการที่ ${index + 1}: ต้องระบุสินค้าที่ต้องการเสนอราคา (เลือกจากรายการในดีล หรือระบุรุ่น/รายละเอียด)`, 400);
+    }
+  });
 }
 
 function buildMockDoc(doc) {
@@ -4060,6 +4071,10 @@ export const api = {
       if (pr.requiredDate && new Date(pr.requiredDate) < new Date(new Date().toDateString())) {
         fail('วันที่ต้องการต้องไม่ใช่วันที่ผ่านมาแล้ว', 400);
       }
+      // Re-check item identity against the PERSISTED items, not just at
+      // create()/update() time — a draft saved before this rule existed (or
+      // one whose items were never touched again) must still be blocked here.
+      requirePricingRequestItemFieldsValid(pr.items);
       const seenSourceItemIds = new Set();
       for (const item of pr.items) {
         if (item.sourceTicketItemId != null) {

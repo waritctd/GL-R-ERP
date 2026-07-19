@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 
@@ -71,5 +71,33 @@ describe('PricingRequestCreateModal', () => {
 
     expect((await screen.findByRole('alert')).textContent).toContain('กรุณากรอกจำนวนของทุกรายการให้ถูกต้อง');
     expect(createFn).not.toHaveBeenCalled();
+  });
+
+  // Mirrors PricingRequestService.validateItems (Part 1 of the review-remediation
+  // plan): a line with no sourceTicketItemId/productId/model/specialRequirement
+  // does not identify a product. Unlike the two tests above, this is reported
+  // per-row (attached to the specific item), not as a single form banner.
+  it('blocks an item with no identity field and shows the error on that specific row', async () => {
+    const { createFn } = renderModal({ ticketItems: [] }); // no deal items to seed from -> one blank row
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+
+    const rowError = await screen.findByRole('alert');
+    expect(rowError.textContent).toContain('ต้องระบุสินค้าที่ต้องการเสนอราคา');
+    expect(createFn).not.toHaveBeenCalled();
+  });
+
+  it('clears the row error once a model is filled in, and allows submission', async () => {
+    const { createFn } = renderModal({ ticketItems: [] });
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+    await screen.findByRole('alert');
+
+    fireEvent.change(screen.getByLabelText('รุ่น'), { target: { value: 'Model X' } });
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

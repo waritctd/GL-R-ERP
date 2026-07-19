@@ -66,4 +66,38 @@ describe('mockApi.pricingRequests.create item validation', () => {
     badPayload.items[0].requestedUnit = '';
     await expect(api.pricingRequests.update(draftId, badPayload)).rejects.toThrow();
   });
+
+  // Mirrors PricingRequestService.validateItems (Part 1 of the review-remediation
+  // plan): brand alone does not identify a product. Without this check, the
+  // mock would be MORE permissive than the real backend (issue #199's failure
+  // mode) — it would happily persist a line that says nothing more than
+  // "1 แผ่น" and hand it to Import.
+  it('rejects an item with no identity field (brand alone is not enough)', async () => {
+    const ticket = await ownedActiveTicketWithItems();
+    const payload = validPayload(ticket.items[0]);
+    payload.items[0].sourceTicketItemId = null;
+    payload.items[0].model = null; // brand alone remains — not sufficient
+    await expect(api.pricingRequests.create(ticket.summary.id, payload)).rejects.toThrow();
+  });
+
+  it('accepts an item identified only by specialRequirement, with no sourceTicketItemId/model/brand', async () => {
+    const ticket = await ownedActiveTicketWithItems();
+    const payload = validPayload(ticket.items[0]);
+    payload.items[0].sourceTicketItemId = null;
+    payload.items[0].brand = null;
+    payload.items[0].model = null;
+    payload.items[0].specialRequirement = 'กระเบื้องลายไม้สีเข้ม ผิวด้าน';
+    const { pricingRequest } = await api.pricingRequests.create(ticket.summary.id, payload);
+    expect(pricingRequest.summary.status).toBe('DRAFT');
+  });
+
+  // submit()'s own re-check against the persisted items (mirroring
+  // PricingRequestService.submit) is exercised on the backend
+  // (PricingRequestServiceTest#submit_rejectsPreExistingDraftWithUnidentifiedItem)
+  // — there is no way to reach that state through this mock's public API
+  // surface, since create()/update() both already reject an unidentified item
+  // and delay() structuredClone()s every response, so a returned item can't be
+  // mutated back into the mock's own store. That asymmetry is expected: the
+  // real-world scenario is a row that predates this rule in a persisted
+  // database, which a fresh in-memory mock session has no equivalent of.
 });

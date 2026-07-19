@@ -12,6 +12,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.customer.ContactDto;
+import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestDetailDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
@@ -55,13 +57,16 @@ public class PricingRequestService {
     private final TicketRepository tickets;
     private final NotificationRepository notifications;
     private final ObjectMapper objectMapper;
+    private final ContactRepository contacts;
 
     public PricingRequestService(PricingRequestRepository requests, TicketRepository tickets,
-                                 NotificationRepository notifications, ObjectMapper objectMapper) {
+                                 NotificationRepository notifications, ObjectMapper objectMapper,
+                                 ContactRepository contacts) {
         this.requests      = requests;
         this.tickets       = tickets;
         this.notifications = notifications;
         this.objectMapper  = objectMapper;
+        this.contacts      = contacts;
     }
 
     @Transactional
@@ -79,6 +84,7 @@ public class PricingRequestService {
         validateItems(request.items());
         validateCurrency(request.targetCurrency());
         validateRecipientIdentifiable(request.recipientContactId(), request.recipientLabel());
+        validateRecipientContactBelongsToCustomer(request.recipientContactId(), ticket);
         validateSourceItemsBelongToTicket(ticketId, request.items());
 
         String requestCode = requests.nextRequestCode();
@@ -158,6 +164,7 @@ public class PricingRequestService {
             String effectiveLabel = request.recipientLabel() != null
                 ? request.recipientLabel() : summary.recipientLabel();
             validateRecipientIdentifiable(effectiveContactId, effectiveLabel);
+            validateRecipientContactBelongsToCustomer(effectiveContactId, ticket);
         }
 
         boolean updated = requests.updateDraft(id, request);
@@ -192,11 +199,28 @@ public class PricingRequestService {
                 && (summary.recipientLabel() == null || summary.recipientLabel().isBlank())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุผู้รับคำขอราคา");
         }
+        // Re-check against the PERSISTED recipientContactId, not a request
+        // payload — submit() takes no body, so this is the only re-validation
+        // point. Same reasoning as the item-identity recheck below: a draft
+        // created before this rule existed (or before its recipient was
+        // last touched) must not be submittable while pointing at another
+        // customer's contact.
+        validateRecipientContactBelongsToCustomer(summary.recipientContactId(), ticket);
         if (summary.requiredDate() != null && summary.requiredDate().isBefore(LocalDate.now())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ต้องการต้องไม่ใช่วันที่ผ่านมาแล้ว");
         }
+        // Re-check item identity against the PERSISTED items, not the
+        // createDraft/updateDraft payload that produced them — validateItems
+        // only runs before a write, so a draft created before that rule
+        // existed (or one whose items were never touched again) must still
+        // be blocked here, at the one point before a request becomes visible
+        // to Import.
         Set<Long> seenSourceItemIds = new HashSet<>();
-        for (PricingRequestItemDto item : items) {
+        for (int i = 0; i < items.size(); i++) {
+            PricingRequestItemDto item = items.get(i);
+            if (!isProductIdentified(item.sourceTicketItemId(), item.productId(), item.model(), item.specialRequirement())) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, identityErrorMessage(i));
+            }
             if (item.sourceTicketItemId() != null && !seenSourceItemIds.add(item.sourceTicketItemId())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "มีรายการอ้างอิงสินค้าเดิมซ้ำกัน");
             }
@@ -508,10 +532,63 @@ public class PricingRequestService {
     }
 
     private void validateItems(List<PricingRequestItemRequest> items) {
-        for (PricingRequestItemRequest item : items) {
+        for (int i = 0; i < items.size(); i++) {
+            PricingRequestItemRequest item = items.get(i);
             if (!QuantityType.isValid(item.quantityType())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown quantity type '" + item.quantityType() + "'");
             }
+            if (!isProductIdentified(item.sourceTicketItemId(), item.productId(), item.model(), item.specialRequirement())) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, identityErrorMessage(i));
+            }
+        }
+    }
+
+    /**
+     * Shared identity predicate for Part 1 of the review-remediation plan:
+     * an item must actually name a product somehow — an existing deal line,
+     * a catalog reference, a model name, or a free-text special requirement.
+     * Brand alone is deliberately NOT sufficient (a brand with no model does
+     * not identify a product), so this checks the other four fields only.
+     *
+     * <p>Called from both {@link #validateItems} (the payload-shaped
+     * {@link PricingRequestItemRequest}, pre-persist) and {@link #submit}
+     * (the persisted {@link PricingRequestItemDto}) — the two are different
+     * record types with no shared interface, so callers extract the four
+     * relevant fields themselves rather than this method taking either DTO.
+     */
+    private static boolean isProductIdentified(Long sourceTicketItemId, Long productId, String model, String specialRequirement) {
+        return sourceTicketItemId != null || productId != null || hasText(model) || hasText(specialRequirement);
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    private static String identityErrorMessage(int zeroBasedIndex) {
+        return "รายการที่ " + (zeroBasedIndex + 1)
+            + ": ต้องระบุสินค้าที่ต้องการเสนอราคา (เลือกจากรายการในดีล หรือระบุรุ่น/รายละเอียด)";
+    }
+
+    /**
+     * Part 2 of the review-remediation plan: a {@code recipientContactId}
+     * must belong to the SAME customer as the deal itself — otherwise a
+     * pricing request on Customer A's deal could name Customer B's contact,
+     * which would later put the wrong recipient on a quotation.
+     *
+     * <p>Skips the comparison when {@code ticket.customerId()} is null (an
+     * older deal with no customer link) rather than throwing — there is no
+     * customer to compare against, so this is "nothing to check", NOT "any
+     * contact is fine". A contact id that does not resolve to any row at all
+     * is treated the same as a mismatch: both are a 400, since neither could
+     * possibly belong to the deal's customer.
+     */
+    private void validateRecipientContactBelongsToCustomer(Long recipientContactId, TicketSummaryDto ticket) {
+        if (recipientContactId == null || ticket.customerId() == null) {
+            return;
+        }
+        ContactDto contact = contacts.findById(recipientContactId).orElse(null);
+        if (contact == null || contact.customerId() != ticket.customerId()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ผู้รับที่เลือกไม่ได้อยู่ในลูกค้าของดีลนี้");
         }
     }
 

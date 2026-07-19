@@ -9,6 +9,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
@@ -17,11 +18,14 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 import org.assertj.core.api.ThrowableAssert;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.customer.ContactDto;
+import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
@@ -45,8 +49,9 @@ class PricingRequestServiceTest {
     private final PricingRequestRepository requestRepo = mock(PricingRequestRepository.class);
     private final TicketRepository ticketRepo = mock(TicketRepository.class);
     private final NotificationRepository notifRepo = mock(NotificationRepository.class);
+    private final ContactRepository contactRepo = mock(ContactRepository.class);
     private final PricingRequestService service =
-        new PricingRequestService(requestRepo, ticketRepo, notifRepo, new ObjectMapper());
+        new PricingRequestService(requestRepo, ticketRepo, notifRepo, new ObjectMapper(), contactRepo);
 
     private final UserPrincipal salesActor        = actor(1L, "sales");
     private final UserPrincipal otherSales        = actor(2L, "sales");
@@ -202,6 +207,193 @@ class PricingRequestServiceTest {
 
         verify(notifRepo, never()).notifyByRole(any(), anyLong(), any(), any());
         verify(notifRepo, never()).notifyEmployee(anyLong(), anyLong(), any(), any());
+    }
+
+    // ── item identity (Part 1: an unidentified product must be rejected) ───────
+
+    @Test
+    void createDraft_rejectsItemWithNoIdentityField() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
+            List.of(itemRequestWithIdentity(null, null, "Brand only, no model", null, null)));
+        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
+        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
+    }
+
+    @Test
+    void createDraft_rejectsItemIdentifiedByBrandAlone() {
+        // Brand alone is explicitly NOT sufficient — a brand with no model
+        // does not identify a product. Same assertion as the no-fields test
+        // above, kept separate so a future change that (wrongly) special-cases
+        // "at least one field is non-null" fails this test specifically.
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
+            List.of(itemRequestWithIdentity(null, null, "Some Brand", null, null)));
+        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
+        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
+    }
+
+    @Test
+    void createDraft_acceptsItemIdentifiedBySourceTicketItemIdAlone() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of(501L));
+        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
+        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
+            List.of(itemRequestWithIdentity(501L, null, null, null, null)));
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+
+        service.createDraft(10L, request, salesActor);
+
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+    }
+
+    @Test
+    void createDraft_acceptsItemIdentifiedByProductIdAlone() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
+        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
+        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
+            List.of(itemRequestWithIdentity(null, 77L, null, null, null)));
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+
+        service.createDraft(10L, request, salesActor);
+
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+    }
+
+    @Test
+    void createDraft_acceptsItemIdentifiedByModelAlone() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
+        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
+        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
+            List.of(itemRequestWithIdentity(null, null, null, "Model X", null)));
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+
+        service.createDraft(10L, request, salesActor);
+
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+    }
+
+    @Test
+    void createDraft_acceptsItemIdentifiedBySpecialRequirementAlone() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
+        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
+        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
+            List.of(itemRequestWithIdentity(null, null, null, null, "กระเบื้องลายไม้สีเข้ม ผิวด้าน")));
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+
+        service.createDraft(10L, request, salesActor);
+
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+    }
+
+    @Test
+    void submit_rejectsPreExistingDraftWithUnidentifiedItem() {
+        // Simulates a draft created BEFORE this rule existed (or otherwise
+        // persisted with an unidentified line): submit() must re-check the
+        // PERSISTED items, not just rely on createDraft/updateDraft having
+        // validated them at write time.
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.findItems(20L)).thenReturn(List.of(itemDtoWithIdentity(null, null, "Brand only", null, null)));
+        assertBadRequest(() -> service.submit(20L, salesActor));
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    // ── recipient contact ownership (Part 2) ────────────────────────────────
+
+    @Test
+    void createDraft_rejectsContactBelongingToAnotherCustomer() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE, 5L);
+        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
+        when(contactRepo.findById(1L)).thenReturn(Optional.of(
+            new ContactDto(1L, 99L, "Other", "Customer's Contact", null, null, null)));
+        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
+            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
+        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
+        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
+    }
+
+    @Test
+    void createDraft_acceptsContactBelongingToTheDealsCustomer() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE, 5L);
+        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
+        when(contactRepo.findById(1L)).thenReturn(Optional.of(
+            new ContactDto(1L, 5L, "Matching", "Contact", null, null, null)));
+        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
+        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
+            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+
+        service.createDraft(10L, request, salesActor);
+
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+    }
+
+    @Test
+    void createDraft_rejectsUnknownContactId() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE, 5L);
+        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
+        when(contactRepo.findById(1L)).thenReturn(Optional.empty());
+        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
+            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
+        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
+        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
+    }
+
+    @Test
+    void createDraft_skipsContactOwnershipCheckWhenTicketHasNoCustomer() {
+        // Older deals may have customerId == null (no customer link at all).
+        // The ownership check has nothing to compare the contact against in
+        // that case, so it is skipped rather than treated as a mismatch —
+        // this is "nothing to check", NOT "any contact is fine" in general.
+        // contactRepo is deliberately never stubbed: if this code path
+        // incorrectly called it anyway, Mockito's default Optional.empty()
+        // would fail this test for the wrong reason (contact not found)
+        // instead of the assertion below, and verifyNoInteractions makes
+        // that failure mode explicit rather than accidental.
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE); // customerId defaults to null
+        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
+        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
+        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
+            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+
+        service.createDraft(10L, request, salesActor);
+
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+        verifyNoInteractions(contactRepo);
+    }
+
+    @Test
+    void updateDraft_rejectsContactBelongingToAnotherCustomer() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE, 5L);
+        when(contactRepo.findById(1L)).thenReturn(Optional.of(
+            new ContactDto(1L, 99L, "Other", "Customer's Contact", null, null, null)));
+        UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
+            null, 1L, null, null, null, null, null, null);
+        assertBadRequest(() -> service.updateDraft(20L, request, salesActor));
+        verify(requestRepo, never()).updateDraft(anyLong(), any());
+    }
+
+    @Test
+    void submit_rejectsContactBelongingToAnotherCustomer() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE, 5L);
+        when(requestRepo.findItems(20L)).thenReturn(List.of(sampleItem(null)));
+        when(contactRepo.findById(1L)).thenReturn(Optional.of(
+            new ContactDto(1L, 99L, "Other", "Customer's Contact", null, null, null)));
+        assertBadRequest(() -> service.submit(20L, salesActor));
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
     }
 
     // ── submit ───────────────────────────────────────────────────────────
@@ -785,9 +977,14 @@ class PricingRequestServiceTest {
     }
 
     private TicketDto stubTicket(long ticketId, long createdById, String lifecycle) {
+        return stubTicket(ticketId, createdById, lifecycle, null);
+    }
+
+    /** Variant that sets the deal's customerId — needed for the recipient-contact-ownership tests. */
+    private TicketDto stubTicket(long ticketId, long createdById, String lifecycle, Long customerId) {
         TicketSummaryDto summary = new TicketSummaryDto(
             ticketId, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.APPROVED, "NORMAL",
-            createdById, "Sales User", null, null, "Test Customer", null, null, "Test Project",
+            createdById, "Sales User", null, null, "Test Customer", customerId, null, "Test Project",
             null, null, null, Instant.now(), Instant.now(), null, 1, false, null, null,
             "QUOTE_DESIGN_SIDE", null, null, Instant.now(),
             lifecycle, TenderRequirement.UNKNOWN, DepositPolicy.REQUIRED, null, EntryChannel.DESIGNER_LED);
@@ -843,6 +1040,22 @@ class PricingRequestServiceTest {
     private static PricingRequestItemRequest sampleItemRequest(Long sourceTicketItemId, String quantityType) {
         return new PricingRequestItemRequest(sourceTicketItemId, null, null, "Brand", "Model", null, null, null, null,
             new BigDecimal("1"), null, "PIECE", quantityType, null, null, null);
+    }
+
+    /** Lets each Part 1 identity test set exactly one identifying field and leave the rest null. */
+    private static PricingRequestItemRequest itemRequestWithIdentity(Long sourceTicketItemId, Long productId,
+                                                                     String brand, String model, String specialRequirement) {
+        return new PricingRequestItemRequest(sourceTicketItemId, productId, null, brand, model, null, null, null, null,
+            new BigDecimal("1"), null, "PIECE", QuantityType.REFERENCE, null, null, specialRequirement);
+    }
+
+    /** Same as {@link #sampleItem}, but with every identity field controllable for the Part 1 submit-recheck tests. */
+    private static PricingRequestItemDto itemDtoWithIdentity(Long sourceTicketItemId, Long productId,
+                                                             String brand, String model, String specialRequirement) {
+        return new PricingRequestItemDto(1L, 20L, sourceTicketItemId, productId, null,
+            brand, model, null, null, null, null,
+            new BigDecimal("1"), null, "PIECE", QuantityType.REFERENCE,
+            null, null, specialRequirement, 0);
     }
 
     private static CreatePricingRequestRequest createRequest(String recipientType, Long recipientContactId,
