@@ -73,7 +73,8 @@ export function DealStagePanel({
 
   const hasAction = (action, targetStage = null) => availableActions.some((item) =>
     item.action === action && (targetStage == null || item.targetStage === targetStage));
-  const lost = !!summary.lostReason;
+  // lifecycle, not lostReason — the reason persists after a reopen (V57).
+  const lost = summary.lifecycle === 'CLOSED_LOST';
   const lifecycle = summary.lifecycle ?? (lost ? 'CLOSED_LOST' : 'ACTIVE');
   const meta = stageMeta(summary.salesStage);
   const label = dealStageLabel(summary.salesStage);

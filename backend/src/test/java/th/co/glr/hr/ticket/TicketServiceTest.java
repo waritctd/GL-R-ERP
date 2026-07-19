@@ -428,8 +428,9 @@ class TicketServiceTest {
 
         verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0001"), eq(1L), eq(new BigDecimal("200.00")),
             eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull());
-        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.QUOTATION_ISSUED), eq(TicketStatus.APPROVED), eq(TicketStatus.QUOTATION_ISSUED), anyString());
+        verify(ticketRepo).addEventWithDocument(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.QUOTATION_ISSUED), eq(TicketStatus.APPROVED), eq(TicketStatus.QUOTATION_ISSUED),
+            anyString(), eq(RelatedDocumentType.QUOTATION), anyLong());
     }
 
     @Test
@@ -461,8 +462,9 @@ class TicketServiceTest {
 
         verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0003"), eq(1L), any(BigDecimal.class),
             eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull());
-        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), anyString());
+        verify(ticketRepo).addEventWithDocument(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), anyString(),
+            eq(RelatedDocumentType.QUOTATION), anyLong());
     }
 
     @Test
@@ -638,9 +640,10 @@ class TicketServiceTest {
 
         service.generateQuotation(10L, amendment, salesActor);
 
-        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(), eq(TicketEventKind.QUOTATION_ISSUED),
+        verify(ticketRepo).addEventWithDocument(eq(10L), eq(1L), anyString(), eq(TicketEventKind.QUOTATION_ISSUED),
             eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED),
-            org.mockito.ArgumentMatchers.contains("แก้ตามแบบล่าสุด"));
+            org.mockito.ArgumentMatchers.contains("แก้ตามแบบล่าสุด"),
+            eq(RelatedDocumentType.QUOTATION), anyLong());
 
         stubDealWithQuotations(11L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(),
             "CUSTOMER_CONFIRMED", null, DealStage.NEGOTIATION, DealLifecycle.ACTIVE, List.of());
@@ -1018,8 +1021,9 @@ class TicketServiceTest {
         verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(3L), eq("ส่งบางส่วน"),
             argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("40.00")) == 0));
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.PARTIALLY_DELIVERED);
-        verify(ticketRepo).addEvent(eq(10L), eq(3L), anyString(),
-            eq(TicketEventKind.DELIVERY_RECORDED), anyString(), anyString(), argThat(msg -> msg.contains("40/100")));
+        verify(ticketRepo).addEventWithDocument(eq(10L), eq(3L), anyString(),
+            eq(TicketEventKind.DELIVERY_RECORDED), anyString(), anyString(), argThat(msg -> msg.contains("40/100")),
+            eq(RelatedDocumentType.DELIVERY_RECORD), anyLong());
     }
 
     @Test
@@ -1039,8 +1043,9 @@ class TicketServiceTest {
 
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
         verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERED);
-        verify(ticketRepo).addEvent(eq(10L), eq(3L), anyString(),
-            eq(TicketEventKind.DELIVERY_COMPLETED), anyString(), anyString(), anyString());
+        verify(ticketRepo).addEventWithDocument(eq(10L), eq(3L), anyString(),
+            eq(TicketEventKind.DELIVERY_COMPLETED), anyString(), anyString(), anyString(),
+            eq(RelatedDocumentType.DELIVERY_RECORD), anyLong());
     }
 
     @Test
@@ -1380,6 +1385,30 @@ class TicketServiceTest {
         assertForbidden(() -> service.markLost(10L, DealLostReason.PRICE, null, accountActor));
         stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, DealLostReason.PRICE);
         assertConflict(() -> service.markLost(11L, DealLostReason.LEAD_TIME, null, salesActor));
+    }
+
+    @Test
+    void reopenedDealIsFullyOperableAndKeepsItsLostReason() {
+        // V57 stopped nulling lost_reason on reopen, so a live reopened deal now
+        // carries one. Every guard that used `lostReason != null` to mean "is
+        // currently lost" had to move to the lifecycle — otherwise reopening a deal
+        // silently bricked it: no stage changes, no auto-advance, un-losable again.
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null,
+            DealStage.NEGOTIATION, DealLostReason.PRICE, DealLifecycle.ACTIVE, DepositPolicy.REQUIRED);
+
+        service.updateStage(10L, DealStage.ORDER_RECEIVED, null, salesActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.ORDER_RECEIVED);
+
+        service.markLost(10L, DealLostReason.LEAD_TIME, null, salesActor);
+        verify(ticketRepo).markDealLost(10L, DealLostReason.LEAD_TIME);
+    }
+
+    @Test
+    void stageWritesStillRefusedWhileActuallyLost() {
+        stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), null, null,
+            DealStage.NEGOTIATION, DealLostReason.PRICE, DealLifecycle.CLOSED_LOST, DepositPolicy.REQUIRED);
+        assertConflict(() -> service.updateStage(11L, DealStage.ORDER_RECEIVED, null, salesActor));
+        assertConflict(() -> service.markLost(11L, DealLostReason.PRICE, null, salesActor));
     }
 
     @Test
