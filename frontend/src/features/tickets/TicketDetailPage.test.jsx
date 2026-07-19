@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketDetailPage } from './TicketDetailPage.jsx';
 import { api } from '../../api/index.js';
@@ -26,6 +26,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         approve: vi.fn(),
         comment: vi.fn(),
         confirmFinalPayment: vi.fn(),
+        quotation: vi.fn(),
       },
       attachments: {
         list: vi.fn(),
@@ -39,6 +40,10 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 });
 
 const ceoUser = { id: 9, employeeId: 9, name: 'CEO ทดสอบ', role: 'ceo' };
+// Quotation issuing (can.generateQuotation) requires role 'sales' AND
+// isOwner (user.id === summary.createdById) — buildTicket()'s default
+// summary.createdById is 1, so this user matches it out of the box.
+const salesOwnerUser = { id: 1, employeeId: 1, name: 'พนักงานขาย', role: 'sales' };
 
 function buildTicket(overrides = {}) {
   return {
@@ -128,6 +133,7 @@ describe('TicketDetailPage', () => {
     api.tickets.reserveStock.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.recordDelivery.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.completeDelivery.mockResolvedValue({ ticket: buildTicket() });
+    api.tickets.quotation.mockResolvedValue({ ticket: buildTicket() });
   });
 
   it('renders a ticket from a mocked api.tickets.get', async () => {
@@ -405,5 +411,181 @@ describe('TicketDetailPage', () => {
       expect(queryClient.getQueryState(queryKeys.dashboardSummary())?.isInvalidated).toBe(true);
       expect(queryClient.getQueryState(queryKeys.notifications())?.isInvalidated).toBe(true);
     });
+  });
+
+  // ── UX-03 (slice 5a): inline validation for the quotation/payment/delivery
+  // modals — see TicketCreateModal.jsx / DepositNoticePage.jsx for the same
+  // aria-invalid + aria-describedby + role="alert" contract this mirrors. ──
+
+  it('payment modal: submitting with an empty amount marks the amount field inline and does not call recordPayment', async () => {
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed',
+      },
+      availableActions: [{ action: 'RECORD_PAYMENT', kind: 'payment', label: 'บันทึกรับชำระเงิน' }],
+    });
+
+    renderTicketDetailPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'บันทึกรับชำระเงิน' }));
+    const dialog = await screen.findByRole('dialog', { name: 'บันทึกรับชำระเงิน' });
+
+    // buildTicket()'s default amountOutstanding is 0, so openPaymentModal()
+    // leaves the amount field blank (its own suggested-amount logic only
+    // fills in a value when amountOutstanding > 0) — submitting right away
+    // exercises the "empty amount" branch of the guard.
+    const amountInput = within(dialog).getByLabelText('จำนวนเงิน');
+    expect(amountInput.value).toBe('');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+
+    const error = await within(dialog).findByText('กรุณากรอกยอดรับชำระ');
+    expect(error.getAttribute('role')).toBe('alert');
+    expect(amountInput.getAttribute('aria-invalid')).toBe('true');
+    expect(amountInput.getAttribute('aria-describedby')).toBe(error.id);
+    expect(api.tickets.recordPayment).not.toHaveBeenCalled();
+
+    // Fixing the field clears its inline error (and only that error).
+    fireEvent.change(amountInput, { target: { value: '500' } });
+    await waitFor(() => expect(within(dialog).queryByText('กรุณากรอกยอดรับชำระ')).toBeNull());
+    expect(amountInput.getAttribute('aria-invalid')).toBeNull();
+  });
+
+  it('quotation modal: submitting with no recipient marks the recipient control inline and does not call the quotation API', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({ summary: { status: 'approved', createdById: 1 } }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'approved',
+      },
+      availableActions: [{ action: 'GENERATE_QUOTATION', kind: 'operational', label: 'ออกใบเสนอราคา' }],
+    });
+
+    renderTicketDetailPage(salesOwnerUser);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ออกใบเสนอราคา' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ออกใบเสนอราคา' });
+
+    // No blank option exists on the select (DESIGNER/OWNER/BUYER only) — this
+    // simulates the recipientType being cleared out from under the control,
+    // which is exactly what `!quotationDraft.recipientType` guards against.
+    const recipientSelect = within(dialog).getByLabelText('ผู้รับใบเสนอราคา');
+    fireEvent.change(recipientSelect, { target: { value: '' } });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบเสนอราคา' }));
+
+    const error = await within(dialog).findByText('กรุณาเลือกผู้รับใบเสนอราคา');
+    expect(error.getAttribute('role')).toBe('alert');
+    expect(recipientSelect.getAttribute('aria-invalid')).toBe('true');
+    expect(recipientSelect.getAttribute('aria-describedby')).toBe(error.id);
+    expect(api.tickets.quotation).not.toHaveBeenCalled();
+  });
+
+  it('quotation modal: the amendment-reason rule only fires when amendmentRequired is true', async () => {
+    // amendmentRequired = chainAccepted || summary.paymentStatus != null —
+    // a non-null paymentStatus is the simplest way to force it true.
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({ summary: { status: 'approved', createdById: 1, paymentStatus: 'DEPOSIT_PAID' } }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'approved',
+      },
+      availableActions: [{ action: 'GENERATE_QUOTATION', kind: 'operational', label: 'ออกใบเสนอราคา' }],
+    });
+
+    renderTicketDetailPage(salesOwnerUser);
+
+    // buildTicket()'s default quotations is [] (no prior quotation), so the
+    // open-trigger button reads plain 'ออกใบเสนอราคา' (the '...ใหม่ (Rev)'
+    // label only appears once quotations.length > 0) — amendmentRequired is
+    // still forced true here via summary.paymentStatus, independent of that.
+    fireEvent.click(await screen.findByRole('button', { name: 'ออกใบเสนอราคา' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ออกใบเสนอราคา' });
+
+    // recipientType already defaults to a valid value (DESIGNER) — only the
+    // amendment reason is missing, isolating this one rule. Grab the field
+    // reference before submitting: once its inline error renders, the error
+    // <p> is a descendant of the same <label> (same convention as
+    // TicketCreateModal.jsx), which would make the label's accessible name
+    // ambiguous for a later getByLabelText lookup.
+    const reasonField = within(dialog).getByLabelText('เหตุผลการแก้ไข');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบเสนอราคา' }));
+
+    const error = await within(dialog).findByText('กรุณาระบุเหตุผลการแก้ไขใบเสนอราคา');
+    expect(error.getAttribute('role')).toBe('alert');
+    expect(reasonField.getAttribute('aria-invalid')).toBe('true');
+    expect(api.tickets.quotation).not.toHaveBeenCalled();
+
+    // Fixing it clears the error and lets the submit through.
+    fireEvent.change(reasonField, { target: { value: 'ลูกค้าขอปรับราคาใหม่' } });
+    await waitFor(() => expect(within(dialog).queryByText('กรุณาระบุเหตุผลการแก้ไขใบเสนอราคา')).toBeNull());
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบเสนอราคา' }));
+    await waitFor(() => expect(api.tickets.quotation).toHaveBeenCalledTimes(1));
+  });
+
+  it('quotation modal: amendment reason is not required when amendmentRequired is false', async () => {
+    // Default fixture: no accepted quotation in the chain, no paymentStatus
+    // — amendmentRequired stays false, so the field never even renders and
+    // submit must go straight through without any inline error.
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({ summary: { status: 'approved', createdById: 1 } }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'approved',
+      },
+      availableActions: [{ action: 'GENERATE_QUOTATION', kind: 'operational', label: 'ออกใบเสนอราคา' }],
+    });
+
+    renderTicketDetailPage(salesOwnerUser);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ออกใบเสนอราคา' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ออกใบเสนอราคา' });
+
+    expect(within(dialog).queryByLabelText('เหตุผลการแก้ไข')).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบเสนอราคา' }));
+
+    await waitFor(() => expect(api.tickets.quotation).toHaveBeenCalledTimes(1));
+    expect(within(dialog).queryByRole('alert')).toBeNull();
+  });
+
+  it('delivery modal: submitting with no line quantities shows the group-level error and does not call recordDelivery', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: { status: 'quotation_issued', salesStage: 'PROCUREMENT', fulfillmentStatus: null },
+        items: [{ id: 70101, brand: 'SCG', model: 'A1', qty: 10, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: 150 }],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', paymentStatus: 'FULLY_PAID', fulfillmentStatus: null, status: 'quotation_issued',
+      },
+      availableActions: [{ action: 'RECORD_PARTIAL_DELIVERY', kind: 'fulfillment', label: 'บันทึกการส่งสินค้า' }],
+    });
+
+    renderTicketDetailPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'บันทึกการส่งสินค้า' }));
+    const dialog = await screen.findByRole('dialog', { name: 'บันทึกการส่งสินค้า' });
+
+    // openDeliveryModal() prefills each line with its remaining qty (here
+    // 10), so the "no line has qty > 0" rule only fires once every line is
+    // explicitly zeroed out — this is the single-item case.
+    const qtyInput = within(dialog).getByLabelText('จำนวนส่งมอบ SCG A1');
+    fireEvent.change(qtyInput, { target: { value: '0' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+
+    const error = await within(dialog).findByText('กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ');
+    expect(error.getAttribute('role')).toBe('alert');
+    const panel = document.getElementById('delivery-lines-panel');
+    expect(panel.getAttribute('aria-invalid')).toBe('true');
+    expect(panel.getAttribute('aria-describedby')).toBe(error.id);
+    expect(api.tickets.recordDelivery).not.toHaveBeenCalled();
+
+    // Fixing one line (qty > 0) clears the group-level error.
+    fireEvent.change(qtyInput, { target: { value: '3' } });
+    await waitFor(() => expect(within(dialog).queryByText('กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ')).toBeNull());
+    expect(panel.getAttribute('aria-invalid')).toBeNull();
   });
 });

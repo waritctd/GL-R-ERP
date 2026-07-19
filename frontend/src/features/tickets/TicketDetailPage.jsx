@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
+import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
@@ -150,6 +151,43 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const [reviseScope, setReviseScope] = useState('QTY_OR_NOTE');
   const [reviseReason, setReviseReason] = useState('');
 
+  // UX-03 (slice 5a): inline field-level validation for the quotation /
+  // payment / delivery modals below. One shared dict, keyed per-modal so a
+  // stale error from one modal can never bleed into another:
+  // 'quotation.recipientType' | 'quotation.amendmentReason' | 'payment.amount'
+  // | 'delivery.lines' (the last is a group-level rule with no single owning
+  // field — same convention DepositNoticePage.jsx uses for its 'items' key).
+  // fieldRefs holds the DOM node for each key so a failed submit can
+  // scroll/focus the first invalid control. Same shape as the fieldErrors/
+  // fieldRefs/clearFieldError pattern already used in TicketCreateModal.jsx,
+  // CeoSettingsPage.jsx and DepositNoticePage.jsx on this branch.
+  const [fieldErrors, setFieldErrors] = useState({});
+  const fieldRefs = useRef({});
+  function clearFieldError(key) {
+    setFieldErrors((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }
+  // Replaces every fieldErrors key under `prefix` with `errors` in one go —
+  // used both to report a fresh validation failure for one modal (errors
+  // non-empty) and to clear that modal's errors on open/close/success
+  // (errors = {}), without touching any other modal's keys.
+  function setFieldErrorsForPrefix(prefix, errors) {
+    setFieldErrors((prev) => {
+      const kept = Object.fromEntries(Object.entries(prev).filter(([k]) => !k.startsWith(prefix)));
+      return { ...kept, ...errors };
+    });
+  }
+  function focusFirstInvalid(key) {
+    const node = fieldRefs.current[key];
+    if (!node) return;
+    if (typeof node.scrollIntoView === 'function') node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    node.focus();
+  }
+
   // Quotation recipient/terms form (Phase 2 recipient-scoped chains)
   const [quotationModal, setQuotationModal] = useState(null); // { defaultRecipientType, amendmentRequired } | null
   const [quotationDraft, setQuotationDraft] = useState({
@@ -283,6 +321,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   // Same UI-draft reset the old doAction ran on every successful action.
   function resetActionDrafts() {
+    // UX-03: a successful action closes every modal below (quotation/payment/
+    // delivery among them) — clear every field error along with them so a
+    // stale one can never greet the user on the next open.
+    setFieldErrors({});
     setProposeMode(false);
     setEditMode(false);
     setEditDraft([]);
@@ -835,17 +877,31 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       amendmentReason: '',
     });
     setQuotationModal({ amendmentRequired });
+    // UX-03: reset on open so a stale error from a previous attempt never
+    // greets the user on reopen.
+    setFieldErrorsForPrefix('quotation.', {});
+  }
+
+  function closeQuotationModal() {
+    setQuotationModal(null);
+    setFieldErrorsForPrefix('quotation.', {});
   }
 
   async function submitQuotation() {
+    const errors = {};
     if (!quotationDraft.recipientType) {
-      showToast('error', 'กรุณาเลือกผู้รับใบเสนอราคา');
-      return;
+      errors['quotation.recipientType'] = 'กรุณาเลือกผู้รับใบเสนอราคา';
     }
     if (quotationModal?.amendmentRequired && !quotationDraft.amendmentReason.trim()) {
-      showToast('error', 'กรุณาระบุเหตุผลการแก้ไขใบเสนอราคา');
+      errors['quotation.amendmentReason'] = 'กรุณาระบุเหตุผลการแก้ไขใบเสนอราคา';
+    }
+    const order = Object.keys(errors);
+    if (order.length > 0) {
+      setFieldErrorsForPrefix('quotation.', errors);
+      focusFirstInvalid(order[0]);
       return;
     }
+    setFieldErrorsForPrefix('quotation.', {});
     const payload = Object.fromEntries(Object.entries(quotationDraft).map(([key, value]) => [
       key,
       typeof value === 'string' && value.trim() === '' ? null : value,
@@ -892,9 +948,11 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   async function handleRecordPayment() {
     const amount = Number(paymentDraft.amount);
     if (!amount || amount <= 0) {
-      showToast('error', 'กรุณากรอกยอดรับชำระ');
+      setFieldErrorsForPrefix('payment.', { 'payment.amount': 'กรุณากรอกยอดรับชำระ' });
+      focusFirstInvalid('payment.amount');
       return;
     }
+    setFieldErrorsForPrefix('payment.', {});
     const payload = {
       kind: paymentDraft.kind,
       amount,
@@ -922,9 +980,11 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       .map((item) => ({ itemId: item.id, qty: Number(deliveryDraft.lines[item.id] || 0) }))
       .filter((line) => line.qty > 0);
     if (lines.length === 0) {
-      showToast('error', 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ');
+      setFieldErrorsForPrefix('delivery.', { 'delivery.lines': 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ' });
+      focusFirstInvalid('delivery.lines');
       return;
     }
+    setFieldErrorsForPrefix('delivery.', {});
     await doAction(() => api.tickets.recordDelivery(ticketId, {
       source: deliveryDraft.source,
       note: deliveryDraft.note.trim() || null,
@@ -963,6 +1023,14 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       allowOverpayment: false,
     });
     setPaymentModal(true);
+    // UX-03: reset on open so a stale error from a previous attempt never
+    // greets the user on reopen.
+    setFieldErrorsForPrefix('payment.', {});
+  }
+
+  function closePaymentModal() {
+    setPaymentModal(false);
+    setFieldErrorsForPrefix('payment.', {});
   }
 
   function openDeliveryModal() {
@@ -973,6 +1041,14 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     });
     setDeliveryDraft({ source, note: '', lines });
     setDeliveryModal(true);
+    // UX-03: reset on open so a stale error from a previous attempt never
+    // greets the user on reopen.
+    setFieldErrorsForPrefix('delivery.', {});
+  }
+
+  function closeDeliveryModal() {
+    setDeliveryModal(false);
+    setFieldErrorsForPrefix('delivery.', {});
   }
 
   function openStockModal() {
@@ -2070,10 +2146,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       {quotationModal && (
         <Modal
           title="ออกใบเสนอราคา"
-          onClose={() => setQuotationModal(null)}
+          onClose={closeQuotationModal}
           footer={(
           <>
-            <button type="button" className="secondary-button" onClick={() => setQuotationModal(null)}>
+            <button type="button" className="secondary-button" onClick={closeQuotationModal}>
               ยกเลิก
             </button>
             <button type="button" className="primary-button" disabled={actionLoading} onClick={submitQuotation}>
@@ -2087,6 +2163,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
             ผู้รับใบเสนอราคา
             <select
+              id="quotation-recipient-type"
+              ref={(el) => { fieldRefs.current['quotation.recipientType'] = el; }}
               value={quotationDraft.recipientType}
               onChange={(e) => {
                 const recipientType = e.target.value;
@@ -2094,12 +2172,20 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   (q.recipientType ?? 'UNSPECIFIED') === recipientType && q.docStatus === 'ACCEPTED');
                 setQuotationDraft((draft) => ({ ...draft, recipientType }));
                 setQuotationModal((modal) => ({ ...(modal ?? {}), amendmentRequired: chainAccepted || summary.paymentStatus != null }));
+                clearFieldError('quotation.recipientType');
               }}
+              aria-invalid={fieldErrors['quotation.recipientType'] ? true : undefined}
+              aria-describedby={fieldErrors['quotation.recipientType'] ? fieldErrorId('quotation-recipient-type') : undefined}
             >
               <option value="DESIGNER">ผู้ออกแบบ</option>
               <option value="OWNER">เจ้าของ</option>
               <option value="BUYER">ผู้ซื้อ-ผู้รับเหมา</option>
             </select>
+            {fieldErrors['quotation.recipientType'] ? (
+              <p id={fieldErrorId('quotation-recipient-type')} role="alert" style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                {fieldErrors['quotation.recipientType']}
+              </p>
+            ) : null}
           </label>
           <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
             ชื่อผู้รับ/บริษัท
@@ -2131,8 +2217,22 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           {quotationModal?.amendmentRequired && (
             <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
               เหตุผลการแก้ไข
-              <textarea rows={3} value={quotationDraft.amendmentReason}
-                onChange={(e) => setQuotationDraft((draft) => ({ ...draft, amendmentReason: e.target.value }))} />
+              <textarea rows={3}
+                id="quotation-amendment-reason"
+                ref={(el) => { fieldRefs.current['quotation.amendmentReason'] = el; }}
+                value={quotationDraft.amendmentReason}
+                onChange={(e) => {
+                  setQuotationDraft((draft) => ({ ...draft, amendmentReason: e.target.value }));
+                  clearFieldError('quotation.amendmentReason');
+                }}
+                aria-invalid={fieldErrors['quotation.amendmentReason'] ? true : undefined}
+                aria-describedby={fieldErrors['quotation.amendmentReason'] ? fieldErrorId('quotation-amendment-reason') : undefined}
+              />
+              {fieldErrors['quotation.amendmentReason'] ? (
+                <p id={fieldErrorId('quotation-amendment-reason')} role="alert" style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                  {fieldErrors['quotation.amendmentReason']}
+                </p>
+              ) : null}
             </label>
           )}
           </div>
@@ -2142,10 +2242,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       {paymentModal && (
         <Modal
           title="บันทึกรับชำระเงิน"
-          onClose={() => setPaymentModal(false)}
+          onClose={closePaymentModal}
           footer={(
             <>
-              <button type="button" className="secondary-button" onClick={() => setPaymentModal(false)}>ยกเลิก</button>
+              <button type="button" className="secondary-button" onClick={closePaymentModal}>ยกเลิก</button>
               <button type="button" className="primary-button" disabled={actionLoading} onClick={handleRecordPayment}>
                 บันทึก
               </button>
@@ -2164,8 +2264,22 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
               <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
                 จำนวนเงิน
-                <input type="number" min="0" step="0.01" value={paymentDraft.amount}
-                  onChange={(e) => setPaymentDraft((draft) => ({ ...draft, amount: e.target.value }))} />
+                <input type="number" min="0" step="0.01"
+                  id="payment-amount"
+                  ref={(el) => { fieldRefs.current['payment.amount'] = el; }}
+                  value={paymentDraft.amount}
+                  onChange={(e) => {
+                    setPaymentDraft((draft) => ({ ...draft, amount: e.target.value }));
+                    clearFieldError('payment.amount');
+                  }}
+                  aria-invalid={fieldErrors['payment.amount'] ? true : undefined}
+                  aria-describedby={fieldErrors['payment.amount'] ? fieldErrorId('payment-amount') : undefined}
+                />
+                {fieldErrors['payment.amount'] ? (
+                  <p id={fieldErrorId('payment-amount')} role="alert" style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                    {fieldErrors['payment.amount']}
+                  </p>
+                ) : null}
               </label>
               <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
                 วันที่รับเงิน
@@ -2242,10 +2356,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       {deliveryModal && (
         <Modal
           title="บันทึกการส่งสินค้า"
-          onClose={() => setDeliveryModal(false)}
+          onClose={closeDeliveryModal}
           footer={(
             <>
-              <button type="button" className="secondary-button" onClick={() => setDeliveryModal(false)}>ยกเลิก</button>
+              <button type="button" className="secondary-button" onClick={closeDeliveryModal}>ยกเลิก</button>
               <button type="button" className="primary-button" disabled={actionLoading} onClick={handleRecordDelivery}>
                 บันทึก
               </button>
@@ -2261,7 +2375,21 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 <option value="STOCK">STOCK</option>
               </select>
             </label>
-            <div style={{ display: 'grid', gap: 8 }}>
+            {/*
+              UX-03: "at least 1 line item with qty > 0" is a group-level rule
+              with no single owning field — like DepositNoticePage's
+              doc-items-panel, the wrapper itself is the scroll/focus target,
+              carrying aria-invalid/aria-describedby and a tabIndex so a plain
+              div is focusable.
+            */}
+            <div
+              id="delivery-lines-panel"
+              ref={(el) => { fieldRefs.current['delivery.lines'] = el; }}
+              tabIndex={-1}
+              aria-invalid={fieldErrors['delivery.lines'] ? true : undefined}
+              aria-describedby={fieldErrors['delivery.lines'] ? fieldErrorId('delivery-lines-panel') : undefined}
+              style={{ display: 'grid', gap: 8 }}
+            >
               {items.map((item) => {
                 const remaining = Math.max(0, Number(item.qty || 0) - Number(item.qtyDelivered || 0));
                 return (
@@ -2276,13 +2404,26 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 	                    <input type="number" min="0" max={remaining} step="0.01"
                         aria-label={`จำนวนส่งมอบ ${item.brand} ${item.model || ''}`}
 	                      value={deliveryDraft.lines[item.id] ?? ''}
-                      onChange={(e) => setDeliveryDraft((draft) => ({
-                        ...draft,
-                        lines: { ...draft.lines, [item.id]: e.target.value },
-                      }))} />
+                      onChange={(e) => {
+                        const { value } = e.target;
+                        setDeliveryDraft((draft) => ({
+                          ...draft,
+                          lines: { ...draft.lines, [item.id]: value },
+                        }));
+                        // The group rule is "at least one line qty > 0" — the
+                        // instant THIS line goes positive that rule is
+                        // satisfied regardless of the other lines' values
+                        // (they were all <=0 for the error to have fired).
+                        if (Number(value) > 0) clearFieldError('delivery.lines');
+                      }} />
                   </label>
                 );
               })}
+              {fieldErrors['delivery.lines'] ? (
+                <p id={fieldErrorId('delivery-lines-panel')} role="alert" style={{ margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--color-danger)' }}>
+                  {fieldErrors['delivery.lines']}
+                </p>
+              ) : null}
             </div>
             <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
               หมายเหตุ
