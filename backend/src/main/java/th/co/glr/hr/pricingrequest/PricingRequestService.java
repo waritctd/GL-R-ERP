@@ -1,0 +1,331 @@
+package th.co.glr.hr.pricingrequest;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.LocalDate;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestDetailDto;
+import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
+import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.CancelPricingRequestRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
+import th.co.glr.hr.ticket.DealLifecycle;
+import th.co.glr.hr.ticket.TicketRepository;
+import th.co.glr.hr.ticket.TicketSummaryDto;
+
+/**
+ * Workflow + authz for the PricingRequest aggregate (commit 3): createDraft, get,
+ * listForTicket, list (the Import queue), updateDraft, submit, cancel. Pickup /
+ * requestInformation / respondInformation are commit 4 and deliberately absent.
+ *
+ * <p>Reads {@link TicketRepository} for deal ownership/lifecycle/scoping context
+ * only — this class never writes through it. Writing to {@code sales.ticket} /
+ * {@code sales.ticket_event} from here would be exactly the coupling
+ * {@link PricingRequestRepository}'s class-level Javadoc warns against.
+ */
+@Service
+public class PricingRequestService {
+    // Duplicated from th.co.glr.hr.ticket.TicketService's role sets on purpose:
+    // TicketService keeps its own copies private, and this is a distinct
+    // aggregate's authz, not a side door into ticket workflow rules. Keep the
+    // two lists in sync by inspection, not by sharing a mutable reference.
+    private static final Set<String> SALES_ROLES  = Set.of("sales");
+    private static final Set<String> IMPORT_ROLES = Set.of("import");
+    // Mirrors TicketService.VIEWER_ROLES: who may read a pricing request at all.
+    // sales_manager stays read-only oversight here too — never add it to
+    // SALES_ROLES/IMPORT_ROLES.
+    private static final Set<String> VIEWER_ROLES =
+        Set.of("sales", "import", "ceo", "account", "sales_manager");
+
+    private final PricingRequestRepository requests;
+    private final TicketRepository tickets;
+    private final NotificationRepository notifications;
+    private final ObjectMapper objectMapper;
+
+    public PricingRequestService(PricingRequestRepository requests, TicketRepository tickets,
+                                 NotificationRepository notifications, ObjectMapper objectMapper) {
+        this.requests      = requests;
+        this.tickets       = tickets;
+        this.notifications = notifications;
+        this.objectMapper  = objectMapper;
+    }
+
+    @Transactional
+    public PricingRequestDetailDto createDraft(long ticketId, CreatePricingRequestRequest request, UserPrincipal actor) {
+        requireRole(actor, SALES_ROLES);
+        TicketSummaryDto ticket = requireTicket(ticketId);
+        requireActive(ticket);
+        if (ticket.createdById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        // Validate BEFORE persisting — an unvalidated value hits a CHECK
+        // constraint in the repository and fails closed (500), same reasoning
+        // as TicketService.create's Priority guard.
+        validateRecipient(request.recipientType());
+        validateItems(request.items());
+        validateCurrency(request.targetCurrency());
+        validateRecipientIdentifiable(request.recipientContactId(), request.recipientLabel());
+        validateSourceItemsBelongToTicket(ticketId, request.items());
+
+        String requestCode = requests.nextRequestCode();
+        long id = requests.create(ticketId, requestCode, request, actor.id());
+        requests.addEvent(id, ticketId, actor.id(), actor.name(),
+            PricingRequestEventKind.PRICING_REQUEST_CREATED, null, PricingRequestStatus.DRAFT, null, null);
+        // Deliberately no notification, no ticket status change, no sales_stage
+        // change, no ticket_item write — a draft is the rep's private scratchpad
+        // until submit().
+        return detail(id);
+    }
+
+    public PricingRequestDetailDto get(long id, UserPrincipal actor) {
+        requireViewable(id, actor);
+        return detail(id);
+    }
+
+    public List<PricingRequestSummaryDto> listForTicket(long ticketId, UserPrincipal actor) {
+        requireRole(actor, VIEWER_ROLES);
+        TicketSummaryDto ticket = requireTicket(ticketId);
+        if ("sales".equals(actor.role()) && ticket.createdById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        return requests.findByTicket(ticketId);
+    }
+
+    public List<PricingRequestSummaryDto> list(String status, Long assignedImportId,
+                                               boolean activeDealsOnly, UserPrincipal actor) {
+        requireRole(actor, VIEWER_ROLES);
+        if (status != null && !PricingRequestStatus.isValid(status)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown status '" + status + "'");
+        }
+        Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
+        return requests.findSummaries(status, assignedImportId, createdByFilter, activeDealsOnly);
+    }
+
+    @Transactional
+    public PricingRequestDetailDto updateDraft(long id, UpdatePricingRequestRequest request, UserPrincipal actor) {
+        requireRole(actor, SALES_ROLES);
+        PricingRequestSummaryDto summary = requireViewable(id, actor);
+        if (summary.ticketCreatedById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        if (!PricingRequestStatus.DRAFT.equals(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Expected status 'DRAFT' but pricing request is '" + summary.status() + "'");
+        }
+        if (request.recipientType() != null) {
+            validateRecipient(request.recipientType());
+        }
+        if (request.items() != null) {
+            validateItems(request.items());
+            validateSourceItemsBelongToTicket(summary.ticketId(), request.items());
+        }
+        if (request.targetCurrency() != null) {
+            validateCurrency(request.targetCurrency());
+        }
+        // recipientContactId/recipientLabel are a joint invariant (at least one
+        // must identify a recipient) — only re-check it when the caller is
+        // actually touching one of the two fields; a partial edit of an
+        // unrelated field (e.g. requiredDate) must not be forced to resupply
+        // the recipient. updateDraft's COALESCE semantics mean a field left
+        // null keeps its current value, so merge onto the existing summary
+        // before validating.
+        if (request.recipientContactId() != null || request.recipientLabel() != null) {
+            Long effectiveContactId = request.recipientContactId() != null
+                ? request.recipientContactId() : summary.recipientContactId();
+            String effectiveLabel = request.recipientLabel() != null
+                ? request.recipientLabel() : summary.recipientLabel();
+            validateRecipientIdentifiable(effectiveContactId, effectiveLabel);
+        }
+
+        boolean updated = requests.updateDraft(id, request);
+        if (!updated) {
+            throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
+        }
+        requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
+            PricingRequestEventKind.PRICING_REQUEST_UPDATED, PricingRequestStatus.DRAFT, PricingRequestStatus.DRAFT,
+            null, null);
+        return detail(id);
+    }
+
+    @Transactional
+    public PricingRequestDetailDto submit(long id, UserPrincipal actor) {
+        requireRole(actor, SALES_ROLES);
+        PricingRequestSummaryDto summary = requireViewable(id, actor);
+        if (summary.ticketCreatedById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        if (!PricingRequestStatus.DRAFT.equals(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Expected status 'DRAFT' but pricing request is '" + summary.status() + "'");
+        }
+        TicketSummaryDto ticket = requireTicket(summary.ticketId());
+        requireActive(ticket);
+
+        List<PricingRequestItemDto> items = requests.findItems(id);
+        if (items.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องมีรายการสินค้าอย่างน้อย 1 รายการก่อนส่งคำขอราคา");
+        }
+        if (summary.recipientContactId() == null
+                && (summary.recipientLabel() == null || summary.recipientLabel().isBlank())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุผู้รับคำขอราคา");
+        }
+        if (summary.requiredDate() != null && summary.requiredDate().isBefore(LocalDate.now())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ต้องการต้องไม่ใช่วันที่ผ่านมาแล้ว");
+        }
+        Set<Long> seenSourceItemIds = new HashSet<>();
+        for (PricingRequestItemDto item : items) {
+            if (item.sourceTicketItemId() != null && !seenSourceItemIds.add(item.sourceTicketItemId())) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "มีรายการอ้างอิงสินค้าเดิมซ้ำกัน");
+            }
+        }
+
+        int rows = requests.transition(id, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
+        if (rows == 0) {
+            // Compare-and-set miss: someone else changed this row between the
+            // requireViewable() read above and this call. Don't re-query to
+            // build a nicer message — see PricingRequestRepository.transition's
+            // Javadoc for why.
+            throw new ApiException(HttpStatus.CONFLICT, "Pricing request was updated by another user");
+        }
+        requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
+            PricingRequestEventKind.PRICING_REQUEST_SUBMITTED, PricingRequestStatus.DRAFT,
+            PricingRequestStatus.SUBMITTED, null, null);
+        // NotificationRepository.notifyByRole hardcodes link = "/tickets/{ticketId}"
+        // (there is no pricing-request-specific route yet), so this deep-links to
+        // the deal page rather than the request itself. Known limitation — a
+        // request-specific deep link is a follow-up, not part of this branch.
+        notifications.notifyByRole("import", summary.ticketId(), "SUBMITTED",
+            "ใบขอราคา " + summary.requestCode() + " รอการรับเรื่อง");
+        return detail(id);
+    }
+
+    @Transactional
+    public PricingRequestDetailDto cancel(long id, CancelPricingRequestRequest request, UserPrincipal actor) {
+        PricingRequestSummaryDto summary = requireViewable(id, actor);
+        // Mirrors TicketService.cancel: ownership is the gate, not a role set —
+        // extended here with an explicit CEO override (unlike TicketService.cancel,
+        // which currently has none) so a manager can unwind an abandoned draft
+        // without needing the original sales rep's session.
+        if (!"ceo".equals(actor.role()) && summary.ticketCreatedById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        if (!PricingRequestStatus.canTransition(summary.status(), PricingRequestStatus.CANCELLED)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Cannot cancel pricing request in status '" + summary.status() + "'");
+        }
+        int rows = requests.transition(id, summary.status(), PricingRequestStatus.CANCELLED, null, actor.id());
+        if (rows == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "Pricing request was updated by another user");
+        }
+        String metadataJson = toReasonMetadataJson(request.reason());
+        requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
+            PricingRequestEventKind.PRICING_REQUEST_CANCELLED, summary.status(), PricingRequestStatus.CANCELLED,
+            request.reason(), metadataJson);
+        return detail(id);
+    }
+
+    // --- private helpers ---
+
+    private String toReasonMetadataJson(String reason) {
+        try {
+            return objectMapper.writeValueAsString(Map.of("reason", reason));
+        } catch (JsonProcessingException e) {
+            // reason is @NotBlank String — a plain string can never actually fail
+            // Jackson serialisation, but the checked exception must still be
+            // handled rather than escaping as an unhandled 500.
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid cancel reason");
+        }
+    }
+
+    private PricingRequestDetailDto detail(long id) {
+        PricingRequestSummaryDto summary = requests.findSummary(id)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Pricing request not found"));
+        return new PricingRequestDetailDto(summary, requests.findItems(id), requests.findEvents(id));
+    }
+
+    /**
+     * The one read-access rule for a single pricing request: viewer role
+     * required, and sales reps only see requests on tickets they created.
+     * Every read path (get, updateDraft, submit, cancel) must go through this.
+     */
+    private PricingRequestSummaryDto requireViewable(long id, UserPrincipal actor) {
+        requireRole(actor, VIEWER_ROLES);
+        PricingRequestSummaryDto summary = requests.findSummary(id)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Pricing request not found"));
+        if ("sales".equals(actor.role()) && summary.ticketCreatedById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        return summary;
+    }
+
+    private TicketSummaryDto requireTicket(long ticketId) {
+        return tickets.findById(ticketId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"))
+            .summary();
+    }
+
+    private void requireActive(TicketSummaryDto ticket) {
+        if (!DealLifecycle.ACTIVE.equals(ticket.lifecycle())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + ticket.lifecycle() + ") จึงสร้าง/แก้ไขคำขอราคาไม่ได้");
+        }
+    }
+
+    private void requireRole(UserPrincipal actor, Set<String> allowed) {
+        if (!allowed.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+    }
+
+    private void validateRecipient(String recipientType) {
+        if (!PricingRequestRecipient.isValid(recipientType)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown recipient type '" + recipientType + "'");
+        }
+    }
+
+    private void validateItems(List<PricingRequestItemRequest> items) {
+        for (PricingRequestItemRequest item : items) {
+            if (!QuantityType.isValid(item.quantityType())) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown quantity type '" + item.quantityType() + "'");
+            }
+        }
+    }
+
+    private void validateCurrency(String currency) {
+        if (currency == null || currency.isBlank()) {
+            return;
+        }
+        if (currency.trim().length() != 3) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "targetCurrency must be a 3-letter currency code");
+        }
+    }
+
+    private void validateRecipientIdentifiable(Long recipientContactId, String recipientLabel) {
+        if (recipientContactId == null && (recipientLabel == null || recipientLabel.isBlank())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ต้องระบุผู้รับคำขอราคา (recipientContactId หรือ recipientLabel)");
+        }
+    }
+
+    private void validateSourceItemsBelongToTicket(long ticketId, List<PricingRequestItemRequest> items) {
+        List<Long> validItemIds = requests.findItemIdsForTicket(ticketId);
+        for (PricingRequestItemRequest item : items) {
+            Long sourceTicketItemId = item.sourceTicketItemId();
+            if (sourceTicketItemId != null && !validItemIds.contains(sourceTicketItemId)) {
+                throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "sourceTicketItemId " + sourceTicketItemId + " does not belong to ticket " + ticketId);
+            }
+        }
+    }
+}
