@@ -156,6 +156,9 @@ export function AttendancePage({ user, showToast }) {
   const rowKey = (day) => `${day.employee_id}:${day.work_date}`;
 
   async function toggleExpanded(day) {
+    // A day with no scans has nothing to reveal; opening an empty panel and firing a request for it
+    // is worse than not responding to the click.
+    if (!day.punch_count) return;
     const key = rowKey(day);
     if (expandedKey === key) {
       setExpandedKey(null);
@@ -460,7 +463,14 @@ export function AttendancePage({ user, showToast }) {
   );
 }
 
-/** The raw scans behind a day — what settles "the system says 17:32, why?". */
+/**
+ * The raw scans behind a day — what settles "the system says 17:32, why?".
+ *
+ * <p>Someone may badge in and out several times a day (lunch, moving between sites). The first and
+ * last scan are what became the เข้า/ออก columns, so they are labelled as such; everything between
+ * is marked ระหว่างวัน. Without the labels this is just a list of times that silently repeats the
+ * two values already shown on the row.
+ */
 function PunchDetail({ punches }) {
   if (!punches) {
     return <span className="text-xs text-text-muted">กำลังโหลดรายการสแกน…</span>;
@@ -470,15 +480,33 @@ function PunchDetail({ punches }) {
   }
   return (
     <ul className="grid gap-1">
-      {punches.map((punch) => (
-        <li key={punch.punch_id} className="flex flex-wrap gap-2 text-xs text-text-muted">
-          <strong className="text-text">{formatBangkokTime(punch.punch_time)}</strong>
-          <span>{punch.site_code || '-'}</span>
-          <span>{punch.device_name || punch.device_code || '-'}</span>
-        </li>
-      ))}
+      {punches.map((punch, index) => {
+        const role = punchRole(index, punches.length);
+        return (
+          <li key={punch.punch_id} className="flex flex-wrap items-baseline gap-2 text-xs text-text-muted">
+            <span className={`w-[68px] shrink-0 ${role.muted ? 'text-text-muted' : 'text-text-secondary'}`}>
+              {role.label}
+            </span>
+            <strong className="text-text">{formatBangkokTime(punch.punch_time)}</strong>
+            <span>{punch.site_code || '-'}</span>
+            <span>{punch.device_name || punch.device_code || '-'}</span>
+          </li>
+        );
+      })}
     </ul>
   );
+}
+
+/**
+ * Which of the day's scans a punch is. A single scan is deliberately left unlabelled — the day row
+ * already says which side is missing, and calling a lone punch "เข้า" would assert a direction the
+ * data does not carry.
+ */
+function punchRole(index, total) {
+  if (total === 1) return { label: '', muted: true };
+  if (index === 0) return { label: 'เข้า', muted: false };
+  if (index === total - 1) return { label: 'ออก', muted: false };
+  return { label: 'ระหว่างวัน', muted: true };
 }
 
 function StatusCell({ day }) {
@@ -525,16 +553,39 @@ function AttendanceDayCard({ day, isSelfView }) {
       {day.status === 'NO_RECORD' && !hasTimes ? (
         <span className="text-xs text-text-muted">ไม่มีข้อมูล</span>
       ) : (
-        <StatusCell day={day} />
+        <span className="flex flex-wrap items-center gap-1.5">
+          <StatusCell day={day} />
+          <MidDayPunchChip day={day} />
+        </span>
       )}
     </>
+  );
+}
+
+/**
+ * Marks days that hold more than the two scans already shown in the เข้า/ออก columns, so the ones
+ * worth opening are findable without clicking rows at random. An ordinary in/out day stays clean —
+ * which is what gives the chip its meaning.
+ */
+function MidDayPunchChip({ day }) {
+  if (!day.punch_count || day.punch_count <= 2) return null;
+  return (
+    <span className="inline-flex items-center gap-1 rounded-sm bg-surface-subtle px-1.5 py-0.5 text-2xs text-text-muted">
+      <Icon name="chevronDown" size={11} />
+      {day.punch_count} ครั้ง
+    </span>
   );
 }
 
 const statusColumn = {
   key: 'status',
   header: 'สถานะ',
-  render: (day) => <StatusCell day={day} />,
+  render: (day) => (
+    <span className="flex flex-wrap items-center gap-1.5">
+      <StatusCell day={day} />
+      <MidDayPunchChip day={day} />
+    </span>
+  ),
 };
 
 const timeColumns = [

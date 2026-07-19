@@ -1093,25 +1093,32 @@ function bangkokStamp(date, hour, minute) {
  */
 const MOCK_DAY_SHAPES = [
   { kind: 'present', inAt: [8, 24], outAt: [17, 35] },
-  { kind: 'late', inAt: [8, 47], outAt: [17, 32], late: 17 },
+  { kind: 'late', inAt: [8, 47], outAt: [17, 32], late: 17, midAt: [[12, 3], [13, 10], [15, 30]] },
   { kind: 'early', inAt: [8, 28], outAt: [16, 20], early: 70 },
   { kind: 'missingOut', inAt: [8, 31], outAt: null },
-  { kind: 'overtime', inAt: [8, 20], outAt: [19, 0], overtime: 90 },
+  { kind: 'overtime', inAt: [8, 20], outAt: [19, 0], overtime: 90, midAt: [[12, 15]] },
   { kind: 'present', inAt: [8, 12], outAt: [17, 40] },
   { kind: 'workedLate', inAt: [8, 26], outAt: [18, 40] },
   { kind: 'missingIn', inAt: null, outAt: [17, 25] },
   { kind: 'none' },
 ];
 
+/**
+ * Keyed on the employee's own id, never their position in the array. The drill-down fetches punches
+ * for a single employee, so a position-based key would pick a different shape there than the day
+ * list used and the expanded scans would contradict the row they came from.
+ */
+function mockDayShape(employee, date) {
+  return MOCK_DAY_SHAPES[(date.getDate() + Number(employee.id)) % MOCK_DAY_SHAPES.length];
+}
+
 function mockAttendanceDays(employees, from, to) {
   const days = [];
   for (let cursor = new Date(to); cursor >= from; cursor.setDate(cursor.getDate() - 1)) {
     const date = new Date(cursor);
     const weekend = date.getDay() === 0 || date.getDay() === 6;
-    employees.forEach((employee, index) => {
-      const shape = weekend
-        ? { kind: 'nonWorkday' }
-        : MOCK_DAY_SHAPES[(date.getDate() + index) % MOCK_DAY_SHAPES.length];
+    employees.forEach((employee) => {
+      const shape = weekend ? { kind: 'nonWorkday' } : mockDayShape(employee, date);
       days.push(mockAttendanceDay(employee, date, shape, weekend));
     });
   }
@@ -1178,7 +1185,9 @@ function mockAttendanceDay(employee, date, shape, weekend) {
     late_minutes: shape.late ?? 0,
     early_leave_minutes: shape.early ?? 0,
     overtime_minutes: shape.overtime ?? 0,
-    punch_count: (checkIn ? 1 : 0) + (checkOut ? 1 : 0),
+    // Counts every scan, not just the two that became check-in/out — that difference is exactly
+    // what the day row's "N ครั้ง" affordance surfaces.
+    punch_count: (checkIn ? 1 : 0) + (checkOut ? 1 : 0) + (shape.midAt?.length ?? 0),
     site_code: 'SHOWROOM',
     status,
     flags,
@@ -1193,10 +1202,11 @@ function mockAttendancePunches(employees, params) {
   const weekend = date.getDay() === 0 || date.getDay() === 6;
   if (weekend) return [];
 
-  return employees.flatMap((employee, index) => {
-    const shape = MOCK_DAY_SHAPES[(date.getDate() + index) % MOCK_DAY_SHAPES.length];
+  return employees.flatMap((employee) => {
+    const shape = mockDayShape(employee, date);
     if (shape.kind === 'none' || shape.kind === 'nonWorkday') return [];
-    const stamps = [shape.inAt, shape.outAt].filter(Boolean);
+    // Chronological, so the consumer sees the same first/last the backend derived by MIN/MAX.
+    const stamps = [shape.inAt, ...(shape.midAt ?? []), shape.outAt].filter(Boolean);
     return stamps.map((stamp, position) => ({
       punch_id: employee.id * 1000 + date.getDate() * 10 + position,
       employee_id: employee.id,
