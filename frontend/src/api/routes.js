@@ -164,6 +164,9 @@ export const API_ROUTES = {
     factoryQuoteStartNegotiation: (id) => `/api/factory-quotes/${id}/start-negotiation`,
     factoryQuoteReady: (id) => `/api/factory-quotes/${id}/mark-ready-for-costing`,
     factoryQuoteNotAvailable: (id) => `/api/factory-quotes/${id}/not-available`,
+    factoryQuoteAttachments: (id) => `/api/factory-quotes/${id}/attachments`,
+    factoryQuoteAttachmentFile: (id) => `/api/factory-quote-attachments/${id}/file`,
+    factoryQuoteAttachment: (id) => `/api/factory-quote-attachments/${id}`,
     costings: (id) => `/api/pricing-requests/${id}/costings`,
     costing: (id) => `/api/pricing-costings/${id}`,
     costingRecalculate: (id) => `/api/pricing-costings/${id}/recalculate`,
@@ -172,6 +175,7 @@ export const API_ROUTES = {
     pickup: (id) => `/api/pricing-requests/${id}/pickup`,
     requestInformation: (id) => `/api/pricing-requests/${id}/request-information`,
     respondInformation: (id) => `/api/pricing-requests/${id}/respond-information`,
+    customerChangeRevision: (id) => `/api/pricing-requests/${id}/customer-change-revision`,
     cancel: (id) => `/api/pricing-requests/${id}/cancel`,
   },
 };

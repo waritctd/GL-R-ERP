@@ -68,4 +68,17 @@ public final class PricingRequestRequests {
     public record CancelPricingRequestRequest(
         @NotBlank String reason
     ) {}
+
+    public record CustomerChangeRevisionRequest(
+        @NotBlank String revisionReason,
+        @NotBlank String clientRequestId,
+        @NotBlank String recipientType,
+        Long recipientContactId,
+        String recipientLabel,
+        LocalDate requiredDate,
+        @DecimalMin("0.00") BigDecimal customerTargetPrice,
+        String targetCurrency,
+        String note,
+        @NotEmpty List<@Valid PricingRequestItemRequest> items
+    ) {}
 }

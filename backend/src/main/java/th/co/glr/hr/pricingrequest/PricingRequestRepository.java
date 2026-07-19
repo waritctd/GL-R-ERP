@@ -17,6 +17,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestEventDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.CustomerChangeRevisionRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 
@@ -268,6 +269,83 @@ public class PricingRequestRepository {
             replaceItems(id, request.items());
         }
         return rows == 1;
+    }
+
+    public long createCustomerChangeRevision(PricingRequestSummaryDto parent, CustomerChangeRevisionRequest request,
+                                             long actorId) {
+        Long rootId = findRootPricingRequestId(parent.id()).orElse(parent.id());
+        Integer nextRevision = jdbc.queryForObject("""
+            SELECT COALESCE(MAX(revision_no), 0) + 1
+              FROM sales.pricing_request
+             WHERE pricing_request_id = :rootId
+                OR root_pricing_request_id = :rootId
+            """, Map.of("rootId", rootId), Integer.class);
+        String targetCurrency = normalizeCurrency(request.targetCurrency());
+        List<Long> ids = jdbc.query("""
+            INSERT INTO sales.pricing_request
+                (request_code, ticket_id, recipient_type, recipient_contact_id, recipient_label,
+                 status, requested_by, required_date, customer_target_price, target_currency, note,
+                 parent_pricing_request_id, root_pricing_request_id, revision_no, revision_reason,
+                 client_request_id)
+            VALUES
+                (:requestCode, :ticketId, :recipientType, :recipientContactId, :recipientLabel,
+                 'DRAFT', :requestedBy, :requiredDate, :customerTargetPrice, :targetCurrency, :note,
+                 :parentId, :rootId, :revisionNo, :revisionReason, CAST(:clientRequestId AS uuid))
+            ON CONFLICT (requested_by, client_request_id)
+            WHERE client_request_id IS NOT NULL
+            DO NOTHING
+            RETURNING pricing_request_id
+            """,
+            new MapSqlParameterSource()
+                .addValue("requestCode", nextRequestCode())
+                .addValue("ticketId", parent.ticketId())
+                .addValue("recipientType", request.recipientType())
+                .addValue("recipientContactId", request.recipientContactId())
+                .addValue("recipientLabel", request.recipientLabel())
+                .addValue("requestedBy", actorId)
+                .addValue("requiredDate", request.requiredDate())
+                .addValue("customerTargetPrice", request.customerTargetPrice())
+                .addValue("targetCurrency", targetCurrency)
+                .addValue("note", request.note())
+                .addValue("parentId", parent.id())
+                .addValue("rootId", rootId)
+                .addValue("revisionNo", nextRevision)
+                .addValue("revisionReason", request.revisionReason())
+                .addValue("clientRequestId", request.clientRequestId()),
+            (rs, rowNum) -> rs.getLong("pricing_request_id"));
+        if (ids.isEmpty()) {
+            return 0L;
+        }
+        long pricingRequestId = ids.get(0);
+        replaceItems(pricingRequestId, request.items());
+        return pricingRequestId;
+    }
+
+    public Optional<Long> findRootPricingRequestId(long pricingRequestId) {
+        try {
+            return Optional.ofNullable(jdbc.queryForObject("""
+                SELECT root_pricing_request_id
+                  FROM sales.pricing_request
+                 WHERE pricing_request_id = :id
+                """, Map.of("id", pricingRequestId), Long.class));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    public int supersedeForCustomerRevision(long id, long supersededByPricingRequestId) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request
+               SET status = 'SUPERSEDED',
+                   superseded_at = now(),
+                   superseded_by_pricing_request_id = :supersededBy,
+                   updated_at = now()
+             WHERE pricing_request_id = :id
+               AND status <> 'SUPERSEDED'
+               AND status <> 'CANCELLED'
+            """, new MapSqlParameterSource()
+                .addValue("id", id)
+                .addValue("supersededBy", supersededByPricingRequestId));
     }
 
     public void addEvent(long pricingRequestId, long ticketId, Long actorId, String actorName,

@@ -34,7 +34,8 @@ public final class FactoryQuoteDtos {
         boolean current,
         Instant createdAt,
         Instant updatedAt,
-        List<FactoryQuoteItemDto> items
+        List<FactoryQuoteItemDto> items,
+        List<FactoryQuoteAttachmentDto> attachments
     ) {}
 
     public record FactoryQuoteItemDto(
@@ -56,5 +57,15 @@ public final class FactoryQuoteDtos {
         String availabilityNote,
         String lineNote,
         int sortOrder
+    ) {}
+
+    public record FactoryQuoteAttachmentDto(
+        long id,
+        long factoryQuoteId,
+        String fileName,
+        String mimeType,
+        Long fileSize,
+        long uploadedBy,
+        Instant uploadedAt
     ) {}
 }

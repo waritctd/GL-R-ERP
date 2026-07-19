@@ -24,6 +24,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CancelPricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.CustomerChangeRevisionRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.RequestMoreInformationRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.RespondMoreInformationRequest;
@@ -398,6 +399,61 @@ public class PricingRequestService {
         return detail(id);
     }
 
+    @Transactional
+    public PricingRequestDetailDto createCustomerChangeRevision(long id, CustomerChangeRevisionRequest request,
+                                                                UserPrincipal actor) {
+        requireRole(actor, SALES_ROLES);
+        PricingRequestSummaryDto parent = requireViewable(id, actor);
+        if (parent.ticketCreatedById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        if (Set.of(PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, PricingRequestStatus.SUPERSEDED)
+                .contains(parent.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Customer-change revisions can only be created from an active submitted pricing request");
+        }
+        TicketSummaryDto ticket = requireTicket(parent.ticketId());
+        requireActive(ticket);
+        validateClientRequestId(request.clientRequestId());
+        PricingRequestSummaryDto existing = existingForClientRequest(actor.id(), request.clientRequestId());
+        if (existing != null) {
+            if (existing.parentPricingRequestId() == null || existing.parentPricingRequestId() != id) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "clientRequestId has already been used for another pricing request");
+            }
+            return detail(existing.id());
+        }
+        validateRecipient(request.recipientType());
+        validateRecipientIdentifiable(request.recipientContactId(), request.recipientLabel());
+        validateRecipientContactBelongsToCustomer(request.recipientContactId(), ticket);
+        validateCurrency(request.targetCurrency());
+        validateItems(request.items());
+        validateSourceItemsBelongToTicket(parent.ticketId(), request.items());
+
+        long newId = requests.createCustomerChangeRevision(parent, request, actor.id());
+        if (newId == 0L) {
+            existing = existingForClientRequest(actor.id(), request.clientRequestId());
+            if (existing != null) {
+                return detail(existing.id());
+            }
+            throw new ApiException(HttpStatus.CONFLICT, "clientRequestId has already been used");
+        }
+        int superseded = requests.supersedeForCustomerRevision(parent.id(), newId);
+        if (superseded == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
+        }
+        requests.cancelOpenStep2Children(parent.id(), "Customer change revision created", actor.id());
+        requests.addEvent(parent.id(), parent.ticketId(), actor.id(), actor.name(),
+            PricingRequestEventKind.PRICING_REQUEST_REVISED, parent.status(), PricingRequestStatus.SUPERSEDED,
+            request.revisionReason(), toRevisionMetadataJson(newId));
+        requests.addEvent(newId, parent.ticketId(), actor.id(), actor.name(),
+            PricingRequestEventKind.PRICING_REQUEST_CREATED, null, PricingRequestStatus.DRAFT,
+            request.revisionReason(), toRevisionMetadataJson(parent.id()));
+        notifyCeo(parent, PricingRequestEventKind.PRICING_REQUEST_REVISED,
+            "ใบขอราคา " + parent.requestCode() + " มี customer-change revision ใหม่");
+        return detail(newId);
+    }
+
     /**
      * Internal cascade: when a deal reaches a terminal lifecycle state (lost or
      * cancelled — see {@code TicketService.markLost}/{@code cancel}), any pricing
@@ -548,6 +604,14 @@ public class PricingRequestService {
             return objectMapper.writeValueAsString(Map.of("reason", reason, "cause", "DEAL_TERMINAL"));
         } catch (JsonProcessingException e) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid cancel reason");
+        }
+    }
+
+    private String toRevisionMetadataJson(long relatedPricingRequestId) {
+        try {
+            return objectMapper.writeValueAsString(Map.of("relatedPricingRequestId", relatedPricingRequestId));
+        } catch (JsonProcessingException e) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid revision metadata");
         }
     }
 

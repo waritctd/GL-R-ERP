@@ -19,6 +19,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CancelPricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.CustomerChangeRevisionRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.RequestMoreInformationRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.RespondMoreInformationRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
@@ -130,5 +131,16 @@ public class PricingRequestController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         return new PricingRequestDetailResponse(pricingRequests.cancel(id, request, user));
+    }
+
+    @PostMapping("/pricing-requests/{id}/customer-change-revision")
+    ResponseEntity<PricingRequestDetailResponse> customerChangeRevision(
+        @PathVariable long id,
+        @Valid @RequestBody CustomerChangeRevisionRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        var created = pricingRequests.createCustomerChangeRevision(id, request, user);
+        return ResponseEntity.status(HttpStatus.CREATED).body(new PricingRequestDetailResponse(created));
     }
 }
