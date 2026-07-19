@@ -139,39 +139,23 @@ public class TicketService {
         }
         String code = tickets.nextTicketCode();
         long id = tickets.create(request, code, actor.id(), actor.name());
-        // A lightweight lead-stage deal (no items yet) is the rep's private draft —
-        // import/CEO are only notified when it actually enters the price-request
-        // flow (created with items, or submitted later).
-        if (request.items() != null && !request.items().isEmpty()) {
-            notifications.notifyByRole("import", id, "SUBMITTED",
-                "Ticket " + code + " รอการรับเรื่อง");
-            notifications.notifyByRole("ceo", id, "SUBMITTED",
-                "Ticket " + code + " ส่งเข้าระบบแล้ว");
-        }
+        // A newly created deal is always the rep's private draft, whether or not
+        // products were attached — import/CEO are notified only once a
+        // PricingRequest is created and submitted against this ticket, never at
+        // deal-creation time.
         return requireTicket(id);
     }
 
-    @Transactional
+    /**
+     * Deprecated: ticket-level price-request submission has been replaced by the
+     * PricingRequest aggregate. Create a pricing request via
+     * {@code POST /api/tickets/{ticketId}/pricing-requests} and submit it via
+     * {@code POST /api/pricing-requests/{id}/submit} instead.
+     */
+    @Deprecated
     public TicketDto submit(long ticketId, UserPrincipal actor) {
-        requireRole(actor, SALES_ROLES);
-        TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.DRAFT);
-        requireActive(s);
-        if (s.createdById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only the ticket owner can submit");
-        }
-        // A lightweight lead-stage deal has no items yet — the price-request flow
-        // needs at least one product line before import can price it.
-        if (s.itemCount() == 0) {
-            throw new ApiException(HttpStatus.BAD_REQUEST,
-                "ต้องเพิ่มรายการสินค้าอย่างน้อย 1 รายการก่อนส่งขอราคา");
-        }
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.SUBMITTED, TicketStatus.DRAFT, TicketStatus.SUBMITTED, null);
-        notifications.notifyByRole("import", ticketId, "SUBMITTED",
-            "Ticket " + s.code() + " รอการรับเรื่อง");
-        notifications.notifyByRole("ceo", ticketId, "SUBMITTED",
-            "Ticket " + s.code() + " ส่งเข้าระบบแล้ว");
-        return requireTicket(ticketId);
+        throw new ApiException(HttpStatus.CONFLICT,
+            "การส่งขอราคาย้ายไปอยู่ที่ใบขอราคา (PCR) แล้ว — กรุณาสร้างใบขอราคาจากหน้าดีลแทน");
     }
 
     @Transactional
@@ -1468,7 +1452,6 @@ public class TicketService {
 
     private void addOperationalActions(List<TicketActionDto> actions, TicketDto ticket, UserPrincipal actor) {
         TicketSummaryDto s = ticket.summary();
-        if (canSubmit(s, actor)) actions.add(new TicketActionDto("SUBMIT", "operational", "ส่งขอราคา"));
         if (IMPORT_ROLES.contains(actor.role()) && TicketStatus.SUBMITTED.equals(s.status())) {
             actions.add(new TicketActionDto("PICKUP", "operational", "รับเรื่อง"));
         }
@@ -1579,11 +1562,6 @@ public class TicketService {
             actions.add(new TicketActionDto("MARK_QUOTATION_REJECTED", "doc", "บันทึกลูกค้าปฏิเสธใบเสนอราคา",
                 List.of("quotationId")));
         }
-    }
-
-    private boolean canSubmit(TicketSummaryDto s, UserPrincipal actor) {
-        return SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id()
-            && TicketStatus.DRAFT.equals(s.status()) && s.itemCount() > 0;
     }
 
     private boolean canGenerateQuotation(TicketSummaryDto s, UserPrincipal actor) {

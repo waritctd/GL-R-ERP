@@ -257,43 +257,22 @@ class TicketServiceTest {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
-    // ── submit ────────────────────────────────────────────────────────────
+    // ── submit (deprecated — superseded by the PricingRequest aggregate) ───
 
     @Test
-    void submit_draftByOwner_transitionsToSubmitted() {
+    void submit_isDeprecatedAndAlwaysConflicts() {
+        // Ticket-level submit() is retired: pricing now starts on a PricingRequest
+        // (POST /api/tickets/{id}/pricing-requests + /pricing-requests/{id}/submit).
+        // This must 409 unconditionally — regardless of status, role, or ownership —
+        // and must not touch the repository or notifications at all.
         stubTicketWithItems(10L, 1L, TicketStatus.DRAFT, List.of(sampleItem()));
 
-        service.submit(10L, salesActor);
-
-        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.SUBMITTED), eq(TicketStatus.DRAFT), eq(TicketStatus.SUBMITTED), isNull());
-        verify(notifRepo).notifyByRole(eq("import"), eq(10L), anyString(), anyString());
-        verify(notifRepo).notifyByRole(eq("ceo"),    eq(10L), anyString(), anyString());
-    }
-
-    @Test
-    void submit_rejectsDraftWithoutItems() {
-        // A lightweight lead-stage deal (V50) has no items yet — it cannot enter the
-        // price-request flow until at least one product line exists.
-        stubTicket(10L, 1L, TicketStatus.DRAFT);
-        assertBadRequest(() -> service.submit(10L, salesActor));
-    }
-
-    @Test
-    void submit_rejectsImportRole() {
-        assertForbidden(() -> service.submit(10L, importActor));
-    }
-
-    @Test
-    void submit_rejectsNonOwner() {
-        stubTicket(10L, 1L, TicketStatus.DRAFT);
-        assertForbidden(() -> service.submit(10L, otherSales));
-    }
-
-    @Test
-    void submit_rejectsWrongStatus() {
-        stubTicket(10L, 1L, TicketStatus.SUBMITTED);
         assertConflict(() -> service.submit(10L, salesActor));
+        assertConflict(() -> service.submit(10L, otherSales));
+        assertConflict(() -> service.submit(10L, importActor));
+
+        verify(ticketRepo, never()).addEvent(anyLong(), anyLong(), anyString(), anyString(), any(), any(), any());
+        verify(notifRepo, never()).notifyByRole(any(), anyLong(), any(), any());
     }
 
     // ── pickup ────────────────────────────────────────────────────────────
@@ -1250,16 +1229,30 @@ class TicketServiceTest {
     }
 
     @Test
-    void create_withItems_entersPriceRequestFlowAndNotifies() {
+    void create_withItems_startsAsDraft() {
+        // Pricing no longer starts at deal-creation time: products attached here are
+        // preliminary deal products, and a PricingRequest must be created + submitted
+        // separately before the deal can be priced.
         var request = createRequest(77L, List.of(sampleItemRequest()));
         when(ticketRepo.nextTicketCode()).thenReturn("PR-2026-0001");
         when(ticketRepo.create(request, "PR-2026-0001", 1L, "sales")).thenReturn(10L);
-        stubTicket(10L, 1L, TicketStatus.SUBMITTED);
+        stubTicket(10L, 1L, TicketStatus.DRAFT);
+
+        TicketDto result = service.create(request, salesActor);
+
+        assertThat(result.summary().status()).isEqualTo(TicketStatus.DRAFT);
+    }
+
+    @Test
+    void create_withItems_doesNotNotifyImportOrCeo() {
+        var request = createRequest(77L, List.of(sampleItemRequest()));
+        when(ticketRepo.nextTicketCode()).thenReturn("PR-2026-0001");
+        when(ticketRepo.create(request, "PR-2026-0001", 1L, "sales")).thenReturn(10L);
+        stubTicket(10L, 1L, TicketStatus.DRAFT);
 
         service.create(request, salesActor);
 
-        verify(notifRepo).notifyByRole(eq("import"), eq(10L), anyString(), anyString());
-        verify(notifRepo).notifyByRole(eq("ceo"), eq(10L), anyString(), anyString());
+        verify(notifRepo, never()).notifyByRole(any(), anyLong(), any(), any());
     }
 
     @Test
@@ -1556,7 +1549,8 @@ class TicketServiceTest {
         List<String> names = actions.availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
 
         assertThat(actions.currentState().lifecycle()).isEqualTo(DealLifecycle.ACTIVE);
-        assertThat(names).contains("SUBMIT", "UPDATE_STAGE", "PLACE_ON_HOLD");
+        assertThat(names).contains("UPDATE_STAGE", "PLACE_ON_HOLD");
+        assertThat(names).doesNotContain("SUBMIT");
         assertForbidden(() -> service.actions(10L, otherSales));
 
         stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(sampleItem()), null, null,
@@ -1577,6 +1571,24 @@ class TicketServiceTest {
             .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
         assertThat(quotationManager).doesNotContain("MARK_QUOTATION_SENT", "MARK_QUOTATION_ACCEPTED",
             "MARK_QUOTATION_REJECTED");
+    }
+
+    @Test
+    void actions_neverOffersSubmit() {
+        // Ticket-level submit() is retired (superseded by the PricingRequest
+        // aggregate) — the API must never advertise a "SUBMIT" action that would
+        // 409 on click, for a draft ticket owned by its creator with items or not.
+        stubDeal(20L, 1L, TicketStatus.DRAFT, List.of(sampleItem()), null, null,
+            DealStage.PRESENTATION, null);
+        List<String> withItems = service.actions(20L, salesActor)
+            .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
+        assertThat(withItems).doesNotContain("SUBMIT");
+
+        stubDeal(21L, 1L, TicketStatus.DRAFT, List.of(), null, null,
+            DealStage.PRESENTATION, null);
+        List<String> withoutItems = service.actions(21L, salesActor)
+            .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
+        assertThat(withoutItems).doesNotContain("SUBMIT");
     }
 
     // ── deal pipeline: auto-advance from operational transitions (V50) ────
@@ -1695,7 +1707,10 @@ class TicketServiceTest {
         // handoff 58's read-only invariant — operational actions must stay denied.
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null, DealStage.NEGOTIATION, null);
         assertForbidden(() -> service.confirmCustomer(10L, salesManagerActor));
-        assertForbidden(() -> service.submit(10L, salesManagerActor));
+        // submit() is now deprecated and 409s unconditionally for every role, sales_manager
+        // included — it no longer demonstrates a role-specific denial, just that the route
+        // is dead. See submit_isDeprecatedAndAlwaysConflicts for the dedicated coverage.
+        assertConflict(() -> service.submit(10L, salesManagerActor));
         service.markLost(10L, DealLostReason.RELATIONSHIP, null, salesManagerActor);
         verify(ticketRepo).markDealLost(10L, DealLostReason.RELATIONSHIP);
     }
@@ -2010,8 +2025,11 @@ class TicketServiceTest {
     }
 
     @Test
-    void submit_rejectsSalesManagerRole() {
-        assertForbidden(() -> service.submit(10L, salesManagerActor));
+    void submit_deprecatedConflictAppliesToSalesManagerToo() {
+        // Previously sales_manager got a distinct FORBIDDEN (read-only role, never owns a
+        // ticket). Now that submit() is deprecated for everyone, it 409s here the same as
+        // for any other role — there is no more role-specific denial to assert.
+        assertConflict(() -> service.submit(10L, salesManagerActor));
     }
 
     @Test
