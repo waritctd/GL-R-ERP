@@ -224,4 +224,66 @@ describe('PricingRequestPanel', () => {
     await screen.findByText('PCR-2026-0001');
     expect(screen.queryByRole('button', { name: 'ขอข้อมูลเพิ่มเติม' })).toBeNull();
   });
+
+  // Gap 1 (review-remediation Commit F): the respond-information round trip had
+  // zero frontend coverage — canRespondInformation existed and the modal was
+  // wired, but nothing exercised either. Mirrors the request-information tests
+  // above, on the sales side of the MORE_INFO_REQUIRED loop.
+
+  it('shows "ตอบข้อมูลเพิ่มเติม" to the owning sales rep while MORE_INFO_REQUIRED', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({
+      items: [summary({ status: 'MORE_INFO_REQUIRED', assignedImportId: 5, assignedImportName: importUser.name })],
+    });
+    renderPanel();
+
+    expect(await screen.findByRole('button', { name: 'ตอบข้อมูลเพิ่มเติม' })).not.toBeNull();
+  });
+
+  it('does not offer "ตอบข้อมูลเพิ่มเติม" to a non-owner sales rep', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({
+      items: [summary({ status: 'MORE_INFO_REQUIRED', assignedImportId: 5, assignedImportName: importUser.name })],
+    });
+    renderPanel({ user: { id: 2, name: 'อื่น', role: 'sales' } });
+
+    await screen.findByText('PCR-2026-0001');
+    expect(screen.queryByRole('button', { name: 'ตอบข้อมูลเพิ่มเติม' })).toBeNull();
+  });
+
+  it('does not offer "ตอบข้อมูลเพิ่มเติม" to import, even the assigned reviewer', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({
+      items: [summary({ status: 'MORE_INFO_REQUIRED', assignedImportId: 5, assignedImportName: importUser.name })],
+    });
+    renderPanel({ user: importUser });
+
+    await screen.findByText('PCR-2026-0001');
+    expect(screen.queryByRole('button', { name: 'ตอบข้อมูลเพิ่มเติม' })).toBeNull();
+  });
+
+  it('requires response text before saving, then calls respondInformation with the typed text', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({
+      items: [summary({ status: 'MORE_INFO_REQUIRED', assignedImportId: 5, assignedImportName: importUser.name })],
+    });
+    api.pricingRequests.respondInformation.mockResolvedValue({
+      pricingRequest: { summary: summary({ status: 'IMPORT_REVIEWING' }), items: [], events: [] },
+    });
+    renderPanel();
+
+    const respondButton = await screen.findByRole('button', { name: 'ตอบข้อมูลเพิ่มเติม' });
+    fireEvent.click(respondButton);
+
+    const saveButton = await screen.findByRole('button', { name: 'บันทึก' });
+    // Required response text — the save action stays disabled until something is typed.
+    expect(saveButton.disabled).toBe(true);
+
+    const textarea = screen.getByRole('dialog').querySelector('textarea');
+    fireEvent.change(textarea, { target: { value: 'ขนาด 60x60' } });
+    expect(saveButton.disabled).toBe(false);
+
+    fireEvent.click(saveButton);
+
+    await waitFor(() => expect(api.pricingRequests.respondInformation).toHaveBeenCalledWith(
+      1,
+      { response: 'ขนาด 60x60' },
+    ));
+  });
 });
