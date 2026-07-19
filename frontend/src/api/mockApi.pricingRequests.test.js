@@ -101,3 +101,53 @@ describe('mockApi.pricingRequests.create item validation', () => {
   // real-world scenario is a row that predates this rule in a persisted
   // database, which a fresh in-memory mock session has no equivalent of.
 });
+
+// Review-remediation plan Commit D, part 1: the DB column is
+// `revision_no INTEGER NOT NULL DEFAULT 1` with
+// `CONSTRAINT chk_pricing_request_revision CHECK (revision_no >= 1)` (V58).
+// A mock starting the counter at 0 would produce a row production would
+// reject outright, not merely a cosmetic divergence.
+describe('mockApi.pricingRequests revisionNo', () => {
+  it('create() starts a new pricing request at revisionNo 1, not 0', async () => {
+    const ticket = await ownedActiveTicketWithItems();
+    const { pricingRequest } = await api.pricingRequests.create(ticket.summary.id, validPayload(ticket.items[0]));
+    expect(pricingRequest.summary.revisionNo).toBe(1);
+  });
+});
+
+// Review-remediation plan Commit D, part 1: PricingRequestRepository.
+// normalizeCurrency trims + uppercases on both insert and update, blank ->
+// null. Mirrored here so the mock never stores a raw/mixed-case currency the
+// real column wouldn't have.
+describe('mockApi.pricingRequests targetCurrency normalisation', () => {
+  it('create() normalises a lowercase/whitespace-padded currency to trimmed uppercase', async () => {
+    const ticket = await ownedActiveTicketWithItems();
+    const payload = validPayload(ticket.items[0]);
+    payload.targetCurrency = ' usd ';
+    const { pricingRequest } = await api.pricingRequests.create(ticket.summary.id, payload);
+    expect(pricingRequest.summary.targetCurrency).toBe('USD');
+  });
+
+  it('create() collapses an empty-string currency to null, mirroring normalizeCurrency', async () => {
+    // Note: a whitespace-only string (e.g. '   ') is NOT used here — it trips
+    // a separate, pre-existing format-check quirk unrelated to this fix (the
+    // mock's 3-letter-code check treats a non-empty whitespace string as
+    // "present but wrong length" where the Java validateCurrency's
+    // currency.isBlank() short-circuits first); out of scope for this task.
+    const ticket = await ownedActiveTicketWithItems();
+    const payload = validPayload(ticket.items[0]);
+    payload.targetCurrency = '';
+    const { pricingRequest } = await api.pricingRequests.create(ticket.summary.id, payload);
+    expect(pricingRequest.summary.targetCurrency).toBeNull();
+  });
+
+  it('update() re-normalises targetCurrency the same way create() does', async () => {
+    const ticket = await ownedActiveTicketWithItems();
+    const created = await api.pricingRequests.create(ticket.summary.id, validPayload(ticket.items[0]));
+    const draftId = created.pricingRequest.summary.id;
+    const payload = validPayload(ticket.items[0]);
+    payload.targetCurrency = 'thb';
+    const { pricingRequest } = await api.pricingRequests.update(draftId, payload);
+    expect(pricingRequest.summary.targetCurrency).toBe('THB');
+  });
+});

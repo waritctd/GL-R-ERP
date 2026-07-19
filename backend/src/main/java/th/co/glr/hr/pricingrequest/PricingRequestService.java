@@ -3,10 +3,13 @@ package th.co.glr.hr.pricingrequest;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,6 +44,8 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  */
 @Service
 public class PricingRequestService {
+    private static final Logger log = LoggerFactory.getLogger(PricingRequestService.class);
+
     // Duplicated from th.co.glr.hr.ticket.TicketService's role sets on purpose:
     // TicketService keeps its own copies private, and this is a distinct
     // aggregate's authz, not a side door into ticket workflow rules. Keep the
@@ -52,6 +57,8 @@ public class PricingRequestService {
     // SALES_ROLES/IMPORT_ROLES.
     private static final Set<String> VIEWER_ROLES =
         Set.of("sales", "import", "ceo", "account", "sales_manager");
+    /** Bounded retry count for {@link #cancelOpenForTicket}'s per-row compare-and-set. */
+    private static final int CANCEL_MAX_ATTEMPTS = 3;
 
     private final PricingRequestRepository requests;
     private final TicketRepository tickets;
@@ -237,7 +244,12 @@ public class PricingRequestService {
         // (there is no pricing-request-specific route yet), so this deep-links to
         // the deal page rather than the request itself. Known limitation — a
         // request-specific deep link is a follow-up, not part of this branch.
-        notifications.notifyByRole("import", summary.ticketId(), "SUBMITTED",
+        // Type is "PRICING_REQUEST_SUBMITTED", NOT "SUBMITTED" — the latter is
+        // also TicketEventKind.SUBMITTED, which would make a pricing-request
+        // notification indistinguishable from a ticket-submitted one in
+        // hr.notification.type (no DB CHECK constraint on that column, so a new
+        // value here is safe).
+        notifications.notifyByRole("import", summary.ticketId(), "PRICING_REQUEST_SUBMITTED",
             "ใบขอราคา " + summary.requestCode() + " รอการรับเรื่อง");
         return detail(id);
     }
@@ -391,10 +403,25 @@ public class PricingRequestService {
      * IMPORT_REVIEWING — the normal restriction exists to protect a live workflow,
      * which no longer exists once the deal itself is terminal.
      *
-     * @return the number of pricing requests actually cancelled.
+     * <p>Each row's compare-and-set is retried up to {@value #CANCEL_MAX_ATTEMPTS}
+     * times against a freshly-read status before being given up on — a single
+     * raced miss (something else changed the row between the read and the
+     * transition) is common enough under concurrent access that giving up on the
+     * first attempt would routinely leave a request stranded open on a dead deal.
+     * A row already found CANCELLED (by whatever raced it) counts as settled, not
+     * abandoned — the outcome we wanted already holds. Exhausting every attempt
+     * without settling is logged as a warning (this method has no caller that
+     * inspects the return value today, so the log is the only operator-visible
+     * signal) and the id is reported back in {@link CancelOpenForTicketResult
+     * #abandonedIds()} so a future caller can act on it without a plain count
+     * silently swallowing the distinction between "nothing was open" and
+     * "gave up on some".
+     *
+     * @return cancelled/abandoned counts — never throws for a row that could not
+     *         be settled, so the caller's own deal-terminal transaction still commits.
      */
     @Transactional
-    public int cancelOpenForTicket(long ticketId, String reason, UserPrincipal actor) {
+    public CancelOpenForTicketResult cancelOpenForTicket(long ticketId, String reason, UserPrincipal actor) {
         // Deliberately NO requireTicket/requireActive here: this method exists
         // BECAUSE the deal just left ACTIVE (see the class Javadoc above) — a
         // lifecycle gate would make the one caller that needs this cascade fail
@@ -402,31 +429,73 @@ public class PricingRequestService {
         List<Long> openIds = requests.findOpenIdsForTicket(ticketId);
         String metadataJson = toDeadDealMetadataJson(reason);
         int cancelledCount = 0;
+        List<Long> abandonedIds = new ArrayList<>();
         for (Long id : openIds) {
-            // Read each request's own current status to pass as the compare-and-set
-            // `expected` value — findOpenIdsForTicket only guarantees status <>
-            // CANCELLED, not which of the open statuses each row is actually in.
-            PricingRequestSummaryDto summary = requests.findSummary(id).orElse(null);
-            if (summary == null) {
-                continue;
+            boolean settled = false;
+            for (int attempt = 1; attempt <= CANCEL_MAX_ATTEMPTS; attempt++) {
+                // Read each request's own current status fresh on every attempt to pass
+                // as the compare-and-set `expected` value — findOpenIdsForTicket only
+                // guarantees status <> CANCELLED at the time it ran, not which of the
+                // open statuses each row is still in by the time we get here.
+                PricingRequestSummaryDto summary = requests.findSummary(id).orElse(null);
+                if (summary == null) {
+                    // Row is gone entirely — nothing left to cancel.
+                    settled = true;
+                    break;
+                }
+                if (PricingRequestStatus.CANCELLED.equals(summary.status())) {
+                    // Already cancelled by whatever raced us — the wanted end state
+                    // already holds. Not a new cancellation of ours, so it does not
+                    // add to cancelledCount, but it is settled, not abandoned.
+                    settled = true;
+                    break;
+                }
+                int rows = requests.transition(id, summary.status(), PricingRequestStatus.CANCELLED, null, actor.id());
+                if (rows == 1) {
+                    requests.addEvent(id, ticketId, actor.id(), actor.name(),
+                        PricingRequestEventKind.PRICING_REQUEST_CANCELLED, summary.status(), PricingRequestStatus.CANCELLED,
+                        reason, metadataJson);
+                    cancelledCount++;
+                    settled = true;
+                    break;
+                }
+                // Raced: something else changed this row between the read above and
+                // this transition (e.g. the owning rep cancelled it concurrently).
+                // Retry with a fresh read rather than giving up on the first miss —
+                // this runs inside the caller's transaction (REQUIRED propagation
+                // joins markLost/cancel), so throwing here would roll back the deal's
+                // own lost/cancel too, which must never happen over a pricing request
+                // someone else is concurrently touching.
+                log.warn("cancelOpenForTicket: transition raced on pricing request {} (ticket {}, attempt {}/{}); retrying",
+                    id, ticketId, attempt, CANCEL_MAX_ATTEMPTS);
             }
-            int rows = requests.transition(id, summary.status(), PricingRequestStatus.CANCELLED, null, actor.id());
-            if (rows == 0) {
-                // Raced: something else changed this row between findOpenIdsForTicket
-                // and this transition (e.g. the owning rep cancelled it concurrently).
-                // Skip it rather than failing the whole deal-terminal cascade. This
-                // runs inside the caller's transaction (REQUIRED propagation joins
-                // markLost/cancel), so throwing here would roll back the deal's own
-                // lost/cancel too — losing a legitimate deal state change over a
-                // request someone else has already resolved.
-                continue;
+            if (!settled) {
+                abandonedIds.add(id);
+                log.warn("cancelOpenForTicket: gave up cancelling pricing request {} for ticket {} after {} attempts (reason={}) — it remains open",
+                    id, ticketId, CANCEL_MAX_ATTEMPTS, reason);
             }
-            requests.addEvent(id, ticketId, actor.id(), actor.name(),
-                PricingRequestEventKind.PRICING_REQUEST_CANCELLED, summary.status(), PricingRequestStatus.CANCELLED,
-                reason, metadataJson);
-            cancelledCount++;
         }
-        return cancelledCount;
+        return new CancelOpenForTicketResult(cancelledCount, abandonedIds);
+    }
+
+    /**
+     * Result of {@link #cancelOpenForTicket}: distinguishes "nothing was open" /
+     * "cancelled everything that was open" from "gave up on N requests after
+     * retrying" — a plain {@code int} count cannot express that distinction, which
+     * matters because an abandoned row is left open on an otherwise-dead deal.
+     */
+    public record CancelOpenForTicketResult(int cancelledCount, List<Long> abandonedIds) {
+        public CancelOpenForTicketResult {
+            abandonedIds = List.copyOf(abandonedIds);
+        }
+
+        public int abandonedCount() {
+            return abandonedIds.size();
+        }
+
+        public boolean hasAbandoned() {
+            return !abandonedIds.isEmpty();
+        }
     }
 
     // --- private helpers ---

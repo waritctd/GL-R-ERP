@@ -33,6 +33,7 @@ import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
+import th.co.glr.hr.pricingrequest.PricingRequestService.CancelOpenForTicketResult;
 
 class TicketServiceTest {
 
@@ -42,6 +43,16 @@ class TicketServiceTest {
     private final CustomerRepository customerRepo = mock(CustomerRepository.class);
     private final QuotationRenderer quotationRenderer = new QuotationRenderer();
     private final PricingRequestService pricingRequestService = mock(PricingRequestService.class);
+    {
+        // Default stub so every markLost/cancel call in this file (most of which
+        // don't care about the cascade's own outcome) doesn't NPE on
+        // cancelOpenForTicket's now-non-primitive return value — Mockito's default
+        // answer for an unstubbed reference-typed method is null, and TicketService
+        // calls .hasAbandoned() on the result unconditionally. Tests that DO care
+        // about an abandoned row override this per-test.
+        when(pricingRequestService.cancelOpenForTicket(anyLong(), anyString(), any()))
+            .thenReturn(new CancelOpenForTicketResult(0, List.of()));
+    }
     private final TicketService service = new TicketService(
         ticketRepo, notifRepo, priceCalcService, new ObjectMapper(), customerRepo, quotationRenderer,
         pricingRequestService);

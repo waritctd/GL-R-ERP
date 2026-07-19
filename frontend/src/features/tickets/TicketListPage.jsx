@@ -76,6 +76,15 @@ function DealStageCell({ deal }) {
   const operational = ticketStatusLabel(deal.status);
   const paused = ['ON_HOLD', 'DORMANT'].includes(deal.lifecycle);
   const lifecycle = dealLifecycleLabel(deal.lifecycle);
+  // Since 03b5ba9 stopped ticket-level auto-submit, every newly created deal's
+  // legacy `status` is frozen at 'draft' forever — it no longer advances with
+  // real workflow (that now lives on the deal's PricingRequest(s) and
+  // salesStage instead). Showing "แบบร่าง" under the stage badge for those
+  // deals is not just uninformative, it actively misleads a reader into
+  // thinking nothing has happened. Older deals that already progressed past
+  // draft before that change still have a meaningful legacy status, so keep
+  // showing it for them.
+  const showOperational = deal.status !== 'draft';
   return (
     <span className="flex min-w-0 flex-col gap-0.5">
       <span className="flex flex-wrap items-center gap-1">
@@ -84,7 +93,9 @@ function DealStageCell({ deal }) {
         </StatusBadge>
         {paused ? <StatusBadge tone={lifecycle.tone}>{lifecycle.label}</StatusBadge> : null}
       </span>
-      <span className="pl-0.5 text-2xs text-text-muted">{operational.label}</span>
+      {showOperational ? (
+        <span className="pl-0.5 text-2xs text-text-muted">{operational.label}</span>
+      ) : null}
     </span>
   );
 }
@@ -120,8 +131,10 @@ export function TicketListPage({ user, showToast }) {
   const queryClient = useQueryClient();
   // Phase filter + search live in the URL so list → detail → back keeps them.
   // The old operational ?status= chips row was removed as redundant with the
-  // phase cards (user decision) — the stage cell's sublabel still shows where
-  // the paperwork stands per deal.
+  // phase cards (user decision) — the stage cell's sublabel shows where the
+  // legacy ticket-status paperwork stands, for deals where that status still
+  // means something (see DealStageCell's showOperational: it is suppressed
+  // for deals frozen at 'draft').
   const [searchParams, setSearchParams] = useSearchParams();
   const phaseFilter = searchParams.get('phase') ?? '';
   const lifecycleFilter = searchParams.get('life') ?? '';
@@ -236,7 +249,7 @@ export function TicketListPage({ user, showToast }) {
       <SalesTabs role={user.role} />
       <PageHeader
         title="งานขาย"
-        subtitle="ดีลทั้งหมด · 1 ดีล = 1 ใบขอราคา ภายใต้โครงการ"
+        subtitle="ดีลทั้งหมด · 1 ดีล = 1 Ticket ภายใต้โครงการ หนึ่งดีลอาจมีได้หลายใบขอราคา"
         actions={(
           <>
             <button type="button" className="icon-button" onClick={invalidateTicketsList} title="รีเฟรช" aria-label="รีเฟรช">
