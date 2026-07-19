@@ -109,6 +109,17 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         ceoActor = actor(ceoUserId, "ceo");
         accountActor = actor(accountUserId, "account");
         salesManagerActor = actor(salesManagerUserId, "sales_manager");
+        jdbc.update("""
+            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
+            VALUES
+                ('Factory A', 'factory-a@example.com', 'THB', 'piece', 'Thailand'),
+                ('Factory B', 'factory-b@example.com', 'THB', 'piece', 'Thailand')
+            ON CONFLICT (factory_name) DO UPDATE
+            SET email = EXCLUDED.email,
+                currency = EXCLUDED.currency,
+                unit = EXCLUDED.unit,
+                country = EXCLUDED.country
+            """, Map.of());
 
         CustomerDto customer = customers.create(
             "บริษัท Step 2 จำกัด", "0100000000001", "123 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0001");

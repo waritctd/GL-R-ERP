@@ -36,6 +36,19 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
 public class FactoryQuoteService {
     private static final Set<String> RAW_QUOTE_ROLES = Set.of("import", "ceo");
     private static final Set<String> IMPORT_ROLES = Set.of("import");
+    private static final Set<String> DRAFT_STATUSES = Set.of(
+        PricingRequestStatus.IMPORT_REVIEWING,
+        PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
+        PricingRequestStatus.COSTING_IN_PROGRESS);
+    private static final Set<String> RESPONSE_STATUSES = Set.of(
+        PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
+        PricingRequestStatus.COSTING_IN_PROGRESS,
+        PricingRequestStatus.READY_FOR_CEO_REVIEW);
+    private static final Set<String> MUTABLE_STATUSES = Set.of(
+        PricingRequestStatus.IMPORT_REVIEWING,
+        PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
+        PricingRequestStatus.COSTING_IN_PROGRESS,
+        PricingRequestStatus.READY_FOR_CEO_REVIEW);
 
     private final FactoryQuoteRepository quotes;
     private final PricingRequestRepository pricingRequests;
@@ -59,8 +72,7 @@ public class FactoryQuoteService {
     public List<FactoryQuoteDto> generateDrafts(long pricingRequestId, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
         PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
-        if (!Set.of(PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
-                PricingRequestStatus.COSTING_IN_PROGRESS).contains(summary.status())) {
+        if (!DRAFT_STATUSES.contains(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "Pricing request must be under Import review before factory quote drafts can be generated");
         }
@@ -76,7 +88,12 @@ public class FactoryQuoteService {
             String emailTo = config == null ? null : config.email();
             String subject = "Pricing request " + summary.requestCode() + " - " + safe(summary.projectName(), summary.customerName());
             String body = emailBody(summary, factoryName, entry.getValue());
-            long quoteId = quotes.createDraft(pricingRequestId, null, factoryName, emailTo, subject, body, actor.id());
+            Long factoryId = entry.getValue().stream()
+                .map(PricingRequestItemDto::resolvedFactoryId)
+                .filter(java.util.Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+            long quoteId = quotes.createDraft(pricingRequestId, factoryId, factoryName, emailTo, subject, body, actor.id());
             quotes.insertDraftItems(quoteId, entry.getValue().stream().map(PricingRequestItemDto::id).toList());
             addEvent(summary, actor, PricingRequestEventKind.FACTORY_EMAIL_READY, summary.status(), summary.status(),
                 "Factory email draft ready for " + factoryName);
@@ -101,7 +118,9 @@ public class FactoryQuoteService {
     public FactoryQuoteDto updateDraft(long quoteId, UpdateFactoryQuoteDraftRequest request, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
         FactoryQuoteDto quote = requireQuote(quoteId);
-        requireActiveDeal(requirePricingRequest(quote.pricingRequestId()).ticketId());
+        PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
+        requireMutablePricingRequest(summary, DRAFT_STATUSES);
+        requireActiveDeal(summary.ticketId());
         if (!quotes.updateDraft(quoteId, request.emailTo(), request.emailSubject(), request.emailBody(), request.note())) {
             throw new ApiException(HttpStatus.CONFLICT, "Only draft factory quote emails can be edited");
         }
@@ -113,26 +132,32 @@ public class FactoryQuoteService {
         requireRole(actor, IMPORT_ROLES);
         FactoryQuoteDto quote = requireQuote(quoteId);
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
+        requireMutablePricingRequest(summary, DRAFT_STATUSES);
         requireActiveDeal(summary.ticketId());
+        if (FactoryQuoteStatus.REQUESTED.equals(quote.status())) {
+            return quote;
+        }
         String emailTo = firstText(request.emailTo(), quote.emailTo());
         String subject = firstText(request.emailSubject(), quote.emailSubject());
         String body = firstText(request.emailBody(), quote.emailBody());
         if (emailTo == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Factory email recipient is required");
         }
-        factoryEmail.send(summary.ticketId(), quote.factoryName(), emailTo, subject, body);
         int rows = quotes.markRequested(quoteId, emailTo, subject, body, actor.id());
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "Only draft factory quote emails can be sent");
         }
+        factoryEmail.send(summary.ticketId(), quote.factoryName(), emailTo, subject, body);
         if (PricingRequestStatus.IMPORT_REVIEWING.equals(summary.status())) {
             pricingRequests.transition(summary.id(), PricingRequestStatus.IMPORT_REVIEWING,
                 PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
         }
-        addEvent(summary, actor, PricingRequestEventKind.FACTORY_EMAIL_SENT, summary.status(),
-            PricingRequestStatus.AWAITING_FACTORY_RESPONSE, "Factory request sent to " + quote.factoryName());
-        notifyCeo(summary, PricingRequestEventKind.FACTORY_EMAIL_SENT,
-            "ใบขอราคา " + summary.requestCode() + " ส่งคำขอโรงงาน " + quote.factoryName());
+        if (!PricingRequestStatus.AWAITING_FACTORY_RESPONSE.equals(summary.status())) {
+            addEvent(summary, actor, PricingRequestEventKind.FACTORY_EMAIL_SENT, summary.status(),
+                PricingRequestStatus.AWAITING_FACTORY_RESPONSE, "Factory request sent to " + quote.factoryName());
+            notifyCeo(summary, PricingRequestEventKind.FACTORY_EMAIL_SENT,
+                "ใบขอราคา " + summary.requestCode() + " ส่งคำขอโรงงาน " + quote.factoryName());
+        }
         return requireQuote(quoteId);
     }
 
@@ -144,6 +169,7 @@ public class FactoryQuoteService {
             throw new ApiException(HttpStatus.CONFLICT, "Only the current factory quote revision can receive a response");
         }
         PricingRequestSummaryDto summary = requirePricingRequest(current.pricingRequestId());
+        requireMutablePricingRequest(summary, RESPONSE_STATUSES);
         requireActiveDeal(summary.ticketId());
         validateResponseItems(current, request.items());
 
@@ -167,6 +193,13 @@ public class FactoryQuoteService {
                 request.paymentTerms(), request.leadTimeText(), request.revisionReason(), request.negotiationNote(), actor.id());
             quotes.replaceResponseItems(newId, request.items());
             quotes.markOpenCostingsStale(summary.id(), "Factory quote revision changed");
+            if (PricingRequestStatus.READY_FOR_CEO_REVIEW.equals(summary.status())) {
+                int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.READY_FOR_CEO_REVIEW,
+                    PricingRequestStatus.COSTING_IN_PROGRESS, null, null);
+                if (transitioned == 0) {
+                    throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
+                }
+            }
             saved = requireQuote(newId);
             addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_REVISED, summary.status(), summary.status(),
                 "Factory response revised for " + current.factoryName());
@@ -183,6 +216,7 @@ public class FactoryQuoteService {
         requireRole(actor, IMPORT_ROLES);
         FactoryQuoteDto quote = requireQuote(quoteId);
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
+        requireMutablePricingRequest(summary, RESPONSE_STATUSES);
         requireActiveDeal(summary.ticketId());
         int rows = quotes.startNegotiation(quoteId, request.note());
         if (rows == 0) {
@@ -200,6 +234,7 @@ public class FactoryQuoteService {
         requireRole(actor, IMPORT_ROLES);
         FactoryQuoteDto quote = requireQuote(quoteId);
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
+        requireMutablePricingRequest(summary, RESPONSE_STATUSES);
         requireActiveDeal(summary.ticketId());
         int rows = quotes.markReady(quoteId);
         if (rows == 0) {
@@ -217,6 +252,7 @@ public class FactoryQuoteService {
         requireRole(actor, IMPORT_ROLES);
         FactoryQuoteDto quote = requireQuote(quoteId);
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
+        requireMutablePricingRequest(summary, MUTABLE_STATUSES);
         requireActiveDeal(summary.ticketId());
         int rows = quotes.markNotAvailable(quoteId, request.reason(), actor.id());
         if (rows == 0) {
@@ -232,7 +268,7 @@ public class FactoryQuoteService {
     private Map<String, List<PricingRequestItemDto>> groupByFactory(List<PricingRequestItemDto> items) {
         Map<String, List<PricingRequestItemDto>> byFactory = new LinkedHashMap<>();
         for (PricingRequestItemDto item : items.stream().sorted(Comparator.comparingInt(PricingRequestItemDto::sortOrder)).toList()) {
-            String factoryName = firstText(item.factory(), null);
+            String factoryName = firstText(item.resolvedFactoryName(), item.factory());
             if (factoryName == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "Pricing request item " + item.id() + " has no resolved factory");
@@ -262,7 +298,7 @@ public class FactoryQuoteService {
             if (requestItem == null) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "Factory response item does not belong to this pricing request");
             }
-            String itemFactory = firstText(requestItem.factory(), null);
+            String itemFactory = firstText(requestItem.resolvedFactoryName(), requestItem.factory());
             if (!quote.factoryName().equals(itemFactory)) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "Factory response item belongs to a different factory");
             }
@@ -285,6 +321,13 @@ public class FactoryQuoteService {
             .summary();
         if (!DealLifecycle.ACTIVE.equals(ticket.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT, "Parent deal must be ACTIVE");
+        }
+    }
+
+    private void requireMutablePricingRequest(PricingRequestSummaryDto summary, Set<String> allowedStatuses) {
+        if (!allowedStatuses.contains(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Pricing request status '" + summary.status() + "' cannot be modified by factory quote actions");
         }
     }
 

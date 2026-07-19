@@ -181,6 +181,49 @@ public class PricingRequestRepository {
                 .addValue("cancelledBy", cancelledBy));
     }
 
+    public int requestMoreInformation(long id, String expectedResumeStatus) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request
+               SET status = 'MORE_INFO_REQUIRED',
+                   resume_status = :resumeStatus,
+                   updated_at = now()
+             WHERE pricing_request_id = :id
+               AND status = :resumeStatus
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", id)
+                .addValue("resumeStatus", expectedResumeStatus));
+    }
+
+    public Optional<String> findResumeStatus(long id) {
+        try {
+            return Optional.ofNullable(jdbc.queryForObject("""
+                SELECT resume_status
+                  FROM sales.pricing_request
+                 WHERE pricing_request_id = :id
+                """, Map.of("id", id), String.class));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    public int resumeFromMoreInformation(long id, String nextStatus) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request
+               SET status = :nextStatus,
+                   resume_status = NULL,
+                   picked_up_at = CASE WHEN :nextStatus = 'IMPORT_REVIEWING'
+                                       THEN COALESCE(picked_up_at, now()) ELSE picked_up_at END,
+                   updated_at = now()
+             WHERE pricing_request_id = :id
+               AND status = 'MORE_INFO_REQUIRED'
+               AND COALESCE(resume_status, 'IMPORT_REVIEWING') = :nextStatus
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", id)
+                .addValue("nextStatus", nextStatus));
+    }
+
     /**
      * Full-replacement update of a DRAFT's editable fields (review-remediation
      * plan, Fix 2). Used to COALESCE(:x, col) every scalar column, which meant
@@ -289,13 +332,53 @@ public class PricingRequestRepository {
             SELECT pricing_request_item_id, pricing_request_id, source_ticket_item_id, product_id, variant_id,
                    brand, model, product_description, color, texture, size, factory,
                    requested_qty, requested_qty_sqm, requested_unit, quantity_type,
-                   target_delivery_date, delivery_location, special_requirement, sort_order
+                   target_delivery_date, delivery_location, special_requirement, sort_order,
+                   price_list_version_id, catalog_price_id, catalog_base_price, catalog_currency,
+                   catalog_effective_date, resolved_factory_id, resolved_factory_name,
+                   catalog_product_code, catalog_brand, catalog_collection, catalog_model
               FROM sales.pricing_request_item
              WHERE pricing_request_id = :id
              ORDER BY sort_order, pricing_request_item_id
             """,
             Map.of("id", pricingRequestId),
             (rs, rowNum) -> mapItem(rs));
+    }
+
+    public List<Long> findUnresolvableCatalogItemIds(long pricingRequestId) {
+        return jdbc.query("""
+            SELECT pri.pricing_request_item_id
+              FROM sales.pricing_request_item pri
+              LEFT JOIN price_catalog.product_prices pp ON pp.price_id = pri.product_id
+              LEFT JOIN price_catalog.price_list_versions plv ON plv.version_id = pp.version_id
+             WHERE pri.pricing_request_id = :pricingRequestId
+               AND pri.product_id IS NOT NULL
+               AND (pp.price_id IS NULL OR plv.status <> 'ACTIVE')
+             ORDER BY pri.sort_order, pri.pricing_request_item_id
+            """, Map.of("pricingRequestId", pricingRequestId), (rs, rowNum) -> rs.getLong("pricing_request_item_id"));
+    }
+
+    public int snapshotCatalogSelections(long pricingRequestId) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request_item pri
+               SET price_list_version_id = plv.version_id,
+                   catalog_price_id = pp.price_id,
+                   catalog_base_price = pp.price,
+                   catalog_currency = pp.currency,
+                   catalog_effective_date = plv.effective_from,
+                   resolved_factory_id = f.factory_id,
+                   resolved_factory_name = f.name,
+                   catalog_product_code = pp.product_code,
+                   catalog_brand = COALESCE(pri.brand, pp.grade),
+                   catalog_collection = pp.collection,
+                   catalog_model = pp.product_name,
+                   factory = COALESCE(NULLIF(BTRIM(pri.factory), ''), f.name)
+              FROM price_catalog.product_prices pp
+              JOIN price_catalog.price_list_versions plv ON plv.version_id = pp.version_id
+              JOIN price_catalog.factories f ON f.factory_id = pp.factory_id
+             WHERE pri.pricing_request_id = :pricingRequestId
+               AND pri.product_id = pp.price_id
+               AND plv.status = 'ACTIVE'
+            """, Map.of("pricingRequestId", pricingRequestId));
     }
 
     public List<PricingRequestEventDto> findEvents(long pricingRequestId) {
@@ -363,6 +446,33 @@ public class PricingRequestRepository {
             """,
             Map.of("ticketId", ticketId),
             (rs, rowNum) -> rs.getLong("pricing_request_id"));
+    }
+
+    public void cancelOpenStep2Children(long pricingRequestId, String reason, long actorId) {
+        MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("pricingRequestId", pricingRequestId)
+            .addValue("reason", reason)
+            .addValue("actorId", actorId);
+        jdbc.update("""
+            UPDATE sales.factory_quote
+               SET status = 'CANCELLED',
+                   is_current = FALSE,
+                   cancel_reason = :reason,
+                   cancelled_by = :actorId,
+                   cancelled_at = now(),
+                   updated_at = now()
+             WHERE pricing_request_id = :pricingRequestId
+               AND status IN ('DRAFT', 'REQUESTED')
+            """, params);
+        jdbc.update("""
+            UPDATE sales.pricing_costing
+               SET status = 'CANCELLED',
+                   stale = FALSE,
+                   stale_reason = :reason,
+                   updated_at = now()
+             WHERE pricing_request_id = :pricingRequestId
+               AND status IN ('DRAFT', 'CALCULATED')
+            """, params);
     }
 
     /**
@@ -460,8 +570,24 @@ public class PricingRequestRepository {
             rs.getObject("target_delivery_date", LocalDate.class),
             rs.getString("delivery_location"),
             rs.getString("special_requirement"),
-            rs.getInt("sort_order")
+            rs.getInt("sort_order"),
+            nullableLong(rs, "price_list_version_id"),
+            nullableLong(rs, "catalog_price_id"),
+            rs.getBigDecimal("catalog_base_price"),
+            rs.getString("catalog_currency"),
+            rs.getObject("catalog_effective_date", LocalDate.class),
+            nullableLong(rs, "resolved_factory_id"),
+            rs.getString("resolved_factory_name"),
+            rs.getString("catalog_product_code"),
+            rs.getString("catalog_brand"),
+            rs.getString("catalog_collection"),
+            rs.getString("catalog_model")
         );
+    }
+
+    private Long nullableLong(ResultSet rs, String column) throws SQLException {
+        long value = rs.getLong(column);
+        return rs.wasNull() ? null : value;
     }
 
     private PricingRequestEventDto mapEvent(ResultSet rs) throws SQLException {

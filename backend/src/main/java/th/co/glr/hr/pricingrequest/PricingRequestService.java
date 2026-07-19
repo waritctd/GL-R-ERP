@@ -53,6 +53,10 @@ public class PricingRequestService {
     // two lists in sync by inspection, not by sharing a mutable reference.
     private static final Set<String> SALES_ROLES  = Set.of("sales");
     private static final Set<String> IMPORT_ROLES = Set.of("import");
+    private static final Set<String> INFORMATION_REQUEST_STATUSES = Set.of(
+        PricingRequestStatus.IMPORT_REVIEWING,
+        PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
+        PricingRequestStatus.COSTING_IN_PROGRESS);
     // Mirrors TicketService.VIEWER_ROLES: who may read a pricing request at all.
     // sales_manager stays read-only oversight here too — never add it to
     // SALES_ROLES/IMPORT_ROLES.
@@ -211,6 +215,13 @@ public class PricingRequestService {
         if (items.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องมีรายการสินค้าอย่างน้อย 1 รายการก่อนส่งคำขอราคา");
         }
+        List<Long> unresolvableCatalogItems = requests.findUnresolvableCatalogItemIds(id);
+        if (!unresolvableCatalogItems.isEmpty()) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "ไม่พบสินค้าใน price catalog ที่ active สำหรับรายการ: " + unresolvableCatalogItems);
+        }
+        requests.snapshotCatalogSelections(id);
+        items = requests.findItems(id);
         if (summary.recipientContactId() == null
                 && (summary.recipientLabel() == null || summary.recipientLabel().isBlank())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุผู้รับคำขอราคา");
@@ -303,25 +314,18 @@ public class PricingRequestService {
     public PricingRequestDetailDto requestInformation(long id, RequestMoreInformationRequest request, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
         PricingRequestSummaryDto summary = requireViewable(id, actor);
-        // Only the Import employee already assigned to THIS request may ask for
-        // more information. An unassigned Import user must call pickup() first —
-        // which is also what makes them the assignee checked here.
-        if (summary.assignedImportId() == null || summary.assignedImportId() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
-        }
-        if (!PricingRequestStatus.IMPORT_REVIEWING.equals(summary.status())) {
+        if (!INFORMATION_REQUEST_STATUSES.contains(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "Expected status 'IMPORT_REVIEWING' but pricing request is '" + summary.status() + "'");
+                "Pricing request cannot request more information from status '" + summary.status() + "'");
         }
         TicketSummaryDto ticket = requireTicket(summary.ticketId());
         requireActive(ticket);
-        int rows = requests.transition(id, PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.MORE_INFO_REQUIRED,
-            null, null);
+        int rows = requests.requestMoreInformation(id, summary.status());
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "Pricing request was updated by another user");
         }
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
-            PricingRequestEventKind.MORE_INFO_REQUESTED, PricingRequestStatus.IMPORT_REVIEWING,
+            PricingRequestEventKind.MORE_INFO_REQUESTED, summary.status(),
             PricingRequestStatus.MORE_INFO_REQUIRED, request.message(), toDueDateMetadataJson(request.dueDate()));
         notifications.notifyEmployee(summary.requestedById(), summary.ticketId(), "MORE_INFO_REQUIRED",
             "ใบขอราคา " + summary.requestCode() + " ต้องการข้อมูลเพิ่มเติม");
@@ -341,18 +345,16 @@ public class PricingRequestService {
         }
         TicketSummaryDto ticket = requireTicket(summary.ticketId());
         requireActive(ticket);
-        // Goes back to IMPORT_REVIEWING, NOT SUBMITTED — Import already owns this
-        // request. The repository's transition() COALESCE guards mean
-        // assigned_import_id and picked_up_at survive this round trip unchanged;
-        // this method does not (and must not) re-supply them.
-        int rows = requests.transition(id, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.IMPORT_REVIEWING,
-            null, null);
+        String resumeStatus = requests.findResumeStatus(id)
+            .filter(INFORMATION_REQUEST_STATUSES::contains)
+            .orElse(PricingRequestStatus.IMPORT_REVIEWING);
+        int rows = requests.resumeFromMoreInformation(id, resumeStatus);
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "Pricing request was updated by another user");
         }
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.MORE_INFO_RESPONDED, PricingRequestStatus.MORE_INFO_REQUIRED,
-            PricingRequestStatus.IMPORT_REVIEWING, request.response(), null);
+            resumeStatus, request.response(), null);
         // Guard against a null assignee: NotificationRepository.notifyEmployee takes
         // a primitive long, not a Long, so this cannot be skipped by a null check
         // inside the call itself. Should not happen once a request has been through
@@ -387,6 +389,7 @@ public class PricingRequestService {
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "Pricing request was updated by another user");
         }
+        requests.cancelOpenStep2Children(id, request.reason(), actor.id());
         String metadataJson = toReasonMetadataJson(request.reason());
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_CANCELLED, summary.status(), PricingRequestStatus.CANCELLED,
@@ -465,6 +468,7 @@ public class PricingRequestService {
                 }
                 int rows = requests.transition(id, summary.status(), PricingRequestStatus.CANCELLED, null, actor.id());
                 if (rows == 1) {
+                    requests.cancelOpenStep2Children(id, reason, actor.id());
                     requests.addEvent(id, ticketId, actor.id(), actor.name(),
                         PricingRequestEventKind.PRICING_REQUEST_CANCELLED, summary.status(), PricingRequestStatus.CANCELLED,
                         reason, metadataJson);

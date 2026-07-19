@@ -60,7 +60,18 @@ public final class PricingRequestDtos {
         LocalDate targetDeliveryDate,
         String deliveryLocation,
         String specialRequirement,
-        int sortOrder
+        int sortOrder,
+        Long priceListVersionId,
+        Long catalogPriceId,
+        BigDecimal catalogBasePrice,
+        String catalogCurrency,
+        LocalDate catalogEffectiveDate,
+        Long resolvedFactoryId,
+        String resolvedFactoryName,
+        String catalogProductCode,
+        String catalogBrand,
+        String catalogCollection,
+        String catalogModel
     ) {}
 
     public record PricingRequestEventDto(

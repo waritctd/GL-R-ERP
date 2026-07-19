@@ -1083,18 +1083,26 @@ class PricingRequestServiceTest {
     }
 
     @Test
-    void requestInformation_rejectsUnassignedImport() {
+    void requestInformation_allowsUnassignedImport() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, null);
-        assertForbidden(() -> service.requestInformation(20L, moreInfoRequest(), importActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.requestMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING)).thenReturn(1);
+        when(requestRepo.findItems(20L)).thenReturn(List.of());
+        when(requestRepo.findEvents(20L)).thenReturn(List.of());
+        service.requestInformation(20L, moreInfoRequest(), importActor);
+        verify(requestRepo).requestMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING);
     }
 
     @Test
-    void requestInformation_rejectsDifferentAssignedImport() {
+    void requestInformation_allowsDifferentAssignedImport() {
         long anotherImportId = 99L;
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, anotherImportId);
-        assertForbidden(() -> service.requestInformation(20L, moreInfoRequest(), importActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.requestMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING)).thenReturn(1);
+        when(requestRepo.findItems(20L)).thenReturn(List.of());
+        when(requestRepo.findEvents(20L)).thenReturn(List.of());
+        service.requestInformation(20L, moreInfoRequest(), importActor);
+        verify(requestRepo).requestMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING);
     }
 
     @Test
@@ -1108,8 +1116,7 @@ class PricingRequestServiceTest {
     void requestInformation_rejectsWhenTransitionRowsZero() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, 3L);
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.transition(20L, PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.MORE_INFO_REQUIRED,
-            null, null)).thenReturn(0);
+        when(requestRepo.requestMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING)).thenReturn(0);
         assertConflict(() -> service.requestInformation(20L, moreInfoRequest(), importActor));
         verify(notifRepo, never()).notifyEmployee(anyLong(), anyLong(), any(), any());
     }
@@ -1126,15 +1133,13 @@ class PricingRequestServiceTest {
     void requestInformation_assignedImportSucceedsAndNotifiesRequester() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, 3L);
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.transition(20L, PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.MORE_INFO_REQUIRED,
-            null, null)).thenReturn(1);
+        when(requestRepo.requestMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING)).thenReturn(1);
         when(requestRepo.findItems(20L)).thenReturn(List.of());
         when(requestRepo.findEvents(20L)).thenReturn(List.of());
 
         service.requestInformation(20L, moreInfoRequest(), importActor);
 
-        verify(requestRepo).transition(20L, PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.MORE_INFO_REQUIRED,
-            null, null);
+        verify(requestRepo).requestMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING);
         verify(requestRepo).addEvent(eq(20L), eq(10L), eq(3L), any(),
             eq(PricingRequestEventKind.MORE_INFO_REQUESTED), eq(PricingRequestStatus.IMPORT_REVIEWING),
             eq(PricingRequestStatus.MORE_INFO_REQUIRED), eq("กรุณาระบุขนาดสินค้าเพิ่มเติม"), any());
@@ -1168,8 +1173,8 @@ class PricingRequestServiceTest {
     void respondInformation_rejectsWhenTransitionRowsZero() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, 3L);
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.transition(20L, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.IMPORT_REVIEWING,
-            null, null)).thenReturn(0);
+        when(requestRepo.findResumeStatus(20L)).thenReturn(java.util.Optional.of(PricingRequestStatus.IMPORT_REVIEWING));
+        when(requestRepo.resumeFromMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING)).thenReturn(0);
         assertConflict(() -> service.respondInformation(20L, respondRequest(), salesActor));
     }
 
@@ -1185,16 +1190,15 @@ class PricingRequestServiceTest {
     void respondInformation_goesToImportReviewingNotSubmittedAndNotifiesAssignedImport() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, 3L);
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.transition(20L, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.IMPORT_REVIEWING,
-            null, null)).thenReturn(1);
+        when(requestRepo.findResumeStatus(20L)).thenReturn(java.util.Optional.of(PricingRequestStatus.IMPORT_REVIEWING));
+        when(requestRepo.resumeFromMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING)).thenReturn(1);
         when(requestRepo.findItems(20L)).thenReturn(List.of());
         when(requestRepo.findEvents(20L)).thenReturn(List.of());
 
         service.respondInformation(20L, respondRequest(), salesActor);
 
         // The critical assertion: NOT back to SUBMITTED.
-        verify(requestRepo).transition(20L, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.IMPORT_REVIEWING,
-            null, null);
+        verify(requestRepo).resumeFromMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING);
         verify(requestRepo, never()).transition(eq(20L), any(), eq(PricingRequestStatus.SUBMITTED), any(), any());
         verify(requestRepo).addEvent(eq(20L), eq(10L), eq(1L), any(),
             eq(PricingRequestEventKind.MORE_INFO_RESPONDED), eq(PricingRequestStatus.MORE_INFO_REQUIRED),
@@ -1206,8 +1210,8 @@ class PricingRequestServiceTest {
     void respondInformation_guardsAgainstNullAssignedImport() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, null);
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.transition(20L, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.IMPORT_REVIEWING,
-            null, null)).thenReturn(1);
+        when(requestRepo.findResumeStatus(20L)).thenReturn(java.util.Optional.of(PricingRequestStatus.IMPORT_REVIEWING));
+        when(requestRepo.resumeFromMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING)).thenReturn(1);
         when(requestRepo.findItems(20L)).thenReturn(List.of());
         when(requestRepo.findEvents(20L)).thenReturn(List.of());
 
@@ -1400,7 +1404,7 @@ class PricingRequestServiceTest {
         return new PricingRequestItemDto(1L, 20L, sourceTicketItemId, null, null,
             "Brand", "Model", null, null, null, null, null,
             new BigDecimal("1"), null, "PIECE", QuantityType.REFERENCE,
-            null, null, null, 0);
+            null, null, null, 0, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private static PricingRequestItemRequest sampleItemRequest(Long sourceTicketItemId, String quantityType) {
@@ -1433,7 +1437,7 @@ class PricingRequestServiceTest {
         return new PricingRequestItemDto(1L, 20L, sourceTicketItemId, productId, null,
             brand, model, productDescription, null, null, null, null,
             new BigDecimal("1"), null, "PIECE", QuantityType.REFERENCE,
-            null, null, specialRequirement, 0);
+            null, null, specialRequirement, 0, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private static CreatePricingRequestRequest createRequest(String recipientType, Long recipientContactId,

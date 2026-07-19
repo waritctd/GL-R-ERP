@@ -327,6 +327,119 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     @Test
+    void draftPricingRequest_isPrivateToOwnerAndOversightUntilSubmitted() {
+        long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
+
+        assertThat(pricingRequestService.get(id, salesActor).summary().id()).isEqualTo(id);
+        assertThat(pricingRequestService.listForTicket(ticketId, salesActor))
+            .extracting(PricingRequestSummaryDto::id)
+            .contains(id);
+        assertThat(pricingRequestService.list(null, null, false, salesActor))
+            .extracting(PricingRequestSummaryDto::id)
+            .contains(id);
+
+        assertThat(pricingRequestService.get(id, ceoActor).summary().id()).isEqualTo(id);
+        assertThat(pricingRequestService.listForTicket(ticketId, ceoActor))
+            .extracting(PricingRequestSummaryDto::id)
+            .contains(id);
+        assertThat(pricingRequestService.get(id, salesManagerActor).summary().id()).isEqualTo(id);
+        assertThat(pricingRequestService.listForTicket(ticketId, salesManagerActor))
+            .extracting(PricingRequestSummaryDto::id)
+            .contains(id);
+
+        assertThatThrownBy(() -> pricingRequestService.get(id, secondSalesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+        assertThat(pricingRequestService.list(null, null, false, secondSalesActor))
+            .extracting(PricingRequestSummaryDto::id)
+            .doesNotContain(id);
+        assertThatThrownBy(() -> pricingRequestService.listForTicket(ticketId, secondSalesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        assertThatThrownBy(() -> pricingRequestService.get(id, importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+        assertThat(pricingRequestService.listForTicket(ticketId, importActor))
+            .extracting(PricingRequestSummaryDto::id)
+            .doesNotContain(id);
+        assertThat(pricingRequestService.list(null, null, false, importActor))
+            .extracting(PricingRequestSummaryDto::id)
+            .doesNotContain(id);
+    }
+
+    @Test
+    void submittedPricingRequest_handsOffToImportAndReflectsPickupToOwner() {
+        long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
+
+        PricingRequestDetailDto submitted = pricingRequestService.submit(id, salesActor);
+        assertThat(submitted.summary().status()).isEqualTo(PricingRequestStatus.SUBMITTED);
+
+        assertThat(pricingRequestService.get(id, importActor).summary().id()).isEqualTo(id);
+        assertThat(pricingRequestService.listForTicket(ticketId, importActor))
+            .extracting(PricingRequestSummaryDto::id)
+            .contains(id);
+        assertThat(pricingRequestService.list("SUBMITTED", null, true, importActor))
+            .extracting(PricingRequestSummaryDto::id)
+            .contains(id);
+
+        PricingRequestDetailDto pickedUp = pricingRequestService.pickup(id, importActor);
+        assertThat(pickedUp.summary().status()).isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
+        assertThat(pickedUp.summary().assignedImportId()).isEqualTo(importUserId);
+        assertThat(pricingRequestService.get(id, salesActor).summary().status())
+            .isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
+    }
+
+    @Test
+    void informationLoop_recordsBothTurnsAndAllowsDepartmentWideImport() {
+        long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
+        pricingRequestService.submit(id, salesActor);
+        pricingRequestService.pickup(id, importActor);
+
+        PricingRequestDetailDto infoRequested = pricingRequestService.requestInformation(id,
+            new RequestMoreInformationRequest("กรุณาระบุขนาดสินค้าเพิ่มเติม", null), secondImportActor);
+        assertThat(infoRequested.summary().status()).isEqualTo(PricingRequestStatus.MORE_INFO_REQUIRED);
+
+        assertThatThrownBy(() -> pricingRequestService.respondInformation(id,
+            new RespondMoreInformationRequest("ไม่ใช่เจ้าของดีล"), secondSalesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        PricingRequestDetailDto responded = pricingRequestService.respondInformation(id,
+            new RespondMoreInformationRequest("ขนาด 60x60 ซม."), salesActor);
+        assertThat(responded.summary().status()).isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
+        assertThat(responded.events()).extracting(event -> event.eventKind())
+            .contains(PricingRequestEventKind.MORE_INFO_REQUESTED, PricingRequestEventKind.MORE_INFO_RESPONDED);
+        assertThat(responded.events()).extracting(event -> event.message())
+            .contains("กรุณาระบุขนาดสินค้าเพิ่มเติม", "ขนาด 60x60 ซม.");
+    }
+
+    @Test
+    void accountingCanReadDealPaymentInfoButCannotReadPricingRequests() {
+        TicketDto deal = ticketService.get(ticketId, accountActor);
+        assertThat(deal.summary().id()).isEqualTo(ticketId);
+        assertThat(ticketService.listPayments(ticketId, accountActor)).isEmpty();
+
+        long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
+        pricingRequestService.submit(id, salesActor);
+
+        assertThatThrownBy(() -> pricingRequestService.get(id, accountActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> pricingRequestService.listForTicket(ticketId, accountActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    @Test
+    void sequentialCreateDraft_sameClientRequestId_returnsOneRequestWithOneItemSetAndOneCreatedEvent() {
+        CreatePricingRequestRequest request = new CreatePricingRequestRequest(
+            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
+            new BigDecimal("1000.00"), "THB", "sequential retry", "66666666-6666-6666-6666-666666666666",
+            List.of(pricingItem("Toyota", "Hilux")));
+
+        PricingRequestDetailDto first = pricingRequestService.createDraft(ticketId, request, salesActor);
+        PricingRequestDetailDto replay = pricingRequestService.createDraft(ticketId, request, salesActor);
+
+        assertThat(replay.summary().id()).isEqualTo(first.summary().id());
+        assertOneRequestOneItemSetOneCreatedEvent(first.summary().id(), salesRepId, request.clientRequestId());
+    }
+
+    @Test
     void concurrentCreateDraft_sameClientRequestId_returnsOneRequestWithOneItemSetAndOneCreatedEvent() throws Exception {
         String clientRequestId = "55555555-5555-5555-5555-555555555555";
         var racingRequests = new RacingPricingRequestRepository(jdbc, salesRepId, clientRequestId);
