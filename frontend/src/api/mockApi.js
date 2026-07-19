@@ -406,6 +406,11 @@ const mockPricingRequests = [];
 let mockPricingRequestSeq = 1;
 let mockPricingRequestItemSeq = 1;
 let mockPricingRequestEventSeq = 1;
+const mockFactoryQuotes = [];
+const mockPricingCostings = [];
+let mockFactoryQuoteSeq = 1;
+let mockFactoryQuoteItemSeq = 1;
+let mockPricingCostingSeq = 1;
 const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'sales_manager'];
 const PRICING_REQUEST_RECIPIENT_VALUES = PRICING_REQUEST_RECIPIENT_OPTIONS.map((o) => o.code);
 const PRICING_REQUEST_QUANTITY_TYPE_VALUES = PRICING_REQUEST_QUANTITY_TYPE_OPTIONS.map((o) => o.code);
@@ -4125,7 +4130,17 @@ export const api = {
       // Mirrors PricingRequestService.list: same viewer roles as a single
       // request, plus sales is scoped to only its own created tickets.
       if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('Forbidden', 403);
-      if (params.status && !['DRAFT', 'SUBMITTED', 'IMPORT_REVIEWING', 'MORE_INFO_REQUIRED', 'CANCELLED'].includes(params.status)) {
+      if (params.status && ![
+        'DRAFT',
+        'SUBMITTED',
+        'IMPORT_REVIEWING',
+        'AWAITING_FACTORY_RESPONSE',
+        'COSTING_IN_PROGRESS',
+        'READY_FOR_CEO_REVIEW',
+        'MORE_INFO_REQUIRED',
+        'CANCELLED',
+        'SUPERSEDED',
+      ].includes(params.status)) {
         fail(`Unknown status '${params.status}'`, 400);
       }
       let list = mockPricingRequests;
@@ -4334,6 +4349,263 @@ export const api = {
       pr.updatedAt = new Date().toISOString();
       pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_UPDATED', 'DRAFT', 'DRAFT');
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async generateFactoryEmailDrafts(id) {
+      const user = hasRole('import');
+      const pr = findPricingRequestRaw(id);
+      if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS'].includes(pr.status)) {
+        fail('Pricing request must be under Import review before factory quote drafts can be generated', 409);
+      }
+      const byFactory = new Map();
+      for (const item of pr.items) {
+        if (!item.factory) fail(`Pricing request item ${item.id} has no resolved factory`, 422);
+        byFactory.set(item.factory, [...(byFactory.get(item.factory) ?? []), item]);
+      }
+      for (const [factoryName, items] of byFactory) {
+        const exists = mockFactoryQuotes.some((q) => q.pricingRequestId === pr.id && q.factoryName === factoryName && q.current);
+        if (exists) continue;
+        const quoteId = mockFactoryQuoteSeq++;
+        mockFactoryQuotes.push({
+          id: quoteId,
+          quoteCode: `FQ-2026-${String(quoteId).padStart(4, '0')}`,
+          pricingRequestId: pr.id,
+          factoryId: null,
+          factoryName,
+          status: 'DRAFT',
+          emailTo: null,
+          emailSubject: `Pricing request ${pr.requestCode}`,
+          emailBody: items.map((item) => `${item.brand ?? ''} ${item.model ?? item.productDescription ?? ''}`).join('\n'),
+          emailSentAt: null,
+          sentBy: null,
+          supplierQuoteRef: null,
+          defaultCurrency: 'THB',
+          paymentTerms: null,
+          leadTimeText: null,
+          note: null,
+          negotiationNote: null,
+          requestedAt: null,
+          receivedAt: null,
+          rootFactoryQuoteId: quoteId,
+          parentFactoryQuoteId: null,
+          revisionNo: 1,
+          revisionReason: null,
+          current: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          items: items.map((item, i) => ({
+            id: mockFactoryQuoteItemSeq++,
+            factoryQuoteId: quoteId,
+            pricingRequestItemId: item.id,
+            quotedQuantity: item.requestedQty,
+            quotedUnit: item.requestedUnit,
+            unitBasis: item.requestedUnit,
+            rawUnitPrice: null,
+            currency: null,
+            sortOrder: i,
+          })),
+        });
+      }
+      pushPricingRequestEvent(pr, user, 'FACTORY_EMAIL_READY', pr.status, pr.status);
+      return delay({ items: mockFactoryQuotes.filter((q) => q.pricingRequestId === pr.id) });
+    },
+
+    async listFactoryQuotes(id) {
+      hasRole('import', 'ceo');
+      findPricingRequestRaw(id);
+      return delay({ items: mockFactoryQuotes.filter((q) => q.pricingRequestId === Number(id)) });
+    },
+
+    async getFactoryQuote(id) {
+      hasRole('import', 'ceo');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
+      if (!quote) fail('Factory quote not found', 404);
+      return delay({ factoryQuote: quote });
+    },
+
+    async updateFactoryQuote(id, payload) {
+      hasRole('import');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
+      if (!quote) fail('Factory quote not found', 404);
+      if (quote.status !== 'DRAFT') fail('Only draft factory quote emails can be edited', 409);
+      Object.assign(quote, {
+        emailTo: payload.emailTo ?? quote.emailTo,
+        emailSubject: payload.emailSubject ?? quote.emailSubject,
+        emailBody: payload.emailBody ?? quote.emailBody,
+        note: payload.note ?? quote.note,
+        updatedAt: new Date().toISOString(),
+      });
+      return delay({ factoryQuote: quote });
+    },
+
+    async sendFactoryQuote(id, payload = {}) {
+      const user = hasRole('import');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
+      if (!quote) fail('Factory quote not found', 404);
+      if (quote.status !== 'DRAFT') fail('Only draft factory quote emails can be sent', 409);
+      quote.status = 'REQUESTED';
+      quote.emailTo = payload.emailTo ?? quote.emailTo;
+      quote.emailSubject = payload.emailSubject ?? quote.emailSubject;
+      quote.emailBody = payload.emailBody ?? quote.emailBody;
+      quote.emailSentAt = new Date().toISOString();
+      quote.requestedAt = quote.emailSentAt;
+      quote.sentBy = user.id;
+      quote.updatedAt = quote.emailSentAt;
+      const pr = findPricingRequestRaw(quote.pricingRequestId);
+      if (pr.status === 'IMPORT_REVIEWING') pr.status = 'AWAITING_FACTORY_RESPONSE';
+      pushPricingRequestEvent(pr, user, 'FACTORY_EMAIL_SENT', 'IMPORT_REVIEWING', pr.status);
+      return delay({ factoryQuote: quote });
+    },
+
+    async receiveFactoryQuote(id, payload) {
+      const user = hasRole('import');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
+      if (!quote) fail('Factory quote not found', 404);
+      if (!quote.current) fail('Only the current factory quote revision can receive a response', 409);
+      const pr = findPricingRequestRaw(quote.pricingRequestId);
+      const applyResponse = (target) => {
+        target.status = 'RESPONSE_RECEIVED';
+        target.supplierQuoteRef = payload.supplierQuoteRef ?? null;
+        target.defaultCurrency = payload.defaultCurrency ?? 'THB';
+        target.paymentTerms = payload.paymentTerms ?? null;
+        target.leadTimeText = payload.leadTimeText ?? null;
+        target.revisionReason = payload.revisionReason ?? null;
+        target.negotiationNote = payload.negotiationNote ?? null;
+        target.receivedAt = new Date().toISOString();
+        target.updatedAt = target.receivedAt;
+        target.items = payload.items.map((item, i) => ({
+          id: mockFactoryQuoteItemSeq++,
+          factoryQuoteId: target.id,
+          pricingRequestItemId: item.pricingRequestItemId,
+          quotedQuantity: item.quotedQuantity,
+          quotedUnit: item.quotedUnit,
+          unitBasis: item.unitBasis,
+          rawUnitPrice: item.rawUnitPrice,
+          currency: item.currency,
+          minimumOrderQuantity: item.minimumOrderQuantity ?? null,
+          sqmPerUnit: item.sqmPerUnit ?? null,
+          piecesPerBox: item.piecesPerBox ?? null,
+          sortOrder: i,
+        }));
+      };
+      if (['DRAFT', 'REQUESTED'].includes(quote.status)) {
+        applyResponse(quote);
+        pushPricingRequestEvent(pr, user, 'FACTORY_RESPONSE_RECEIVED', pr.status, pr.status);
+        return delay({ factoryQuote: quote });
+      }
+      if (!['RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(quote.status)) {
+        fail(`Factory quote cannot receive a response in status ${quote.status}`, 409);
+      }
+      quote.status = 'SUPERSEDED';
+      quote.current = false;
+      const revision = { ...quote, id: mockFactoryQuoteSeq++, quoteCode: `FQ-2026-${String(mockFactoryQuoteSeq).padStart(4, '0')}`, status: 'RESPONSE_RECEIVED', parentFactoryQuoteId: quote.id, revisionNo: quote.revisionNo + 1, current: true, createdAt: new Date().toISOString() };
+      applyResponse(revision);
+      mockFactoryQuotes.push(revision);
+      for (const costing of mockPricingCostings.filter((c) => c.pricingRequestId === pr.id && ['DRAFT', 'CALCULATED'].includes(c.status))) {
+        costing.stale = true;
+        costing.staleReason = 'Factory quote revision changed';
+      }
+      pushPricingRequestEvent(pr, user, 'FACTORY_RESPONSE_REVISED', pr.status, pr.status);
+      return delay({ factoryQuote: revision });
+    },
+
+    async startFactoryNegotiation(id, payload) {
+      const user = hasRole('import');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
+      if (!quote) fail('Factory quote not found', 404);
+      if (quote.status !== 'RESPONSE_RECEIVED' || !quote.current) fail('Only a current received response can enter negotiation', 409);
+      quote.status = 'NEGOTIATING';
+      quote.negotiationNote = payload.note;
+      quote.updatedAt = new Date().toISOString();
+      pushPricingRequestEvent(findPricingRequestRaw(quote.pricingRequestId), user, 'FACTORY_NEGOTIATION_STARTED', null, null, payload.note);
+      return delay({ factoryQuote: quote });
+    },
+
+    async markFactoryQuoteReady(id) {
+      const user = hasRole('import');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
+      if (!quote) fail('Factory quote not found', 404);
+      if (!['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) || !quote.current) fail('Current response must have raw prices before it can be marked ready', 409);
+      quote.status = 'READY_FOR_COSTING';
+      quote.updatedAt = new Date().toISOString();
+      pushPricingRequestEvent(findPricingRequestRaw(quote.pricingRequestId), user, 'FACTORY_RESPONSE_READY_FOR_COSTING', null, null);
+      return delay({ factoryQuote: quote });
+    },
+
+    async markFactoryQuoteNotAvailable(id, payload) {
+      const user = hasRole('import');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
+      if (!quote) fail('Factory quote not found', 404);
+      quote.status = 'NOT_AVAILABLE';
+      quote.note = payload.reason;
+      pushPricingRequestEvent(findPricingRequestRaw(quote.pricingRequestId), user, 'FACTORY_NOT_AVAILABLE', null, null, payload.reason);
+      return delay({ factoryQuote: quote });
+    },
+
+    async createCosting(id, payload = {}) {
+      const user = hasRole('import');
+      const pr = findPricingRequestRaw(id);
+      const readyFactories = new Set(mockFactoryQuotes.filter((q) => q.pricingRequestId === pr.id && q.current && q.status === 'READY_FOR_COSTING').map((q) => q.factoryName));
+      for (const item of pr.items) if (!readyFactories.has(item.factory)) fail(`Factory quote for ${item.factory} is not ready for costing`, 422);
+      const existing = mockPricingCostings.find((c) => c.pricingRequestId === pr.id && ['DRAFT', 'CALCULATED'].includes(c.status));
+      if (existing) return delay({ costing: existing });
+      const costing = { id: mockPricingCostingSeq++, costingCode: `PCO-2026-${String(mockPricingCostingSeq).padStart(4, '0')}`, pricingRequestId: pr.id, versionNo: mockPricingCostingSeq, status: 'DRAFT', stale: false, staleReason: null, note: payload.note ?? null, createdBy: user.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), calculatedAt: null, submittedBy: null, submittedAt: null, totalLandedCostThb: null, items: [] };
+      mockPricingCostings.push(costing);
+      pr.status = 'COSTING_IN_PROGRESS';
+      pushPricingRequestEvent(pr, user, 'PRICING_COSTING_STARTED', null, 'COSTING_IN_PROGRESS');
+      return delay({ costing });
+    },
+
+    async listCostings(id) {
+      hasRole('import', 'ceo');
+      return delay({ items: mockPricingCostings.filter((c) => c.pricingRequestId === Number(id)) });
+    },
+
+    async getCosting(id) {
+      hasRole('import', 'ceo');
+      const costing = mockPricingCostings.find((c) => c.id === Number(id));
+      if (!costing) fail('Costing not found', 404);
+      return delay({ costing });
+    },
+
+    async recalculateCosting(id, payload = {}) {
+      const user = hasRole('import');
+      const costing = mockPricingCostings.find((c) => c.id === Number(id));
+      if (!costing) fail('Costing not found', 404);
+      if (costing.status === 'SUBMITTED') fail('Submitted costing is immutable', 409);
+      const pr = findPricingRequestRaw(costing.pricingRequestId);
+      costing.items = pr.items.map((item) => {
+        const quote = mockFactoryQuotes.find((q) => q.pricingRequestId === pr.id && q.factoryName === item.factory && q.current && q.status === 'READY_FOR_COSTING');
+        const quoteItem = quote?.items.find((qi) => qi.pricingRequestItemId === item.id);
+        if (!quote || !quoteItem) fail(`Factory quote for ${item.factory} is not ready for costing`, 422);
+        const raw = Number(quoteItem.rawUnitPrice ?? 0);
+        const qty = Number(item.requestedQty ?? 1);
+        return { pricingRequestItemId: item.id, factoryQuoteId: quote.id, factoryQuoteItemId: quoteItem.id, factoryQuoteRevisionNo: quote.revisionNo, factoryName: quote.factoryName, rawUnitPrice: raw, rawCurrency: quoteItem.currency, landedCostPerUnitThb: raw, totalLandedCostThb: raw * qty };
+      });
+      costing.totalLandedCostThb = costing.items.reduce((sum, item) => sum + item.totalLandedCostThb, 0);
+      costing.status = 'CALCULATED';
+      costing.stale = false;
+      costing.staleReason = null;
+      costing.note = payload.note ?? costing.note;
+      costing.calculatedAt = new Date().toISOString();
+      pushPricingRequestEvent(pr, user, 'PRICING_COSTING_CALCULATED', null, null);
+      return delay({ costing });
+    },
+
+    async submitCosting(id, payload = {}) {
+      const user = hasRole('import');
+      const costing = mockPricingCostings.find((c) => c.id === Number(id));
+      if (!costing) fail('Costing not found', 404);
+      if (costing.stale) fail('Costing is stale and must be recalculated before submit', 409);
+      if (costing.status !== 'CALCULATED') fail('Only a calculated costing can be submitted', 409);
+      const pr = findPricingRequestRaw(costing.pricingRequestId);
+      costing.status = 'SUBMITTED';
+      costing.submittedBy = user.id;
+      costing.submittedAt = new Date().toISOString();
+      costing.note = payload.note ?? costing.note;
+      pr.status = 'READY_FOR_CEO_REVIEW';
+      pushPricingRequestEvent(pr, user, 'PRICING_COSTING_SUBMITTED', 'COSTING_IN_PROGRESS', 'READY_FOR_CEO_REVIEW');
+      return delay({ costing });
     },
 
     async submit(id) {

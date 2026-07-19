@@ -31,4 +31,7 @@ export const queryKeys = {
   pricingRequestsByTicket: (ticketId) => ['pricingRequests', 'byTicket', ticketId],
   pricingRequestQueue: (filters = {}) => ['pricingRequests', 'queue', filters.status ?? '', filters.assignedImportId ?? '', filters.activeOnly ?? true],
   pricingRequestDetail: (id) => ['pricingRequests', 'detail', id],
+  pricingRequestFactoryQuotes: (id) => ['pricingRequests', 'factoryQuotes', id],
+  pricingRequestCostings: (id) => ['pricingRequests', 'costings', id],
+  pricingCostingDetail: (id) => ['pricingCostings', 'detail', id],
 };

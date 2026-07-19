@@ -1,7 +1,7 @@
 // Canonical metadata for the PricingRequest aggregate (commit 6): one deal may
 // have several pricing requests (one per recipient / re-quote round), each
-// walking DRAFT -> SUBMITTED -> IMPORT_REVIEWING -> (MORE_INFO_REQUIRED <->
-// IMPORT_REVIEWING) -> CANCELLED. Mirrors PricingRequestStatus /
+// walking from sales submission through Import factory communication and
+// costing submission. Mirrors PricingRequestStatus /
 // PricingRequestRecipient / QuantityType / PricingRequestEventKind (backend
 // pricingrequest/ package).
 //
@@ -11,7 +11,15 @@
 // CLAUDE.md "Mock API contract").
 
 export const PRICING_REQUEST_STATUSES = [
-  'DRAFT', 'SUBMITTED', 'IMPORT_REVIEWING', 'MORE_INFO_REQUIRED', 'CANCELLED',
+  'DRAFT',
+  'SUBMITTED',
+  'IMPORT_REVIEWING',
+  'AWAITING_FACTORY_RESPONSE',
+  'COSTING_IN_PROGRESS',
+  'READY_FOR_CEO_REVIEW',
+  'MORE_INFO_REQUIRED',
+  'CANCELLED',
+  'SUPERSEDED',
 ];
 
 // Mirrors PricingRequestStatus.ALLOWED — forward/lateral transitions only.
@@ -20,8 +28,12 @@ export const PRICING_REQUEST_STATUSES = [
 const ALLOWED_TRANSITIONS = {
   DRAFT: ['SUBMITTED', 'CANCELLED'],
   SUBMITTED: ['IMPORT_REVIEWING', 'CANCELLED'],
-  IMPORT_REVIEWING: ['MORE_INFO_REQUIRED'],
-  MORE_INFO_REQUIRED: ['IMPORT_REVIEWING', 'CANCELLED'],
+  IMPORT_REVIEWING: ['AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS', 'MORE_INFO_REQUIRED', 'CANCELLED', 'SUPERSEDED'],
+  AWAITING_FACTORY_RESPONSE: ['COSTING_IN_PROGRESS', 'MORE_INFO_REQUIRED', 'CANCELLED', 'SUPERSEDED'],
+  COSTING_IN_PROGRESS: ['AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW', 'MORE_INFO_REQUIRED', 'CANCELLED', 'SUPERSEDED'],
+  READY_FOR_CEO_REVIEW: ['SUPERSEDED'],
+  MORE_INFO_REQUIRED: ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS', 'CANCELLED'],
+  SUPERSEDED: [],
   CANCELLED: [],
 };
 

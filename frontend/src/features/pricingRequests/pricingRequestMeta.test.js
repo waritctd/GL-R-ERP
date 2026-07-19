@@ -39,9 +39,13 @@ describe('canTransition', () => {
     expect(canTransition('DRAFT', 'DRAFT')).toBe(false);
     expect(canTransition('SUBMITTED', 'IMPORT_REVIEWING')).toBe(true);
     expect(canTransition('IMPORT_REVIEWING', 'MORE_INFO_REQUIRED')).toBe(true);
-    expect(canTransition('IMPORT_REVIEWING', 'CANCELLED')).toBe(false);
+    expect(canTransition('IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE')).toBe(true);
+    expect(canTransition('AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS')).toBe(true);
+    expect(canTransition('COSTING_IN_PROGRESS', 'READY_FOR_CEO_REVIEW')).toBe(true);
+    expect(canTransition('IMPORT_REVIEWING', 'CANCELLED')).toBe(true);
     expect(canTransition('MORE_INFO_REQUIRED', 'IMPORT_REVIEWING')).toBe(true);
     expect(canTransition('MORE_INFO_REQUIRED', 'CANCELLED')).toBe(true);
+    expect(canTransition('READY_FOR_CEO_REVIEW', 'SUPERSEDED')).toBe(true);
     expect(canTransition('CANCELLED', 'DRAFT')).toBe(false);
   });
 });
@@ -120,8 +124,8 @@ describe('canCancelPricingRequest', () => {
   it('rejects a non-owner, non-ceo actor', () => {
     expect(canCancelPricingRequest(otherSales, pr({ status: 'DRAFT' }))).toBe(false);
   });
-  it('rejects IMPORT_REVIEWING (not a normal-flow cancel target)', () => {
-    expect(canCancelPricingRequest(salesOwner, pr({ status: 'IMPORT_REVIEWING' }))).toBe(false);
+  it('allows active Import workflow statuses to cancel', () => {
+    expect(canCancelPricingRequest(salesOwner, pr({ status: 'IMPORT_REVIEWING' }))).toBe(true);
   });
   it('rejects an already-cancelled request', () => {
     expect(canCancelPricingRequest(ceo, pr({ status: 'CANCELLED' }))).toBe(false);
