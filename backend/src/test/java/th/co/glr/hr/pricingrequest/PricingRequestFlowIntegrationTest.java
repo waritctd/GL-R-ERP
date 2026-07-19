@@ -249,6 +249,62 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(responded.summary().assignedImportId()).isEqualTo(importUserId);
     }
 
+    // ── 6. Gap 2 (review-remediation Commit F): the full pickup -> request-info ──
+    // -> respond sequence, driven through the real services with a status
+    // assertion after EVERY step, not just the two isolated fragments above
+    // (#4 stops at pickup; #5 fabricates its starting point via pickup() but
+    // never checks submit's/pickup's own returned status). Ends by proving
+    // pickedUpAt/assignedImportId survived the whole round trip byte-identical,
+    // per the task brief.
+
+    @Test
+    void fullSequence_pickupThenRequestInformationThenRespond_assertsStatusAtEveryStepAndPreservesPickupFields() {
+        PricingRequestDetailDto draft = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor);
+        long id = draft.summary().id();
+        assertThat(draft.summary().status()).isEqualTo(PricingRequestStatus.DRAFT);
+
+        PricingRequestDetailDto submitted = pricingRequestService.submit(id, salesActor);
+        assertThat(submitted.summary().status()).isEqualTo(PricingRequestStatus.SUBMITTED);
+        assertThat(submitted.summary().pickedUpAt()).isNull();
+        assertThat(submitted.summary().assignedImportId()).isNull();
+
+        PricingRequestDetailDto pickedUp = pricingRequestService.pickup(id, importActor);
+        assertThat(pickedUp.summary().status()).isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
+        assertThat(pickedUp.summary().assignedImportId()).isEqualTo(importUserId);
+        Instant pickedUpAt = pickedUp.summary().pickedUpAt();
+        assertThat(pickedUpAt).isNotNull();
+
+        PricingRequestDetailDto infoRequested = pricingRequestService.requestInformation(id,
+            new RequestMoreInformationRequest("กรุณาระบุขนาดสินค้าเพิ่มเติม", null), importActor);
+        assertThat(infoRequested.summary().status()).isEqualTo(PricingRequestStatus.MORE_INFO_REQUIRED);
+        // The COALESCE-preserving transition() must not touch either field just
+        // because the status moved away from IMPORT_REVIEWING.
+        assertThat(infoRequested.summary().pickedUpAt()).isEqualTo(pickedUpAt);
+        assertThat(infoRequested.summary().assignedImportId()).isEqualTo(importUserId);
+
+        PricingRequestDetailDto responded = pricingRequestService.respondInformation(id,
+            new RespondMoreInformationRequest("ขนาด 60x60 ซม."), salesActor);
+        assertThat(responded.summary().status()).isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
+
+        // picked_up_at and assigned_import_id survived the entire pickup ->
+        // request-info -> respond round trip unchanged (byte-identical, not
+        // just "still non-null").
+        assertThat(responded.summary().pickedUpAt()).isEqualTo(pickedUpAt);
+        assertThat(responded.summary().assignedImportId()).isEqualTo(importUserId);
+
+        // Read straight from Postgres too — not just the DTO the service handed
+        // back — so a bug that resets the column but not the in-memory object
+        // (or vice versa) cannot hide behind the assertions above.
+        Instant persistedPickedUpAt = jdbc.queryForObject(
+            "SELECT picked_up_at FROM sales.pricing_request WHERE pricing_request_id = :id",
+            Map.of("id", id), Instant.class);
+        Long persistedAssignedImportId = jdbc.queryForObject(
+            "SELECT assigned_import_id FROM sales.pricing_request WHERE pricing_request_id = :id",
+            Map.of("id", id), Long.class);
+        assertThat(persistedPickedUpAt).isEqualTo(pickedUpAt);
+        assertThat(persistedAssignedImportId).isEqualTo(importUserId);
+    }
+
     // ── extra: a second sales rep cannot read the first rep's pricing requests ──
 
     @Test

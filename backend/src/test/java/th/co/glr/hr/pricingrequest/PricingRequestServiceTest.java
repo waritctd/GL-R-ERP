@@ -389,6 +389,134 @@ class PricingRequestServiceTest {
         verify(requestRepo, never()).updateDraft(anyLong(), any());
     }
 
+    // ── updateDraft: full-replacement re-validation (Commit F gap fill) ────────
+    // The full-replacement PUT (commit C) re-runs EVERY validation against the
+    // replacement payload, not just the contact-ownership check above — none of
+    // that re-validation, nor the ownership/status guards ahead of it, nor the
+    // happy path, had a service-level test before this.
+
+    @Test
+    void updateDraft_rejectsNonOwnerSales() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        assertForbidden(() -> service.updateDraft(20L, sampleUpdateRequest(), otherSales));
+        verify(requestRepo, never()).updateDraft(anyLong(), any());
+    }
+
+    @Test
+    void updateDraft_rejectsNonDraftStatus() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
+        assertConflict(() -> service.updateDraft(20L, sampleUpdateRequest(), salesActor));
+        verify(requestRepo, never()).updateDraft(anyLong(), any());
+    }
+
+    @Test
+    void updateDraft_rejectsNullRecipientType() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
+            null, null, null, null, null, null, null, null);
+        assertBadRequest(() -> service.updateDraft(20L, request, salesActor));
+        verify(requestRepo, never()).updateDraft(anyLong(), any());
+    }
+
+    @Test
+    void updateDraft_rejectsBlankRecipientType() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
+            "   ", null, null, null, null, null, null, null);
+        assertBadRequest(() -> service.updateDraft(20L, request, salesActor));
+        verify(requestRepo, never()).updateDraft(anyLong(), any());
+    }
+
+    @Test
+    void updateDraft_rejectsInvalidRecipientType() {
+        // Proves the replacement payload's recipientType is re-validated against
+        // PricingRequestRecipient, the same as createDraft — not merely checked
+        // for blankness.
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
+            "BOGUS", 1L, null, null, null, null, null, null);
+        assertBadRequest(() -> service.updateDraft(20L, request, salesActor));
+        verify(requestRepo, never()).updateDraft(anyLong(), any());
+    }
+
+    @Test
+    void updateDraft_rejectsInvalidCurrency() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
+            PricingRequestRecipient.BUYER, 1L, null, null, null, "DOLLARS", null, null);
+        assertBadRequest(() -> service.updateDraft(20L, request, salesActor));
+        verify(requestRepo, never()).updateDraft(anyLong(), any());
+    }
+
+    @Test
+    void updateDraft_rejectsReplacementItemWithNoIdentityField() {
+        // Part 1's item-identity rule is re-run against the REPLACEMENT items
+        // list, same as createDraft — a full-replacement PUT could otherwise be
+        // used to smuggle an unidentified line past the create-time check.
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
+            PricingRequestRecipient.BUYER, 1L, null, null, null, null, null,
+            List.of(itemRequestWithIdentity(null, null, "Brand only, no model", null, null)));
+        assertBadRequest(() -> service.updateDraft(20L, request, salesActor));
+        verify(requestRepo, never()).updateDraft(anyLong(), any());
+    }
+
+    @Test
+    void updateDraft_rejectsReplacementSourceItemFromAnotherTicket() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of(501L, 502L));
+        UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
+            PricingRequestRecipient.BUYER, 1L, null, null, null, null, null,
+            List.of(sampleItemRequest(999L, QuantityType.REFERENCE)));
+        assertBadRequest(() -> service.updateDraft(20L, request, salesActor));
+        verify(requestRepo, never()).updateDraft(anyLong(), any());
+    }
+
+    @Test
+    void updateDraft_skipsItemValidationWhenItemsOmitted() {
+        // items == null means "leave the item list untouched" (the one field
+        // that keeps sparse-PATCH semantics under the otherwise full-replacement
+        // PUT — see PricingRequestRepository.updateDraft's Javadoc), so neither
+        // validateItems nor validateSourceItemsBelongToTicket should run at all.
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.updateDraft(eq(20L), any())).thenReturn(true);
+
+        service.updateDraft(20L, validUpdateRequest(), salesActor);
+
+        verify(requestRepo, never()).findItemIdsForTicket(anyLong());
+    }
+
+    @Test
+    void updateDraft_rejectsWhenUpdateReturnsFalse() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.updateDraft(eq(20L), any())).thenReturn(false);
+        assertConflict(() -> service.updateDraft(20L, validUpdateRequest(), salesActor));
+        verify(requestRepo, never()).addEvent(anyLong(), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void updateDraft_succeedsAndRecordsUpdatedEvent() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        UpdatePricingRequestRequest request = validUpdateRequest();
+        when(requestRepo.updateDraft(20L, request)).thenReturn(true);
+
+        service.updateDraft(20L, request, salesActor);
+
+        verify(requestRepo).updateDraft(20L, request);
+        verify(requestRepo).addEvent(eq(20L), eq(10L), eq(1L), any(),
+            eq(PricingRequestEventKind.PRICING_REQUEST_UPDATED), eq(PricingRequestStatus.DRAFT),
+            eq(PricingRequestStatus.DRAFT), eq(null), eq(null));
+    }
+
     @Test
     void submit_rejectsContactBelongingToAnotherCustomer() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
@@ -642,6 +770,25 @@ class PricingRequestServiceTest {
         verify(requestRepo).findSummaries(null, null, null, true, true, 4L);
     }
 
+    // Gap 3 (review-remediation Commit F): sales_manager is the OTHER oversight
+    // role in draftOversight's "ceo".equals(...) || "sales_manager".equals(...)
+    // check — only ceo had ever been proven to flip that flag to true. account
+    // is neither owner-filtered nor oversight, so it must behave like import.
+    @Test
+    void list_salesManagerHasDraftOversight() {
+        PricingRequestSummaryDto draft = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        when(requestRepo.findSummaries(null, null, null, true, true, 7L)).thenReturn(List.of(draft));
+        assertThat(service.list(null, null, true, salesManagerActor))
+            .extracting(PricingRequestSummaryDto::id).contains(20L);
+        verify(requestRepo).findSummaries(null, null, null, true, true, 7L);
+    }
+
+    @Test
+    void list_accountHasNoDraftOversightAndIsNotOwnerFiltered() {
+        service.list(null, null, true, accountActor);
+        verify(requestRepo).findSummaries(null, null, null, true, false, 5L);
+    }
+
     // listForTicket is a separate read path from get()/list() and must honour the
     // same DRAFT-privacy rule.
     @Test
@@ -653,11 +800,40 @@ class PricingRequestServiceTest {
     }
 
     @Test
+    void listForTicket_accountDoesNotSeeDraftRequestsOnTicket() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        PricingRequestSummaryDto draft = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        when(requestRepo.findByTicket(10L)).thenReturn(List.of(draft));
+        assertThat(service.listForTicket(10L, accountActor)).isEmpty();
+    }
+
+    @Test
     void listForTicket_ceoSeesDraftRequestsOnTicket() {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         PricingRequestSummaryDto draft = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
         when(requestRepo.findByTicket(10L)).thenReturn(List.of(draft));
         assertThat(service.listForTicket(10L, ceoActor))
+            .extracting(PricingRequestSummaryDto::id).containsExactly(20L);
+    }
+
+    @Test
+    void listForTicket_salesManagerSeesDraftRequestsOnTicket() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        PricingRequestSummaryDto draft = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        when(requestRepo.findByTicket(10L)).thenReturn(List.of(draft));
+        assertThat(service.listForTicket(10L, salesManagerActor))
+            .extracting(PricingRequestSummaryDto::id).containsExactly(20L);
+    }
+
+    @Test
+    void listForTicket_ownerSalesSeesOwnDraftRequest() {
+        // Unlike listForTicket_salesSeesOnlyOwnDeal below (which only proves the
+        // repo call happens), this proves the owner's OWN draft actually survives
+        // the service's DRAFT-privacy filter, not just import/ceo/sales_manager's.
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        PricingRequestSummaryDto draft = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        when(requestRepo.findByTicket(10L)).thenReturn(List.of(draft));
+        assertThat(service.listForTicket(10L, salesActor))
             .extracting(PricingRequestSummaryDto::id).containsExactly(20L);
     }
 
@@ -1154,12 +1330,22 @@ class PricingRequestServiceTest {
         // recipientType is a real value, not null: updateDraft is now a
         // full-replacement PUT (Fix 2) that validates recipientType
         // unconditionally, so this helper must represent a request that could
-        // otherwise legitimately succeed — its two current callers short-circuit
-        // on an earlier guard (role / deal lifecycle) before ever reaching that
-        // check, but a future caller reaching further into the method should not
-        // be tripped up by an otherwise-invalid sample payload.
+        // otherwise legitimately succeed on THAT guard. It still has no
+        // recipientContactId/recipientLabel, so it fails
+        // validateRecipientIdentifiable — fine for this fixture's actual callers,
+        // which short-circuit on an earlier guard (role / deal lifecycle) before
+        // ever reaching that far. A test that needs to reach past
+        // validateRecipientIdentifiable (e.g. to exercise a later validation, or
+        // the happy path) must use {@link #validUpdateRequest()} instead.
         return new UpdatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, null, LocalDate.now().plusDays(1), null, null, null, null);
+    }
+
+    /** A full-replacement update payload that passes every updateDraft validation. */
+    private static UpdatePricingRequestRequest validUpdateRequest() {
+        return new UpdatePricingRequestRequest(
+            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(1),
+            null, null, null, null);
     }
 
     private static CancelPricingRequestRequest cancelRequest() {
