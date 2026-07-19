@@ -1,7 +1,7 @@
 # 85 — feat/sales-pricing-request-foundation
 
 **Branch:** `feat/sales-pricing-request-foundation` (branched off `feat/sales-flow-remediation-part1`, not off `main`) · **Migration:** V58 only
-**Date:** 2026-07-19 · **Status:** commits 1-6 committed and pushed. **Commit 7 of the plan (end-to-end smoke tests) was NOT done** — see "Outstanding" below.
+**Date:** 2026-07-19 · **Status:** all 7 planned commits done, plus a fix commit for three defects the browser pass surfaced. Backend **630 tests green**, frontend **242 tests green**.
 
 ⚠️ **This branch is not independently deployable.** See "Known risks" #1. Do not merge to `uat` or
 `main` for deploy until the pricing chain is rebuilt on the PricingRequest aggregate (Steps 2-4).
@@ -61,7 +61,10 @@ aggregate (commits 1-5, backend) is the replacement: a deal may now have several
   wiring is a follow-up.
 - No dedicated "edit draft" UI (PUT `/pricing-requests/{id}` is implemented in all three API layers
   for contract completeness, but nothing in the UI calls it yet — a saved draft can only be
-  re-submitted, not edited, from `PricingRequestPanel`).
+  re-submitted, not edited, from `PricingRequestPanel`). **Note this is the same class of gap as
+  the `requestInformation` defect above, which shipped unnoticed because the API layer existed and
+  the tests passed. Treat "implemented in the API layer" as NOT meaning "reachable by a user" —
+  check for a rendered control.**
 - (Resolved during review — the `TicketDashboard` StatCard "รอรับเรื่อง" tile that still read the
   stale `summary.submitted` was repointed at the pricing-request queue, and the then-orphaned
   `canPickup` binding removed.)
@@ -147,18 +150,58 @@ against `mockApi.js`:
   left the company would be uncancellable. Flagged here because it is a new permission, not a
   mirror of an existing one.
 
-## Outstanding — commit 7 was not done
+## Commit 7 + browser verification
 
-The plan's seventh commit is **not** in this branch:
+`0065544 test(pricing)` adds `PricingRequestFlowIntegrationTest` (the full acceptance walk against
+real Postgres — deal-with-3-products stays draft with zero notifications, two requests coexist,
+submitting one leaves the other DRAFT and the deal unmoved, pickup keeps `sales.ticket.assigned_to`
+NULL and the deal timeline at one event, info loop returns to IMPORT_REVIEWING with `picked_up_at`
+byte-identical) and the `App.test.jsx` route guard for `/pricing-requests`.
 
-- `PricingRequestFlowIntegrationTest` — the end-to-end acceptance walk (deal with 3 items → no
-  notification → two coexisting requests → submit one → only that one changes → pickup → assert
-  `sales.ticket.assigned_to IS NULL`). **Several of its assertions do exist** already, spread across
-  `PricingRequestRepositoryIntegrationTest` (including the `assigned_to IS NULL` guard after a real
-  pickup) and `PricingRequestServiceTest`, but the single end-to-end walk does not.
-- The `App.test.jsx` route-guard case for `/pricing-requests`.
-- The manual mock-frontend drive-through (`VITE_USE_MOCKS=true`) has **not** been performed — no
-  browser verification of this slice has happened at all.
+### The browser pass found three defects the test suites did not
+
+Driving the mock (`VITE_USE_MOCKS=true`) caught what unit tests structurally could not — they
+covered the gate predicates and the API surface, not whether a control actually renders. Fixed in
+`b229922`:
+
+1. **Import could never request more information.** `api.pricingRequests.requestInformation`
+   existed in all three API layers, `canRequestInformation` existed in `pricingRequestMeta.js`, and
+   the backend implemented it — but **no component called it**. A request could therefore never
+   reach `MORE_INFO_REQUIRED`, which also made the already-wired Sales respond path unreachable.
+   Two Definition-of-Done boxes were silently failing.
+2. **The mock was more permissive than production.** The create modal left `requestedUnit` blank
+   (it did not seed from the deal item) and the mock happily accepted the submission, where the
+   real backend rejects it — `@NotBlank String requestedUnit`. This is the issue-#199 failure mode:
+   you only find out in prod. The modal now seeds the unit from `unitBasis` and the mock validates
+   the required item fields like the Java request record does.
+3. **Naming collision:** the deal breadcrumb still labelled a ticket "ใบขอราคา", the same words the
+   new pricing-request panel uses. Now "ดีล".
+
+### Verified live in the browser
+
+Deal detail shows the panel after the items table with the correct empty state; the old ส่งขอราคา
+button is gone; creating a request yields `PCR-2026-0002` in SUBMITTED; the Import queue lists it
+and pickup assigns it; the `ขอข้อมูลเพิ่มเติม` action moves it to `MORE_INFO_REQUIRED`;
+`DealStagePanel`'s การขอราคา strip appears only once a request exists and tracks its status; and
+the row expansion renders **"ประวัติ (เฉพาะใบขอราคานี้)"** with that request's own events while the
+deal timeline still shows only สร้างดีล — decision #4 confirmed end to end.
+
+### What was NOT verified live
+
+- **The Sales respond-information step.** It is wired (`PricingRequestPanel.jsx`) and unit-tested,
+  and the Import half of the loop was driven live, but the final Sales→respond click was not
+  performed in the browser (the SPA logout did not take, and reloading resets the mock store).
+  Worth 60 seconds of manual confirmation before merge.
+- **Nothing was verified against the real Java backend through the UI** — only against the mock.
+  Permission behaviour is covered by the Java service/controller tests, not by this browser pass.
+
+### Known UX observation (not a defect)
+
+After Import picks up a request it disappears from the default queue view, because the default
+filter is the SUBMITTED ("รอ Import รับเรื่อง") work queue and the request has left that state.
+The data is correct and it is still reachable under the other filters, but there is no confirmation
+feedback on pickup, so it reads as though something failed. Consider a toast, or defaulting the
+queue to "everything assigned to me plus everything unclaimed".
 
 ## Known risks / uncertainties
 
