@@ -39,10 +39,13 @@ public class TicketRepository {
                t.lifecycle, t.tender_requirement, t.deposit_policy,
                t.deposit_policy_reason, t.entry_channel,
                t.billing_date, t.due_date, t.credit_term_days,
-               t.last_follow_up_at, t.next_follow_up_at
+               t.last_follow_up_at, t.next_follow_up_at,
+               t.close_confirmed_at,
+               NULLIF(TRIM(CONCAT_WS(' ', ecc.first_name_th, ecc.last_name_th)), '') AS close_confirmed_by_name
           FROM sales.ticket t
           JOIN hr.employee ec ON ec.employee_id = t.created_by
           LEFT JOIN hr.employee ea ON ea.employee_id = t.assigned_to
+          LEFT JOIN hr.employee ecc ON ecc.employee_id = t.close_confirmed_by
           LEFT JOIN sales.ticket_item ti ON ti.ticket_id = t.ticket_id
           LEFT JOIN customers.project p ON p.project_id = t.project_id
           LEFT JOIN customers.contact ct ON ct.contact_id = t.contact_id
@@ -64,7 +67,8 @@ public class TicketRepository {
                AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
              GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
                       ea.first_name_th, ea.last_name_th,
-                      p.name, ct.first_name, ct.last_name
+                      p.name, ct.first_name, ct.last_name,
+                      ecc.first_name_th, ecc.last_name_th
              ORDER BY t.created_at DESC
             """);
         MapSqlParameterSource params = new MapSqlParameterSource()
@@ -528,7 +532,8 @@ public class TicketRepository {
                  WHERE t.ticket_id = :id
                  GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
                           ea.first_name_th, ea.last_name_th,
-                          p.name, ct.first_name, ct.last_name
+                          p.name, ct.first_name, ct.last_name,
+                          ecc.first_name_th, ecc.last_name_th
                 """,
                 Map.of("id", id), (rs, rowNum) -> mapSummary(rs));
             return Optional.ofNullable(summary).map(this::enrichSummary);
@@ -768,6 +773,10 @@ public class TicketRepository {
             BigDecimal.ZERO,
             BigDecimal.ZERO,
             BigDecimal.ZERO,
+            false,
+            rs.getTimestamp("close_confirmed_at") != null
+                ? rs.getTimestamp("close_confirmed_at").toInstant() : null,
+            rs.getString("close_confirmed_by_name"),
             false
         );
     }
@@ -792,7 +801,39 @@ public class TicketRepository {
             s.stageUpdatedAt(), s.lifecycle(), s.tenderRequirement(), s.depositPolicy(),
             s.depositPolicyReason(), s.entryChannel(), s.billingDate(), s.dueDate(),
             s.creditTermDays(), s.lastFollowUpAt(), s.nextFollowUpAt(),
-            stage, payable, paid, outstanding, overdue);
+            stage, payable, paid, outstanding, overdue,
+            s.closeConfirmedAt(), s.closeConfirmedByName(), hasInvoiceAttachment(s.id()));
+    }
+
+    /**
+     * An INVOICE document is on file. The invoice is produced by an external
+     * system and uploaded here, so its presence — not its contents — is what the
+     * close gate can check.
+     */
+    public boolean hasInvoiceAttachment(long ticketId) {
+        Integer n = jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.attachment
+             WHERE ticket_id = :id AND attach_type = 'INVOICE'
+            """, Map.of("id", ticketId), Integer.class);
+        return n != null && n > 0;
+    }
+
+    /** ฝ่ายบัญชี signs off that the deal is ready to close; CEO verification still required. */
+    public void confirmClose(long ticketId, long actorId) {
+        jdbc.update("""
+            UPDATE sales.ticket
+               SET close_confirmed_by = :actor, close_confirmed_at = now(), updated_at = now()
+             WHERE ticket_id = :id
+            """, Map.of("id", ticketId, "actor", actorId));
+    }
+
+    /** Withdraw the confirmation so the deal leaves the CEO's verification queue. */
+    public void clearCloseConfirmation(long ticketId) {
+        jdbc.update("""
+            UPDATE sales.ticket
+               SET close_confirmed_by = NULL, close_confirmed_at = NULL, updated_at = now()
+             WHERE ticket_id = :id
+            """, Map.of("id", ticketId));
     }
 
     private String derivePaymentStage(TicketSummaryDto s, BigDecimal payable, BigDecimal paid,

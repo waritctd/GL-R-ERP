@@ -603,6 +603,32 @@ function deliveryComplete(status) {
   return status === 'FULLY_DELIVERED';
 }
 
+// Attachments live in their own store (mockAttachments), not on the ticket —
+// mirrors sales.attachment being its own table.
+function hasInvoiceAttachment(ticket) {
+  return mockAttachments.some((a) => a.ticketId === ticket.id && a.attachType === 'INVOICE');
+}
+
+// Mirrors TicketService.requireClosePrerequisites. Legacy document_issued deals
+// predate the delivery and invoice tracks, so those two are waived for them —
+// requiring either would strand old data permanently.
+function requireClosePrerequisites(ticket) {
+  const legacyOk = ticket.status === 'document_issued'
+    && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID');
+  const dualTrackOk = ticket.status === 'quotation_issued'
+    && ticket.paymentStatus === 'FULLY_PAID'
+    && deliveryComplete(ticket.fulfillmentStatus);
+  if (!legacyOk && !dualTrackOk) {
+    fail('ปิดงานไม่ได้: ต้องรับเงินครบและส่งมอบสินค้าครบก่อน', 409);
+  }
+  if (derivePaymentFields(ticket).amountOutstanding > 0) {
+    fail('ปิดงานไม่ได้: ยังมียอดค้างชำระ', 409);
+  }
+  if (dualTrackOk && !hasInvoiceAttachment(ticket)) {
+    fail('ปิดงานไม่ได้: ยังไม่ได้แนบใบกำกับภาษี (ฝ่ายบัญชีต้องอัปโหลดก่อน)', 409);
+  }
+}
+
 // Mirrors TicketService.maybeAdvanceClosedPaid: CLOSED_PAID (S20) requires BOTH
 // gates — payment fully paid AND goods actually delivered (FULLY_DELIVERED).
 // Now the same rule the manual close uses; the two agree on "delivered".
@@ -941,6 +967,9 @@ function buildTicketDetail(ticket) {
       depositPolicy: ticket.depositPolicy ?? 'REQUIRED',
       depositPolicyReason: ticket.depositPolicyReason ?? null,
       entryChannel: ticket.entryChannel ?? 'DESIGNER_LED',
+      closeConfirmedAt: ticket.closeConfirmedAt ?? null,
+      closeConfirmedByName: ticket.closeConfirmedByName ?? null,
+      invoiceOnFile: hasInvoiceAttachment(ticket),
       ...paymentFields,
     },
     items: ticket.items, events: ticket.events,
@@ -1691,8 +1720,18 @@ export const api = {
         const finalPaymentAllowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
           || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
         if (['account', 'ceo'].includes(user.role) && finalPaymentAllowed) add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
-        if (ticket.createdById === user.id && ((ticket.status === 'document_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID'))
-          || (ticket.status === 'quotation_issued' && ticket.paymentStatus === 'FULLY_PAID' && deliveryComplete(ticket.fulfillmentStatus)))) add('CLOSE', 'operational', 'ปิดงาน');
+        // Three-party close: account confirms, CEO verifies. Sales is not involved.
+        let closeReady = true;
+        try { requireClosePrerequisites(ticket); } catch { closeReady = false; }
+        if (user.role === 'account' && !ticket.closeConfirmedAt && closeReady) {
+          add('CONFIRM_CLOSE', 'operational', 'ยืนยันพร้อมปิดงาน');
+        }
+        if (['account', 'ceo'].includes(user.role) && ticket.closeConfirmedAt) {
+          add('REVOKE_CLOSE_CONFIRM', 'operational', 'ยกเลิกการยืนยันปิดงาน');
+        }
+        if (user.role === 'ceo' && ticket.closeConfirmedAt && closeReady) {
+          add('VERIFY_CLOSE', 'operational', 'ตรวจสอบและปิดงาน');
+        }
         if (ticket.createdById === user.id && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
         if (owner && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(ticket.status)) add('EDIT_ITEMS', 'operational', 'แก้ไขรายการ');
         for (const stage of ['LEAD_APPROACH','PRESENTATION','SPEC_APPROVED','QUOTE_DESIGN_SIDE','OWNER_SIGNOFF','AWAITING_BUYER','QUOTE_BUYER','NEGOTIATION','ORDER_RECEIVED','DEPOSIT_RECEIVED','PROCUREMENT','DELIVERY_SCHEDULING','DELIVERED','CLOSED_PAID']) {
@@ -2079,29 +2118,49 @@ export const api = {
       return buildMockQuotationHtml(ticketId, quotationId);
     },
 
-    async close(id) {
+    // Three-party close (V55). Mirrors TicketService.confirmCloseReady /
+    // revokeCloseConfirmation / verifyClose. Sales is not part of the sequence.
+    async confirmCloseReady(id) {
       const user = requireSession();
+      hasRole('account'); // NOT ceo — the CEO signs the second half
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
-      // Mirrors TicketService.close(): legacy document_issued path (pre-dual-track
-      // tickets only, or fully paid), or the dual-track completion
-      // (quotation_issued + FULLY_PAID + FULLY_DELIVERED).
-      const legacyOk = ticket.status === 'document_issued'
-        && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID');
-      const dualTrackOk = ticket.status === 'quotation_issued'
-        && ticket.paymentStatus === 'FULLY_PAID'
-        && deliveryComplete(ticket.fulfillmentStatus);
-      if (!legacyOk && !dualTrackOk) {
-        fail('Cannot close: require paymentStatus=FULLY_PAID and delivery complete', 409);
-      }
-      if (derivePaymentFields(ticket).amountOutstanding > 0) {
-        fail('Cannot close: ยังมียอดค้างชำระ', 409);
-      }
+      if (ticket.closeConfirmedAt) fail('ยืนยันปิดงานไปแล้ว — รอ CEO ตรวจสอบ', 409);
+      requireClosePrerequisites(ticket);
+      ticket.closeConfirmedAt = new Date().toISOString();
+      ticket.closeConfirmedByName = user.name;
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'CLOSE_CONFIRMED', ticket.status, ticket.status,
+        'ฝ่ายบัญชียืนยันพร้อมปิดงาน — รอ CEO ตรวจสอบ');
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async revokeCloseConfirmation(id, payload = {}) {
+      const user = requireSession();
+      hasRole('account', 'ceo');
+      const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
+      if (!ticket.closeConfirmedAt) fail('ดีลนี้ยังไม่ได้ยืนยันปิดงาน', 409);
+      ticket.closeConfirmedAt = null;
+      ticket.closeConfirmedByName = null;
+      pushEvent(ticket, user, 'CLOSE_CONFIRM_REVOKED', ticket.status, ticket.status,
+        (payload.note || '').trim() || null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async verifyClose(id) {
+      const user = requireSession();
+      hasRole('ceo');
+      const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
+      if (!ticket.closeConfirmedAt) fail('ปิดงานไม่ได้: ต้องให้ฝ่ายบัญชียืนยันก่อน', 409);
+      // Re-checked here too: the CEO verifies, never overrides.
+      requireClosePrerequisites(ticket);
       const prev = ticket.status;
       ticket.status = 'closed';
       ticket.closedAt = new Date().toISOString().slice(0, 10);
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'CLOSED', prev, 'closed', null);
+      pushEvent(ticket, user, 'CLOSED', prev, 'closed', 'CEO ตรวจสอบและปิดงาน');
       ticket.lifecycle = 'COMPLETED';
       return delay({ ticket: buildTicketDetail(ticket) });
     },
