@@ -115,6 +115,8 @@ export function DataTable({
   loading = false,
   emptyState,
   initialSort,
+  sort,
+  onSortChange,
   toolbarExtra,
   stickyHeader = false,
   exportable = false,
@@ -138,9 +140,29 @@ export function DataTable({
   const [internalSearch, setInternalSearch] = useState('');
   const search = isControlledSearch ? searchValue : internalSearch;
   const setSearch = isControlledSearch ? (value) => onSearchChange?.(value) : setInternalSearch;
-  const [sorting, setSorting] = useState(
+  // Optional controlled sort, same contract as the controlled search above:
+  // when the caller passes `sort` (typically mirrored into a URL query param so
+  // header clicks and an out-of-table sort control stay in step), this component
+  // defers to it. Omitting both `sort` and `onSortChange` leaves every existing
+  // caller on the uncontrolled `initialSort` path unchanged.
+  const isControlledSort = sort !== undefined;
+  const [internalSorting, setInternalSorting] = useState(
     initialSort?.key ? [{ id: initialSort.key, desc: initialSort.dir === 'desc' }] : [],
   );
+  const controlledSorting = useMemo(
+    () => (sort?.key ? [{ id: sort.key, desc: sort.dir === 'desc' }] : []),
+    [sort?.key, sort?.dir],
+  );
+  const sorting = isControlledSort ? controlledSorting : internalSorting;
+  const setSorting = (updater) => {
+    const next = typeof updater === 'function' ? updater(sorting) : updater;
+    if (!isControlledSort) {
+      setInternalSorting(next);
+      return;
+    }
+    const [first] = next;
+    onSortChange?.(first ? { key: first.id, dir: first.desc ? 'desc' : 'asc' } : null);
+  };
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize });
 
   const columnMap = useMemo(
