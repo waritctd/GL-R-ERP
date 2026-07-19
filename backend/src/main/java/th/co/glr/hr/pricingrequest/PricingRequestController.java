@@ -19,13 +19,16 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CancelPricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.RequestMoreInformationRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.RespondMoreInformationRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestResponses.PricingRequestDetailResponse;
 
 /**
- * Endpoints for commit 3 only: createDraft, get, listForTicket, list (the Import
- * queue), updateDraft, submit, cancel. Pickup / requestInformation /
- * respondInformation (commit 4) are not wired up here.
+ * Endpoints for the PricingRequest aggregate: createDraft, get, listForTicket, list
+ * (the Import queue), updateDraft, submit, pickup, requestInformation,
+ * respondInformation, cancel. {@code cancelOpenForTicket} is an internal cascade
+ * invoked by {@code TicketService} and is deliberately NOT exposed here.
  *
  * <p>Routes straddle two prefixes, like the request shapes: ticket-scoped create
  * and list live under {@code /api/tickets/{ticketId}/...} (mirroring
@@ -91,6 +94,32 @@ public class PricingRequestController {
     PricingRequestDetailResponse submit(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new PricingRequestDetailResponse(pricingRequests.submit(id, user));
+    }
+
+    @PostMapping("/pricing-requests/{id}/pickup")
+    PricingRequestDetailResponse pickup(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new PricingRequestDetailResponse(pricingRequests.pickup(id, user));
+    }
+
+    @PostMapping("/pricing-requests/{id}/request-information")
+    PricingRequestDetailResponse requestInformation(
+        @PathVariable long id,
+        @Valid @RequestBody RequestMoreInformationRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new PricingRequestDetailResponse(pricingRequests.requestInformation(id, request, user));
+    }
+
+    @PostMapping("/pricing-requests/{id}/respond-information")
+    PricingRequestDetailResponse respondInformation(
+        @PathVariable long id,
+        @Valid @RequestBody RespondMoreInformationRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new PricingRequestDetailResponse(pricingRequests.respondInformation(id, request, user));
     }
 
     @PostMapping("/pricing-requests/{id}/cancel")

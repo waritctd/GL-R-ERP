@@ -19,15 +19,18 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CancelPricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.RequestMoreInformationRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.RespondMoreInformationRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
 /**
- * Workflow + authz for the PricingRequest aggregate (commit 3): createDraft, get,
- * listForTicket, list (the Import queue), updateDraft, submit, cancel. Pickup /
- * requestInformation / respondInformation are commit 4 and deliberately absent.
+ * Workflow + authz for the PricingRequest aggregate: createDraft, get, listForTicket,
+ * list (the Import queue), updateDraft, submit, pickup, requestInformation,
+ * respondInformation, cancel, plus the internal {@link #cancelOpenForTicket} cascade
+ * invoked by {@code TicketService} when a deal reaches a terminal lifecycle state.
  *
  * <p>Reads {@link TicketRepository} for deal ownership/lifecycle/scoping context
  * only — this class never writes through it. Writing to {@code sales.ticket} /
@@ -211,6 +214,99 @@ public class PricingRequestService {
     }
 
     @Transactional
+    public PricingRequestDetailDto pickup(long id, UserPrincipal actor) {
+        requireRole(actor, IMPORT_ROLES);
+        PricingRequestSummaryDto summary = requireViewable(id, actor);
+        if (!PricingRequestStatus.SUBMITTED.equals(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "Only a submitted pricing request can be picked up");
+        }
+        TicketSummaryDto ticket = requireTicket(summary.ticketId());
+        requireActive(ticket);
+        // CRITICAL: this assigns the Import employee to the PRICING REQUEST only,
+        // never to sales.ticket.assigned_to. TicketRepository.addEventInternal sets
+        // assigned_to as a side-effect of any PICKED_UP event ON THE TICKET; this
+        // flow deliberately never routes through TicketRepository's write methods
+        // (see that class's and PricingRequestRepository's class-level Javadoc), so
+        // two pricing requests on the same deal can be picked up by two different
+        // Import employees without either stealing the other's — or the whole
+        // deal's — assignment.
+        int rows = requests.transition(id, PricingRequestStatus.SUBMITTED, PricingRequestStatus.IMPORT_REVIEWING,
+            actor.id(), null);
+        if (rows == 0) {
+            // Compare-and-set miss: someone else already picked this up between
+            // requireViewable()'s read and here.
+            throw new ApiException(HttpStatus.CONFLICT, "Pricing request was already picked up");
+        }
+        requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
+            PricingRequestEventKind.PRICING_REQUEST_PICKED_UP, PricingRequestStatus.SUBMITTED,
+            PricingRequestStatus.IMPORT_REVIEWING, null, null);
+        notifications.notifyEmployee(summary.requestedById(), summary.ticketId(), "PICKED_UP",
+            "ใบขอราคา " + summary.requestCode() + " ถูกรับเรื่องแล้ว");
+        return detail(id);
+    }
+
+    @Transactional
+    public PricingRequestDetailDto requestInformation(long id, RequestMoreInformationRequest request, UserPrincipal actor) {
+        requireRole(actor, IMPORT_ROLES);
+        PricingRequestSummaryDto summary = requireViewable(id, actor);
+        // Only the Import employee already assigned to THIS request may ask for
+        // more information. An unassigned Import user must call pickup() first —
+        // which is also what makes them the assignee checked here.
+        if (summary.assignedImportId() == null || summary.assignedImportId() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        if (!PricingRequestStatus.IMPORT_REVIEWING.equals(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Expected status 'IMPORT_REVIEWING' but pricing request is '" + summary.status() + "'");
+        }
+        int rows = requests.transition(id, PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.MORE_INFO_REQUIRED,
+            null, null);
+        if (rows == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "Pricing request was updated by another user");
+        }
+        requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
+            PricingRequestEventKind.MORE_INFO_REQUESTED, PricingRequestStatus.IMPORT_REVIEWING,
+            PricingRequestStatus.MORE_INFO_REQUIRED, request.message(), toDueDateMetadataJson(request.dueDate()));
+        notifications.notifyEmployee(summary.requestedById(), summary.ticketId(), "MORE_INFO_REQUIRED",
+            "ใบขอราคา " + summary.requestCode() + " ต้องการข้อมูลเพิ่มเติม");
+        return detail(id);
+    }
+
+    @Transactional
+    public PricingRequestDetailDto respondInformation(long id, RespondMoreInformationRequest request, UserPrincipal actor) {
+        requireRole(actor, SALES_ROLES);
+        PricingRequestSummaryDto summary = requireViewable(id, actor);
+        if (summary.ticketCreatedById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        if (!PricingRequestStatus.MORE_INFO_REQUIRED.equals(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Expected status 'MORE_INFO_REQUIRED' but pricing request is '" + summary.status() + "'");
+        }
+        // Goes back to IMPORT_REVIEWING, NOT SUBMITTED — Import already owns this
+        // request. The repository's transition() COALESCE guards mean
+        // assigned_import_id and picked_up_at survive this round trip unchanged;
+        // this method does not (and must not) re-supply them.
+        int rows = requests.transition(id, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.IMPORT_REVIEWING,
+            null, null);
+        if (rows == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "Pricing request was updated by another user");
+        }
+        requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
+            PricingRequestEventKind.MORE_INFO_RESPONDED, PricingRequestStatus.MORE_INFO_REQUIRED,
+            PricingRequestStatus.IMPORT_REVIEWING, request.response(), null);
+        // Guard against a null assignee: NotificationRepository.notifyEmployee takes
+        // a primitive long, not a Long, so this cannot be skipped by a null check
+        // inside the call itself. Should not happen once a request has been through
+        // pickup(), but a defensive check here costs nothing.
+        if (summary.assignedImportId() != null) {
+            notifications.notifyEmployee(summary.assignedImportId(), summary.ticketId(), "MORE_INFO_RESPONDED",
+                "ใบขอราคา " + summary.requestCode() + " ได้รับข้อมูลเพิ่มเติมแล้ว");
+        }
+        return detail(id);
+    }
+
+    @Transactional
     public PricingRequestDetailDto cancel(long id, CancelPricingRequestRequest request, UserPrincipal actor) {
         PricingRequestSummaryDto summary = requireViewable(id, actor);
         // Mirrors TicketService.cancel: ownership is the gate, not a role set —
@@ -235,6 +331,62 @@ public class PricingRequestService {
         return detail(id);
     }
 
+    /**
+     * Internal cascade: when a deal reaches a terminal lifecycle state (lost or
+     * cancelled — see {@code TicketService.markLost}/{@code cancel}), any pricing
+     * requests still open on it can never be priced, so they are cancelled here
+     * too rather than left stranded in the Import queue forever.
+     *
+     * <p><strong>No role check on purpose.</strong> This is not a user-facing
+     * endpoint — it is invoked by an already-authorised ticket action (the caller
+     * has already passed {@code TicketService}'s own gate for markLost/cancel), and
+     * re-deriving a pricing-request-specific role check here would either reject a
+     * legitimate cascade (the triggering actor may be sales, not import — pricing
+     * requests are normally only cancellable by import/CEO-adjacent flows) or
+     * require threading a bypass flag through. Do NOT add a controller endpoint for
+     * this method.
+     *
+     * <p>Bypasses {@link PricingRequestStatus#canTransition} on purpose: the normal
+     * state machine forbids IMPORT_REVIEWING → CANCELLED directly (only DRAFT,
+     * SUBMITTED and MORE_INFO_REQUIRED may cancel per {@code cancel()}'s check), but
+     * a dead deal must be able to kill a request in ANY open status, including
+     * IMPORT_REVIEWING — the normal restriction exists to protect a live workflow,
+     * which no longer exists once the deal itself is terminal.
+     *
+     * @return the number of pricing requests actually cancelled.
+     */
+    @Transactional
+    public int cancelOpenForTicket(long ticketId, String reason, UserPrincipal actor) {
+        List<Long> openIds = requests.findOpenIdsForTicket(ticketId);
+        String metadataJson = toDeadDealMetadataJson(reason);
+        int cancelledCount = 0;
+        for (Long id : openIds) {
+            // Read each request's own current status to pass as the compare-and-set
+            // `expected` value — findOpenIdsForTicket only guarantees status <>
+            // CANCELLED, not which of the open statuses each row is actually in.
+            PricingRequestSummaryDto summary = requests.findSummary(id).orElse(null);
+            if (summary == null) {
+                continue;
+            }
+            int rows = requests.transition(id, summary.status(), PricingRequestStatus.CANCELLED, null, actor.id());
+            if (rows == 0) {
+                // Raced: something else changed this row between findOpenIdsForTicket
+                // and this transition (e.g. the owning rep cancelled it concurrently).
+                // Skip it rather than failing the whole deal-terminal cascade. This
+                // runs inside the caller's transaction (REQUIRED propagation joins
+                // markLost/cancel), so throwing here would roll back the deal's own
+                // lost/cancel too — losing a legitimate deal state change over a
+                // request someone else has already resolved.
+                continue;
+            }
+            requests.addEvent(id, ticketId, actor.id(), actor.name(),
+                PricingRequestEventKind.PRICING_REQUEST_CANCELLED, summary.status(), PricingRequestStatus.CANCELLED,
+                reason, metadataJson);
+            cancelledCount++;
+        }
+        return cancelledCount;
+    }
+
     // --- private helpers ---
 
     private String toReasonMetadataJson(String reason) {
@@ -244,6 +396,28 @@ public class PricingRequestService {
             // reason is @NotBlank String — a plain string can never actually fail
             // Jackson serialisation, but the checked exception must still be
             // handled rather than escaping as an unhandled 500.
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid cancel reason");
+        }
+    }
+
+    private String toDueDateMetadataJson(LocalDate dueDate) {
+        // Unlike cancel's reason (always present, @NotBlank), dueDate is optional —
+        // omit metadata entirely rather than serialising a JSON null, matching
+        // addEvent's null-metadata convention (COALESCE(...,'{}'::jsonb) on read).
+        if (dueDate == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(Map.of("dueDate", dueDate));
+        } catch (JsonProcessingException e) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid due date");
+        }
+    }
+
+    private String toDeadDealMetadataJson(String reason) {
+        try {
+            return objectMapper.writeValueAsString(Map.of("reason", reason, "cause", "DEAL_TERMINAL"));
+        } catch (JsonProcessingException e) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid cancel reason");
         }
     }

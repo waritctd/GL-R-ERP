@@ -241,6 +241,27 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
     }
 
     @Test
+    void transition_pickup_neverWritesSalesTicketAssignedTo() {
+        // The landmine guard (see PricingRequestRepository's and TicketRepository's
+        // class-level Javadoc): TicketRepository.addEventInternal sets
+        // sales.ticket.assigned_to as a side-effect of any PICKED_UP event ON THE
+        // TICKET. PricingRequestRepository must never call TicketRepository, so a
+        // real pickup here (SUBMITTED -> IMPORT_REVIEWING with an assignImportId)
+        // must leave sales.ticket.assigned_to untouched — proven against a real
+        // Postgres row, not a mock that could silently miss a future regression.
+        long importId = createEmployee("นำเข้า ทดสอบ", "import-landmine@glr.co.th");
+        long id = createDraft();
+        requests.transition(id, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
+
+        requests.transition(id, PricingRequestStatus.SUBMITTED, PricingRequestStatus.IMPORT_REVIEWING, importId, null);
+
+        assertThat(requests.findSummary(id).orElseThrow().assignedImportId()).isEqualTo(importId);
+        Long ticketAssignedTo = jdbc.queryForObject(
+            "SELECT assigned_to FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), Long.class);
+        assertThat(ticketAssignedTo).isNull();
+    }
+
+    @Test
     void findOpenIdsForTicket_excludesCancelled() {
         long openId = createDraft();
         long cancelledId = createDraft();
