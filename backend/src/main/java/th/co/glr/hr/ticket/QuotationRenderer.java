@@ -53,6 +53,15 @@ public class QuotationRenderer {
                 ? quotation.issuedAt().atZone(ZoneId.of("Asia/Bangkok")).toLocalDate()
                 : LocalDate.now();
 
+            // Title cell H1 (row 0, col 7) — "ใบเสนอราคา" carries ~25 leading spaces to
+            // position it in Excel. LibreOffice's wider substitute font pushes the trailing
+            // sara-aa (า) past the print-area right edge (col I), clipping it. Re-anchor
+            // with fewer leading spaces so it stays right-aligned but fits within the page.
+            Cell titleCell = getOrKeep(sh, 0, 7);
+            if (titleCell.getCellType() == org.apache.poi.ss.usermodel.CellType.STRING) {
+                setStr(sh, 0, 7, "        " + titleCell.getStringCellValue().strip());
+            }
+
             // B4 (row 3, col 1) — issue date, overrides TODAY() formula
             setStr(sh, 3, 1, thaiDate(issueDate));
 
@@ -101,27 +110,36 @@ public class QuotationRenderer {
                 })
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-            int seq = 1;
-            for (int i = 0; i < priceItems.size() && i < MAX_ITEMS; i++) {
-                TicketItemDto item = priceItems.get(i);
-                BigDecimal qty = item.qty() != null ? item.qty() : BigDecimal.ONE;
-                BigDecimal price = item.approvedPrice();
-                BigDecimal amount = price.multiply(qty);
-
+            int itemCount = Math.min(priceItems.size(), MAX_ITEMS);
+            // Sequence numbers only make sense with more than one line item — a single
+            // product shows no "1." (per document spec). The template pre-fills "1" and "2"
+            // (+ unit "แผ่น") in the first two item rows as placeholders; every unused row
+            // must be cleared so leftover numbers/units don't show.
+            boolean showSeq = itemCount > 1;
+            for (int i = 0; i < MAX_ITEMS; i++) {
                 int r = ITEM_START_ROW + (i * ROWS_PER_ITEM);
+                if (i < itemCount) {
+                    TicketItemDto item = priceItems.get(i);
+                    BigDecimal qty = item.qty() != null ? item.qty() : BigDecimal.ONE;
+                    BigDecimal price = item.approvedPrice();
 
-                // Row R: main item line
-                setNum(sh, r, 0, seq++);                                    // A: sequence
-                setStr(sh, r, 1, buildDesc(item));                          // B: description
-                setNum(sh, r, 2, qty.doubleValue());                        // C: qty
-                setStr(sh, r, 3, nullSafe(item.rawUnit(), "แผ่น"));         // D: unit
-                setNum(sh, r, 4, price.doubleValue());                      // E: unit price
-                // G (col 6) = "Net" — H and I formulas auto-calculate in template
-                setStr(sh, r, 6, "Net");
-
-                // Row R+1: pcs detail (pcs_per_box info from rawUnit)
-                // Row R+2: box packing detail — leave blank if no pcs_per_box data
-                // (catalog pcs_per_box data not currently in TicketItemDto snapshot)
+                    if (showSeq) setNum(sh, r, 0, i + 1); else clearCell(sh, r, 0); // A: sequence
+                    setStr(sh, r, 1, buildDesc(item));                          // B: description
+                    setNum(sh, r, 2, qty.doubleValue());                        // C: qty
+                    setStr(sh, r, 3, nullSafe(item.rawUnit(), "แผ่น"));         // D: unit
+                    setNum(sh, r, 4, price.doubleValue());                      // E: unit price
+                    // G (col 6) = "Net" — H and I formulas auto-calculate in template
+                    setStr(sh, r, 6, "Net");
+                } else {
+                    // Clear leftover template placeholders (seq / desc / qty / unit / price / Net).
+                    // Leave the H & I formula cells (col 7/8) — they render "" when qty is empty.
+                    clearCell(sh, r, 0);
+                    clearCell(sh, r, 1);
+                    clearCell(sh, r, 2);
+                    clearCell(sh, r, 3);
+                    clearCell(sh, r, 4);
+                    clearCell(sh, r, 6);
+                }
             }
 
             // Remarks block — B24 (row 23), B26 (row 25), B28 (row 27)
@@ -136,10 +154,38 @@ public class QuotationRenderer {
             setStr(sh, 27, 1,
                 "3.ขณะนี้โรงงานผู้ผลิตประเทศอิตาลีมีสินค้าในสต็อก ระยะเวลานำเข้าประมาณ " + deliveryDays + " วัน");
 
+            // B27 (row 26) — note-2 continuation. The template author left a stray cell
+            // reference "+B27:B29" in the text; strip it so it doesn't print.
+            Cell b27 = getOrKeep(sh, 26, 1);
+            if (b27.getCellType() == org.apache.poi.ss.usermodel.CellType.STRING) {
+                String cleaned = b27.getStringCellValue().replace("+B27:B29", "").stripTrailing();
+                setStr(sh, 26, 1, cleaned);
+            }
+
             // I38 (row 37, col 8) — subtotal
             setNum(sh, 37, 8, subtotal.doubleValue());
             // I39 = I38 × 0.07, I40 = I38 + I39 — template has formulas; force recalc
             wb.setForceFormulaRecalculation(true);
+
+            // Force fit-to-1-page-wide so LibreOffice never spills columns onto extra
+            // pages. The template's saved fixed 86% scale relies on Windows' condensed
+            // Thai fonts (Angsana/Browallia/Cordia); LibreOffice substitutes wider fonts
+            // and overflows at that scale, so we let it auto-shrink to the page width.
+            // FitHeight=0 keeps height unconstrained (content flows naturally, no vertical
+            // squashing).
+            sh.setFitToPage(true);
+            sh.setAutobreaks(true);
+            PrintSetup ps = sh.getPrintSetup();
+            ps.setFitWidth((short) 1);
+            ps.setFitHeight((short) 0);
+
+            // Clear the salesperson-lookup formula cell (Row44, ColA) — it evaluates to
+            // FALSE when the code isn't in the lookup table, which LibreOffice renders as "0".
+            getOrKeep(sh, 44, 0).setBlank();
+
+            // Clear the form-reference tag (F-SM-002) at the end of the print area —
+            // not part of the customer-facing document.
+            getOrKeep(sh, 46, 8).setBlank();
 
             wb.write(out);
             return out.toByteArray();
@@ -175,12 +221,24 @@ public class QuotationRenderer {
     // Preserve template cell style — get existing cell, only create if absent
     private void setStr(Sheet sh, int rowIdx, int colIdx, String value) {
         Cell cell = getOrKeep(sh, rowIdx, colIdx);
+        // Drop any template formula (e.g. B4 =TODAY()) so our literal value wins;
+        // otherwise POI keeps the formula and LibreOffice recalculates + reformats it.
+        if (cell.getCellType() == org.apache.poi.ss.usermodel.CellType.FORMULA) cell.setBlank();
         cell.setCellValue(value != null ? value : "");
     }
 
     private void setNum(Sheet sh, int rowIdx, int colIdx, double value) {
         Cell cell = getOrKeep(sh, rowIdx, colIdx);
+        if (cell.getCellType() == org.apache.poi.ss.usermodel.CellType.FORMULA) cell.setBlank();
         cell.setCellValue(value);
+    }
+
+    // Blank a cell's content but keep its style (so template borders/formatting stay).
+    private void clearCell(Sheet sh, int rowIdx, int colIdx) {
+        Row row = sh.getRow(rowIdx);
+        if (row == null) return;
+        Cell cell = row.getCell(colIdx);
+        if (cell != null) cell.setBlank();
     }
 
     private Cell getOrKeep(Sheet sh, int rowIdx, int colIdx) {

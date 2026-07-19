@@ -8,6 +8,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Locale;
 import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.PrintSetup;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
@@ -76,6 +77,14 @@ public class DepositNoticeRenderer {
 
             // Preparer
             setStr(sh, 47, 1, nullSafe(doc.preparerName()));
+
+            // Force fit-to-1-page-wide so LibreOffice never spills columns onto extra
+            // pages when it substitutes the template's Windows Thai fonts with wider ones.
+            sh.setFitToPage(true);
+            sh.setAutobreaks(true);
+            PrintSetup ps = sh.getPrintSetup();
+            ps.setFitWidth((short) 1);
+            ps.setFitHeight((short) 0);
 
             wb.write(out);
             return out.toByteArray();
