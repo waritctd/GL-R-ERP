@@ -15,6 +15,11 @@ import { cn } from '../../utils/cn.js';
  *   - `to` omitted  -> row is informational only (e.g. unread notifications has no
  *     route — the bell dropdown is the only UI for it), so it must NOT look clickable.
  *
+ * Callers (EmployeeDashboard.actionQueueItems) are expected to have already dropped any
+ * item the viewer has no way to act on at all (UX-04) — this panel is titled "ต้องดำเนินการ"
+ * (requires action), so an item with no `to` AND no other affordance must never reach here.
+ * `to` omitted still means "actionable elsewhere" for `notifications`, never "unreachable".
+ *
  * Desktop/tablet only (`max-[720px]:hidden`): ui-responsive-repair-plan.md Step 7's
  * item 10 ("mobile dashboard must not become too tall") is explicit, and Step 4
  * already fought hard to cut the mobile stat block from 1541px to 661px — this
