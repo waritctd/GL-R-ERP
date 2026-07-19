@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  activePricingRequestsSummary,
   canCancelPricingRequest,
   canCreatePricingRequest,
   canPickupPricingRequest,
@@ -8,7 +9,6 @@ import {
   canSubmitPricingRequest,
   canTransition,
   canUpdatePricingRequest,
-  latestPricingRequest,
   pricingRequestRecipientLabel,
   quantityTypeLabel,
 } from './pricingRequestMeta.js';
@@ -128,13 +128,39 @@ describe('canCancelPricingRequest', () => {
   });
 });
 
-describe('latestPricingRequest', () => {
+// Fix 3 (review-remediation plan): replaces the old latestPricingRequest
+// (highest-id-wins) reduction, which hid concurrent requests from the deal
+// summary strip — see DealStagePanel.test.jsx for the UI-level regression
+// cases this was written to prevent.
+describe('activePricingRequestsSummary', () => {
   it('returns null for an empty list', () => {
-    expect(latestPricingRequest([])).toBeNull();
+    expect(activePricingRequestsSummary([])).toBeNull();
   });
-  it('returns the highest-id request', () => {
-    const requests = [{ id: 1 }, { id: 3 }, { id: 2 }];
-    expect(latestPricingRequest(requests).id).toBe(3);
+
+  it('returns null when every request is cancelled', () => {
+    expect(activePricingRequestsSummary([
+      pr({ id: 1, status: 'CANCELLED' }),
+      pr({ id: 2, status: 'CANCELLED' }),
+    ])).toBeNull();
+  });
+
+  it('excludes cancelled requests but keeps every other status, oldest first', () => {
+    const summary = activePricingRequestsSummary([
+      pr({ id: 3, status: 'DRAFT' }),
+      pr({ id: 1, status: 'IMPORT_REVIEWING' }),
+      pr({ id: 2, status: 'CANCELLED' }),
+    ]);
+    expect(summary.total).toBe(2);
+    expect(summary.requests.map((r) => r.id)).toEqual([1, 3]);
+  });
+
+  it('counts requests per status', () => {
+    const summary = activePricingRequestsSummary([
+      pr({ id: 1, status: 'DRAFT' }),
+      pr({ id: 2, status: 'DRAFT' }),
+      pr({ id: 3, status: 'SUBMITTED' }),
+    ]);
+    expect(summary.counts).toEqual({ DRAFT: 2, SUBMITTED: 1 });
   });
 });
 

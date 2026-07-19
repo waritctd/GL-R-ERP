@@ -256,24 +256,57 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
             .isInstanceOf(DataIntegrityViolationException.class);
     }
 
+    // NOTE: this test used to be named
+    // updateDraft_leavesNullFieldsUnchangedAndOnlyAppliesToDraftRows and asserted
+    // the OPPOSITE of what it asserts now: that a null field in the request left
+    // the existing column value in place (COALESCE(:x, col)). That was a
+    // deliberate product bug — there was no way for a client to ever clear a
+    // field via PUT (e.g. remove a target price or a note) — fixed by the
+    // review-remediation plan's Fix 2. PricingRequestRepository.updateDraft is
+    // now a full replacement of every editable scalar column, so this rewrite
+    // asserts the inverse: a null in the request DOES clear the column.
     @Test
-    void updateDraft_leavesNullFieldsUnchangedAndOnlyAppliesToDraftRows() {
-        long id = createDraft();
+    void updateDraft_fullyReplacesEditableFields_includingClearingAFieldToNull_andOnlyAppliesToDraftRows() {
+        long id = requests.create(ticketId, requests.nextRequestCode(),
+            new CreatePricingRequestRequest(PricingRequestRecipient.DESIGNER, null, "Designer Co.", null,
+                new BigDecimal("100.00"), "thb", "first note", List.of(item("Toyota", "1"))),
+            salesActorId);
+
+        // Full replacement: recipientType actually changes (DESIGNER -> OWNER,
+        // no longer "untouched, left as-is by COALESCE"), recipientLabel is
+        // explicitly cleared to null even though the request also didn't touch
+        // it, and customerTargetPrice/note/items are overwritten as before.
+        // recipient_type is NOT NULL in the DB, so every UpdatePricingRequestRequest
+        // in this test supplies a real value for it (repository-level test — the
+        // "must not be blank" 400 guard lives in PricingRequestService, not here).
         requests.updateDraft(id, new UpdatePricingRequestRequest(
-            null, null, null, null, new BigDecimal("200.00"), null, "updated note",
+            PricingRequestRecipient.OWNER, null, null, null, new BigDecimal("200.00"), null, "updated note",
             List.of(item("Honda", "9"))));
 
-        PricingRequestSummaryDto afterUpdate = requests.findSummary(id).orElseThrow();
-        assertThat(afterUpdate.customerTargetPrice()).isEqualByComparingTo("200.00");
-        assertThat(afterUpdate.note()).isEqualTo("updated note");
-        assertThat(afterUpdate.recipientType()).isEqualTo(PricingRequestRecipient.DESIGNER); // untouched, left as-is by COALESCE
+        PricingRequestSummaryDto afterFirstUpdate = requests.findSummary(id).orElseThrow();
+        assertThat(afterFirstUpdate.recipientType()).isEqualTo(PricingRequestRecipient.OWNER);
+        assertThat(afterFirstUpdate.recipientLabel()).isNull(); // cleared, not left as "Designer Co."
+        assertThat(afterFirstUpdate.targetCurrency()).isNull(); // cleared, not left as "THB"
+        assertThat(afterFirstUpdate.customerTargetPrice()).isEqualByComparingTo("200.00");
+        assertThat(afterFirstUpdate.note()).isEqualTo("updated note");
+        assertThat(requests.findItems(id)).extracting(PricingRequestItemDto::model).containsExactly("9");
+
+        // A second update that clears customerTargetPrice and note to null (the
+        // exact "remove a target price / note" case the old COALESCE semantics
+        // could never express) — items omitted this time (null), proving items
+        // is the one field that keeps "omit to leave untouched" behavior.
+        requests.updateDraft(id, new UpdatePricingRequestRequest(
+            PricingRequestRecipient.OWNER, null, null, null, null, null, null, null));
+        PricingRequestSummaryDto afterClear = requests.findSummary(id).orElseThrow();
+        assertThat(afterClear.customerTargetPrice()).isNull();
+        assertThat(afterClear.note()).isNull();
         assertThat(requests.findItems(id)).extracting(PricingRequestItemDto::model).containsExactly("9");
 
         requests.transition(id, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
         boolean appliedAfterSubmit = requests.updateDraft(id, new UpdatePricingRequestRequest(
-            null, null, null, null, null, null, "should not apply", null));
+            PricingRequestRecipient.OWNER, null, null, null, null, null, "should not apply", null));
         assertThat(appliedAfterSubmit).isFalse();
-        assertThat(requests.findSummary(id).orElseThrow().note()).isEqualTo("updated note");
+        assertThat(requests.findSummary(id).orElseThrow().note()).isNull();
     }
 
     @Test

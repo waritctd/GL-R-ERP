@@ -379,8 +379,12 @@ class PricingRequestServiceTest {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE, 5L);
         when(contactRepo.findById(1L)).thenReturn(Optional.of(
             new ContactDto(1L, 99L, "Other", "Customer's Contact", null, null, null)));
+        // recipientType must be a real value here (not null): updateDraft is now a
+        // full-replacement PUT (Fix 2) that validates recipientType unconditionally
+        // before it ever reaches the contact-ownership check this test targets —
+        // a null would fail-fast on THAT guard instead, never exercising this one.
         UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
-            null, 1L, null, null, null, null, null, null);
+            PricingRequestRecipient.BUYER, 1L, null, null, null, null, null, null);
         assertBadRequest(() -> service.updateDraft(20L, request, salesActor));
         verify(requestRepo, never()).updateDraft(anyLong(), any());
     }
@@ -1071,7 +1075,15 @@ class PricingRequestServiceTest {
     }
 
     private static UpdatePricingRequestRequest sampleUpdateRequest() {
-        return new UpdatePricingRequestRequest(null, null, null, LocalDate.now().plusDays(1), null, null, null, null);
+        // recipientType is a real value, not null: updateDraft is now a
+        // full-replacement PUT (Fix 2) that validates recipientType
+        // unconditionally, so this helper must represent a request that could
+        // otherwise legitimately succeed — its two current callers short-circuit
+        // on an earlier guard (role / deal lifecycle) before ever reaching that
+        // check, but a future caller reaching further into the method should not
+        // be tripped up by an otherwise-invalid sample payload.
+        return new UpdatePricingRequestRequest(
+            PricingRequestRecipient.DESIGNER, null, null, LocalDate.now().plusDays(1), null, null, null, null);
     }
 
     private static CancelPricingRequestRequest cancelRequest() {

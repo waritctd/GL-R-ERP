@@ -141,30 +141,26 @@ public class PricingRequestService {
         }
         TicketSummaryDto ticket = requireTicket(summary.ticketId());
         requireActive(ticket);
-        if (request.recipientType() != null) {
-            validateRecipient(request.recipientType());
+
+        // PricingRequestRepository.updateDraft is now a FULL REPLACEMENT of
+        // the draft's editable fields (COALESCE dropped — see its Javadoc):
+        // the request represents the complete new state, not a sparse patch,
+        // so every editable field is validated unconditionally here, the same
+        // way createDraft validates its (also complete) payload — there is no
+        // more "only re-check what the caller touched". recipient_type is
+        // additionally NOT NULL in the DB, so a blank/missing one must be
+        // rejected here as a 400, before it can reach the repository and fail
+        // as a raw constraint violation (500).
+        if (request.recipientType() == null || request.recipientType().isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "recipientType must not be blank");
         }
+        validateRecipient(request.recipientType());
+        validateRecipientIdentifiable(request.recipientContactId(), request.recipientLabel());
+        validateRecipientContactBelongsToCustomer(request.recipientContactId(), ticket);
+        validateCurrency(request.targetCurrency());
         if (request.items() != null) {
             validateItems(request.items());
             validateSourceItemsBelongToTicket(summary.ticketId(), request.items());
-        }
-        if (request.targetCurrency() != null) {
-            validateCurrency(request.targetCurrency());
-        }
-        // recipientContactId/recipientLabel are a joint invariant (at least one
-        // must identify a recipient) — only re-check it when the caller is
-        // actually touching one of the two fields; a partial edit of an
-        // unrelated field (e.g. requiredDate) must not be forced to resupply
-        // the recipient. updateDraft's COALESCE semantics mean a field left
-        // null keeps its current value, so merge onto the existing summary
-        // before validating.
-        if (request.recipientContactId() != null || request.recipientLabel() != null) {
-            Long effectiveContactId = request.recipientContactId() != null
-                ? request.recipientContactId() : summary.recipientContactId();
-            String effectiveLabel = request.recipientLabel() != null
-                ? request.recipientLabel() : summary.recipientLabel();
-            validateRecipientIdentifiable(effectiveContactId, effectiveLabel);
-            validateRecipientContactBelongsToCustomer(effectiveContactId, ticket);
         }
 
         boolean updated = requests.updateDraft(id, request);

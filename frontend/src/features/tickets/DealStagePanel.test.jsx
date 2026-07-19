@@ -49,38 +49,81 @@ function renderPanel(props = {}) {
   );
 }
 
-// commit 6: the "การขอราคา" substep strip used to be keyed off ticket.status
-// (PRICING_SUBSTEPS), which is now permanently 'draft' since ticket creation
-// no longer auto-submits (TicketService.create/submit, commit 5). It must now
-// key off the deal's most recent PricingRequest instead.
-describe('DealStagePanel pricing-request substep strip', () => {
-  it('renders no strip when the deal has no pricing requests', () => {
+// commit 6 / Fix 3 (review-remediation plan): the "การขอราคา" strip used to be
+// keyed off ticket.status (PRICING_SUBSTEPS), which is now permanently 'draft'
+// since ticket creation no longer auto-submits (TicketService.create/submit,
+// commit 5). It moved to being keyed off the deal's PricingRequests, first as
+// "the highest-id (most recent) request wins" — but that reduction was itself
+// a real bug: a DRAFT created after an active IMPORT_REVIEWING request has a
+// higher id and hid the request Import is actually working on, and a
+// cancelled newest request hid the whole strip even when an older request
+// was still live. Fix 3 replaces the single-request reduction with a strip
+// that surfaces every non-CANCELLED request.
+describe('DealStagePanel pricing-request summary strip', () => {
+  it('renders nothing when the deal has no pricing requests', () => {
     renderPanel({ pricingRequests: [] });
+    expect(screen.queryByText('การขอราคา:')).toBeNull();
+  });
+
+  it('renders nothing once every pricing request is cancelled', () => {
+    renderPanel({
+      pricingRequests: [
+        { id: 1, status: 'CANCELLED', recipientType: 'DESIGNER' },
+        { id: 2, status: 'CANCELLED', recipientType: 'OWNER' },
+      ],
+    });
     expect(screen.queryByText('การขอราคา:')).toBeNull();
   });
 
   it('reflects a SUBMITTED pricing request even though the ticket itself is still draft', () => {
     renderPanel({
       summary: baseSummary({ status: 'draft' }),
-      pricingRequests: [{ id: 1, status: 'SUBMITTED' }],
+      pricingRequests: [{ id: 1, status: 'SUBMITTED', recipientType: 'DESIGNER' }],
     });
     expect(screen.getByText('การขอราคา:')).not.toBeNull();
-    expect(screen.getByText('ส่งให้ Import แล้ว')).not.toBeNull();
+    expect(screen.getByText('รอ Import รับเรื่อง')).not.toBeNull();
   });
 
-  it('does not render the strip once the latest pricing request is cancelled', () => {
-    renderPanel({ pricingRequests: [{ id: 1, status: 'CANCELLED' }] });
-    expect(screen.queryByText('การขอราคา:')).toBeNull();
-  });
-
-  it('keys off the highest-id (most recent) pricing request when several exist', () => {
+  // Inverts the old "keys off the highest-id (most recent) pricing request"
+  // test, which asserted the bug directly: a DRAFT created after an active
+  // IMPORT_REVIEWING request has a higher id, so the old reduction picked the
+  // DRAFT and hid the work actually in flight. Both must now be visible.
+  it('shows a newer DRAFT alongside an older still-active IMPORT_REVIEWING request', () => {
     renderPanel({
       pricingRequests: [
-        { id: 1, status: 'CANCELLED' },
-        { id: 2, status: 'IMPORT_REVIEWING' },
+        { id: 2, status: 'IMPORT_REVIEWING', recipientType: 'DESIGNER' },
+        { id: 3, status: 'DRAFT', recipientType: 'OWNER' },
       ],
     });
     expect(screen.getByText('การขอราคา:')).not.toBeNull();
     expect(screen.getByText('Import กำลังเสนอราคา')).not.toBeNull();
+    expect(screen.getByText('แบบร่าง')).not.toBeNull();
+  });
+
+  // Inverts the old "does not render the strip once the latest pricing
+  // request is cancelled" test, which asserted the OTHER bug directly: a
+  // newer CANCELLED request made the strip vanish even though an older
+  // request was still live and needed attention. The active one must stay
+  // visible.
+  it('keeps an older active request visible even when the newest one is cancelled', () => {
+    renderPanel({
+      pricingRequests: [
+        { id: 1, status: 'IMPORT_REVIEWING', recipientType: 'DESIGNER' },
+        { id: 2, status: 'CANCELLED', recipientType: 'OWNER' },
+      ],
+    });
+    expect(screen.getByText('การขอราคา:')).not.toBeNull();
+    expect(screen.getByText('Import กำลังเสนอราคา')).not.toBeNull();
+  });
+
+  it('renders a roll-up count alongside the per-request lines', () => {
+    renderPanel({
+      pricingRequests: [
+        { id: 1, status: 'DRAFT', recipientType: 'DESIGNER' },
+        { id: 2, status: 'SUBMITTED', recipientType: 'OWNER' },
+        { id: 3, status: 'IMPORT_REVIEWING', recipientType: 'BUYER' },
+      ],
+    });
+    expect(screen.getByText(/ใบขอราคา 3 รายการ/)).not.toBeNull();
   });
 });

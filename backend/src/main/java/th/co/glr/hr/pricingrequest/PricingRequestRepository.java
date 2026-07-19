@@ -172,16 +172,34 @@ public class PricingRequestRepository {
                 .addValue("cancelledBy", cancelledBy));
     }
 
+    /**
+     * Full-replacement update of a DRAFT's editable fields (review-remediation
+     * plan, Fix 2). Used to COALESCE(:x, col) every scalar column, which meant
+     * a {@code null} in the request could never clear a field — there was no
+     * way for a client to express "remove the target price / required date /
+     * contact / note", only "leave it" or "overwrite it with a non-null
+     * value". Now that {@code PricingRequestCreateModal} (edit mode) submits
+     * the *entire* editable representation on every PUT, a {@code null} means
+     * exactly what it says: clear this field. {@code recipient_type} is
+     * NOT NULL in the DB, so {@link PricingRequestService#updateDraft} must
+     * validate it unconditionally before this method is ever called — a null
+     * here would otherwise surface as a raw constraint violation (500)
+     * instead of a 400. {@code items} keeps its own "provide to replace,
+     * omit to leave untouched" behavior (see the {@code rows == 1 &&
+     * request.items() != null} guard below) — unrelated to this change,
+     * since it was already a full delete+reinsert via {@link #replaceItems}
+     * whenever a list was supplied.
+     */
     public boolean updateDraft(long id, UpdatePricingRequestRequest request) {
         int rows = jdbc.update("""
             UPDATE sales.pricing_request
-               SET recipient_type        = COALESCE(:recipientType, recipient_type),
-                   recipient_contact_id  = COALESCE(:recipientContactId, recipient_contact_id),
-                   recipient_label       = COALESCE(:recipientLabel, recipient_label),
-                   required_date         = COALESCE(:requiredDate, required_date),
-                   customer_target_price = COALESCE(:customerTargetPrice, customer_target_price),
-                   target_currency       = COALESCE(:targetCurrency, target_currency),
-                   note                  = COALESCE(:note, note),
+               SET recipient_type        = :recipientType,
+                   recipient_contact_id  = :recipientContactId,
+                   recipient_label       = :recipientLabel,
+                   required_date         = :requiredDate,
+                   customer_target_price = :customerTargetPrice,
+                   target_currency       = :targetCurrency,
+                   note                  = :note,
                    updated_at            = now()
              WHERE pricing_request_id = :id AND status = 'DRAFT'
             """,

@@ -157,6 +157,9 @@ export const PAYMENT_SUBSTEPS = [
 // The internal PricingRequest journey (DRAFT -> SUBMITTED -> IMPORT_REVIEWING
 // <-> MORE_INFO_REQUIRED) used to be keyed off ticket.status here as
 // PRICING_SUBSTEPS. Since commit 5 (ticket creation no longer auto-submits)
-// that status is permanently stuck at 'draft', so the substep labels moved to
-// PRICING_REQUEST_SUBSTEPS in features/pricingRequests/pricingRequestMeta.js,
-// keyed off the deal's most recent PricingRequest status instead.
+// that status is permanently stuck at 'draft', so it moved to
+// features/pricingRequests/pricingRequestMeta.js. It was briefly a single
+// progress-chip strip keyed off "the deal's most recent PricingRequest"
+// (highest id), but that reduction was itself a bug (review-remediation plan,
+// Fix 3): DealStagePanel's PricingRequestSummaryStrip now renders every
+// non-CANCELLED request instead of picking one "latest".
