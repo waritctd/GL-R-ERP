@@ -491,6 +491,27 @@ function requirePricingRequestDealActive(ticket) {
   }
 }
 
+// Mirrors PricingRequestRequests.PricingRequestItemRequest's Bean Validation
+// annotations, which run BEFORE PricingRequestService even sees the request
+// (@NotNull @DecimalMin("0.0001") requestedQty, @NotBlank requestedUnit,
+// @NotBlank quantityType — quantityType's enum-membership is checked
+// separately by the callers of this helper). A mock that skips this is the
+// dangerous direction (issue #199): it would accept a blank unit / zero qty
+// that the real backend 400s on.
+function requirePricingRequestItemFieldsValid(items) {
+  for (const item of items) {
+    if (item.requestedQty == null || !(Number(item.requestedQty) >= 0.0001)) {
+      fail('requestedQty must be at least 0.0001', 400);
+    }
+    if (!item.requestedUnit?.trim()) {
+      fail('requestedUnit must not be blank', 400);
+    }
+    if (!item.quantityType?.trim()) {
+      fail('quantityType must not be blank', 400);
+    }
+  }
+}
+
 function buildMockDoc(doc) {
   const items = doc.items ?? [];
   const depositPct = doc.depositPercent ?? 0.5;
@@ -3888,6 +3909,7 @@ export const api = {
         fail(`Unknown recipient type '${payload.recipientType}'`, 400);
       }
       if (!payload.items?.length) fail('items must not be empty', 400);
+      requirePricingRequestItemFieldsValid(payload.items);
       for (const item of payload.items) {
         if (!PRICING_REQUEST_QUANTITY_TYPE_VALUES.includes(item.quantityType)) {
           fail(`Unknown quantity type '${item.quantityType}'`, 400);
@@ -3965,6 +3987,7 @@ export const api = {
         fail(`Unknown recipient type '${payload.recipientType}'`, 400);
       }
       if (payload.items != null) {
+        requirePricingRequestItemFieldsValid(payload.items);
         for (const item of payload.items) {
           if (!PRICING_REQUEST_QUANTITY_TYPE_VALUES.includes(item.quantityType)) {
             fail(`Unknown quantity type '${item.quantityType}'`, 400);
@@ -4085,6 +4108,8 @@ export const api = {
       const pr = findPricingRequestRaw(id);
       if (pr.assignedImportId == null || pr.assignedImportId !== user.id) fail('Forbidden', 403);
       if (pr.status !== 'IMPORT_REVIEWING') fail(`Expected status 'IMPORT_REVIEWING' but pricing request is '${pr.status}'`, 409);
+      // Mirrors RequestMoreInformationRequest's @NotBlank message.
+      if (!payload.message?.trim()) fail('message must not be blank', 400);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       const now = new Date().toISOString();
       pr.status = 'MORE_INFO_REQUIRED';

@@ -476,7 +476,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   if (loading) {
     return (
-      <div className="page-stack" aria-busy="true" aria-label="กำลังโหลดข้อมูลใบขอราคา">
+      <div className="page-stack" aria-busy="true" aria-label="กำลังโหลดข้อมูลดีล">
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between' }}>
           <div style={{ flex: 1 }}>
             <Skeleton width={80} height={28} radius="var(--radius-md)" className="skeleton" />
@@ -511,7 +511,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   if (!ticket) {
     return (
       <div className="page-stack">
-        <EmptyState icon="fileText" title="ไม่พบใบขอราคา" description="กลับไปหน้ารายการ" />
+        <EmptyState icon="fileText" title="ไม่พบดีล" description="กลับไปหน้ารายการ" />
         <button type="button" className="secondary-button" onClick={onBack}>
           <Icon name="chevronLeft" />
           กลับ
@@ -1117,7 +1117,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   return (
     <div className="page-stack">
-      <Breadcrumbs items={[{ label: 'ใบขอราคา', onClick: onBack }, { label: summary.code || summary.customerName || summary.title }]} />
+      <Breadcrumbs items={[{ label: 'ดีล', onClick: onBack }, { label: summary.code || summary.customerName || summary.title }]} />
       <header style={{ display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between' }}>
         <div style={{ minWidth: 0 }}>
           <button type="button" className="secondary-button" onClick={onBack} style={{ marginBottom: 12 }}>
