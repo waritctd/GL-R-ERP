@@ -42,7 +42,7 @@
           "UX-38"
         ],
         "remaining": [
-          "UX-03 (2 surfaces left)",
+          "UX-03 (1 surface left)",
           "UX-04"
         ],
         "newFindings": [
@@ -53,10 +53,10 @@
           "done": [
             "ProductFormModal",
             "TicketCreateModal",
-            "CeoSettings editor"
+            "CeoSettings editor",
+            "DepositNoticePage"
           ],
           "remaining": [
-            "DepositNoticePage",
             "TicketDetailPage inline forms"
           ]
         },
@@ -147,8 +147,8 @@
       "validation": "Submit an empty TicketCreateModal; verify each required field (customer, project, product rows) shows an inline error and the first is focused/scrolled to.",
       "effort": "L",
       "confidence": "High",
-      "fixNote": "IN PROGRESS, 3 of 5 surfaces. ProductFormModal migrated to react-hook-form + zod + FormField [310a032]. TicketCreateModal — the finding’s headline case — now produces keyed per-field zod errors with aria wiring and scroll+focus to the first invalid field [16895c5]; verified live that a blank item row flags six fields individually instead of one generic bottom-of-form string. CeoSettings FX override and the six pricing fields now show inline per-field errors, FX keyed per currency so errors never leak across rows [e3281b9]. Remaining surfaces: DepositNoticePage, TicketDetailPage inline forms.",
-      "fixedIn": "310a032, 16895c5, e3281b9 [partial: 3 of 5 surfaces]"
+      "fixNote": "IN PROGRESS, 4 of 5 surfaces. ProductFormModal migrated to react-hook-form + zod + FormField [310a032]. TicketCreateModal — the finding’s headline case — now produces keyed per-field zod errors with aria wiring and scroll+focus to the first invalid field [16895c5]; verified live that a blank item row flags six fields individually instead of one generic bottom-of-form string. CeoSettings FX override and the six pricing fields show inline per-field errors, FX keyed per currency so errors never leak across rows [e3281b9]. DepositNoticePage now validates at ISSUE rather than SAVE — the draft path stays permissive by design — requiring a customer name, at least one item with a description and qty, and a total above zero, with validation running before the confirm dialog opens [3937dc2]. Remaining surface: the TicketDetailPage inline forms.",
+      "fixedIn": "310a032, 16895c5, e3281b9, 3937dc2 [partial: 4 of 5 surfaces]"
     },
     {
       "id": "UX-04",
