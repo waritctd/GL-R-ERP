@@ -70,6 +70,8 @@ public class AppProperties {
 
     public static class Attendance {
         private String agentToken;
+        private final Schedule schedule = new Schedule();
+        private final Daily daily = new Daily();
 
         public String getAgentToken() {
             return agentToken;
@@ -77,6 +79,109 @@ public class AppProperties {
 
         public void setAgentToken(String agentToken) {
             this.agentToken = agentToken;
+        }
+
+        public Schedule getSchedule() {
+            return schedule;
+        }
+
+        public Daily getDaily() {
+            return daily;
+        }
+    }
+
+    /**
+     * The company-wide standard working day used to derive late / early-leave minutes.
+     *
+     * <p>Company-wide is deliberate: there is no per-employee or per-division schedule yet. Read
+     * this through {@code WorkScheduleResolver} rather than injecting it into calculation code, so
+     * adding per-division schedules later is a new resolver implementation instead of a rewrite.
+     */
+    public static class Schedule {
+        private String zone = "Asia/Bangkok";
+        private String workStart = "08:30";
+        private String workEnd = "17:30";
+        /**
+         * Minutes after {@code workStart} before a check-in counts as late. This is a
+         * <strong>threshold, not an allowance</strong>: with a 5-minute grace, arriving 08:34 is 0
+         * late minutes, but arriving 08:40 is <em>10</em> late minutes measured from 08:30 — not 4.
+         */
+        private int graceMinutes = 5;
+        private List<String> workdays = new ArrayList<>(
+            List.of("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY")
+        );
+
+        public String getZone() {
+            return zone;
+        }
+
+        public void setZone(String zone) {
+            this.zone = zone;
+        }
+
+        public String getWorkStart() {
+            return workStart;
+        }
+
+        public void setWorkStart(String workStart) {
+            this.workStart = workStart;
+        }
+
+        public String getWorkEnd() {
+            return workEnd;
+        }
+
+        public void setWorkEnd(String workEnd) {
+            this.workEnd = workEnd;
+        }
+
+        public int getGraceMinutes() {
+            return graceMinutes;
+        }
+
+        public void setGraceMinutes(int graceMinutes) {
+            this.graceMinutes = graceMinutes;
+        }
+
+        public List<String> getWorkdays() {
+            return workdays;
+        }
+
+        public void setWorkdays(List<String> workdays) {
+            this.workdays = workdays;
+        }
+    }
+
+    /** Roll-up of raw punches into hr.attendance_daily. */
+    public static class Daily {
+        private boolean recalcEnabled = true;
+        /** How many trailing days the nightly job re-derives, to heal late catch-up pulls. */
+        private int recalcLookbackDays = 7;
+        /** One-shot historical roll-up on startup. Off by default; drive it from the HR endpoint. */
+        private boolean backfillOnStartup = false;
+
+        public boolean isRecalcEnabled() {
+            return recalcEnabled;
+        }
+
+        public void setRecalcEnabled(boolean recalcEnabled) {
+            this.recalcEnabled = recalcEnabled;
+        }
+
+        public int getRecalcLookbackDays() {
+            return recalcLookbackDays;
+        }
+
+        public void setRecalcLookbackDays(int recalcLookbackDays) {
+            this.recalcLookbackDays = recalcLookbackDays;
+        }
+
+        public boolean isBackfillOnStartup() {
+            return backfillOnStartup;
+        }
+
+        public void setBackfillOnStartup(boolean backfillOnStartup) {
+            this.backfillOnStartup = backfillOnStartup;
         }
     }
 

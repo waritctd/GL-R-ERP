@@ -29,7 +29,13 @@ export const api = {
     update: (id, payload) => apiRequest(API_ROUTES.profileRequests.detail(id), { method: 'PATCH', body: payload }),
   },
   attendance: {
+    daily: (params) => apiRequest(withQuery(API_ROUTES.attendance.daily, params)),
+    // Backs the per-day drill-down; no longer rendered as its own table.
     list: (params) => apiRequest(withQuery(API_ROUTES.attendance.punches, params)),
+    unmapped: (params) => apiRequest(withQuery(API_ROUTES.attendance.unmapped, params)),
+    employees: () => apiRequest(API_ROUTES.attendance.employees),
+    backfillCards: (payload) =>
+      apiRequest(API_ROUTES.attendance.cardsBackfill, { method: 'POST', body: payload }),
     importDat: (payload) => apiRequest(API_ROUTES.attendance.importDat, { method: 'POST', body: payload }),
     devices: () => apiRequest(API_ROUTES.attendance.devices),
   },

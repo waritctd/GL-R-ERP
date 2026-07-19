@@ -17,6 +17,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
+import th.co.glr.hr.attendance.daily.AttendanceDailyService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -28,11 +29,15 @@ class OvertimeServiceTest {
     private final AuditService auditService = mock(AuditService.class);
     private final NotificationService notificationService = mock(NotificationService.class);
     private final AppProperties appProperties = new AppProperties();
+    // Approving/cancelling overtime re-derives that attendance day; stubbed here so these cases
+    // stay about the overtime rules. The real sync is covered by the integration tests.
+    private final AttendanceDailyService attendanceDailyService = mock(AttendanceDailyService.class);
     private final OvertimeService overtimeService = new OvertimeService(
         overtimeRepository,
         auditService,
         notificationService,
-        appProperties
+        appProperties,
+        attendanceDailyService
     );
 
     @Test
