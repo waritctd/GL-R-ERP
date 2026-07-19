@@ -32,6 +32,7 @@ import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
+import th.co.glr.hr.pricingrequest.PricingRequestService;
 
 class TicketServiceTest {
 
@@ -40,8 +41,10 @@ class TicketServiceTest {
     private final PriceCalcService priceCalcService = mock(PriceCalcService.class);
     private final CustomerRepository customerRepo = mock(CustomerRepository.class);
     private final QuotationRenderer quotationRenderer = new QuotationRenderer();
+    private final PricingRequestService pricingRequestService = mock(PricingRequestService.class);
     private final TicketService service = new TicketService(
-        ticketRepo, notifRepo, priceCalcService, new ObjectMapper(), customerRepo, quotationRenderer);
+        ticketRepo, notifRepo, priceCalcService, new ObjectMapper(), customerRepo, quotationRenderer,
+        pricingRequestService);
 
     private final UserPrincipal salesActor   = actor(1L, "sales");
     private final UserPrincipal otherSales   = actor(2L, "sales");
@@ -1374,6 +1377,35 @@ class TicketServiceTest {
         verify(ticketRepo, never()).updateSalesStage(org.mockito.ArgumentMatchers.anyLong(), anyString());
         verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.MARKED_LOST), eq(DealStage.NEGOTIATION), eq(DealStage.NEGOTIATION), anyString());
+    }
+
+    // ── dead-deal handling: markLost/cancel cascade, hold/dormant deliberately do not ──
+
+    @Test
+    void markLost_cascadesCancelOpenPricingRequestsWithTheDealsOwnReason() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, null);
+        service.markLost(10L, DealLostReason.PRICE, "แพ้ราคาคู่แข่ง", salesActor);
+        verify(pricingRequestService).cancelOpenForTicket(10L, DealLostReason.PRICE, salesActor);
+    }
+
+    @Test
+    void cancel_cascadesCancelOpenPricingRequestsWithTheDealsOwnReason() {
+        stubTicket(10L, 1L, TicketStatus.DRAFT);
+        service.cancel(10L, DealCancelReason.OWNER_CANCELLED, null, salesActor);
+        verify(pricingRequestService).cancelOpenForTicket(10L, DealCancelReason.OWNER_CANCELLED, salesActor);
+    }
+
+    @Test
+    void holdAndDormant_doNotCascadeCancelOpenPricingRequests() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, null);
+        service.placeOnHold(10L, "รอเจ้าของโครงการ", salesActor);
+
+        stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), null, null,
+            DealStage.NEGOTIATION, null, DealLifecycle.ON_HOLD, DepositPolicy.REQUIRED);
+        service.markDormant(11L, null, salesManagerActor);
+
+        verify(pricingRequestService, never())
+            .cancelOpenForTicket(org.mockito.ArgumentMatchers.anyLong(), anyString(), any());
     }
 
     @Test

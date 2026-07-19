@@ -9,6 +9,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,6 +28,8 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CancelPricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.RequestMoreInformationRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.RespondMoreInformationRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.DepositPolicy;
@@ -373,6 +376,258 @@ class PricingRequestServiceTest {
         assertBadRequest(() -> service.list("BOGUS", null, true, salesActor));
     }
 
+    // ── B1: dead-deal lifecycle filter is wired, but get(id) bypasses it ───────
+
+    @Test
+    void list_defaultQueueExcludesOnHoldDealButGetStillReachesIt() {
+        // list(..., activeDealsOnly=true) must exclude a request whose deal is not
+        // ACTIVE (repo-level behaviour proved by
+        // PricingRequestRepositoryIntegrationTest#findSummaries_...); this test
+        // proves the SERVICE actually passes activeDealsOnly through unmangled, and
+        // that get(id) — which never touches deal lifecycle, only ownership/role —
+        // still reaches the same request directly.
+        when(requestRepo.findSummaries(null, null, null, true)).thenReturn(List.of());
+        PricingRequestSummaryDto onHoldDealRequest = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
+        when(requestRepo.findSummaries(null, null, null, false)).thenReturn(List.of(onHoldDealRequest));
+        when(requestRepo.findItems(20L)).thenReturn(List.of());
+        when(requestRepo.findEvents(20L)).thenReturn(List.of());
+
+        assertThat(service.list(null, null, true, importActor)).isEmpty();
+        assertThat(service.list(null, null, false, importActor)).extracting(PricingRequestSummaryDto::id).contains(20L);
+        assertThat(service.get(20L, importActor).summary().id()).isEqualTo(20L);
+    }
+
+    // ── pickup ───────────────────────────────────────────────────────────
+
+    @Test
+    void pickup_rejectsNonImportRoles() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
+        assertForbidden(() -> service.pickup(20L, salesActor));
+        assertForbidden(() -> service.pickup(20L, ceoActor));
+        assertForbidden(() -> service.pickup(20L, accountActor));
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void pickup_rejectsNonSubmittedStatus() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        assertConflict(() -> service.pickup(20L, importActor));
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void pickup_rejectsNonActiveDeal() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
+        stubTicket(10L, 1L, DealLifecycle.ON_HOLD);
+        assertConflict(() -> service.pickup(20L, importActor));
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void pickup_rejectsWhenTransitionRowsZero() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.transition(20L, PricingRequestStatus.SUBMITTED, PricingRequestStatus.IMPORT_REVIEWING,
+            3L, null)).thenReturn(0);
+        assertConflict(() -> service.pickup(20L, importActor));
+        verify(notifRepo, never()).notifyEmployee(anyLong(), anyLong(), any(), any());
+    }
+
+    @Test
+    void pickup_succeedsAssignsOnlyTheRequestNeverTheTicketAndNotifiesRequester() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.transition(20L, PricingRequestStatus.SUBMITTED, PricingRequestStatus.IMPORT_REVIEWING,
+            3L, null)).thenReturn(1);
+        when(requestRepo.findItems(20L)).thenReturn(List.of());
+        when(requestRepo.findEvents(20L)).thenReturn(List.of());
+
+        service.pickup(20L, importActor);
+
+        verify(requestRepo).transition(20L, PricingRequestStatus.SUBMITTED, PricingRequestStatus.IMPORT_REVIEWING, 3L, null);
+        verify(requestRepo).addEvent(eq(20L), eq(10L), eq(3L), any(),
+            eq(PricingRequestEventKind.PRICING_REQUEST_PICKED_UP), eq(PricingRequestStatus.SUBMITTED),
+            eq(PricingRequestStatus.IMPORT_REVIEWING), eq(null), eq(null));
+        verify(notifRepo).notifyEmployee(eq(1L), eq(10L), eq("PICKED_UP"), any());
+        // The landmine guard: this repository call must be the ONLY interaction with
+        // TicketRepository — pickup must never write sales.ticket.assigned_to. The
+        // real end-to-end assertion (assigned_to IS NULL after a real pickup) lives
+        // in PricingRequestRepositoryIntegrationTest.
+        verify(ticketRepo, times(1)).findById(10L);
+        verifyNoMoreInteractions(ticketRepo);
+    }
+
+    // ── requestInformation ──────────────────────────────────────────────────
+
+    @Test
+    void requestInformation_rejectsNonImportRoles() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, 3L);
+        assertForbidden(() -> service.requestInformation(20L, moreInfoRequest(), salesActor));
+        assertForbidden(() -> service.requestInformation(20L, moreInfoRequest(), ceoActor));
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void requestInformation_rejectsUnassignedImport() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, null);
+        assertForbidden(() -> service.requestInformation(20L, moreInfoRequest(), importActor));
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void requestInformation_rejectsDifferentAssignedImport() {
+        long anotherImportId = 99L;
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, anotherImportId);
+        assertForbidden(() -> service.requestInformation(20L, moreInfoRequest(), importActor));
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void requestInformation_rejectsWrongStatus() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED, 3L);
+        assertConflict(() -> service.requestInformation(20L, moreInfoRequest(), importActor));
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void requestInformation_rejectsWhenTransitionRowsZero() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, 3L);
+        when(requestRepo.transition(20L, PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.MORE_INFO_REQUIRED,
+            null, null)).thenReturn(0);
+        assertConflict(() -> service.requestInformation(20L, moreInfoRequest(), importActor));
+        verify(notifRepo, never()).notifyEmployee(anyLong(), anyLong(), any(), any());
+    }
+
+    @Test
+    void requestInformation_assignedImportSucceedsAndNotifiesRequester() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, 3L);
+        when(requestRepo.transition(20L, PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.MORE_INFO_REQUIRED,
+            null, null)).thenReturn(1);
+        when(requestRepo.findItems(20L)).thenReturn(List.of());
+        when(requestRepo.findEvents(20L)).thenReturn(List.of());
+
+        service.requestInformation(20L, moreInfoRequest(), importActor);
+
+        verify(requestRepo).transition(20L, PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.MORE_INFO_REQUIRED,
+            null, null);
+        verify(requestRepo).addEvent(eq(20L), eq(10L), eq(3L), any(),
+            eq(PricingRequestEventKind.MORE_INFO_REQUESTED), eq(PricingRequestStatus.IMPORT_REVIEWING),
+            eq(PricingRequestStatus.MORE_INFO_REQUIRED), eq("กรุณาระบุขนาดสินค้าเพิ่มเติม"), any());
+        verify(notifRepo).notifyEmployee(eq(1L), eq(10L), eq("MORE_INFO_REQUIRED"), any());
+    }
+
+    // ── respondInformation ──────────────────────────────────────────────────
+
+    @Test
+    void respondInformation_rejectsImportRole() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, 3L);
+        assertForbidden(() -> service.respondInformation(20L, respondRequest(), importActor));
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void respondInformation_rejectsNonOwnerSales() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, 3L);
+        assertForbidden(() -> service.respondInformation(20L, respondRequest(), otherSales));
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void respondInformation_rejectsWrongStatus() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, 3L);
+        assertConflict(() -> service.respondInformation(20L, respondRequest(), salesActor));
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void respondInformation_rejectsWhenTransitionRowsZero() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, 3L);
+        when(requestRepo.transition(20L, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.IMPORT_REVIEWING,
+            null, null)).thenReturn(0);
+        assertConflict(() -> service.respondInformation(20L, respondRequest(), salesActor));
+    }
+
+    @Test
+    void respondInformation_goesToImportReviewingNotSubmittedAndNotifiesAssignedImport() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, 3L);
+        when(requestRepo.transition(20L, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.IMPORT_REVIEWING,
+            null, null)).thenReturn(1);
+        when(requestRepo.findItems(20L)).thenReturn(List.of());
+        when(requestRepo.findEvents(20L)).thenReturn(List.of());
+
+        service.respondInformation(20L, respondRequest(), salesActor);
+
+        // The critical assertion: NOT back to SUBMITTED.
+        verify(requestRepo).transition(20L, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.IMPORT_REVIEWING,
+            null, null);
+        verify(requestRepo, never()).transition(eq(20L), any(), eq(PricingRequestStatus.SUBMITTED), any(), any());
+        verify(requestRepo).addEvent(eq(20L), eq(10L), eq(1L), any(),
+            eq(PricingRequestEventKind.MORE_INFO_RESPONDED), eq(PricingRequestStatus.MORE_INFO_REQUIRED),
+            eq(PricingRequestStatus.IMPORT_REVIEWING), any(), eq(null));
+        verify(notifRepo).notifyEmployee(eq(3L), eq(10L), eq("MORE_INFO_RESPONDED"), any());
+    }
+
+    @Test
+    void respondInformation_guardsAgainstNullAssignedImport() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, null);
+        when(requestRepo.transition(20L, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.IMPORT_REVIEWING,
+            null, null)).thenReturn(1);
+        when(requestRepo.findItems(20L)).thenReturn(List.of());
+        when(requestRepo.findEvents(20L)).thenReturn(List.of());
+
+        service.respondInformation(20L, respondRequest(), salesActor);
+
+        verify(notifRepo, never()).notifyEmployee(anyLong(), anyLong(), any(), any());
+    }
+
+    // ── cancelOpenForTicket (internal dead-deal cascade) ──────────────────────
+
+    @Test
+    void cancelOpenForTicket_cancelsAllOpenRequests() {
+        when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(20L, 21L));
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
+        stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED);
+        when(requestRepo.transition(20L, PricingRequestStatus.SUBMITTED, PricingRequestStatus.CANCELLED, null, 4L))
+            .thenReturn(1);
+        when(requestRepo.transition(21L, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.CANCELLED, null, 4L))
+            .thenReturn(1);
+
+        int cancelledCount = service.cancelOpenForTicket(10L, "PROJECT_ON_HOLD", ceoActor);
+
+        assertThat(cancelledCount).isEqualTo(2);
+        verify(requestRepo).addEvent(eq(20L), eq(10L), eq(4L), any(),
+            eq(PricingRequestEventKind.PRICING_REQUEST_CANCELLED), eq(PricingRequestStatus.SUBMITTED),
+            eq(PricingRequestStatus.CANCELLED), eq("PROJECT_ON_HOLD"), any());
+        verify(requestRepo).addEvent(eq(21L), eq(10L), eq(4L), any(),
+            eq(PricingRequestEventKind.PRICING_REQUEST_CANCELLED), eq(PricingRequestStatus.MORE_INFO_REQUIRED),
+            eq(PricingRequestStatus.CANCELLED), eq("PROJECT_ON_HOLD"), any());
+    }
+
+    @Test
+    void cancelOpenForTicket_skipsAlreadyCancelledAndRacedRows() {
+        // 20L: already cancelled by the time findSummary runs (findOpenIdsForTicket
+        // read is not in the same transaction snapshot as the loop body).
+        when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(20L, 21L, 22L));
+        when(requestRepo.findSummary(20L)).thenReturn(java.util.Optional.empty());
+        // 21L: still open per findSummary, but the compare-and-set races and misses.
+        stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.DRAFT);
+        when(requestRepo.transition(21L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 4L))
+            .thenReturn(0);
+        // 22L: succeeds normally.
+        stubPricingRequest(22L, 10L, 1L, PricingRequestStatus.SUBMITTED);
+        when(requestRepo.transition(22L, PricingRequestStatus.SUBMITTED, PricingRequestStatus.CANCELLED, null, 4L))
+            .thenReturn(1);
+
+        int cancelledCount = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
+
+        // A raced 0-rowcount (21L) does not abort the loop — 22L still gets cancelled.
+        assertThat(cancelledCount).isEqualTo(1);
+        verify(requestRepo, never()).addEvent(eq(21L), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
+        verify(requestRepo).addEvent(eq(22L), eq(10L), eq(4L), any(),
+            eq(PricingRequestEventKind.PRICING_REQUEST_CANCELLED), eq(PricingRequestStatus.SUBMITTED),
+            eq(PricingRequestStatus.CANCELLED), eq("OTHER"), any());
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     private static UserPrincipal actor(long id, String role) {
@@ -405,6 +660,27 @@ class PricingRequestServiceTest {
             1, 1, null, null, null, null, Instant.now(), Instant.now());
         when(requestRepo.findSummary(id)).thenReturn(java.util.Optional.of(summary));
         return summary;
+    }
+
+    /** Variant for pickup/requestInformation/respondInformation: carries assignedImportId. */
+    private PricingRequestSummaryDto stubPricingRequest(long id, long ticketId, long ticketCreatedById, String status,
+                                                         Long assignedImportId) {
+        PricingRequestSummaryDto summary = new PricingRequestSummaryDto(
+            id, "PCR-2026-0001", ticketId, "PR-2026-0001", "Test Project", "Test Customer",
+            ticketCreatedById, PricingRequestRecipient.BUYER, 1L, null,
+            status, ticketCreatedById, "Sales User", assignedImportId,
+            assignedImportId != null ? "Import User" : null, null, null, null, null,
+            1, 1, null, null, null, null, Instant.now(), Instant.now());
+        when(requestRepo.findSummary(id)).thenReturn(java.util.Optional.of(summary));
+        return summary;
+    }
+
+    private static RequestMoreInformationRequest moreInfoRequest() {
+        return new RequestMoreInformationRequest("กรุณาระบุขนาดสินค้าเพิ่มเติม", null);
+    }
+
+    private static RespondMoreInformationRequest respondRequest() {
+        return new RespondMoreInformationRequest("ขนาด 60x60");
     }
 
     private static PricingRequestItemDto sampleItem(Long sourceTicketItemId) {

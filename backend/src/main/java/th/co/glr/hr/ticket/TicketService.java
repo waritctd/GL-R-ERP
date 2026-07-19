@@ -20,6 +20,7 @@ import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
+import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionDto;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionState;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionsResponse;
@@ -57,16 +58,22 @@ public class TicketService {
     private final ObjectMapper objectMapper;
     private final CustomerRepository customers;
     private final QuotationRenderer quotationRenderer;
+    // Dead-deal cascade only (see markLost/cancel below) — PricingRequestService
+    // injects TicketRepository, not TicketService, so this dependency direction
+    // (TicketService -> PricingRequestService -> TicketRepository) is acyclic.
+    private final PricingRequestService pricingRequests;
 
     public TicketService(TicketRepository tickets, NotificationRepository notifications,
                          PriceCalcService priceCalcService, ObjectMapper objectMapper,
-                         CustomerRepository customers, QuotationRenderer quotationRenderer) {
+                         CustomerRepository customers, QuotationRenderer quotationRenderer,
+                         PricingRequestService pricingRequests) {
         this.tickets           = tickets;
         this.notifications     = notifications;
         this.priceCalcService  = priceCalcService;
         this.objectMapper      = objectMapper;
         this.customers         = customers;
         this.quotationRenderer = quotationRenderer;
+        this.pricingRequests   = pricingRequests;
     }
 
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
@@ -1073,6 +1080,13 @@ public class TicketService {
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.MARKED_LOST, s.salesStage(), s.salesStage(),
             "เสียงาน (" + reason + ")" + (note != null && !note.isBlank() ? " — " + note.trim() : ""));
+        // Terminal deal state: a lost deal can never receive Import's pricing, so
+        // any pricing request still open on it (DRAFT/SUBMITTED/IMPORT_REVIEWING/
+        // MORE_INFO_REQUIRED) is cancelled here too rather than stranded in a queue
+        // forever. See PricingRequestService.cancelOpenForTicket's Javadoc for why
+        // this has no role check of its own. placeOnHold/markDormant deliberately do
+        // NOT do this — see those methods.
+        pricingRequests.cancelOpenForTicket(ticketId, reason, actor);
         return requireTicket(ticketId);
     }
 
@@ -1117,6 +1131,13 @@ public class TicketService {
         tickets.updateLifecycle(ticketId, DealLifecycle.ON_HOLD);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.ON_HOLD, s.salesStage(), s.salesStage(), blankToNull(note));
+        // Deliberately does NOT call pricingRequests.cancelOpenForTicket, unlike
+        // markLost/cancel. ON_HOLD is temporary — resume() brings the deal straight
+        // back to ACTIVE — so cancelling in-progress pricing work here would destroy
+        // it for no reason. The default queue already hides these requests while the
+        // deal is not ACTIVE (PricingRequestRepository.findSummaries'
+        // activeDealsOnly); resume() un-hides them with their status intact. Do not
+        // "fix" this into symmetry with the terminal-state methods.
         return requireTicket(ticketId);
     }
 
@@ -1130,6 +1151,9 @@ public class TicketService {
         tickets.updateLifecycle(ticketId, DealLifecycle.DORMANT);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.DORMANT, s.salesStage(), s.salesStage(), blankToNull(note));
+        // Same deliberate asymmetry as placeOnHold: DORMANT is temporary (resume()
+        // returns it to ACTIVE), so no pricingRequests.cancelOpenForTicket call here
+        // either. Do not "fix" this into symmetry with markLost/cancel.
         return requireTicket(ticketId);
     }
 
@@ -1275,6 +1299,10 @@ public class TicketService {
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CANCELLED, currentStatus, TicketStatus.CANCELLED, message);
         tickets.updateLifecycle(ticketId, DealLifecycle.CANCELLED);
+        // Terminal deal state: same cascade as markLost above — a cancelled deal
+        // can never receive Import's pricing, so any pricing request still open on
+        // it is cancelled too.
+        pricingRequests.cancelOpenForTicket(ticketId, reason, actor);
         return requireTicket(ticketId);
     }
 

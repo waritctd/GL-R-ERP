@@ -99,6 +99,89 @@ class PricingRequestControllerTest {
             .andExpect(status().isOk());
     }
 
+    // ── pickup ───────────────────────────────────────────────────────────
+
+    @Test
+    void pickup_returnsOkOnSuccess() throws Exception {
+        when(service.pickup(eq(20L), any())).thenReturn(sampleDetail());
+        mvc.perform(post("/api/pricing-requests/20/pickup").session(session("import")))
+            .andExpect(status().isOk());
+    }
+
+    @Test
+    void pickup_returnsForbiddenForWrongRole() throws Exception {
+        when(service.pickup(eq(20L), any())).thenThrow(new ApiException(HttpStatus.FORBIDDEN, "Forbidden"));
+        mvc.perform(post("/api/pricing-requests/20/pickup").session(session("sales")))
+            .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void pickup_returnsConflictWhenAlreadyPickedUp() throws Exception {
+        when(service.pickup(eq(20L), any()))
+            .thenThrow(new ApiException(HttpStatus.CONFLICT, "Pricing request was already picked up"));
+        mvc.perform(post("/api/pricing-requests/20/pickup").session(session("import")))
+            .andExpect(status().isConflict());
+    }
+
+    // ── requestInformation ──────────────────────────────────────────────────
+
+    @Test
+    void requestInformation_returnsOkOnSuccess() throws Exception {
+        when(service.requestInformation(eq(20L), any(), any())).thenReturn(sampleDetail());
+        mvc.perform(post("/api/pricing-requests/20/request-information").session(session("import"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"message\":\"กรุณาระบุขนาดสินค้าเพิ่มเติม\"}"))
+            .andExpect(status().isOk());
+    }
+
+    @Test
+    void requestInformation_rejectsBlankMessage() throws Exception {
+        mvc.perform(post("/api/pricing-requests/20/request-information").session(session("import"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"message\":\"\"}"))
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void requestInformation_returnsForbiddenWhenNotTheAssignedImport() throws Exception {
+        when(service.requestInformation(eq(20L), any(), any()))
+            .thenThrow(new ApiException(HttpStatus.FORBIDDEN, "Forbidden"));
+        mvc.perform(post("/api/pricing-requests/20/request-information").session(session("import"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"message\":\"ขอข้อมูลเพิ่ม\"}"))
+            .andExpect(status().isForbidden());
+    }
+
+    // ── respondInformation ──────────────────────────────────────────────────
+
+    @Test
+    void respondInformation_returnsOkOnSuccess() throws Exception {
+        when(service.respondInformation(eq(20L), any(), any())).thenReturn(sampleDetail());
+        mvc.perform(post("/api/pricing-requests/20/respond-information").session(session("sales"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"response\":\"ขนาด 60x60\"}"))
+            .andExpect(status().isOk());
+    }
+
+    @Test
+    void respondInformation_rejectsBlankResponse() throws Exception {
+        mvc.perform(post("/api/pricing-requests/20/respond-information").session(session("sales"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"response\":\"\"}"))
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void respondInformation_returnsConflictOnWrongStatus() throws Exception {
+        when(service.respondInformation(eq(20L), any(), any()))
+            .thenThrow(new ApiException(HttpStatus.CONFLICT,
+                "Expected status 'MORE_INFO_REQUIRED' but pricing request is 'IMPORT_REVIEWING'"));
+        mvc.perform(post("/api/pricing-requests/20/respond-information").session(session("sales"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"response\":\"ขนาด 60x60\"}"))
+            .andExpect(status().isConflict());
+    }
+
     // ── submit / cancel: illegal transition ─────────────────────────────────
 
     @Test
