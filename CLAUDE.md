@@ -40,6 +40,31 @@ because it read the mock's authz as the backend's.
 When editing `mockApi.js`, keep each namespace's `// Mirrors <JavaClass>` header accurate — that
 pointer is how the next reader finds the source of truth.
 
+### Permission changes must ship evidence — not a claim
+
+The paragraph above was already in this file and an agent still reported mock-driven browser
+clicking as verified role scoping (PR #238). Prose was not enough, so this is now a **requirement**:
+
+**Any change that touches authorization — a role gate, a scope/filter, who may read or write whose
+rows — must ship a real-DB integration test through the real Java service, or it is not done.**
+
+1. **Unit-test the decision** (`resolveScope`-style): proves the right branch was chosen.
+2. **Integration-test the enforcement** against real Postgres, through the real service *and*
+   repository (`AbstractPostgresIntegrationTest`): proves the decision survives into the `WHERE`
+   clause and actually filters rows. **Mockito cannot reach this** — a mocked repository happily
+   "passes" while the SQL does something else. This repo has been bitten by exactly that before.
+3. **Write the cases wrong-way-round.** Assert the caller *cannot* reach what they shouldn't, not
+   that they can reach their own. "Manager asks for an out-of-division employee → zero rows" is the
+   test that matters; "manager sees their own division" is not.
+4. **Mutation-check the guard.** Introduce the vulnerability, confirm that specific test goes red
+   and nothing else, then revert to an empty diff. A green test that cannot fail is not evidence.
+
+Reference implementation:
+`backend/src/test/java/th/co/glr/hr/attendance/AttendanceScopeIntegrationTest.java`.
+
+**Reporting:** if verification ran only under `VITE_USE_MOCKS=true`, say so and call the permission
+aspect **unverified**. Never let "I clicked through it as HR" stand in for an authz claim.
+
 ## Styling direction — Tailwind-first
 The frontend is migrating from the single global `frontend/src/styles.css` to a **Tailwind-first** system. Tailwind 4 is already wired up via `@tailwindcss/vite`, with design tokens in `frontend/src/index.css` (`@theme static`).
 
@@ -59,12 +84,17 @@ The frontend is migrating from the single global `frontend/src/styles.css` to a 
 - **Always run the relevant tests/builds** and record the results:
   - Frontend: `cd frontend && npm run lint && npm test && npm run build` (there is no `typecheck` script)
   - Backend: `cd backend && ./mvnw -B clean verify` (integration tests need a Postgres + `TEST_DB_URL`; note if they were skipped)
+- **Did the change touch authorization?** (a role gate, a scope/filter, who may read or write whose
+  rows.) If yes, a real-DB integration test through the real Java service is **required** — see
+  "Permission changes must ship evidence" above. If it ran on mocks only, report the permission
+  aspect as **unverified**; do not describe it as tested.
 - **Update the relevant handoff file before ending.** Fill in every section, and always list:
   1. **Files changed** (path + what changed)
   2. **Commands run**
-  3. **Tests / build results** (pass/fail/not run)
-  4. **Known risks**
-  5. **The exact next prompt** for the next agent
+  3. **Tests / build results** (pass/fail/not run, and whether integration tests *ran* or were skipped)
+  4. **Authz evidence** (real-service test, or "no authz change", or "unverified — mock only")
+  5. **Known risks**
+  6. **The exact next prompt** for the next agent
 
 ## Handoff system
 `docs/agent-handoffs/` is the shared memory between Claude, Codex, and reviewer agents. See `docs/agent-handoffs/README.md` for the process and the handoff template. Create a new `NN_<branch-name>.md` from the template when you start a branch.
