@@ -8,7 +8,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
 import {
-  canCancelPricingRequest, canCreatePricingRequest, canRespondInformation,
+  canCancelPricingRequest, canCreatePricingRequest, canRequestInformation, canRespondInformation,
   canSubmitPricingRequest, pricingRequestRecipientLabel, quantityTypeLabel,
 } from './pricingRequestMeta.js';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
@@ -41,6 +41,7 @@ export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user }) 
   const [expandedId, setExpandedId] = useState(null);
   const [respondDraft, setRespondDraft] = useState(null); // { id, response }
   const [cancelDraft, setCancelDraft] = useState(null); // { id, reason }
+  const [requestInfoDraft, setRequestInfoDraft] = useState(null); // { id, message, dueDate }
 
   const listQuery = useQuery({
     queryKey: queryKeys.pricingRequestsByTicket(ticketId),
@@ -72,6 +73,10 @@ export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user }) 
   const respondMutation = useMutation({
     mutationFn: ({ id, response }) => api.pricingRequests.respondInformation(id, { response }),
     onSuccess: () => { invalidate(); setRespondDraft(null); },
+  });
+  const requestInfoMutation = useMutation({
+    mutationFn: ({ id, message, dueDate }) => api.pricingRequests.requestInformation(id, { message, dueDate }),
+    onSuccess: () => { invalidate(); setRequestInfoDraft(null); },
   });
 
   const canCreate = canCreatePricingRequest(user, deal);
@@ -124,7 +129,7 @@ export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user }) 
                   </span>
                 </button>
 
-                {(canSubmitPricingRequest(user, pr) || canRespondInformation(user, pr) || canCancelPricingRequest(user, pr)) ? (
+                {(canSubmitPricingRequest(user, pr) || canRequestInformation(user, pr) || canRespondInformation(user, pr) || canCancelPricingRequest(user, pr)) ? (
                   <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2">
                     {canSubmitPricingRequest(user, pr) ? (
                       <button
@@ -134,6 +139,11 @@ export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user }) 
                         onClick={() => submitMutation.mutate(pr.id)}
                       >
                         ส่งให้ Import
+                      </button>
+                    ) : null}
+                    {canRequestInformation(user, pr) ? (
+                      <button type="button" className="secondary-button" onClick={() => setRequestInfoDraft({ id: pr.id, message: '', dueDate: '' })}>
+                        ขอข้อมูลเพิ่มเติม
                       </button>
                     ) : null}
                     {canRespondInformation(user, pr) ? (
@@ -232,6 +242,49 @@ export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user }) 
               onChange={(e) => setRespondDraft((d) => ({ ...d, response: e.target.value }))}
             />
           </label>
+        </Modal>
+      ) : null}
+
+      {requestInfoDraft ? (
+        <Modal
+          title="ขอข้อมูลเพิ่มเติม"
+          onClose={() => setRequestInfoDraft(null)}
+          footer={(
+            <>
+              <button type="button" className="secondary-button" onClick={() => setRequestInfoDraft(null)}>ยกเลิก</button>
+              <button
+                type="button"
+                className="primary-button"
+                disabled={!requestInfoDraft.message.trim() || requestInfoMutation.isPending}
+                onClick={() => requestInfoMutation.mutate({
+                  id: requestInfoDraft.id,
+                  message: requestInfoDraft.message.trim(),
+                  dueDate: requestInfoDraft.dueDate || null,
+                })}
+              >
+                ส่งคำขอ
+              </button>
+            </>
+          )}
+        >
+          <div className="flex flex-col gap-3">
+            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+              ข้อมูลที่ต้องการเพิ่มเติม *
+              <textarea
+                className="min-h-24"
+                value={requestInfoDraft.message}
+                onChange={(e) => setRequestInfoDraft((d) => ({ ...d, message: e.target.value }))}
+              />
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+              ต้องการภายในวันที่ (ไม่บังคับ)
+              <input
+                type="date"
+                value={requestInfoDraft.dueDate}
+                onChange={(e) => setRequestInfoDraft((d) => ({ ...d, dueDate: e.target.value }))}
+              />
+            </label>
+          </div>
         </Modal>
       ) : null}
 

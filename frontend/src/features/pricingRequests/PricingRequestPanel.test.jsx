@@ -19,12 +19,15 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         submit: vi.fn(),
         cancel: vi.fn(),
         respondInformation: vi.fn(),
+        requestInformation: vi.fn(),
       },
     },
   };
 });
 
 const salesOwner = { id: 1, name: 'พนักงานขาย', role: 'sales' };
+const importUser = { id: 5, name: 'ฝ่ายนำเข้า', role: 'import' };
+const otherImportUser = { id: 6, name: 'ฝ่ายนำเข้าอีกคน', role: 'import' };
 const deal = { createdById: 1, lifecycle: 'ACTIVE' };
 
 function renderPanel(overrides = {}) {
@@ -129,5 +132,53 @@ describe('PricingRequestPanel', () => {
     // Cancel is the one action the CEO gets on ANY cancellable status, as an
     // explicit override (PricingRequestService.cancel).
     expect(screen.getByRole('button', { name: 'ยกเลิก' })).not.toBeNull();
+  });
+
+  it('lets the ASSIGNED import user request more information while IMPORT_REVIEWING', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({
+      items: [summary({ status: 'IMPORT_REVIEWING', assignedImportId: 5, assignedImportName: importUser.name })],
+    });
+    api.pricingRequests.requestInformation.mockResolvedValue({
+      pricingRequest: { summary: summary({ status: 'MORE_INFO_REQUIRED' }), items: [], events: [] },
+    });
+    renderPanel({ user: importUser });
+
+    const requestInfoButton = await screen.findByRole('button', { name: 'ขอข้อมูลเพิ่มเติม' });
+    fireEvent.click(requestInfoButton);
+
+    const saveButton = await screen.findByRole('button', { name: 'ส่งคำขอ' });
+    // Required message — the save action stays disabled until something is typed.
+    expect(saveButton.disabled).toBe(true);
+
+    const textarea = screen.getByRole('dialog').querySelector('textarea');
+    fireEvent.change(textarea, { target: { value: 'ขอแบบ CAD เพิ่มเติม' } });
+    expect(saveButton.disabled).toBe(false);
+
+    fireEvent.click(saveButton);
+
+    await waitFor(() => expect(api.pricingRequests.requestInformation).toHaveBeenCalledWith(
+      1,
+      { message: 'ขอแบบ CAD เพิ่มเติม', dueDate: null },
+    ));
+  });
+
+  it('does not offer "ขอข้อมูลเพิ่มเติม" to an unassigned import user', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({
+      items: [summary({ status: 'IMPORT_REVIEWING', assignedImportId: 5, assignedImportName: importUser.name })],
+    });
+    renderPanel({ user: otherImportUser });
+
+    await screen.findByText('PCR-2026-0001');
+    expect(screen.queryByRole('button', { name: 'ขอข้อมูลเพิ่มเติม' })).toBeNull();
+  });
+
+  it('does not offer "ขอข้อมูลเพิ่มเติม" to sales, even the deal owner', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({
+      items: [summary({ status: 'IMPORT_REVIEWING', assignedImportId: 5, assignedImportName: importUser.name })],
+    });
+    renderPanel();
+
+    await screen.findByText('PCR-2026-0001');
+    expect(screen.queryByRole('button', { name: 'ขอข้อมูลเพิ่มเติม' })).toBeNull();
   });
 });

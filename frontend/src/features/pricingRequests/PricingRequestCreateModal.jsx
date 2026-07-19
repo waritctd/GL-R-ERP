@@ -3,6 +3,20 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { QUANTITY_TYPE_OPTIONS, RECIPIENT_OPTIONS } from './pricingRequestMeta.js';
 
+// TicketItemDto's unitBasis is a code ('PIECE' | 'SQM'), never a display unit —
+// mirrors the label mapping TicketDetailPage already uses for the same field
+// (unitBasis === 'SQM' ? 'ตร.ม.' : 'แผ่น').
+function unitLabelForTicketItem(ticketItem) {
+  return ticketItem?.unitBasis === 'SQM' ? 'ตร.ม.' : 'แผ่น';
+}
+
+// Mirrors TicketDetailPage's own qtyDisplay logic: an SQM-basis line quotes
+// its sqm quantity, a PIECE-basis line quotes its piece count.
+function quantityForTicketItem(ticketItem) {
+  if (ticketItem?.unitBasis === 'SQM' && ticketItem?.qtySqm != null) return ticketItem.qtySqm;
+  return ticketItem?.qty ?? 1;
+}
+
 function emptyItemFromTicketItem(ticketItem) {
   return {
     sourceTicketItemId: ticketItem?.id ?? null,
@@ -12,8 +26,8 @@ function emptyItemFromTicketItem(ticketItem) {
     texture: ticketItem?.texture ?? '',
     size: ticketItem?.size ?? '',
     factory: ticketItem?.factory ?? '',
-    requestedQty: ticketItem?.qty ?? 1,
-    requestedUnit: 'แผ่น',
+    requestedQty: quantityForTicketItem(ticketItem),
+    requestedUnit: unitLabelForTicketItem(ticketItem),
     quantityType: 'ESTIMATE',
     targetDeliveryDate: '',
     deliveryLocation: '',
