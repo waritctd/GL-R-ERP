@@ -14,7 +14,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageStack } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
-import { formatMoney, formatThaiDate } from '../../utils/format.js';
+import { formatAddress, formatMoney, formatThaiDate } from '../../utils/format.js';
 import { EmployeeFormModal } from './EmployeeFormModal.jsx';
 
 const tabDefs = [
@@ -131,7 +131,7 @@ function PersonalTab({ employee }) {
         </FieldList>
       </CollapsibleSection>
       <CollapsibleSection title="ที่อยู่ปัจจุบัน" defaultOpen={false}>
-        <p className="leading-[1.7] text-text-secondary">{employee.currentAddress.line1}<br />{employee.currentAddress.district} {employee.currentAddress.province} {employee.currentAddress.postalCode}</p>
+        <p className="leading-[1.7] text-text-secondary">{formatAddress(employee.currentAddress)}</p>
       </CollapsibleSection>
       <CollapsibleSection title="ผู้ติดต่อฉุกเฉิน" defaultOpen={false}>
         <FieldList>

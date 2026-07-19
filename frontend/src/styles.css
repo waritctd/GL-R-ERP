@@ -315,6 +315,7 @@ textarea:focus {
 .employee-cell small,
 .topbar-user span,
 .request-feed small,
+.editable-list > div > span > small,
 .data-row small {
   display: block;
   color: var(--color-text-muted);
@@ -737,7 +738,10 @@ textarea:focus {
   justify-content: space-between;
 }
 
-.request-feed-item > span,
+/* `:first-child` matters: StatusBadge also renders a <span>, so an unscoped
+   `> span` made the badge flex too and stretched a "รออนุมัติ" pill across the
+   whole row. Only the leading text column should absorb the free space. */
+.request-feed-item > span:first-child,
 .editable-list > div > span,
 .salary-history > div > span {
   min-width: 0;
@@ -1893,11 +1897,11 @@ a.status-badge {
     display: none;
   }
 
-  /* The drawer's account row already shows who is signed in, so the topbar
-     avatar is redundant here and costs ~48px on a 320px-wide header. */
-  .topbar-user .avatar {
-    display: none;
-  }
+  /* The avatar stays visible on mobile: it is the trigger for the user menu
+     (ข้อมูลของฉัน / ออกจากระบบ), so hiding it would strip profile access from
+     the phone — the surface employees actually use. It is affordable because
+     the standalone 44px logout button moved into that menu, so the header is
+     net narrower than before. */
 
   .topbar-user {
     gap: 4px;

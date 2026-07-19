@@ -50,7 +50,8 @@ function dashboardAccess(user) {
   return {
     employees: () => hasPermission(user?.role, 'canViewEmployees'),
     reviewRequests: () => hasPermission(user?.role, 'canReviewProfileRequests'),
-    myRequests: () => hasPermission(user?.role, 'canSubmitProfileRequests'),
+    // /profile absorbed the former /my-requests page; both gate on employeeId.
+    profile: () => !!user?.employeeId,
     overtime: () => canOvertime,
     leave: () => canLeave,
     tickets: () => SALES_ENABLED && hasPermission(user?.role, 'canViewTickets'),
@@ -103,12 +104,30 @@ function dashboardCards(mode, summary, pendingCount, { navigate, access }) {
     ];
   }
 
+  // Employee mode renders its own three-tier layout (identity facts → today →
+  // pending rows) instead of a flat card grid, so it does not use this list.
+  return [];
+}
+
+/**
+ * Employee mode, tier 3: the four pending counts as a compact list.
+ *
+ * Rendering these as equal-weight stat cards meant a `0` shouted exactly as
+ * loud as a `1`, so nothing led the page. Here a zero recedes to a muted dash
+ * and only a real count gets a badge — emphasis becomes a function of whether
+ * something actually needs attention.
+ */
+function employeePendingRows(summary, pendingCount, { navigate, access }) {
+  const pending = summary?.pendingApprovals ?? {};
+  const notifications = summary?.notifications ?? {};
+  const go = (path, allowed) => (allowed ? () => navigate(path) : undefined);
   return [
-    { icon: 'badgeCheck', label: 'สถานะวันนี้', value: attendanceStatus(attendance.todayStatus), helper: 'Attendance', tone: attendance.todayStatus === 'PRESENT' ? 'teal' : 'amber', onClick: go('/attendance', access.attendance()) },
-    { icon: 'clock', label: 'OT ของฉัน', value: numberValue(pending.overtime), helper: 'Pending', tone: 'amber', onClick: go('/overtime', access.overtime()) },
-    { icon: 'calendar', label: 'ลาของฉัน', value: numberValue(pending.leave), helper: 'Pending', tone: 'teal', onClick: go('/leave', access.leave()) },
-    { icon: 'clipboard', label: 'คำขอแก้ไขข้อมูล', value: numberValue(pending.profileRequests ?? pendingCount), helper: 'Pending', tone: 'rose', onClick: go('/my-requests', access.myRequests()) },
-    { icon: 'bell', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread), helper: 'Unread', tone: 'indigo' },
+    { key: 'overtime', label: 'OT ของฉัน', value: numberValue(pending.overtime), tone: 'warning', onClick: go('/overtime', access.overtime()) },
+    { key: 'leave', label: 'ลาของฉัน', value: numberValue(pending.leave), tone: 'info', onClick: go('/leave', access.leave()) },
+    { key: 'profileRequests', label: 'คำขอแก้ไขข้อมูล', value: numberValue(pending.profileRequests ?? pendingCount), tone: 'warning', onClick: go('/profile', access.profile()) },
+    // No onClick: the topbar bell dropdown is the only UI for notifications,
+    // so a row that navigated nowhere would be a false affordance (UX-04).
+    { key: 'notifications', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread), tone: 'info' },
   ];
 }
 
@@ -154,6 +173,9 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
   const mode = dashboardMode(user, dashboardSummary);
   const access = dashboardAccess(user);
   const cards = dashboardCards(mode, dashboardSummary, pendingCount, { navigate, access });
+  const pendingRows = mode === 'employee'
+    ? employeePendingRows(dashboardSummary, pendingCount, { navigate, access })
+    : [];
   const queueItems = actionQueueItems(mode, dashboardSummary, { navigate, access });
   const title = mode === 'company'
     ? `สวัสดี, คุณ${employee?.nickName || employee?.nameTh || user?.name || ''}`
@@ -168,6 +190,9 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
   // offer a destination the router will reject. Filtering here, not by
   // hand-picking per role, is what keeps this list from drifting out of sync
   // with the router the way the stat cards/ActionQueue previously did.
+  // Employee mode has no quick-actions panel: every destination it offered was
+  // already one click away in the sidebar or the pending rows above, so it was
+  // duplicate navigation occupying half the lower dashboard.
   const quickActionCandidates = mode === 'company'
     ? [
       ['/hr', 'ภาพรวม HR'],
@@ -176,15 +201,13 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
       ['/attendance', 'ข้อมูลเวลาเข้างาน'],
     ]
     : [
-      ['/profile', 'ดูข้อมูลของฉัน'],
-      ['/my-requests', 'ติดตามคำขอแก้ไข'],
       ['/overtime', 'รายการ OT'],
       ['/leave', 'รายการลา'],
     ];
   const quickActions = quickActionCandidates.filter(([path]) => canAccessPath(path, user));
   // Same predicate gates "ดูทั้งหมด" — company mode points at /requests, which
   // a CEO cannot reach (canReviewProfileRequests is hr-only).
-  const requestsFeedPath = mode === 'company' ? '/requests' : '/my-requests';
+  const requestsFeedPath = mode === 'company' ? '/requests' : '/profile';
   const canViewRequestsFeed = canAccessPath(requestsFeedPath, user);
   const latestPayrollPeriodId = dashboardSummary?.latestPayrollPeriodId;
   const ownPayslipMutation = useMutation({
@@ -221,7 +244,7 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
 
       {mode !== 'employee' ? <ActionQueue items={queueItems} /> : null}
 
-      {employee ? (
+      {employee && mode !== 'employee' ? (
         <section className="profile-strip">
           <Avatar employee={employee} size="lg" />
           <div>
@@ -232,21 +255,101 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
         </section>
       ) : null}
 
-      <StatGrid>
-        {cards.map((card) => (
-          <StatCard key={`${card.label}-${card.helper}`} {...card} />
-        ))}
-        {mode === 'employee' ? (
-          <>
-            <StatCard icon="briefcase" label="ตำแหน่ง" value={employee?.positionTh || '-'} tone="indigo" />
-            <StatCard icon="building" label="สังกัด" value={employee?.divisionTh || '-'} tone="teal" />
-            <StatCard icon="calendar" label="อายุงาน" value={`${years} ปี`} tone="amber" />
-          </>
-        ) : null}
-      </StatGrid>
+      {/* Employee tier 1 — identity, with ตำแหน่ง/สังกัด/อายุงาน folded in as a
+          definition list. They are attributes of the person, so they belong
+          beside the person; as stat cards they both repeated the line above and
+          forced text into a numeric display slot. A bordered list inside this
+          card, never a nested card (DESIGN.md). */}
+      {employee && mode === 'employee' ? (
+        <section className="profile-strip !flex-col !items-stretch !gap-0">
+          <div className="flex items-center gap-[18px] max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-2.5">
+            <Avatar employee={employee} size="lg" />
+            <div className="min-w-0 flex-1">
+              <h2>{employee?.nameTh}</h2>
+              <p>{employee?.positionTh} · <code>{employee?.code}</code></p>
+            </div>
+            <StatusBadge tone={employee?.statusTone}>{employee?.statusTh}</StatusBadge>
+          </div>
+          <dl className="m-0 mt-4 pt-4 border-t border-border grid gap-2">
+            {[
+              ['ตำแหน่ง', employee?.positionTh || '-'],
+              ['สังกัด', employee?.divisionTh || '-'],
+              ['อายุงาน', `${years} ปี`],
+            ].map(([term, value]) => (
+              <div key={term} className="flex items-baseline justify-between gap-4">
+                <dt className="!text-xs !text-text-muted">{term}</dt>
+                <dd className="m-0 !text-sm !text-text text-right min-w-0 truncate">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      ) : null}
 
-      <div className={DASHBOARD_GRID}>
-        {quickActions.length > 0 ? (
+      {/* Employee tier 2 — the one fact that actually changes daily, given the
+          page's single largest value so there is somewhere obvious to look. */}
+      {mode === 'employee' ? (
+        <button
+          type="button"
+          onClick={() => navigate('/attendance')}
+          className="bg-surface border border-border rounded-md shadow-sm p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-2"
+        >
+          <span className="flex items-center gap-3 min-w-0">
+            <span className={`stat-icon !mb-0 stat-${dashboardSummary?.attendance?.todayStatus === 'PRESENT' ? 'teal' : 'amber'}`}>
+              <Icon name="badgeCheck" size={21} />
+            </span>
+            <span className="min-w-0">
+              <span className="block !text-sm !font-bold !text-text">สถานะวันนี้</span>
+              <span className="block !text-xs !text-text-muted">เวลาทำงานวันนี้</span>
+            </span>
+          </span>
+          <span className="text-3xl font-extrabold leading-tight !text-text truncate">
+            {attendanceStatus(dashboardSummary?.attendance?.todayStatus)}
+          </span>
+        </button>
+      ) : null}
+
+      {/* Employee tier 3 — pending counts, quiet until one is non-zero. */}
+      {mode === 'employee' ? (
+        <Panel title="รอดำเนินการ">
+          <div className="grid">
+            {pendingRows.map((row) => {
+              const RowTag = row.onClick ? 'button' : 'div';
+              return (
+                <RowTag
+                  key={row.key}
+                  type={row.onClick ? 'button' : undefined}
+                  onClick={row.onClick}
+                  className={`flex items-center justify-between gap-4 min-h-11 py-2 border-0 bg-transparent text-left w-full border-b border-surface-subtle last:border-b-0${
+                    row.onClick
+                      ? ' cursor-pointer transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]'
+                      : ''
+                  }`}
+                >
+                  <span className={`!text-sm ${row.value > 0 ? '!text-text !font-bold' : '!text-text-muted'}`}>
+                    {row.label}
+                  </span>
+                  {row.value > 0 ? (
+                    <StatusBadge tone={row.tone}>{row.value} รายการ</StatusBadge>
+                  ) : (
+                    <span className="!text-sm !text-text-muted" aria-label="ไม่มีรายการ">—</span>
+                  )}
+                </RowTag>
+              );
+            })}
+          </div>
+        </Panel>
+      ) : null}
+
+      {mode !== 'employee' ? (
+        <StatGrid>
+          {cards.map((card) => (
+            <StatCard key={`${card.label}-${card.helper}`} {...card} />
+          ))}
+        </StatGrid>
+      ) : null}
+
+      <div className={mode === 'employee' ? '' : DASHBOARD_GRID}>
+        {mode !== 'employee' && quickActions.length > 0 ? (
           <Panel title="การดำเนินการด่วน">
             <div className="action-list">
               {quickActions.map(([path, label]) => (
