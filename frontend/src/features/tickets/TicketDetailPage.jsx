@@ -273,6 +273,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // quiet background refetch (window refocus, another tab's invalidate) —
   // same reasoning as TicketDashboard's loading gate in slice A (handoff 62).
   const loading = ticketQuery.isLoading;
+  const canViewPricingRequests = ['sales', 'import', 'ceo', 'sales_manager'].includes(user?.role);
 
   const paymentsQuery = useQuery({
     queryKey: queryKeys.ticketPayments(ticketId),
@@ -294,9 +295,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const pricingRequestsQuery = useQuery({
     queryKey: queryKeys.pricingRequestsByTicket(ticketId),
     queryFn: () => api.pricingRequests.listForTicket(ticketId).then((r) => r.items ?? []),
-    enabled: !!ticketId && !!ticket,
+    enabled: canViewPricingRequests && !!ticketId && !!ticket,
   });
-  const pricingRequests = pricingRequestsQuery.data ?? [];
+  const pricingRequests = canViewPricingRequests ? (pricingRequestsQuery.data ?? []) : [];
 
   useEffect(() => {
     if (ticketQuery.error) showToast('error', ticketQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
@@ -2051,7 +2052,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             )}
           </section>
 
-          <PricingRequestPanel ticketId={ticketId} deal={summary} ticketItems={items} user={user} />
+          {canViewPricingRequests ? (
+            <PricingRequestPanel ticketId={ticketId} deal={summary} ticketItems={items} user={user} />
+          ) : null}
 
           {/* D9: Price formula breakdown */}
           {showBreakdown && priceBreakdown.length > 0 && (

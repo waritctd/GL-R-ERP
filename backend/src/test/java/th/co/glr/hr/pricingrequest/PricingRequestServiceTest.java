@@ -340,6 +340,25 @@ class PricingRequestServiceTest {
     }
 
     @Test
+    void createDraft_idempotentConflictReturnsExistingWithoutDuplicateItemsOrEvent() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        PricingRequestSummaryDto existing = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        when(requestRepo.findByClientRequestId(1L, clientRequestId()))
+            .thenReturn(Optional.empty(), Optional.of(existing));
+        when(requestRepo.findItems(20L)).thenReturn(List.of());
+        when(requestRepo.findEvents(20L)).thenReturn(List.of());
+        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(sampleCreateRequest()), eq(1L))).thenReturn(0L);
+
+        var replay = service.createDraft(10L, sampleCreateRequest(), salesActor);
+
+        assertThat(replay.summary().id()).isEqualTo(20L);
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(sampleCreateRequest()), eq(1L));
+        verify(requestRepo, never()).replaceItems(anyLong(), any());
+        verify(requestRepo, never()).addEvent(anyLong(), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     void createDraft_rejectsClientRequestIdReplayedForDifferentTicket() {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         PricingRequestSummaryDto existing = stubPricingRequest(20L, 99L, 1L, PricingRequestStatus.DRAFT);

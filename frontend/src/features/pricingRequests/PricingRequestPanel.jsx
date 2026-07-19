@@ -187,17 +187,23 @@ export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user }) 
                       <>
                         <div className="flex flex-col gap-1.5">
                           <span className="text-2xs font-bold text-text-muted">รายการสินค้า</span>
-                          {(detail?.items ?? []).map((item) => (
-                            <div key={item.id} className="flex flex-wrap items-center gap-2 text-xs">
-                              <strong>{item.brand} {item.model}</strong>
-                              <span className="text-text-muted">{[item.color, item.texture, item.size].filter(Boolean).join(' · ')}</span>
-                              <span className="text-text-muted">{item.requestedQty} {item.requestedUnit}</span>
-                              <StatusBadge tone="neutral">{quantityTypeLabel(item.quantityType)}</StatusBadge>
-                              {item.targetDeliveryDate ? (
-                                <span className="text-text-muted">ส่งมอบ {formatThaiDate(item.targetDeliveryDate)}</span>
-                              ) : null}
-                            </div>
-                          ))}
+                          {(detail?.items ?? []).map((item) => {
+                            const productName = [item.brand, item.model].filter(Boolean).join(' ');
+                            return (
+                              <div key={item.id} className="flex flex-wrap items-center gap-2 text-xs">
+                                <strong>{productName || item.productDescription || 'ไม่ระบุชื่อสินค้า'}</strong>
+                                {productName && item.productDescription ? (
+                                  <span className="text-text-muted">{item.productDescription}</span>
+                                ) : null}
+                                <span className="text-text-muted">{[item.color, item.texture, item.size].filter(Boolean).join(' · ')}</span>
+                                <span className="text-text-muted">{item.requestedQty} {item.requestedUnit}</span>
+                                <StatusBadge tone="neutral">{quantityTypeLabel(item.quantityType)}</StatusBadge>
+                                {item.targetDeliveryDate ? (
+                                  <span className="text-text-muted">ส่งมอบ {formatThaiDate(item.targetDeliveryDate)}</span>
+                                ) : null}
+                              </div>
+                            );
+                          })}
                         </div>
 
                         <div className="mt-3 flex flex-col gap-1.5 border-t border-border-subtle pt-3">

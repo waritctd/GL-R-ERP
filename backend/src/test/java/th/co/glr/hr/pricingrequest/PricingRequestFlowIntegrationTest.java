@@ -10,6 +10,12 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -320,6 +326,53 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
+    @Test
+    void concurrentCreateDraft_sameClientRequestId_returnsOneRequestWithOneItemSetAndOneCreatedEvent() throws Exception {
+        String clientRequestId = "55555555-5555-5555-5555-555555555555";
+        var racingRequests = new RacingPricingRequestRepository(jdbc, salesRepId, clientRequestId);
+        var racingService = new PricingRequestService(
+            racingRequests, tickets, notifications, new ObjectMapper(), new ContactRepository(jdbc));
+        CreatePricingRequestRequest request = new CreatePricingRequestRequest(
+            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
+            new BigDecimal("1000.00"), "THB", "race request", clientRequestId,
+            List.of(pricingItem("Toyota", "Hilux")));
+        Callable<PricingRequestDetailDto> task = () -> racingService.createDraft(ticketId, request, salesActor);
+
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var first = executor.submit(task);
+            var second = executor.submit(task);
+
+            PricingRequestDetailDto firstResult = first.get(5, TimeUnit.SECONDS);
+            PricingRequestDetailDto secondResult = second.get(5, TimeUnit.SECONDS);
+
+            long id = firstResult.summary().id();
+            assertThat(secondResult.summary().id()).isEqualTo(id);
+            assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*)
+                  FROM sales.pricing_request
+                 WHERE requested_by = :requestedBy
+                   AND client_request_id = CAST(:clientRequestId AS uuid)
+                """, Map.of("requestedBy", salesRepId, "clientRequestId", clientRequestId), Long.class))
+                .isEqualTo(1L);
+            assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*)
+                  FROM sales.pricing_request_item
+                 WHERE pricing_request_id = :id
+                """, Map.of("id", id), Long.class))
+                .isEqualTo(1L);
+            assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*)
+                  FROM sales.pricing_request_event
+                 WHERE pricing_request_id = :id
+                   AND event_kind = :eventKind
+                """, Map.of("id", id, "eventKind", PricingRequestEventKind.PRICING_REQUEST_CREATED), Long.class))
+                .isEqualTo(1L);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
 
     private CreatePricingRequestRequest designerCreateRequest() {
@@ -357,5 +410,39 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
     private UserPrincipal actor(long employeeId, String role) {
         return new UserPrincipal(employeeId, employeeId + "@glr.co.th", "Actor " + employeeId, role, employeeId,
             true, LocalDate.now(), false, null, false);
+    }
+
+    private static class RacingPricingRequestRepository extends PricingRequestRepository {
+        private final long requestedBy;
+        private final String clientRequestId;
+        private final AtomicInteger emptyLookups = new AtomicInteger();
+        private final CountDownLatch bothThreadsChecked = new CountDownLatch(2);
+
+        RacingPricingRequestRepository(org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate jdbc,
+                                       long requestedBy, String clientRequestId) {
+            super(jdbc);
+            this.requestedBy = requestedBy;
+            this.clientRequestId = clientRequestId;
+        }
+
+        @Override
+        public Optional<PricingRequestSummaryDto> findByClientRequestId(long requestedBy, String clientRequestId) {
+            Optional<PricingRequestSummaryDto> existing = super.findByClientRequestId(requestedBy, clientRequestId);
+            if (existing.isEmpty()
+                    && requestedBy == this.requestedBy
+                    && this.clientRequestId.equals(clientRequestId)
+                    && emptyLookups.incrementAndGet() <= 2) {
+                bothThreadsChecked.countDown();
+                try {
+                    if (!bothThreadsChecked.await(5, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("Timed out waiting for both createDraft calls to reach the race point");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("Interrupted while waiting for concurrent createDraft race", e);
+                }
+            }
+            return existing;
+        }
     }
 }
