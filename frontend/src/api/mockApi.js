@@ -463,7 +463,7 @@ function buildPricingRequestSummary(pr) {
     targetCurrency: pr.targetCurrency ?? null,
     note: pr.note ?? null,
     itemCount: pr.items.length,
-    revisionNo: pr.revisionNo ?? 0,
+    revisionNo: pr.revisionNo ?? 1,
     parentPricingRequestId: pr.parentPricingRequestId ?? null,
     submittedAt: pr.submittedAt ?? null,
     pickedUpAt: pr.pickedUpAt ?? null,
@@ -489,6 +489,14 @@ function requirePricingRequestDealActive(ticket) {
   if ((ticket?.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
     fail(`ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket?.lifecycle}) จึงสร้าง/แก้ไขคำขอราคาไม่ได้`, 409);
   }
+}
+
+// Mirrors PricingRequestRepository.normalizeCurrency: trim + uppercase,
+// blank collapses to null. Applied on both insert and update so the mock
+// never stores a raw/mixed-case currency the real column wouldn't have.
+function normalizePricingRequestCurrency(targetCurrency) {
+  if (targetCurrency == null || targetCurrency.trim() === '') return null;
+  return targetCurrency.trim().toUpperCase();
 }
 
 // Mirrors PricingRequestRequests.PricingRequestItemRequest's Bean Validation
@@ -3893,7 +3901,21 @@ export const api = {
       if (user.role === 'sales') {
         list = list.filter((pr) => db.tickets.find((t) => t.id === pr.ticketId)?.createdById === user.id);
       }
-      if (params.status) list = list.filter((pr) => pr.status === params.status);
+      // Mirrors PricingRequestService.list's draft-privacy clause: a DRAFT is the
+      // owning rep's private scratchpad, visible only to them plus ceo/sales_manager
+      // oversight. import/account must not see it in the queue even though they see
+      // every other status. Without this the mock is MORE permissive than the Java
+      // service, which is the direction that only surfaces in production (#199).
+      const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
+      list = list.filter((pr) => pr.status !== 'DRAFT'
+        || draftOversight
+        || db.tickets.find((t) => t.id === pr.ticketId)?.createdById === user.id);
+      if (params.status) {
+        list = list.filter((pr) => pr.status === params.status);
+      } else {
+        // Mirrors the same method's default-queue branch: dead rows do not pollute it.
+        list = list.filter((pr) => pr.status !== 'CANCELLED');
+      }
       if (params.assignedImportId) list = list.filter((pr) => pr.assignedImportId === Number(params.assignedImportId));
       const activeOnly = params.activeOnly === undefined || params.activeOnly === true || params.activeOnly === 'true';
       if (activeOnly) {
@@ -3973,9 +3995,12 @@ export const api = {
         assignedImportId: null, assignedImportName: null,
         requiredDate: payload.requiredDate ?? null,
         customerTargetPrice: payload.customerTargetPrice ?? null,
-        targetCurrency: payload.targetCurrency ?? null,
+        targetCurrency: normalizePricingRequestCurrency(payload.targetCurrency),
         note: payload.note ?? null,
-        revisionNo: 0, parentPricingRequestId: null,
+        // DB column is `revision_no INTEGER NOT NULL DEFAULT 1` with
+        // `chk_pricing_request_revision CHECK (revision_no >= 1)` (V58) — a
+        // mock row starting at 0 would violate that constraint in production.
+        revisionNo: 1, parentPricingRequestId: null,
         submittedAt: null, pickedUpAt: null, cancelledAt: null,
         createdAt: now, updatedAt: now,
         items, events: [],
@@ -4037,7 +4062,7 @@ export const api = {
       pr.recipientLabel = payload.recipientLabel ?? null;
       pr.requiredDate = payload.requiredDate ?? null;
       pr.customerTargetPrice = payload.customerTargetPrice ?? null;
-      pr.targetCurrency = payload.targetCurrency ?? null;
+      pr.targetCurrency = normalizePricingRequestCurrency(payload.targetCurrency);
       pr.note = payload.note ?? null;
       if (payload.items != null) {
         pr.items = payload.items.map((item, i) => ({

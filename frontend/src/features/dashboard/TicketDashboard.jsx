@@ -67,10 +67,29 @@ export function TicketDashboard({ user, employee, showToast }) {
   // Commit 6: summary.submitted is permanently 0 for new deals now that ticket
   // creation no longer auto-submits (TicketService.create/submit, commit 5) —
   // "รอรับเรื่อง (Import)" now counts the PricingRequest queue instead.
+  // Review-remediation plan Commit D: fetched WITHOUT a status filter (was
+  // `status: 'SUBMITTED'` only) so the same query can also back "กำลังดำเนินการ"
+  // below, which needs IMPORT_REVIEWING + MORE_INFO_REQUIRED counts — reusing
+  // one query instead of adding a third. Client-side filtering by status below.
   const pricingQueueQuery = useQuery({
-    queryKey: queryKeys.pricingRequestQueue({ status: 'SUBMITTED' }),
-    queryFn: () => api.pricingRequests.queue({ status: 'SUBMITTED', activeOnly: true }).then((r) => r.items ?? []),
+    queryKey: queryKeys.pricingRequestQueue({ activeOnly: true }),
+    queryFn: () => api.pricingRequests.queue({ activeOnly: true }).then((r) => r.items ?? []),
   });
+  const pricingQueueData = pricingQueueQuery.data;
+  const submittedPricingRequestCount = useMemo(
+    () => (pricingQueueData ?? []).filter((pr) => pr.status === 'SUBMITTED').length,
+    [pricingQueueData],
+  );
+  // "กำลังดำเนินการ" used to read summary.inReview, a legacy ticket-status count
+  // that new deals never reach (ticket-level submit/in_review is retired — see
+  // 03b5ba9). Import's actual in-progress work now lives on the PricingRequest,
+  // so this counts IMPORT_REVIEWING + MORE_INFO_REQUIRED instead.
+  const inProgressPricingRequestCount = useMemo(
+    () => (pricingQueueData ?? []).filter(
+      (pr) => pr.status === 'IMPORT_REVIEWING' || pr.status === 'MORE_INFO_REQUIRED',
+    ).length,
+    [pricingQueueData],
+  );
 
   const summaryPayload = summaryQuery.data;
   const nextSummary = useMemo(
@@ -114,7 +133,12 @@ export function TicketDashboard({ user, employee, showToast }) {
   // previously every card landed on "ทั้งหมด" and made the user re-apply the
   // exact filter the card already named.
   const queueItems = summary ? [
-    { key: 'submitted', label: 'รอรับเรื่อง (Import)', value: pricingQueueQuery.data?.length ?? 0, to: canViewPricingQueue ? () => navigate('/pricing-requests') : undefined },
+    { key: 'submitted', label: 'รอรับเรื่อง (Import)', value: submittedPricingRequestCount, to: canViewPricingQueue ? () => navigate('/pricing-requests') : undefined },
+    // No Step-1 pricing request can reach CEO approval yet (that stage isn't
+    // built — see handoff 85's "Known risks" #1), so this deliberately stays on
+    // the legacy summary.priceProposed count. Do NOT mistake this for the same
+    // "still reads the retired ticket-status field" oversight fixed elsewhere
+    // on this dashboard — there is currently nothing else for it to read.
     { key: 'priceProposed', label: 'รอการอนุมัติราคา (CEO)', value: summary.priceProposed, to: canApprove ? () => navigate('/tickets') : undefined },
     { key: 'approved', label: 'อนุมัติแล้ว รอออกใบเสนอราคา', value: summary.approved, to: canQuote ? () => navigate('/tickets') : undefined },
     { key: 'notifications', label: 'แจ้งเตือนยังไม่อ่าน', value: notifications?.unread ?? 0 },
@@ -164,8 +188,16 @@ export function TicketDashboard({ user, employee, showToast }) {
             {/* Same reason as the ActionQueue entry above: summary.submitted is
                 permanently 0 for new deals since ticket creation stopped
                 auto-submitting, so this tile counts the PricingRequest queue. */}
-            <StatCard icon="clock"     label="รอรับเรื่อง"         value={pricingQueueQuery.data?.length ?? 0} helper="Pricing requests" tone="amber"  onClick={canViewPricingQueue ? () => navigate('/pricing-requests') : undefined} />
-            <StatCard icon="users"     label="กำลังดำเนินการ"     value={summary.inReview}        helper="In review"          tone="blue"   onClick={() => navigate('/tickets')} />
+            <StatCard icon="clock"     label="รอรับเรื่อง"         value={submittedPricingRequestCount} helper="Pricing requests" tone="amber"  onClick={canViewPricingQueue ? () => navigate('/pricing-requests') : undefined} />
+            {/* Was summary.inReview (legacy ticket status) — new deals never reach
+                'in_review' any more, so this tile was permanently 0 for them. Now
+                counts pricing requests Import has picked up or sent back for more
+                info (IMPORT_REVIEWING / MORE_INFO_REQUIRED). */}
+            <StatCard icon="users"     label="กำลังดำเนินการ"     value={inProgressPricingRequestCount} helper="In review"          tone="blue"   onClick={canViewPricingQueue ? () => navigate('/pricing-requests') : undefined} />
+            {/* Deliberately still summary.priceProposed: no Step-1 pricing request
+                can reach CEO approval yet (that stage isn't built) — see handoff 85
+                "Known risks" #1. Not the same oversight as the tile above; there is
+                genuinely nothing else for this one to read yet. */}
             <StatCard icon="clipboard" label="รอการอนุมัติ"        value={summary.priceProposed}   helper="Awaiting approval"  tone="amber"  onClick={canApprove ? () => navigate('/tickets') : undefined} />
           </div>
 

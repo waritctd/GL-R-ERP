@@ -63,7 +63,7 @@ function makeItemSchema(rowNumber) {
 
 const customerRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกบริษัท/ลูกค้า');
 // Mirrors TicketService.create: every new deal belongs to a โครงการ.
-const projectRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกโครงการ (1 ดีล = 1 ใบขอราคา ภายใต้โครงการ)');
+const projectRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกโครงการ (1 ดีล = 1 Ticket ภายใต้โครงการ)');
 
 /**
  * Validates the whole form and returns every invalid field, plus `order`:

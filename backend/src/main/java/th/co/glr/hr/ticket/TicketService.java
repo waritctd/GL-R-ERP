@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import th.co.glr.hr.pricing.PriceBreakdownItemDto;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -21,12 +23,15 @@ import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
+import th.co.glr.hr.pricingrequest.PricingRequestService.CancelOpenForTicketResult;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionDto;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionState;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionsResponse;
 
 @Service
 public class TicketService {
+    private static final Logger log = LoggerFactory.getLogger(TicketService.class);
+
     private static final Set<String> SALES_ROLES  = Set.of("sales");
     private static final Set<String> IMPORT_ROLES = Set.of("import");
     private static final Set<String> CEO_ROLES    = Set.of("ceo");
@@ -1070,7 +1075,15 @@ public class TicketService {
         // forever. See PricingRequestService.cancelOpenForTicket's Javadoc for why
         // this has no role check of its own. placeOnHold/markDormant deliberately do
         // NOT do this — see those methods.
-        pricingRequests.cancelOpenForTicket(ticketId, reason, actor);
+        CancelOpenForTicketResult cancelResult = pricingRequests.cancelOpenForTicket(ticketId, reason, actor);
+        if (cancelResult.hasAbandoned()) {
+            // cancelOpenForTicket already logged the per-row detail; this ties the
+            // abandonment back to the deal action that triggered it, for whoever is
+            // grepping logs after the fact. The deal's own lost-marking above still
+            // committed — an abandoned pricing request must never roll that back.
+            log.warn("markLost: ticket {} left {} pricing request(s) still open after the cascade: {}",
+                ticketId, cancelResult.abandonedCount(), cancelResult.abandonedIds());
+        }
         return requireTicket(ticketId);
     }
 
@@ -1286,7 +1299,11 @@ public class TicketService {
         // Terminal deal state: same cascade as markLost above — a cancelled deal
         // can never receive Import's pricing, so any pricing request still open on
         // it is cancelled too.
-        pricingRequests.cancelOpenForTicket(ticketId, reason, actor);
+        CancelOpenForTicketResult cancelResult = pricingRequests.cancelOpenForTicket(ticketId, reason, actor);
+        if (cancelResult.hasAbandoned()) {
+            log.warn("cancel: ticket {} left {} pricing request(s) still open after the cascade: {}",
+                ticketId, cancelResult.abandonedCount(), cancelResult.abandonedIds());
+        }
         return requireTicket(ticketId);
     }
 

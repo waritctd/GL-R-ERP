@@ -432,7 +432,11 @@ class PricingRequestServiceTest {
 
         service.submit(20L, salesActor);
 
-        verify(notifRepo, times(1)).notifyByRole(eq("import"), eq(10L), any(), any());
+        // Review-remediation plan Commit D: must be "PRICING_REQUEST_SUBMITTED",
+        // NOT the bare "SUBMITTED" also used by TicketEventKind.SUBMITTED — a
+        // pricing-request notification must be distinguishable from a
+        // ticket-submitted one in hr.notification.type.
+        verify(notifRepo, times(1)).notifyByRole(eq("import"), eq(10L), eq("PRICING_REQUEST_SUBMITTED"), any());
         verify(notifRepo, never()).notifyByRole(eq("ceo"), anyLong(), any(), any());
     }
 
@@ -938,9 +942,12 @@ class PricingRequestServiceTest {
         when(requestRepo.transition(21L, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.CANCELLED, null, 4L))
             .thenReturn(1);
 
-        int cancelledCount = service.cancelOpenForTicket(10L, "PROJECT_ON_HOLD", ceoActor);
+        PricingRequestService.CancelOpenForTicketResult result =
+            service.cancelOpenForTicket(10L, "PROJECT_ON_HOLD", ceoActor);
 
-        assertThat(cancelledCount).isEqualTo(2);
+        assertThat(result.cancelledCount()).isEqualTo(2);
+        assertThat(result.abandonedIds()).isEmpty();
+        assertThat(result.hasAbandoned()).isFalse();
         verify(requestRepo).addEvent(eq(20L), eq(10L), eq(4L), any(),
             eq(PricingRequestEventKind.PRICING_REQUEST_CANCELLED), eq(PricingRequestStatus.SUBMITTED),
             eq(PricingRequestStatus.CANCELLED), eq("PROJECT_ON_HOLD"), any());
@@ -950,24 +957,93 @@ class PricingRequestServiceTest {
     }
 
     @Test
-    void cancelOpenForTicket_skipsAlreadyCancelledAndRacedRows() {
-        // 20L: already cancelled by the time findSummary runs (findOpenIdsForTicket
-        // read is not in the same transaction snapshot as the loop body).
-        when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(20L, 21L, 22L));
+    void cancelOpenForTicket_rowGoneEntirelyIsSettledNotAbandoned() {
+        // 20L: already gone entirely by the time findSummary runs (findOpenIdsForTicket's
+        // read is not in the same transaction snapshot as the loop body). Nothing left
+        // to cancel, so this is settled on the first read — not retried, not abandoned.
+        when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(20L, 22L));
         when(requestRepo.findSummary(20L)).thenReturn(java.util.Optional.empty());
-        // 21L: still open per findSummary, but the compare-and-set races and misses.
-        stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.DRAFT);
-        when(requestRepo.transition(21L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 4L))
-            .thenReturn(0);
-        // 22L: succeeds normally.
         stubPricingRequest(22L, 10L, 1L, PricingRequestStatus.SUBMITTED);
         when(requestRepo.transition(22L, PricingRequestStatus.SUBMITTED, PricingRequestStatus.CANCELLED, null, 4L))
             .thenReturn(1);
 
-        int cancelledCount = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
+        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
 
-        // A raced 0-rowcount (21L) does not abort the loop — 22L still gets cancelled.
-        assertThat(cancelledCount).isEqualTo(1);
+        assertThat(result.cancelledCount()).isEqualTo(1);
+        assertThat(result.abandonedIds()).isEmpty();
+        verify(requestRepo, times(1)).findSummary(20L);
+        verify(requestRepo, never()).transition(eq(20L), any(), any(), any(), anyLong());
+        verify(requestRepo).addEvent(eq(22L), eq(10L), eq(4L), any(),
+            eq(PricingRequestEventKind.PRICING_REQUEST_CANCELLED), eq(PricingRequestStatus.SUBMITTED),
+            eq(PricingRequestStatus.CANCELLED), eq("OTHER"), any());
+    }
+
+    @Test
+    void cancelOpenForTicket_alreadyCancelledByARaceIsSettledNotDoubleCancelled() {
+        // 21L: by the time the loop reaches it, something else already raced it to
+        // CANCELLED. The wanted end state already holds, so this must count as
+        // settled (no retry, no abandonment, no duplicate cancel event) rather than
+        // either "cancelled by us" or "gave up".
+        when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(21L));
+        stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.CANCELLED);
+
+        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
+
+        assertThat(result.cancelledCount()).isEqualTo(0);
+        assertThat(result.abandonedIds()).isEmpty();
+        verify(requestRepo, never()).transition(eq(21L), any(), any(), any(), anyLong());
+        verify(requestRepo, never()).addEvent(eq(21L), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
+    }
+
+    // Review-remediation plan Commit D: a raced compare-and-set used to `continue`
+    // immediately, silently leaving a CLOSED_LOST/CANCELLED deal with an open
+    // IMPORT_REVIEWING pricing request behind. cancelOpenForTicket now retries a
+    // raced row up to CANCEL_MAX_ATTEMPTS (3) times against a freshly-read status
+    // before giving up on it.
+    @Test
+    void cancelOpenForTicket_retriesARacedTransitionAndEndsCancelled() {
+        when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(21L));
+        stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.DRAFT);
+        // First attempt races and misses; second attempt (still reading DRAFT, since
+        // the stub is a fixed answer) succeeds.
+        when(requestRepo.transition(21L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 4L))
+            .thenReturn(0, 1);
+
+        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
+
+        assertThat(result.cancelledCount()).isEqualTo(1);
+        assertThat(result.abandonedIds()).isEmpty();
+        verify(requestRepo, times(2)).findSummary(21L);
+        verify(requestRepo, times(2))
+            .transition(21L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 4L);
+        verify(requestRepo).addEvent(eq(21L), eq(10L), eq(4L), any(),
+            eq(PricingRequestEventKind.PRICING_REQUEST_CANCELLED), eq(PricingRequestStatus.DRAFT),
+            eq(PricingRequestStatus.CANCELLED), eq("OTHER"), any());
+    }
+
+    @Test
+    void cancelOpenForTicket_givesUpAfterMaxAttemptsAndReportsAbandonment() {
+        // 21L: every attempt races and misses. The loop must not abort the whole
+        // cascade over this — 22L, which comes after it, must still be cancelled —
+        // and 21L's failure must be reported back, not silently swallowed into a
+        // plain count that looks identical to "nothing was open".
+        when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(21L, 22L));
+        stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.DRAFT);
+        when(requestRepo.transition(21L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 4L))
+            .thenReturn(0);
+        stubPricingRequest(22L, 10L, 1L, PricingRequestStatus.SUBMITTED);
+        when(requestRepo.transition(22L, PricingRequestStatus.SUBMITTED, PricingRequestStatus.CANCELLED, null, 4L))
+            .thenReturn(1);
+
+        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
+
+        assertThat(result.cancelledCount()).isEqualTo(1);
+        assertThat(result.abandonedIds()).containsExactly(21L);
+        assertThat(result.abandonedCount()).isEqualTo(1);
+        assertThat(result.hasAbandoned()).isTrue();
+        verify(requestRepo, times(3)).findSummary(21L);
+        verify(requestRepo, times(3))
+            .transition(21L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 4L);
         verify(requestRepo, never()).addEvent(eq(21L), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
         verify(requestRepo).addEvent(eq(22L), eq(10L), eq(4L), any(),
             eq(PricingRequestEventKind.PRICING_REQUEST_CANCELLED), eq(PricingRequestStatus.SUBMITTED),

@@ -129,6 +129,24 @@ describe('TicketListPage', () => {
           fulfillmentStatus: null,
           stageUpdatedAt: '2026-07-04T09:00:00.000Z',
         },
+        {
+          id: 506,
+          code: 'PR-2026-0506',
+          title: 'ดีลใหม่ยังไม่มีขอราคา',
+          customerName: 'บริษัท ดีลใหม่ จำกัด',
+          // Review-remediation plan Commit D: every deal created since
+          // 03b5ba9 stays frozen on the legacy status 'draft' forever — real
+          // progress now lives on salesStage/PricingRequest instead.
+          status: 'draft',
+          createdByName: 'สมชาย ใจดี',
+          createdAt: '2026-07-05T09:00:00.000Z',
+          salesStage: 'LEAD_APPROACH',
+          lifecycle: 'ACTIVE',
+          lostReason: null,
+          overdue: false,
+          fulfillmentStatus: null,
+          stageUpdatedAt: '2026-07-05T09:00:00.000Z',
+        },
       ],
     });
     api.tickets.create.mockResolvedValue({ ticket: { summary: { id: 502, code: 'PR-2026-0502' } } });
@@ -188,6 +206,19 @@ describe('TicketListPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันสร้าง (stub)' }));
 
     await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets/502'));
+  });
+
+  // Review-remediation plan Commit D: since 03b5ba9 stopped ticket-level
+  // auto-submit, a new deal's legacy `status` is permanently 'draft' and no
+  // longer reflects real workflow — showing it as a secondary label under the
+  // stage badge would read as if nothing had happened. Deals that already
+  // progressed under the old flow (`status: 'submitted'` etc.) still show it.
+  it('suppresses the legacy status sublabel for a deal frozen on draft, but keeps it for others', async () => {
+    renderTicketListPage();
+
+    expect(await screen.findByText('บริษัท ดีลใหม่ จำกัด')).not.toBeNull();
+    expect(screen.queryByText('แบบร่าง')).toBeNull();
+    expect(screen.getByText('รอรับเรื่องจากฝ่าย Import')).not.toBeNull();
   });
 
   it('filters by lifecycle, overdue, and partial delivery chips', async () => {

@@ -61,7 +61,7 @@ describe('TicketDashboard', () => {
         tickets: {
           totalOpen: 12,
           submitted: 3,
-          inReview: 2,
+          inReview: 2, // legacy field — no longer read; see Commit D on กำลังดำเนินการ
           priceProposed: 1,
           approved: 4,
           quotationIssued: 2,
@@ -107,5 +107,37 @@ describe('TicketDashboard', () => {
 
     expect(await screen.findByText('บริษัท ล่าสุด จำกัด')).not.toBeNull();
     expect(api.tickets.list).toHaveBeenCalledWith({});
+  });
+
+  // Review-remediation plan Commit D: "กำลังดำเนินการ" used to read
+  // summary.inReview, a legacy ticket-status count new deals never reach any
+  // more (03b5ba9 retired ticket-level submit/in_review). It now counts
+  // pricing requests Import has picked up or sent back for more info
+  // (IMPORT_REVIEWING / MORE_INFO_REQUIRED), reusing the same unfiltered
+  // pricing-request queue query that already backs "รอรับเรื่อง" (SUBMITTED)
+  // rather than adding a third query.
+  it('splits the pricing-request queue into รอรับเรื่อง (SUBMITTED) and กำลังดำเนินการ (IMPORT_REVIEWING/MORE_INFO_REQUIRED) counts', async () => {
+    api.pricingRequests.queue.mockResolvedValue({
+      items: [
+        { id: 1, status: 'SUBMITTED' },
+        { id: 2, status: 'SUBMITTED' },
+        { id: 3, status: 'IMPORT_REVIEWING' },
+        { id: 4, status: 'MORE_INFO_REQUIRED' },
+        { id: 5, status: 'DRAFT' },
+      ],
+    });
+
+    renderDashboard();
+    await screen.findByText('เปิดอยู่ทั้งหมด');
+
+    function statCardValue(label) {
+      const card = screen.getByText(label).closest('.stat-card');
+      return card.querySelector('.stat-value').textContent;
+    }
+
+    expect(statCardValue('รอรับเรื่อง')).toBe('2');
+    expect(statCardValue('กำลังดำเนินการ')).toBe('2');
+    // Deliberately unfiltered (no `status`) — one query backs both tiles.
+    expect(api.pricingRequests.queue).toHaveBeenCalledWith({ activeOnly: true });
   });
 });
