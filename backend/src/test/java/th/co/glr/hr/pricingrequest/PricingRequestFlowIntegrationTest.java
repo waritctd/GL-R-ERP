@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customer.ProjectDto;
@@ -88,7 +89,8 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
 
         ObjectMapper objectMapper = new ObjectMapper();
-        pricingRequestService = new PricingRequestService(pricingRequests, tickets, notifications, objectMapper);
+        pricingRequestService = new PricingRequestService(
+            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc));
         // PriceCalcService is genuinely awkward business logic unrelated to this walk
         // (no price is ever proposed/calculated here) — mocked, per the task brief.
         // Every other collaborator is real and cheap to construct.

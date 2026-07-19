@@ -47,6 +47,19 @@ function emptyItemFromTicketItem(ticketItem) {
  * recipientLabel (free text) is the only way to identify a recipient today.
  * PricingRequestService.validateRecipientIdentifiable accepts either.
  */
+// Mirrors PricingRequestService.validateItems (Part 1 of the review-remediation
+// plan): an item must actually name a product somehow — a link back to a deal
+// line, a catalog product, a model name, or a free-text special requirement.
+// Brand alone is deliberately NOT enough (a brand with no model does not
+// identify a product). This modal has no productId field yet (no catalog
+// picker — see the class doc below), so in practice this reduces to
+// sourceTicketItemId / model / specialRequirement, but the productId check is
+// kept here to stay byte-for-byte in sync with the backend predicate.
+function itemIdentityValid(item) {
+  return Boolean(item.sourceTicketItemId) || Boolean(item.productId)
+    || Boolean(item.model?.trim()) || Boolean(item.specialRequirement?.trim());
+}
+
 export function PricingRequestCreateModal({ ticketItems = [], onClose, onCreated, createFn, submitFn }) {
   const [recipientType, setRecipientType] = useState('DESIGNER');
   const [recipientLabel, setRecipientLabel] = useState('');
@@ -58,10 +71,23 @@ export function PricingRequestCreateModal({ ticketItems = [], onClose, onCreated
     ticketItems.length ? ticketItems.map(emptyItemFromTicketItem) : [emptyItemFromTicketItem(null)]
   ));
   const [error, setError] = useState('');
+  // Per-row identity errors (keyed by item index), separate from the
+  // form-level `error` banner above — unlike the other validation rules,
+  // this one is attached to the specific line that is missing an identity so
+  // the user knows which row to fix, not just that "a" row is wrong.
+  const [itemErrors, setItemErrors] = useState({});
   const [saving, setSaving] = useState(false);
 
   function updateItem(index, field, value) {
     setItems((cur) => cur.map((item, i) => (i === index ? { ...item, [field]: value } : item)));
+    if (['sourceTicketItemId', 'model', 'specialRequirement'].includes(field)) {
+      setItemErrors((cur) => {
+        if (!(index in cur)) return cur;
+        const next = { ...cur };
+        delete next[index];
+        return next;
+      });
+    }
   }
 
   function addItem() {
@@ -80,6 +106,20 @@ export function PricingRequestCreateModal({ ticketItems = [], onClose, onCreated
       if (!item.requestedUnit?.trim()) return 'กรุณากรอกหน่วยของทุกรายการ';
     }
     return '';
+  }
+
+  // Separate from validate() above: this rule reports per-row, not as a
+  // single form-level message (see itemErrors' declaration). Returns whether
+  // every row is valid, and updates itemErrors as a side effect.
+  function validateItemIdentities() {
+    const next = {};
+    items.forEach((item, index) => {
+      if (!itemIdentityValid(item)) {
+        next[index] = 'ต้องระบุสินค้าที่ต้องการเสนอราคา (เลือกจากรายการในดีล หรือระบุรุ่น/รายละเอียด)';
+      }
+    });
+    setItemErrors(next);
+    return Object.keys(next).length === 0;
   }
 
   function buildPayload() {
@@ -111,6 +151,7 @@ export function PricingRequestCreateModal({ ticketItems = [], onClose, onCreated
   async function handleSaveDraft() {
     const validationError = validate();
     if (validationError) { setError(validationError); return; }
+    if (!validateItemIdentities()) return;
     setError('');
     setSaving(true);
     try {
@@ -126,6 +167,7 @@ export function PricingRequestCreateModal({ ticketItems = [], onClose, onCreated
   async function handleSubmitToImport() {
     const validationError = validate();
     if (validationError) { setError(validationError); return; }
+    if (!validateItemIdentities()) return;
     setError('');
     setSaving(true);
     try {
@@ -230,6 +272,9 @@ export function PricingRequestCreateModal({ ticketItems = [], onClose, onCreated
                     </button>
                   ) : null}
                 </div>
+                {itemErrors[index] ? (
+                  <p role="alert" className="text-2xs font-bold text-danger-dark">{itemErrors[index]}</p>
+                ) : null}
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <label className="col-span-2 flex flex-col gap-1 text-xs sm:col-span-1">
                     ยี่ห้อ
