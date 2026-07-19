@@ -27,6 +27,10 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         comment: vi.fn(),
         confirmFinalPayment: vi.fn(),
         quotation: vi.fn(),
+        reject: vi.fn(),
+        revision: vi.fn(),
+        overrideItemPrice: vi.fn(),
+        editItems: vi.fn(),
       },
       attachments: {
         list: vi.fn(),
@@ -134,6 +138,10 @@ describe('TicketDetailPage', () => {
     api.tickets.recordDelivery.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.completeDelivery.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.quotation.mockResolvedValue({ ticket: buildTicket() });
+    api.tickets.reject.mockResolvedValue({ ticket: buildTicket({ summary: { status: 'in_review' } }) });
+    api.tickets.revision.mockResolvedValue({ ticket: buildTicket() });
+    api.tickets.overrideItemPrice.mockResolvedValue({ ticket: buildTicket() });
+    api.tickets.editItems.mockResolvedValue({ ticket: buildTicket() });
   });
 
   it('renders a ticket from a mocked api.tickets.get', async () => {
@@ -587,5 +595,169 @@ describe('TicketDetailPage', () => {
     fireEvent.change(qtyInput, { target: { value: '3' } });
     await waitFor(() => expect(within(dialog).queryByText('กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ')).toBeNull());
     expect(panel.getAttribute('aria-invalid')).toBeNull();
+  });
+
+  // ── UX-03 (slice 5b — final slice): the 4 remaining inline page-body
+  // validations (reject / revise / per-item override / edit-items qty). ──
+
+  it('reject form: a blank reason marks the reason textarea inline, does not call api.tickets.reject, and clears once fixed', async () => {
+    renderTicketDetailPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ไม่อนุมัติ' }));
+    const reasonField = await screen.findByLabelText('เหตุผลในการตีกลับ *');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันไม่อนุมัติ' }));
+
+    const error = await screen.findByText('กรุณาระบุเหตุผลในการตีกลับ');
+    expect(error.getAttribute('role')).toBe('alert');
+    expect(reasonField.getAttribute('aria-invalid')).toBe('true');
+    expect(reasonField.getAttribute('aria-describedby')).toBe(error.id);
+    expect(api.tickets.reject).not.toHaveBeenCalled();
+
+    fireEvent.change(reasonField, { target: { value: 'ราคาสูงเกินไป' } });
+    await waitFor(() => expect(screen.queryByText('กรุณาระบุเหตุผลในการตีกลับ')).toBeNull());
+    expect(reasonField.getAttribute('aria-invalid')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันไม่อนุมัติ' }));
+    await waitFor(() => expect(api.tickets.reject).toHaveBeenCalledWith(701, { reason: 'ราคาสูงเกินไป' }));
+  });
+
+  it('CEO price override: an invalid price on one item marks only that item\'s input, never the other item\'s', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        items: [
+          { id: 70101, brand: 'SCG', model: 'A1', qty: 10, qtyDelivered: 0, qtyFromStock: 0, calcedCost: 100, calcedPrice: 150, approvedPrice: null },
+          { id: 70102, brand: 'Cotto', model: 'B2', qty: 5, qtyDelivered: 0, qtyFromStock: 0, calcedCost: 80, calcedPrice: 120, approvedPrice: null },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed',
+      },
+      availableActions: [{ action: 'OVERRIDE_ITEM_PRICE', kind: 'operational', label: 'ตั้งราคาเอง' }],
+    });
+
+    renderTicketDetailPage();
+
+    // showCalcBreakdown (role ceo + some item.calcedCost != null) renders an
+    // "override" trigger per row — open only item 1's editor.
+    const overrideButtons = await screen.findAllByRole('button', { name: 'override' });
+    expect(overrideButtons).toHaveLength(2);
+    fireEvent.click(overrideButtons[0]);
+
+    const priceInput = document.getElementById('override-price-70101');
+    expect(priceInput).not.toBeNull();
+    // Item 2's editor was never opened, so it has no override input at all —
+    // there is nothing for the error to leak onto.
+    expect(document.getElementById('override-price-70102')).toBeNull();
+
+    // The editor opens pre-filled with item.calcedPrice (150, a valid
+    // price) — clear it to an invalid value to actually exercise the guard.
+    fireEvent.change(priceInput, { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+    const error = await screen.findByText('กรุณากรอกราคา override ที่ถูกต้อง');
+    expect(error.getAttribute('role')).toBe('alert');
+    expect(priceInput.getAttribute('aria-invalid')).toBe('true');
+    expect(priceInput.getAttribute('aria-describedby')).toBe(error.id);
+    expect(api.tickets.overrideItemPrice).not.toHaveBeenCalled();
+
+    // Fixing item 1's price clears its own error and lets the save through
+    // with the exact same payload shape as before this slice.
+    fireEvent.change(priceInput, { target: { value: '135' } });
+    await waitFor(() => expect(screen.queryByText('กรุณากรอกราคา override ที่ถูกต้อง')).toBeNull());
+    expect(priceInput.getAttribute('aria-invalid')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.tickets.overrideItemPrice).toHaveBeenCalledWith(701, 70101, { manualPrice: 135, reason: null }));
+  });
+
+  it('edit-items: multiple invalid rows each get their own inline qty error — not one shared message', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: { status: 'submitted', createdById: 1 },
+        items: [
+          { id: 70101, brand: 'SCG', model: 'A1', qty: 0, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null },
+          { id: 70102, brand: 'Cotto', model: 'B2', qty: 0, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted',
+      },
+      availableActions: [{ action: 'EDIT_ITEMS', kind: 'operational', label: 'แก้ไขรายการสินค้า' }],
+    });
+
+    renderTicketDetailPage(salesOwnerUser);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+    // This is the headline assertion for this slice: the old code showed ONE
+    // toast covering every row ("กรุณากรอกจำนวนสินค้าให้ครบทุกรายการ"); now
+    // each offending row gets its own inline error message and input.
+    const errors = await screen.findAllByText('กรุณากรอกจำนวนสินค้าของรายการนี้ให้ถูกต้อง');
+    expect(errors).toHaveLength(2);
+
+    const qtyInput0 = document.getElementById('edit-item-qty-0');
+    const qtyInput1 = document.getElementById('edit-item-qty-1');
+    expect(qtyInput0.getAttribute('aria-invalid')).toBe('true');
+    expect(qtyInput1.getAttribute('aria-invalid')).toBe('true');
+    // Distinct describedby ids — row 1's error text is not row 2's.
+    expect(qtyInput0.getAttribute('aria-describedby')).not.toBe(qtyInput1.getAttribute('aria-describedby'));
+    expect(api.tickets.editItems).not.toHaveBeenCalled();
+
+    // Fixing only row 1 clears row 1's error and leaves row 2's in place.
+    fireEvent.change(qtyInput0, { target: { value: '3' } });
+    await waitFor(() => expect(qtyInput0.getAttribute('aria-invalid')).toBeNull());
+    expect(qtyInput1.getAttribute('aria-invalid')).toBe('true');
+    expect(screen.getAllByText('กรุณากรอกจำนวนสินค้าของรายการนี้ให้ถูกต้อง')).toHaveLength(1);
+
+    // Fixing row 2 too lets the save through with the unchanged payload shape.
+    fireEvent.change(qtyInput1, { target: { value: '2' } });
+    await waitFor(() => expect(qtyInput1.getAttribute('aria-invalid')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+    await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
+    expect(api.tickets.editItems.mock.calls[0][0]).toBe(701);
+    expect(api.tickets.editItems.mock.calls[0][1].items.map((it) => it.qty)).toEqual([3, 2]);
+  });
+
+  it('revise form: the confirm button is disabled on a blank reason (pre-existing guard, unchanged) and submits once filled', async () => {
+    // can.revise has no hasAction() gate — only status + role + isOwner — so
+    // no availableActions entry is needed for this button to appear.
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({ summary: { status: 'approved', createdById: 1 } }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'approved',
+      },
+      availableActions: [],
+    });
+
+    renderTicketDetailPage(salesOwnerUser);
+
+    fireEvent.click(await screen.findByRole('button', { name: /ขอแก้ไข \(Revise\)/ }));
+    const confirmButton = screen.getByRole('button', { name: 'ยืนยันขอแก้ไข' });
+
+    // The button's disabled={actionLoading || !reviseReason.trim()} guard
+    // (unchanged by this slice) makes the inline-error branch in its onClick
+    // unreachable through a real click while the reason is blank — jsdom
+    // respects the native disabled attribute, so fireEvent.click on it does
+    // not invoke the handler. This is the narrowest honest proof available:
+    // the guard still gates the button exactly as before.
+    expect(confirmButton.disabled).toBe(true);
+    fireEvent.click(confirmButton);
+    expect(api.tickets.revision).not.toHaveBeenCalled();
+
+    const reasonField = screen.getByLabelText('เหตุผลการแก้ไข *');
+    fireEvent.change(reasonField, { target: { value: 'ลูกค้าขอเปลี่ยนจำนวน' } });
+    expect(confirmButton.disabled).toBe(false);
+
+    fireEvent.click(confirmButton);
+    await waitFor(() => expect(api.tickets.revision).toHaveBeenCalledWith(701, { scope: 'QTY_OR_NOTE', reason: 'ลูกค้าขอเปลี่ยนจำนวน' }));
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

@@ -151,12 +151,16 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const [reviseScope, setReviseScope] = useState('QTY_OR_NOTE');
   const [reviseReason, setReviseReason] = useState('');
 
-  // UX-03 (slice 5a): inline field-level validation for the quotation /
-  // payment / delivery modals below. One shared dict, keyed per-modal so a
-  // stale error from one modal can never bleed into another:
-  // 'quotation.recipientType' | 'quotation.amendmentReason' | 'payment.amount'
-  // | 'delivery.lines' (the last is a group-level rule with no single owning
-  // field — same convention DepositNoticePage.jsx uses for its 'items' key).
+  // UX-03 (slice 5a + 5b): inline field-level validation for the quotation /
+  // payment / delivery modals, plus (5b) the reject/revise inline forms, the
+  // per-item CEO price override, and the edit-items quantities. One shared
+  // dict, keyed per-form/per-row so a stale error can never bleed into
+  // another: 'quotation.recipientType' | 'quotation.amendmentReason' |
+  // 'payment.amount' | 'delivery.lines' (a group-level rule with no single
+  // owning field — same convention DepositNoticePage.jsx uses for its
+  // 'items' key) | 'reject.reason' | 'revise.reason' |
+  // 'override.<itemId>' (per-item — see handleOverridePrice) |
+  // 'editItems.qty.<rowIndex>' (per-row — see the edit-items save handler).
   // fieldRefs holds the DOM node for each key so a failed submit can
   // scroll/focus the first invalid control. Same shape as the fieldErrors/
   // fieldRefs/clearFieldError pattern already used in TicketCreateModal.jsx,
@@ -170,6 +174,15 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       delete next[key];
       return next;
     });
+  }
+  // Sets exactly one key. Used (instead of setFieldErrorsForPrefix) for the
+  // per-item override.<itemId> key: itemIds are numeric, and
+  // setFieldErrorsForPrefix's startsWith match would treat 'override.1' as a
+  // prefix of 'override.10' — silently wiping out a different item's error.
+  // clearFieldError above is exact-match-safe already; this is its setter
+  // counterpart.
+  function setFieldError(key, message) {
+    setFieldErrors((prev) => ({ ...prev, [key]: message }));
   }
   // Replaces every fieldErrors key under `prefix` with `errors` in one go —
   // used both to report a fresh validation failure for one modal (errors
@@ -403,6 +416,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     onSuccess: (response, { itemId }) => {
       applyTicketUpdate(response.ticket);
       setOverrideDraft((p) => { const n = { ...p }; delete n[itemId]; return n; });
+      clearFieldError(`override.${itemId}`);
       showToast('success', 'บันทึกราคา override แล้ว');
     },
     onError: (err) => showToast('error', err.message || 'บันทึกไม่สำเร็จ'),
@@ -799,10 +813,16 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   async function handleOverridePrice(itemId) {
     const draft = overrideDraft[itemId];
+    const key = `override.${itemId}`;
+    // UX-03 (slice 5b): the error is per-item — keyed by itemId (exact-match
+    // setFieldError, not a prefix) so an invalid price on one row's input
+    // can never mark another row's input.
     if (!draft?.price || isNaN(Number(draft.price)) || Number(draft.price) <= 0) {
-      showToast('error', 'กรุณากรอกราคา override ที่ถูกต้อง');
+      setFieldError(key, 'กรุณากรอกราคา override ที่ถูกต้อง');
+      focusFirstInvalid(key);
       return;
     }
+    clearFieldError(key);
     try {
       await overrideMutation.mutateAsync({
         itemId,
@@ -936,7 +956,12 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   }
 
   async function handleReject() {
-    if (!rejectReason.trim()) { showToast('error', 'กรุณาระบุเหตุผลในการตีกลับ'); return; }
+    if (!rejectReason.trim()) {
+      setFieldError('reject.reason', 'กรุณาระบุเหตุผลในการตีกลับ');
+      focusFirstInvalid('reject.reason');
+      return;
+    }
+    clearFieldError('reject.reason');
     await doAction(() => api.tickets.reject(ticketId, { reason: rejectReason.trim() }), 'ตีกลับใบขอราคาแล้ว');
   }
 
@@ -1339,7 +1364,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 )}
                 {can.reject && (
                   <button type="button" className="secondary-button" disabled={actionLoading}
-                    onClick={() => setShowRejectForm(true)}
+                    onClick={() => { setShowRejectForm(true); clearFieldError('reject.reason'); }}
                     style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}>
                     <Icon name="close" size={14} />
                     ไม่อนุมัติ
@@ -1351,15 +1376,27 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <label style={{ fontSize: 13, fontWeight: 600 }}>
                   เหตุผลในการตีกลับ *
-                  <textarea rows={2} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)}
-                    placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }} />
+                  <textarea rows={2}
+                    id="reject-reason"
+                    ref={(el) => { fieldRefs.current['reject.reason'] = el; }}
+                    value={rejectReason}
+                    onChange={(e) => { setRejectReason(e.target.value); clearFieldError('reject.reason'); }}
+                    placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }}
+                    aria-invalid={fieldErrors['reject.reason'] ? true : undefined}
+                    aria-describedby={fieldErrors['reject.reason'] ? fieldErrorId('reject-reason') : undefined}
+                  />
+                  {fieldErrors['reject.reason'] ? (
+                    <p id={fieldErrorId('reject-reason')} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                      {fieldErrors['reject.reason']}
+                    </p>
+                  ) : null}
                 </label>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button type="button" className="secondary-button" onClick={handleReject} disabled={actionLoading}
                     style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}>
                     ยืนยันไม่อนุมัติ
                   </button>
-                  <button type="button" className="secondary-button" onClick={() => { setShowRejectForm(false); setRejectReason(''); }} disabled={actionLoading}>
+                  <button type="button" className="secondary-button" onClick={() => { setShowRejectForm(false); setRejectReason(''); clearFieldError('reject.reason'); }} disabled={actionLoading}>
                     ยกเลิก
                   </button>
                 </div>
@@ -1398,7 +1435,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
             {can.revise && !showReviseForm && (
               <button type="button" className="secondary-button" disabled={actionLoading}
-                onClick={() => setShowReviseForm(true)}>
+                onClick={() => { setShowReviseForm(true); clearFieldError('revise.reason'); }}>
                 <Icon name="pencil" size={14} />
                 ขอแก้ไข (Revise)
               </button>
@@ -1410,6 +1447,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                   setEditDraft(items.map((item) => ({ ...item })));
                   setEditNote('');
                   setEditMode(true);
+                  setFieldErrorsForPrefix('editItems.qty.', {});
                 }}>
                 <Icon name="pencil" size={14} />
                 แก้ไขรายการสินค้า
@@ -1447,19 +1485,40 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               ))}
               <label style={{ fontSize: 13, fontWeight: 600 }}>
                 เหตุผลการแก้ไข *
-                <textarea rows={2} value={reviseReason} onChange={(e) => setReviseReason(e.target.value)}
-                  placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }} />
+                <textarea rows={2}
+                  id="revise-reason"
+                  ref={(el) => { fieldRefs.current['revise.reason'] = el; }}
+                  value={reviseReason}
+                  onChange={(e) => { setReviseReason(e.target.value); clearFieldError('revise.reason'); }}
+                  placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }}
+                  aria-invalid={fieldErrors['revise.reason'] ? true : undefined}
+                  aria-describedby={fieldErrors['revise.reason'] ? fieldErrorId('revise-reason') : undefined}
+                />
+                {fieldErrors['revise.reason'] ? (
+                  <p id={fieldErrorId('revise-reason')} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                    {fieldErrors['revise.reason']}
+                  </p>
+                ) : null}
               </label>
               <div style={{ display: 'flex', gap: 8 }}>
+                {/* This button is already disabled={!reviseReason.trim()} (unchanged
+                    below), so the guard inside onClick is defensive/unreachable
+                    through the UI — wired for consistency with the other 3 forms
+                    in this slice, not because a user can trigger it here. */}
                 <button type="button" className="primary-button" disabled={actionLoading || !reviseReason.trim()}
                   onClick={() => {
-                    if (!reviseReason.trim()) { showToast('error', 'กรุณาระบุเหตุผล'); return; }
+                    if (!reviseReason.trim()) {
+                      setFieldError('revise.reason', 'กรุณาระบุเหตุผล');
+                      focusFirstInvalid('revise.reason');
+                      return;
+                    }
+                    clearFieldError('revise.reason');
                     doAction(() => api.tickets.revision(ticketId, { scope: reviseScope, reason: reviseReason.trim() }), 'ส่งคำขอแก้ไขแล้ว');
                   }}>
                   ยืนยันขอแก้ไข
                 </button>
                 <button type="button" className="secondary-button" disabled={actionLoading}
-                  onClick={() => { setShowReviseForm(false); setReviseReason(''); }}>
+                  onClick={() => { setShowReviseForm(false); setReviseReason(''); clearFieldError('revise.reason'); }}>
                   ยกเลิก
                 </button>
               </div>
@@ -1498,7 +1557,26 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                       <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)' }}>รายการที่ {index + 1}</span>
                       {editDraft.length > 1 && (
                         <button type="button" className="icon-button" style={{ color: 'var(--color-danger)' }} aria-label={`ลบรายการที่ ${index + 1}`}
-                          onClick={() => setEditDraft((d) => d.filter((_, i) => i !== index))}>
+                          onClick={() => {
+                            setEditDraft((d) => d.filter((_, i) => i !== index));
+                            // Removing a row shifts every later row's index down by
+                            // one — reindex their qty errors along with it so an
+                            // error never ends up pinned to the wrong (now
+                            // different) row.
+                            setFieldErrors((prev) => {
+                              let changed = false;
+                              const next = {};
+                              Object.entries(prev).forEach(([k, v]) => {
+                                const m = k.match(/^editItems\.qty\.(\d+)$/);
+                                if (!m) { next[k] = v; return; }
+                                const idx = Number(m[1]);
+                                if (idx === index) { changed = true; return; }
+                                if (idx > index) { next[`editItems.qty.${idx - 1}`] = v; changed = true; return; }
+                                next[k] = v;
+                              });
+                              return changed ? next : prev;
+                            });
+                          }}>
                           <Icon name="close" size={14} />
                         </button>
                       )}
@@ -1551,12 +1629,25 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                           <label style={{ margin: 0 }}>
                             <span style={{ fontSize: 12 }}>จำนวน (แผ่น)</span>
                             <input type="number" value={item.qty ?? ''} step="1"
-                              onChange={(e) => setEditDraft((d) => d.map((r, ri) => {
-                                if (ri !== index) return r;
-                                const u = { ...r, qty: e.target.value };
-                                if (r.sqmPerPiece && e.target.value) u.qtySqm = (Number(e.target.value) * r.sqmPerPiece).toFixed(3);
-                                return u;
-                              }))} />
+                              id={`edit-item-qty-${index}`}
+                              ref={(el) => { fieldRefs.current[`editItems.qty.${index}`] = el; }}
+                              onChange={(e) => {
+                                setEditDraft((d) => d.map((r, ri) => {
+                                  if (ri !== index) return r;
+                                  const u = { ...r, qty: e.target.value };
+                                  if (r.sqmPerPiece && e.target.value) u.qtySqm = (Number(e.target.value) * r.sqmPerPiece).toFixed(3);
+                                  return u;
+                                }));
+                                clearFieldError(`editItems.qty.${index}`);
+                              }}
+                              aria-invalid={fieldErrors[`editItems.qty.${index}`] ? true : undefined}
+                              aria-describedby={fieldErrors[`editItems.qty.${index}`] ? fieldErrorId(`edit-item-qty-${index}`) : undefined}
+                            />
+                            {fieldErrors[`editItems.qty.${index}`] ? (
+                              <p id={fieldErrorId(`edit-item-qty-${index}`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                                {fieldErrors[`editItems.qty.${index}`]}
+                              </p>
+                            ) : null}
                           </label>
                           <div style={{ margin: 0 }}>
                             <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>พื้นที่รวม (ตร.ม.)</span>
@@ -1569,13 +1660,30 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                         <>
                           <label style={{ margin: 0 }}>
                             <span style={{ fontSize: 12 }}>พื้นที่ (ตร.ม.)</span>
+                            {/* Governs qty when this row is in SQM mode (qty is
+                                derived from qtySqm × sqmPerPiece below) — so the
+                                per-row qty error, if any, attaches here rather
+                                than to a non-editable derived display. */}
                             <input type="number" value={item.qtySqm ?? ''} min="0" step="0.001"
-                              onChange={(e) => setEditDraft((d) => d.map((r, ri) => {
-                                if (ri !== index) return r;
-                                const u = { ...r, qtySqm: e.target.value };
-                                if (r.sqmPerPiece && e.target.value) u.qty = Math.ceil(Number(e.target.value) / r.sqmPerPiece);
-                                return u;
-                              }))} />
+                              id={`edit-item-qtysqm-${index}`}
+                              ref={(el) => { fieldRefs.current[`editItems.qty.${index}`] = el; }}
+                              onChange={(e) => {
+                                setEditDraft((d) => d.map((r, ri) => {
+                                  if (ri !== index) return r;
+                                  const u = { ...r, qtySqm: e.target.value };
+                                  if (r.sqmPerPiece && e.target.value) u.qty = Math.ceil(Number(e.target.value) / r.sqmPerPiece);
+                                  return u;
+                                }));
+                                clearFieldError(`editItems.qty.${index}`);
+                              }}
+                              aria-invalid={fieldErrors[`editItems.qty.${index}`] ? true : undefined}
+                              aria-describedby={fieldErrors[`editItems.qty.${index}`] ? fieldErrorId(`edit-item-qtysqm-${index}`) : undefined}
+                            />
+                            {fieldErrors[`editItems.qty.${index}`] ? (
+                              <p id={fieldErrorId(`edit-item-qtysqm-${index}`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                                {fieldErrors[`editItems.qty.${index}`]}
+                              </p>
+                            ) : null}
                           </label>
                           <div style={{ margin: 0 }}>
                             <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>จำนวน (แผ่น)</span>
@@ -1609,10 +1717,24 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button type="button" className="primary-button" disabled={actionLoading}
                     onClick={() => {
-                      if (editDraft.some((item) => !item.qty || Number(item.qty) <= 0)) {
-                        showToast('error', 'กรุณากรอกจำนวนสินค้าให้ครบทุกรายการ');
+                      // UX-03 (slice 5b): this used to be one toast covering every
+                      // row ("กรุณากรอกจำนวนสินค้าให้ครบทุกรายการ") — the exact
+                      // "one message for many fields" defect the finding names.
+                      // Flag each offending row's own qty input instead, keyed by
+                      // row index, so the user sees exactly which rows are wrong.
+                      const qtyErrors = {};
+                      editDraft.forEach((item, i) => {
+                        if (!item.qty || Number(item.qty) <= 0) {
+                          qtyErrors[`editItems.qty.${i}`] = 'กรุณากรอกจำนวนสินค้าของรายการนี้ให้ถูกต้อง';
+                        }
+                      });
+                      const order = Object.keys(qtyErrors);
+                      if (order.length > 0) {
+                        setFieldErrorsForPrefix('editItems.qty.', qtyErrors);
+                        focusFirstInvalid(order[0]);
                         return;
                       }
+                      setFieldErrorsForPrefix('editItems.qty.', {});
                       doAction(() => api.tickets.editItems(ticketId, {
                         items: editDraft.map((item) => ({
                           brand: item.brand, model: item.model, color: item.color,
@@ -1630,7 +1752,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                     บันทึกการแก้ไข
                   </button>
                   <button type="button" className="secondary-button" disabled={actionLoading}
-                    onClick={() => { setEditMode(false); setEditDraft([]); setEditNote(''); }}>
+                    onClick={() => { setEditMode(false); setEditDraft([]); setEditNote(''); setFieldErrorsForPrefix('editItems.qty.', {}); }}>
                     ยกเลิก
                   </button>
                 </div>
@@ -1802,10 +1924,22 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                             overrideDraft[item.id] !== undefined ? (
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
                                 <input type="number" step="0.01" min="0"
+                                  id={`override-price-${item.id}`}
+                                  ref={(el) => { fieldRefs.current[`override.${item.id}`] = el; }}
                                   placeholder="ราคา override"
                                   value={overrideDraft[item.id]?.price ?? ''}
-                                  onChange={(e) => setOverrideDraft((p) => ({ ...p, [item.id]: { ...p[item.id], price: e.target.value } }))}
+                                  onChange={(e) => {
+                                    setOverrideDraft((p) => ({ ...p, [item.id]: { ...p[item.id], price: e.target.value } }));
+                                    clearFieldError(`override.${item.id}`);
+                                  }}
+                                  aria-invalid={fieldErrors[`override.${item.id}`] ? true : undefined}
+                                  aria-describedby={fieldErrors[`override.${item.id}`] ? fieldErrorId(`override-price-${item.id}`) : undefined}
                                   style={{ width: 90, padding: '2px 6px', fontSize: 12, border: '1px solid var(--color-override-border)', borderRadius: 4 }} />
+                                {fieldErrors[`override.${item.id}`] ? (
+                                  <p id={fieldErrorId(`override-price-${item.id}`)} role="alert" style={{ margin: 0, width: 90, fontSize: 10, fontWeight: 700, color: 'var(--color-danger)' }}>
+                                    {fieldErrors[`override.${item.id}`]}
+                                  </p>
+                                ) : null}
                                 <input type="text" placeholder="เหตุผล (ถ้ามี)"
                                   value={overrideDraft[item.id]?.reason ?? ''}
                                   onChange={(e) => setOverrideDraft((p) => ({ ...p, [item.id]: { ...p[item.id], reason: e.target.value } }))}
@@ -1819,7 +1953,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                                   </button>
                                   <button type="button" className="secondary-button"
                                     style={{ fontSize: 10, padding: '2px 6px' }}
-                                    onClick={() => setOverrideDraft((p) => { const n = { ...p }; delete n[item.id]; return n; })}>
+                                    onClick={() => {
+                                      setOverrideDraft((p) => { const n = { ...p }; delete n[item.id]; return n; });
+                                      clearFieldError(`override.${item.id}`);
+                                    }}>
                                     ✕
                                   </button>
                                 </div>
@@ -1827,7 +1964,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                             ) : (
                               <button type="button" className="secondary-button"
                                 style={{ fontSize: 10, padding: '2px 8px', marginTop: 4, display: 'block' }}
-                                onClick={() => setOverrideDraft((p) => ({ ...p, [item.id]: { price: item.calcedPrice != null ? String(item.calcedPrice) : '', reason: '' } }))}>
+                                onClick={() => {
+                                  setOverrideDraft((p) => ({ ...p, [item.id]: { price: item.calcedPrice != null ? String(item.calcedPrice) : '', reason: '' } }));
+                                  clearFieldError(`override.${item.id}`);
+                                }}>
                                 override
                               </button>
                             )
