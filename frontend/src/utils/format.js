@@ -14,6 +14,22 @@ export function formatShortDate(value) {
   return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear() + 543}`;
 }
 
+/**
+ * Canonical address formatter; do not re-add a page-local version.
+ *
+ * `currentAddress` is four separate fields (line1/district/province/postalCode),
+ * and rendering only `line1` silently dropped the district, province and postcode.
+ * Empty parts are filtered out because a newly created employee gets '' for
+ * everything but `line1` (mockApi) — joining blindly would leave stray spaces.
+ */
+export function formatAddress(address) {
+  if (!address) return '-';
+  const parts = [address.line1, address.district, address.province, address.postalCode]
+    .map((part) => (typeof part === 'string' ? part.trim() : part))
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join(' ') : '-';
+}
+
 export function formatMoney(value) {
   if (value === null || value === undefined || value === '') return '-';
   return `฿${Number(value).toLocaleString('en-US')}`;
@@ -262,4 +278,108 @@ export function payrollStatusLabel(status) {
     VOID: { label: 'ยกเลิก', tone: 'danger' },
   };
   return map[status] ?? { label: status || '-', tone: 'neutral' };
+}
+
+// Bangkok is the business zone for every attendance/leave/overtime date. Deriving "today" from
+// the browser's zone instead makes a late-evening session disagree with the server about which
+// day it is — which matters most on the attendance page, whose primary control is a date stepper.
+export function bangkokDateParts(date = new Date()) {
+  return Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Bangkok',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    })
+      .formatToParts(date)
+      .map((part) => [part.type, part.value]),
+  );
+}
+
+export function bangkokTodayIso(date = new Date()) {
+  const parts = bangkokDateParts(date);
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+export function bangkokMonthStartIso(date = new Date()) {
+  const parts = bangkokDateParts(date);
+  return `${parts.year}-${parts.month}-01`;
+}
+
+// Clock time only, pinned to Bangkok. Used by the attendance day table, where the date already
+// labels the row and repeating it in every cell is noise.
+export function formatBangkokTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return new Intl.DateTimeFormat('th-TH', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'Asia/Bangkok',
+  }).format(date);
+}
+
+// Minutes -> "8:45". Hours are the unit people reason about for a working day; raw minutes
+// ("525") force arithmetic at every glance.
+export function formatDuration(minutes) {
+  if (minutes === null || minutes === undefined || Number.isNaN(minutes)) return '-';
+  const safe = Math.max(0, Math.round(minutes));
+  return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, '0')}`;
+}
+
+// Attendance day status -> StatusBadge tone. Canonical source; do not re-add a page-local map.
+//
+// NOTE: late/early-leave are REPORTING ONLY. Thai Labour Protection Act §76 forbids deducting
+// wages as a penalty for lateness or absence, so these badges must never gain a "deduction"
+// affordance. Tones are informational (warning), never punitive (danger).
+export function attendanceStatusLabel(status) {
+  const map = {
+    PRESENT: { label: 'ปกติ', tone: 'success' },
+    LATE: { label: 'มาสาย', tone: 'warning' },
+    MISSING_CHECK_IN: { label: 'ขาดสแกนเข้า', tone: 'warning' },
+    MISSING_CHECK_OUT: { label: 'ขาดสแกนออก', tone: 'warning' },
+    NON_WORKDAY: { label: 'วันหยุด', tone: 'neutral' },
+    NO_RECORD: { label: '-', tone: 'neutral' },
+  };
+  return map[status] ?? { label: status || '-', tone: 'neutral' };
+}
+
+// Per-day flags -> badges. A day can carry several (late in AND early out), so this returns a
+// list. Minutes are baked into the label because "มาสาย" alone prompts "by how much?".
+export function attendanceFlagLabels(day) {
+  if (!day) return [];
+  const labels = [];
+  if (day.late_minutes > 0) {
+    labels.push({ key: 'LATE', label: `สาย ${day.late_minutes} นาที`, tone: 'warning' });
+  }
+  if (day.early_leave_minutes > 0) {
+    labels.push({
+      key: 'EARLY_LEAVE',
+      label: `ออกก่อน ${day.early_leave_minutes} นาที`,
+      tone: 'warning',
+    });
+  }
+  const flags = day.flags ?? [];
+  if (flags.includes('MISSING_CHECK_IN')) {
+    labels.push({ key: 'MISSING_CHECK_IN', label: 'ขาดสแกนเข้า', tone: 'warning' });
+  }
+  if (flags.includes('MISSING_CHECK_OUT')) {
+    labels.push({ key: 'MISSING_CHECK_OUT', label: 'ขาดสแกนออก', tone: 'warning' });
+  }
+  if (day.overtime_minutes > 0) {
+    labels.push({
+      key: 'OVERTIME_APPROVED',
+      label: `โอที ${formatDuration(day.overtime_minutes)}`,
+      tone: 'info',
+    });
+  } else if (flags.includes('WORKED_LATE_UNAPPROVED')) {
+    // Deliberately NOT called overtime: overtime pay requires approval, and promising it here
+    // would set an expectation payroll will not meet.
+    labels.push({ key: 'WORKED_LATE_UNAPPROVED', label: 'ออกช้า', tone: 'neutral' });
+  }
+  if (flags.includes('NON_WORKDAY')) {
+    labels.push({ key: 'NON_WORKDAY', label: 'วันหยุด', tone: 'neutral' });
+  }
+  return labels;
 }

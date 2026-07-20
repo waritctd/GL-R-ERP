@@ -14,7 +14,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageStack } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
-import { formatMoney, formatThaiDate } from '../../utils/format.js';
+import { formatAddress, formatMoney, formatThaiDate } from '../../utils/format.js';
 import { EmployeeFormModal } from './EmployeeFormModal.jsx';
 
 const tabDefs = [
@@ -114,8 +114,8 @@ export function EmployeeDetailPage({ user, onUpdateEmployee }) {
 
 function PersonalTab({ employee }) {
   return (
-    <InfoGrid two>
-      <CollapsibleSection title="ข้อมูลส่วนบุคคล">
+    <InfoGrid two className="items-start">
+      <CollapsibleSection title="ข้อมูลส่วนบุคคล" collapsible={false}>
         <FieldList>
           <div><dt>คำนำหน้า · เพศ</dt><dd>{employee.titleTh} · {employee.genderTh}</dd></div>
           <div><dt>วันเกิด</dt><dd>{formatThaiDate(employee.birthDate)} ({employee.age} ปี)</dd></div>
@@ -123,17 +123,17 @@ function PersonalTab({ employee }) {
           <div><dt>สถานภาพ</dt><dd>{employee.maritalStatus}</dd></div>
         </FieldList>
       </CollapsibleSection>
-      <CollapsibleSection title="ช่องทางติดต่อ">
+      <CollapsibleSection title="ช่องทางติดต่อ" collapsible={false}>
         <FieldList>
           <div><dt>อีเมล</dt><dd>{employee.email}</dd></div>
           <div><dt>เบอร์โทรศัพท์</dt><dd>{employee.phone}</dd></div>
           <div><dt>บัตรพนักงาน</dt><dd><code>{employee.badge}</code></dd></div>
         </FieldList>
       </CollapsibleSection>
-      <CollapsibleSection title="ที่อยู่ปัจจุบัน" defaultOpen={false}>
-        <p className="leading-[1.7] text-text-secondary">{employee.currentAddress.line1}<br />{employee.currentAddress.district} {employee.currentAddress.province} {employee.currentAddress.postalCode}</p>
+      <CollapsibleSection title="ที่อยู่ปัจจุบัน" collapsible={false}>
+        <p className="leading-[1.7] text-text-secondary">{formatAddress(employee.currentAddress)}</p>
       </CollapsibleSection>
-      <CollapsibleSection title="ผู้ติดต่อฉุกเฉิน" defaultOpen={false}>
+      <CollapsibleSection title="ผู้ติดต่อฉุกเฉิน" collapsible={false}>
         <FieldList>
           <div><dt>ชื่อ</dt><dd>{employee.emergencyContact.name}</dd></div>
           <div><dt>ความสัมพันธ์</dt><dd>{employee.emergencyContact.relationship}</dd></div>
@@ -146,8 +146,8 @@ function PersonalTab({ employee }) {
 
 function EmploymentTab({ employee, canSeeSalary }) {
   return (
-    <InfoGrid two>
-      <CollapsibleSection title="การมอบหมายงานปัจจุบัน">
+    <InfoGrid two className="items-start">
+      <CollapsibleSection title="การมอบหมายงานปัจจุบัน" collapsible={false}>
         <FieldList>
           <div><dt>ฝ่าย</dt><dd>{employee.divisionTh}</dd></div>
           <div><dt>แผนก</dt><dd>{employee.departmentTh}</dd></div>
@@ -159,26 +159,24 @@ function EmploymentTab({ employee, canSeeSalary }) {
           <div><dt>วันที่บรรจุ</dt><dd>{formatThaiDate(employee.confirmationDate)}</dd></div>
         </FieldList>
       </CollapsibleSection>
-      <div className="highlight-panel">
-        <CollapsibleSection title="ค่าตอบแทน">
-          {canSeeSalary ? (
-            <>
-              <div className="mt-4 text-surface text-4xl font-extrabold">{formatMoney(employee.salary)}</div>
-              <span>ต่อเดือน · {employee.payType}</span>
-            </>
-          ) : (
-            <p>แสดงเฉพาะบทบาท HR และ ADMIN</p>
-          )}
-        </CollapsibleSection>
-      </div>
+      <CollapsibleSection title="ค่าตอบแทน" collapsible={false}>
+        {canSeeSalary ? (
+          <>
+            <div className="mt-3 text-text text-3xl font-extrabold">{formatMoney(employee.salary)}</div>
+            <span className="text-text-secondary text-sm">ต่อเดือน · {employee.payType}</span>
+          </>
+        ) : (
+          <p className="mt-3 text-text-muted">แสดงเฉพาะบทบาท HR และ ADMIN</p>
+        )}
+      </CollapsibleSection>
     </InfoGrid>
   );
 }
 
 function HistoryTab({ employee, canSeeSalary }) {
   return (
-    <InfoGrid two>
-      <CollapsibleSection title="ประวัติการมอบหมายงาน">
+    <InfoGrid two className="items-start">
+      <CollapsibleSection title="ประวัติการมอบหมายงาน" collapsible={false}>
         <div className="timeline-list">
           {employee.assignments.map((assignment) => (
             <div key={`${assignment.from}-${assignment.title}`} className={assignment.current ? 'current' : ''}>
@@ -189,7 +187,7 @@ function HistoryTab({ employee, canSeeSalary }) {
           ))}
         </div>
       </CollapsibleSection>
-      <CollapsibleSection title="ประวัติเงินเดือน" defaultOpen={false}>
+      <CollapsibleSection title="ประวัติเงินเดือน" collapsible={false}>
         {canSeeSalary ? (
           <div className="salary-history">
             {employee.salaryHistory.map((item) => (
@@ -210,20 +208,18 @@ function HistoryTab({ employee, canSeeSalary }) {
 
 function SensitiveTab({ employee }) {
   return (
-    <div className="sensitive-panel">
-      <CollapsibleSection
-        title="ข้อมูลอ่อนไหว"
-        defaultOpen={false}
-        headerRight={<StatusBadge tone="teal">PDPA</StatusBadge>}
-      >
-        <FieldList columns={3}>
-          <div><dt>เลขบัตรประชาชน</dt><dd><code>{employee.sensitive.nationalId}</code></dd></div>
-          <div><dt>เลขประจำตัวผู้เสียภาษี</dt><dd><code>{employee.sensitive.taxId}</code></dd></div>
-          <div><dt>เลขประกันสังคม</dt><dd><code>{employee.sensitive.socialSecurityNo}</code></dd></div>
-          <div><dt>โรงพยาบาลประกันสังคม</dt><dd>{employee.sensitive.socialSecurityHospital}</dd></div>
-          <div><dt>กองทุนสำรองเลี้ยงชีพ</dt><dd><code>{employee.sensitive.providentFundNo}</code></dd></div>
-        </FieldList>
-      </CollapsibleSection>
-    </div>
+    <CollapsibleSection
+      title="ข้อมูลอ่อนไหว"
+      collapsible={false}
+      headerRight={<StatusBadge tone="teal">PDPA</StatusBadge>}
+    >
+      <FieldList columns={3}>
+        <div><dt>เลขบัตรประชาชน</dt><dd><code>{employee.sensitive.nationalId}</code></dd></div>
+        <div><dt>เลขประจำตัวผู้เสียภาษี</dt><dd><code>{employee.sensitive.taxId}</code></dd></div>
+        <div><dt>เลขประกันสังคม</dt><dd><code>{employee.sensitive.socialSecurityNo}</code></dd></div>
+        <div><dt>โรงพยาบาลประกันสังคม</dt><dd>{employee.sensitive.socialSecurityHospital}</dd></div>
+        <div><dt>กองทุนสำรองเลี้ยงชีพ</dt><dd><code>{employee.sensitive.providentFundNo}</code></dd></div>
+      </FieldList>
+    </CollapsibleSection>
   );
 }

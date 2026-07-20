@@ -1,4 +1,4 @@
-import { isValidElement, useEffect, useMemo, useState } from 'react';
+import { Fragment, isValidElement, useEffect, useMemo, useState } from 'react';
 import {
   getCoreRowModel,
   getFilteredRowModel,
@@ -115,11 +115,16 @@ export function DataTable({
   loading = false,
   emptyState,
   initialSort,
+  sort,
+  onSortChange,
   toolbarExtra,
   stickyHeader = false,
   exportable = false,
   onExportCsv,
   mobileCard,
+  // Optional per-row detail panel. Return an element to expand that row, null to leave it
+  // collapsed. Pairs with onRowClick for the toggle; the table itself holds no expansion state.
+  renderExpanded,
 }) {
   // Below 720px a dense grid crushes every column into an unreadable stub
   // (ids as "PR-…", clipped badges). When a page supplies `mobileCard`, render
@@ -135,9 +140,29 @@ export function DataTable({
   const [internalSearch, setInternalSearch] = useState('');
   const search = isControlledSearch ? searchValue : internalSearch;
   const setSearch = isControlledSearch ? (value) => onSearchChange?.(value) : setInternalSearch;
-  const [sorting, setSorting] = useState(
+  // Optional controlled sort, same contract as the controlled search above:
+  // when the caller passes `sort` (typically mirrored into a URL query param so
+  // header clicks and an out-of-table sort control stay in step), this component
+  // defers to it. Omitting both `sort` and `onSortChange` leaves every existing
+  // caller on the uncontrolled `initialSort` path unchanged.
+  const isControlledSort = sort !== undefined;
+  const [internalSorting, setInternalSorting] = useState(
     initialSort?.key ? [{ id: initialSort.key, desc: initialSort.dir === 'desc' }] : [],
   );
+  const controlledSorting = useMemo(
+    () => (sort?.key ? [{ id: sort.key, desc: sort.dir === 'desc' }] : []),
+    [sort?.key, sort?.dir],
+  );
+  const sorting = isControlledSort ? controlledSorting : internalSorting;
+  const setSorting = (updater) => {
+    const next = typeof updater === 'function' ? updater(sorting) : updater;
+    if (!isControlledSort) {
+      setInternalSorting(next);
+      return;
+    }
+    const [first] = next;
+    onSortChange?.(first ? { key: first.id, dir: first.desc ? 'desc' : 'asc' } : null);
+  };
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize });
 
   const columnMap = useMemo(
@@ -299,47 +324,64 @@ export function DataTable({
         ) : pageRows.map((row) => {
           const key = getRowKey(row);
           const extraClassName = rowClassName ? ` ${rowClassName(row)}` : '';
+          // Optional detail panel beneath a row. Returning null (the common case) renders
+          // nothing, so tables that don't opt in are unaffected.
+          const expanded = renderExpanded ? renderExpanded(row) : null;
 
           if (asCards) {
             return (
-              <RowTag
-                key={key}
-                type={onRowClick ? 'button' : undefined}
-                role="row"
-                className={cn(
-                  'record-card flex w-full min-w-0 flex-col items-stretch gap-2 text-left',
-                  'mt-2.5 first:mt-0 rounded-md border border-solid border-border bg-surface p-4',
-                  onRowClick && 'cursor-pointer hover:bg-surface-hover',
-                  extraClassName,
-                )}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
-              >
-                {mobileCard(row)}
-              </RowTag>
+              <Fragment key={key}>
+                <RowTag
+                  type={onRowClick ? 'button' : undefined}
+                  role="row"
+                  className={cn(
+                    'record-card flex w-full min-w-0 flex-col items-stretch gap-2 text-left',
+                    'mt-2.5 first:mt-0 rounded-md border border-solid border-border bg-surface p-4',
+                    onRowClick && 'cursor-pointer hover:bg-surface-hover',
+                    extraClassName,
+                  )}
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  aria-expanded={renderExpanded ? Boolean(expanded) : undefined}
+                >
+                  {mobileCard(row)}
+                </RowTag>
+                {expanded ? (
+                  <div className="rounded-b-md border border-t-0 border-border bg-surface-subtle px-4 py-3">
+                    {expanded}
+                  </div>
+                ) : null}
+              </Fragment>
             );
           }
 
           const style = rowStyle ? rowStyle(row) : undefined;
           return (
-            <RowTag
-              key={key}
-              type={onRowClick ? 'button' : undefined}
-              role="row"
-              className={`${gridClassName} data-row${extraClassName}`}
-              style={style}
-              onClick={onRowClick ? () => onRowClick(row) : undefined}
-            >
-              {columns.map((column) => (
-                <span
-                  key={column.key}
-                  role="cell"
-                  className={column.align === 'right' ? 'text-right' : undefined}
-                  data-label={typeof column.header === 'string' ? column.header : undefined}
-                >
-                  {column.render(row)}
-                </span>
-              ))}
-            </RowTag>
+            <Fragment key={key}>
+              <RowTag
+                type={onRowClick ? 'button' : undefined}
+                role="row"
+                className={`${gridClassName} data-row${extraClassName}`}
+                style={style}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
+                aria-expanded={renderExpanded ? Boolean(expanded) : undefined}
+              >
+                {columns.map((column) => (
+                  <span
+                    key={column.key}
+                    role="cell"
+                    className={column.align === 'right' ? 'text-right' : undefined}
+                    data-label={typeof column.header === 'string' ? column.header : undefined}
+                  >
+                    {column.render(row)}
+                  </span>
+                ))}
+              </RowTag>
+              {expanded ? (
+                <div className="border-b border-border bg-surface-subtle px-4 py-3">
+                  {expanded}
+                </div>
+              ) : null}
+            </Fragment>
           );
         })}
 

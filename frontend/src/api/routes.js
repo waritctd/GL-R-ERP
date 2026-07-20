@@ -16,7 +16,13 @@ export const API_ROUTES = {
     detail: (id) => `/api/profile-requests/${id}`,
   },
   attendance: {
+    daily: '/api/attendance/daily',
+    // Still served, but no longer a top-level view: it backs the per-day drill-down.
     punches: '/api/attendance/punches',
+    unmapped: '/api/attendance/unmapped',
+    employees: '/api/attendance/employees',
+    recalculate: '/api/attendance/daily/recalculate',
+    cardsBackfill: '/api/attendance/cards/backfill',
     importDat: '/api/attendance/imports/dat',
     devices: '/api/attendance/devices',
   },

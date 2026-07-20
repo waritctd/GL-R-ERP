@@ -16,6 +16,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
+import th.co.glr.hr.attendance.daily.AttendanceDailyService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
@@ -23,7 +24,12 @@ import th.co.glr.hr.config.AppProperties;
 class AttendanceServiceTest {
     private final AttendanceRepository attendanceRepository = mock(AttendanceRepository.class);
     private final AppProperties properties = new AppProperties();
-    private final AttendanceService attendanceService = new AttendanceService(attendanceRepository, new AttendanceDatParser(), properties);
+    // The daily roll-up is exercised for real in AttendanceDailyCalculatorTest and the
+    // Testcontainers integration tests; here it is stubbed so these cases stay about punch
+    // ingestion and scoping.
+    private final AttendanceDailyService dailyService = mock(AttendanceDailyService.class);
+    private final AttendanceService attendanceService =
+        new AttendanceService(attendanceRepository, new AttendanceDatParser(), properties, dailyService);
 
     @BeforeEach
     void resetToken() {
@@ -281,6 +287,34 @@ class AttendanceServiceTest {
             "LIVE_CAPTURE",
             Map.of("user_id", "10012")
         );
+    }
+
+    @Test
+    void hrCanNarrowTheDayViewToOneDivision() {
+        AttendanceScope scope = attendanceService.resolveScope(user("hr", 1L), null, 42L);
+
+        assertThat(scope.divisionId()).isEqualTo(42L);
+        assertThat(scope.employeeId()).isNull();
+    }
+
+    /**
+     * The division filter is a convenience for roles that can already see everything — it must never
+     * become a way to look sideways. A ฝ่าย manager's division comes from their own principal, so a
+     * requested one is ignored outright rather than merged.
+     */
+    @Test
+    void aManagerCannotUseTheDivisionFilterToSeeAnotherDivision() {
+        AttendanceScope scope = attendanceService.resolveScope(manager("employee", 5L, 7L), null, 42L);
+
+        assertThat(scope.divisionId()).isEqualTo(7L);
+    }
+
+    @Test
+    void anEmployeeCannotUseTheDivisionFilterToWidenTheirScope() {
+        AttendanceScope scope = attendanceService.resolveScope(user("employee", 5L), null, 42L);
+
+        assertThat(scope.divisionId()).isNull();
+        assertThat(scope.employeeId()).isEqualTo(5L);
     }
 
     private UserPrincipal user(String role, Long employeeId) {

@@ -15,13 +15,45 @@ import { Icon } from './Icon.jsx';
  *   <CollapsibleSection title="ที่อยู่จัดส่ง" subtitle="ไม่บังคับ">
  *     <input value={address} onChange={(e) => setAddress(e.target.value)} />
  *   </CollapsibleSection>
+ *
+ * `collapsible={false}` drops the disclosure entirely: a plain heading, no
+ * chevron, body always rendered. Read-only record views (EmployeeDetailPage)
+ * want the grouping and the surface but have nothing to progressively disclose
+ * — a chevron there promises hidden content that doesn't exist. The `is-static`
+ * modifier also tightens the padding, since a heading needs less room than a
+ * 44px-target button.
  */
-export function CollapsibleSection({ title, subtitle, defaultOpen = true, children, id, headerRight }) {
+export function CollapsibleSection({
+  title,
+  subtitle,
+  defaultOpen = true,
+  collapsible = true,
+  children,
+  id,
+  headerRight,
+}) {
   const [open, setOpen] = useState(defaultOpen);
   const autoId = useId();
   const sectionId = id ?? autoId;
   const headerId = `${sectionId}-header`;
   const bodyId = `${sectionId}-body`;
+
+  if (!collapsible) {
+    return (
+      <section className="collapsible-section is-static" aria-labelledby={headerId}>
+        <div className="collapsible-header">
+          <div className="collapsible-header-static">
+            <span className="collapsible-title-group">
+              <h2 id={headerId} className="collapsible-title">{title}</h2>
+              {subtitle ? <span className="collapsible-subtitle">{subtitle}</span> : null}
+            </span>
+          </div>
+          {headerRight ? <div className="collapsible-header-right">{headerRight}</div> : null}
+        </div>
+        <div className="collapsible-body">{children}</div>
+      </section>
+    );
+  }
 
   return (
     <section className="collapsible-section">
