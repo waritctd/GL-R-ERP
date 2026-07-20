@@ -82,6 +82,8 @@ app:
     advance-notice-days: ${APP_LEAVE_ADVANCE_NOTICE_DAYS:7}
   overtime:
     advance-notice-days: ${APP_OVERTIME_ADVANCE_NOTICE_DAYS:3}
+  special-money:
+    payroll-cutoff-day: ${APP_SPECIAL_MONEY_PAYROLL_CUTOFF_DAY:25}
   uploads-dir: ${APP_UPLOADS_DIR:./uploads}
   bot:
     api-token: ${BOT_API_TOKEN:}
