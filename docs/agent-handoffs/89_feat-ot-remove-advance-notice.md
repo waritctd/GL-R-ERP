@@ -19,7 +19,7 @@ occupied by another live session on `feat/sales-factory-quote-costing` with unco
 `8ae42e3` (origin/main — Merge pull request #240 from waritctd/fix/employee-detail-view)
 
 ## Current Commit
-Not committed — working tree only, per the standing "do not commit unless asked" rule.
+`fed1bec` (plus a follow-up renumbering the migration V65 → V70). Not pushed.
 
 ## Agent / Model Used
 Claude Opus 4.8
@@ -57,7 +57,7 @@ Claude Opus 4.8
 - `backend/.../overtime/OvertimeRetroactiveScopeIntegrationTest.java` — **new**, the authz evidence.
 - `backend/.../overtime/RetroactiveOvertimeReachesPayrollIntegrationTest.java` — **new**, the
   payroll-integration evidence (9 cases, real DB, real `OvertimeService` + real `PayrollService`).
-- `backend/src/main/resources/db/migration/V65__overtime_salary_basis_snapshot.sql` — **new**, adds
+- `backend/src/main/resources/db/migration/V70__overtime_salary_basis_snapshot.sql` — **new**, adds
   and backfills `hr.overtime_request.salary_basis`. **See "Migration numbering" below — this file was
   renumbered from V64 to avoid a collision, and must be re-checked before merge.**
 - `backend/.../payroll/PayrollRepository.java` — `findApprovedOvertimePayByEmployee` now prices from
@@ -172,7 +172,7 @@ mid/end-month raises do happen).
 changed, from a live join on `hr.employee` to a value frozen on the request. That is what keeps
 already-approved historical figures byte-identical.
 
-- **`V65__overtime_salary_basis_snapshot.sql`** — adds `hr.overtime_request.salary_basis
+- **`V70__overtime_salary_basis_snapshot.sql`** — adds `hr.overtime_request.salary_basis
   NUMERIC(12,2)`, with a non-negative check and a documenting `COMMENT ON COLUMN`. Backfills every
   existing row from `employee.current_salary`, which reproduces exactly what the old query would
   have computed, so no historical figure moves.
@@ -233,18 +233,23 @@ the old overtime pattern.
 
 ## Migration numbering — read before merging
 
-`origin/main` tops out at **V55**. The higher numbers visible in the primary worktree belong to
+`origin/main` tops out at **V54** (V55 exists only on unmerged branches, and prod has V55 applied
+from one of them). The higher numbers visible in the primary worktree belong to
 `feat/sales-factory-quote-costing`, which is unmerged and has **committed V56 through V64**,
 including `V64__pricing_step2_dispatch_and_attachments.sql`.
 
-This branch's migration was originally written as `V64` and **collided head-on with that file**. Two
+This branch's migration was originally `V64` — a head-on collision with that file — was moved to
+`V65`, and **collided again** when the sales branch claimed `V65__factory_quote_response_idempotency`.
+It is now **V70**, above every number claimed anywhere (that branch has since reached V69). Two
 migrations sharing a version make Flyway refuse to start ("Found more than one migration with
 version 64"), so it would have broken the first deploy after both branches merged. It has been
-renumbered to **V65**. Flyway tolerates the V56-V64 gap on this branch; those fill in when the sales
+renumbered to **V70**. Flyway tolerates the V56-V64 gap on this branch; those fill in when the sales
 branch merges.
 
-**Before merging, re-check the highest migration version across `main` and every unmerged branch, and
-renumber again if the sales branch has grown.** Do not read the number off whichever worktree happens
+**Before merging, re-check the highest migration version across `main`, every unmerged branch, AND
+every working tree** — the sales branch claims numbers in uncommitted files, so `git ls-tree` alone
+is not enough. It moved V64 → V69 in a single day. Prod is also ahead of main (V55 applied from an
+unmerged branch), so pick against APPLIED history too, not just repo files. Do not read the number off whichever worktree happens
 to be open — that is exactly the mistake that produced the collision.
 
 ## Known Risks
