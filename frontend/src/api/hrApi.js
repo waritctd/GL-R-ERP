@@ -47,6 +47,16 @@ export const api = {
     reject: (id, payload = {}) => apiRequest(API_ROUTES.overtime.reject(id), { method: 'POST', body: payload }),
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.overtime.cancel(id), { method: 'POST', body: payload }),
   },
+  specialMoney: {
+    list: (params) => apiRequest(withQuery(API_ROUTES.specialMoney.list, params)),
+    employees: () => apiRequest(API_ROUTES.specialMoney.employees),
+    usage: (params) => apiRequest(withQuery(API_ROUTES.specialMoney.usage, params)),
+    types: () => apiRequest(API_ROUTES.specialMoney.types),
+    create: (payload) => apiRequest(API_ROUTES.specialMoney.create, { method: 'POST', body: payload }),
+    approve: (id, payload = {}) => apiRequest(API_ROUTES.specialMoney.approve(id), { method: 'POST', body: payload }),
+    reject: (id, payload = {}) => apiRequest(API_ROUTES.specialMoney.reject(id), { method: 'POST', body: payload }),
+    cancel: (id, payload = {}) => apiRequest(API_ROUTES.specialMoney.cancel(id), { method: 'POST', body: payload }),
+  },
   leave: {
     list: (params) => apiRequest(withQuery(API_ROUTES.leave.list, params)),
     employees: () => apiRequest(API_ROUTES.leave.employees),

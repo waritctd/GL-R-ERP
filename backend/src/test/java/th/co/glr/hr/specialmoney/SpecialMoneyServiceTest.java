@@ -66,7 +66,7 @@ class SpecialMoneyServiceTest {
 
         assertThat(result.id()).isEqualTo(55L);
         verify(auditService).record(eq(employee), eq("SUBMIT_SPECIAL_MONEY_REQUEST"), eq("special_money_request"), eq(55L), isNull(), any());
-        verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_SUBMITTED"), anyString(), anyString(), eq("/requests"), eq(true));
+        verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_SUBMITTED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
     }
 
     @Test
@@ -115,7 +115,7 @@ class SpecialMoneyServiceTest {
 
         assertThat(result.status()).isEqualTo("MANAGER_APPROVED");
         verify(auditService).record(any(), eq("MANAGER_APPROVE_SPECIAL_MONEY_REQUEST"), eq("special_money_request"), eq(77L), eq(submitted), eq(managerApproved));
-        verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_MANAGER_APPROVED"), anyString(), anyString(), eq("/requests"), eq(true));
+        verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_MANAGER_APPROVED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
     }
 
     @Test
@@ -194,7 +194,7 @@ class SpecialMoneyServiceTest {
 
         assertThat(result.status()).isEqualTo("APPROVED");
         verify(repository).ceoApprove(eq(77L), eq(500L), eq(new BigDecimal("5000")), any(LocalDate.class), isNull(), isNull());
-        verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_APPROVED"), anyString(), anyString(), eq("/requests"), eq(true));
+        verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_APPROVED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
     }
 
     @Test
@@ -289,7 +289,7 @@ class SpecialMoneyServiceTest {
         SpecialMoneyRequestDto result = service.reject(77L, new ReviewSpecialMoneyRequest("no budget", null, null), user("employee", 99L));
 
         assertThat(result.status()).isEqualTo("REJECTED");
-        verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_REJECTED"), anyString(), anyString(), eq("/requests"), eq(true));
+        verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_REJECTED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
     }
 
     @Test

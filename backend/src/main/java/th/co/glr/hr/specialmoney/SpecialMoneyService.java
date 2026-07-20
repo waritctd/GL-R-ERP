@@ -363,14 +363,14 @@ public class SpecialMoneyService {
     private void notifySubmitted(SpecialMoneyRequestDto request) {
         String title = "ส่งคำขอเงินสวัสดิการแล้ว";
         String message = "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ถูกส่งให้ผู้จัดการตรวจสอบแล้ว";
-        notificationService.notify(request.employeeId(), "SPECIAL_MONEY_SUBMITTED", title, message, "/requests", true);
+        notificationService.notify(request.employeeId(), "SPECIAL_MONEY_SUBMITTED", title, message, "/employee-requests", true);
         if (request.managerEmployeeId() != null) {
             notificationService.notify(
                 request.managerEmployeeId(),
                 "SPECIAL_MONEY_PENDING_MANAGER",
                 "มีคำขอเงินสวัสดิการรออนุมัติ",
                 request.employeeName() + " ส่งคำขอ " + request.requestType() + " วันที่ " + request.eventDate(),
-                "/requests",
+                "/employee-requests",
                 true
             );
         }
@@ -382,7 +382,7 @@ public class SpecialMoneyService {
             "SPECIAL_MONEY_MANAGER_APPROVED",
             "ผู้จัดการอนุมัติคำขอเงินสวัสดิการแล้ว",
             "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ผ่านผู้จัดการแล้ว และรอ CEO อนุมัติขั้นสุดท้าย",
-            "/requests",
+            "/employee-requests",
             true
         );
         for (Long ceoEmployeeId : repository.findCeoApproverEmployeeIds()) {
@@ -391,7 +391,7 @@ public class SpecialMoneyService {
                 "SPECIAL_MONEY_PENDING_CEO",
                 "มีคำขอเงินสวัสดิการรอ CEO อนุมัติ",
                 request.employeeName() + " มีคำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ที่ผู้จัดการอนุมัติแล้ว",
-                "/requests",
+                "/employee-requests",
                 true
             );
         }
@@ -403,7 +403,7 @@ public class SpecialMoneyService {
             "SPECIAL_MONEY_APPROVED",
             "CEO อนุมัติคำขอเงินสวัสดิการแล้ว",
             "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " อนุมัติครบถ้วนแล้ว",
-            "/requests",
+            "/employee-requests",
             true
         );
         if (request.managerApprovedBy() != null) {
@@ -412,7 +412,7 @@ public class SpecialMoneyService {
                 "SPECIAL_MONEY_APPROVED",
                 "CEO อนุมัติคำขอเงินสวัสดิการแล้ว",
                 request.employeeName() + " ได้รับการอนุมัติคำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ครบถ้วนแล้ว",
-                "/requests",
+                "/employee-requests",
                 true
             );
         }
@@ -425,7 +425,7 @@ public class SpecialMoneyService {
             "คำขอเงินสวัสดิการถูกปฏิเสธ",
             "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ถูกปฏิเสธ: "
                 + (request.reviewerNote() == null ? "กรุณาติดต่อผู้จัดการหรือ HR" : request.reviewerNote()),
-            "/requests",
+            "/employee-requests",
             true
         );
     }

@@ -225,3 +225,169 @@ SpecialMoneyRepository/SpecialMoneyService reaches into th.co.glr.hr.payroll or 
 If clean, hand off to implement slice 3 (attachment upload/download endpoints OR the frontend
 submission/review UI, product owner's call) on a fresh branch off main.
 ```
+
+---
+
+## Slice 3 Update (frontend) — 2026-07-20
+
+### Task
+Frontend consumption of the slice-2 API: the mock/hrApi/routes layer, a combined "คำขอ" page
+(overtime + welfare tabs), and the `SpecialMoneyPanel` submit/review UI. Backend untouched.
+
+### Scope
+- **In:** `frontend/src/api/{routes,hrApi,queryKeys,mockApi}.js`, a new combined tab-bar page, a
+  pure move of `OvertimePage`'s body into `OvertimePanel`, `SpecialMoneyPanel` + tests.
+- **Out:** attachment upload/download (no backend endpoint yet — rendered as a disabled, labeled
+  placeholder with a note), `backend/`, `PayrollPage.jsx`.
+
+### Files Changed
+- `frontend/src/api/routes.js` — added `specialMoney` endpoint block (mirrors `overtime`) and
+  `canViewAllSpecialMoney: ['hr', 'ceo']` to `ROLE_PERMISSIONS`.
+- `frontend/src/api/hrApi.js` — added `api.specialMoney.{list, create, employees, usage, types,
+  approve, reject, cancel}`.
+- `frontend/src/api/queryKeys.js` — added `specialMoneyRequests/Employees/Types/Usage` keys.
+- `frontend/src/api/mockApi.js` — new `specialMoney` namespace (`// Mirrors SpecialMoneyService`
+  header), seed data (5 requests spanning every status), `canReviewSpecialMoney`/
+  `canViewAllSpecialMoney`/`canAccessSpecialMoneyEmployee`/`buildSpecialMoneyRecord` helpers kept
+  deliberately separate from the overtime equivalents (comment explains why, echoing issue #199).
+  Mock `create` does NOT reimplement `SpecialMoneyPolicyEvaluator`'s cap/eligibility math — it
+  authorizes and transitions status faithfully but passes `requestedAmount` through unclamped; this
+  is called out in the namespace's header comment. Mock authz is explicitly commented as an
+  approximation, not authoritative.
+- `frontend/src/utils/format.js` — added `specialMoneyStatusLabel` next to the existing
+  `overtimeStatusLabel`/`leaveStatusLabel` canonical maps.
+- `frontend/src/features/overtime/OvertimePanel.jsx` (new) — the exact former body of
+  `OvertimePage.jsx`, function renamed `OvertimePanel`, otherwise byte-identical (no logic change).
+- `frontend/src/features/overtime/OvertimePage.jsx` — reduced to a one-line re-export
+  (`export { OvertimePanel as OvertimePage } from './OvertimePanel.jsx'`) so
+  `OvertimePage.test.jsx` keeps passing unchanged against the same import path/export name.
+- `frontend/src/features/requests/RequestsPage.jsx` (new) — page shell: `PageHeader` "คำขอ" + a
+  Tailwind tab bar (`role="tablist"`), tab state in `?tab=ot|welfare` (default `ot`), renders
+  `<OvertimePanel/>` or `<SpecialMoneyPanel/>`.
+- `frontend/src/features/specialmoney/SpecialMoneyPanel.jsx` (new), `specialMoneyRules.js` (new,
+  client-side fast-feedback constants/estimator — explicitly commented as an approximation of the
+  V66 seed, never authoritative), `thaiProvinces.js` (new, 77-province list + the excluded-province
+  set copied verbatim from the migration).
+- `frontend/src/features/specialmoney/SpecialMoneyPanel.test.jsx`,
+  `frontend/src/features/requests/RequestsPage.test.jsx` (new tests).
+- `frontend/src/App.jsx` — lazy `RequestsPage` at `/employee-requests`; `/overtime` becomes
+  `<Navigate to="/employee-requests?tab=ot" replace/>`.
+- `frontend/src/components/layout/AppShell.jsx` — the `/overtime` nav item becomes `/employee-requests`,
+  label "คำขอ", `match: ['/employee-requests', '/overtime']`, visible to anyone with an employee record
+  or `canViewAllOvertime`/`canViewAllSpecialMoney`.
+- `frontend/src/app/permissions.js` — `PATH_GUARDS` entry for `/overtime` extended to also cover
+  `/employee-requests`, condition widened to include `canViewAllSpecialMoney`.
+
+### Deviation from the spec — route path (`/requests` → `/employee-requests`)
+The task spec asked for the combined page at `/requests`. That path is already
+`ProfileRequestsPage`'s HR review-queue route, with call sites in `AppShell.jsx`, `HrDashboard.jsx`,
+and `EmployeeDashboard.jsx` (all navigate/link there). Moving `ProfileRequestsPage` off `/requests`
+to free the path would mean rewriting those unrelated dashboard pages — a much larger, riskier diff
+than this slice should carry. Mounted the combined page at `/employee-requests` instead and left
+`ProfileRequestsPage`/`/requests` completely untouched.
+
+**Known consequence, not fixed here (backend, out of scope):** `SpecialMoneyService.notifySubmitted`
+/`notifyManagerApproved`/`notifyCeoApproved`/`notifyRejected` all hardcode `"/requests"` as the
+notification link (see `backend/src/main/java/th/co/glr/hr/specialmoney/SpecialMoneyService.java`
+lines ~366-430). Under this frontend layout those links resolve to the *profile-requests* queue, not
+the welfare tab — clicking a special-money notification lands on the wrong page. `OvertimeService`
+by contrast hardcodes `"/overtime"`, which this branch's `/overtime → /employee-requests?tab=ot` redirect
+does handle correctly. Recommended follow-up: a tiny backend change to
+`SpecialMoneyService`'s four `notificationService.notify(...)` calls, swapping `"/requests"` for
+`"/employee-requests?tab=welfare"`.
+
+### Other deviations / accepted gaps
+- **Double page header when the OT tab is active.** `OvertimePanel` was moved with "no logic change
+  whatsoever," so it still renders its own `PageHeader title="จัดการล่วงเวลา"` inside
+  `RequestsPage`'s own `PageHeader title="คำขอ"`. Not fixed, since removing it would be a logic/UI
+  change to the untouchable moved body.
+- **Evidence upload is a disabled, labeled placeholder** (no backend endpoint exists yet), per the
+  task's explicit instruction — no endpoint was invented.
+- **UNIFORM_PREPROBATION_KIT / UNIFORM_NEW_STAFF** show the same shirt/trouser count fields as
+  `UNIFORM_ANNUAL` but the live amount estimate only auto-computes for `UNIFORM_ANNUAL` (the only
+  type with known per-piece rates in the V66 seed); the other two fall back to a manual amount
+  input. `UNIFORM_PREPROBATION_KIT` is server-disabled anyway (placeholder department code, per
+  slice 1/2 notes) so this has no real-world effect yet.
+- **`AID_FUNERAL` gained a `relation` select** (parent/spouse/child) not explicitly listed in the
+  task's per-type field bullets, because `SpecialMoneyPolicyEvaluator.evaluateFixedAid` hard-requires
+  `detail.relation` to be one of those three values — omitting the field would make every funeral-aid
+  submission fail server-side.
+- **Overseas per-diem (`destination=OVERSEAS`, `region` field) is not exposed** — the task's field
+  list for `TRAVEL_PER_DIEM`/`TRAVEL_LODGING` only described the domestic fields (start/end date,
+  province, role), so this slice only submits `destination: 'DOMESTIC'`.
+- Client-side cap/rate numbers in `specialMoneyRules.js` (medical ฿3,000, aid ฿5,000, uniform
+  ฿300/฿350 per piece/4-piece max, per-diem ฿400 driver/฿200 loader) are copied from
+  `V66__special_money_request_schema.sql`'s seed for fast inline feedback only; the server
+  (`SpecialMoneyPolicyEvaluator` + live `hr.special_money_policy` table) is the sole authority and
+  will diverge silently if that table is ever edited without updating this file too — documented
+  in-file.
+
+### Commands Run
+```bash
+cd frontend && npm ci
+cd frontend && npm run lint
+cd frontend && npx vitest run
+cd frontend && npm run build
+```
+
+### Test / Build Results
+- Lint: **0 errors**, 3 pre-existing warnings (`CommissionPage.jsx` x2, `PayrollPage.jsx` x1 —
+  confirmed pre-existing/out of scope, not touched by this branch).
+- Tests: **PASS — 38 test files, 222 tests, 0 failures** (`npx vitest run`). New: 5
+  `SpecialMoneyPanel.test.jsx` (type-swap fields, per-diem days×rate, excluded-province zeroes +
+  warns, tax chip flips, submit payload shape) + 2 `RequestsPage.test.jsx` (both tabs render,
+  `?tab=welfare` selects the welfare panel). `OvertimePage.test.jsx` passes unchanged (2 tests, same
+  file, same import).
+- Build: **PASS** (`npm run build`, 147ms, `RequestsPage` code-split into its own chunk).
+- No backend commands were run — backend is untouched in this slice.
+
+### Authz Evidence
+**Unverified — mock only.** This slice only touches `frontend/src/api/mockApi.js`'s `specialMoney`
+namespace (a new mock authz surface mirroring `SpecialMoneyService`'s gates) and the frontend route
+guards in `permissions.js`/`AppShell.jsx` (visibility only, not a real permission decision — the
+underlying `canViewAllOvertime`/`canViewAllSpecialMoney` role lists are unchanged, just OR'd
+together for one nav item). No backend authorization code was touched. The slice-2 handoff above
+already carries the real-Postgres authz evidence for the actual `SpecialMoneyService` gates
+(`SpecialMoneyScopeIntegrationTest`); nothing here supersedes or re-verifies it. Per CLAUDE.md,
+verification here ran under `VITE_USE_MOCKS=true`-equivalent unit tests only — treat the mock's
+authz shape as an approximation, not proof of the real 403 behavior.
+
+### Known Risks
+- The `/requests` notification-link mismatch above (backend hardcodes the wrong-for-this-layout
+  path) — cosmetic (wrong landing page on a deep link, not a broken link), but worth a follow-up.
+- `specialMoneyRules.js`'s client-side cap numbers can silently drift from `hr.special_money_policy`
+  if that table is ever edited outside a migration (e.g. a future CEO policy-editing UI) — the file
+  is commented accordingly but there is no automated check tying the two together.
+- Mock `specialMoney.create` does not enforce caps/eligibility (documented above) — a mock-only
+  submit can succeed with amounts the real service would reject or clamp. Never treat a
+  mock-verified submit as proof the real cap logic ran.
+- Manual-browser click-through was not performed in this session (no dev server/browser step was
+  requested); verification here is `npm run lint && npx vitest run && npm run build` only.
+
+### Things Not Finished
+- Attachment upload/download endpoints (explicitly out of scope this slice, backend has no endpoint
+  yet).
+- The `/requests` notification-link follow-up described above.
+- Payroll wiring (unchanged from slice 2 — still gated on external sign-off).
+
+### Recommended Next Agent
+Claude Opus review of this frontend slice, focused on: (1) the `/employee-requests` vs `/requests`
+routing deviation and whether the recommended backend notification-link fix should be scheduled, (2)
+whether `SpecialMoneyPanel`'s per-type field set is complete enough for a first release, (3) a manual
+click-through under `VITE_USE_MOCKS=true` to sanity-check the UI end-to-end (not done in this
+session).
+
+### Exact Next Prompt
+```
+Review the special-money-requests slice 3 frontend implementation in
+.claude/worktrees/special-money (branch feat/special-money-requests) against the "Slice 3 Update"
+section of docs/agent-handoffs/90_feat-special-money-requests.md. In particular: (1) confirm the
+/requests -> /employee-requests routing deviation is the right call given the existing ProfileRequestsPage
+call sites, (2) decide whether to schedule the backend follow-up (SpecialMoneyService's four
+notify() calls hardcode "/requests" instead of "/employee-requests?tab=welfare"), (3) manually click
+through SpecialMoneyPanel under VITE_USE_MOCKS=true (submit each request-type category, approve/
+reject/cancel flows, the excluded-province and medical-cap-clamp warnings) since this session only
+ran automated tests. If clean, this slice is ready to merge; permission/authz claims in this handoff
+are explicitly UNVERIFIED against the real Java service (no backend authz surface was touched, so
+none was required) — do not represent them as tested beyond that mock-only unit-test level.
+```

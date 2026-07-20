@@ -33,6 +33,16 @@ export const API_ROUTES = {
     reject: (id) => `/api/overtime/${id}/reject`,
     cancel: (id) => `/api/overtime/${id}/cancel`,
   },
+  specialMoney: {
+    list: '/api/special-money',
+    create: '/api/special-money',
+    employees: '/api/special-money/employees',
+    usage: '/api/special-money/usage',
+    types: '/api/special-money/types',
+    approve: (id) => `/api/special-money/${id}/approve`,
+    reject: (id) => `/api/special-money/${id}/reject`,
+    cancel: (id) => `/api/special-money/${id}/cancel`,
+  },
   leave: {
     list: '/api/leave',
     create: '/api/leave',
@@ -159,6 +169,9 @@ export const ROLE_PERMISSIONS = {
   canViewAllAttendance: ['hr', 'ceo'],
   canImportAttendance: ['hr', 'ceo'],
   canViewAllOvertime: ['hr', 'ceo'],
+  // Mirrors SpecialMoneyService.VIEW_ALL_ROLES — hr/ceo see every welfare/special-money
+  // request; everyone else is scoped to self + managed employees, same shape as overtime.
+  canViewAllSpecialMoney: ['hr', 'ceo'],
   canViewAllLeave: ['hr', 'ceo'],
   canReviewLeave: ['hr'],
   // Sales module
