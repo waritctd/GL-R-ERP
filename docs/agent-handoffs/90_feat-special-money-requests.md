@@ -391,3 +391,63 @@ ran automated tests. If clean, this slice is ready to merge; permission/authz cl
 are explicitly UNVERIFIED against the real Java service (no backend authz surface was touched, so
 none was required) — do not represent them as tested beyond that mock-only unit-test level.
 ```
+
+---
+
+## Payroll reconciliation against the accountant's 2026 workbook (2026-07-20)
+
+Findings recorded here for context; the reconciliation test itself
+(`PayrollExcelReconciliationTest`, 7 cases, figures transcribed from sheet พ.ค.69 / May 2026) lives
+on the **`feat/payroll-reconciliation`** branch alongside the fixes, not on this branch. **No payroll
+code was changed by this branch.**
+
+### Reconciles exactly
+- **Taxable gross** = sheet column W (`SUM(H:V)`) for all seven sampled employees.
+- **Social security** = 5% capped at the 2026 ฿17,500 ceiling → ฿875. All 23 above-ceiling employees
+  match; the five sub-ceiling figures (760 / 600 / 563 / 354 / 260) are each exactly 5% of wage.
+- **Net-pay identity** `net = gross − deductions + non-taxable`. All **33 rows** of the May sheet
+  check out against its own arithmetic (`AD = W − AC`, `AL = Σ(AE:AK)`, `AN = AD − AL + AM`) with
+  **zero mismatches**. The engine's structure is the sheet's structure.
+
+### Does NOT reconcile — four findings
+
+1. **Withholding tax cannot match until allowances are loaded.** For จริญญา (฿45,000/mo) the sheet
+   withholds **฿296**; the engine run for January with no allowance data withholds **฿1,204.17**.
+   The engine applies only the 50% expense deduction (cap 100,000), the 60,000 personal allowance
+   and SSO. The accountant also applies spouse / children / parent care / insurance / RMF / mortgage
+   — none of which appear in this workbook. `PayrollTaxAllowanceInput`'s 16 fields exist for exactly
+   this and are empty. **HR must load them per employee before the tax column can be trusted.**
+   (An exact reconstruction was attempted and abandoned: each allowance field carries its own
+   statutory cap, so the accountant's total cannot be expressed as a single number.)
+
+2. **MIGRATION HAZARD — an empty year-to-date under-withholds, to zero.**
+   `projectedAnnualIncome = YTD + thisMonth × monthsRemaining` is a correct catch-up mechanism *when
+   YTD is populated*. Empty, it projects only the remaining months. Same employee, same salary:
+   Jan ฿1,204.17 · Mar ฿656.25 · May ฿268.75 · **Aug ฿0.00** · **Dec ฿0.00**.
+   Before the first live mid-year run, each employee's YTD taxable income, SSO and withholding must
+   be back-loaded, or everyone is under-withheld and finds out at filing time.
+
+3. **ค่าตอบแทนกรรมการ (director remuneration, column G) has no home and no SSO exemption.**
+   In the workbook the five directors have column G filled, D/H (salary) **empty**, the same amount
+   every month, and **no social security row at all** — director remuneration is not wages under the
+   Social Security Act. Employees all carry 875. The engine derives `ssoWageBase` from
+   `baseSalary`, and `findActiveEmployees` feeds it `hr.employee.current_salary`, so a director whose
+   remuneration is stored as salary is charged **฿875/month the accountant does not charge** — the
+   company over-deducts and the SSO filing disagrees with payroll.
+   There IS a correct workaround (base salary 0, remuneration as an allowance → SSO 0, gross
+   unchanged) and it is now pinned by a test, but nothing prevents HR from typing it into the salary
+   field instead. A `director_remuneration` column or an SSO-exempt flag on the employee is the real
+   fix; both are payroll-math changes and out of scope here.
+
+4. **The sheet has four pre-tax deduction columns; the engine has one.** หักขาดงาน / หักตามใบเตือน /
+   ลูกค้าคืนสินค้า / อื่นๆ (Y..AB) are all subtracted *before* tax. The engine has only
+   `unpaidLeaveDeduction`; the other three would have to go through `otherPostTaxDeductions`, which
+   is applied *after* tax — so a warning-letter deduction would be taxed when the accountant does not
+   tax it. Invisible in May (all four columns are zero) but it bites the first month anyone gets one.
+
+### Tax-position gate — CLEARED
+The accountant has confirmed **in writing** that the 2018 สวัสดิการ policy qualifies as a documented
+medical-benefit scheme and that uniform reimbursement is ค่าเครื่องแบบ for exemption purposes.
+Medical and uniform may therefore be routed into payroll as non-taxable income (sheet column AM).
+Gates still open before the payroll wiring: the `bankExport` reconciliation check, and the two
+production `SELECT`s (probation exclusion count, sales-support `source_code`).
