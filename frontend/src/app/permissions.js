@@ -48,7 +48,15 @@ const PATH_GUARDS = [
   { test: (p) => p === '/overtime', can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllOvertime') },
   { test: (p) => p === '/leave', can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllLeave') },
   { test: (p) => p === '/price-import', can: (u) => hasPermission(u.role, 'canManagePriceImport') },
-  { test: (p) => p === '/pricing-requests' || p.startsWith('/pricing-requests/'), can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') || u.role === 'sales' },
+  // The bare queue (`/pricing-requests`) is Import's work list — canViewPricingRequestQueue
+  // only (import/ceo/sales_manager), never sales. Detail sub-paths are a separate rule: a sales
+  // rep needs to reach their OWN request's `/pricing-requests/:id` (PICKED_UP/MORE_INFO_REQUIRED
+  // notifications link there — NotificationRepository.notifyEmployeeForPricingRequest), but the
+  // backend's requireViewable ownership check is what actually enforces per-request access; this
+  // guard only decides whether the role belongs on the URL shape at all. Regression-fixed by
+  // COMMIT 6 review remediation: a single combined rule previously let sales reach the queue too.
+  { test: (p) => p === '/pricing-requests', can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') },
+  { test: (p) => p.startsWith('/pricing-requests/'), can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') || u.role === 'sales' },
   // Matches the sidebar's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
   { test: (p) => p === '/ceo-settings', can: (u) => u.role === 'ceo' },
 ];

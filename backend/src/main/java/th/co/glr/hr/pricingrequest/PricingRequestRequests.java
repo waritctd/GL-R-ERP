@@ -50,6 +50,10 @@ public final class PricingRequestRequests {
         @NotNull @DecimalMin("0.0001") BigDecimal requestedQty,
         @DecimalMin("0.0000") BigDecimal requestedQtySqm,
         @NotBlank String requestedUnit,
+        // See PricingRequestItemDto.requestedUnitBasis's javadoc — required so submit()/
+        // PricingCostingService can normalize this line's requested quantity onto the same
+        // basis as the factory-quoted price (financial-integrity review Finding B).
+        @NotBlank String requestedUnitBasis,
         @NotBlank String quantityType,
         LocalDate targetDeliveryDate,
         String deliveryLocation,
@@ -67,6 +71,11 @@ public final class PricingRequestRequests {
 
     public record CancelPricingRequestRequest(
         @NotBlank String reason
+    ) {}
+
+    /** Import-only toggle on a Pricing Request attachment (V69, review remediation COMMIT 4). */
+    public record UpdatePricingRequestAttachmentRequest(
+        @NotNull Boolean includeInFactoryEmail
     ) {}
 
     public record CustomerChangeRevisionRequest(

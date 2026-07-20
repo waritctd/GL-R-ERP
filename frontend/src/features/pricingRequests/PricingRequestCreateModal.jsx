@@ -1,8 +1,22 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
-import { QUANTITY_TYPE_OPTIONS, RECIPIENT_OPTIONS } from './pricingRequestMeta.js';
+import { QUANTITY_TYPE_OPTIONS, RECIPIENT_OPTIONS, UNIT_BASIS_OPTIONS, unitBasisLabel } from './pricingRequestMeta.js';
+
+// Maps price_catalog.product_prices.price_unit ('per_sqm' | 'per_piece' | 'per_box' |
+// 'per_linear_m' | 'unknown') to our canonical UnitBasis code, for pre-filling the unit select
+// when a catalog product is picked. Falls back to the row's current basis for 'unknown' or any
+// unrecognised value, rather than guessing wrong.
+function unitBasisForPriceUnit(priceUnit, fallback) {
+  switch (String(priceUnit ?? '').toLowerCase()) {
+    case 'per_sqm': return 'PER_SQM';
+    case 'per_piece': return 'PER_PIECE';
+    case 'per_box': return 'PER_BOX';
+    case 'per_linear_m': return 'PER_LINEAR_M';
+    default: return fallback;
+  }
+}
 
 let pricingCatalogTimer = null;
 
@@ -16,6 +30,13 @@ function debouncedCatalogSearch(query, callback) {
 // (unitBasis === 'SQM' ? 'ตร.ม.' : 'แผ่น').
 function unitLabelForTicketItem(ticketItem) {
   return ticketItem?.unitBasis === 'SQM' ? 'ตร.ม.' : 'แผ่น';
+}
+
+// Same mapping as unitLabelForTicketItem, but the canonical UnitBasis code — TicketItemDto's
+// own unitBasis ('PIECE' | 'SQM') is a narrower, ticket-specific enum, not the pricing-request
+// item's four-way UnitBasis, so this is a deliberate translation, not a passthrough.
+function unitBasisForTicketItem(ticketItem) {
+  return ticketItem?.unitBasis === 'SQM' ? 'PER_SQM' : 'PER_PIECE';
 }
 
 // Mirrors TicketDetailPage's own qtyDisplay logic: an SQM-basis line quotes
@@ -41,6 +62,7 @@ function emptyItemFromTicketItem(ticketItem) {
     factory: ticketItem?.factory ?? '',
     requestedQty: quantityForTicketItem(ticketItem),
     requestedUnit: unitLabelForTicketItem(ticketItem),
+    requestedUnitBasis: unitBasisForTicketItem(ticketItem),
     quantityType: 'ESTIMATE',
     targetDeliveryDate: '',
     deliveryLocation: '',
@@ -67,6 +89,7 @@ function itemFromExisting(item) {
     factory: item?.factory ?? '',
     requestedQty: item?.requestedQty ?? 1,
     requestedUnit: item?.requestedUnit ?? '',
+    requestedUnitBasis: item?.requestedUnitBasis ?? 'PER_PIECE',
     quantityType: item?.quantityType ?? 'ESTIMATE',
     targetDeliveryDate: item?.targetDeliveryDate ?? '',
     deliveryLocation: item?.deliveryLocation ?? '',
@@ -83,12 +106,26 @@ function itemFromExisting(item) {
  * and edit differ only in how the form seeds its initial state and what the
  * footer buttons do; every field, validation, and row layout below is shared.
  *
- * No attachments — explicitly cut from scope (see handoff). Item rows seed
- * from the deal's existing ticket_item rows in create mode (carrying
- * sourceTicketItemId so Import can trace a request line back to the original
- * product line) or from the request's own persisted items in edit mode, but
- * every field stays editable either way — PricingRequestItemRequest carries
- * its own independent descriptive copy, not a read-only mirror of ticket_item.
+ * Review remediation (COMMIT 5, P1 finding 3): a third `mode="revision"`
+ * reuses the exact same seeding/catalog-picker/unit-select/attachment-uploader
+ * machinery to let Sales actually EDIT a customer-change revision's items —
+ * product, collection, size, quantity, recipient, required date, adding/
+ * removing lines — instead of the old PricingRequestDetailPage.revisionPayload
+ * helper, which copied the current request verbatim and only collected a
+ * revision reason, so the resulting DRAFT was always commercially identical
+ * to its parent. Pass `mode="revision"` + `initialValue` (the CURRENT
+ * request, same shape as edit mode) + `createRevisionFn`. The prior
+ * (parent) request is never touched by this mode — no `updateFn` call is
+ * ever made against it; the backend's own `createCustomerChangeRevision`
+ * supersedes the parent as a side effect of creating the new DRAFT, keeping
+ * the parent's own submitted record immutable.
+ *
+ * Item rows seed from the deal's existing ticket_item rows in create mode
+ * (carrying sourceTicketItemId so Import can trace a request line back to the
+ * original product line) or from the request's own persisted items in edit/
+ * revision mode, but every field stays editable either way —
+ * PricingRequestItemRequest carries its own independent descriptive copy, not
+ * a read-only mirror of ticket_item.
  *
  * recipientContactId (a real customer-contact picker) is not wired up yet —
  * recipientLabel (free text) is the only way to identify a recipient today.
@@ -109,9 +146,14 @@ function generateClientRequestId() {
 
 export function PricingRequestCreateModal({
   ticketItems = [], onClose, onCreated, createFn, submitFn,
-  mode = 'create', initialValue = null, updateFn,
+  mode = 'create', initialValue = null, updateFn, createRevisionFn,
 }) {
   const isEdit = mode === 'edit';
+  const isRevision = mode === 'revision';
+  // Both edit and revision mode seed every field from a PERSISTED request (edit's own DRAFT,
+  // or revision's current/parent request); only plain create mode seeds from the deal's raw
+  // ticket_item rows instead.
+  const seedsFromExisting = isEdit || isRevision;
   const initialSummary = initialValue?.summary ?? null;
   const [recipientType, setRecipientType] = useState(() => initialSummary?.recipientType ?? 'DESIGNER');
   const [recipientLabel, setRecipientLabel] = useState(() => initialSummary?.recipientLabel ?? '');
@@ -121,9 +163,10 @@ export function PricingRequestCreateModal({
   ));
   const [targetCurrency, setTargetCurrency] = useState(() => initialSummary?.targetCurrency ?? 'THB');
   const [note, setNote] = useState(() => initialSummary?.note ?? '');
+  const [revisionReason, setRevisionReason] = useState('');
   const [clientRequestId] = useState(() => generateClientRequestId());
   const [items, setItems] = useState(() => {
-    if (isEdit) {
+    if (seedsFromExisting) {
       return initialValue?.items?.length ? initialValue.items.map(itemFromExisting) : [emptyItemFromTicketItem(null)];
     }
     return ticketItems.length ? ticketItems.map(emptyItemFromTicketItem) : [emptyItemFromTicketItem(null)];
@@ -148,6 +191,58 @@ export function PricingRequestCreateModal({
   const [catalogQuery, setCatalogQuery] = useState({});
   const [catalogResults, setCatalogResults] = useState({});
 
+  // Pricing Request attachments (V69, review remediation COMMIT 4): Sales may optionally attach
+  // supporting files while the request is a DRAFT (also true in edit mode, since editing a
+  // pricing request only ever happens while it is still DRAFT). Zero attachments remains valid —
+  // there is no gate anywhere requiring at least one. Files can only be attached to a PERSISTED
+  // request, so in create/revision mode this stays disabled until the first successful save
+  // (createdId) exists; in edit mode initialSummary.id is already known. Revision mode never
+  // uses initialSummary.id here — that id belongs to the PARENT request being revised, not the
+  // new DRAFT this modal creates, and attachments must never be attributed to the wrong request.
+  const attachablePricingRequestId = isEdit ? initialSummary?.id ?? null : createdId;
+  const [attachments, setAttachments] = useState([]);
+  const [attachmentsError, setAttachmentsError] = useState('');
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    if (attachablePricingRequestId == null) {
+      setAttachments([]);
+      return;
+    }
+    let cancelled = false;
+    api.pricingRequests.listAttachments(attachablePricingRequestId)
+      .then((res) => { if (!cancelled) setAttachments(res?.items ?? []); })
+      .catch((err) => { if (!cancelled) setAttachmentsError(err.message || 'โหลดไฟล์แนบไม่สำเร็จ'); });
+    return () => { cancelled = true; };
+  }, [attachablePricingRequestId]);
+
+  async function handleUploadAttachment(e) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || attachablePricingRequestId == null) return;
+    setAttachmentsError('');
+    setUploadingAttachment(true);
+    try {
+      const res = await api.pricingRequests.uploadAttachment(attachablePricingRequestId, file);
+      if (res?.attachment) setAttachments((cur) => [res.attachment, ...cur]);
+    } catch (err) {
+      setAttachmentsError(err.message || 'แนบไฟล์ไม่สำเร็จ');
+    } finally {
+      setUploadingAttachment(false);
+    }
+  }
+
+  async function handleDeleteAttachment(attachmentId) {
+    setAttachmentsError('');
+    try {
+      await api.pricingRequests.deleteAttachment(attachmentId);
+      setAttachments((cur) => cur.filter((a) => a.id !== attachmentId));
+    } catch (err) {
+      setAttachmentsError(err.message || 'ลบไฟล์แนบไม่สำเร็จ');
+    }
+  }
+
   function updateItem(index, field, value) {
     setItems((cur) => cur.map((item, i) => {
       if (i !== index) return item;
@@ -168,6 +263,15 @@ export function PricingRequestCreateModal({
         return next;
       });
     }
+  }
+
+  // Sets requestedUnitBasis (canonical, what the backend/costing engine consumes) and
+  // requestedUnit (the Thai display label, still what the factory email body shows) together
+  // from one select, so the two can never drift apart the way a free-typed requestedUnit could.
+  function updateUnitBasis(index, code) {
+    setItems((cur) => cur.map((item, i) => (
+      i === index ? { ...item, requestedUnitBasis: code, requestedUnit: unitBasisLabel(code) } : item
+    )));
   }
 
   function addItem() {
@@ -197,21 +301,28 @@ export function PricingRequestCreateModal({
   function applyCatalogItem(index, product) {
     setItems((cur) => cur.map((item, i) => {
       if (i !== index) return item;
-      const priceUnit = String(product.priceUnit ?? '').toLowerCase();
+      // Mirrors PricingRequestRepository.snapshotCatalogSelections: catalog_brand =
+      // COALESCE(pri.brand, pp.grade) — an already-typed brand wins, otherwise the catalog's
+      // own grade fills in. Brand is deliberately NOT the factory name (that belongs in the
+      // separate `factory` field below) — picking a catalog product used to overwrite brand
+      // with product.factoryName, which was wrong (review finding).
+      const brand = item.brand?.trim() ? item.brand : (product.grade ?? '');
+      const requestedUnitBasis = unitBasisForPriceUnit(product.priceUnit, item.requestedUnitBasis);
       return {
         ...item,
         productId: product.priceId ?? null,
         catalogProductCode: product.productCode ?? '',
         catalogBasePrice: product.price ?? null,
         catalogCurrency: product.currency ?? '',
-        brand: product.factoryName ?? item.brand ?? '',
+        brand,
         model: product.collection ?? product.productName ?? product.productCode ?? item.model ?? '',
         productDescription: product.productName ?? product.productCode ?? item.productDescription ?? '',
         color: product.color ?? '',
         texture: product.surface ?? '',
         size: product.sizeRaw ?? '',
         factory: product.factoryName ?? '',
-        requestedUnit: priceUnit.includes('sqm') ? 'ตร.ม.' : item.requestedUnit,
+        requestedUnitBasis,
+        requestedUnit: unitBasisLabel(requestedUnitBasis),
       };
     }));
     setCatalogQuery((cur) => ({
@@ -234,6 +345,8 @@ export function PricingRequestCreateModal({
       if (!Number(item.requestedQty) || Number(item.requestedQty) <= 0) return 'กรุณากรอกจำนวนของทุกรายการให้ถูกต้อง';
       if (!item.requestedUnit?.trim()) return 'กรุณากรอกหน่วยของทุกรายการ';
     }
+    // Mirrors CustomerChangeRevisionRequest.revisionReason's @NotBlank — revision mode only.
+    if (isRevision && !revisionReason.trim()) return 'กรุณาระบุเหตุผลของการแก้ไข';
     return '';
   }
 
@@ -271,6 +384,7 @@ export function PricingRequestCreateModal({
         factory: item.factory?.trim() || null,
         requestedQty: Number(item.requestedQty),
         requestedUnit: item.requestedUnit.trim(),
+        requestedUnitBasis: item.requestedUnitBasis,
         quantityType: item.quantityType,
         targetDeliveryDate: item.targetDeliveryDate || null,
         deliveryLocation: item.deliveryLocation?.trim() || null,
@@ -279,6 +393,20 @@ export function PricingRequestCreateModal({
     };
     if (includeClientRequestId) payload.clientRequestId = clientRequestId;
     return payload;
+  }
+
+  // Review remediation (COMMIT 5, P1 finding 3): CustomerChangeRevisionRequest is buildPayload's
+  // shape plus revisionReason — and, unlike create/edit, always carries a clientRequestId (the
+  // backend's own idempotency guard against a duplicate submit of the same revision). It also
+  // carries recipientContactId explicitly (always null here, same as buildPayload's create/edit
+  // callers — this modal has never wired up a real contact picker, see this file's own class
+  // Javadoc-equivalent comment above).
+  function buildRevisionPayload() {
+    return {
+      ...buildPayload({ includeClientRequestId: true }),
+      revisionReason: revisionReason.trim(),
+      recipientContactId: null,
+    };
   }
 
   // Fix 1 (review-remediation plan): both create-mode actions below share the
@@ -358,12 +486,39 @@ export function PricingRequestCreateModal({
     }
   }
 
+  // Revision mode (COMMIT 5, P1 finding 3): creates a brand-new DRAFT customer-change revision
+  // carrying whatever edits the user made to the seeded (current-request) form state above —
+  // never an UPDATE against initialSummary.id, which stays the immutable parent record.
+  // createCustomerChangeRevision is a single atomic backend call (unlike create mode's separate
+  // create-then-submit), so there is no intermediate "draft created, now push a second write"
+  // step to guard against re-creating on retry the way Fix 1 does for create mode — a failed
+  // attempt here has created nothing server-side to orphan.
+  async function handleCreateRevision() {
+    const validationError = validate();
+    if (validationError) { setError(validationError); return; }
+    if (!validateItemIdentities()) return;
+    setError('');
+    setSaving(true);
+    try {
+      const created = await createRevisionFn(initialSummary.id, buildRevisionPayload());
+      const newId = created?.pricingRequest?.summary?.id;
+      if (newId != null) setCreatedId(newId);
+      onCreated(created);
+    } catch (err) {
+      setError(err.message || 'สร้าง revision ไม่สำเร็จ');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <Modal
-      title={isEdit ? 'แก้ไขร่างใบขอราคา' : 'สร้างใบขอราคา'}
+      title={isEdit ? 'แก้ไขร่างใบขอราคา' : isRevision ? 'สร้าง Customer Change Revision' : 'สร้างใบขอราคา'}
       subtitle={isEdit
         ? 'แก้ไขรายละเอียดใบขอราคานี้ก่อนส่งให้ Import — บันทึกแล้วยังคงเป็นร่างจนกว่าจะกดส่ง'
-        : 'ส่งรายการสินค้าให้ฝ่ายนำเข้าเสนอราคา — ไม่รองรับไฟล์แนบในขั้นนี้'}
+        : isRevision
+          ? 'แก้ไขสินค้า/จำนวน/ผู้รับ/วันที่ตามที่ลูกค้าต้องการ — ใบขอราคาเดิมจะถูกเก็บไว้ไม่เปลี่ยนแปลง และรายการนี้จะเริ่มเป็นร่างใหม่'
+          : 'ส่งรายการสินค้าให้ฝ่ายนำเข้าเสนอราคา — แนบไฟล์ประกอบได้หลังบันทึกร่าง'}
       onClose={onClose}
       footer={isEdit ? (
         <>
@@ -371,6 +526,14 @@ export function PricingRequestCreateModal({
           <button type="button" className="primary-button" disabled={saving} onClick={handleUpdate}>
             <Icon name="check" size={14} />
             {saving ? 'กำลังบันทึก...' : 'บันทึกการแก้ไข'}
+          </button>
+        </>
+      ) : isRevision ? (
+        <>
+          <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>ยกเลิก</button>
+          <button type="button" className="primary-button" disabled={saving || !revisionReason.trim()} onClick={handleCreateRevision}>
+            <Icon name="check" size={14} />
+            {saving ? 'กำลังสร้าง...' : 'สร้าง revision'}
           </button>
         </>
       ) : (
@@ -387,6 +550,17 @@ export function PricingRequestCreateModal({
       )}
     >
       <div className="flex flex-col gap-4">
+        {isRevision ? (
+          <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+            เหตุผลของการแก้ไข *
+            <textarea
+              className="min-h-16"
+              value={revisionReason}
+              onChange={(e) => setRevisionReason(e.target.value)}
+              placeholder="เช่น ลูกค้าเปลี่ยนสินค้า/จำนวน/ขนาด"
+            />
+          </label>
+        ) : null}
         <div>
           <span className="mb-1.5 block text-sm font-bold text-text-secondary">ผู้รับคำขอราคา *</span>
           <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="ผู้รับคำขอราคา">
@@ -533,7 +707,12 @@ export function PricingRequestCreateModal({
                   </label>
                   <label className="flex flex-col gap-1 text-xs">
                     หน่วย *
-                    <input value={item.requestedUnit} onChange={(e) => updateItem(index, 'requestedUnit', e.target.value)} placeholder="แผ่น / ตร.ม." />
+                    <select value={item.requestedUnitBasis ?? ''} onChange={(e) => updateUnitBasis(index, e.target.value)}>
+                      <option value="">-- เลือกหน่วย --</option>
+                      {UNIT_BASIS_OPTIONS.map((option) => (
+                        <option key={option.code} value={option.code}>{option.label}</option>
+                      ))}
+                    </select>
                   </label>
                   <label className="flex flex-col gap-1 text-xs">
                     ลักษณะจำนวน *
@@ -559,6 +738,57 @@ export function PricingRequestCreateModal({
               </div>
             ))}
           </div>
+        </div>
+
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-sm font-bold text-text-secondary">ไฟล์แนบประกอบคำขอราคา (ไม่บังคับ)</span>
+            {attachablePricingRequestId != null ? (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  onChange={handleUploadAttachment}
+                  disabled={uploadingAttachment}
+                />
+                <button
+                  type="button"
+                  className="secondary-button"
+                  style={{ fontSize: 12 }}
+                  disabled={uploadingAttachment}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Icon name="plus" size={13} /> {uploadingAttachment ? 'กำลังแนบไฟล์...' : 'แนบไฟล์'}
+                </button>
+              </>
+            ) : null}
+          </div>
+          {attachablePricingRequestId == null ? (
+            <p className="text-2xs text-text-muted">บันทึกร่างก่อน จึงจะแนบไฟล์ได้</p>
+          ) : attachments.length === 0 ? (
+            <p className="text-2xs text-text-muted">ยังไม่มีไฟล์แนบ</p>
+          ) : (
+            <ul className="flex flex-col gap-1.5">
+              {attachments.map((attachment) => (
+                <li
+                  key={attachment.id}
+                  className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-subtle px-3 py-1.5 text-xs"
+                >
+                  <span className="truncate">{attachment.fileName}</span>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={`ลบไฟล์แนบ ${attachment.fileName}`}
+                    onClick={() => handleDeleteAttachment(attachment.id)}
+                  >
+                    <Icon name="close" size={13} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {attachmentsError ? <p role="alert" className="text-2xs font-bold text-danger-dark">{attachmentsError}</p> : null}
         </div>
 
         {info ? <div className="text-xs font-bold text-info" role="status">{info}</div> : null}

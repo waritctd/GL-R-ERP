@@ -38,6 +38,7 @@ function validPayload(sourceItem) {
       model: sourceItem.model,
       requestedQty: 10,
       requestedUnit: 'แผ่น',
+      requestedUnitBasis: 'PER_PIECE',
       quantityType: 'ESTIMATE',
     }],
   };

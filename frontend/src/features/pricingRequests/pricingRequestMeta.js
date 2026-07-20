@@ -31,7 +31,12 @@ const ALLOWED_TRANSITIONS = {
   IMPORT_REVIEWING: ['AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS', 'MORE_INFO_REQUIRED', 'CANCELLED', 'SUPERSEDED'],
   AWAITING_FACTORY_RESPONSE: ['COSTING_IN_PROGRESS', 'MORE_INFO_REQUIRED', 'CANCELLED', 'SUPERSEDED'],
   COSTING_IN_PROGRESS: ['AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW', 'MORE_INFO_REQUIRED', 'CANCELLED', 'SUPERSEDED'],
-  READY_FOR_CEO_REVIEW: ['SUPERSEDED'],
+  // Costing v2 path (review remediation COMMIT 5): a factory revising its quote after CEO review
+  // has already started, or Import opening a new costing draft against an already-submitted
+  // request, both reopen costing rather than only allowing SUPERSEDED — mirrors the backend fix
+  // to PricingRequestStatus.ALLOWED (previously decorative; PricingRequestRepository.transition()
+  // now enforces it server-side too).
+  READY_FOR_CEO_REVIEW: ['COSTING_IN_PROGRESS', 'SUPERSEDED'],
   MORE_INFO_REQUIRED: ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS', 'CANCELLED'],
   SUPERSEDED: [],
   CANCELLED: [],
@@ -59,6 +64,21 @@ export const QUANTITY_TYPE_OPTIONS = [
 
 export function quantityTypeLabel(value) {
   return QUANTITY_TYPE_OPTIONS.find((q) => q.code === value)?.label ?? value ?? '-';
+}
+
+// Mirrors th.co.glr.hr.pricingrequest.UnitBasis: the canonical unit-basis codes shared across
+// the pricing-request / factory-quote / costing aggregate (financial-integrity review Finding
+// B, commit 3). requestedUnit stays a free-text display label alongside this canonical code —
+// PricingRequestCreateModal's unit input writes both from the same select.
+export const UNIT_BASIS_OPTIONS = [
+  { code: 'PER_PIECE', label: 'แผ่น' },
+  { code: 'PER_SQM', label: 'ตร.ม.' },
+  { code: 'PER_BOX', label: 'กล่อง' },
+  { code: 'PER_LINEAR_M', label: 'เมตร' },
+];
+
+export function unitBasisLabel(value) {
+  return UNIT_BASIS_OPTIONS.find((u) => u.code === value)?.label ?? value ?? '-';
 }
 
 /** Mirrors PricingRequestService.createDraft: sales (deal owner), deal must be ACTIVE. */

@@ -43,6 +43,15 @@ public final class PricingCostingDtos {
         String unitBasis,
         BigDecimal requestedQuantity,
         String requestedUnit,
+        // Audit trail for the unit-normalization fix (financial-integrity review Finding B,
+        // commit 3): which basis requestedQuantity was expressed in, how many physical pieces
+        // it normalized to, and the linear-metre conversion factor used (if this line's price
+        // or requested quantity was PER_LINEAR_M). sqmPerUnit/piecesPerBox above already
+        // played this role for PER_SQM/PER_BOX; these three columns close the same gap for
+        // PER_LINEAR_M and make the normalization itself (not just the raw inputs) inspectable.
+        String requestedUnitBasis,
+        BigDecimal normalizedQuantityPieces,
+        BigDecimal linearMPerUnit,
         BigDecimal sqmPerUnit,
         BigDecimal piecesPerBox,
         BigDecimal fxRate,

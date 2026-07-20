@@ -12,7 +12,9 @@ import java.util.Optional;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestEventDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
@@ -127,6 +129,7 @@ public class PricingRequestRepository {
                 .addValue("requestedQty", item.requestedQty())
                 .addValue("requestedQtySqm", item.requestedQtySqm())
                 .addValue("requestedUnit", item.requestedUnit())
+                .addValue("requestedUnitBasis", item.requestedUnitBasis())
                 .addValue("quantityType", item.quantityType())
                 .addValue("targetDeliveryDate", item.targetDeliveryDate())
                 .addValue("deliveryLocation", item.deliveryLocation())
@@ -137,12 +140,12 @@ public class PricingRequestRepository {
             INSERT INTO sales.pricing_request_item
                 (pricing_request_id, source_ticket_item_id, product_id, variant_id,
                  brand, model, product_description, color, texture, size, factory,
-                 requested_qty, requested_qty_sqm, requested_unit, quantity_type,
+                 requested_qty, requested_qty_sqm, requested_unit, requested_unit_basis, quantity_type,
                  target_delivery_date, delivery_location, special_requirement, sort_order)
             VALUES
                 (:pricingRequestId, :sourceTicketItemId, :productId, :variantId,
                  :brand, :model, :productDescription, :color, :texture, :size, :factory,
-                 :requestedQty, :requestedQtySqm, :requestedUnit, :quantityType,
+                 :requestedQty, :requestedQtySqm, :requestedUnit, :requestedUnitBasis, :quantityType,
                  :targetDeliveryDate, :deliveryLocation, :specialRequirement, :sortOrder)
             """, batch);
     }
@@ -152,8 +155,33 @@ public class PricingRequestRepository {
      * (service) must throw a 409 when it returns 0 rather than following up with a
      * SELECT to build a nicer error message — that would reintroduce the race this
      * WHERE status = :expected clause exists to close.
+     *
+     * <p><strong>Review remediation (COMMIT 5):</strong> {@code expected -> next} is now asserted
+     * against {@link PricingRequestStatus#canTransition} before the UPDATE runs — previously
+     * {@link PricingRequestStatus#ALLOWED} was decorative (nothing consulted it outside {@code
+     * cancel()}'s own pre-check), so {@code PricingCostingService.createDraft()} could freely move
+     * a {@code READY_FOR_CEO_REVIEW} request back to {@code COSTING_IN_PROGRESS} even though the
+     * canonical map only listed {@code SUPERSEDED} as reachable from there. This throws {@link
+     * IllegalStateException}, not an {@code ApiException} 409: an illegal {@code expected -> next}
+     * pair means the CALLING CODE asked for a transition the state machine does not recognise —
+     * a programming error to catch at the source, not a normal concurrent-user race (that case is
+     * what the {@code WHERE status = :expected} compare-and-set above already handles via a 0
+     * rowcount, which the service layer turns into a 409). This class's own Javadoc says
+     * persistence code should not carry workflow validation; this is the one deliberate exception,
+     * treated as a repository-level invariant guard (the state machine must be authoritative
+     * everywhere `transition` is called), not as business-rule validation belonging in the service.
+     *
+     * <p>The one intentional bypass of this assertion is {@link #cancelForDeadDeal} — used
+     * exclusively by {@code PricingRequestService#cancelOpenForTicket}'s dead-deal cascade, which
+     * must be able to cancel a request from ANY open status (including one, like {@code
+     * READY_FOR_CEO_REVIEW}, that is not normally cancellable by a live user action) once the deal
+     * itself has gone terminal. Use that method, never this one, for that cascade.
      */
     public int transition(long id, String expected, String next, Long assignImportId, Long cancelledBy) {
+        if (!PricingRequestStatus.canTransition(expected, next)) {
+            throw new IllegalStateException(
+                "Illegal pricing request status transition: " + expected + " -> " + next);
+        }
         return jdbc.update("""
             UPDATE sales.pricing_request
                SET status       = :next,
@@ -179,6 +207,35 @@ public class PricingRequestRepository {
                 .addValue("expected", expected)
                 .addValue("next", next)
                 .addValue("assignImportId", assignImportId)
+                .addValue("cancelledBy", cancelledBy));
+    }
+
+    /**
+     * Cancels a pricing request as part of {@code PricingRequestService#cancelOpenForTicket}'s
+     * dead-deal cascade (review remediation COMMIT 5) — the one place a status transition must
+     * bypass {@link PricingRequestStatus#canTransition}, since a deal reaching a terminal
+     * lifecycle state must be able to cancel a pricing request from ANY open status, including
+     * {@code READY_FOR_CEO_REVIEW} (which {@link PricingRequestStatus#ALLOWED} does not permit a
+     * live user to cancel directly — only {@code SUPERSEDED}/{@code COSTING_IN_PROGRESS} are
+     * reachable from there for a normal in-flight workflow). Do not call this from anywhere else;
+     * every other caller must use {@link #transition} so the state machine stays authoritative.
+     *
+     * <p>Same compare-and-set shape as {@link #transition}, deliberately narrowed to only the
+     * columns a cancellation actually touches (no {@code assignImportId}/{@code submitted_at}/
+     * {@code picked_up_at} handling — a dead-deal cancel never needs any of those).
+     */
+    public int cancelForDeadDeal(long id, String expected, long cancelledBy) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request
+               SET status       = 'CANCELLED',
+                   cancelled_at = now(),
+                   cancelled_by = :cancelledBy,
+                   updated_at   = now()
+             WHERE pricing_request_id = :id AND status = :expected
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", id)
+                .addValue("expected", expected)
                 .addValue("cancelledBy", cancelledBy));
     }
 
@@ -271,9 +328,20 @@ public class PricingRequestRepository {
         return rows == 1;
     }
 
+    /**
+     * Review remediation (COMMIT 5, P2 finding 2): the next {@code revision_no} used to be
+     * computed via a bare {@code SELECT COALESCE(MAX(revision_no),0)+1} with no lock, so two
+     * concurrent customer-change-revision calls racing the same chain (different
+     * {@code clientRequestId}s — not a retry of the same one) could both read the same MAX before
+     * either INSERT committed. Mirrors {@code FactoryQuoteRepository.createRevision}'s
+     * {@code pg_advisory_xact_lock(rootId)} pattern exactly: held for the remainder of this
+     * (transactional) call, so a second racing caller blocks here until the first commits, then
+     * recomputes {@code revision_no} against the now-visible row instead of colliding with it.
+     */
     public long createCustomerChangeRevision(PricingRequestSummaryDto parent, CustomerChangeRevisionRequest request,
                                              long actorId) {
         Long rootId = findRootPricingRequestId(parent.id()).orElse(parent.id());
+        jdbc.query("SELECT pg_advisory_xact_lock(:rootId)", Map.of("rootId", rootId), (rs, rowNum) -> 0);
         Integer nextRevision = jdbc.queryForObject("""
             SELECT COALESCE(MAX(revision_no), 0) + 1
               FROM sales.pricing_request
@@ -377,6 +445,28 @@ public class PricingRequestRepository {
                 .addValue("metadata", metadataJson));
     }
 
+    /**
+     * True if an event of {@code eventKind} tagged with {@code "dispatchId": <dispatchId>} in its
+     * {@code metadata} already exists for this pricing request. Used by {@code
+     * FactoryQuoteService.finalizeDispatch} as defense-in-depth against duplicating the
+     * factory-email-sent event/notification on a re-run — see that method's javadoc.
+     */
+    public boolean existsEventForDispatch(long pricingRequestId, String eventKind, long dispatchId) {
+        Integer count = jdbc.queryForObject("""
+            SELECT COUNT(*)
+              FROM sales.pricing_request_event
+             WHERE pricing_request_id = :pricingRequestId
+               AND event_kind = :eventKind
+               AND metadata->>'dispatchId' = :dispatchId
+            """,
+            new MapSqlParameterSource()
+                .addValue("pricingRequestId", pricingRequestId)
+                .addValue("eventKind", eventKind)
+                .addValue("dispatchId", String.valueOf(dispatchId)),
+            Integer.class);
+        return count != null && count > 0;
+    }
+
     public Optional<PricingRequestSummaryDto> findSummary(long id) {
         try {
             PricingRequestSummaryDto summary = jdbc.queryForObject(
@@ -409,7 +499,7 @@ public class PricingRequestRepository {
         return jdbc.query("""
             SELECT pricing_request_item_id, pricing_request_id, source_ticket_item_id, product_id, variant_id,
                    brand, model, product_description, color, texture, size, factory,
-                   requested_qty, requested_qty_sqm, requested_unit, quantity_type,
+                   requested_qty, requested_qty_sqm, requested_unit, requested_unit_basis, quantity_type,
                    target_delivery_date, delivery_location, special_requirement, sort_order,
                    price_list_version_id, catalog_price_id, catalog_base_price, catalog_currency,
                    catalog_effective_date, resolved_factory_id, resolved_factory_name,
@@ -567,6 +657,118 @@ public class PricingRequestRepository {
             (rs, rowNum) -> rs.getLong("item_id"));
     }
 
+    // --- Pricing Request attachments (V69, review remediation COMMIT 4) ---
+    //
+    // Sales-level supporting attachments on the Pricing Request itself — distinct from
+    // FactoryQuoteRepository's raw supplier-quote attachments. A dedicated table (not a reuse of
+    // hr.file_attachment's generic domain/owner_id shape) per the approved remediation plan: this
+    // is fully owned by sales.pricing_request and needs its own include_in_factory_email column,
+    // which would otherwise leak a pricing-request-specific concern onto a table shared with
+    // unrelated domains (e.g. hr.leave_request attachments).
+
+    public PricingRequestAttachmentDto saveAttachment(long pricingRequestId, String fileName, String filePath,
+                                                       String mimeType, Long fileSize, long uploadedBy) {
+        GeneratedKeyHolder key = new GeneratedKeyHolder();
+        jdbc.update("""
+            INSERT INTO sales.pricing_request_attachment
+                (pricing_request_id, file_name, file_path, mime_type, file_size, uploaded_by)
+            VALUES
+                (:pricingRequestId, :fileName, :filePath, :mimeType, :fileSize, :uploadedBy)
+            """,
+            new MapSqlParameterSource()
+                .addValue("pricingRequestId", pricingRequestId)
+                .addValue("fileName", fileName)
+                .addValue("filePath", filePath)
+                .addValue("mimeType", mimeType)
+                .addValue("fileSize", fileSize)
+                .addValue("uploadedBy", uploadedBy),
+            key, new String[]{"pricing_request_attachment_id"});
+        return findAttachment(key.getKey().longValue()).orElseThrow();
+    }
+
+    public List<PricingRequestAttachmentDto> findAttachments(long pricingRequestId) {
+        return jdbc.query("""
+            SELECT pricing_request_attachment_id, pricing_request_id, file_name, mime_type,
+                   file_size, include_in_factory_email, uploaded_by, uploaded_at
+              FROM sales.pricing_request_attachment
+             WHERE pricing_request_id = :pricingRequestId
+             ORDER BY uploaded_at DESC, pricing_request_attachment_id DESC
+            """, Map.of("pricingRequestId", pricingRequestId), (rs, rowNum) -> mapAttachment(rs));
+    }
+
+    public Optional<PricingRequestAttachmentDto> findAttachment(long attachmentId) {
+        try {
+            PricingRequestAttachmentDto dto = jdbc.queryForObject("""
+                SELECT pricing_request_attachment_id, pricing_request_id, file_name, mime_type,
+                       file_size, include_in_factory_email, uploaded_by, uploaded_at
+                  FROM sales.pricing_request_attachment
+                 WHERE pricing_request_attachment_id = :attachmentId
+                """, Map.of("attachmentId", attachmentId), (rs, rowNum) -> mapAttachment(rs));
+            return Optional.ofNullable(dto);
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    public String findAttachmentFilePath(long attachmentId) {
+        try {
+            return jdbc.queryForObject("""
+                SELECT file_path FROM sales.pricing_request_attachment
+                 WHERE pricing_request_attachment_id = :attachmentId
+                """, Map.of("attachmentId", attachmentId), String.class);
+        } catch (EmptyResultDataAccessException e) {
+            return null;
+        }
+    }
+
+    public void deleteAttachment(long attachmentId) {
+        jdbc.update("""
+            DELETE FROM sales.pricing_request_attachment WHERE pricing_request_attachment_id = :attachmentId
+            """, Map.of("attachmentId", attachmentId));
+    }
+
+    public int setIncludeInFactoryEmail(long attachmentId, boolean include) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request_attachment
+               SET include_in_factory_email = :include
+             WHERE pricing_request_attachment_id = :attachmentId
+            """, Map.of("attachmentId", attachmentId, "include", include));
+    }
+
+    /**
+     * Server-internal file handle for outbound email use only — deliberately NOT the public
+     * {@link PricingRequestAttachmentDto} (which never exposes a local disk path). Used solely by
+     * {@code FactoryQuoteService.attemptSend}, resolved fresh at actual-send time so a late
+     * {@code include_in_factory_email} toggle is honoured up to the moment the worker really
+     * calls the mail provider.
+     */
+    public record PricingRequestEmailAttachmentFile(String fileName, String filePath, String mimeType) {}
+
+    public List<PricingRequestEmailAttachmentFile> findIncludedInFactoryEmailAttachmentFiles(long pricingRequestId) {
+        return jdbc.query("""
+            SELECT file_name, file_path, mime_type
+              FROM sales.pricing_request_attachment
+             WHERE pricing_request_id = :pricingRequestId
+               AND include_in_factory_email = TRUE
+             ORDER BY uploaded_at
+            """, Map.of("pricingRequestId", pricingRequestId),
+            (rs, rowNum) -> new PricingRequestEmailAttachmentFile(
+                rs.getString("file_name"), rs.getString("file_path"), rs.getString("mime_type")));
+    }
+
+    private PricingRequestAttachmentDto mapAttachment(ResultSet rs) throws SQLException {
+        return new PricingRequestAttachmentDto(
+            rs.getLong("pricing_request_attachment_id"),
+            rs.getLong("pricing_request_id"),
+            rs.getString("file_name"),
+            rs.getString("mime_type"),
+            nullableLong(rs, "file_size"),
+            rs.getBoolean("include_in_factory_email"),
+            rs.getLong("uploaded_by"),
+            rs.getTimestamp("uploaded_at").toInstant()
+        );
+    }
+
     // --- private helpers ---
 
     private String normalizeCurrency(String targetCurrency) {
@@ -644,6 +846,7 @@ public class PricingRequestRepository {
             rs.getBigDecimal("requested_qty"),
             rs.getBigDecimal("requested_qty_sqm"),
             rs.getString("requested_unit"),
+            rs.getString("requested_unit_basis"),
             rs.getString("quantity_type"),
             rs.getObject("target_delivery_date", LocalDate.class),
             rs.getString("delivery_location"),

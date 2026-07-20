@@ -178,6 +178,12 @@ export const API_ROUTES = {
     respondInformation: (id) => `/api/pricing-requests/${id}/respond-information`,
     customerChangeRevision: (id) => `/api/pricing-requests/${id}/customer-change-revision`,
     cancel: (id) => `/api/pricing-requests/${id}/cancel`,
+    // Sales-level supporting attachments on the Pricing Request itself (V69, review remediation
+    // COMMIT 4) — distinct from the raw factory-quote attachments above.
+    attachments: (id) => `/api/pricing-requests/${id}/attachments`,
+    attachmentFile: (id) => `/api/pricing-request-attachments/${id}/file`,
+    attachment: (id) => `/api/pricing-request-attachments/${id}`,
+    attachmentIncludeInFactoryEmail: (id) => `/api/pricing-request-attachments/${id}/include-in-factory-email`,
   },
 };
 

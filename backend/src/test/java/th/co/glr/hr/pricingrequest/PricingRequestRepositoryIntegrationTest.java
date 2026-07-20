@@ -143,6 +143,65 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
         assertThat(unchanged.cancelledAt()).isNull();
     }
 
+    // Review remediation (COMMIT 5, P1 finding 1): PricingRequestStatus.ALLOWED used to be purely
+    // decorative — transition() persisted whatever (expected, next) pair it was given, regardless
+    // of whether the canonical map listed it. These two tests prove the map is now authoritative:
+    // an illegal pair is rejected loudly, BEFORE any row mutation, and a legal-but-previously-
+    // missing pair (the Costing v2 reopen path this commit also adds to the map) now succeeds.
+    @Test
+    void transition_rejectsATransitionNotInTheCanonicalMap_andLeavesTheRowUnchanged() {
+        long id = createDraft();
+        // DRAFT -> COSTING_IN_PROGRESS is not, and has never been, a real transition — no code
+        // path attempts it; it exists purely to prove the guard fires for a nonsense pair.
+        assertThatThrownBy(() -> requests.transition(
+            id, PricingRequestStatus.DRAFT, PricingRequestStatus.COSTING_IN_PROGRESS, null, null))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("DRAFT")
+            .hasMessageContaining("COSTING_IN_PROGRESS");
+
+        PricingRequestSummaryDto unchanged = requests.findSummary(id).orElseThrow();
+        assertThat(unchanged.status()).isEqualTo(PricingRequestStatus.DRAFT);
+        assertThat(unchanged.updatedAt()).isNotNull();
+    }
+
+    @Test
+    void transition_readyForCeoReviewToCostingInProgress_isNowPermittedByTheCanonicalMap() {
+        // Repository-level test (no full costing workflow needed): drive the row directly to
+        // READY_FOR_CEO_REVIEW via SQL, then prove transition() itself (not just the DB's CHECK
+        // constraint, which never restricted this) now accepts the reopen this commit's ALLOWED
+        // entry adds.
+        long id = createDraft();
+        jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
+            Map.of("status", PricingRequestStatus.READY_FOR_CEO_REVIEW, "id", id));
+
+        int rows = requests.transition(id, PricingRequestStatus.READY_FOR_CEO_REVIEW,
+            PricingRequestStatus.COSTING_IN_PROGRESS, null, null);
+
+        assertThat(rows).isEqualTo(1);
+        assertThat(requests.findSummary(id).orElseThrow().status()).isEqualTo(PricingRequestStatus.COSTING_IN_PROGRESS);
+    }
+
+    @Test
+    void cancelForDeadDeal_cancelsFromReadyForCeoReview_aStatusTheCanonicalMapForbidsANormalCancelFrom() {
+        // The one intentional bypass of PricingRequestStatus.canTransition: a dead-deal cascade
+        // must be able to cancel from READY_FOR_CEO_REVIEW even though transition() would now
+        // reject READY_FOR_CEO_REVIEW -> CANCELLED as illegal (only SUPERSEDED/COSTING_IN_PROGRESS
+        // are reachable from there for a live user action).
+        long id = createDraft();
+        jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
+            Map.of("status", PricingRequestStatus.READY_FOR_CEO_REVIEW, "id", id));
+        assertThatThrownBy(() -> requests.transition(
+            id, PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.CANCELLED, null, salesActorId))
+            .isInstanceOf(IllegalStateException.class);
+
+        int rows = requests.cancelForDeadDeal(id, PricingRequestStatus.READY_FOR_CEO_REVIEW, salesActorId);
+
+        assertThat(rows).isEqualTo(1);
+        PricingRequestSummaryDto cancelled = requests.findSummary(id).orElseThrow();
+        assertThat(cancelled.status()).isEqualTo(PricingRequestStatus.CANCELLED);
+        assertThat(cancelled.cancelledAt()).isNotNull();
+    }
+
     @Test
     void transition_pickedUpAt_isPreservedByteIdenticalAcrossReviewingMoreInfoReviewingRoundTrip() throws InterruptedException {
         long importId = createEmployee("นำเข้า ทดสอบ", "import@glr.co.th");
@@ -398,7 +457,7 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
 
     private PricingRequestItemRequest item(String brand, String model) {
         return new PricingRequestItemRequest(null, null, null, brand, model, brand + " " + model, null, null, null, null,
-            new BigDecimal("1"), null, "PIECE", QuantityType.REFERENCE, null, null, null);
+            new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE, null, null, null);
     }
 
     private String clientRequestId(String suffix) {

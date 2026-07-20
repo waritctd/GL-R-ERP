@@ -32,7 +32,8 @@ public final class FactoryQuoteRequests {
         String leadTimeText,
         String revisionReason,
         String negotiationNote,
-        @NotEmpty List<@Valid ReceiveFactoryQuoteItemRequest> items
+        @NotEmpty List<@Valid ReceiveFactoryQuoteItemRequest> items,
+        @NotBlank String clientRequestId
     ) {}
 
     public record ReceiveFactoryQuoteItemRequest(
@@ -47,6 +48,7 @@ public final class FactoryQuoteRequests {
         @DecimalMin("0.0000") BigDecimal minimumOrderQuantity,
         @DecimalMin("0.000001") BigDecimal sqmPerUnit,
         @DecimalMin("0.0000") BigDecimal piecesPerBox,
+        @DecimalMin("0.000001") BigDecimal linearMPerUnit,
         String leadTimeText,
         String availabilityNote,
         String lineNote

@@ -263,6 +263,7 @@ class PricingRequestControllerTest {
                 {
                   "requestedQty": 1,
                   "requestedUnit": "PIECE",
+                  "requestedUnitBasis": "PER_PIECE",
                   "quantityType": "REFERENCE"
                 }
               ]

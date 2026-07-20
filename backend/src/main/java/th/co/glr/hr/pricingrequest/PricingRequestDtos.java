@@ -56,6 +56,12 @@ public final class PricingRequestDtos {
         BigDecimal requestedQty,
         BigDecimal requestedQtySqm,
         String requestedUnit,
+        // Machine-readable basis for requestedQty/requestedUnit (V68, financial-integrity
+        // review Finding B) — one of UnitBasis's four canonical codes. requestedUnit stays
+        // free text for display/the factory email body; this is what PricingCostingService
+        // now uses to normalize the requested quantity onto the same basis as the quoted
+        // price before multiplying.
+        String requestedUnitBasis,
         String quantityType,
         LocalDate targetDeliveryDate,
         String deliveryLocation,
@@ -93,5 +99,25 @@ public final class PricingRequestDtos {
         PricingRequestSummaryDto summary,
         List<PricingRequestItemDto> items,
         List<PricingRequestEventDto> events
+    ) {}
+
+    /**
+     * Sales-level supporting attachment on the Pricing Request itself (V69, review remediation
+     * COMMIT 4) — distinct from a factory quote's raw supplier evidence
+     * ({@code FactoryQuoteDtos.FactoryQuoteAttachmentDto}). Uploaded by Sales while the request is
+     * still {@code DRAFT}/{@code MORE_INFO_REQUIRED}; Import may mark {@code includeInFactoryEmail}
+     * so a later factory email carries it. Deliberately has no local file path field — that stays
+     * server-internal (see {@code PricingRequestRepository.PricingRequestEmailAttachmentFile}, used
+     * only by {@code FactoryQuoteService.attemptSend}).
+     */
+    public record PricingRequestAttachmentDto(
+        long id,
+        long pricingRequestId,
+        String fileName,
+        String mimeType,
+        Long fileSize,
+        boolean includeInFactoryEmail,
+        long uploadedBy,
+        Instant uploadedAt
     ) {}
 }

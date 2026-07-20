@@ -21,6 +21,10 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         cancel: vi.fn(),
         respondInformation: vi.fn(),
         requestInformation: vi.fn(),
+        // PricingRequestCreateModal (V69, review remediation COMMIT 4) fetches attachments
+        // whenever it has a persisted id — including edit mode, which this file's "seed the
+        // modal from request detail" test exercises.
+        listAttachments: vi.fn().mockResolvedValue({ items: [] }),
       },
     },
   };
@@ -232,14 +236,27 @@ describe('PricingRequestPanel', () => {
     ));
   });
 
-  it('does not offer "ขอข้อมูลเพิ่มเติม" to an unassigned import user', async () => {
+  // canRequestInformation (pricingRequestMeta.js) is deliberately department-wide —
+  // "Mirrors PricingRequestService.requestInformation: any import user in active
+  // Step 2 statuses" — matching the real backend's requireRole(actor, IMPORT_ROLES)
+  // with no assignedImportId check (PricingRequestService.requestInformation,
+  // backend/src/main/java/th/co/glr/hr/pricingrequest/PricingRequestService.java).
+  // This is a stated business rule in the branch handoff ("Import department users
+  // can request and resume Sales information loops ... without relying on a single
+  // assigned Import user"), not an oversight — an unassigned import user must still
+  // see the button. This test previously asserted the opposite (assigned-only) and
+  // was stale relative to that deliberate design; renamed and inverted to match.
+  //
+  // UI-level only per CLAUDE.md ("Mock API contract" / "Authz verify against Java,
+  // not the mock"): this proves the button-visibility predicate against mockApi,
+  // not the authoritative Java role gate above, which is what actually enforces it.
+  it('offers "ขอข้อมูลเพิ่มเติม" to any import user, not only the one assigned', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({
       items: [summary({ status: 'IMPORT_REVIEWING', assignedImportId: 5, assignedImportName: importUser.name })],
     });
     renderPanel({ user: otherImportUser });
 
-    await screen.findByText('PCR-2026-0001');
-    expect(screen.queryByRole('button', { name: 'ขอข้อมูลเพิ่มเติม' })).toBeNull();
+    expect(await screen.findByRole('button', { name: 'ขอข้อมูลเพิ่มเติม' })).not.toBeNull();
   });
 
   it('does not offer "ขอข้อมูลเพิ่มเติม" to sales, even the deal owner', async () => {

@@ -23,11 +23,14 @@ import java.util.Optional;
 import org.assertj.core.api.ThrowableAssert;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
+import org.springframework.mock.web.MockMultipartFile;
+import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CancelPricingRequestRequest;
@@ -35,6 +38,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRe
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.RequestMoreInformationRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.RespondMoreInformationRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestAttachmentRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.DepositPolicy;
@@ -51,8 +55,9 @@ class PricingRequestServiceTest {
     private final TicketRepository ticketRepo = mock(TicketRepository.class);
     private final NotificationRepository notifRepo = mock(NotificationRepository.class);
     private final ContactRepository contactRepo = mock(ContactRepository.class);
+    private final FileStorageService fileStorage = mock(FileStorageService.class);
     private final PricingRequestService service =
-        new PricingRequestService(requestRepo, ticketRepo, notifRepo, new ObjectMapper(), contactRepo);
+        new PricingRequestService(requestRepo, ticketRepo, notifRepo, new ObjectMapper(), contactRepo, fileStorage);
 
     private final UserPrincipal salesActor        = actor(1L, "sales");
     private final UserPrincipal otherSales        = actor(2L, "sales");
@@ -239,7 +244,7 @@ class PricingRequestServiceTest {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
             List.of(new PricingRequestItemRequest(null, null, null, null, null, null, null, null, null, "Factory only",
-                new BigDecimal("1"), null, "PIECE", QuantityType.REFERENCE, null, null, null)));
+                new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE, null, null, null)));
         assertBadRequest(() -> service.createDraft(10L, request, salesActor));
         verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
     }
@@ -388,6 +393,51 @@ class PricingRequestServiceTest {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItems(20L)).thenReturn(List.of(
             itemDtoWithIdentity(null, null, null, null, null, "กระเบื้องพอร์ซเลน 60x60 สีขาว")));
+        when(requestRepo.transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null))
+            .thenReturn(1);
+
+        service.submit(20L, salesActor);
+
+        verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
+    }
+
+    // Finding A (financial-integrity review, commit 3): the catalog is now MANDATORY — a
+    // free-text item (or a productId that never resolved against an ACTIVE catalog price at
+    // snapshotCatalogSelections time) must 422 at submit(), not silently reach Import/costing.
+    @Test
+    void submit_rejectsPreExistingDraftWithIncompleteCatalogSnapshot() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.findItems(20L)).thenReturn(List.of(
+            itemDtoWithoutCatalogSnapshot(null, null, "Brand", "Model")));
+
+        assertUnprocessable(() -> service.submit(20L, salesActor), "รายการที่ 1");
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    // Same gate, several failing lines at once — the message must report every failing line
+    // number, not just the first, so a rep with multiple free-text lines fixes them all in one
+    // pass instead of being told about them one at a time.
+    @Test
+    void submit_reportsEveryLineWithAnIncompleteCatalogSnapshot() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.findItems(20L)).thenReturn(List.of(
+            sampleItem(null),
+            itemDtoWithoutCatalogSnapshot(null, null, "Brand 2", "Model 2"),
+            itemDtoWithoutCatalogSnapshot(null, null, "Brand 3", "Model 3")));
+
+        assertUnprocessable(() -> service.submit(20L, salesActor), "รายการที่ 2, 3");
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    // A request whose items already have a full catalog snapshot (simulating a real submit(),
+    // where snapshotCatalogSelections has already populated these fields) submits cleanly.
+    @Test
+    void submit_acceptsPreExistingDraftWithFullCatalogSnapshot() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.findItems(20L)).thenReturn(List.of(sampleItem(null)));
         when(requestRepo.transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null))
             .thenReturn(1);
 
@@ -1231,10 +1281,8 @@ class PricingRequestServiceTest {
         when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(20L, 21L));
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
         stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED);
-        when(requestRepo.transition(20L, PricingRequestStatus.SUBMITTED, PricingRequestStatus.CANCELLED, null, 4L))
-            .thenReturn(1);
-        when(requestRepo.transition(21L, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.CANCELLED, null, 4L))
-            .thenReturn(1);
+        when(requestRepo.cancelForDeadDeal(20L, PricingRequestStatus.SUBMITTED, 4L)).thenReturn(1);
+        when(requestRepo.cancelForDeadDeal(21L, PricingRequestStatus.MORE_INFO_REQUIRED, 4L)).thenReturn(1);
 
         PricingRequestService.CancelOpenForTicketResult result =
             service.cancelOpenForTicket(10L, "PROJECT_ON_HOLD", ceoActor);
@@ -1258,15 +1306,14 @@ class PricingRequestServiceTest {
         when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(20L, 22L));
         when(requestRepo.findSummary(20L)).thenReturn(java.util.Optional.empty());
         stubPricingRequest(22L, 10L, 1L, PricingRequestStatus.SUBMITTED);
-        when(requestRepo.transition(22L, PricingRequestStatus.SUBMITTED, PricingRequestStatus.CANCELLED, null, 4L))
-            .thenReturn(1);
+        when(requestRepo.cancelForDeadDeal(22L, PricingRequestStatus.SUBMITTED, 4L)).thenReturn(1);
 
         PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
 
         assertThat(result.cancelledCount()).isEqualTo(1);
         assertThat(result.abandonedIds()).isEmpty();
         verify(requestRepo, times(1)).findSummary(20L);
-        verify(requestRepo, never()).transition(eq(20L), any(), any(), any(), anyLong());
+        verify(requestRepo, never()).cancelForDeadDeal(eq(20L), any(), anyLong());
         verify(requestRepo).addEvent(eq(22L), eq(10L), eq(4L), any(),
             eq(PricingRequestEventKind.PRICING_REQUEST_CANCELLED), eq(PricingRequestStatus.SUBMITTED),
             eq(PricingRequestStatus.CANCELLED), eq("OTHER"), any());
@@ -1285,7 +1332,7 @@ class PricingRequestServiceTest {
 
         assertThat(result.cancelledCount()).isEqualTo(0);
         assertThat(result.abandonedIds()).isEmpty();
-        verify(requestRepo, never()).transition(eq(21L), any(), any(), any(), anyLong());
+        verify(requestRepo, never()).cancelForDeadDeal(eq(21L), any(), anyLong());
         verify(requestRepo, never()).addEvent(eq(21L), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
     }
 
@@ -1300,16 +1347,14 @@ class PricingRequestServiceTest {
         stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.DRAFT);
         // First attempt races and misses; second attempt (still reading DRAFT, since
         // the stub is a fixed answer) succeeds.
-        when(requestRepo.transition(21L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 4L))
-            .thenReturn(0, 1);
+        when(requestRepo.cancelForDeadDeal(21L, PricingRequestStatus.DRAFT, 4L)).thenReturn(0, 1);
 
         PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
 
         assertThat(result.cancelledCount()).isEqualTo(1);
         assertThat(result.abandonedIds()).isEmpty();
         verify(requestRepo, times(2)).findSummary(21L);
-        verify(requestRepo, times(2))
-            .transition(21L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 4L);
+        verify(requestRepo, times(2)).cancelForDeadDeal(21L, PricingRequestStatus.DRAFT, 4L);
         verify(requestRepo).addEvent(eq(21L), eq(10L), eq(4L), any(),
             eq(PricingRequestEventKind.PRICING_REQUEST_CANCELLED), eq(PricingRequestStatus.DRAFT),
             eq(PricingRequestStatus.CANCELLED), eq("OTHER"), any());
@@ -1323,11 +1368,9 @@ class PricingRequestServiceTest {
         // plain count that looks identical to "nothing was open".
         when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(21L, 22L));
         stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.DRAFT);
-        when(requestRepo.transition(21L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 4L))
-            .thenReturn(0);
+        when(requestRepo.cancelForDeadDeal(21L, PricingRequestStatus.DRAFT, 4L)).thenReturn(0);
         stubPricingRequest(22L, 10L, 1L, PricingRequestStatus.SUBMITTED);
-        when(requestRepo.transition(22L, PricingRequestStatus.SUBMITTED, PricingRequestStatus.CANCELLED, null, 4L))
-            .thenReturn(1);
+        when(requestRepo.cancelForDeadDeal(22L, PricingRequestStatus.SUBMITTED, 4L)).thenReturn(1);
 
         PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
 
@@ -1336,12 +1379,121 @@ class PricingRequestServiceTest {
         assertThat(result.abandonedCount()).isEqualTo(1);
         assertThat(result.hasAbandoned()).isTrue();
         verify(requestRepo, times(3)).findSummary(21L);
-        verify(requestRepo, times(3))
-            .transition(21L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 4L);
+        verify(requestRepo, times(3)).cancelForDeadDeal(21L, PricingRequestStatus.DRAFT, 4L);
         verify(requestRepo, never()).addEvent(eq(21L), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
         verify(requestRepo).addEvent(eq(22L), eq(10L), eq(4L), any(),
             eq(PricingRequestEventKind.PRICING_REQUEST_CANCELLED), eq(PricingRequestStatus.SUBMITTED),
             eq(PricingRequestStatus.CANCELLED), eq("OTHER"), any());
+    }
+
+    // ── Pricing Request attachments (V69, review remediation COMMIT 4) ─────
+    //
+    // "Unit-test the decision" half of the two-layer evidence CLAUDE.md requires for an
+    // authorization change — every branch here is proved with every collaborator mocked;
+    // PricingRequestFlowIntegrationTest's attachment tests are the other half (real Postgres,
+    // real repository, real service) that a mocked repository cannot substitute for.
+
+    @Test
+    void uploadAttachment_rejectsNonSalesRoles() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        assertForbidden(() -> service.uploadAttachment(20L, sampleFile(), importActor));
+        assertForbidden(() -> service.uploadAttachment(20L, sampleFile(), ceoActor));
+        assertForbidden(() -> service.uploadAttachment(20L, sampleFile(), salesManagerActor));
+        verifyNoInteractions(fileStorage);
+    }
+
+    /**
+     * Deliberately status = MORE_INFO_REQUIRED, not DRAFT: requireViewable's own draft-privacy
+     * check (a different, pre-existing guard) would otherwise fire FIRST and produce a 404 for a
+     * non-owner reaching a DRAFT — see {@code aSecondSalesRep_cannotReadTheFirstReps_pricingRequest}
+     * in {@code PricingRequestFlowIntegrationTest} for that behavior. MORE_INFO_REQUIRED isolates
+     * THIS method's own explicit ownership re-check.
+     */
+    @Test
+    void uploadAttachment_rejectsNonOwnerSalesRep() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED);
+        assertForbidden(() -> service.uploadAttachment(20L, sampleFile(), otherSales));
+        verifyNoInteractions(fileStorage);
+    }
+
+    @Test
+    void uploadAttachment_rejectsWhenStatusIsNotDraftOrMoreInfoRequired() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
+        assertConflict(() -> service.uploadAttachment(20L, sampleFile(), salesActor));
+        verifyNoInteractions(fileStorage);
+    }
+
+    @Test
+    void uploadAttachment_acceptsOwnerOnDraftAndPersistsTheStoredFile() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        when(fileStorage.store(eq("pricing-request"), eq(20L), any(), any()))
+            .thenReturn(new FileStorageService.StoredFile("quote-sketch.pdf", "/tmp/x/y.pdf", "application/pdf", 1234L));
+        when(requestRepo.saveAttachment(20L, "quote-sketch.pdf", "/tmp/x/y.pdf", "application/pdf", 1234L, 1L))
+            .thenReturn(new PricingRequestAttachmentDto(
+                90L, 20L, "quote-sketch.pdf", "application/pdf", 1234L, false, 1L, Instant.now()));
+
+        PricingRequestAttachmentDto result = service.uploadAttachment(20L, sampleFile(), salesActor);
+
+        assertThat(result.id()).isEqualTo(90L);
+        assertThat(result.includeInFactoryEmail()).isFalse();
+        verify(requestRepo).saveAttachment(20L, "quote-sketch.pdf", "/tmp/x/y.pdf", "application/pdf", 1234L, 1L);
+        verify(requestRepo).addEvent(eq(20L), eq(10L), eq(1L), any(),
+            eq(PricingRequestEventKind.PRICING_REQUEST_UPDATED), eq(PricingRequestStatus.DRAFT),
+            eq(PricingRequestStatus.DRAFT), any(), any());
+    }
+
+    /** Same DRAFT-vs-MORE_INFO_REQUIRED reasoning as {@code uploadAttachment_rejectsNonOwnerSalesRep}. */
+    @Test
+    void deleteAttachment_rejectsNonOwnerSalesRep() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED);
+        when(requestRepo.findAttachment(90L)).thenReturn(Optional.of(
+            new PricingRequestAttachmentDto(90L, 20L, "f.pdf", "application/pdf", 1L, false, 1L, Instant.now())));
+
+        assertForbidden(() -> service.deleteAttachment(90L, otherSales));
+        verify(requestRepo, never()).deleteAttachment(anyLong());
+    }
+
+    @Test
+    void deleteAttachment_rejectsWhenStatusIsNotDraftOrMoreInfoRequired() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING);
+        when(requestRepo.findAttachment(90L)).thenReturn(Optional.of(
+            new PricingRequestAttachmentDto(90L, 20L, "f.pdf", "application/pdf", 1L, false, 1L, Instant.now())));
+
+        assertConflict(() -> service.deleteAttachment(90L, salesActor));
+        verify(requestRepo, never()).deleteAttachment(anyLong());
+    }
+
+    @Test
+    void setAttachmentIncludeInFactoryEmail_rejectsNonImportRoles() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING);
+        when(requestRepo.findAttachment(90L)).thenReturn(Optional.of(
+            new PricingRequestAttachmentDto(90L, 20L, "f.pdf", "application/pdf", 1L, false, 1L, Instant.now())));
+
+        assertForbidden(() -> service.setAttachmentIncludeInFactoryEmail(
+            90L, new UpdatePricingRequestAttachmentRequest(true), salesActor));
+        assertForbidden(() -> service.setAttachmentIncludeInFactoryEmail(
+            90L, new UpdatePricingRequestAttachmentRequest(true), ceoActor));
+        verify(requestRepo, never()).setIncludeInFactoryEmail(anyLong(), anyBoolean());
+    }
+
+    @Test
+    void setAttachmentIncludeInFactoryEmail_acceptsImport() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING);
+        when(requestRepo.findAttachment(90L)).thenReturn(Optional.of(
+            new PricingRequestAttachmentDto(90L, 20L, "f.pdf", "application/pdf", 1L, false, 1L, Instant.now())));
+        when(requestRepo.setIncludeInFactoryEmail(90L, true)).thenReturn(1);
+
+        service.setAttachmentIncludeInFactoryEmail(90L, new UpdatePricingRequestAttachmentRequest(true), importActor);
+
+        verify(requestRepo).setIncludeInFactoryEmail(90L, true);
+    }
+
+    private static MockMultipartFile sampleFile() {
+        return new MockMultipartFile("file", "quote-sketch.pdf", "application/pdf", "content".getBytes());
     }
 
     // ── helpers ──────────────────────────────────────────────────────────
@@ -1404,16 +1556,20 @@ class PricingRequestServiceTest {
         return new RespondMoreInformationRequest("ขนาด 60x60");
     }
 
+    /**
+     * Catalog snapshot fields (positions 20-25: priceListVersionId, catalogPriceId,
+     * catalogBasePrice, catalogCurrency, resolvedFactoryId, resolvedFactoryName) are fully
+     * populated here so the Finding A catalog-completeness gate in submit() does not interfere
+     * with unrelated tests that use this DTO — dedicated catalog-gate tests build their own
+     * items with those fields deliberately null/incomplete instead of reusing this helper.
+     */
     private static PricingRequestItemDto sampleItem(Long sourceTicketItemId) {
-        return new PricingRequestItemDto(1L, 20L, sourceTicketItemId, null, null,
-            "Brand", "Model", null, null, null, null, null,
-            new BigDecimal("1"), null, "PIECE", QuantityType.REFERENCE,
-            null, null, null, 0, null, null, null, null, null, null, null, null, null, null, null);
+        return itemDtoWithIdentity(sourceTicketItemId, null, "Brand", "Model", null);
     }
 
     private static PricingRequestItemRequest sampleItemRequest(Long sourceTicketItemId, String quantityType) {
         return new PricingRequestItemRequest(sourceTicketItemId, null, null, "Brand", "Model", null, null, null, null, null,
-            new BigDecimal("1"), null, "PIECE", quantityType, null, null, null);
+            new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, quantityType, null, null, null);
     }
 
     /** Lets each Part 1 identity test set exactly one identifying field and leave the rest null. */
@@ -1426,7 +1582,7 @@ class PricingRequestServiceTest {
                                                                      String brand, String model, String specialRequirement,
                                                                      String productDescription) {
         return new PricingRequestItemRequest(sourceTicketItemId, productId, null, brand, model, productDescription, null, null, null, null,
-            new BigDecimal("1"), null, "PIECE", QuantityType.REFERENCE, null, null, specialRequirement);
+            new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE, null, null, specialRequirement);
     }
 
     /** Same as {@link #sampleItem}, but with every identity field controllable for the Part 1 submit-recheck tests. */
@@ -1438,10 +1594,26 @@ class PricingRequestServiceTest {
     private static PricingRequestItemDto itemDtoWithIdentity(Long sourceTicketItemId, Long productId,
                                                              String brand, String model, String specialRequirement,
                                                              String productDescription) {
+        // Catalog snapshot fields populated (see sampleItem's javadoc above) so this helper's
+        // callers exercise submit()'s Finding A gate the same (passing) way regardless of
+        // whether productId itself is null — most callers are testing identity rules, not the
+        // catalog gate, and a free-text item (productId null) must still be able to pass the
+        // catalog gate once catalog fields are populated by snapshotCatalogSelections in
+        // production; this fixture simulates that already having happened.
         return new PricingRequestItemDto(1L, 20L, sourceTicketItemId, productId, null,
             brand, model, productDescription, null, null, null, null,
-            new BigDecimal("1"), null, "PIECE", QuantityType.REFERENCE,
-            null, null, specialRequirement, 0, null, null, null, null, null, null, null, null, null, null, null);
+            new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE,
+            null, null, specialRequirement, 0, 900L, 900L, new BigDecimal("100.0000"), "THB",
+            null, 900L, "Test Factory", null, null, null, null);
+    }
+
+    /** Same shape as {@link #itemDtoWithIdentity}, but with every catalog snapshot field left null — for the dedicated catalog-gate tests. */
+    private static PricingRequestItemDto itemDtoWithoutCatalogSnapshot(Long sourceTicketItemId, Long productId,
+                                                                       String brand, String model) {
+        return new PricingRequestItemDto(1L, 20L, sourceTicketItemId, productId, null,
+            brand, model, null, null, null, null, null,
+            new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE,
+            null, null, null, 0, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private static CreatePricingRequestRequest createRequest(String recipientType, Long recipientContactId,
@@ -1508,5 +1680,15 @@ class PricingRequestServiceTest {
         assertThatThrownBy(action)
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    private static void assertUnprocessable(ThrowableAssert.ThrowingCallable action, String expectedMessageFragment) {
+        assertThatThrownBy(action)
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                if (expectedMessageFragment != null) {
+                    assertThat(e.getMessage()).contains(expectedMessageFragment);
+                }
+            });
     }
 }

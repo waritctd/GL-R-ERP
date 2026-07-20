@@ -5,6 +5,21 @@ import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 
 globalThis.React = React;
 
+// The component fetches Pricing Request attachments (V69) whenever a persisted id is available
+// (createdId after save, or initialSummary.id in edit mode) and searches the catalog picker on
+// typing — neither is under test here, so both are stubbed to resolve emptily rather than
+// hitting the network and polluting assertions that expect exactly one alert.
+vi.mock('../../api/index.js', () => ({
+  api: {
+    catalog: { prices: vi.fn().mockResolvedValue({ items: [] }) },
+    pricingRequests: {
+      listAttachments: vi.fn().mockResolvedValue({ items: [] }),
+      uploadAttachment: vi.fn().mockResolvedValue({ attachment: null }),
+      deleteAttachment: vi.fn().mockResolvedValue({ ok: true }),
+    },
+  },
+}));
+
 function ticketItem(overrides = {}) {
   return {
     id: 501,
@@ -236,5 +251,125 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
     );
     expect(screen.queryByRole('button', { name: /ส่งให้ Import/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกร่าง' })).toBeNull();
+  });
+});
+
+// Review remediation (COMMIT 5, P1 finding 3): the customer-change revision UI used to copy the
+// current request verbatim (PricingRequestDetailPage's now-deleted revisionPayload()) and only
+// collect a revision reason, so a customer changing product/quantity/recipient/date could never
+// express it — the new DRAFT was always commercially identical to its parent. Revision mode
+// reuses this same modal (seeding, catalog picker, unit select, attachment uploader) instead.
+describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () => {
+  function revisionInitialValue(overrides = {}) {
+    return {
+      summary: {
+        id: 88,
+        recipientType: 'OWNER',
+        recipientLabel: 'เจ้าของโครงการ ข.',
+        requiredDate: '2026-08-01',
+        customerTargetPrice: 500,
+        targetCurrency: 'USD',
+        note: 'โน้ตเดิม',
+      },
+      items: [{
+        id: 9, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1', color: 'ขาว',
+        productDescription: 'กระเบื้องพื้น SCG A1', texture: 'ด้าน', size: '60x60', factory: 'SCG Ceramics',
+        requestedQty: 20, requestedUnit: 'แผ่น', requestedUnitBasis: 'PER_PIECE',
+        quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: null, specialRequirement: null,
+      }],
+      ...overrides,
+    };
+  }
+
+  function renderRevisionModal(overrides = {}) {
+    const createRevisionFn = vi.fn().mockResolvedValue({ pricingRequest: { summary: { id: 999 } } });
+    const createFn = vi.fn();
+    const submitFn = vi.fn();
+    const updateFn = vi.fn();
+    const onClose = vi.fn();
+    const onCreated = vi.fn();
+    render(
+      <PricingRequestCreateModal
+        mode="revision"
+        initialValue={revisionInitialValue()}
+        onClose={onClose}
+        onCreated={onCreated}
+        createRevisionFn={createRevisionFn}
+        createFn={createFn}
+        submitFn={submitFn}
+        updateFn={updateFn}
+        {...overrides}
+      />,
+    );
+    return { createRevisionFn, createFn, submitFn, updateFn, onClose, onCreated };
+  }
+
+  it('seeds every field from the CURRENT request (initialValue), same as edit mode', () => {
+    renderRevisionModal();
+    expect(screen.getByDisplayValue('เจ้าของโครงการ ข.')).not.toBeNull();
+    expect(screen.getByDisplayValue('20')).not.toBeNull();
+    expect(screen.getByDisplayValue('โน้ตเดิม')).not.toBeNull();
+    expect(screen.getByDisplayValue('กระเบื้องพื้น SCG A1')).not.toBeNull();
+  });
+
+  it('requires a revision reason — the create button stays disabled until one is entered', async () => {
+    const { createRevisionFn } = renderRevisionModal();
+    const submit = screen.getByRole('button', { name: /สร้าง revision/ });
+    expect(submit.disabled).toBe(true);
+
+    fireEvent.click(submit); // disabled: must be a no-op, not a silent success
+    expect(createRevisionFn).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByPlaceholderText('เช่น ลูกค้าเปลี่ยนสินค้า/จำนวน/ขนาด'), {
+      target: { value: 'ลูกค้าเปลี่ยนจำนวนและผู้รับ' },
+    });
+    expect(submit.disabled).toBe(false);
+  });
+
+  it('edits to quantity, recipient, and product description actually reach the payload sent to createRevisionFn', async () => {
+    const { createRevisionFn } = renderRevisionModal();
+
+    fireEvent.change(screen.getByPlaceholderText('เช่น ลูกค้าเปลี่ยนสินค้า/จำนวน/ขนาด'), {
+      target: { value: 'ลูกค้าเปลี่ยนจำนวนและผู้รับ' },
+    });
+    fireEvent.change(screen.getByDisplayValue('เจ้าของโครงการ ข.'), { target: { value: 'เจ้าของโครงการ ค. (เปลี่ยนใหม่)' } });
+    fireEvent.change(screen.getByDisplayValue('20'), { target: { value: '35' } });
+    fireEvent.change(screen.getByDisplayValue('กระเบื้องพื้น SCG A1'), { target: { value: 'กระเบื้องพื้น SCG A1 รุ่นใหม่' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /สร้าง revision/ }));
+
+    await waitFor(() => expect(createRevisionFn).toHaveBeenCalledTimes(1));
+    expect(createRevisionFn).toHaveBeenCalledWith(88, expect.objectContaining({
+      revisionReason: 'ลูกค้าเปลี่ยนจำนวนและผู้รับ',
+      recipientLabel: 'เจ้าของโครงการ ค. (เปลี่ยนใหม่)',
+      items: [expect.objectContaining({
+        requestedQty: 35,
+        productDescription: 'กระเบื้องพื้น SCG A1 รุ่นใหม่',
+      })],
+    }));
+  });
+
+  it('never calls updateFn/createFn/submitFn against the parent request — the prior request stays untouched', async () => {
+    const { createRevisionFn, createFn, submitFn, updateFn, onCreated } = renderRevisionModal();
+
+    fireEvent.change(screen.getByPlaceholderText('เช่น ลูกค้าเปลี่ยนสินค้า/จำนวน/ขนาด'), {
+      target: { value: 'ลูกค้าเปลี่ยนใจ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /สร้าง revision/ }));
+
+    await waitFor(() => expect(createRevisionFn).toHaveBeenCalledTimes(1));
+    expect(createRevisionFn).toHaveBeenCalledWith(88, expect.any(Object));
+    expect(updateFn).not.toHaveBeenCalled();
+    expect(createFn).not.toHaveBeenCalled();
+    expect(submitFn).not.toHaveBeenCalled();
+    expect(onCreated).toHaveBeenCalledWith({ pricingRequest: { summary: { id: 999 } } });
+  });
+
+  it('has no "ส่งให้ Import"/"บันทึกร่าง"/"บันทึกการแก้ไข" buttons — only "สร้าง revision"', () => {
+    renderRevisionModal();
+    expect(screen.queryByRole('button', { name: /ส่งให้ Import/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'บันทึกร่าง' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'บันทึกการแก้ไข' })).toBeNull();
+    expect(screen.getByRole('button', { name: /สร้าง revision/ })).not.toBeNull();
   });
 });

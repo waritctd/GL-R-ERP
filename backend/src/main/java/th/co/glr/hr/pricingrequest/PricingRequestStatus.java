@@ -31,7 +31,12 @@ public final class PricingRequestStatus {
         AWAITING_FACTORY_RESPONSE, Set.of(COSTING_IN_PROGRESS, MORE_INFO_REQUIRED, CANCELLED, SUPERSEDED),
         COSTING_IN_PROGRESS, Set.of(AWAITING_FACTORY_RESPONSE, READY_FOR_CEO_REVIEW, MORE_INFO_REQUIRED, CANCELLED, SUPERSEDED),
         MORE_INFO_REQUIRED,  Set.of(IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE, COSTING_IN_PROGRESS, CANCELLED),
-        READY_FOR_CEO_REVIEW, Set.of(SUPERSEDED),
+        // Costing v2 path (review remediation COMMIT 5): a factory revising its quote after
+        // CEO review has already started (FactoryQuoteService.receive's revision branch), or
+        // Import opening a brand-new costing draft against an already-submitted request
+        // (PricingCostingService.createDraft, gated on COSTING_CREATE_STATUS including
+        // READY_FOR_CEO_REVIEW), both reopen costing rather than only allowing SUPERSEDED.
+        READY_FOR_CEO_REVIEW, Set.of(COSTING_IN_PROGRESS, SUPERSEDED),
         SUPERSEDED,          Set.of(),
         CANCELLED,           Set.of());
 

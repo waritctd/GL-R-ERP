@@ -46,6 +46,11 @@ describe('canTransition', () => {
     expect(canTransition('MORE_INFO_REQUIRED', 'IMPORT_REVIEWING')).toBe(true);
     expect(canTransition('MORE_INFO_REQUIRED', 'CANCELLED')).toBe(true);
     expect(canTransition('READY_FOR_CEO_REVIEW', 'SUPERSEDED')).toBe(true);
+    // Costing v2 path (review remediation COMMIT 5): added to PricingRequestStatus.ALLOWED
+    // alongside the backend fix making that map authoritative (PricingRequestRepository
+    // .transition() now enforces it — previously decorative).
+    expect(canTransition('READY_FOR_CEO_REVIEW', 'COSTING_IN_PROGRESS')).toBe(true);
+    expect(canTransition('READY_FOR_CEO_REVIEW', 'CANCELLED')).toBe(false);
     expect(canTransition('CANCELLED', 'DRAFT')).toBe(false);
   });
 });

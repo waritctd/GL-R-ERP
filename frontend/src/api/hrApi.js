@@ -377,7 +377,33 @@ export const api = {
       return res.json();
     },
     factoryQuoteAttachmentUrl: (id) => API_ROUTES.pricingRequests.factoryQuoteAttachmentFile(id),
-    deleteFactoryQuoteAttachment: (id) => apiRequest(API_ROUTES.pricingRequests.factoryQuoteAttachment(id), { method: 'DELETE' }),
+    deleteFactoryQuoteAttachment: (id, reason) => apiRequest(
+      `${API_ROUTES.pricingRequests.factoryQuoteAttachment(id)}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`,
+      { method: 'DELETE' },
+    ),
     cancel: (id, payload) => apiRequest(API_ROUTES.pricingRequests.cancel(id), { method: 'POST', body: payload }),
+    // Sales-level supporting attachments on the Pricing Request itself (V69, review remediation
+    // COMMIT 4) — distinct from the raw factory-quote attachments above.
+    uploadAttachment: async (id, file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(API_ROUTES.pricingRequests.attachments(id), {
+        method: 'POST',
+        credentials: 'include',
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'Upload failed');
+      }
+      return res.json();
+    },
+    listAttachments: (id) => apiRequest(API_ROUTES.pricingRequests.attachments(id)),
+    attachmentUrl: (id) => API_ROUTES.pricingRequests.attachmentFile(id),
+    deleteAttachment: (id) => apiRequest(API_ROUTES.pricingRequests.attachment(id), { method: 'DELETE' }),
+    setAttachmentIncludeInFactoryEmail: (id, includeInFactoryEmail) => apiRequest(
+      API_ROUTES.pricingRequests.attachmentIncludeInFactoryEmail(id),
+      { method: 'PUT', body: { includeInFactoryEmail } },
+    ),
   },
 };

@@ -35,7 +35,14 @@ public final class FactoryQuoteDtos {
         Instant createdAt,
         Instant updatedAt,
         List<FactoryQuoteItemDto> items,
-        List<FactoryQuoteAttachmentDto> attachments
+        List<FactoryQuoteAttachmentDto> attachments,
+        // Most recent sales.factory_quote_email_dispatch row for this quote (the outbox worker's
+        // state), so the frontend can show pending/sending/sent/failed without a second endpoint.
+        // Null when send() has never been called for this quote.
+        String dispatchStatus,
+        int dispatchAttemptCount,
+        String dispatchFailureMessage,
+        Instant dispatchNextAttemptAt
     ) {}
 
     public record FactoryQuoteItemDto(
@@ -53,6 +60,7 @@ public final class FactoryQuoteDtos {
         BigDecimal minimumOrderQuantity,
         BigDecimal sqmPerUnit,
         BigDecimal piecesPerBox,
+        BigDecimal linearMPerUnit,
         String leadTimeText,
         String availabilityNote,
         String lineNote,
@@ -66,6 +74,14 @@ public final class FactoryQuoteDtos {
         String mimeType,
         Long fileSize,
         long uploadedBy,
-        Instant uploadedAt
+        Instant uploadedAt,
+        // Audited-tombstone fields (V69, review remediation COMMIT 4): a permitted deletion now
+        // sets these three instead of physically removing the row/file — see
+        // FactoryQuoteService.deleteAttachment. Null means "not deleted." The row and its
+        // deletedAt/deletedBy/deleteReason remain visible in the same list Import/CEO already
+        // see, so the audit trail is never hidden, only marked.
+        Instant deletedAt,
+        Long deletedBy,
+        String deleteReason
     ) {}
 }

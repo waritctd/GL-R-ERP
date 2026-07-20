@@ -31,6 +31,7 @@ import {
   canTransition as pricingRequestCanTransition,
   QUANTITY_TYPE_OPTIONS as PRICING_REQUEST_QUANTITY_TYPE_OPTIONS,
   RECIPIENT_OPTIONS as PRICING_REQUEST_RECIPIENT_OPTIONS,
+  UNIT_BASIS_OPTIONS as PRICING_REQUEST_UNIT_BASIS_OPTIONS,
 } from '../features/pricingRequests/pricingRequestMeta.js';
 
 const db = createDemoDatabase();
@@ -408,13 +409,20 @@ let mockPricingRequestItemSeq = 1;
 let mockPricingRequestEventSeq = 1;
 const mockFactoryQuotes = [];
 const mockPricingCostings = [];
+const mockFactoryQuoteResponseReceipts = [];
+// clientRequestId -> quoteId, for sendFactoryQuote()'s idempotency replay (mirrors
+// sales.factory_quote_email_dispatch's unique (created_by, client_request_id) index).
+const mockFactoryQuoteDispatchClientRequests = [];
 let mockFactoryQuoteSeq = 1;
 let mockFactoryQuoteItemSeq = 1;
 let mockFactoryQuoteAttachmentSeq = 1;
+let mockPricingRequestAttachmentSeq = 1;
 let mockPricingCostingSeq = 1;
 const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'sales_manager'];
 const PRICING_REQUEST_RECIPIENT_VALUES = PRICING_REQUEST_RECIPIENT_OPTIONS.map((o) => o.code);
 const PRICING_REQUEST_QUANTITY_TYPE_VALUES = PRICING_REQUEST_QUANTITY_TYPE_OPTIONS.map((o) => o.code);
+// Mirrors th.co.glr.hr.pricingrequest.UnitBasis.VALUES (financial-integrity review Finding B).
+const UNIT_BASIS_VALUES = PRICING_REQUEST_UNIT_BASIS_OPTIONS.map((o) => o.code);
 
 function nextPricingRequestCode() {
   return `PCR-2026-${String(mockPricingRequestSeq).padStart(4, '0')}`;
@@ -424,6 +432,31 @@ function findPricingRequestRaw(id) {
   const pr = mockPricingRequests.find((p) => p.id === Number(id));
   if (!pr) fail('Pricing request not found', 404);
   return pr;
+}
+
+// Mock stand-in for FactoryQuoteEmailDispatchWorker: send() only enqueues (dispatchStatus:
+// 'PENDING'); this simulates the background worker claiming it (-> 'SENDING') and finalizing it
+// (-> 'SENT', quote -> REQUESTED, pricing request status transition, FACTORY_EMAIL_SENT event) a
+// short delay later, so PricingRequestDetailPage's polling has something real to observe.
+function scheduleMockFactoryQuoteDispatch(quote, actor) {
+  quote.dispatchStatus = 'SENDING';
+  quote.dispatchAttemptCount = 1;
+  setTimeout(() => {
+    const current = mockFactoryQuotes.find((q) => q.id === quote.id);
+    // Guard against a quote that moved on (e.g. was cancelled) while "in flight" — the closest
+    // mock equivalent of the real worker's guarded, idempotent finalize.
+    if (!current || current.status !== 'DRAFT' || current.dispatchStatus !== 'SENDING') return;
+    current.status = 'REQUESTED';
+    current.emailSentAt = new Date().toISOString();
+    current.requestedAt = current.emailSentAt;
+    current.sentBy = actor.id;
+    current.updatedAt = current.emailSentAt;
+    current.dispatchStatus = 'SENT';
+    const pr = findPricingRequestRaw(current.pricingRequestId);
+    const fromStatus = pr.status;
+    if (['IMPORT_REVIEWING', 'COSTING_IN_PROGRESS'].includes(pr.status)) pr.status = 'AWAITING_FACTORY_RESPONSE';
+    pushPricingRequestEvent(pr, actor, 'FACTORY_EMAIL_SENT', fromStatus, pr.status);
+  }, 700);
 }
 
 function pushPricingRequestEvent(pr, actor, eventKind, fromStatus, toStatus, message = null, metadata = null) {
@@ -524,6 +557,12 @@ function requirePricingRequestItemFieldsValid(items) {
     if (!item.requestedUnit?.trim()) {
       fail('requestedUnit must not be blank', 400);
     }
+    // Mirrors PricingRequestItemRequest's @NotBlank requestedUnitBasis (V68,
+    // financial-integrity review Finding B) — the machine-readable basis
+    // PricingCostingService now normalizes the requested quantity against.
+    if (!item.requestedUnitBasis?.trim()) {
+      fail('requestedUnitBasis must not be blank', 400);
+    }
     if (!item.quantityType?.trim()) {
       fail('quantityType must not be blank', 400);
     }
@@ -539,6 +578,89 @@ function requirePricingRequestItemFieldsValid(items) {
       fail(`รายการที่ ${index + 1}: ต้องระบุสินค้าที่ต้องการเสนอราคา (เลือกจากรายการในดีล หรือระบุรุ่น/รายละเอียด)`, 400);
     }
   });
+}
+
+// Mirrors PricingRequestRepository.snapshotCatalogSelections: for each item whose productId
+// matches an ACTIVE catalog price, populates the catalog snapshot fields the same way the real
+// UPDATE...FROM does — including catalog_brand = COALESCE(pri.brand, pp.grade) and
+// factory = COALESCE(NULLIF(BTRIM(pri.factory), ''), f.name). An item whose productId does not
+// resolve (null productId, or no ACTIVE price_list_version for that product's factory) is left
+// untouched — submitPricingRequestCatalogGate below is what rejects those.
+function snapshotPricingRequestCatalogSelections(pr) {
+  for (const item of pr.items) {
+    if (item.productId == null) continue;
+    const product = mockProductPrices.find((p) => p.priceId === item.productId);
+    if (!product) continue;
+    const activeVersion = mockPriceImportVersions.find(
+      (v) => v.factoryId === product.factoryId && v.status === 'ACTIVE');
+    if (!activeVersion) continue;
+    const factory = mockPriceImportFactories.find((f) => f.factoryId === product.factoryId);
+    item.priceListVersionId = activeVersion.versionId;
+    item.catalogPriceId = product.priceId;
+    item.catalogBasePrice = product.price;
+    item.catalogCurrency = product.currency;
+    item.catalogEffectiveDate = activeVersion.createdAt ?? null;
+    item.resolvedFactoryId = product.factoryId;
+    item.resolvedFactoryName = factory?.name ?? product.factoryName ?? null;
+    item.catalogProductCode = product.productCode ?? null;
+    item.catalogBrand = item.brand?.trim() ? item.brand : (product.grade ?? null);
+    item.catalogCollection = product.collection ?? null;
+    item.catalogModel = product.productName ?? null;
+    item.factory = item.factory?.trim() ? item.factory : (factory?.name ?? product.factoryName ?? item.factory);
+  }
+}
+
+// Mirrors PricingRequestService.submit's Finding A gate (financial-integrity review, commit
+// 3): the catalog is now MANDATORY — every item must have a fully-resolved catalog snapshot
+// (run snapshotPricingRequestCatalogSelections first) or submit() 422s naming every failing
+// 1-based line number in one message, same "รายการที่ N" style as the identity check above.
+function submitPricingRequestCatalogGate(pr) {
+  const missingLines = [];
+  pr.items.forEach((item, index) => {
+    if (item.catalogPriceId == null || item.priceListVersionId == null
+        || item.catalogBasePrice == null || item.catalogCurrency == null
+        || item.resolvedFactoryId == null || item.resolvedFactoryName == null) {
+      missingLines.push(index + 1);
+    }
+  });
+  if (missingLines.length > 0) {
+    fail(`รายการที่ ${missingLines.join(', ')}: ต้องเลือกสินค้าจาก Price Catalog ที่ active ก่อนส่งคำขอราคา (ไม่พบข้อมูลราคา/โรงงานจาก catalog)`, 422);
+  }
+}
+
+// Mirrors PricingCostingService.requireFactor/missingFactor (financial-integrity review
+// Finding B): 422 naming both the item and the missing conversion factor, rather than letting
+// a null factor silently propagate into a wrong number (or a NaN).
+function mockRequireConversionFactor(value, pricingRequestItemId, factorName) {
+  const numeric = Number(value);
+  if (value == null || !(numeric > 0)) {
+    fail(`Pricing request item ${pricingRequestItemId} is missing the ${factorName} conversion factor needed to normalize its price/quantity`, 422);
+  }
+  return numeric;
+}
+
+// Mirrors PricingCostingService.pricePerPiece: converts a raw factory-quoted price to a
+// per-PIECE figure using the QUOTE's own unit basis.
+function mockPricePerPiece(rawPrice, quotedUnitBasis, factors, pricingRequestItemId) {
+  switch (quotedUnitBasis) {
+    case 'PER_PIECE': return Number(rawPrice);
+    case 'PER_BOX': return Number(rawPrice) / mockRequireConversionFactor(factors.piecesPerBox, pricingRequestItemId, 'piecesPerBox');
+    case 'PER_SQM': return Number(rawPrice) * mockRequireConversionFactor(factors.sqmPerUnit, pricingRequestItemId, 'sqmPerUnit');
+    case 'PER_LINEAR_M': return Number(rawPrice) * mockRequireConversionFactor(factors.linearMPerUnit, pricingRequestItemId, 'linearMPerUnit');
+    default: fail(`Unsupported factory quote unit basis '${quotedUnitBasis}'`, 422); return null;
+  }
+}
+
+// Mirrors PricingCostingService.quantityToPieces: converts a requested quantity to a PIECE
+// count using the REQUEST's own unit basis — independent of the quote's own basis above.
+function mockQuantityToPieces(requestedQty, requestedUnitBasis, factors, pricingRequestItemId) {
+  switch (requestedUnitBasis) {
+    case 'PER_PIECE': return Number(requestedQty);
+    case 'PER_BOX': return Number(requestedQty) * mockRequireConversionFactor(factors.piecesPerBox, pricingRequestItemId, 'piecesPerBox');
+    case 'PER_SQM': return Number(requestedQty) / mockRequireConversionFactor(factors.sqmPerUnit, pricingRequestItemId, 'sqmPerUnit');
+    case 'PER_LINEAR_M': return Number(requestedQty) / mockRequireConversionFactor(factors.linearMPerUnit, pricingRequestItemId, 'linearMPerUnit');
+    default: fail(`Unsupported requested unit basis '${requestedUnitBasis}'`, 422); return null;
+  }
 }
 
 function buildMockDoc(doc) {
@@ -4210,6 +4332,10 @@ export const api = {
         if (!PRICING_REQUEST_QUANTITY_TYPE_VALUES.includes(item.quantityType)) {
           fail(`Unknown quantity type '${item.quantityType}'`, 400);
         }
+        // Mirrors PricingRequestService.validateItems's UnitBasis.isValid check.
+        if (!UNIT_BASIS_VALUES.includes(item.requestedUnitBasis)) {
+          fail(`Unknown requestedUnitBasis '${item.requestedUnitBasis}'`, 400);
+        }
       }
       if (payload.targetCurrency && payload.targetCurrency.trim().length !== 3) {
         fail('targetCurrency must be a 3-letter currency code', 400);
@@ -4243,11 +4369,26 @@ export const api = {
         requestedQty: item.requestedQty,
         requestedQtySqm: item.requestedQtySqm ?? null,
         requestedUnit: item.requestedUnit,
+        requestedUnitBasis: item.requestedUnitBasis,
         quantityType: item.quantityType,
         targetDeliveryDate: item.targetDeliveryDate ?? null,
         deliveryLocation: item.deliveryLocation ?? null,
         specialRequirement: item.specialRequirement ?? null,
         sortOrder: i,
+        // Catalog snapshot (Finding A, financial-integrity review commit 3) — populated only
+        // by submit()'s snapshotCatalogSelections mirror below, never at create/update time,
+        // matching PricingRequestRepository.create/updateDraft/snapshotCatalogSelections.
+        priceListVersionId: null,
+        catalogPriceId: null,
+        catalogBasePrice: null,
+        catalogCurrency: null,
+        catalogEffectiveDate: null,
+        resolvedFactoryId: null,
+        resolvedFactoryName: null,
+        catalogProductCode: null,
+        catalogBrand: null,
+        catalogCollection: null,
+        catalogModel: null,
       }));
       const pr = {
         id, requestCode, ticketId: Number(ticketId),
@@ -4269,6 +4410,9 @@ export const api = {
         submittedAt: null, pickedUpAt: null, cancelledAt: null,
         createdAt: now, updatedAt: now,
         items, events: [],
+        // Sales-level supporting attachments (V69, review remediation COMMIT 4) — distinct from
+        // a factory quote's own `attachments` array above.
+        attachments: [],
       };
       // Deliberately no notification, no ticket status change — a draft is the
       // rep's private scratchpad until submit() (mirrors createDraft's Javadoc).
@@ -4310,6 +4454,9 @@ export const api = {
           if (!PRICING_REQUEST_QUANTITY_TYPE_VALUES.includes(item.quantityType)) {
             fail(`Unknown quantity type '${item.quantityType}'`, 400);
           }
+          if (!UNIT_BASIS_VALUES.includes(item.requestedUnitBasis)) {
+            fail(`Unknown requestedUnitBasis '${item.requestedUnitBasis}'`, 400);
+          }
         }
         const validSourceItemIds = new Set((ticket?.items ?? []).map((i) => i.id));
         for (const item of payload.items) {
@@ -4346,11 +4493,24 @@ export const api = {
           requestedQty: item.requestedQty,
           requestedQtySqm: item.requestedQtySqm ?? null,
           requestedUnit: item.requestedUnit,
+          requestedUnitBasis: item.requestedUnitBasis,
           quantityType: item.quantityType,
           targetDeliveryDate: item.targetDeliveryDate ?? null,
           deliveryLocation: item.deliveryLocation ?? null,
           specialRequirement: item.specialRequirement ?? null,
           sortOrder: i,
+          // See create()'s identical block above for why these start null.
+          priceListVersionId: null,
+          catalogPriceId: null,
+          catalogBasePrice: null,
+          catalogCurrency: null,
+          catalogEffectiveDate: null,
+          resolvedFactoryId: null,
+          resolvedFactoryName: null,
+          catalogProductCode: null,
+          catalogBrand: null,
+          catalogCollection: null,
+          catalogModel: null,
         }));
       }
       pr.updatedAt = new Date().toISOString();
@@ -4401,6 +4561,13 @@ export const api = {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           attachments: [],
+          // Mirrors FactoryQuoteDto's dispatchStatus/dispatchAttemptCount/dispatchFailureMessage/
+          // dispatchNextAttemptAt: the outbox worker's state for this quote's most recent send.
+          // Null until sendFactoryQuote() enqueues one.
+          dispatchStatus: null,
+          dispatchAttemptCount: 0,
+          dispatchFailureMessage: null,
+          dispatchNextAttemptAt: null,
           items: items.map((item, i) => ({
             id: mockFactoryQuoteItemSeq++,
             factoryQuoteId: quoteId,
@@ -4446,6 +4613,11 @@ export const api = {
       return delay({ factoryQuote: quote });
     },
 
+    // Mirrors FactoryQuoteService.send(): enqueue-only. The actual "send + finalize" (quote ->
+    // REQUESTED, pricing request status transition, FACTORY_EMAIL_SENT event) happens out-of-band
+    // a moment later via scheduleMockFactoryQuoteDispatch(), the mock stand-in for
+    // FactoryQuoteEmailDispatchWorker, so the frontend can exercise the same
+    // pending/sending/sent-with-a-delay UX it will see against the real backend.
     async sendFactoryQuote(id, payload = {}) {
       const user = hasRole('import');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
@@ -4453,18 +4625,28 @@ export const api = {
       if (!payload.clientRequestId) fail('clientRequestId must be a UUID', 400);
       if (quote.status === 'REQUESTED') return delay({ factoryQuote: quote });
       if (quote.status !== 'DRAFT') fail('Only draft factory quote emails can be sent', 409);
-      quote.status = 'REQUESTED';
+      const existingForClient = mockFactoryQuoteDispatchClientRequests.find(
+        (d) => d.clientRequestId === payload.clientRequestId
+      );
+      if (existingForClient) {
+        if (existingForClient.quoteId !== quote.id) {
+          fail('clientRequestId has already been used for another factory quote', 409);
+        }
+        return delay({ factoryQuote: quote });
+      }
+      if (quote.dispatchStatus && ['PENDING', 'SENDING', 'SENT'].includes(quote.dispatchStatus)) {
+        return delay({ factoryQuote: quote });
+      }
       quote.emailTo = payload.emailTo ?? quote.emailTo;
       quote.emailSubject = payload.emailSubject ?? quote.emailSubject;
       quote.emailBody = payload.emailBody ?? quote.emailBody;
-      quote.emailSentAt = new Date().toISOString();
-      quote.requestedAt = quote.emailSentAt;
-      quote.sentBy = user.id;
-      quote.updatedAt = quote.emailSentAt;
-      const pr = findPricingRequestRaw(quote.pricingRequestId);
-      const fromStatus = pr.status;
-      if (['IMPORT_REVIEWING', 'COSTING_IN_PROGRESS'].includes(pr.status)) pr.status = 'AWAITING_FACTORY_RESPONSE';
-      pushPricingRequestEvent(pr, user, 'FACTORY_EMAIL_SENT', fromStatus, pr.status);
+      quote.updatedAt = new Date().toISOString();
+      mockFactoryQuoteDispatchClientRequests.push({ clientRequestId: payload.clientRequestId, quoteId: quote.id });
+      quote.dispatchStatus = 'PENDING';
+      quote.dispatchAttemptCount = 0;
+      quote.dispatchFailureMessage = null;
+      quote.dispatchNextAttemptAt = null;
+      scheduleMockFactoryQuoteDispatch(quote, user);
       return delay({ factoryQuote: quote });
     },
 
@@ -4472,6 +4654,25 @@ export const api = {
       const user = hasRole('import');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
       if (!quote) fail('Factory quote not found', 404);
+      if (!payload.clientRequestId) fail('clientRequestId must be a UUID', 400);
+      // Idempotency replay: a lost-response retry (same actor + clientRequestId)
+      // must not be treated as a new commercial revision. Look this up BEFORE any
+      // mutation and short-circuit with the quote the original call landed on.
+      const chainId = (q) => q.rootFactoryQuoteId ?? q.id;
+      const existingReceipt = mockFactoryQuoteResponseReceipts.find(
+        (r) => r.createdBy === user.id && r.clientRequestId === payload.clientRequestId
+      );
+      if (existingReceipt) {
+        const receiptQuote = mockFactoryQuotes.find((q) => q.id === existingReceipt.factoryQuoteId);
+        if (!receiptQuote) fail('Factory quote not found', 404);
+        // Compare the QUOTE CHAIN, not the pricing request: a pricing request has one quote
+        // per factory, so reusing a clientRequestId against a DIFFERENT factory's quote in the
+        // same pricing request must 409, not silently return the wrong factory's quote.
+        if (chainId(receiptQuote) !== chainId(quote)) {
+          fail('clientRequestId has already been used for another factory quote', 409);
+        }
+        return delay({ factoryQuote: receiptQuote });
+      }
       if (!quote.current) fail('Only the current factory quote revision can receive a response', 409);
       const pr = findPricingRequestRaw(quote.pricingRequestId);
       const applyResponse = (target) => {
@@ -4496,13 +4697,22 @@ export const api = {
           minimumOrderQuantity: item.minimumOrderQuantity ?? null,
           sqmPerUnit: item.sqmPerUnit ?? null,
           piecesPerBox: item.piecesPerBox ?? null,
+          // Mirrors FactoryQuoteItemDto.linearMPerUnit (V68, financial-integrity review
+          // Finding B) — the PER_LINEAR_M conversion factor, same role as sqmPerUnit/
+          // piecesPerBox above for PER_SQM/PER_BOX.
+          linearMPerUnit: item.linearMPerUnit ?? null,
           sortOrder: i,
         }));
       };
       if (['DRAFT', 'REQUESTED'].includes(quote.status)) {
         applyResponse(quote);
-        if (['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'].includes(pr.status)) pr.status = 'COSTING_IN_PROGRESS';
+        // First/partial factory response only confirms the request is awaiting
+        // (or still awaiting) factory replies. COSTING_IN_PROGRESS is entered only
+        // by createCosting(), once every request item's factory has a current
+        // READY_FOR_COSTING quote — see PricingCostingService.resolveSources.
+        if (pr.status === 'IMPORT_REVIEWING') pr.status = 'AWAITING_FACTORY_RESPONSE';
         pushPricingRequestEvent(pr, user, 'FACTORY_RESPONSE_RECEIVED', pr.status, pr.status);
+        mockFactoryQuoteResponseReceipts.push({ factoryQuoteId: quote.id, createdBy: user.id, clientRequestId: payload.clientRequestId });
         return delay({ factoryQuote: quote });
       }
       if (!['RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(quote.status)) {
@@ -4518,6 +4728,7 @@ export const api = {
         costing.staleReason = 'Factory quote revision changed';
       }
       pushPricingRequestEvent(pr, user, 'FACTORY_RESPONSE_REVISED', pr.status, pr.status);
+      mockFactoryQuoteResponseReceipts.push({ factoryQuoteId: revision.id, createdBy: user.id, clientRequestId: payload.clientRequestId });
       return delay({ factoryQuote: revision });
     },
 
@@ -4619,9 +4830,36 @@ export const api = {
         const quote = mockFactoryQuotes.find((q) => q.pricingRequestId === pr.id && q.factoryName === item.factory && q.current && q.status === 'READY_FOR_COSTING');
         const quoteItem = quote?.items.find((qi) => qi.pricingRequestItemId === item.id);
         if (!quote || !quoteItem) fail(`Factory quote for ${item.factory} is not ready for costing`, 422);
+        // Finding B (financial-integrity review, commit 3): normalize BOTH the quoted price
+        // and the requested quantity onto a common basis (physical pieces) before multiplying
+        // — see mockPricePerPiece/mockQuantityToPieces above, mirroring
+        // PricingCostingService.calculate(). The pre-fix mock multiplied raw price by the raw
+        // (un-normalized) requestedQty, the same bug the real backend had.
+        const factors = { sqmPerUnit: quoteItem.sqmPerUnit, piecesPerBox: quoteItem.piecesPerBox, linearMPerUnit: quoteItem.linearMPerUnit };
         const raw = Number(quoteItem.rawUnitPrice ?? 0);
-        const qty = Number(item.requestedQty ?? 1);
-        return { pricingRequestItemId: item.id, factoryQuoteId: quote.id, factoryQuoteItemId: quoteItem.id, factoryQuoteRevisionNo: quote.revisionNo, factoryName: quote.factoryName, rawUnitPrice: raw, rawCurrency: quoteItem.currency, landedCostPerUnitThb: raw, totalLandedCostThb: raw * qty };
+        const pricePerPiece = mockPricePerPiece(raw, quoteItem.unitBasis, factors, item.id);
+        const normalizedQuantityPieces = mockQuantityToPieces(item.requestedQty, item.requestedUnitBasis, factors, item.id);
+        return {
+          pricingRequestItemId: item.id,
+          factoryQuoteId: quote.id,
+          factoryQuoteItemId: quoteItem.id,
+          factoryQuoteRevisionNo: quote.revisionNo,
+          factoryName: quote.factoryName,
+          rawUnitPrice: raw,
+          rawCurrency: quoteItem.currency,
+          rawUnit: quoteItem.quotedUnit,
+          unitBasis: quoteItem.unitBasis,
+          requestedQuantity: item.requestedQty,
+          requestedUnit: item.requestedUnit,
+          requestedUnitBasis: item.requestedUnitBasis,
+          normalizedQuantityPieces,
+          sqmPerUnit: quoteItem.sqmPerUnit ?? null,
+          piecesPerBox: quoteItem.piecesPerBox ?? null,
+          linearMPerUnit: quoteItem.linearMPerUnit ?? null,
+          goodsCostThb: pricePerPiece,
+          landedCostPerUnitThb: pricePerPiece,
+          totalLandedCostThb: pricePerPiece * normalizedQuantityPieces,
+        };
       });
       costing.totalLandedCostThb = costing.items.reduce((sum, item) => sum + item.totalLandedCostThb, 0);
       costing.status = 'CALCULATED';
@@ -4668,6 +4906,11 @@ export const api = {
       // create()/update() time — a draft saved before this rule existed (or
       // one whose items were never touched again) must still be blocked here.
       requirePricingRequestItemFieldsValid(pr.items);
+      // Finding A (financial-integrity review, commit 3): snapshot the catalog selection for
+      // every catalog-backed item, then reject the submit unless EVERY item resolved — mirrors
+      // PricingRequestService.submit calling snapshotCatalogSelections then re-checking.
+      snapshotPricingRequestCatalogSelections(pr);
+      submitPricingRequestCatalogGate(pr);
       const seenSourceItemIds = new Set();
       for (const item of pr.items) {
         if (item.sourceTicketItemId != null) {
@@ -4793,6 +5036,9 @@ export const api = {
           sortOrder: i,
         })),
         events: [],
+        // A revision starts with no attachments of its own — the `...parent` spread above must
+        // NOT carry the parent's attachments array forward.
+        attachments: [],
       };
       mockPricingRequests.push(revision);
       pushPricingRequestEvent(parent, user, 'PRICING_REQUEST_REVISED', parentStatus, 'SUPERSEDED', payload.revisionReason);
@@ -4819,6 +5065,78 @@ export const api = {
       pr.updatedAt = now;
       pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_CANCELLED', fromStatus, 'CANCELLED', payload.reason, JSON.stringify({ reason: payload.reason }));
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    // ── Pricing Request attachments (V69, review remediation COMMIT 4) ──────
+    // Sales-level supporting attachments on the Pricing Request itself — distinct from the raw
+    // factory-quote attachments above (uploadFactoryQuoteAttachment etc.), which stay
+    // Import/CEO-only. Mirrors PricingRequestService's new uploadAttachment/listAttachments/
+    // attachmentFilePath/deleteAttachment/setAttachmentIncludeInFactoryEmail.
+
+    async uploadAttachment(id, file) {
+      // Mirrors PricingRequestService.uploadAttachment: owner sales only, DRAFT/MORE_INFO_REQUIRED
+      // only. requirePricingRequestViewable already 404s a non-owner on a DRAFT (draft privacy)
+      // and 403s a non-owner once the request is visible-but-not-owned — see that helper.
+      const user = hasRole('sales');
+      const pr = requirePricingRequestViewable(id, user);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (!['DRAFT', 'MORE_INFO_REQUIRED'].includes(pr.status)) {
+        fail('Pricing request attachments can only be uploaded while DRAFT or MORE_INFO_REQUIRED', 409);
+      }
+      requirePricingRequestDealActive(ticket);
+      const attachment = {
+        id: mockPricingRequestAttachmentSeq++,
+        pricingRequestId: pr.id,
+        fileName: file?.name ?? 'attachment',
+        mimeType: file?.type ?? null,
+        fileSize: file?.size ?? null,
+        includeInFactoryEmail: false,
+        uploadedBy: user.id,
+        uploadedAt: new Date().toISOString(),
+      };
+      pr.attachments = [attachment, ...(pr.attachments ?? [])];
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_UPDATED', pr.status, pr.status, `Attachment uploaded: ${attachment.fileName}`);
+      return delay({ attachment });
+    },
+
+    async listAttachments(id) {
+      const user = requireSession();
+      const pr = requirePricingRequestViewable(id, user);
+      return delay({ items: pr.attachments ?? [] });
+    },
+
+    attachmentUrl(id) {
+      return `#mock-pricing-request-attachment-${id}`;
+    },
+
+    async deleteAttachment(id) {
+      // Mirrors PricingRequestService.deleteAttachment: owner sales only,
+      // DRAFT/MORE_INFO_REQUIRED only.
+      const user = hasRole('sales');
+      const owningPr = mockPricingRequests.find((p) => (p.attachments ?? []).some((a) => a.id === Number(id)));
+      if (!owningPr) fail('Pricing request attachment not found', 404);
+      const ticket = db.tickets.find((t) => t.id === owningPr.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (!['DRAFT', 'MORE_INFO_REQUIRED'].includes(owningPr.status)) {
+        fail('Pricing request attachments can only be deleted while DRAFT or MORE_INFO_REQUIRED', 409);
+      }
+      owningPr.attachments = (owningPr.attachments ?? []).filter((a) => a.id !== Number(id));
+      return delay({ ok: true });
+    },
+
+    async setAttachmentIncludeInFactoryEmail(id, includeInFactoryEmail) {
+      // Mirrors PricingRequestService.setAttachmentIncludeInFactoryEmail: import only. No extra
+      // status gate — requirePricingRequestViewable already makes a DRAFT request invisible to
+      // import entirely, so import can only ever reach an attachment on an already-submitted
+      // request.
+      const user = hasRole('import');
+      const owningPr = mockPricingRequests.find((p) => (p.attachments ?? []).some((a) => a.id === Number(id)));
+      if (!owningPr) fail('Pricing request attachment not found', 404);
+      requirePricingRequestViewable(owningPr.id, user);
+      const attachment = owningPr.attachments.find((a) => a.id === Number(id));
+      attachment.includeInFactoryEmail = Boolean(includeInFactoryEmail);
+      return delay({ attachment });
     },
   },
 

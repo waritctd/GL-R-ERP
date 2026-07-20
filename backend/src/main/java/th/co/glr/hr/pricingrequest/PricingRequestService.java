@@ -2,6 +2,9 @@ package th.co.glr.hr.pricingrequest;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -14,11 +17,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
+import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestDetailDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
@@ -28,6 +34,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.CustomerChangeRevision
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.RequestMoreInformationRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.RespondMoreInformationRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestAttachmentRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -65,21 +72,33 @@ public class PricingRequestService {
         Set.of("sales", "import", "ceo", "sales_manager");
     /** Bounded retry count for {@link #cancelOpenForTicket}'s per-row compare-and-set. */
     private static final int CANCEL_MAX_ATTEMPTS = 3;
+    /**
+     * Statuses in which Sales may upload/delete a Pricing Request attachment (V69, review
+     * remediation COMMIT 4). A DRAFT is the rep's own scratchpad; MORE_INFO_REQUIRED is the one
+     * other state where Sales is actively expected to add supporting material in response to
+     * Import's request. Once past those, the request has moved into Import/CEO territory and its
+     * attachment set should stop changing out from under whatever email draft or costing review
+     * is already in flight.
+     */
+    private static final Set<String> ATTACHMENT_EDITABLE_STATUSES =
+        Set.of(PricingRequestStatus.DRAFT, PricingRequestStatus.MORE_INFO_REQUIRED);
 
     private final PricingRequestRepository requests;
     private final TicketRepository tickets;
     private final NotificationRepository notifications;
     private final ObjectMapper objectMapper;
     private final ContactRepository contacts;
+    private final FileStorageService fileStorage;
 
     public PricingRequestService(PricingRequestRepository requests, TicketRepository tickets,
                                  NotificationRepository notifications, ObjectMapper objectMapper,
-                                 ContactRepository contacts) {
+                                 ContactRepository contacts, FileStorageService fileStorage) {
         this.requests      = requests;
         this.tickets       = tickets;
         this.notifications = notifications;
         this.objectMapper  = objectMapper;
         this.contacts      = contacts;
+        this.fileStorage   = fileStorage;
     }
 
     @Transactional
@@ -223,6 +242,26 @@ public class PricingRequestService {
         }
         requests.snapshotCatalogSelections(id);
         items = requests.findItems(id);
+        // Finding A (financial-integrity review, commit 3): the catalog is now MANDATORY —
+        // a free-text item (product_id null, or a productId that never matched an ACTIVE
+        // catalog price at snapshot time above) must never reach Import/costing without a
+        // priceable catalog reference. findUnresolvableCatalogItemIds above only inspected
+        // items with a non-null product_id; this closes the gap for every item regardless of
+        // how it was created, by requiring the persisted snapshot to be fully populated. A
+        // request already past DRAFT (i.e. every request this check cannot run against) keeps
+        // whatever it already has — this gate only ever runs at submit(), never retroactively.
+        List<Integer> missingCatalogLines = new ArrayList<>();
+        for (int i = 0; i < items.size(); i++) {
+            PricingRequestItemDto item = items.get(i);
+            if (item.catalogPriceId() == null || item.priceListVersionId() == null
+                    || item.catalogBasePrice() == null || item.catalogCurrency() == null
+                    || item.resolvedFactoryId() == null || item.resolvedFactoryName() == null) {
+                missingCatalogLines.add(i + 1);
+            }
+        }
+        if (!missingCatalogLines.isEmpty()) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, catalogGapErrorMessage(missingCatalogLines));
+        }
         if (summary.recipientContactId() == null
                 && (summary.recipientLabel() == null || summary.recipientLabel().isBlank())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุผู้รับคำขอราคา");
@@ -454,6 +493,111 @@ public class PricingRequestService {
         return detail(newId);
     }
 
+    // --- Pricing Request attachments (V69, review remediation COMMIT 4) ---
+    //
+    // Sales may optionally attach supporting files to the Pricing Request while it is DRAFT or
+    // MORE_INFO_REQUIRED; zero attachments remains valid (no gate anywhere requires at least
+    // one). Import can mark which of those to include when it sends the factory email —
+    // FactoryQuoteService.attemptSend reads that flag fresh at actual-send time, not here.
+    //
+    // Every method below reuses requireViewable, which already carries the pricing-request
+    // ownership rule (a "sales" actor may only reach a request on a ticket they created,
+    // regardless of status — see requireViewable's own Javadoc) — this is what makes a second
+    // sales rep's attempt to read/upload/delete another rep's attachments 404/403 without any
+    // attachment-specific ownership check needing to be re-derived here.
+
+    @Transactional
+    public PricingRequestAttachmentDto uploadAttachment(long id, MultipartFile file, UserPrincipal actor) {
+        requireRole(actor, SALES_ROLES);
+        PricingRequestSummaryDto summary = requireViewable(id, actor);
+        if (summary.ticketCreatedById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        if (!ATTACHMENT_EDITABLE_STATUSES.contains(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Pricing request attachments can only be uploaded while DRAFT or MORE_INFO_REQUIRED");
+        }
+        TicketSummaryDto ticket = requireTicket(summary.ticketId());
+        requireActive(ticket);
+        FileStorageService.StoredFile stored = fileStorage.store("pricing-request", id, file, Set.of());
+        PricingRequestAttachmentDto attachment = requests.saveAttachment(id, stored.fileName(), stored.filePath(),
+            stored.mimeType(), stored.fileSize(), actor.id());
+        requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
+            PricingRequestEventKind.PRICING_REQUEST_UPDATED, summary.status(), summary.status(),
+            "Attachment uploaded: " + attachment.fileName(), null);
+        return attachment;
+    }
+
+    public List<PricingRequestAttachmentDto> listAttachments(long id, UserPrincipal actor) {
+        requireViewable(id, actor);
+        return requests.findAttachments(id);
+    }
+
+    /** Resolves and authorizes an attachment id back to its parent request in one step. */
+    private PricingRequestAttachmentDto requireViewableAttachment(long attachmentId, UserPrincipal actor) {
+        PricingRequestAttachmentDto attachment = requests.findAttachment(attachmentId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Pricing request attachment not found"));
+        requireViewable(attachment.pricingRequestId(), actor);
+        return attachment;
+    }
+
+    public PricingRequestAttachmentDto getAttachment(long attachmentId, UserPrincipal actor) {
+        return requireViewableAttachment(attachmentId, actor);
+    }
+
+    public String attachmentFilePath(long attachmentId, UserPrincipal actor) {
+        requireViewableAttachment(attachmentId, actor);
+        String path = requests.findAttachmentFilePath(attachmentId);
+        if (path == null) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "Pricing request attachment file not found");
+        }
+        return path;
+    }
+
+    @Transactional
+    public void deleteAttachment(long attachmentId, UserPrincipal actor) {
+        requireRole(actor, SALES_ROLES);
+        PricingRequestAttachmentDto attachment = requests.findAttachment(attachmentId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Pricing request attachment not found"));
+        PricingRequestSummaryDto summary = requireViewable(attachment.pricingRequestId(), actor);
+        if (summary.ticketCreatedById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        if (!ATTACHMENT_EDITABLE_STATUSES.contains(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "Pricing request attachments can only be deleted while DRAFT or MORE_INFO_REQUIRED");
+        }
+        String path = requests.findAttachmentFilePath(attachmentId);
+        requests.deleteAttachment(attachmentId);
+        if (path != null) {
+            try {
+                Files.deleteIfExists(Paths.get(path));
+            } catch (IOException ignored) {
+                // Metadata removal is authoritative; a missing local file should not fail the workflow.
+            }
+        }
+    }
+
+    /**
+     * Import-only. Deliberately no {@code ATTACHMENT_EDITABLE_STATUSES}-style status gate here:
+     * {@code requireViewable} already makes a DRAFT request invisible to import entirely (see its
+     * Javadoc — draft privacy), so import can only ever reach an attachment on a request that has
+     * already been submitted; there is no separate "too early" state to guard against for this
+     * role the way there is for Sales's own upload/delete.
+     */
+    @Transactional
+    public PricingRequestAttachmentDto setAttachmentIncludeInFactoryEmail(
+        long attachmentId, UpdatePricingRequestAttachmentRequest request, UserPrincipal actor
+    ) {
+        requireRole(actor, IMPORT_ROLES);
+        PricingRequestAttachmentDto attachment = requireViewableAttachment(attachmentId, actor);
+        int rows = requests.setIncludeInFactoryEmail(attachmentId, Boolean.TRUE.equals(request.includeInFactoryEmail()));
+        if (rows == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "Pricing request attachment could not be updated");
+        }
+        return requests.findAttachment(attachment.id()).orElseThrow();
+    }
+
     /**
      * Internal cascade: when a deal reaches a terminal lifecycle state (lost or
      * cancelled — see {@code TicketService.markLost}/{@code cancel}), any pricing
@@ -469,12 +613,13 @@ public class PricingRequestService {
      * require threading a bypass flag through. Do NOT add a controller endpoint for
      * this method.
      *
-     * <p>Bypasses {@link PricingRequestStatus#canTransition} on purpose: the normal
-     * state machine forbids IMPORT_REVIEWING → CANCELLED directly (only DRAFT,
-     * SUBMITTED and MORE_INFO_REQUIRED may cancel per {@code cancel()}'s check), but
-     * a dead deal must be able to kill a request in ANY open status, including
-     * IMPORT_REVIEWING — the normal restriction exists to protect a live workflow,
-     * which no longer exists once the deal itself is terminal.
+     * <p>Bypasses {@link PricingRequestStatus#canTransition} on purpose, via {@link
+     * PricingRequestRepository#cancelForDeadDeal} (review remediation COMMIT 5) rather than
+     * {@link PricingRequestRepository#transition}, which now asserts the canonical map and would
+     * reject this cascade for a request sitting in {@code READY_FOR_CEO_REVIEW} — a status from
+     * which a live user action may not cancel directly, but a dead deal must still be able to kill
+     * ANY open pricing request, in ANY open status. The normal restriction exists to protect a
+     * live workflow, which no longer exists once the deal itself is terminal.
      *
      * <p>Each row's compare-and-set is retried up to {@value #CANCEL_MAX_ATTEMPTS}
      * times against a freshly-read status before being given up on — a single
@@ -523,7 +668,7 @@ public class PricingRequestService {
                     settled = true;
                     break;
                 }
-                int rows = requests.transition(id, summary.status(), PricingRequestStatus.CANCELLED, null, actor.id());
+                int rows = requests.cancelForDeadDeal(id, summary.status(), actor.id());
                 if (rows == 1) {
                     requests.cancelOpenStep2Children(id, reason, actor.id());
                     requests.addEvent(id, ticketId, actor.id(), actor.name(),
@@ -688,6 +833,10 @@ public class PricingRequestService {
             if (!QuantityType.isValid(item.quantityType())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown quantity type '" + item.quantityType() + "'");
             }
+            if (!UnitBasis.isValid(item.requestedUnitBasis())) {
+                throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "Unknown requestedUnitBasis '" + item.requestedUnitBasis() + "'");
+            }
             if (!isProductIdentified(item.sourceTicketItemId(), item.productId(), item.model(), item.productDescription())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, identityErrorMessage(i));
             }
@@ -742,6 +891,25 @@ public class PricingRequestService {
     private static String identityErrorMessage(int zeroBasedIndex) {
         return "รายการที่ " + (zeroBasedIndex + 1)
             + ": ต้องระบุสินค้าที่ต้องการเสนอราคา (เลือกจากรายการในดีล หรือระบุรุ่น/รายละเอียด)";
+    }
+
+    /**
+     * Finding A (financial-integrity review, commit 3): reports every 1-based line number
+     * whose persisted catalog snapshot is incomplete, in the same "รายการที่ N" style as
+     * {@link #identityErrorMessage}, but batched across all failing lines in one message
+     * rather than failing on the first — a submit attempt with several free-text lines
+     * should not force the rep to fix them one at a time.
+     */
+    private static String catalogGapErrorMessage(List<Integer> oneBasedLineNumbers) {
+        StringBuilder lines = new StringBuilder();
+        for (int i = 0; i < oneBasedLineNumbers.size(); i++) {
+            if (i > 0) {
+                lines.append(", ");
+            }
+            lines.append(oneBasedLineNumbers.get(i));
+        }
+        return "รายการที่ " + lines
+            + ": ต้องเลือกสินค้าจาก Price Catalog ที่ active ก่อนส่งคำขอราคา (ไม่พบข้อมูลราคา/โรงงานจาก catalog)";
     }
 
     /**

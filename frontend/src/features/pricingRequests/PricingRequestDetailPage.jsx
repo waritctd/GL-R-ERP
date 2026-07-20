@@ -9,6 +9,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
 import { canRequestInformation, canRespondInformation, pricingRequestRecipientLabel, quantityTypeLabel } from './pricingRequestMeta.js';
+import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 
 function isImport(user) {
   return user?.role === 'import';
@@ -28,6 +29,25 @@ const UNIT_OPTIONS = [
   { code: 'PER_BOX', label: 'per box' },
   { code: 'PER_LINEAR_M', label: 'per linear m' },
 ];
+
+const DISPATCH_STATUS_LABEL = {
+  PENDING: 'รอส่ง',
+  SENDING: 'กำลังส่ง',
+  SENT: 'ส่งแล้ว',
+  FAILED: 'ส่งไม่สำเร็จ',
+};
+
+function dispatchStatusBadge(quote) {
+  const status = quote?.dispatchStatus;
+  if (!status || status === 'SENT') return null;
+  const tone = status === 'FAILED' ? 'danger' : 'warning';
+  const attempt = quote.dispatchAttemptCount > 1 ? ` (ครั้งที่ ${quote.dispatchAttemptCount})` : '';
+  return (
+    <StatusBadge tone={tone}>
+      {(DISPATCH_STATUS_LABEL[status] ?? status) + attempt}
+    </StatusBadge>
+  );
+}
 
 function defaultResponseItems(quote) {
   return (quote?.items ?? []).map((item) => ({
@@ -82,39 +102,6 @@ function cleanResponsePayload(draft) {
   };
 }
 
-function revisionPayload(summary, items, reason) {
-  return {
-    revisionReason: reason,
-    clientRequestId: generateClientRequestId(),
-    recipientType: summary.recipientType,
-    recipientContactId: summary.recipientContactId ?? null,
-    recipientLabel: summary.recipientLabel ?? null,
-    requiredDate: summary.requiredDate ?? null,
-    customerTargetPrice: summary.customerTargetPrice ?? null,
-    targetCurrency: summary.targetCurrency ?? 'THB',
-    note: summary.note ?? null,
-    items: (items ?? []).map((item) => ({
-      sourceTicketItemId: item.sourceTicketItemId ?? null,
-      productId: item.productId ?? null,
-      variantId: item.variantId ?? null,
-      brand: item.brand ?? item.catalogBrand ?? null,
-      model: item.model ?? item.catalogModel ?? null,
-      productDescription: item.productDescription ?? null,
-      color: item.color ?? null,
-      texture: item.texture ?? null,
-      size: item.size ?? null,
-      factory: item.factory ?? item.resolvedFactoryName ?? null,
-      requestedQty: item.requestedQty,
-      requestedQtySqm: item.requestedQtySqm ?? null,
-      requestedUnit: item.requestedUnit,
-      quantityType: item.quantityType,
-      targetDeliveryDate: item.targetDeliveryDate ?? null,
-      deliveryLocation: item.deliveryLocation ?? null,
-      specialRequirement: item.specialRequirement ?? null,
-    })),
-  };
-}
-
 export function PricingRequestDetailPage({ user, showToast }) {
   const { id } = useParams();
   const pricingRequestId = Number(id);
@@ -127,8 +114,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const [salesResponse, setSalesResponse] = useState('');
   const [emailDrafts, setEmailDrafts] = useState({});
   const [sendClientRequestIds, setSendClientRequestIds] = useState({});
-  const [revisionReason, setRevisionReason] = useState('');
+  const [receiveClientRequestIds, setReceiveClientRequestIds] = useState({});
   const [confirmAction, setConfirmAction] = useState(null);
+  // Review remediation (COMMIT 5, P1 finding 3): the customer-change revision UI now reuses
+  // PricingRequestCreateModal in mode="revision" (seeded from the current request, full item
+  // editing, catalog picker, unit select) instead of the old inline reason-only form that copied
+  // every field verbatim via the now-deleted revisionPayload() helper.
+  const [revisionModalOpen, setRevisionModalOpen] = useState(false);
 
   const detailQuery = useQuery({
     queryKey: queryKeys.pricingRequestDetail(pricingRequestId),
@@ -140,6 +132,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
     queryKey: queryKeys.pricingRequestFactoryQuotes(pricingRequestId),
     queryFn: () => api.pricingRequests.listFactoryQuotes(pricingRequestId).then((r) => r.items ?? []),
     enabled: Number.isFinite(pricingRequestId) && canSeeRaw(user),
+    // The outbox worker sends/finalizes a factory quote dispatch out-of-band (send() only
+    // enqueues), so while any quote has one in flight, poll instead of leaving the UI stuck
+    // showing a stale "PENDING"/"SENDING" badge until the next unrelated invalidate.
+    refetchInterval: (query) => {
+      const quotes = query.state.data ?? [];
+      return quotes.some((q) => ['PENDING', 'SENDING'].includes(q.dispatchStatus)) ? 2000 : false;
+    },
   });
 
   const costingQuery = useQuery({
@@ -148,10 +147,21 @@ export function PricingRequestDetailPage({ user, showToast }) {
     enabled: Number.isFinite(pricingRequestId) && canSeeRaw(user),
   });
 
+  // Pricing Request attachments (V69, review remediation COMMIT 4): Sales-level supporting
+  // attachments on the request itself — every viewer role can see the list (requireViewable's
+  // usual scoping already applies server-side: a non-owner sales rep never even reaches this
+  // page's detailQuery, so there is no separate check needed here).
+  const attachmentsQuery = useQuery({
+    queryKey: queryKeys.pricingRequestAttachments(pricingRequestId),
+    queryFn: () => api.pricingRequests.listAttachments(pricingRequestId).then((r) => r.items ?? []),
+    enabled: Number.isFinite(pricingRequestId),
+  });
+
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestDetail(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestFactoryQuotes(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestCostings(pricingRequestId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestAttachments(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: ['pricingRequests', 'queue'] });
   }
 
@@ -174,7 +184,24 @@ export function PricingRequestDetailPage({ user, showToast }) {
     emailBody: draft?.emailBody ?? quote.emailBody,
     clientRequestId: sendClientRequestIds[quote.id] ?? generateClientRequestId(),
   }), 'ส่งคำขอโรงงานแล้ว');
-  const receiveQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.receiveFactoryQuote(quote.id, cleanResponsePayload(draft)), 'บันทึกราคาโรงงานแล้ว');
+  const receiveQuote = useMutation({
+    mutationFn: ({ quote, draft, clientRequestId }) => api.pricingRequests.receiveFactoryQuote(quote.id, {
+      ...cleanResponsePayload(draft),
+      clientRequestId,
+    }),
+    onSuccess: (_, variables) => {
+      // A successful submission consumes this idempotency key; a later distinct
+      // response/revision for the same quote must mint a fresh one, not replay.
+      setReceiveClientRequestIds((cur) => {
+        const next = { ...cur };
+        delete next[variables.quote.id];
+        return next;
+      });
+      showToast?.('success', 'บันทึกราคาโรงงานแล้ว');
+      invalidate();
+    },
+    onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+  });
   const negotiateQuote = useActionMutation((quote) => api.pricingRequests.startFactoryNegotiation(quote.id, { note: quote.negotiationNote || 'Negotiation in progress' }), 'เริ่มเจรจาแล้ว');
   const readyQuote = useActionMutation((quote) => api.pricingRequests.markFactoryQuoteReady(quote.id), 'พร้อมคำนวณต้นทุนแล้ว');
   const createCosting = useActionMutation(() => api.pricingRequests.createCosting(pricingRequestId, { note: costingNote || null, clientRequestId: costingClientRequestId }), 'สร้างร่างต้นทุนแล้ว');
@@ -183,15 +210,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const requestInfo = useActionMutation(() => api.pricingRequests.requestInformation(pricingRequestId, { message: infoMessage }), 'ส่งคำขอข้อมูลแล้ว');
   const respondInfo = useActionMutation(() => api.pricingRequests.respondInformation(pricingRequestId, { response: salesResponse }), 'ส่งข้อมูลเพิ่มเติมแล้ว');
   const uploadQuoteAttachment = useActionMutation(({ quote, file }) => api.pricingRequests.uploadFactoryQuoteAttachment(quote.id, file), 'แนบไฟล์ราคาโรงงานแล้ว');
-  const createRevision = useActionMutation(() => api.pricingRequests.createCustomerChangeRevision(
-    pricingRequestId,
-    revisionPayload(summary, request.items, revisionReason),
-  ).then((res) => {
-    const newId = res?.pricingRequest?.summary?.id;
-    if (newId) navigate(`/pricing-requests/${newId}`);
-    return res;
-  }), 'สร้าง revision ใหม่แล้ว');
-
+  const uploadPricingRequestAttachment = useActionMutation((file) => api.pricingRequests.uploadAttachment(pricingRequestId, file), 'แนบไฟล์แล้ว');
+  const deletePricingRequestAttachment = useActionMutation((attachmentId) => api.pricingRequests.deleteAttachment(attachmentId), 'ลบไฟล์แนบแล้ว');
+  const toggleAttachmentIncludeInFactoryEmail = useActionMutation(
+    (attachment) => api.pricingRequests.setAttachmentIncludeInFactoryEmail(attachment.id, !attachment.includeInFactoryEmail),
+    'อัปเดตไฟล์แนบแล้ว',
+  );
   const request = detailQuery.data;
   const summary = request?.summary;
   const status = pricingRequestStatusLabel(summary?.status);
@@ -204,6 +228,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const canCreateCustomerRevision = isSales(user)
     && summary?.ticketCreatedById === user?.employeeId
     && !['DRAFT', 'CANCELLED', 'SUPERSEDED'].includes(summary?.status);
+  const pricingRequestAttachments = attachmentsQuery.data ?? [];
+  // Mirrors PricingRequestService.ATTACHMENT_EDITABLE_STATUSES: Sales may only upload/delete its
+  // own Pricing Request attachments while the request is DRAFT or MORE_INFO_REQUIRED, and only
+  // on the request it owns.
+  const canEditPricingRequestAttachments = isSales(user)
+    && summary?.ticketCreatedById === user?.employeeId
+    && ['DRAFT', 'MORE_INFO_REQUIRED'].includes(summary?.status);
 
   if (detailQuery.isLoading) {
     return <div className="page-stack"><p className="text-sm text-text-muted">กำลังโหลด...</p></div>;
@@ -259,6 +290,56 @@ export function PricingRequestDetailPage({ user, showToast }) {
         </div>
       </section>
 
+      <section className="table-panel">
+        <div className="panel-header">
+          <h2>ไฟล์แนบประกอบคำขอราคา</h2>
+          {canEditPricingRequestAttachments ? (
+            <label className="secondary-button cursor-pointer">
+              <input type="file" className="hidden" onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) uploadPricingRequestAttachment.mutate(file);
+                event.target.value = '';
+              }} />
+              <Icon name="upload" size={13} />
+              แนบไฟล์
+            </label>
+          ) : null}
+        </div>
+        <div className="flex flex-col gap-1 p-3 text-xs text-text-muted">
+          {pricingRequestAttachments.map((attachment) => (
+            <div key={attachment.id} className="flex flex-wrap items-center gap-2">
+              <a className="text-info underline" href={api.pricingRequests.attachmentUrl(attachment.id)} target="_blank" rel="noreferrer">
+                {attachment.fileName}
+              </a>
+              {isImport(user) ? (
+                <label className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(attachment.includeInFactoryEmail)}
+                    disabled={toggleAttachmentIncludeInFactoryEmail.isPending}
+                    onChange={() => toggleAttachmentIncludeInFactoryEmail.mutate(attachment)}
+                  />
+                  ส่งแนบไปกับอีเมลโรงงาน
+                </label>
+              ) : attachment.includeInFactoryEmail ? (
+                <StatusBadge tone="neutral">แนบไปกับอีเมลโรงงาน</StatusBadge>
+              ) : null}
+              {canEditPricingRequestAttachments ? (
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={`ลบไฟล์แนบ ${attachment.fileName}`}
+                  onClick={() => deletePricingRequestAttachment.mutate(attachment.id)}
+                >
+                  <Icon name="close" size={13} />
+                </button>
+              ) : null}
+            </div>
+          ))}
+          {pricingRequestAttachments.length === 0 ? <span>ยังไม่มีไฟล์แนบ</span> : null}
+        </div>
+      </section>
+
       {canRequestInformation(user, summary) ? (
         <section className="table-panel">
           <div className="panel-header"><h2>ขอข้อมูลจาก Sales</h2></div>
@@ -287,8 +368,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <section className="table-panel">
           <div className="panel-header"><h2>Customer Change Revision</h2></div>
           <div className="flex flex-wrap gap-2 p-3">
-            <input className="form-input min-w-64" value={revisionReason} onChange={(e) => setRevisionReason(e.target.value)} placeholder="Revision reason" />
-            <button type="button" className="secondary-button" disabled={!revisionReason || createRevision.isPending} onClick={() => createRevision.mutate()}>
+            <button type="button" className="secondary-button" onClick={() => setRevisionModalOpen(true)}>
               สร้าง revision
             </button>
           </div>
@@ -328,14 +408,29 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     <strong>{quote.factoryName}</strong>
                     <StatusBadge tone="neutral">Rev {quote.revisionNo}</StatusBadge>
                     <StatusBadge tone={quote.current ? 'success' : 'neutral'}>{quote.status}</StatusBadge>
-                    {isImport(user) && quote.status === 'DRAFT' ? <button type="button" className="secondary-button" onClick={() => {
-                      setSendClientRequestIds((cur) => ({ ...cur, [quote.id]: cur[quote.id] ?? generateClientRequestId() }));
-                      setConfirmAction({ type: 'sendQuote', quote, emailDraft });
-                    }}>ส่ง</button> : null}
+                    {dispatchStatusBadge(quote)}
+                    {isImport(user) && quote.status === 'DRAFT' && quote.dispatchStatus !== 'PENDING' && quote.dispatchStatus !== 'SENDING' ? (
+                      <button type="button" className="secondary-button" onClick={() => {
+                        // A FAILED dispatch has permanently exhausted its own clientRequestId (the
+                        // backend's unique (created_by, client_request_id) index would just replay
+                        // that same dead row), so a manual retry must mint a fresh idempotency key
+                        // rather than reuse whatever was cached for this quote.
+                        const clientRequestId = quote.dispatchStatus === 'FAILED'
+                          ? generateClientRequestId()
+                          : (sendClientRequestIds[quote.id] ?? generateClientRequestId());
+                        setSendClientRequestIds((cur) => ({ ...cur, [quote.id]: clientRequestId }));
+                        setConfirmAction({ type: 'sendQuote', quote, emailDraft });
+                      }}>
+                        {quote.dispatchStatus === 'FAILED' ? 'ส่งอีกครั้ง' : 'ส่ง'}
+                      </button>
+                    ) : null}
                     {isImport(user) && ['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) && quote.current ? <button type="button" className="secondary-button" onClick={() => readyQuote.mutate(quote)}>พร้อม costing</button> : null}
                     {isImport(user) && quote.status === 'RESPONSE_RECEIVED' && quote.current ? <button type="button" className="secondary-button" onClick={() => negotiateQuote.mutate(quote)}>เจรจา</button> : null}
                   </div>
                   <div className="mt-2 text-xs text-text-muted">{quote.emailTo ?? '-'} · {quote.supplierQuoteRef ?? '-'}</div>
+                  {quote.dispatchStatus === 'FAILED' && quote.dispatchFailureMessage ? (
+                    <div className="mt-1 text-xs text-danger">ส่งไม่สำเร็จ: {quote.dispatchFailureMessage}</div>
+                  ) : null}
                   {isImport(user) && quote.status === 'DRAFT' ? (
                     <div className="mt-3 grid gap-2 border-t border-border-subtle pt-3">
                       <input className="form-input" value={emailDraft.emailTo} onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailTo: e.target.value } })} placeholder="Factory email recipient" />
@@ -415,7 +510,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           }} placeholder="sqm/unit" />
                         </div>
                       ))}
-                      <button type="button" className="secondary-button" disabled={receiveQuote.isPending} onClick={() => receiveQuote.mutate({ quote, draft })}>
+                      <button type="button" className="secondary-button" disabled={receiveQuote.isPending} onClick={() => {
+                        const clientRequestId = receiveClientRequestIds[quote.id] ?? generateClientRequestId();
+                        setReceiveClientRequestIds((cur) => ({ ...cur, [quote.id]: clientRequestId }));
+                        receiveQuote.mutate({ quote, draft, clientRequestId });
+                      }}>
                         บันทึก response/revision
                       </button>
                     </div>
@@ -480,6 +579,21 @@ export function PricingRequestDetailPage({ user, showToast }) {
           if (action?.type === 'sendQuote') sendQuote.mutate({ quote: action.quote, draft: action.emailDraft });
         }}
       />
+
+      {revisionModalOpen ? (
+        <PricingRequestCreateModal
+          mode="revision"
+          initialValue={request}
+          onClose={() => setRevisionModalOpen(false)}
+          onCreated={(result) => {
+            setRevisionModalOpen(false);
+            invalidate();
+            const newId = result?.pricingRequest?.summary?.id;
+            if (newId) navigate(`/pricing-requests/${newId}`);
+          }}
+          createRevisionFn={(id, payload) => api.pricingRequests.createCustomerChangeRevision(id, payload)}
+        />
+      ) : null}
     </div>
   );
 }

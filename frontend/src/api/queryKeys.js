@@ -33,5 +33,6 @@ export const queryKeys = {
   pricingRequestDetail: (id) => ['pricingRequests', 'detail', id],
   pricingRequestFactoryQuotes: (id) => ['pricingRequests', 'factoryQuotes', id],
   pricingRequestCostings: (id) => ['pricingRequests', 'costings', id],
+  pricingRequestAttachments: (id) => ['pricingRequests', 'attachments', id],
   pricingCostingDetail: (id) => ['pricingCostings', 'detail', id],
 };

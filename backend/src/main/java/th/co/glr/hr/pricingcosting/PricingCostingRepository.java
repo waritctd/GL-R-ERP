@@ -92,7 +92,8 @@ public class PricingCostingRepository {
             INSERT INTO sales.pricing_costing_item
                 (pricing_costing_id, pricing_request_item_id, factory_quote_id, factory_quote_item_id,
                  factory_quote_revision_no, factory_id, factory_name, supplier_quote_ref, raw_unit_price,
-                 raw_currency, raw_unit, unit_basis, requested_quantity, requested_unit, sqm_per_unit,
+                 raw_currency, raw_unit, unit_basis, requested_quantity, requested_unit,
+                 requested_unit_basis, normalized_quantity_pieces, linear_m_per_unit, sqm_per_unit,
                  pieces_per_box, fx_rate, fx_source, fx_effective_date, fx_fetched_at,
                  calculation_config_id, calculation_config_version, goods_cost_thb, freight_cost_thb,
                  insurance_cost_thb, import_duty_thb, inland_transport_cost_thb, other_cost_thb,
@@ -101,7 +102,8 @@ public class PricingCostingRepository {
             VALUES
                 (:costingId, :pricingRequestItemId, :factoryQuoteId, :factoryQuoteItemId,
                  :factoryQuoteRevisionNo, :factoryId, :factoryName, :supplierQuoteRef, :rawUnitPrice,
-                 :rawCurrency, :rawUnit, :unitBasis, :requestedQuantity, :requestedUnit, :sqmPerUnit,
+                 :rawCurrency, :rawUnit, :unitBasis, :requestedQuantity, :requestedUnit,
+                 :requestedUnitBasis, :normalizedQuantityPieces, :linearMPerUnit, :sqmPerUnit,
                  :piecesPerBox, :fxRate, :fxSource, :fxEffectiveDate, :fxFetchedAt,
                  :calculationConfigId, :calculationConfigVersion, :goodsCostThb, :freightCostThb,
                  :insuranceCostThb, :importDutyThb, :inlandTransportCostThb, :otherCostThb,
@@ -204,7 +206,8 @@ public class PricingCostingRepository {
             SELECT pricing_costing_item_id, pricing_costing_id, pricing_request_item_id,
                    factory_quote_id, factory_quote_item_id, factory_quote_revision_no, factory_id,
                    factory_name, supplier_quote_ref, raw_unit_price, raw_currency, raw_unit,
-                   unit_basis, requested_quantity, requested_unit, sqm_per_unit, pieces_per_box,
+                   unit_basis, requested_quantity, requested_unit, requested_unit_basis,
+                   normalized_quantity_pieces, linear_m_per_unit, sqm_per_unit, pieces_per_box,
                    fx_rate, fx_source, fx_effective_date, fx_fetched_at, calculation_config_id,
                    calculation_config_version, goods_cost_thb, freight_cost_thb, insurance_cost_thb,
                    import_duty_thb, inland_transport_cost_thb, other_cost_thb, cif_cost_thb,
@@ -263,6 +266,9 @@ public class PricingCostingRepository {
             rs.getString("unit_basis"),
             rs.getBigDecimal("requested_quantity"),
             rs.getString("requested_unit"),
+            rs.getString("requested_unit_basis"),
+            rs.getBigDecimal("normalized_quantity_pieces"),
+            rs.getBigDecimal("linear_m_per_unit"),
             rs.getBigDecimal("sqm_per_unit"),
             rs.getBigDecimal("pieces_per_box"),
             rs.getBigDecimal("fx_rate"),
@@ -309,6 +315,9 @@ public class PricingCostingRepository {
         String unitBasis,
         java.math.BigDecimal requestedQuantity,
         String requestedUnit,
+        String requestedUnitBasis,
+        java.math.BigDecimal normalizedQuantityPieces,
+        java.math.BigDecimal linearMPerUnit,
         java.math.BigDecimal sqmPerUnit,
         java.math.BigDecimal piecesPerBox,
         java.math.BigDecimal fxRate,
@@ -344,6 +353,9 @@ public class PricingCostingRepository {
                 .addValue("unitBasis", unitBasis)
                 .addValue("requestedQuantity", requestedQuantity)
                 .addValue("requestedUnit", requestedUnit)
+                .addValue("requestedUnitBasis", requestedUnitBasis)
+                .addValue("normalizedQuantityPieces", normalizedQuantityPieces)
+                .addValue("linearMPerUnit", linearMPerUnit)
                 .addValue("sqmPerUnit", sqmPerUnit)
                 .addValue("piecesPerBox", piecesPerBox)
                 .addValue("fxRate", fxRate)

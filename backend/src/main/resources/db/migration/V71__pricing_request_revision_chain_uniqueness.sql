@@ -1,0 +1,44 @@
+-- Review remediation (COMMIT 5, P2 finding 2): PricingRequestRepository.createCustomerChangeRevision
+-- computed the next revision_no via a bare SELECT COALESCE(MAX(revision_no),0)+1 with no lock and no
+-- chain-wide uniqueness constraint, so two concurrent customer-change-revision calls (different
+-- clientRequestIds racing the same chain, not a retry of the same one) could both compute the same
+-- "next" revision_no before either INSERT committed. The Java-side fix adds an advisory lock
+-- (PricingRequestRepository.createCustomerChangeRevision, mirroring
+-- FactoryQuoteRepository.createRevision's pg_advisory_xact_lock(rootId) pattern exactly); this
+-- migration adds the matching DB-level backstop.
+--
+-- Migration numbering: this branch's own V65/V67/V68/V69 are already taken (V66 skipped throughout
+-- this branch — claimed by an untracked file on the parallel worktree feat/special-money-requests,
+-- .claude/worktrees/special-money/backend/src/main/resources/db/migration/V66__special_money_request_schema.sql
+-- — see V67's own header for the original finding). Re-checked live on this date against every open
+-- worktree's migration directory (GL-R-ERP-employees, GL-R-ERP-main, and every .claude/worktrees/*
+-- checkout) AND against the applied history of both deployed databases: prod is at V55
+-- ("quotation doc terms", from a branch that never merged), UAT and origin/main are at V54.
+-- Elsewhere in the repo: special-money holds V66, and feat/ot-remove-advance-notice holds V70
+-- (committed as 94694e2 "renumber migration V65 -> V70 to clear a second collision" — this file
+-- originally took V70 too and was moved here to yield, since that branch had already renumbered
+-- twice to avoid this one). Nothing claims V71.
+--
+-- Existing guard, not removed: uq_pricing_request_parent_revision (parent_pricing_request_id,
+-- revision_no) WHERE parent_pricing_request_id IS NOT NULL (V59) already prevents two children of
+-- the SAME immediate parent from colliding on revision_no. There is no equivalent guard scoped to
+-- the whole ROOT CHAIN, the way sales.factory_quote's uq_factory_quote_chain_revision
+-- (COALESCE(root_factory_quote_id, factory_quote_id), revision_no) is (V61) — add the matching index
+-- here for the same defense-in-depth reasoning, and because a chain-wide invariant is the more
+-- direct statement of what "no duplicate revision_no in this chain" actually means.
+--
+-- Unlike sales.factory_quote (whose createDraft backfills root_factory_quote_id to itself on the
+-- root row), sales.pricing_request.root_pricing_request_id is NEVER backfilled on a root row --
+-- PricingRequestRepository.findRootPricingRequestId/createCustomerChangeRevision both read it as
+-- NULL on a root row and fall back to pricing_request_id in application code. The COALESCE below
+-- mirrors that fallback so a root row's own (id, revision_no=1) key does not collide with an
+-- unrelated root chain's (id, revision_no=1).
+--
+-- Safe to apply directly: every existing root row has revision_no = 1 (the column default, V59) and
+-- a unique pricing_request_id, so COALESCE(root_pricing_request_id, pricing_request_id) =
+-- pricing_request_id for every root row -- trivially unique by primary key alone. Revision rows
+-- created before this migration were produced by ordinary single-threaded test/dev usage under the
+-- pre-existing parent-scoped index above (Step 2 has never been deployed to any real environment --
+-- see this branch's V68 header), so no pre-existing row can violate this index.
+CREATE UNIQUE INDEX uq_pricing_request_chain_revision
+    ON sales.pricing_request (COALESCE(root_pricing_request_id, pricing_request_id), revision_no);

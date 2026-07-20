@@ -35,6 +35,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestEventKind;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
+import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketSummaryDto;
@@ -181,6 +182,20 @@ public class PricingCostingService {
         return requireCosting(costingId);
     }
 
+    /**
+     * Finding B (financial-integrity review, commit 3): the price quoted by the factory and the
+     * quantity requested by Sales can each be expressed in a different unit basis (the review's
+     * worked example: factory quotes 1,000 THB/box, 20 pieces/box, Sales requests 10 boxes — the
+     * pre-fix code computed {@code landedPerUnit * requestedQty} treating requestedQty as if it
+     * were already in pieces, silently producing 1000/20*10 = 500 instead of 1000*10 = 10,000).
+     * This method now normalizes BOTH the price and the requested quantity onto a common basis
+     * (physical pieces) before multiplying: {@link #pricePerPiece} converts the raw factory price
+     * to a per-piece THB figure using the quote's own unit basis, {@link #quantityToPieces}
+     * converts requestedQty to a piece count using the request's own unit basis — the two bases
+     * do not have to match, and each is looked up independently. freight/insurance/inland are
+     * config values expressed per sqm of product, so they are converted to per-piece using the
+     * line's sqm-per-piece conversion factor the same way regardless of either unit basis.
+     */
     private CalculationResult calculate(PricingRequestSummaryDto summary) {
         List<ResolvedSource> sources = resolveSources(summary);
         List<PricingCostingWriteItem> writeItems = new ArrayList<>();
@@ -199,22 +214,31 @@ public class PricingCostingService {
                 .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "ไม่พบ price config สำหรับประเทศ: " + country));
             FxSnapshot fx = resolveFx(source.quoteItem().currency());
-            BigDecimal sqmPerUnit = source.quoteItem().sqmPerUnit() != null
-                ? source.quoteItem().sqmPerUnit()
-                : sqmPerUnit(source.requestItem());
-            BigDecimal goodsCost = goodsCostForUnit(source.quoteItem(), fx, sqmPerUnit);
-            goodsCost = money4(goodsCost);
-            BigDecimal freight = money4(config.freightPerSqm().multiply(sqmPerUnit));
-            BigDecimal insurance = money4(config.insurancePerSqm().multiply(sqmPerUnit));
+
+            BigDecimal sqmPerPiece = resolveSqmPerPiece(source.quoteItem(), source.requestItem());
+            BigDecimal piecesPerBox = source.quoteItem().piecesPerBox();
+            BigDecimal linearMPerUnit = source.quoteItem().linearMPerUnit();
+
+            BigDecimal rawThb = source.quoteItem().rawUnitPrice().multiply(fx.rate());
+            BigDecimal goodsCost = money4(pricePerPiece(rawThb, source.quoteItem().unitBasis(),
+                sqmPerPiece, piecesPerBox, linearMPerUnit, source.requestItem()));
+
+            String requestedUnitBasis = source.requestItem().requestedUnitBasis();
+            BigDecimal qtyPieces = quantityToPieces(source.requestItem().requestedQty(), requestedUnitBasis,
+                sqmPerPiece, piecesPerBox, linearMPerUnit, source.requestItem());
+
+            BigDecimal freight = money4(config.freightPerSqm().multiply(sqmPerPiece));
+            BigDecimal insurance = money4(config.insurancePerSqm().multiply(sqmPerPiece));
             BigDecimal cif = money4(goodsCost.add(freight).add(insurance));
             BigDecimal duty = money4(cif.multiply(config.importDutyPct()));
             BigDecimal inland = money4(config.inlandFactoryToPortPerSqm()
-                .add(config.inlandPortToWarehousePerSqm()).multiply(sqmPerUnit));
+                .add(config.inlandPortToWarehousePerSqm()).multiply(sqmPerPiece));
             BigDecimal landedPerUnit = money4(cif.add(duty).add(inland));
-            BigDecimal lineTotal = money4(landedPerUnit.multiply(source.requestItem().requestedQty()));
+            BigDecimal lineTotal = money4(landedPerUnit.multiply(qtyPieces));
             total = total.add(lineTotal);
             String snapshot = "{\"formula\":\"goods+freight+insurance+duty+inland\",\"calculatedAt\":\""
-                + calculatedAt + "\"}";
+                + calculatedAt + "\",\"requestedUnitBasis\":\"" + requestedUnitBasis
+                + "\",\"normalizedQuantityPieces\":\"" + qtyPieces + "\"}";
             writeItems.add(new PricingCostingWriteItem(
                 source.requestItem().id(),
                 source.quote().id(),
@@ -229,8 +253,11 @@ public class PricingCostingService {
                 source.quoteItem().unitBasis(),
                 source.requestItem().requestedQty(),
                 source.requestItem().requestedUnit(),
-                sqmPerUnit,
-                source.quoteItem().piecesPerBox(),
+                requestedUnitBasis,
+                qtyPieces,
+                linearMPerUnit,
+                sqmPerPiece,
+                piecesPerBox,
                 fx.rate(),
                 fx.source(),
                 fx.effectiveDate(),
@@ -349,33 +376,86 @@ public class PricingCostingService {
         notifications.notifyByRoleForPricingRequest("ceo", summary.id(), type, message);
     }
 
-    private BigDecimal sqmPerUnit(PricingRequestItemDto item) {
-        if (item.requestedQtySqm() != null && item.requestedQty() != null
-                && item.requestedQty().compareTo(ZERO) > 0) {
-            return item.requestedQtySqm().divide(item.requestedQty(), 8, RoundingMode.HALF_UP);
+    /**
+     * The sqm-per-piece physical conversion factor for a line, needed unconditionally: freight/
+     * insurance/inland are always priced per sqm of product (see {@link #calculate}), regardless
+     * of whether either side's unit basis is PER_SQM. Prefers the factory quote item's own
+     * {@code sqmPerUnit} (what Import entered when recording the response); falls back to the
+     * pricing-request item's requestedQtySqm/requestedQty ratio only when the quote item did not
+     * provide one. Unlike the pre-fix code, this does NOT silently default to 1 when neither
+     * source has data — that was itself an unsafe assumption (freight/insurance/inland would be
+     * costed as if every piece were exactly 1 sqm, which is very rarely true) — it 422s instead.
+     */
+    private BigDecimal resolveSqmPerPiece(FactoryQuoteItemDto quoteItem, PricingRequestItemDto requestItem) {
+        BigDecimal fromQuote = quoteItem.sqmPerUnit();
+        if (fromQuote != null && fromQuote.compareTo(ZERO) > 0) {
+            return fromQuote;
         }
-        return ONE;
+        if (requestItem.requestedQtySqm() != null && requestItem.requestedQty() != null
+                && requestItem.requestedQty().compareTo(ZERO) > 0) {
+            BigDecimal fromRequest = requestItem.requestedQtySqm().divide(requestItem.requestedQty(), 8, RoundingMode.HALF_UP);
+            if (fromRequest.compareTo(ZERO) > 0) {
+                return fromRequest;
+            }
+        }
+        throw missingFactor(requestItem, "sqmPerUnit");
     }
 
-    private BigDecimal goodsCostForUnit(FactoryQuoteItemDto quoteItem, FxSnapshot fx, BigDecimal sqmPerUnit) {
-        BigDecimal rawThb = quoteItem.rawUnitPrice().multiply(fx.rate());
-        return switch (quoteItem.unitBasis()) {
-            case "PER_SQM" -> rawThb.multiply(requirePositive(sqmPerUnit, "PER_SQM requires sqmPerUnit"));
-            case "PER_PIECE" -> rawThb;
-            case "PER_BOX" -> rawThb.divide(requirePositive(quoteItem.piecesPerBox(), "PER_BOX requires piecesPerBox"),
+    /**
+     * Converts a factory-quoted price (already in THB) to a per-PIECE THB figure, using
+     * whichever unit basis the QUOTE itself was expressed in — independent of the basis the
+     * requested quantity is expressed in (see {@link #quantityToPieces}).
+     */
+    private BigDecimal pricePerPiece(BigDecimal rawThb, String quoteUnitBasis, BigDecimal sqmPerPiece,
+                                     BigDecimal piecesPerBox, BigDecimal linearMPerUnit,
+                                     PricingRequestItemDto requestItem) {
+        return switch (quoteUnitBasis) {
+            case UnitBasis.PER_PIECE -> rawThb;
+            case UnitBasis.PER_BOX -> rawThb.divide(requireFactor(piecesPerBox, requestItem, "piecesPerBox"),
                 8, RoundingMode.HALF_UP);
-            case "PER_LINEAR_M" -> throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "PER_LINEAR_M costing requires a configured linear-metre conversion");
+            case UnitBasis.PER_SQM -> rawThb.multiply(requireFactor(sqmPerPiece, requestItem, "sqmPerUnit"));
+            case UnitBasis.PER_LINEAR_M -> rawThb.multiply(requireFactor(linearMPerUnit, requestItem, "linearMPerUnit"));
             default -> throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "Unsupported factory quote unit basis '" + quoteItem.unitBasis() + "'");
+                "Unsupported factory quote unit basis '" + quoteUnitBasis + "'");
         };
     }
 
-    private BigDecimal requirePositive(BigDecimal value, String message) {
+    /**
+     * Converts a requested quantity to a PIECE count, using whichever unit basis the REQUEST
+     * itself was expressed in ({@code sales.pricing_request_item.requested_unit_basis}, V68) —
+     * independent of the basis the factory's price was quoted in (see {@link #pricePerPiece}).
+     * This is the direct fix for Finding B: the pre-fix code multiplied a per-piece landed cost
+     * by requestedQty without ever converting it, so a PER_BOX request against a PER_BOX quote
+     * silently under-costed by a factor of piecesPerBox (see the worked example in this class's
+     * {@link #calculate} javadoc).
+     */
+    private BigDecimal quantityToPieces(BigDecimal requestedQty, String requestedUnitBasis, BigDecimal sqmPerPiece,
+                                        BigDecimal piecesPerBox, BigDecimal linearMPerUnit,
+                                        PricingRequestItemDto requestItem) {
+        return switch (requestedUnitBasis) {
+            case UnitBasis.PER_PIECE -> requestedQty;
+            case UnitBasis.PER_BOX -> requestedQty.multiply(requireFactor(piecesPerBox, requestItem, "piecesPerBox"));
+            case UnitBasis.PER_SQM -> requestedQty.divide(requireFactor(sqmPerPiece, requestItem, "sqmPerUnit"),
+                8, RoundingMode.HALF_UP);
+            case UnitBasis.PER_LINEAR_M -> requestedQty.divide(requireFactor(linearMPerUnit, requestItem, "linearMPerUnit"),
+                8, RoundingMode.HALF_UP);
+            default -> throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Unsupported requested unit basis '" + requestedUnitBasis + "'");
+        };
+    }
+
+    private BigDecimal requireFactor(BigDecimal value, PricingRequestItemDto requestItem, String factorName) {
         if (value == null || value.compareTo(ZERO) <= 0) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, message);
+            throw missingFactor(requestItem, factorName);
         }
         return value;
+    }
+
+    /** Names both the item and the missing factor, per the financial-integrity review's requirement. */
+    private ApiException missingFactor(PricingRequestItemDto requestItem, String factorName) {
+        return new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+            "Pricing request item " + requestItem.id()
+                + " is missing the " + factorName + " conversion factor needed to normalize its price/quantity");
     }
 
     private BigDecimal money4(BigDecimal value) {

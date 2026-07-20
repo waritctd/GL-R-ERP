@@ -144,9 +144,13 @@ public class FactoryQuoteController {
     }
 
     @DeleteMapping("/factory-quote-attachments/{attachmentId}")
-    Map<String, Boolean> deleteAttachment(@PathVariable long attachmentId, HttpSession session) {
+    Map<String, Boolean> deleteAttachment(
+        @PathVariable long attachmentId,
+        @RequestParam(required = false) String reason,
+        HttpSession session
+    ) {
         UserPrincipal user = sessions.requireUser(session);
-        factoryQuotes.deleteAttachment(attachmentId, user);
+        factoryQuotes.deleteAttachment(attachmentId, reason, user);
         return Map.of("ok", true);
     }
 }
