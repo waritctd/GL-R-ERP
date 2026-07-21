@@ -163,6 +163,28 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/attendance', employee)).toBe(true);
   });
 
+  // COMMIT 6 review-remediation regression test: the two rules used to be one
+  // combined `p === '/pricing-requests' || p.startsWith('/pricing-requests/')`
+  // rule with `... || u.role === 'sales'`, which let sales reach the bare
+  // queue too (App.test.jsx's route-guard test caught this). The queue is
+  // Import's work list; sales only needs the per-request detail sub-path
+  // (PICKED_UP/MORE_INFO_REQUIRED notifications link there — this guard only
+  // decides the URL shape, not per-request ownership, which the backend's
+  // requireViewable enforces).
+  it('scopes the bare pricing-requests queue to canViewPricingRequestQueue roles, never sales', () => {
+    expect(canAccessPath('/pricing-requests', importer)).toBe(true);
+    expect(canAccessPath('/pricing-requests', ceo)).toBe(true);
+    expect(canAccessPath('/pricing-requests', { role: 'sales_manager', employeeId: 4 })).toBe(true);
+    expect(canAccessPath('/pricing-requests', sales)).toBe(false);
+    expect(canAccessPath('/pricing-requests', employee)).toBe(false);
+  });
+
+  it('lets sales reach an individual pricing-request detail sub-path even though the queue is closed to them', () => {
+    expect(canAccessPath('/pricing-requests/42', sales)).toBe(true);
+    expect(canAccessPath('/pricing-requests/42', importer)).toBe(true);
+    expect(canAccessPath('/pricing-requests/42', employee)).toBe(false);
+  });
+
   it('gates ceo-settings to the ceo role, matching the sidebar nav condition (UX-19)', () => {
     expect(canAccessPath('/ceo-settings', ceo)).toBe(true);
     expect(canAccessPath('/ceo-settings', hr)).toBe(false);

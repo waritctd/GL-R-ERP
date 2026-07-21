@@ -87,13 +87,18 @@ export function useHrData({ user, showToast }) {
   });
 
   function resetData() {
-    // Prefix-match removes ['currentEmployee', <any id>] so a different role
-    // logging in next never sees the previous user's cached record.
-    queryClient.removeQueries({ queryKey: ['currentEmployee'] });
-    queryClient.removeQueries({ queryKey: ['employeeDetail'] });
-    queryClient.removeQueries({ queryKey: queryKeys.employees() });
-    queryClient.removeQueries({ queryKey: queryKeys.profileRequests() });
-    queryClient.removeQueries({ queryKey: queryKeys.dashboardSummary() });
+    // Drop the WHOLE cache on logout, not an enumerated list of HR keys.
+    //
+    // Query keys are scoped by entity id, never by user, so any cached response
+    // computed for the previous session is served verbatim to the next one. The
+    // enumerated version of this function missed every sales/ticket key, which
+    // meant a CEO logging in after an accountant was shown the ACCOUNTANT's
+    // availableActions for the same deal — role-dependent data leaking across a
+    // logout, and the wrong workflow buttons rendered.
+    //
+    // Keep this a blanket clear: an allowlist has to be updated every time a
+    // query is added, and forgetting is silent.
+    queryClient.clear();
   }
 
   return {

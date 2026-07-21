@@ -19,9 +19,20 @@ import { createDemoDatabase } from '../data/demoData.js';
 import {
   canMarkLost as dealCanMarkLost,
   canSetStage as dealCanSetStage,
+  CANCEL_REASONS as DEAL_CANCEL_REASONS,
+  isRoutineBackwardMove,
   LOST_REASONS as DEAL_LOST_REASONS,
   stageIndex as dealStageIndex,
 } from '../features/tickets/stageMeta.js';
+// PricingRequest (commit 6): status transition table + option lists shared
+// with the UI so the mock's gates can't drift from PricingRequestService's —
+// the authoritative rules live in the backend pricingrequest/ package.
+import {
+  canTransition as pricingRequestCanTransition,
+  QUANTITY_TYPE_OPTIONS as PRICING_REQUEST_QUANTITY_TYPE_OPTIONS,
+  RECIPIENT_OPTIONS as PRICING_REQUEST_RECIPIENT_OPTIONS,
+  UNIT_BASIS_OPTIONS as PRICING_REQUEST_UNIT_BASIS_OPTIONS,
+} from '../features/pricingRequests/pricingRequestMeta.js';
 
 const db = createDemoDatabase();
 
@@ -544,6 +555,440 @@ const mockDepositNotices = []; // used by both depositNotices and documents API 
 let mockDocSeq = 1;
 let mockDocNumberSeq = 1;
 
+// PricingRequest (commit 6): one deal may have several pricing requests (one
+// per recipient / re-quote round). Stored as full detail records (summary
+// fields + items + its own event log) so buildPricingRequestDetail never has
+// to join across a second array.
+const mockPricingRequests = [];
+let mockPricingRequestSeq = 1;
+let mockPricingRequestItemSeq = 1;
+let mockPricingRequestEventSeq = 1;
+const mockFactoryQuotes = [];
+const mockPricingCostings = [];
+const mockFactoryQuoteResponseReceipts = [];
+// clientRequestId -> quoteId, for sendFactoryQuote()'s idempotency replay (mirrors
+// sales.factory_quote_email_dispatch's unique (created_by, client_request_id) index).
+const mockFactoryQuoteDispatchClientRequests = [];
+let mockFactoryQuoteSeq = 1;
+let mockFactoryQuoteItemSeq = 1;
+let mockFactoryQuoteAttachmentSeq = 1;
+let mockPricingRequestAttachmentSeq = 1;
+let mockPricingCostingSeq = 1;
+// Step 3: CEO Selling Price Decision (sales.pricing_decision / pricing_decision_item).
+const mockPricingDecisions = [];
+let mockPricingDecisionSeq = 1;
+let mockPricingDecisionItemSeq = 1;
+// Step 4: Customer Quotation Generation and Issuance — extends sales.quotation/quotation_item
+// (owner's decision: ONE quotation aggregate, not a parallel table). Kept as its own flat mock
+// array (like mockPricingDecisions) rather than nested inside a ticket's `.quotations`, since a
+// Step 4 quotation is keyed by pricingRequestId first — the legacy ticket-item-driven
+// `ticket.quotations` array is untouched by this section.
+const mockCustomerQuotations = [];
+let mockCustomerQuotationSeq = 1;
+let mockCustomerQuotationItemSeq = 1;
+const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'sales_manager'];
+const PRICING_REQUEST_RECIPIENT_VALUES = PRICING_REQUEST_RECIPIENT_OPTIONS.map((o) => o.code);
+const PRICING_REQUEST_QUANTITY_TYPE_VALUES = PRICING_REQUEST_QUANTITY_TYPE_OPTIONS.map((o) => o.code);
+// Mirrors th.co.glr.hr.pricingrequest.UnitBasis.VALUES (financial-integrity review Finding B).
+const UNIT_BASIS_VALUES = PRICING_REQUEST_UNIT_BASIS_OPTIONS.map((o) => o.code);
+
+function nextPricingRequestCode() {
+  return `PCR-2026-${String(mockPricingRequestSeq).padStart(4, '0')}`;
+}
+
+function findPricingRequestRaw(id) {
+  const pr = mockPricingRequests.find((p) => p.id === Number(id));
+  if (!pr) fail('Pricing request not found', 404);
+  return pr;
+}
+
+// Mock stand-in for FactoryQuoteEmailDispatchWorker: send() only enqueues (dispatchStatus:
+// 'PENDING'); this simulates the background worker claiming it (-> 'SENDING') and finalizing it
+// (-> 'SENT', quote -> REQUESTED, pricing request status transition, FACTORY_EMAIL_SENT event) a
+// short delay later, so PricingRequestDetailPage's polling has something real to observe.
+function scheduleMockFactoryQuoteDispatch(quote, actor) {
+  quote.dispatchStatus = 'SENDING';
+  quote.dispatchAttemptCount = 1;
+  setTimeout(() => {
+    const current = mockFactoryQuotes.find((q) => q.id === quote.id);
+    // Guard against a quote that moved on (e.g. was cancelled) while "in flight" — the closest
+    // mock equivalent of the real worker's guarded, idempotent finalize.
+    if (!current || current.status !== 'DRAFT' || current.dispatchStatus !== 'SENDING') return;
+    current.status = 'REQUESTED';
+    current.emailSentAt = new Date().toISOString();
+    current.requestedAt = current.emailSentAt;
+    current.sentBy = actor.id;
+    current.updatedAt = current.emailSentAt;
+    current.dispatchStatus = 'SENT';
+    const pr = findPricingRequestRaw(current.pricingRequestId);
+    const fromStatus = pr.status;
+    if (['IMPORT_REVIEWING', 'COSTING_IN_PROGRESS'].includes(pr.status)) pr.status = 'AWAITING_FACTORY_RESPONSE';
+    pushPricingRequestEvent(pr, actor, 'FACTORY_EMAIL_SENT', fromStatus, pr.status);
+  }, 700);
+}
+
+// Step 3, design correction 3 ("freeze factory mutations from CEO_REVIEWING"): mirrors
+// FactoryQuoteService's RESPONSE_STATUSES/MUTABLE_STATUSES/DRAFT_STATUSES all deliberately
+// excluding CEO_REVIEWING (the CEO owns the request from here until approve/return). Called at
+// the top of every factory-quote mutation this branch touches.
+function mockRequireNotCeoReviewing(pr) {
+  if (pr.status === 'CEO_REVIEWING') {
+    fail('Pricing request is under CEO review — factory quote mutations are frozen', 409);
+  }
+}
+
+function pushPricingRequestEvent(pr, actor, eventKind, fromStatus, toStatus, message = null, metadata = null) {
+  pr.events.push({
+    id: mockPricingRequestEventSeq++,
+    pricingRequestId: pr.id,
+    ticketId: pr.ticketId,
+    actorId: actor.id,
+    actorName: actor.name,
+    eventKind,
+    fromStatus,
+    toStatus,
+    message,
+    metadata,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+function round2(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
+/** Builds a fresh Step 4 DRAFT quotation, snapshotting prices from the current APPROVED
+ * pricing_decision — mirrors CustomerQuotationService.create/createRevision's item-building
+ * (buildItem). `priorDiscounts` (keyed by pricingRequestItemId) is empty for a first-ever
+ * create and carries forward each line's discount for a revision. */
+function buildMockCustomerQuotationDraft(pr, decision, ticket, user, payload, parentQuotationId, revisionNo, priorDiscounts) {
+  const customer = ticket?.customerId ? mockCustomers.find((c) => c.id === ticket.customerId) : null;
+  const project = ticket?.projectId ? mockProjects.find((p) => p.id === ticket.projectId) : null;
+  const id = mockCustomerQuotationSeq++;
+  const items = decision.items
+    .filter((di) => di.approvedSellingPricePerRequestedUnit != null)
+    .map((di, idx) => {
+      const discount = Number(priorDiscounts?.[di.pricingRequestItemId] ?? 0);
+      const approvedUnitPrice = Number(di.approvedSellingPricePerRequestedUnit);
+      const finalUnitPrice = approvedUnitPrice - discount;
+      const lineSubtotal = round2(finalUnitPrice * Number(di.requestedQuantity));
+      const vat = round2(lineSubtotal * 0.07);
+      return {
+        id: mockCustomerQuotationItemSeq++,
+        seq: idx + 1,
+        pricingRequestItemId: di.pricingRequestItemId,
+        pricingDecisionItemId: di.id,
+        description: di.productDescription || [di.brand, di.model].filter(Boolean).join(' '),
+        itemNotes: null,
+        requestedUnitBasis: di.requestedUnitBasis,
+        requestedQuantity: Number(di.requestedQuantity),
+        approvedUnitPrice,
+        salesDiscount: discount,
+        finalUnitPrice,
+        minimumSellingPricePerRequestedUnit: di.minimumSellingPricePerRequestedUnit ?? null,
+        lineSubtotal,
+        vat,
+        lineTotal: round2(lineSubtotal + vat),
+      };
+    });
+  const quotation = {
+    id,
+    number: `QT-2026-${String(id).padStart(4, '0')}`,
+    ticketId: pr.ticketId,
+    pricingRequestId: pr.id,
+    pricingDecisionId: decision.id,
+    recipientType: pr.recipientType,
+    recipientLabel: pr.recipientLabel ?? null,
+    docStatus: 'DRAFT',
+    quotationVersion: revisionNo,
+    quotationRevisionNo: revisionNo,
+    parentQuotationId: parentQuotationId ?? null,
+    issuedById: user.id,
+    issuedByName: user.name,
+    issuedAt: null,
+    subtotalAmount: 0,
+    vatAmount: 0,
+    grandTotal: 0,
+    currency: decision.currency || 'THB',
+    paymentTerms: payload.paymentTerms || null,
+    leadTime: payload.leadTime || null,
+    deliveryTerms: payload.deliveryTerms || null,
+    validityDate: payload.validityDate || null,
+    customerNotes: payload.customerNotes || null,
+    sentAt: null,
+    acceptedAt: null,
+    rejectedAt: null,
+    createdAt: new Date().toISOString(),
+    clientRequestId: payload.clientRequestId ?? null,
+    issueClientRequestId: null,
+    customerName: ticket?.customerName ?? (customer ? customer.name : null),
+    customerAddress: customer ? customer.address : null,
+    customerTaxId: customer ? customer.taxId : null,
+    customerPhone: customer ? customer.phone : null,
+    projectName: project ? project.name : null,
+    items,
+  };
+  recalcMockCustomerQuotationTotals(quotation);
+  return quotation;
+}
+
+function recalcMockCustomerQuotationTotals(quotation) {
+  quotation.subtotalAmount = round2(quotation.items.reduce((sum, it) => sum + it.lineSubtotal, 0));
+  quotation.vatAmount = round2(quotation.items.reduce((sum, it) => sum + it.vat, 0));
+  quotation.grandTotal = round2(quotation.items.reduce((sum, it) => sum + it.lineTotal, 0));
+}
+
+// Read access: sales/sales_manager/ceo/import, sales scoped to their own deal. account is
+// deliberately excluded end-to-end (task brief: "account role: no quotation editing", and
+// Step 3's own precedent excludes account from every raw-pricing-adjacent view on this chain).
+function mockCustomerQuotationViewAccess(id) {
+  const user = hasRole('sales', 'sales_manager', 'ceo', 'import');
+  const quotation = mockCustomerQuotations.find((q) => q.id === Number(id));
+  if (!quotation) fail('Customer quotation not found', 404);
+  if (user.role === 'sales') {
+    const pr = findPricingRequestRaw(quotation.pricingRequestId);
+    const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+    if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+  }
+  return quotation;
+}
+
+// Write access: sales, ticket owner only — ceo/import/sales_manager are read-only everywhere
+// on this aggregate (caller must already have called hasRole('sales') for `user`).
+function mockCustomerQuotationEditAccess(id, user) {
+  const quotation = mockCustomerQuotations.find((q) => q.id === Number(id));
+  if (!quotation) fail('Customer quotation not found', 404);
+  const pr = findPricingRequestRaw(quotation.pricingRequestId);
+  const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+  if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+  return quotation;
+}
+
+// Demo-mode file preview for a Step 4 quotation — mirrors buildMockQuotationXlsx/
+// buildMockQuotationHtml's own placeholder pattern (same styling/colors, same "real file comes
+// from the server template" banner) rather than inventing a second preview style.
+function buildMockCustomerQuotationDocument(quotation, format) {
+  if (format === 'xlsx') {
+    const lines = [
+      `ใบเสนอราคา  เลขที่ ${quotation.number ?? ''} (revision ${quotation.quotationRevisionNo})`,
+      `วันที่: ${mockThaiDate(quotation.issuedAt ? new Date(quotation.issuedAt) : new Date())}`,
+      `ลูกค้า: ${quotation.customerName ?? ''}`,
+      ...(quotation.projectName ? [`Project: ${quotation.projectName}`] : []),
+      '',
+      ...quotation.items.map((it, i) => `${i + 1}. ${it.description} — ${it.requestedQuantity} × ${it.finalUnitPrice}`),
+    ];
+    return Promise.resolve(mockDocPlaceholderBlob(lines));
+  }
+  const fmtNum = (n) => Number(n).toLocaleString('th-TH', { minimumFractionDigits: 2 });
+  const rowsHtml = quotation.items.map((it, i) =>
+    `<tr><td>${i + 1}</td><td>${it.description}</td><td style="text-align:right">${it.requestedQuantity}</td><td style="text-align:right">${fmtNum(it.finalUnitPrice)}</td><td style="text-align:right">${fmtNum(it.lineSubtotal)}</td></tr>`
+  ).join('');
+  const html = `<!DOCTYPE html><html lang="th"><head><meta charset="utf-8"/><title>ใบเสนอราคา ${quotation.number}</title>
+<style>body{font-family:sans-serif;padding:40px;color:#1e293b;max-width:900px;margin:auto}
+h2{margin:0 0 4px}.meta{color:#64748b;font-size:13px;margin-bottom:24px}
+table{width:100%;border-collapse:collapse;margin-top:16px}
+th{background:#f1f5f9;border:1px solid #cbd5e1;padding:8px 10px;text-align:left;font-size:13px}
+td{border:1px solid #e2e8f0;padding:8px 10px;font-size:13px}
+.banner{background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:10px 14px;margin-bottom:20px;font-size:13px;color:#92400e}
+.total{font-weight:700;font-size:15px;text-align:right;margin-top:16px}</style></head>
+<body><div class="banner">⚠ Demo Mode — PDF จริงสร้างจาก template บน server</div>
+<h2>ใบเสนอราคา</h2>
+<div class="meta">เลขที่: <strong>${quotation.number}</strong> revision ${quotation.quotationRevisionNo} &nbsp;|&nbsp; ลูกค้า: <strong>${quotation.customerName ?? ''}</strong></div>
+<table><thead><tr><th>#</th><th>รายละเอียด</th><th>จำนวน</th><th>ราคา/หน่วย</th><th>เป็นเงิน (บาท)</th></tr></thead>
+<tbody>${rowsHtml}</tbody>
+<tfoot><tr><td colspan="4" style="text-align:right;font-weight:700">รวมเป็นเงิน</td><td style="text-align:right;font-weight:700">${fmtNum(quotation.subtotalAmount)}</td></tr></tfoot></table>
+<div class="total">VAT 7%: ${fmtNum(quotation.vatAmount)} บาท &nbsp;|&nbsp; รวมทั้งสิ้น: ${fmtNum(quotation.grandTotal)} บาท</div></body></html>`;
+  return Promise.resolve(new Blob([html], { type: 'text/html;charset=utf-8' }));
+}
+
+// Mirrors PricingRequestService.detail()'s join: the ticket a request belongs
+// to is looked up fresh every time (never cached on the request record), same
+// as PricingRequestSummaryDto's ticketCode/projectName/customerName/
+// ticketCreatedById fields.
+function buildPricingRequestSummary(pr) {
+  const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+  return {
+    id: pr.id,
+    requestCode: pr.requestCode,
+    ticketId: pr.ticketId,
+    ticketCode: ticket?.code ?? null,
+    projectName: ticket?.projectId ? (mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null) : null,
+    customerName: ticket?.customerName ?? null,
+    ticketCreatedById: ticket?.createdById ?? null,
+    recipientType: pr.recipientType,
+    recipientContactId: pr.recipientContactId ?? null,
+    recipientLabel: pr.recipientLabel ?? null,
+    status: pr.status,
+    requestedById: pr.requestedById,
+    requestedByName: pr.requestedByName,
+    assignedImportId: pr.assignedImportId ?? null,
+    assignedImportName: pr.assignedImportName ?? null,
+    requiredDate: pr.requiredDate ?? null,
+    customerTargetPrice: pr.customerTargetPrice ?? null,
+    targetCurrency: pr.targetCurrency ?? null,
+    note: pr.note ?? null,
+    itemCount: pr.items.length,
+    revisionNo: pr.revisionNo ?? 1,
+    parentPricingRequestId: pr.parentPricingRequestId ?? null,
+    submittedAt: pr.submittedAt ?? null,
+    pickedUpAt: pr.pickedUpAt ?? null,
+    cancelledAt: pr.cancelledAt ?? null,
+    createdAt: pr.createdAt,
+    updatedAt: pr.updatedAt,
+  };
+}
+
+function buildPricingRequestDetail(pr) {
+  return { summary: buildPricingRequestSummary(pr), items: pr.items, events: pr.events };
+}
+
+function requirePricingRequestViewable(id, user) {
+  if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('Forbidden', 403);
+  const pr = findPricingRequestRaw(id);
+  const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+  const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
+  if (pr.status === 'DRAFT' && !draftOversight && ticket?.createdById !== user.id) {
+    fail('Pricing request not found', 404);
+  }
+  if (user.role === 'sales' && ticket?.createdById !== user.id) fail('Forbidden', 403);
+  return pr;
+}
+
+function requirePricingRequestDealActive(ticket) {
+  if ((ticket?.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+    fail(`ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket?.lifecycle}) จึงสร้าง/แก้ไขคำขอราคาไม่ได้`, 409);
+  }
+}
+
+// Mirrors PricingRequestRepository.normalizeCurrency: trim + uppercase,
+// blank collapses to null. Applied on both insert and update so the mock
+// never stores a raw/mixed-case currency the real column wouldn't have.
+function normalizePricingRequestCurrency(targetCurrency) {
+  if (targetCurrency == null || targetCurrency.trim() === '') return null;
+  return targetCurrency.trim().toUpperCase();
+}
+
+// Mirrors PricingRequestRequests.PricingRequestItemRequest's Bean Validation
+// annotations, which run BEFORE PricingRequestService even sees the request
+// (@NotNull @DecimalMin("0.0001") requestedQty, @NotBlank requestedUnit,
+// @NotBlank quantityType — quantityType's enum-membership is checked
+// separately by the callers of this helper). A mock that skips this is the
+// dangerous direction (issue #199): it would accept a blank unit / zero qty
+// that the real backend 400s on.
+function requirePricingRequestItemFieldsValid(items) {
+  items.forEach((item, index) => {
+    if (item.requestedQty == null || !(Number(item.requestedQty) >= 0.0001)) {
+      fail('requestedQty must be at least 0.0001', 400);
+    }
+    if (!item.requestedUnit?.trim()) {
+      fail('requestedUnit must not be blank', 400);
+    }
+    // Mirrors PricingRequestItemRequest's @NotBlank requestedUnitBasis (V68,
+    // financial-integrity review Finding B) — the machine-readable basis
+    // PricingCostingService now normalizes the requested quantity against.
+    if (!item.requestedUnitBasis?.trim()) {
+      fail('requestedUnitBasis must not be blank', 400);
+    }
+    if (!item.quantityType?.trim()) {
+      fail('quantityType must not be blank', 400);
+    }
+    // Mirrors PricingRequestService.validateItems: an item must actually name
+    // a product somehow — a link to an existing deal line, a catalog
+    // product, a model name, or a dedicated product description. Brand alone
+    // is deliberately NOT sufficient (a brand with no model does not
+    // identify a product), so Import never receives a request for a line
+    // nobody can actually source.
+    const identified = item.sourceTicketItemId != null || item.productId != null
+      || Boolean(item.model?.trim()) || Boolean(item.productDescription?.trim());
+    if (!identified) {
+      fail(`รายการที่ ${index + 1}: ต้องระบุสินค้าที่ต้องการเสนอราคา (เลือกจากรายการในดีล หรือระบุรุ่น/รายละเอียด)`, 400);
+    }
+  });
+}
+
+// Mirrors PricingRequestRepository.snapshotCatalogSelections: for each item whose productId
+// matches an ACTIVE catalog price, populates the catalog snapshot fields the same way the real
+// UPDATE...FROM does — including catalog_brand = COALESCE(pri.brand, pp.grade) and
+// factory = COALESCE(NULLIF(BTRIM(pri.factory), ''), f.name). An item whose productId does not
+// resolve (null productId, or no ACTIVE price_list_version for that product's factory) is left
+// untouched — submitPricingRequestCatalogGate below is what rejects those.
+function snapshotPricingRequestCatalogSelections(pr) {
+  for (const item of pr.items) {
+    if (item.productId == null) continue;
+    const product = mockProductPrices.find((p) => p.priceId === item.productId);
+    if (!product) continue;
+    const activeVersion = mockPriceImportVersions.find(
+      (v) => v.factoryId === product.factoryId && v.status === 'ACTIVE');
+    if (!activeVersion) continue;
+    const factory = mockPriceImportFactories.find((f) => f.factoryId === product.factoryId);
+    item.priceListVersionId = activeVersion.versionId;
+    item.catalogPriceId = product.priceId;
+    item.catalogBasePrice = product.price;
+    item.catalogCurrency = product.currency;
+    item.catalogEffectiveDate = activeVersion.createdAt ?? null;
+    item.resolvedFactoryId = product.factoryId;
+    item.resolvedFactoryName = factory?.name ?? product.factoryName ?? null;
+    item.catalogProductCode = product.productCode ?? null;
+    item.catalogBrand = item.brand?.trim() ? item.brand : (product.grade ?? null);
+    item.catalogCollection = product.collection ?? null;
+    item.catalogModel = product.productName ?? null;
+    item.factory = item.factory?.trim() ? item.factory : (factory?.name ?? product.factoryName ?? item.factory);
+  }
+}
+
+// Mirrors PricingRequestService.submit's Finding A gate (financial-integrity review, commit
+// 3): the catalog is now MANDATORY — every item must have a fully-resolved catalog snapshot
+// (run snapshotPricingRequestCatalogSelections first) or submit() 422s naming every failing
+// 1-based line number in one message, same "รายการที่ N" style as the identity check above.
+function submitPricingRequestCatalogGate(pr) {
+  const missingLines = [];
+  pr.items.forEach((item, index) => {
+    if (item.catalogPriceId == null || item.priceListVersionId == null
+        || item.catalogBasePrice == null || item.catalogCurrency == null
+        || item.resolvedFactoryId == null || item.resolvedFactoryName == null) {
+      missingLines.push(index + 1);
+    }
+  });
+  if (missingLines.length > 0) {
+    fail(`รายการที่ ${missingLines.join(', ')}: ต้องเลือกสินค้าจาก Price Catalog ที่ active ก่อนส่งคำขอราคา (ไม่พบข้อมูลราคา/โรงงานจาก catalog)`, 422);
+  }
+}
+
+// Mirrors PricingCostingService.requireFactor/missingFactor (financial-integrity review
+// Finding B): 422 naming both the item and the missing conversion factor, rather than letting
+// a null factor silently propagate into a wrong number (or a NaN).
+function mockRequireConversionFactor(value, pricingRequestItemId, factorName) {
+  const numeric = Number(value);
+  if (value == null || !(numeric > 0)) {
+    fail(`Pricing request item ${pricingRequestItemId} is missing the ${factorName} conversion factor needed to normalize its price/quantity`, 422);
+  }
+  return numeric;
+}
+
+// Mirrors PricingCostingService.pricePerPiece: converts a raw factory-quoted price to a
+// per-PIECE figure using the QUOTE's own unit basis.
+function mockPricePerPiece(rawPrice, quotedUnitBasis, factors, pricingRequestItemId) {
+  switch (quotedUnitBasis) {
+    case 'PER_PIECE': return Number(rawPrice);
+    case 'PER_BOX': return Number(rawPrice) / mockRequireConversionFactor(factors.piecesPerBox, pricingRequestItemId, 'piecesPerBox');
+    case 'PER_SQM': return Number(rawPrice) * mockRequireConversionFactor(factors.sqmPerUnit, pricingRequestItemId, 'sqmPerUnit');
+    case 'PER_LINEAR_M': return Number(rawPrice) * mockRequireConversionFactor(factors.linearMPerUnit, pricingRequestItemId, 'linearMPerUnit');
+    default: fail(`Unsupported factory quote unit basis '${quotedUnitBasis}'`, 422); return null;
+  }
+}
+
+// Mirrors PricingCostingService.quantityToPieces: converts a requested quantity to a PIECE
+// count using the REQUEST's own unit basis — independent of the quote's own basis above.
+function mockQuantityToPieces(requestedQty, requestedUnitBasis, factors, pricingRequestItemId) {
+  switch (requestedUnitBasis) {
+    case 'PER_PIECE': return Number(requestedQty);
+    case 'PER_BOX': return Number(requestedQty) * mockRequireConversionFactor(factors.piecesPerBox, pricingRequestItemId, 'piecesPerBox');
+    case 'PER_SQM': return Number(requestedQty) / mockRequireConversionFactor(factors.sqmPerUnit, pricingRequestItemId, 'sqmPerUnit');
+    case 'PER_LINEAR_M': return Number(requestedQty) / mockRequireConversionFactor(factors.linearMPerUnit, pricingRequestItemId, 'linearMPerUnit');
+    default: fail(`Unsupported requested unit basis '${requestedUnitBasis}'`, 422); return null;
+  }
+}
+
 function buildMockDoc(doc) {
   const items = doc.items ?? [];
   const depositPct = doc.depositPercent ?? 0.5;
@@ -749,18 +1194,44 @@ function deliveryRecordsForTicket(ticketId) {
     .map((record) => structuredClone(record));
 }
 
-function deliveryComplete(status, ticketId = null) {
-  if (status === 'FULLY_DELIVERED') return true;
-  if (status !== 'GOODS_RECEIVED') return false;
-  if (ticketId == null) return true;
-  return !(db.deliveryRecords ?? []).some((record) => record.ticketId === Number(ticketId));
+// Mirrors TicketService.deliveryGateComplete. Previously this also accepted
+// GOODS_RECEIVED with no delivery records; that concession was justified as a
+// legacy allowance but legacy tickets close via the DOCUMENT_ISSUED branch and
+// never reach this predicate, so it only ever loosened modern dual-track deals —
+// letting a fully-paid deal close with the goods still in GLR's own warehouse.
+function deliveryComplete(status) {
+  return status === 'FULLY_DELIVERED';
+}
+
+// Attachments live in their own store (mockAttachments), not on the ticket —
+// mirrors sales.attachment being its own table.
+function hasInvoiceAttachment(ticket) {
+  return mockAttachments.some((a) => a.ticketId === ticket.id && a.attachType === 'INVOICE');
+}
+
+// Mirrors TicketService.requireClosePrerequisites. Legacy document_issued deals
+// predate the delivery and invoice tracks, so those two are waived for them —
+// requiring either would strand old data permanently.
+function requireClosePrerequisites(ticket) {
+  const legacyOk = ticket.status === 'document_issued'
+    && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID');
+  const dualTrackOk = ticket.status === 'quotation_issued'
+    && ticket.paymentStatus === 'FULLY_PAID'
+    && deliveryComplete(ticket.fulfillmentStatus);
+  if (!legacyOk && !dualTrackOk) {
+    fail('ปิดงานไม่ได้: ต้องรับเงินครบและส่งมอบสินค้าครบก่อน', 409);
+  }
+  if (derivePaymentFields(ticket).amountOutstanding > 0) {
+    fail('ปิดงานไม่ได้: ยังมียอดค้างชำระ', 409);
+  }
+  if (dualTrackOk && !hasInvoiceAttachment(ticket)) {
+    fail('ปิดงานไม่ได้: ยังไม่ได้แนบใบกำกับภาษี (ฝ่ายบัญชีต้องอัปโหลดก่อน)', 409);
+  }
 }
 
 // Mirrors TicketService.maybeAdvanceClosedPaid: CLOSED_PAID (S20) requires BOTH
 // gates — payment fully paid AND goods actually delivered (FULLY_DELIVERED).
-// Stricter than deliveryComplete (which accepts a legacy GOODS_RECEIVED deal for
-// the manual close): GOODS_RECEIVED means goods are only in GLR's warehouse, so
-// auto-advancing on it would skip DELIVERED for a fully-paid, undelivered deal.
+// Now the same rule the manual close uses; the two agree on "delivered".
 function maybeAdvanceClosedPaid(ticket, user) {
   if (ticket.paymentStatus === 'FULLY_PAID' && ticket.fulfillmentStatus === 'FULLY_DELIVERED') {
     autoAdvanceStage(ticket, 'CLOSED_PAID', user);
@@ -1037,7 +1508,9 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
 // Deal pipeline (V50): mirrors TicketService.autoAdvanceStage — monotonic
 // forward-only, no-op while lost. Called from the 4 milestone transitions.
 function autoAdvanceStage(ticket, targetStage, user) {
-  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE' || ticket.lostReason != null) return;
+  // ACTIVE is the whole test — since V57 lost_reason SURVIVES a reopen, so keying
+  // on it would silently disable auto-advance on every reopened deal.
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
   if (dealStageIndex(targetStage) <= dealStageIndex(ticket.salesStage)) return;
   const fromStage = ticket.salesStage;
   ticket.salesStage = targetStage;
@@ -1090,12 +1563,18 @@ function buildTicketDetail(ticket) {
       paymentStatus: ticket.paymentStatus ?? null,
       fulfillmentStatus: ticket.fulfillmentStatus ?? null,
       salesStage: ticket.salesStage, lostReason: ticket.lostReason ?? null,
+      reopenedAt: ticket.reopenedAt ?? null, reopenCount: ticket.reopenCount ?? 0,
       lostAt: ticket.lostAt ?? null, stageUpdatedAt: ticket.stageUpdatedAt ?? ticket.updatedAt,
       lifecycle: ticket.lifecycle ?? 'ACTIVE',
       tenderRequirement: ticket.tenderRequirement ?? 'UNKNOWN',
       depositPolicy: ticket.depositPolicy ?? 'REQUIRED',
       depositPolicyReason: ticket.depositPolicyReason ?? null,
       entryChannel: ticket.entryChannel ?? 'DESIGNER_LED',
+      cancelReason: ticket.cancelReason ?? null,
+      cancelledAt: ticket.cancelledAt ?? null,
+      closeConfirmedAt: ticket.closeConfirmedAt ?? null,
+      closeConfirmedByName: ticket.closeConfirmedByName ?? null,
+      invoiceOnFile: hasInvoiceAttachment(ticket),
       ...paymentFields,
     },
     items: ticket.items, events: ticket.events,
@@ -1736,17 +2215,6 @@ function specialMoneyPayrollMonth() {
   return target.toISOString().slice(0, 10);
 }
 
-function doTransition(id, fromStatus, toStatus, kind, actor, message) {
-  const ticket = findTicketRaw(id);
-  requireActive(ticket);
-  verifyStatus(ticket, fromStatus);
-  ticket.status = toStatus;
-  ticket.updatedAt = new Date().toISOString().slice(0, 10);
-  if (toStatus === 'closed' || toStatus === 'cancelled') ticket.closedAt = ticket.updatedAt;
-  pushEvent(ticket, actor, kind, fromStatus, toStatus, message);
-  return { ticket: buildTicketDetail(ticket) };
-}
-
 function employeeWithRequestMeta(employee) {
   return {
     ...employee,
@@ -2108,7 +2576,9 @@ export const api = {
           || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')));
 
       if (active) {
-        if (owner && ticket.status === 'draft' && (ticket.items || []).length > 0) add('SUBMIT', 'operational', 'ส่งขอราคา');
+        // Ticket-level SUBMIT is retired (commit 5/6, superseded by the
+        // PricingRequest aggregate) — never advertised, so the UI never shows
+        // a button that would 409 on click.
         if (user.role === 'import' && ticket.status === 'submitted') add('PICKUP', 'operational', 'รับเรื่อง');
         if (user.role === 'import' && ['in_review', 'price_proposed', 'approved'].includes(ticket.status)) add('PROPOSE_PRICE', 'operational', 'เสนอราคา', { requiredFields: ['items'] });
         if (user.role === 'ceo' && ticket.status === 'price_proposed') {
@@ -2150,8 +2620,18 @@ export const api = {
         const finalPaymentAllowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
           || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
         if (['account', 'ceo'].includes(user.role) && finalPaymentAllowed) add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
-        if (ticket.createdById === user.id && ((ticket.status === 'document_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID'))
-          || (ticket.status === 'quotation_issued' && ticket.paymentStatus === 'FULLY_PAID' && deliveryComplete(ticket.fulfillmentStatus, ticket.id)))) add('CLOSE', 'operational', 'ปิดงาน');
+        // Three-party close: account confirms, CEO verifies. Sales is not involved.
+        let closeReady = true;
+        try { requireClosePrerequisites(ticket); } catch { closeReady = false; }
+        if (user.role === 'account' && !ticket.closeConfirmedAt && closeReady) {
+          add('CONFIRM_CLOSE', 'operational', 'ยืนยันพร้อมปิดงาน');
+        }
+        if (['account', 'ceo'].includes(user.role) && ticket.closeConfirmedAt) {
+          add('REVOKE_CLOSE_CONFIRM', 'operational', 'ยกเลิกการยืนยันปิดงาน');
+        }
+        if (user.role === 'ceo' && ticket.closeConfirmedAt && closeReady) {
+          add('VERIFY_CLOSE', 'operational', 'ตรวจสอบและปิดงาน');
+        }
         if (ticket.createdById === user.id && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
         if (owner && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(ticket.status)) add('EDIT_ITEMS', 'operational', 'แก้ไขรายการ');
         for (const stage of ['LEAD_APPROACH','PRESENTATION','SPEC_APPROVED','QUOTE_DESIGN_SIDE','OWNER_SIGNOFF','AWAITING_BUYER','QUOTE_BUYER','NEGOTIATION','ORDER_RECEIVED','DEPOSIT_RECEIVED','PROCUREMENT','DELIVERY_SCHEDULING','DELIVERED','CLOSED_PAID']) {
@@ -2191,12 +2671,14 @@ export const api = {
       const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
       const code = `PR-2026-${String(nextId).padStart(4, '0')}`;
       const now = new Date().toISOString();
-      // Lightweight deal start (V50): no items → DRAFT at the lead stage, no
-      // import/CEO notification; items → the price-request flow as before.
-      const hasItems = (payload.items || []).length > 0;
+      // Every deal begins as a DRAFT at the lead stage, regardless of whether
+      // products were attached at creation time — pricing no longer starts at
+      // ticket creation (commit 5). Items attached here are preliminary deal
+      // products only; nothing reaches Import (no notification, no status
+      // change) until a PricingRequest is created and submitted separately.
       const ticket = {
         id: nextId, code, type: 'PRICE_REQUEST',
-        title: payload.title, status: hasItems ? 'submitted' : 'draft',
+        title: payload.title, status: 'draft',
         priority: payload.priority || 'NORMAL',
         createdById: user.id, createdByName: user.name,
         assignedToId: null, assignedToName: null,
@@ -2221,23 +2703,24 @@ export const api = {
           proposedPrice: null, approvedPrice: null,
           currency: item.currency || 'THB', sortOrder: i,
         })),
-        events: [hasItems
-          ? { id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'SUBMITTED', fromStatus: null, toStatus: 'submitted', message: null, createdAt: now }
-          : { id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: now }],
+        events: [{ id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: now }],
         quotation: null,
       };
       db.tickets.unshift(ticket);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
-    async submit(id) {
-      const user = hasRole('sales');
-      // Mirrors TicketService.submit: the price-request flow needs ≥1 product line.
-      const ticket = findTicketRaw(Number(id));
-      if ((ticket.items || []).length === 0) {
-        fail('ต้องเพิ่มรายการสินค้าอย่างน้อย 1 รายการก่อนส่งขอราคา', 400);
-      }
-      return delay(doTransition(Number(id), 'draft', 'submitted', 'SUBMITTED', user, null));
+    /**
+     * Deprecated: ticket-level price-request submission has been replaced by
+     * the PricingRequest aggregate (commit 5/6). 409s unconditionally, same as
+     * TicketService.submit — create a pricing request via
+     * api.pricingRequests.create + .submit instead.
+     */
+    async submit() {
+      // Mirrors TicketService.submit exactly: 409s unconditionally, regardless
+      // of status, role, or ownership — there is no more role-specific denial.
+      requireSession();
+      fail('การส่งขอราคาย้ายไปอยู่ที่ใบขอราคา (PCR) แล้ว — กรุณาสร้างใบขอราคาจากหน้าดีลแทน', 409);
     },
 
     async pickup(id) {
@@ -2538,43 +3021,75 @@ export const api = {
       return buildMockQuotationHtml(ticketId, quotationId);
     },
 
-    async close(id) {
+    // Three-party close (V55). Mirrors TicketService.confirmCloseReady /
+    // revokeCloseConfirmation / verifyClose. Sales is not part of the sequence.
+    async confirmCloseReady(id) {
       const user = requireSession();
+      hasRole('account'); // NOT ceo — the CEO signs the second half
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
-      // Mirrors TicketService.close(): legacy document_issued path (pre-dual-track
-      // tickets only, or fully paid), or the dual-track completion
-      // (quotation_issued + FULLY_PAID + GOODS_RECEIVED).
-      const legacyOk = ticket.status === 'document_issued'
-        && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID');
-      const dualTrackOk = ticket.status === 'quotation_issued'
-        && ticket.paymentStatus === 'FULLY_PAID'
-        && deliveryComplete(ticket.fulfillmentStatus, ticket.id);
-      if (!legacyOk && !dualTrackOk) {
-        fail('Cannot close: require paymentStatus=FULLY_PAID and delivery complete', 409);
-      }
-      if (derivePaymentFields(ticket).amountOutstanding > 0) {
-        fail('Cannot close: ยังมียอดค้างชำระ', 409);
-      }
+      if (ticket.closeConfirmedAt) fail('ยืนยันปิดงานไปแล้ว — รอ CEO ตรวจสอบ', 409);
+      requireClosePrerequisites(ticket);
+      ticket.closeConfirmedAt = new Date().toISOString();
+      ticket.closeConfirmedByName = user.name;
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'CLOSE_CONFIRMED', ticket.status, ticket.status,
+        'ฝ่ายบัญชียืนยันพร้อมปิดงาน — รอ CEO ตรวจสอบ');
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async revokeCloseConfirmation(id, payload = {}) {
+      const user = requireSession();
+      hasRole('account', 'ceo');
+      const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
+      if (!ticket.closeConfirmedAt) fail('ดีลนี้ยังไม่ได้ยืนยันปิดงาน', 409);
+      ticket.closeConfirmedAt = null;
+      ticket.closeConfirmedByName = null;
+      pushEvent(ticket, user, 'CLOSE_CONFIRM_REVOKED', ticket.status, ticket.status,
+        (payload.note || '').trim() || null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async verifyClose(id) {
+      const user = requireSession();
+      hasRole('ceo');
+      const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
+      if (!ticket.closeConfirmedAt) fail('ปิดงานไม่ได้: ต้องให้ฝ่ายบัญชียืนยันก่อน', 409);
+      // Re-checked here too: the CEO verifies, never overrides.
+      requireClosePrerequisites(ticket);
       const prev = ticket.status;
       ticket.status = 'closed';
       ticket.closedAt = new Date().toISOString().slice(0, 10);
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'CLOSED', prev, 'closed', null);
+      pushEvent(ticket, user, 'CLOSED', prev, 'closed', 'CEO ตรวจสอบและปิดงาน');
       ticket.lifecycle = 'COMPLETED';
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
-    async cancel(id) {
+    // Mirrors TicketService.cancel. The reason is mandatory (V56) — a cancelled
+    // deal used to carry no explanation at all, unlike its CLOSED_LOST sibling.
+    async cancel(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
+      if (!DEAL_CANCEL_REASONS.some((r) => r.code === payload.reason)) {
+        fail(`Unknown cancel reason '${payload.reason}'`, 400);
+      }
       if (ticket.status === 'closed' || ticket.status === 'cancelled') fail('Cannot cancel', 409);
+      // Ownership gate — the Java service has always had this; the mock did not,
+      // which made it MORE permissive than production (the dangerous direction).
+      if (ticket.createdById !== user.id) fail('Forbidden', 403);
       const prev = ticket.status;
       ticket.status = 'cancelled';
       ticket.lifecycle = 'CANCELLED';
+      ticket.cancelReason = payload.reason;
+      ticket.cancelledAt = new Date().toISOString();
       ticket.closedAt = new Date().toISOString().slice(0, 10);
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'CANCELLED', prev, 'cancelled', null);
+      const note = (payload.note || '').trim();
+      pushEvent(ticket, user, 'CANCELLED', prev, 'cancelled',
+        note ? `ยกเลิกดีล (${payload.reason}) — ${note}` : `ยกเลิกดีล (${payload.reason})`);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
@@ -2759,9 +3274,11 @@ export const api = {
       requireActive(ticket);
       if (dealStageIndex(payload.stage) < 0) fail(`Unknown stage '${payload.stage}'`, 400);
       if (!dealCanSetStage(user, ticket, payload.stage)) fail('Forbidden', 403);
-      if (ticket.lostReason != null) fail('ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ', 409);
+      // Lifecycle, not lostReason: a reopened deal is ACTIVE and keeps its reason (V57).
+      if (ticket.lifecycle === 'CLOSED_LOST') fail('ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ', 409);
       if (ticket.salesStage === payload.stage) fail(`Deal is already in stage ${payload.stage}`, 409);
-      const backward = dealStageIndex(payload.stage) < dealStageIndex(ticket.salesStage);
+      const backward = dealStageIndex(payload.stage) < dealStageIndex(ticket.salesStage)
+        && !isRoutineBackwardMove(ticket.salesStage, payload.stage);
       const skipForward = dealStageIndex(payload.stage) - dealStageIndex(ticket.salesStage) > 1;
       if (backward && !(payload.note || '').trim()) fail('การย้อนสถานะกลับต้องระบุเหตุผล', 400);
       if (skipForward && !(payload.note || '').trim()) fail('การข้ามขั้นตอนต้องระบุเหตุผล', 400);
@@ -2778,7 +3295,7 @@ export const api = {
       requireActive(ticket);
       if (!DEAL_LOST_REASONS.some((r) => r.code === payload.reason)) fail(`Unknown lost reason '${payload.reason}'`, 400);
       if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
-      if (ticket.lostReason != null) fail('Deal is already marked lost', 409);
+      if (ticket.lifecycle === 'CLOSED_LOST') fail('Deal is already marked lost', 409);
       ticket.lostReason = payload.reason;
       ticket.lostAt = new Date().toISOString();
       ticket.lifecycle = 'CLOSED_LOST';
@@ -2794,9 +3311,12 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
       if (ticket.lifecycle !== 'CLOSED_LOST' || ticket.lostReason == null) fail('Deal is not marked lost', 409);
-      ticket.lostReason = null;
-      ticket.lostAt = null;
+      // lostReason/lostAt deliberately PRESERVED (V57): erasing them left the row
+      // indistinguishable from one never lost, so "why did we lose this before we
+      // reopened it" needed parsing Thai free text out of an event message.
       ticket.lifecycle = 'ACTIVE';
+      ticket.reopenedAt = new Date().toISOString();
+      ticket.reopenCount = (ticket.reopenCount ?? 0) + 1;
       ticket.stageUpdatedAt = new Date().toISOString();
       pushEvent(ticket, user, 'REOPENED', ticket.salesStage, ticket.salesStage, (payload.note || '').trim() || null);
       return delay({ ticket: buildTicketDetail(ticket) });
@@ -4384,6 +4904,1333 @@ export const api = {
       hasRole('ceo', 'import');
       void json;
       return delay({ status: 'updated', factoryId: Number(factoryId) });
+    },
+  },
+
+  // Mirrors PricingRequestController + PricingRequestService (pricingrequest/).
+  pricingRequests: {
+    async listForTicket(ticketId) {
+      const user = requireSession();
+      if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('Forbidden', 403);
+      const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+      if (!ticket) fail('Ticket not found', 404);
+      // Mirrors PricingRequestService.listForTicket: sales may only see requests
+      // on tickets they created.
+      if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
+      const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
+      const items = mockPricingRequests
+        .filter((pr) => pr.ticketId === Number(ticketId))
+        .filter((pr) => pr.status !== 'DRAFT' || draftOversight || ticket.createdById === user.id)
+        .map(buildPricingRequestSummary);
+      return delay({ items });
+    },
+
+    async queue(params = {}) {
+      const user = requireSession();
+      // Mirrors PricingRequestService.list: same viewer roles as a single
+      // request, plus sales is scoped to only its own created tickets.
+      if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('Forbidden', 403);
+      if (params.status && ![
+        'DRAFT',
+        'SUBMITTED',
+        'IMPORT_REVIEWING',
+        'AWAITING_FACTORY_RESPONSE',
+        'COSTING_IN_PROGRESS',
+        'READY_FOR_CEO_REVIEW',
+        'MORE_INFO_REQUIRED',
+        'CANCELLED',
+        'SUPERSEDED',
+      ].includes(params.status)) {
+        fail(`Unknown status '${params.status}'`, 400);
+      }
+      let list = mockPricingRequests;
+      if (user.role === 'sales') {
+        list = list.filter((pr) => db.tickets.find((t) => t.id === pr.ticketId)?.createdById === user.id);
+      }
+      // Mirrors PricingRequestService.list's draft-privacy clause: a DRAFT is the
+      // owning rep's private scratchpad, visible only to them plus ceo/sales_manager
+      // oversight. import must not see it in the queue even though it sees
+      // every other status. Without this the mock is MORE permissive than the Java
+      // service, which is the direction that only surfaces in production (#199).
+      const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
+      list = list.filter((pr) => pr.status !== 'DRAFT'
+        || draftOversight
+        || db.tickets.find((t) => t.id === pr.ticketId)?.createdById === user.id);
+      if (params.status) {
+        list = list.filter((pr) => pr.status === params.status);
+      } else {
+        // Mirrors the same method's default-queue branch: dead rows do not pollute it.
+        list = list.filter((pr) => pr.status !== 'CANCELLED');
+      }
+      if (params.assignedImportId) list = list.filter((pr) => pr.assignedImportId === Number(params.assignedImportId));
+      const activeOnly = params.activeOnly === undefined || params.activeOnly === true || params.activeOnly === 'true';
+      if (activeOnly) {
+        list = list.filter((pr) => (db.tickets.find((t) => t.id === pr.ticketId)?.lifecycle ?? 'ACTIVE') === 'ACTIVE');
+      }
+      return delay({ items: list.map(buildPricingRequestSummary) });
+    },
+
+    async get(id) {
+      const user = requireSession();
+      const pr = requirePricingRequestViewable(id, user);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async create(ticketId, payload) {
+      // Mirrors PricingRequestService.createDraft: sales (deal owner), deal
+      // must be ACTIVE, and every field is validated BEFORE persisting.
+      const user = hasRole('sales');
+      const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+      if (!ticket) fail('Ticket not found', 404);
+      requirePricingRequestDealActive(ticket);
+      if (ticket.createdById !== user.id) fail('Forbidden', 403);
+      if (!payload.clientRequestId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.clientRequestId)) {
+        fail('clientRequestId must be a UUID', 400);
+      }
+      const existing = mockPricingRequests.find((pr) => (
+        pr.requestedById === user.id && pr.clientRequestId === payload.clientRequestId
+      ));
+      if (existing) {
+        if (existing.ticketId !== Number(ticketId)) fail('clientRequestId has already been used for a different ticket', 409);
+        return delay({ pricingRequest: buildPricingRequestDetail(existing) });
+      }
+      if (!PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
+        fail(`Unknown recipient type '${payload.recipientType}'`, 400);
+      }
+      if (!payload.items?.length) fail('items must not be empty', 400);
+      requirePricingRequestItemFieldsValid(payload.items);
+      for (const item of payload.items) {
+        if (!PRICING_REQUEST_QUANTITY_TYPE_VALUES.includes(item.quantityType)) {
+          fail(`Unknown quantity type '${item.quantityType}'`, 400);
+        }
+        // Mirrors PricingRequestService.validateItems's UnitBasis.isValid check.
+        if (!UNIT_BASIS_VALUES.includes(item.requestedUnitBasis)) {
+          fail(`Unknown requestedUnitBasis '${item.requestedUnitBasis}'`, 400);
+        }
+      }
+      if (payload.targetCurrency && payload.targetCurrency.trim().length !== 3) {
+        fail('targetCurrency must be a 3-letter currency code', 400);
+      }
+      if (payload.recipientContactId == null && !payload.recipientLabel?.trim()) {
+        fail('ต้องระบุผู้รับคำขอราคา (recipientContactId หรือ recipientLabel)', 400);
+      }
+      const validSourceItemIds = new Set((ticket.items ?? []).map((i) => i.id));
+      for (const item of payload.items) {
+        if (item.sourceTicketItemId != null && !validSourceItemIds.has(item.sourceTicketItemId)) {
+          fail(`sourceTicketItemId ${item.sourceTicketItemId} does not belong to ticket ${ticketId}`, 400);
+        }
+      }
+
+      const now = new Date().toISOString();
+      const id = mockPricingRequestSeq++;
+      const requestCode = nextPricingRequestCode();
+      const items = payload.items.map((item, i) => ({
+        id: mockPricingRequestItemSeq++,
+        pricingRequestId: id,
+        sourceTicketItemId: item.sourceTicketItemId ?? null,
+        productId: item.productId ?? null,
+        variantId: item.variantId ?? null,
+        brand: item.brand ?? null,
+        model: item.model ?? null,
+        productDescription: item.productDescription ?? null,
+        color: item.color ?? null,
+        texture: item.texture ?? null,
+        size: item.size ?? null,
+        factory: item.factory ?? null,
+        requestedQty: item.requestedQty,
+        requestedQtySqm: item.requestedQtySqm ?? null,
+        requestedUnit: item.requestedUnit,
+        requestedUnitBasis: item.requestedUnitBasis,
+        quantityType: item.quantityType,
+        targetDeliveryDate: item.targetDeliveryDate ?? null,
+        deliveryLocation: item.deliveryLocation ?? null,
+        specialRequirement: item.specialRequirement ?? null,
+        sortOrder: i,
+        // Catalog snapshot (Finding A, financial-integrity review commit 3) — populated only
+        // by submit()'s snapshotCatalogSelections mirror below, never at create/update time,
+        // matching PricingRequestRepository.create/updateDraft/snapshotCatalogSelections.
+        priceListVersionId: null,
+        catalogPriceId: null,
+        catalogBasePrice: null,
+        catalogCurrency: null,
+        catalogEffectiveDate: null,
+        resolvedFactoryId: null,
+        resolvedFactoryName: null,
+        catalogProductCode: null,
+        catalogBrand: null,
+        catalogCollection: null,
+        catalogModel: null,
+      }));
+      const pr = {
+        id, requestCode, ticketId: Number(ticketId),
+        recipientType: payload.recipientType,
+        recipientContactId: payload.recipientContactId ?? null,
+        recipientLabel: payload.recipientLabel ?? null,
+        status: 'DRAFT',
+        requestedById: user.id, requestedByName: user.name,
+        assignedImportId: null, assignedImportName: null,
+        requiredDate: payload.requiredDate ?? null,
+        customerTargetPrice: payload.customerTargetPrice ?? null,
+        targetCurrency: normalizePricingRequestCurrency(payload.targetCurrency),
+        note: payload.note ?? null,
+        clientRequestId: payload.clientRequestId,
+        // DB column is `revision_no INTEGER NOT NULL DEFAULT 1` with
+        // `chk_pricing_request_revision CHECK (revision_no >= 1)` (V58) — a
+        // mock row starting at 0 would violate that constraint in production.
+        revisionNo: 1, parentPricingRequestId: null,
+        submittedAt: null, pickedUpAt: null, cancelledAt: null,
+        createdAt: now, updatedAt: now,
+        items, events: [],
+        // Sales-level supporting attachments (V69, review remediation COMMIT 4) — distinct from
+        // a factory quote's own `attachments` array above.
+        attachments: [],
+      };
+      // Deliberately no notification, no ticket status change — a draft is the
+      // rep's private scratchpad until submit() (mirrors createDraft's Javadoc).
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_CREATED', null, 'DRAFT');
+      mockPricingRequests.push(pr);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async update(id, payload) {
+      // Mirrors PricingRequestService.updateDraft: owner sales, DRAFT only.
+      // Review-remediation plan Fix 2 made this a FULL-REPLACEMENT PUT (in
+      // sync with PricingRequestRepository.updateDraft dropping its COALESCE)
+      // — every editable scalar field is validated and applied unconditionally
+      // against the payload exactly as sent, never merged with the existing
+      // row first. This mock used to distinguish `undefined` (field omitted,
+      // "leave unchanged") from `null` (field explicitly cleared) for these
+      // columns, which was actually MORE permissive than the real
+      // UpdatePricingRequestRequest Java record ever was: Jackson deserializes
+      // a missing JSON key the same way it deserializes an explicit `null` —
+      // there is no wire-level way to distinguish the two on the real
+      // backend — so "omitted" and "null" must collapse to the same outcome
+      // here too. recipientType is additionally required (recipient_type is
+      // NOT NULL in the real schema), validated unconditionally like create().
+      const user = hasRole('sales');
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (pr.status !== 'DRAFT') fail(`Expected status 'DRAFT' but pricing request is '${pr.status}'`, 409);
+      if (!payload.recipientType?.trim()) fail('recipientType must not be blank', 400);
+      if (!PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
+        fail(`Unknown recipient type '${payload.recipientType}'`, 400);
+      }
+      if (payload.recipientContactId == null && !payload.recipientLabel?.trim()) {
+        fail('ต้องระบุผู้รับคำขอราคา (recipientContactId หรือ recipientLabel)', 400);
+      }
+      if (payload.items != null) {
+        requirePricingRequestItemFieldsValid(payload.items);
+        for (const item of payload.items) {
+          if (!PRICING_REQUEST_QUANTITY_TYPE_VALUES.includes(item.quantityType)) {
+            fail(`Unknown quantity type '${item.quantityType}'`, 400);
+          }
+          if (!UNIT_BASIS_VALUES.includes(item.requestedUnitBasis)) {
+            fail(`Unknown requestedUnitBasis '${item.requestedUnitBasis}'`, 400);
+          }
+        }
+        const validSourceItemIds = new Set((ticket?.items ?? []).map((i) => i.id));
+        for (const item of payload.items) {
+          if (item.sourceTicketItemId != null && !validSourceItemIds.has(item.sourceTicketItemId)) {
+            fail(`sourceTicketItemId ${item.sourceTicketItemId} does not belong to ticket ${pr.ticketId}`, 400);
+          }
+        }
+      }
+      if (payload.targetCurrency != null && payload.targetCurrency.trim().length !== 3) {
+        fail('targetCurrency must be a 3-letter currency code', 400);
+      }
+
+      pr.recipientType = payload.recipientType;
+      pr.recipientContactId = payload.recipientContactId ?? null;
+      pr.recipientLabel = payload.recipientLabel ?? null;
+      pr.requiredDate = payload.requiredDate ?? null;
+      pr.customerTargetPrice = payload.customerTargetPrice ?? null;
+      pr.targetCurrency = normalizePricingRequestCurrency(payload.targetCurrency);
+      pr.note = payload.note ?? null;
+      if (payload.items != null) {
+        pr.items = payload.items.map((item, i) => ({
+          id: mockPricingRequestItemSeq++,
+          pricingRequestId: pr.id,
+          sourceTicketItemId: item.sourceTicketItemId ?? null,
+          productId: item.productId ?? null,
+          variantId: item.variantId ?? null,
+          brand: item.brand ?? null,
+          model: item.model ?? null,
+          productDescription: item.productDescription ?? null,
+          color: item.color ?? null,
+          texture: item.texture ?? null,
+          size: item.size ?? null,
+          factory: item.factory ?? null,
+          requestedQty: item.requestedQty,
+          requestedQtySqm: item.requestedQtySqm ?? null,
+          requestedUnit: item.requestedUnit,
+          requestedUnitBasis: item.requestedUnitBasis,
+          quantityType: item.quantityType,
+          targetDeliveryDate: item.targetDeliveryDate ?? null,
+          deliveryLocation: item.deliveryLocation ?? null,
+          specialRequirement: item.specialRequirement ?? null,
+          sortOrder: i,
+          // See create()'s identical block above for why these start null.
+          priceListVersionId: null,
+          catalogPriceId: null,
+          catalogBasePrice: null,
+          catalogCurrency: null,
+          catalogEffectiveDate: null,
+          resolvedFactoryId: null,
+          resolvedFactoryName: null,
+          catalogProductCode: null,
+          catalogBrand: null,
+          catalogCollection: null,
+          catalogModel: null,
+        }));
+      }
+      pr.updatedAt = new Date().toISOString();
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_UPDATED', 'DRAFT', 'DRAFT');
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async generateFactoryEmailDrafts(id) {
+      const user = hasRole('import');
+      const pr = findPricingRequestRaw(id);
+      if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS'].includes(pr.status)) {
+        fail('Pricing request must be under Import review before factory quote drafts can be generated', 409);
+      }
+      const byFactory = new Map();
+      for (const item of pr.items) {
+        if (!item.factory) fail(`Pricing request item ${item.id} has no resolved factory`, 422);
+        byFactory.set(item.factory, [...(byFactory.get(item.factory) ?? []), item]);
+      }
+      for (const [factoryName, items] of byFactory) {
+        const exists = mockFactoryQuotes.some((q) => q.pricingRequestId === pr.id && q.factoryName === factoryName && q.current);
+        if (exists) continue;
+        const quoteId = mockFactoryQuoteSeq++;
+        mockFactoryQuotes.push({
+          id: quoteId,
+          quoteCode: `FQ-2026-${String(quoteId).padStart(4, '0')}`,
+          pricingRequestId: pr.id,
+          factoryId: null,
+          factoryName,
+          status: 'DRAFT',
+          emailTo: null,
+          emailSubject: `Pricing request ${pr.requestCode}`,
+          emailBody: items.map((item) => `${item.brand ?? ''} ${item.model ?? item.productDescription ?? ''}`).join('\n'),
+          emailSentAt: null,
+          sentBy: null,
+          supplierQuoteRef: null,
+          defaultCurrency: 'THB',
+          paymentTerms: null,
+          leadTimeText: null,
+          note: null,
+          negotiationNote: null,
+          requestedAt: null,
+          receivedAt: null,
+          rootFactoryQuoteId: quoteId,
+          parentFactoryQuoteId: null,
+          revisionNo: 1,
+          revisionReason: null,
+          current: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          attachments: [],
+          // Mirrors FactoryQuoteDto's dispatchStatus/dispatchAttemptCount/dispatchFailureMessage/
+          // dispatchNextAttemptAt: the outbox worker's state for this quote's most recent send.
+          // Null until sendFactoryQuote() enqueues one.
+          dispatchStatus: null,
+          dispatchAttemptCount: 0,
+          dispatchFailureMessage: null,
+          dispatchNextAttemptAt: null,
+          items: items.map((item, i) => ({
+            id: mockFactoryQuoteItemSeq++,
+            factoryQuoteId: quoteId,
+            pricingRequestItemId: item.id,
+            quotedQuantity: item.requestedQty,
+            quotedUnit: item.requestedUnit,
+            unitBasis: item.requestedUnit,
+            rawUnitPrice: null,
+            currency: null,
+            sortOrder: i,
+          })),
+        });
+      }
+      pushPricingRequestEvent(pr, user, 'FACTORY_EMAIL_READY', pr.status, pr.status);
+      return delay({ items: mockFactoryQuotes.filter((q) => q.pricingRequestId === pr.id) });
+    },
+
+    async listFactoryQuotes(id) {
+      hasRole('import', 'ceo');
+      findPricingRequestRaw(id);
+      return delay({ items: mockFactoryQuotes.filter((q) => q.pricingRequestId === Number(id)) });
+    },
+
+    async getFactoryQuote(id) {
+      hasRole('import', 'ceo');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
+      if (!quote) fail('Factory quote not found', 404);
+      return delay({ factoryQuote: quote });
+    },
+
+    async updateFactoryQuote(id, payload) {
+      hasRole('import');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
+      if (!quote) fail('Factory quote not found', 404);
+      if (quote.status !== 'DRAFT') fail('Only draft factory quote emails can be edited', 409);
+      Object.assign(quote, {
+        emailTo: payload.emailTo ?? quote.emailTo,
+        emailSubject: payload.emailSubject ?? quote.emailSubject,
+        emailBody: payload.emailBody ?? quote.emailBody,
+        note: payload.note ?? quote.note,
+        updatedAt: new Date().toISOString(),
+      });
+      return delay({ factoryQuote: quote });
+    },
+
+    // Mirrors FactoryQuoteService.send(): enqueue-only. The actual "send + finalize" (quote ->
+    // REQUESTED, pricing request status transition, FACTORY_EMAIL_SENT event) happens out-of-band
+    // a moment later via scheduleMockFactoryQuoteDispatch(), the mock stand-in for
+    // FactoryQuoteEmailDispatchWorker, so the frontend can exercise the same
+    // pending/sending/sent-with-a-delay UX it will see against the real backend.
+    async sendFactoryQuote(id, payload = {}) {
+      const user = hasRole('import');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
+      if (!quote) fail('Factory quote not found', 404);
+      if (!payload.clientRequestId) fail('clientRequestId must be a UUID', 400);
+      if (quote.status === 'REQUESTED') return delay({ factoryQuote: quote });
+      if (quote.status !== 'DRAFT') fail('Only draft factory quote emails can be sent', 409);
+      const existingForClient = mockFactoryQuoteDispatchClientRequests.find(
+        (d) => d.clientRequestId === payload.clientRequestId
+      );
+      if (existingForClient) {
+        if (existingForClient.quoteId !== quote.id) {
+          fail('clientRequestId has already been used for another factory quote', 409);
+        }
+        return delay({ factoryQuote: quote });
+      }
+      if (quote.dispatchStatus && ['PENDING', 'SENDING', 'SENT'].includes(quote.dispatchStatus)) {
+        return delay({ factoryQuote: quote });
+      }
+      quote.emailTo = payload.emailTo ?? quote.emailTo;
+      quote.emailSubject = payload.emailSubject ?? quote.emailSubject;
+      quote.emailBody = payload.emailBody ?? quote.emailBody;
+      quote.updatedAt = new Date().toISOString();
+      mockFactoryQuoteDispatchClientRequests.push({ clientRequestId: payload.clientRequestId, quoteId: quote.id });
+      quote.dispatchStatus = 'PENDING';
+      quote.dispatchAttemptCount = 0;
+      quote.dispatchFailureMessage = null;
+      quote.dispatchNextAttemptAt = null;
+      scheduleMockFactoryQuoteDispatch(quote, user);
+      return delay({ factoryQuote: quote });
+    },
+
+    async receiveFactoryQuote(id, payload) {
+      const user = hasRole('import');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
+      if (!quote) fail('Factory quote not found', 404);
+      if (!payload.clientRequestId) fail('clientRequestId must be a UUID', 400);
+      // Idempotency replay: a lost-response retry (same actor + clientRequestId)
+      // must not be treated as a new commercial revision. Look this up BEFORE any
+      // mutation and short-circuit with the quote the original call landed on.
+      const chainId = (q) => q.rootFactoryQuoteId ?? q.id;
+      const existingReceipt = mockFactoryQuoteResponseReceipts.find(
+        (r) => r.createdBy === user.id && r.clientRequestId === payload.clientRequestId
+      );
+      if (existingReceipt) {
+        const receiptQuote = mockFactoryQuotes.find((q) => q.id === existingReceipt.factoryQuoteId);
+        if (!receiptQuote) fail('Factory quote not found', 404);
+        // Compare the QUOTE CHAIN, not the pricing request: a pricing request has one quote
+        // per factory, so reusing a clientRequestId against a DIFFERENT factory's quote in the
+        // same pricing request must 409, not silently return the wrong factory's quote.
+        if (chainId(receiptQuote) !== chainId(quote)) {
+          fail('clientRequestId has already been used for another factory quote', 409);
+        }
+        return delay({ factoryQuote: receiptQuote });
+      }
+      if (!quote.current) fail('Only the current factory quote revision can receive a response', 409);
+      const pr = findPricingRequestRaw(quote.pricingRequestId);
+      mockRequireNotCeoReviewing(pr);
+      const applyResponse = (target) => {
+        target.status = 'RESPONSE_RECEIVED';
+        target.supplierQuoteRef = payload.supplierQuoteRef ?? null;
+        target.defaultCurrency = payload.defaultCurrency ?? 'THB';
+        target.paymentTerms = payload.paymentTerms ?? null;
+        target.leadTimeText = payload.leadTimeText ?? null;
+        target.revisionReason = payload.revisionReason ?? null;
+        target.negotiationNote = payload.negotiationNote ?? null;
+        target.receivedAt = new Date().toISOString();
+        target.updatedAt = target.receivedAt;
+        target.items = payload.items.map((item, i) => ({
+          id: mockFactoryQuoteItemSeq++,
+          factoryQuoteId: target.id,
+          pricingRequestItemId: item.pricingRequestItemId,
+          quotedQuantity: item.quotedQuantity,
+          quotedUnit: item.quotedUnit,
+          unitBasis: item.unitBasis,
+          rawUnitPrice: item.rawUnitPrice,
+          currency: item.currency,
+          minimumOrderQuantity: item.minimumOrderQuantity ?? null,
+          sqmPerUnit: item.sqmPerUnit ?? null,
+          piecesPerBox: item.piecesPerBox ?? null,
+          // Mirrors FactoryQuoteItemDto.linearMPerUnit (V68, financial-integrity review
+          // Finding B) — the PER_LINEAR_M conversion factor, same role as sqmPerUnit/
+          // piecesPerBox above for PER_SQM/PER_BOX.
+          linearMPerUnit: item.linearMPerUnit ?? null,
+          sortOrder: i,
+        }));
+      };
+      if (['DRAFT', 'REQUESTED'].includes(quote.status)) {
+        applyResponse(quote);
+        // First/partial factory response only confirms the request is awaiting
+        // (or still awaiting) factory replies. COSTING_IN_PROGRESS is entered only
+        // by createCosting(), once every request item's factory has a current
+        // READY_FOR_COSTING quote — see PricingCostingService.resolveSources.
+        if (pr.status === 'IMPORT_REVIEWING') pr.status = 'AWAITING_FACTORY_RESPONSE';
+        pushPricingRequestEvent(pr, user, 'FACTORY_RESPONSE_RECEIVED', pr.status, pr.status);
+        mockFactoryQuoteResponseReceipts.push({ factoryQuoteId: quote.id, createdBy: user.id, clientRequestId: payload.clientRequestId });
+        return delay({ factoryQuote: quote });
+      }
+      if (!['RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(quote.status)) {
+        fail(`Factory quote cannot receive a response in status ${quote.status}`, 409);
+      }
+      quote.status = 'SUPERSEDED';
+      quote.current = false;
+      const revision = { ...quote, id: mockFactoryQuoteSeq++, quoteCode: `FQ-2026-${String(mockFactoryQuoteSeq).padStart(4, '0')}`, status: 'RESPONSE_RECEIVED', parentFactoryQuoteId: quote.id, revisionNo: quote.revisionNo + 1, current: true, createdAt: new Date().toISOString() };
+      applyResponse(revision);
+      mockFactoryQuotes.push(revision);
+      for (const costing of mockPricingCostings.filter((c) => c.pricingRequestId === pr.id && ['DRAFT', 'CALCULATED'].includes(c.status))) {
+        costing.stale = true;
+        costing.staleReason = 'Factory quote revision changed';
+      }
+      pushPricingRequestEvent(pr, user, 'FACTORY_RESPONSE_REVISED', pr.status, pr.status);
+      mockFactoryQuoteResponseReceipts.push({ factoryQuoteId: revision.id, createdBy: user.id, clientRequestId: payload.clientRequestId });
+      return delay({ factoryQuote: revision });
+    },
+
+    async startFactoryNegotiation(id, payload) {
+      const user = hasRole('import');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
+      if (!quote) fail('Factory quote not found', 404);
+      mockRequireNotCeoReviewing(findPricingRequestRaw(quote.pricingRequestId));
+      if (quote.status !== 'RESPONSE_RECEIVED' || !quote.current) fail('Only a current received response can enter negotiation', 409);
+      quote.status = 'NEGOTIATING';
+      quote.negotiationNote = payload.note;
+      quote.updatedAt = new Date().toISOString();
+      pushPricingRequestEvent(findPricingRequestRaw(quote.pricingRequestId), user, 'FACTORY_NEGOTIATION_STARTED', null, null, payload.note);
+      return delay({ factoryQuote: quote });
+    },
+
+    async markFactoryQuoteReady(id) {
+      const user = hasRole('import');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
+      if (!quote) fail('Factory quote not found', 404);
+      mockRequireNotCeoReviewing(findPricingRequestRaw(quote.pricingRequestId));
+      if (!['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) || !quote.current) fail('Current response must have raw prices before it can be marked ready', 409);
+      quote.status = 'READY_FOR_COSTING';
+      quote.updatedAt = new Date().toISOString();
+      pushPricingRequestEvent(findPricingRequestRaw(quote.pricingRequestId), user, 'FACTORY_RESPONSE_READY_FOR_COSTING', null, null);
+      return delay({ factoryQuote: quote });
+    },
+
+    async markFactoryQuoteNotAvailable(id, payload) {
+      const user = hasRole('import');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
+      if (!quote) fail('Factory quote not found', 404);
+      mockRequireNotCeoReviewing(findPricingRequestRaw(quote.pricingRequestId));
+      quote.status = 'NOT_AVAILABLE';
+      quote.note = payload.reason;
+      pushPricingRequestEvent(findPricingRequestRaw(quote.pricingRequestId), user, 'FACTORY_NOT_AVAILABLE', null, null, payload.reason);
+      return delay({ factoryQuote: quote });
+    },
+
+    async uploadFactoryQuoteAttachment(id, file) {
+      hasRole('import');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
+      if (!quote) fail('Factory quote not found', 404);
+      mockRequireNotCeoReviewing(findPricingRequestRaw(quote.pricingRequestId));
+      const attachment = {
+        id: mockFactoryQuoteAttachmentSeq++,
+        factoryQuoteId: quote.id,
+        fileName: file?.name ?? 'attachment',
+        mimeType: file?.type ?? null,
+        fileSize: file?.size ?? null,
+        uploadedBy: sessionUser.id,
+        uploadedAt: new Date().toISOString(),
+      };
+      quote.attachments = [attachment, ...(quote.attachments ?? [])];
+      return delay({ attachment });
+    },
+
+    factoryQuoteAttachmentUrl(id) {
+      return `#mock-factory-quote-attachment-${id}`;
+    },
+
+    async deleteFactoryQuoteAttachment(id) {
+      hasRole('import');
+      for (const quote of mockFactoryQuotes) {
+        quote.attachments = (quote.attachments ?? []).filter((attachment) => attachment.id !== Number(id));
+      }
+      return delay({ ok: true });
+    },
+
+    async createCosting(id, payload = {}) {
+      const user = hasRole('import');
+      const pr = findPricingRequestRaw(id);
+      // Mirrors PricingCostingService.COSTING_CREATE_STATUSES (Step 3, design corrections 3+4):
+      // READY_FOR_CEO_REVIEW/CEO_REVIEWING are deliberately excluded — a submitted costing is
+      // frozen until the CEO explicitly returns the request (-> COSTING_REVISION_REQUIRED).
+      if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS', 'COSTING_REVISION_REQUIRED'].includes(pr.status)) {
+        fail('Pricing request is not ready for costing', 409);
+      }
+      const readyFactories = new Set(mockFactoryQuotes.filter((q) => q.pricingRequestId === pr.id && q.current && q.status === 'READY_FOR_COSTING').map((q) => q.factoryName));
+      for (const item of pr.items) if (!readyFactories.has(item.factory)) fail(`Factory quote for ${item.factory} is not ready for costing`, 422);
+      const existing = mockPricingCostings.find((c) => c.pricingRequestId === pr.id && ['DRAFT', 'CALCULATED'].includes(c.status));
+      if (existing) return delay({ costing: existing });
+      const costing = { id: mockPricingCostingSeq++, costingCode: `PCO-2026-${String(mockPricingCostingSeq).padStart(4, '0')}`, pricingRequestId: pr.id, versionNo: mockPricingCostingSeq, status: 'DRAFT', stale: false, staleReason: null, note: payload.note ?? null, createdBy: user.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), calculatedAt: null, submittedBy: null, submittedAt: null, totalLandedCostThb: null, items: [] };
+      mockPricingCostings.push(costing);
+      pr.status = 'COSTING_IN_PROGRESS';
+      pushPricingRequestEvent(pr, user, 'PRICING_COSTING_STARTED', null, 'COSTING_IN_PROGRESS');
+      return delay({ costing });
+    },
+
+    async listCostings(id) {
+      hasRole('import', 'ceo');
+      return delay({ items: mockPricingCostings.filter((c) => c.pricingRequestId === Number(id)) });
+    },
+
+    async getCosting(id) {
+      hasRole('import', 'ceo');
+      const costing = mockPricingCostings.find((c) => c.id === Number(id));
+      if (!costing) fail('Costing not found', 404);
+      return delay({ costing });
+    },
+
+    async recalculateCosting(id, payload = {}) {
+      const user = hasRole('import');
+      const costing = mockPricingCostings.find((c) => c.id === Number(id));
+      if (!costing) fail('Costing not found', 404);
+      if (costing.status === 'SUBMITTED') fail('Submitted costing is immutable', 409);
+      const pr = findPricingRequestRaw(costing.pricingRequestId);
+      costing.items = pr.items.map((item) => {
+        const quote = mockFactoryQuotes.find((q) => q.pricingRequestId === pr.id && q.factoryName === item.factory && q.current && q.status === 'READY_FOR_COSTING');
+        const quoteItem = quote?.items.find((qi) => qi.pricingRequestItemId === item.id);
+        if (!quote || !quoteItem) fail(`Factory quote for ${item.factory} is not ready for costing`, 422);
+        // Finding B (financial-integrity review, commit 3): normalize BOTH the quoted price
+        // and the requested quantity onto a common basis (physical pieces) before multiplying
+        // — see mockPricePerPiece/mockQuantityToPieces above, mirroring
+        // PricingCostingService.calculate(). The pre-fix mock multiplied raw price by the raw
+        // (un-normalized) requestedQty, the same bug the real backend had.
+        const factors = { sqmPerUnit: quoteItem.sqmPerUnit, piecesPerBox: quoteItem.piecesPerBox, linearMPerUnit: quoteItem.linearMPerUnit };
+        const raw = Number(quoteItem.rawUnitPrice ?? 0);
+        const pricePerPiece = mockPricePerPiece(raw, quoteItem.unitBasis, factors, item.id);
+        const normalizedQuantityPieces = mockQuantityToPieces(item.requestedQty, item.requestedUnitBasis, factors, item.id);
+        return {
+          pricingRequestItemId: item.id,
+          factoryQuoteId: quote.id,
+          factoryQuoteItemId: quoteItem.id,
+          factoryQuoteRevisionNo: quote.revisionNo,
+          factoryName: quote.factoryName,
+          rawUnitPrice: raw,
+          rawCurrency: quoteItem.currency,
+          rawUnit: quoteItem.quotedUnit,
+          unitBasis: quoteItem.unitBasis,
+          requestedQuantity: item.requestedQty,
+          requestedUnit: item.requestedUnit,
+          requestedUnitBasis: item.requestedUnitBasis,
+          normalizedQuantityPieces,
+          sqmPerUnit: quoteItem.sqmPerUnit ?? null,
+          piecesPerBox: quoteItem.piecesPerBox ?? null,
+          linearMPerUnit: quoteItem.linearMPerUnit ?? null,
+          goodsCostThb: pricePerPiece,
+          landedCostPerUnitThb: pricePerPiece,
+          totalLandedCostThb: pricePerPiece * normalizedQuantityPieces,
+        };
+      });
+      costing.totalLandedCostThb = costing.items.reduce((sum, item) => sum + item.totalLandedCostThb, 0);
+      costing.status = 'CALCULATED';
+      costing.stale = false;
+      costing.staleReason = null;
+      costing.note = payload.note ?? costing.note;
+      costing.calculatedAt = new Date().toISOString();
+      pushPricingRequestEvent(pr, user, 'PRICING_COSTING_CALCULATED', null, null);
+      return delay({ costing });
+    },
+
+    async submitCosting(id, payload = {}) {
+      const user = hasRole('import');
+      const costing = mockPricingCostings.find((c) => c.id === Number(id));
+      if (!costing) fail('Costing not found', 404);
+      if (costing.stale) fail('Costing is stale and must be recalculated before submit', 409);
+      if (costing.status !== 'CALCULATED') fail('Only a calculated costing can be submitted', 409);
+      const pr = findPricingRequestRaw(costing.pricingRequestId);
+      costing.status = 'SUBMITTED';
+      costing.submittedBy = user.id;
+      costing.submittedAt = new Date().toISOString();
+      costing.note = payload.note ?? costing.note;
+      pr.status = 'READY_FOR_CEO_REVIEW';
+      pushPricingRequestEvent(pr, user, 'PRICING_COSTING_SUBMITTED', 'COSTING_IN_PROGRESS', 'READY_FOR_CEO_REVIEW');
+      return delay({ costing });
+    },
+
+    // ── Step 3: CEO Selling Price Decision — mirrors PricingDecisionController +
+    // PricingDecisionService (pricingdecision/). Authorization is NOT authoritative (CLAUDE.md);
+    // verify role/scope behavior against the real Java service.
+    //
+    // Simplifications vs the real backend (documented, not silent): FX is always THB (rate 1) —
+    // the same simplification the costing mock above already makes (no fxRate/fxSource fields on
+    // a mock costing item, no BOT validation); selling price is computed in THB only.
+
+    async startPricingDecision(id, payload = {}) {
+      const user = hasRole('ceo');
+      const pr = findPricingRequestRaw(id);
+      if (pr.status !== 'READY_FOR_CEO_REVIEW') fail('Pricing request is not ready for CEO review', 409);
+      const openDraft = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'DRAFT');
+      if (openDraft) return delay({ decision: openDraft });
+      const submittedCostings = mockPricingCostings.filter((c) => c.pricingRequestId === pr.id && c.status === 'SUBMITTED');
+      const costing = submittedCostings[submittedCostings.length - 1];
+      if (!costing) fail('Pricing request has no submitted costing', 409);
+      const currency = (payload.currency || pr.targetCurrency || 'THB').toUpperCase();
+      const defaultMarginPct = payload.defaultMarginPct ?? null;
+      const decisionVersionNo = mockPricingDecisions.filter((d) => d.pricingRequestId === pr.id).length + 1;
+      const decision = {
+        id: mockPricingDecisionSeq++,
+        decisionCode: `PCD-2026-${String(mockPricingDecisionSeq).padStart(4, '0')}`,
+        pricingRequestId: pr.id,
+        pricingCostingId: costing.id,
+        decisionVersionNo,
+        status: 'DRAFT',
+        defaultMarginPct,
+        currency,
+        fxRateUsed: 1,
+        fxSource: 'THB',
+        fxEffectiveDate: new Date().toISOString().slice(0, 10),
+        ceoNote: payload.ceoNote ?? null,
+        returnReason: null,
+        approveClientRequestId: null,
+        createdBy: user.id,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        approvedBy: null,
+        approvedAt: null,
+        returnedAt: null,
+        items: costing.items.map((costingItem) => {
+          const prItem = pr.items.find((i) => i.id === costingItem.pricingRequestItemId);
+          const frozenPerPiece = Number(costingItem.landedCostPerUnitThb ?? 0);
+          const requestedQuantity = Number(costingItem.requestedQuantity ?? prItem?.requestedQty ?? 0);
+          const frozenPerRequestedUnit = requestedQuantity > 0
+            ? Number(costingItem.totalLandedCostThb ?? 0) / requestedQuantity : frozenPerPiece;
+          const proposedSellingPricePerRequestedUnit = defaultMarginPct != null
+            ? frozenPerRequestedUnit * (1 + Number(defaultMarginPct)) : null;
+          return {
+            id: mockPricingDecisionItemSeq++,
+            pricingDecisionId: decision?.id,
+            pricingRequestItemId: costingItem.pricingRequestItemId,
+            pricingCostingItemId: costingItem.pricingRequestItemId,
+            brand: prItem?.brand ?? null,
+            model: prItem?.model ?? null,
+            productDescription: prItem?.productDescription ?? null,
+            factoryName: costingItem.factoryName ?? null,
+            requestedUnitBasis: costingItem.requestedUnitBasis,
+            requestedQuantity,
+            normalizedQuantityPieces: costingItem.normalizedQuantityPieces,
+            frozenLandedCostPerPieceThb: frozenPerPiece,
+            frozenLandedCostPerRequestedUnitThb: frozenPerRequestedUnit,
+            currency,
+            proposedMarginPct: defaultMarginPct,
+            approvedMarginPct: null,
+            proposedSellingPricePerRequestedUnit,
+            approvedSellingPricePerRequestedUnit: null,
+            discountCeilingPct: null,
+            minimumSellingPricePerRequestedUnit: null,
+            decisionNote: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        }),
+      };
+      // Fix up the self-reference now that decision.id is known (items were built before push).
+      decision.items.forEach((item) => { item.pricingDecisionId = decision.id; });
+      mockPricingDecisions.push(decision);
+      pr.status = 'CEO_REVIEWING';
+      pushPricingRequestEvent(pr, user, 'PRICING_DECISION_STARTED', 'READY_FOR_CEO_REVIEW', 'CEO_REVIEWING');
+      return delay({ decision });
+    },
+
+    async listPricingDecisions(id) {
+      hasRole('import', 'ceo');
+      return delay({ items: mockPricingDecisions.filter((d) => d.pricingRequestId === Number(id)) });
+    },
+
+    async getPricingDecisionSalesView(id) {
+      const user = hasRole('sales', 'sales_manager', 'ceo', 'import');
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (user.role === 'sales' && ticket?.createdById !== user.id) fail('Forbidden', 403);
+      const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
+      if (!decision) fail('No approved pricing decision yet', 404);
+      // Design correction 2 ("never leak cost to Sales"): a fresh object literal per item with
+      // ONLY these fields — never a spread of the raw (cost/margin-bearing) decision item.
+      return delay({
+        decision: {
+          pricingRequestId: pr.id,
+          pricingDecisionId: decision.id,
+          currency: decision.currency,
+          approvedAt: decision.approvedAt,
+          items: decision.items.map((item) => ({
+            pricingRequestItemId: item.pricingRequestItemId,
+            brand: item.brand,
+            model: item.model,
+            productDescription: item.productDescription,
+            requestedUnitBasis: item.requestedUnitBasis,
+            requestedQuantity: item.requestedQuantity,
+            approvedSellingPricePerRequestedUnit: item.approvedSellingPricePerRequestedUnit,
+            discountCeilingPct: item.discountCeilingPct,
+            minimumSellingPricePerRequestedUnit: item.minimumSellingPricePerRequestedUnit,
+          })),
+        },
+      });
+    },
+
+    async getPricingDecision(id) {
+      hasRole('import', 'ceo');
+      const decision = mockPricingDecisions.find((d) => d.id === Number(id));
+      if (!decision) fail('Pricing decision not found', 404);
+      return delay({ decision });
+    },
+
+    async updatePricingDecision(id, payload) {
+      hasRole('ceo');
+      const decision = mockPricingDecisions.find((d) => d.id === Number(id));
+      if (!decision) fail('Pricing decision not found', 404);
+      if (decision.status !== 'DRAFT') fail('Decision is not open for editing', 409);
+      if (payload.ceoNote != null) decision.ceoNote = payload.ceoNote;
+      for (const itemPayload of payload.items ?? []) {
+        const item = decision.items.find((i) => i.id === Number(itemPayload.pricingDecisionItemId));
+        if (!item) fail(`Item ${itemPayload.pricingDecisionItemId} does not belong to this decision`, 400);
+        if (itemPayload.marginPct != null) {
+          item.proposedMarginPct = itemPayload.marginPct;
+          item.proposedSellingPricePerRequestedUnit =
+            item.frozenLandedCostPerRequestedUnitThb * (1 + Number(itemPayload.marginPct));
+        }
+        if (itemPayload.discountCeilingPct != null) item.discountCeilingPct = itemPayload.discountCeilingPct;
+        if (itemPayload.minimumSellingPrice != null) item.minimumSellingPricePerRequestedUnit = itemPayload.minimumSellingPrice;
+        if (itemPayload.decisionNote != null) item.decisionNote = itemPayload.decisionNote;
+        item.updatedAt = new Date().toISOString();
+      }
+      decision.updatedAt = new Date().toISOString();
+      return delay({ decision });
+    },
+
+    async recalculatePricingDecision(id, payload = {}) {
+      hasRole('ceo');
+      const decision = mockPricingDecisions.find((d) => d.id === Number(id));
+      if (!decision) fail('Pricing decision not found', 404);
+      if (decision.status !== 'DRAFT') fail('Decision is not open for editing', 409);
+      if (payload.defaultMarginPct != null) decision.defaultMarginPct = payload.defaultMarginPct;
+      for (const item of decision.items) {
+        const margin = payload.defaultMarginPct != null ? payload.defaultMarginPct : item.proposedMarginPct;
+        if (margin == null) continue;
+        item.proposedMarginPct = margin;
+        item.proposedSellingPricePerRequestedUnit = item.frozenLandedCostPerRequestedUnitThb * (1 + Number(margin));
+        item.updatedAt = new Date().toISOString();
+      }
+      decision.updatedAt = new Date().toISOString();
+      return delay({ decision });
+    },
+
+    async approvePricingDecision(id, payload = {}) {
+      const user = hasRole('ceo');
+      const decision = mockPricingDecisions.find((d) => d.id === Number(id));
+      if (!decision) fail('Pricing decision not found', 404);
+      if (payload.clientRequestId && decision.approveClientRequestId === payload.clientRequestId
+          && decision.status === 'APPROVED') {
+        return delay({ decision });
+      }
+      if (decision.status !== 'DRAFT') fail('Decision is not open for approval', 409);
+      const pr = findPricingRequestRaw(decision.pricingRequestId);
+      if (pr.status !== 'CEO_REVIEWING') fail('Pricing request is not under CEO review', 409);
+      const missingMargin = decision.items.filter((i) => i.proposedMarginPct == null).map((i) => i.id);
+      const missingMinimum = decision.items.filter((i) => i.minimumSellingPricePerRequestedUnit == null).map((i) => i.id);
+      if (missingMargin.length || missingMinimum.length) {
+        fail(`Every item needs a margin and a minimum selling price before approval — missing margin: [${missingMargin}], missing minimum selling price: [${missingMinimum}]`, 422);
+      }
+      // Never trust a stored/client-supplied selling price — recompute from frozen cost + margin.
+      for (const item of decision.items) {
+        item.approvedMarginPct = item.proposedMarginPct;
+        item.approvedSellingPricePerRequestedUnit =
+          item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
+        item.updatedAt = new Date().toISOString();
+      }
+      decision.status = 'APPROVED';
+      decision.approvedBy = user.id;
+      decision.approvedAt = new Date().toISOString();
+      decision.approveClientRequestId = payload.clientRequestId ?? null;
+      if (payload.ceoNote != null) decision.ceoNote = payload.ceoNote;
+      decision.updatedAt = new Date().toISOString();
+      pr.status = 'APPROVED_FOR_QUOTATION';
+      pushPricingRequestEvent(pr, user, 'PRICING_DECISION_APPROVED', 'CEO_REVIEWING', 'APPROVED_FOR_QUOTATION');
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      addNotification(pr.requestedById, pr.ticketId, ticket?.code, 'PRICING_DECISION_APPROVED',
+        `ใบขอราคา ${pr.requestCode} ได้รับอนุมัติราคาขายแล้ว`);
+      return delay({ decision });
+    },
+
+    async returnPricingDecisionToImport(id, payload) {
+      const user = hasRole('ceo');
+      if (!payload?.returnReason?.trim()) fail('returnReason is required', 400);
+      const decision = mockPricingDecisions.find((d) => d.id === Number(id));
+      if (!decision) fail('Pricing decision not found', 404);
+      if (decision.status !== 'DRAFT') fail('Decision is not open for editing', 409);
+      const pr = findPricingRequestRaw(decision.pricingRequestId);
+      if (pr.status !== 'CEO_REVIEWING') fail('Pricing request is not under CEO review', 409);
+      decision.status = 'RETURNED';
+      decision.returnReason = payload.returnReason;
+      decision.returnedAt = new Date().toISOString();
+      decision.updatedAt = new Date().toISOString();
+      pr.status = 'COSTING_REVISION_REQUIRED';
+      pushPricingRequestEvent(pr, user, 'PRICING_DECISION_RETURNED', 'CEO_REVIEWING', 'COSTING_REVISION_REQUIRED', payload.returnReason);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (pr.assignedImportId != null) {
+        addNotification(pr.assignedImportId, pr.ticketId, ticket?.code, 'PRICING_DECISION_RETURNED',
+          `ใบขอราคา ${pr.requestCode} ถูก CEO ตีกลับให้แก้ไขต้นทุน`);
+      }
+      return delay({ decision });
+    },
+
+    // ── Step 4: Customer Quotation Generation and Issuance — mirrors
+    // CustomerQuotationController + CustomerQuotationService (customerquotation/).
+    // Authorization is NOT authoritative (CLAUDE.md); verify against the real Java service.
+    // Simplification vs the real backend (documented, not silent): FX/currency mirrors Step 3's
+    // own mock simplification — THB only, rate 1 (no fxRate/fxSource fields anywhere on this
+    // aggregate either, same as the pricing-decision mock above).
+
+    async createCustomerQuotation(id, payload = {}) {
+      const user = hasRole('sales');
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (payload.clientRequestId) {
+        const replay = mockCustomerQuotations.find(
+          (q) => q.issuedById === user.id && q.clientRequestId === payload.clientRequestId);
+        if (replay) return delay({ quotation: replay });
+      }
+      if (pr.status !== 'APPROVED_FOR_QUOTATION') {
+        fail(`ใบขอราคาต้องอยู่ในสถานะ 'อนุมัติราคาขายแล้ว' ก่อนจึงจะออกใบเสนอราคาลูกค้าได้ (ปัจจุบัน: ${pr.status})`, 409);
+      }
+      const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
+      if (!decision) fail('ยังไม่มีราคาขายที่ CEO อนุมัติสำหรับใบขอราคานี้', 409);
+      const quotation = buildMockCustomerQuotationDraft(pr, decision, ticket, user, payload, null, 1, {});
+      mockCustomerQuotations.push(quotation);
+      pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_CREATED', pr.status, pr.status, 'สร้างร่างใบเสนอราคาลูกค้า');
+      return delay({ quotation });
+    },
+
+    async listCustomerQuotations(id) {
+      const user = hasRole('sales', 'sales_manager', 'ceo', 'import');
+      const pr = findPricingRequestRaw(id);
+      if (user.role === 'sales') {
+        const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+        if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      }
+      return delay({
+        items: mockCustomerQuotations
+          .filter((q) => q.pricingRequestId === pr.id)
+          .sort((a, b) => a.quotationRevisionNo - b.quotationRevisionNo),
+      });
+    },
+
+    async getCustomerQuotation(id) {
+      const quotation = mockCustomerQuotationViewAccess(id);
+      return delay({ quotation });
+    },
+
+    async updateCustomerQuotation(id, payload = {}) {
+      const user = hasRole('sales');
+      const quotation = mockCustomerQuotationEditAccess(id, user);
+      if (!['DRAFT', 'READY_TO_ISSUE'].includes(quotation.docStatus)) {
+        fail(`แก้ไขได้เฉพาะใบเสนอราคาที่ยังเป็นร่างเท่านั้น (ปัจจุบัน: ${quotation.docStatus})`, 409);
+      }
+      if (payload.paymentTerms != null) quotation.paymentTerms = payload.paymentTerms;
+      if (payload.leadTime != null) quotation.leadTime = payload.leadTime;
+      if (payload.deliveryTerms != null) quotation.deliveryTerms = payload.deliveryTerms;
+      if (payload.validityDate != null) quotation.validityDate = payload.validityDate;
+      if (payload.customerNotes != null) quotation.customerNotes = payload.customerNotes;
+      for (const itemPayload of payload.items ?? []) {
+        const item = quotation.items.find((i) => i.id === Number(itemPayload.quotationItemId));
+        if (!item) fail(`รายการ ${itemPayload.quotationItemId} ไม่ได้อยู่ในใบเสนอราคานี้`, 400);
+        const discount = itemPayload.salesDiscount != null ? Number(itemPayload.salesDiscount) : (item.salesDiscount ?? 0);
+        if (discount < 0) fail('ส่วนลดต้องไม่ติดลบ', 400);
+        const finalUnitPrice = item.approvedUnitPrice - discount;
+        if (finalUnitPrice < 0) fail('ส่วนลดต้องไม่เกินราคาที่อนุมัติ', 400);
+        // Discount Policy B (owner's decision): never below the CEO-approved minimum — hard
+        // 422, no auto-escalation.
+        if (item.minimumSellingPricePerRequestedUnit != null && finalUnitPrice < item.minimumSellingPricePerRequestedUnit) {
+          fail(`ราคาหลังหักส่วนลดของรายการ ${itemPayload.quotationItemId} ต่ำกว่าราคาขั้นต่ำที่ CEO อนุมัติ`, 422);
+        }
+        if (itemPayload.description != null) item.description = itemPayload.description;
+        if (itemPayload.itemNotes != null) item.itemNotes = itemPayload.itemNotes;
+        item.salesDiscount = discount;
+        item.finalUnitPrice = finalUnitPrice;
+        item.lineSubtotal = round2(finalUnitPrice * item.requestedQuantity);
+        item.vat = round2(item.lineSubtotal * 0.07);
+        item.lineTotal = round2(item.lineSubtotal + item.vat);
+      }
+      recalcMockCustomerQuotationTotals(quotation);
+      pushPricingRequestEvent(findPricingRequestRaw(quotation.pricingRequestId), user, 'CUSTOMER_QUOTATION_UPDATED',
+        null, null, `แก้ไขใบเสนอราคาลูกค้า ${quotation.number}`);
+      return delay({ quotation });
+    },
+
+    async previewCustomerQuotation(id) {
+      // Rule 12: pure read, zero writes — same object the last create/update already computed.
+      const quotation = mockCustomerQuotationViewAccess(id);
+      return delay({ quotation });
+    },
+
+    async issueCustomerQuotation(id, payload = {}) {
+      const user = hasRole('sales');
+      const preview = mockCustomerQuotationEditAccess(id, user);
+      if (payload.clientRequestId) {
+        const replay = mockCustomerQuotations.find(
+          (q) => q.issuedById === user.id && q.issueClientRequestId === payload.clientRequestId);
+        if (replay) {
+          if (replay.id !== preview.id) fail('clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น', 409);
+          return delay({ quotation: replay });
+        }
+      }
+      if (!['DRAFT', 'READY_TO_ISSUE'].includes(preview.docStatus)) {
+        if (preview.docStatus === 'ISSUED') fail('ใบเสนอราคานี้ออกไปแล้ว', 409);
+        fail(`ใบเสนอราคาไม่ได้อยู่ในสถานะที่ออกได้ (${preview.docStatus})`, 409);
+      }
+      for (const item of preview.items) {
+        if (item.minimumSellingPricePerRequestedUnit != null && item.finalUnitPrice < item.minimumSellingPricePerRequestedUnit) {
+          fail(`ไม่สามารถออกใบเสนอราคาได้ — รายการ ${item.id} ต่ำกว่าราคาขั้นต่ำ`, 422);
+        }
+      }
+      preview.docStatus = 'ISSUED';
+      preview.issuedAt = new Date().toISOString();
+      preview.issueClientRequestId = payload.clientRequestId ?? null;
+
+      const pr = findPricingRequestRaw(preview.pricingRequestId);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      // Only the FIRST issue moves the pricing request — a revision's re-issue is a no-op
+      // transition (mirrors PricingRequestStatus.QUOTATION_ISSUED being terminal).
+      if (pr.status === 'APPROVED_FOR_QUOTATION') {
+        pr.status = 'QUOTATION_ISSUED';
+      }
+      // Rule 7: reuse the EXACT SAME stage-advance the legacy quotation() mock action already
+      // performs — not a second path.
+      if (['DESIGNER', 'OWNER'].includes(preview.recipientType)) autoAdvanceStage(ticket, 'QUOTE_DESIGN_SIDE', user);
+      if (preview.recipientType === 'BUYER') autoAdvanceStage(ticket, 'QUOTE_BUYER', user);
+      pushEvent(ticket, user, 'QUOTATION_ISSUED', null, null,
+        `ออกใบเสนอราคาลูกค้า ${preview.number} (revision ${preview.quotationRevisionNo})`);
+      pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_ISSUED', null, null, `ออกใบเสนอราคาลูกค้า ${preview.number}`);
+      // "Customer notification" — no customer user account exists in this system to notify
+      // in-app, so (matching the real service) the closest equivalent is a CEO-visibility
+      // notification. Documented, not silently substituted.
+      const ceoUsers = db.users.filter((u) => u.role === 'ceo');
+      ceoUsers.forEach((ceo) => addNotification(ceo.id, pr.ticketId, ticket?.code, 'CUSTOMER_QUOTATION_ISSUED',
+        `ใบเสนอราคาลูกค้า ${preview.number} ถูกออกแล้ว`));
+      return delay({ quotation: preview });
+    },
+
+    async cancelCustomerQuotation(id, payload = {}) {
+      const user = hasRole('sales');
+      const quotation = mockCustomerQuotationEditAccess(id, user);
+      if (!['DRAFT', 'READY_TO_ISSUE'].includes(quotation.docStatus)) {
+        fail('ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงยกเลิกไม่ได้', 409);
+      }
+      quotation.docStatus = 'CANCELLED';
+      pushPricingRequestEvent(findPricingRequestRaw(quotation.pricingRequestId), user, 'CUSTOMER_QUOTATION_CANCELLED',
+        null, null, `ยกเลิกร่างใบเสนอราคาลูกค้า ${quotation.number}${payload.reason ? ` — ${payload.reason}` : ''}`);
+      return delay({ quotation });
+    },
+
+    async createCustomerQuotationRevision(id, payload = {}) {
+      const user = hasRole('sales');
+      const source = mockCustomerQuotationEditAccess(id, user);
+      if (source.docStatus !== 'ISSUED') fail('แก้ไข revision ใหม่ได้จากใบเสนอราคาที่ออกแล้วเท่านั้น', 409);
+      if (payload.clientRequestId) {
+        const replay = mockCustomerQuotations.find(
+          (q) => q.issuedById === user.id && q.clientRequestId === payload.clientRequestId);
+        if (replay) return delay({ quotation: replay });
+      }
+      const pr = findPricingRequestRaw(source.pricingRequestId);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
+      if (!decision) fail('ยังไม่มีราคาขายที่ CEO อนุมัติ', 409);
+      // Preserve each prior line's discount by pricingRequestItemId, same as the real service.
+      const priorDiscounts = {};
+      source.items.forEach((item) => { priorDiscounts[item.pricingRequestItemId] = item.salesDiscount; });
+      const revision = buildMockCustomerQuotationDraft(pr, decision, ticket, user, {
+        paymentTerms: source.paymentTerms, leadTime: source.leadTime, deliveryTerms: source.deliveryTerms,
+        validityDate: source.validityDate, customerNotes: source.customerNotes,
+        clientRequestId: payload.clientRequestId,
+      }, source.id, source.quotationRevisionNo + 1, priorDiscounts);
+      mockCustomerQuotations.push(revision);
+      source.docStatus = 'SUPERSEDED';
+      pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_REVISED', null, null,
+        `สร้างใบเสนอราคาลูกค้า revision ${revision.quotationRevisionNo}${payload.reason ? ` — ${payload.reason}` : ''}`);
+      return delay({ quotation: revision });
+    },
+
+    async downloadCustomerQuotationPdf(id) {
+      const quotation = mockCustomerQuotationViewAccess(id);
+      return buildMockCustomerQuotationDocument(quotation, 'pdf');
+    },
+
+    async downloadCustomerQuotationXlsx(id) {
+      const quotation = mockCustomerQuotationViewAccess(id);
+      return buildMockCustomerQuotationDocument(quotation, 'xlsx');
+    },
+
+    async submit(id) {
+      // Mirrors PricingRequestService.submit: owner sales, DRAFT only, deal
+      // ACTIVE, >=1 item, recipient identifiable, requiredDate not in the past,
+      // no duplicate sourceTicketItemId across lines.
+      const user = hasRole('sales');
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (pr.status !== 'DRAFT') fail(`Expected status 'DRAFT' but pricing request is '${pr.status}'`, 409);
+      requirePricingRequestDealActive(ticket);
+      if (pr.items.length === 0) fail('ต้องมีรายการสินค้าอย่างน้อย 1 รายการก่อนส่งคำขอราคา', 400);
+      if (pr.recipientContactId == null && !pr.recipientLabel?.trim()) fail('ต้องระบุผู้รับคำขอราคา', 400);
+      if (pr.requiredDate && new Date(pr.requiredDate) < new Date(new Date().toDateString())) {
+        fail('วันที่ต้องการต้องไม่ใช่วันที่ผ่านมาแล้ว', 400);
+      }
+      // Re-check item identity against the PERSISTED items, not just at
+      // create()/update() time — a draft saved before this rule existed (or
+      // one whose items were never touched again) must still be blocked here.
+      requirePricingRequestItemFieldsValid(pr.items);
+      // Finding A (financial-integrity review, commit 3): snapshot the catalog selection for
+      // every catalog-backed item, then reject the submit unless EVERY item resolved — mirrors
+      // PricingRequestService.submit calling snapshotCatalogSelections then re-checking.
+      snapshotPricingRequestCatalogSelections(pr);
+      submitPricingRequestCatalogGate(pr);
+      const seenSourceItemIds = new Set();
+      for (const item of pr.items) {
+        if (item.sourceTicketItemId != null) {
+          if (seenSourceItemIds.has(item.sourceTicketItemId)) fail('มีรายการอ้างอิงสินค้าเดิมซ้ำกัน', 400);
+          seenSourceItemIds.add(item.sourceTicketItemId);
+        }
+      }
+
+      const now = new Date().toISOString();
+      pr.status = 'SUBMITTED';
+      pr.submittedAt = now;
+      pr.updatedAt = now;
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_SUBMITTED', 'DRAFT', 'SUBMITTED');
+      // NotificationRepository.notifyByRole('import', ...) has no single mock
+      // equivalent (no per-role broadcast helper here) — hardcoded to the demo
+      // import user (id 7), same convention as the existing ceo hardcode
+      // (id 8) elsewhere in this file for PRICE_PROPOSED.
+      addNotification(7, pr.ticketId, ticket?.code, 'PRICING_REQUEST_SUBMITTED', `ใบขอราคา ${pr.requestCode} รอการรับเรื่อง`);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async pickup(id) {
+      // Mirrors PricingRequestService.pickup: any import user, SUBMITTED only.
+      // Assigns the PRICING REQUEST only — never sales.ticket.assigned_to (two
+      // pricing requests on the same deal may go to two different Import users).
+      const user = hasRole('import');
+      const pr = findPricingRequestRaw(id);
+      if (pr.status !== 'SUBMITTED') fail('Only a submitted pricing request can be picked up', 409);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      requirePricingRequestDealActive(ticket);
+      const now = new Date().toISOString();
+      pr.status = 'IMPORT_REVIEWING';
+      pr.assignedImportId = user.id;
+      pr.assignedImportName = user.name;
+      pr.pickedUpAt = now;
+      pr.updatedAt = now;
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_PICKED_UP', 'SUBMITTED', 'IMPORT_REVIEWING');
+      addNotification(pr.requestedById, pr.ticketId, ticket?.code, 'PRICING_REQUEST_PICKED_UP', `ใบขอราคา ${pr.requestCode} ถูกรับเรื่องแล้ว`);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async requestInformation(id, payload) {
+      // Mirrors PricingRequestService.requestInformation: only the ASSIGNED
+      // import user, IMPORT_REVIEWING only.
+      const user = hasRole('import');
+      const pr = findPricingRequestRaw(id);
+      if (pr.assignedImportId == null || pr.assignedImportId !== user.id) fail('Forbidden', 403);
+      if (pr.status !== 'IMPORT_REVIEWING') fail(`Expected status 'IMPORT_REVIEWING' but pricing request is '${pr.status}'`, 409);
+      // Mirrors RequestMoreInformationRequest's @NotBlank message.
+      if (!payload.message?.trim()) fail('message must not be blank', 400);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      const now = new Date().toISOString();
+      pr.status = 'MORE_INFO_REQUIRED';
+      pr.updatedAt = now;
+      pushPricingRequestEvent(
+        pr, user, 'MORE_INFO_REQUESTED', 'IMPORT_REVIEWING', 'MORE_INFO_REQUIRED',
+        payload.message, payload.dueDate ? JSON.stringify({ dueDate: payload.dueDate }) : null,
+      );
+      addNotification(pr.requestedById, pr.ticketId, ticket?.code, 'MORE_INFO_REQUIRED', `ใบขอราคา ${pr.requestCode} ต้องการข้อมูลเพิ่มเติม`);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async respondInformation(id, payload) {
+      // Mirrors PricingRequestService.respondInformation: owner sales,
+      // MORE_INFO_REQUIRED only. Goes back to IMPORT_REVIEWING, not SUBMITTED —
+      // Import already owns this request; assignedImportId/pickedUpAt survive.
+      const user = hasRole('sales');
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (pr.status !== 'MORE_INFO_REQUIRED') fail(`Expected status 'MORE_INFO_REQUIRED' but pricing request is '${pr.status}'`, 409);
+      const now = new Date().toISOString();
+      pr.status = 'IMPORT_REVIEWING';
+      pr.updatedAt = now;
+      pushPricingRequestEvent(pr, user, 'MORE_INFO_RESPONDED', 'MORE_INFO_REQUIRED', 'IMPORT_REVIEWING', payload.response);
+      if (pr.assignedImportId != null) {
+        addNotification(pr.assignedImportId, pr.ticketId, ticket?.code, 'MORE_INFO_RESPONDED', `ใบขอราคา ${pr.requestCode} ได้รับข้อมูลเพิ่มเติมแล้ว`);
+      }
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async createCustomerChangeRevision(id, payload) {
+      const user = hasRole('sales');
+      const parent = requirePricingRequestViewable(id, user);
+      const ticket = db.tickets.find((t) => t.id === parent.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (['DRAFT', 'CANCELLED', 'SUPERSEDED'].includes(parent.status)) {
+        fail('Customer-change revisions can only be created from an active submitted pricing request', 409);
+      }
+      if (!payload.revisionReason?.trim()) fail('revisionReason must not be blank', 400);
+      if (!payload.clientRequestId) fail('clientRequestId must be a UUID', 400);
+      if (!payload.items?.length) fail('items must not be empty', 400);
+      requirePricingRequestItemFieldsValid(payload.items ?? []);
+      const parentStatus = parent.status;
+      const revisionId = mockPricingRequestSeq++;
+      parent.status = 'SUPERSEDED';
+      parent.updatedAt = new Date().toISOString();
+      const now = new Date().toISOString();
+      const revision = {
+        ...parent,
+        id: revisionId,
+        requestCode: nextPricingRequestCode(),
+        status: 'DRAFT',
+        revisionNo: (parent.revisionNo ?? 1) + 1,
+        parentPricingRequestId: parent.id,
+        clientRequestId: payload.clientRequestId,
+        recipientType: payload.recipientType,
+        recipientContactId: payload.recipientContactId ?? null,
+        recipientLabel: payload.recipientLabel ?? null,
+        requiredDate: payload.requiredDate ?? null,
+        customerTargetPrice: payload.customerTargetPrice ?? null,
+        targetCurrency: normalizePricingRequestCurrency(payload.targetCurrency),
+        note: payload.note ?? null,
+        submittedAt: null,
+        pickedUpAt: null,
+        cancelledAt: null,
+        createdAt: now,
+        updatedAt: now,
+        items: (payload.items ?? []).map((item, i) => ({
+          id: mockPricingRequestItemSeq++,
+          pricingRequestId: revisionId,
+          ...item,
+          sortOrder: i,
+        })),
+        events: [],
+        // A revision starts with no attachments of its own — the `...parent` spread above must
+        // NOT carry the parent's attachments array forward.
+        attachments: [],
+      };
+      mockPricingRequests.push(revision);
+      pushPricingRequestEvent(parent, user, 'PRICING_REQUEST_REVISED', parentStatus, 'SUPERSEDED', payload.revisionReason);
+      pushPricingRequestEvent(revision, user, 'PRICING_REQUEST_CREATED', null, 'DRAFT', payload.revisionReason);
+      return delay({ pricingRequest: buildPricingRequestDetail(revision) });
+    },
+
+    async cancel(id, payload) {
+      // Mirrors PricingRequestService.cancel: owner sales OR ceo (an explicit
+      // override — unlike TicketService.cancel, which has none), any status the
+      // transition table allows into CANCELLED.
+      const user = requireSession();
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      const isOwnerOrCeo = user.role === 'ceo' || ticket?.createdById === user.id;
+      if (!isOwnerOrCeo) fail('Forbidden', 403);
+      if (!pricingRequestCanTransition(pr.status, 'CANCELLED')) {
+        fail(`Cannot cancel pricing request in status '${pr.status}'`, 409);
+      }
+      const now = new Date().toISOString();
+      const fromStatus = pr.status;
+      pr.status = 'CANCELLED';
+      pr.cancelledAt = now;
+      pr.updatedAt = now;
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_CANCELLED', fromStatus, 'CANCELLED', payload.reason, JSON.stringify({ reason: payload.reason }));
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    // ── Pricing Request attachments (V69, review remediation COMMIT 4) ──────
+    // Sales-level supporting attachments on the Pricing Request itself — distinct from the raw
+    // factory-quote attachments above (uploadFactoryQuoteAttachment etc.), which stay
+    // Import/CEO-only. Mirrors PricingRequestService's new uploadAttachment/listAttachments/
+    // attachmentFilePath/deleteAttachment/setAttachmentIncludeInFactoryEmail.
+
+    async uploadAttachment(id, file) {
+      // Mirrors PricingRequestService.uploadAttachment: owner sales only, DRAFT/MORE_INFO_REQUIRED
+      // only. requirePricingRequestViewable already 404s a non-owner on a DRAFT (draft privacy)
+      // and 403s a non-owner once the request is visible-but-not-owned — see that helper.
+      const user = hasRole('sales');
+      const pr = requirePricingRequestViewable(id, user);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (!['DRAFT', 'MORE_INFO_REQUIRED'].includes(pr.status)) {
+        fail('Pricing request attachments can only be uploaded while DRAFT or MORE_INFO_REQUIRED', 409);
+      }
+      requirePricingRequestDealActive(ticket);
+      const attachment = {
+        id: mockPricingRequestAttachmentSeq++,
+        pricingRequestId: pr.id,
+        fileName: file?.name ?? 'attachment',
+        mimeType: file?.type ?? null,
+        fileSize: file?.size ?? null,
+        includeInFactoryEmail: false,
+        uploadedBy: user.id,
+        uploadedAt: new Date().toISOString(),
+      };
+      pr.attachments = [attachment, ...(pr.attachments ?? [])];
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_UPDATED', pr.status, pr.status, `Attachment uploaded: ${attachment.fileName}`);
+      return delay({ attachment });
+    },
+
+    async listAttachments(id) {
+      const user = requireSession();
+      const pr = requirePricingRequestViewable(id, user);
+      return delay({ items: pr.attachments ?? [] });
+    },
+
+    attachmentUrl(id) {
+      return `#mock-pricing-request-attachment-${id}`;
+    },
+
+    async deleteAttachment(id) {
+      // Mirrors PricingRequestService.deleteAttachment: owner sales only,
+      // DRAFT/MORE_INFO_REQUIRED only.
+      const user = hasRole('sales');
+      const owningPr = mockPricingRequests.find((p) => (p.attachments ?? []).some((a) => a.id === Number(id)));
+      if (!owningPr) fail('Pricing request attachment not found', 404);
+      const ticket = db.tickets.find((t) => t.id === owningPr.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (!['DRAFT', 'MORE_INFO_REQUIRED'].includes(owningPr.status)) {
+        fail('Pricing request attachments can only be deleted while DRAFT or MORE_INFO_REQUIRED', 409);
+      }
+      owningPr.attachments = (owningPr.attachments ?? []).filter((a) => a.id !== Number(id));
+      return delay({ ok: true });
+    },
+
+    async setAttachmentIncludeInFactoryEmail(id, includeInFactoryEmail) {
+      // Mirrors PricingRequestService.setAttachmentIncludeInFactoryEmail: import only. No extra
+      // status gate — requirePricingRequestViewable already makes a DRAFT request invisible to
+      // import entirely, so import can only ever reach an attachment on an already-submitted
+      // request.
+      const user = hasRole('import');
+      const owningPr = mockPricingRequests.find((p) => (p.attachments ?? []).some((a) => a.id === Number(id)));
+      if (!owningPr) fail('Pricing request attachment not found', 404);
+      requirePricingRequestViewable(owningPr.id, user);
+      const attachment = owningPr.attachments.find((a) => a.id === Number(id));
+      attachment.includeInFactoryEmail = Boolean(includeInFactoryEmail);
+      return delay({ attachment });
     },
   },
 

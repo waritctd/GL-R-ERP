@@ -156,6 +156,62 @@ export const API_ROUTES = {
     commit: (versionId) => `/api/price-import/commit/${versionId}`,
     profile: (factoryId) => `/api/price-import/profile/${factoryId}`,
   },
+  // Mirrors PricingRequestController: ticket-scoped create/list live under
+  // /api/tickets/{ticketId}/..., everything else is its own /api/pricing-requests/... resource.
+  pricingRequests: {
+    listForTicket: (ticketId) => `/api/tickets/${ticketId}/pricing-requests`,
+    create: (ticketId) => `/api/tickets/${ticketId}/pricing-requests`,
+    queue: (params = {}) => {
+      const p = new URLSearchParams();
+      if (params.status) p.set('status', params.status);
+      if (params.assignedImportId) p.set('assignedImportId', params.assignedImportId);
+      if (params.activeOnly !== undefined) p.set('activeOnly', String(params.activeOnly));
+      return `/api/pricing-requests${p.toString() ? `?${p}` : ''}`;
+    },
+    detail: (id) => `/api/pricing-requests/${id}`,
+    factoryEmailDrafts: (id) => `/api/pricing-requests/${id}/factory-email-drafts`,
+    factoryQuotes: (id) => `/api/pricing-requests/${id}/factory-quotes`,
+    factoryQuote: (id) => `/api/factory-quotes/${id}`,
+    factoryQuoteSend: (id) => `/api/factory-quotes/${id}/send`,
+    factoryQuoteReceive: (id) => `/api/factory-quotes/${id}/receive`,
+    factoryQuoteStartNegotiation: (id) => `/api/factory-quotes/${id}/start-negotiation`,
+    factoryQuoteReady: (id) => `/api/factory-quotes/${id}/mark-ready-for-costing`,
+    factoryQuoteNotAvailable: (id) => `/api/factory-quotes/${id}/not-available`,
+    factoryQuoteAttachments: (id) => `/api/factory-quotes/${id}/attachments`,
+    factoryQuoteAttachmentFile: (id) => `/api/factory-quote-attachments/${id}/file`,
+    factoryQuoteAttachment: (id) => `/api/factory-quote-attachments/${id}`,
+    costings: (id) => `/api/pricing-requests/${id}/costings`,
+    costing: (id) => `/api/pricing-costings/${id}`,
+    costingRecalculate: (id) => `/api/pricing-costings/${id}/recalculate`,
+    costingSubmit: (id) => `/api/pricing-costings/${id}/submit`,
+    // Step 3: CEO Selling Price Decision. Mirrors PricingDecisionController.
+    pricingDecisions: (id) => `/api/pricing-requests/${id}/pricing-decisions`,
+    pricingDecisionSalesView: (id) => `/api/pricing-requests/${id}/pricing-decision/sales-view`,
+    pricingDecision: (id) => `/api/pricing-decisions/${id}`,
+    pricingDecisionRecalculate: (id) => `/api/pricing-decisions/${id}/recalculate`,
+    pricingDecisionApprove: (id) => `/api/pricing-decisions/${id}/approve`,
+    pricingDecisionReturnToImport: (id) => `/api/pricing-decisions/${id}/return-to-import`,
+    // Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationController.
+    customerQuotations: (id) => `/api/pricing-requests/${id}/quotations`,
+    customerQuotation: (id) => `/api/customer-quotations/${id}`,
+    customerQuotationPreview: (id) => `/api/customer-quotations/${id}/preview`,
+    customerQuotationIssue: (id) => `/api/customer-quotations/${id}/issue`,
+    customerQuotationCancel: (id) => `/api/customer-quotations/${id}/cancel`,
+    customerQuotationRevisions: (id) => `/api/customer-quotations/${id}/revisions`,
+    customerQuotationFile: (id, format) => `/api/customer-quotations/${id}/file?format=${format}`,
+    submit: (id) => `/api/pricing-requests/${id}/submit`,
+    pickup: (id) => `/api/pricing-requests/${id}/pickup`,
+    requestInformation: (id) => `/api/pricing-requests/${id}/request-information`,
+    respondInformation: (id) => `/api/pricing-requests/${id}/respond-information`,
+    customerChangeRevision: (id) => `/api/pricing-requests/${id}/customer-change-revision`,
+    cancel: (id) => `/api/pricing-requests/${id}/cancel`,
+    // Sales-level supporting attachments on the Pricing Request itself (V69, review remediation
+    // COMMIT 4) — distinct from the raw factory-quote attachments above.
+    attachments: (id) => `/api/pricing-requests/${id}/attachments`,
+    attachmentFile: (id) => `/api/pricing-request-attachments/${id}/file`,
+    attachment: (id) => `/api/pricing-request-attachments/${id}`,
+    attachmentIncludeInFactoryEmail: (id) => `/api/pricing-request-attachments/${id}/include-in-factory-email`,
+  },
 };
 
 export const ROLE_PERMISSIONS = {
@@ -198,4 +254,10 @@ export const ROLE_PERMISSIONS = {
   canManagePayroll: ['hr'],
   canManagePriceImport: ['ceo', 'import'],
   canManageCatalogProducts: ['ceo', 'import'],
+  // Import's PricingRequest queue (/pricing-requests). Mirrors
+  // PricingRequestService.VIEWER_ROLES minus 'sales'/'account' — this key is
+  // about who sees the cross-deal QUEUE page, not who may view/act on a single
+  // pricing request (sales still sees its own deal's requests via
+  // PricingRequestPanel, gated by ticket ownership, not this key).
+  canViewPricingRequestQueue: ['import', 'ceo', 'sales_manager'],
 };

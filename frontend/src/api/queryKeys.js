@@ -31,4 +31,19 @@ export const queryKeys = {
   customersSearch: (q) => ['customers', 'search', q ?? ''],
   fxRates: () => ['fxRates'],
   priceCalcConfigs: () => ['priceCalcConfigs'],
+  // Commit 6 (pricing-request-foundation)
+  pricingRequestsByTicket: (ticketId) => ['pricingRequests', 'byTicket', ticketId],
+  pricingRequestQueue: (filters = {}) => ['pricingRequests', 'queue', filters.status ?? '', filters.assignedImportId ?? '', filters.activeOnly ?? true],
+  pricingRequestDetail: (id) => ['pricingRequests', 'detail', id],
+  pricingRequestFactoryQuotes: (id) => ['pricingRequests', 'factoryQuotes', id],
+  pricingRequestCostings: (id) => ['pricingRequests', 'costings', id],
+  pricingRequestAttachments: (id) => ['pricingRequests', 'attachments', id],
+  pricingCostingDetail: (id) => ['pricingCostings', 'detail', id],
+  // Step 3: CEO Selling Price Decision.
+  pricingDecisions: (id) => ['pricingRequests', 'pricingDecisions', id],
+  pricingDecisionSalesView: (id) => ['pricingRequests', 'pricingDecisionSalesView', id],
+  pricingDecisionDetail: (id) => ['pricingDecisions', 'detail', id],
+  // Step 4: Customer Quotation Generation and Issuance.
+  customerQuotations: (pricingRequestId) => ['pricingRequests', 'customerQuotations', pricingRequestId],
+  customerQuotationDetail: (id) => ['customerQuotations', 'detail', id],
 };

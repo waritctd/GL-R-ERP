@@ -90,6 +90,15 @@ app:
   uploads-dir: ${APP_UPLOADS_DIR:./uploads}
   bot:
     api-token: ${BOT_API_TOKEN:}
+  factory-quote-dispatch:
+    # Background outbox worker for factory quote request emails (V67). send() only enqueues a
+    # PENDING row; FactoryQuoteEmailDispatchWorker sends and finalizes it out-of-band so an app
+    # crash between "email accepted" and "quote/pricing-request updated" cannot strand the dispatch.
+    poll-interval-ms: ${APP_FACTORY_QUOTE_DISPATCH_POLL_INTERVAL_MS:5000}
+    reclaim-timeout-seconds: ${APP_FACTORY_QUOTE_DISPATCH_RECLAIM_TIMEOUT_SECONDS:120}
+    max-attempts: ${APP_FACTORY_QUOTE_DISPATCH_MAX_ATTEMPTS:8}
+    backoff-base-seconds: ${APP_FACTORY_QUOTE_DISPATCH_BACKOFF_BASE_SECONDS:30}
+    batch-size: ${APP_FACTORY_QUOTE_DISPATCH_BATCH_SIZE:20}
   login-rate-limit:
     enabled: ${APP_LOGIN_RATE_LIMIT_ENABLED:true}
     max-account-failures: ${APP_LOGIN_MAX_ACCOUNT_FAILURES:5}

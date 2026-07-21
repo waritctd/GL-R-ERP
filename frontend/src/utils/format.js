@@ -74,6 +74,28 @@ export function ticketStatusLabel(status) {
   return map[status] ?? { label: status, tone: 'neutral' };
 }
 
+// PricingRequest status -> StatusBadge tone (commit 6). Canonical source; do
+// not re-add a page-local map for pricing-request status elsewhere. Status
+// order/gates live in features/pricingRequests/pricingRequestMeta.js.
+export function pricingRequestStatusLabel(status) {
+  const map = {
+    DRAFT: { label: 'แบบร่าง', tone: 'neutral' },
+    SUBMITTED: { label: 'รอ Import รับเรื่อง', tone: 'warning' },
+    IMPORT_REVIEWING: { label: 'Import ตรวจคำขอราคา', tone: 'info' },
+    AWAITING_FACTORY_RESPONSE: { label: 'รอราคาโรงงาน', tone: 'warning' },
+    COSTING_IN_PROGRESS: { label: 'กำลังร่างต้นทุน', tone: 'info' },
+    READY_FOR_CEO_REVIEW: { label: 'ส่งให้ CEO ตรวจแล้ว', tone: 'success' },
+    // Step 3 (CEO Selling Price Decision).
+    CEO_REVIEWING: { label: 'CEO กำลังพิจารณาราคาขาย', tone: 'info' },
+    APPROVED_FOR_QUOTATION: { label: 'อนุมัติราคาขายแล้ว', tone: 'success' },
+    COSTING_REVISION_REQUIRED: { label: 'CEO ตีกลับให้แก้ไขต้นทุน', tone: 'danger' },
+    MORE_INFO_REQUIRED: { label: 'รอข้อมูลเพิ่มเติม', tone: 'warning' },
+    SUPERSEDED: { label: 'ถูกแทนที่แล้ว', tone: 'neutral' },
+    CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },
+  };
+  return map[status] ?? { label: status || '-', tone: 'neutral' };
+}
+
 export function ticketPriorityLabel(priority) {
   const map = {
     LOW:    { label: 'ต่ำ',   tone: 'neutral' },

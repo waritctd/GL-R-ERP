@@ -39,10 +39,14 @@ public class TicketRepository {
                t.lifecycle, t.tender_requirement, t.deposit_policy,
                t.deposit_policy_reason, t.entry_channel,
                t.billing_date, t.due_date, t.credit_term_days,
-               t.last_follow_up_at, t.next_follow_up_at
+               t.last_follow_up_at, t.next_follow_up_at,
+               t.close_confirmed_at,
+               NULLIF(TRIM(CONCAT_WS(' ', ecc.first_name_th, ecc.last_name_th)), '') AS close_confirmed_by_name,
+               t.cancel_reason, t.cancelled_at
           FROM sales.ticket t
           JOIN hr.employee ec ON ec.employee_id = t.created_by
           LEFT JOIN hr.employee ea ON ea.employee_id = t.assigned_to
+          LEFT JOIN hr.employee ecc ON ecc.employee_id = t.close_confirmed_by
           LEFT JOIN sales.ticket_item ti ON ti.ticket_id = t.ticket_id
           LEFT JOIN customers.project p ON p.project_id = t.project_id
           LEFT JOIN customers.contact ct ON ct.contact_id = t.contact_id
@@ -64,7 +68,8 @@ public class TicketRepository {
                AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
              GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
                       ea.first_name_th, ea.last_name_th,
-                      p.name, ct.first_name, ct.last_name
+                      p.name, ct.first_name, ct.last_name,
+                      ecc.first_name_th, ecc.last_name_th
              ORDER BY t.created_at DESC
             """);
         MapSqlParameterSource params = new MapSqlParameterSource()
@@ -122,12 +127,13 @@ public class TicketRepository {
     public long create(CreateTicketRequest request, String code, long actorId, String actorName) {
         String priority = (request.priority() != null && !request.priority().isBlank())
             ? request.priority() : Priority.DEFAULT;
-        // V50 lightweight deal start: a deal created without items begins as a DRAFT
-        // at the lead stage — product items and the price-request flow come later
-        // (editItems then submit). A deal created WITH items enters the price-request
-        // flow immediately, exactly as before.
+        // Every deal begins as a DRAFT at the lead stage, regardless of whether
+        // products were attached at creation time. Items attached here are
+        // preliminary deal products only — pricing does not start until a
+        // PricingRequest is created and submitted against this ticket
+        // (see th.co.glr.hr.pricingrequest.PricingRequestService).
         boolean hasItems = request.items() != null && !request.items().isEmpty();
-        String status = hasItems ? TicketStatus.SUBMITTED : TicketStatus.DRAFT;
+        String status = TicketStatus.DRAFT;
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO sales.ticket
@@ -150,29 +156,39 @@ public class TicketRepository {
                     ? request.entryChannel() : EntryChannel.DESIGNER_LED),
             keyHolder, new String[]{"ticket_id"});
         long ticketId = keyHolder.getKey().longValue();
-        if (hasItems) {
-            insertItems(ticketId, request.items());
-            addEvent(ticketId, actorId, actorName, TicketEventKind.SUBMITTED, null, TicketStatus.SUBMITTED, null);
-        } else {
-            addEvent(ticketId, actorId, actorName, TicketEventKind.CREATED, null, TicketStatus.DRAFT, null);
-        }
+        if (hasItems) insertItems(ticketId, request.items());
+        addEvent(ticketId, actorId, actorName, TicketEventKind.CREATED, null, TicketStatus.DRAFT, null);
         return ticketId;
     }
 
     public void addEvent(long ticketId, long actorId, String actorName,
                          String kind, String fromStatus, String toStatus, String message) {
-        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message, null);
+        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message, null,
+            null, null);
     }
 
     public void addEventWithSnapshot(long ticketId, long actorId, String actorName,
                                      String kind, String fromStatus, String toStatus,
                                      String message, String itemSnapshotJson) {
-        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message, itemSnapshotJson);
+        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message,
+            itemSnapshotJson, null, null);
+    }
+
+    /**
+     * Record an event AND the document it produced (V58), so "which receipt did
+     * this payment event write" is a query rather than a timestamp match.
+     */
+    public void addEventWithDocument(long ticketId, long actorId, String actorName,
+                                     String kind, String fromStatus, String toStatus,
+                                     String message, String documentType, Long documentId) {
+        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message, null,
+            documentType, documentId);
     }
 
     private void addEventInternal(long ticketId, long actorId, String actorName,
                                    String kind, String fromStatus, String toStatus,
-                                   String message, String itemSnapshotJson) {
+                                   String message, String itemSnapshotJson,
+                                   String documentType, Long documentId) {
         if (toStatus != null) {
             // toStatus doubles as the event's "to" timeline label AND, for genuine
             // status transitions, the ticket's new status. Deal-pipeline events
@@ -209,13 +225,17 @@ public class TicketRepository {
             .addValue("kind", kind)
             .addValue("fromStatus", fromStatus)
             .addValue("toStatus", toStatus)
-            .addValue("message", message);
+            .addValue("message", message)
+            .addValue("documentType", documentType)
+            .addValue("documentId", documentId);
 
         if (itemSnapshotJson == null) {
             jdbc.update("""
                 INSERT INTO sales.ticket_event
-                    (ticket_id, actor_id, actor_name, kind, from_status, to_status, message)
-                VALUES (:ticketId, :actorId, :actorName, :kind, :fromStatus, :toStatus, :message)
+                    (ticket_id, actor_id, actor_name, kind, from_status, to_status, message,
+                     related_document_type, related_document_id)
+                VALUES (:ticketId, :actorId, :actorName, :kind, :fromStatus, :toStatus, :message,
+                        :documentType, :documentId)
                 """, params);
             return;
         }
@@ -223,8 +243,10 @@ public class TicketRepository {
         params.addValue("itemSnapshot", itemSnapshotJson);
         jdbc.update("""
             INSERT INTO sales.ticket_event
-                (ticket_id, actor_id, actor_name, kind, from_status, to_status, message, item_snapshot)
-            VALUES (:ticketId, :actorId, :actorName, :kind, :fromStatus, :toStatus, :message, :itemSnapshot::jsonb)
+                (ticket_id, actor_id, actor_name, kind, from_status, to_status, message, item_snapshot,
+                 related_document_type, related_document_id)
+            VALUES (:ticketId, :actorId, :actorName, :kind, :fromStatus, :toStatus, :message,
+                    :itemSnapshot::jsonb, :documentType, :documentId)
             """, params);
     }
 
@@ -528,7 +550,8 @@ public class TicketRepository {
                  WHERE t.ticket_id = :id
                  GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
                           ea.first_name_th, ea.last_name_th,
-                          p.name, ct.first_name, ct.last_name
+                          p.name, ct.first_name, ct.last_name,
+                          ecc.first_name_th, ecc.last_name_th
                 """,
                 Map.of("id", id), (rs, rowNum) -> mapSummary(rs));
             return Optional.ofNullable(summary).map(this::enrichSummary);
@@ -768,7 +791,13 @@ public class TicketRepository {
             BigDecimal.ZERO,
             BigDecimal.ZERO,
             BigDecimal.ZERO,
-            false
+            false,
+            rs.getTimestamp("close_confirmed_at") != null
+                ? rs.getTimestamp("close_confirmed_at").toInstant() : null,
+            rs.getString("close_confirmed_by_name"),
+            false,
+            rs.getString("cancel_reason"),
+            rs.getTimestamp("cancelled_at") != null ? rs.getTimestamp("cancelled_at").toInstant() : null
         );
     }
 
@@ -792,7 +821,40 @@ public class TicketRepository {
             s.stageUpdatedAt(), s.lifecycle(), s.tenderRequirement(), s.depositPolicy(),
             s.depositPolicyReason(), s.entryChannel(), s.billingDate(), s.dueDate(),
             s.creditTermDays(), s.lastFollowUpAt(), s.nextFollowUpAt(),
-            stage, payable, paid, outstanding, overdue);
+            stage, payable, paid, outstanding, overdue,
+            s.closeConfirmedAt(), s.closeConfirmedByName(), hasInvoiceAttachment(s.id()),
+            s.cancelReason(), s.cancelledAt());
+    }
+
+    /**
+     * An INVOICE document is on file. The invoice is produced by an external
+     * system and uploaded here, so its presence — not its contents — is what the
+     * close gate can check.
+     */
+    public boolean hasInvoiceAttachment(long ticketId) {
+        Integer n = jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.attachment
+             WHERE ticket_id = :id AND attach_type = 'INVOICE'
+            """, Map.of("id", ticketId), Integer.class);
+        return n != null && n > 0;
+    }
+
+    /** ฝ่ายบัญชี signs off that the deal is ready to close; CEO verification still required. */
+    public void confirmClose(long ticketId, long actorId) {
+        jdbc.update("""
+            UPDATE sales.ticket
+               SET close_confirmed_by = :actor, close_confirmed_at = now(), updated_at = now()
+             WHERE ticket_id = :id
+            """, Map.of("id", ticketId, "actor", actorId));
+    }
+
+    /** Withdraw the confirmation so the deal leaves the CEO's verification queue. */
+    public void clearCloseConfirmation(long ticketId) {
+        jdbc.update("""
+            UPDATE sales.ticket
+               SET close_confirmed_by = NULL, close_confirmed_at = NULL, updated_at = now()
+             WHERE ticket_id = :id
+            """, Map.of("id", ticketId));
     }
 
     private String derivePaymentStage(TicketSummaryDto s, BigDecimal payable, BigDecimal paid,
@@ -829,9 +891,36 @@ public class TicketRepository {
                 .addValue("id", ticketId));
     }
 
-    public void clearDealLost(long ticketId) {
+    /** Record why the opportunity went away. Lifecycle is set separately by the caller. */
+    public void cancelDeal(long ticketId, String reason) {
         jdbc.update(
-            "UPDATE sales.ticket SET lost_reason = NULL, lost_at = NULL, lifecycle = :lifecycle, stage_updated_at = now() WHERE ticket_id = :id",
+            "UPDATE sales.ticket SET cancel_reason = :r, cancelled_at = now(), updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource()
+                .addValue("r", reason)
+                .addValue("id", ticketId));
+    }
+
+    /**
+     * Reopen a lost deal — **without erasing why it was lost**.
+     *
+     * This used to null lost_reason/lost_at, leaving a row indistinguishable
+     * from one that was never lost; the reason survived only inside a Thai
+     * free-text event message. The values now stay readable and reopened_at /
+     * reopen_count record that the deal came back, so "reopened deals we
+     * previously lost on PRICE" is a plain query.
+     *
+     * lifecycle=ACTIVE is what makes the deal live again; `lost_reason != null`
+     * no longer implies "currently lost" — check the lifecycle for that.
+     */
+    public void clearDealLost(long ticketId) {
+        jdbc.update("""
+            UPDATE sales.ticket
+               SET lifecycle = :lifecycle,
+                   reopened_at = now(),
+                   reopen_count = reopen_count + 1,
+                   stage_updated_at = now()
+             WHERE ticket_id = :id
+            """,
             new MapSqlParameterSource()
                 .addValue("lifecycle", DealLifecycle.ACTIVE)
                 .addValue("id", ticketId));

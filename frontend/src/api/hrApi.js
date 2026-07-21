@@ -112,8 +112,15 @@ export const api = {
     markQuotationSent: (id, quotationId, payload = {}) => apiRequest(API_ROUTES.tickets.quotationStatus(id, quotationId, 'sent'), { method: 'POST', body: payload }),
     markQuotationAccepted: (id, quotationId, payload = {}) => apiRequest(API_ROUTES.tickets.quotationStatus(id, quotationId, 'accepted'), { method: 'POST', body: payload }),
     markQuotationRejected: (id, quotationId, payload = {}) => apiRequest(API_ROUTES.tickets.quotationStatus(id, quotationId, 'rejected'), { method: 'POST', body: payload }),
-    close: (id) => apiRequest(API_ROUTES.tickets.action(id, 'close'), { method: 'POST' }),
-    cancel: (id) => apiRequest(API_ROUTES.tickets.action(id, 'cancel'), { method: 'POST' }),
+    // Three-party close (V55): ฝ่ายบัญชี confirms, then the CEO verifies. There is no
+    // single-step close any more — sales is not part of the sequence.
+    confirmCloseReady: (id) =>
+      apiRequest(API_ROUTES.tickets.action(id, 'close/confirm'), { method: 'POST' }),
+    revokeCloseConfirmation: (id, body) =>
+      apiRequest(API_ROUTES.tickets.action(id, 'close/revoke'), { method: 'POST', body }),
+    verifyClose: (id) =>
+      apiRequest(API_ROUTES.tickets.action(id, 'close/verify'), { method: 'POST' }),
+    cancel: (id, body) => apiRequest(API_ROUTES.tickets.action(id, 'cancel'), { method: 'POST', body }),
     editItems: (id, payload) => apiRequest(API_ROUTES.tickets.editItems(id), { method: 'PATCH', body: payload }),
     comment: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'comments'), { method: 'POST', body: payload }),
     overrideItemPrice: (id, itemId, payload) => apiRequest(`/api/tickets/${id}/items/${itemId}/price-override`, { method: 'PUT', body: payload }),
@@ -342,5 +349,106 @@ export const api = {
       method: 'PUT',
       body: JSON.parse(json),
     }),
+  },
+  // Mirrors PricingRequestController + PricingRequestService (pricingrequest/).
+  // Detail-shaped responses (create/get/update/submit/pickup/requestInformation/
+  // respondInformation/cancel) come back wrapped as { pricingRequest }; list-shaped
+  // responses (listForTicket/queue) come back as { items }.
+  pricingRequests: {
+    listForTicket: (ticketId) => apiRequest(API_ROUTES.pricingRequests.listForTicket(ticketId)),
+    create: (ticketId, payload) => apiRequest(API_ROUTES.pricingRequests.create(ticketId), { method: 'POST', body: payload }),
+    queue: (params) => apiRequest(API_ROUTES.pricingRequests.queue(params)),
+    get: (id) => apiRequest(API_ROUTES.pricingRequests.detail(id)),
+    update: (id, payload) => apiRequest(API_ROUTES.pricingRequests.detail(id), { method: 'PUT', body: payload }),
+    generateFactoryEmailDrafts: (id) => apiRequest(API_ROUTES.pricingRequests.factoryEmailDrafts(id), { method: 'POST' }),
+    listFactoryQuotes: (id) => apiRequest(API_ROUTES.pricingRequests.factoryQuotes(id)),
+    getFactoryQuote: (id) => apiRequest(API_ROUTES.pricingRequests.factoryQuote(id)),
+    updateFactoryQuote: (id, payload) => apiRequest(API_ROUTES.pricingRequests.factoryQuote(id), { method: 'PUT', body: payload }),
+    sendFactoryQuote: (id, payload) => apiRequest(API_ROUTES.pricingRequests.factoryQuoteSend(id), { method: 'POST', body: payload }),
+    receiveFactoryQuote: (id, payload) => apiRequest(API_ROUTES.pricingRequests.factoryQuoteReceive(id), { method: 'POST', body: payload }),
+    startFactoryNegotiation: (id, payload) => apiRequest(API_ROUTES.pricingRequests.factoryQuoteStartNegotiation(id), { method: 'POST', body: payload }),
+    markFactoryQuoteReady: (id) => apiRequest(API_ROUTES.pricingRequests.factoryQuoteReady(id), { method: 'POST' }),
+    markFactoryQuoteNotAvailable: (id, payload) => apiRequest(API_ROUTES.pricingRequests.factoryQuoteNotAvailable(id), { method: 'POST', body: payload }),
+    createCosting: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.costings(id), { method: 'POST', body: payload }),
+    listCostings: (id) => apiRequest(API_ROUTES.pricingRequests.costings(id)),
+    getCosting: (id) => apiRequest(API_ROUTES.pricingRequests.costing(id)),
+    recalculateCosting: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.costingRecalculate(id), { method: 'POST', body: payload }),
+    submitCosting: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.costingSubmit(id), { method: 'POST', body: payload }),
+    // Step 3: CEO Selling Price Decision. Mirrors PricingDecisionController.
+    startPricingDecision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.pricingDecisions(id), { method: 'POST', body: payload }),
+    listPricingDecisions: (id) => apiRequest(API_ROUTES.pricingRequests.pricingDecisions(id)),
+    getPricingDecisionSalesView: (id) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionSalesView(id)),
+    getPricingDecision: (id) => apiRequest(API_ROUTES.pricingRequests.pricingDecision(id)),
+    updatePricingDecision: (id, payload) => apiRequest(API_ROUTES.pricingRequests.pricingDecision(id), { method: 'PUT', body: payload }),
+    recalculatePricingDecision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionRecalculate(id), { method: 'POST', body: payload }),
+    approvePricingDecision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionApprove(id), { method: 'POST', body: payload }),
+    returnPricingDecisionToImport: (id, payload) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionReturnToImport(id), { method: 'POST', body: payload }),
+    // Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationController.
+    createCustomerQuotation: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotations(id), { method: 'POST', body: payload }),
+    listCustomerQuotations: (id) => apiRequest(API_ROUTES.pricingRequests.customerQuotations(id)),
+    getCustomerQuotation: (id) => apiRequest(API_ROUTES.pricingRequests.customerQuotation(id)),
+    updateCustomerQuotation: (id, payload) => apiRequest(API_ROUTES.pricingRequests.customerQuotation(id), { method: 'PUT', body: payload }),
+    previewCustomerQuotation: (id) => apiRequest(API_ROUTES.pricingRequests.customerQuotationPreview(id), { method: 'POST' }),
+    issueCustomerQuotation: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotationIssue(id), { method: 'POST', body: payload }),
+    cancelCustomerQuotation: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotationCancel(id), { method: 'POST', body: payload }),
+    createCustomerQuotationRevision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotationRevisions(id), { method: 'POST', body: payload }),
+    downloadCustomerQuotationPdf: async (id) => {
+      const res = await fetch(API_ROUTES.pricingRequests.customerQuotationFile(id, 'pdf'), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    downloadCustomerQuotationXlsx: async (id) => {
+      const res = await fetch(API_ROUTES.pricingRequests.customerQuotationFile(id, 'xlsx'), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    submit: (id) => apiRequest(API_ROUTES.pricingRequests.submit(id), { method: 'POST' }),
+    pickup: (id) => apiRequest(API_ROUTES.pricingRequests.pickup(id), { method: 'POST' }),
+    requestInformation: (id, payload) => apiRequest(API_ROUTES.pricingRequests.requestInformation(id), { method: 'POST', body: payload }),
+    respondInformation: (id, payload) => apiRequest(API_ROUTES.pricingRequests.respondInformation(id), { method: 'POST', body: payload }),
+    createCustomerChangeRevision: (id, payload) => apiRequest(API_ROUTES.pricingRequests.customerChangeRevision(id), { method: 'POST', body: payload }),
+    uploadFactoryQuoteAttachment: async (id, file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(API_ROUTES.pricingRequests.factoryQuoteAttachments(id), {
+        method: 'POST',
+        credentials: 'include',
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'Upload failed');
+      }
+      return res.json();
+    },
+    factoryQuoteAttachmentUrl: (id) => API_ROUTES.pricingRequests.factoryQuoteAttachmentFile(id),
+    deleteFactoryQuoteAttachment: (id, reason) => apiRequest(
+      `${API_ROUTES.pricingRequests.factoryQuoteAttachment(id)}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`,
+      { method: 'DELETE' },
+    ),
+    cancel: (id, payload) => apiRequest(API_ROUTES.pricingRequests.cancel(id), { method: 'POST', body: payload }),
+    // Sales-level supporting attachments on the Pricing Request itself (V69, review remediation
+    // COMMIT 4) — distinct from the raw factory-quote attachments above.
+    uploadAttachment: async (id, file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(API_ROUTES.pricingRequests.attachments(id), {
+        method: 'POST',
+        credentials: 'include',
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'Upload failed');
+      }
+      return res.json();
+    },
+    listAttachments: (id) => apiRequest(API_ROUTES.pricingRequests.attachments(id)),
+    attachmentUrl: (id) => API_ROUTES.pricingRequests.attachmentFile(id),
+    deleteAttachment: (id) => apiRequest(API_ROUTES.pricingRequests.attachment(id), { method: 'DELETE' }),
+    setAttachmentIncludeInFactoryEmail: (id, includeInFactoryEmail) => apiRequest(
+      API_ROUTES.pricingRequests.attachmentIncludeInFactoryEmail(id),
+      { method: 'PUT', body: { includeInFactoryEmail } },
+    ),
   },
 };
