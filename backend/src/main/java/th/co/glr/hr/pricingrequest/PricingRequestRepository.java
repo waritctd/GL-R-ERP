@@ -60,6 +60,13 @@ public class PricingRequestRepository {
         this.jdbc = jdbc;
     }
 
+    /** Serializes every mutating operation Step 6 (order confirmation) performs against a given
+     * pricing request, against each other and against every earlier step's own advisory locks on
+     * the same key. Mirrors {@code CustomerQuotationRepository.lockPricingRequest} exactly. */
+    public void lockPricingRequest(long pricingRequestId) {
+        jdbc.query("SELECT pg_advisory_xact_lock(:id)", Map.of("id", pricingRequestId), (rs, rowNum) -> 0);
+    }
+
     public String nextRequestCode() {
         Long seq = jdbc.queryForObject("SELECT nextval('sales.pricing_request_code_seq')", Map.of(), Long.class);
         if (seq == null) {
@@ -677,6 +684,51 @@ public class PricingRequestRepository {
     }
 
     /**
+     * Step 6 (V76): the order-confirmation bridge's own idempotency/state check — read under the
+     * same {@link #lockPricingRequest} hold as the guarded update below, exactly like every prior
+     * step's create/issue/outcome replay check (e.g. {@code CustomerQuotationRepository
+     * .findIdByIssueClientRequestId}).
+     */
+    public record OrderConfirmationState(boolean confirmed, String clientRequestId) {}
+
+    public OrderConfirmationState findOrderConfirmationState(long pricingRequestId) {
+        return jdbc.queryForObject("""
+            SELECT order_confirmed_at IS NOT NULL AS confirmed,
+                   order_confirm_client_request_id::text AS client_request_id
+              FROM sales.pricing_request
+             WHERE pricing_request_id = :id
+            """, Map.of("id", pricingRequestId),
+            (rs, rowNum) -> new OrderConfirmationState(
+                rs.getBoolean("confirmed"), rs.getString("client_request_id")));
+    }
+
+    /**
+     * Compare-and-set: only succeeds from {@code QUOTATION_ACCEPTED} (Step 5's terminal status —
+     * intentionally NOT routed through {@link #transition}/{@link PricingRequestStatus#ALLOWED},
+     * since {@code status} itself does not change here; only the order-confirmation columns do)
+     * and only once ({@code order_confirmed_at IS NULL}). Rowcount 0 means either "not
+     * QUOTATION_ACCEPTED yet" or "already confirmed" — {@code OrderConfirmationService}
+     * distinguishes the two via {@link #findOrderConfirmationState}, called first under the same
+     * lock hold, exactly like {@code CustomerQuotationService.issue}'s own replay-vs-conflict split.
+     */
+    public int markOrderConfirmed(long pricingRequestId, long actorId, String clientRequestId) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request
+               SET order_confirmed_at = now(),
+                   order_confirmed_by = :actorId,
+                   order_confirm_client_request_id = CAST(:clientRequestId AS uuid),
+                   updated_at = now()
+             WHERE pricing_request_id = :id
+               AND status = 'QUOTATION_ACCEPTED'
+               AND order_confirmed_at IS NULL
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", pricingRequestId)
+                .addValue("actorId", actorId)
+                .addValue("clientRequestId", clientRequestId));
+    }
+
+    /**
      * The ticket_item ids that legally belong to this ticket — used by the
      * service layer to validate a pricing-request item's sourceTicketItemId
      * before persisting (commit 3). Lives here rather than on TicketRepository
@@ -852,8 +904,14 @@ public class PricingRequestRepository {
             pickedUpAt != null ? pickedUpAt.toInstant() : null,
             cancelledAt != null ? cancelledAt.toInstant() : null,
             rs.getTimestamp("created_at").toInstant(),
-            rs.getTimestamp("updated_at").toInstant()
+            rs.getTimestamp("updated_at").toInstant(),
+            instant(rs, "order_confirmed_at")
         );
+    }
+
+    private java.time.Instant instant(ResultSet rs, String column) throws SQLException {
+        Timestamp ts = rs.getTimestamp(column);
+        return ts == null ? null : ts.toInstant();
     }
 
     private PricingRequestItemDto mapItem(ResultSet rs) throws SQLException {

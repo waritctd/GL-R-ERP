@@ -218,6 +218,22 @@ export function canCreateCommercialOnlyRevision(user, pr, quotation) {
   return canManageCustomerQuotation(user, pr) && ['ISSUED', 'REVISION_REQUESTED'].includes(quotation?.docStatus);
 }
 
+// ── Step 6: Deposit, Payment, and Order Confirmation. Mirrors OrderConfirmationService. ──
+
+/** Mirrors OrderConfirmationService.confirmOrder's gate: sales (ticket owner) only, reachable
+ * ONLY from QUOTATION_ACCEPTED (Step 5's terminal status), and only until the bridge has already
+ * run once (orderConfirmedAt is set on the FIRST successful call and never cleared). */
+export function canConfirmOrder(user, pr) {
+  return canManageCustomerQuotation(user, pr) && pr?.status === 'QUOTATION_ACCEPTED' && !pr?.orderConfirmedAt;
+}
+
+/** Mirrors OrderConfirmationService.createDepositNoticeFromQuotation's gate: sales (ticket owner)
+ * only, reachable once the bridge action above has run (the endpoint's own precondition —
+ * ticket.status=quotation_issued — is only true after confirmOrder). */
+export function canCreateDepositNoticeFromQuotation(user, pr) {
+  return canManageCustomerQuotation(user, pr) && pr?.status === 'QUOTATION_ACCEPTED' && Boolean(pr?.orderConfirmedAt);
+}
+
 /** Mirrors PricingRequestService.cancel: owner sales OR ceo, any cancellable status. */
 export function canCancelPricingRequest(user, pr) {
   if (!pr) return false;

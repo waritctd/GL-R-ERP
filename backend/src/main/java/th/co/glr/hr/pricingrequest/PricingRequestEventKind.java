@@ -38,6 +38,9 @@ public final class PricingRequestEventKind {
     public static final String CUSTOMER_QUOTATION_REVISION_REQUESTED = "CUSTOMER_QUOTATION_REVISION_REQUESTED";
     // Sweep-only (QuotationExpiryWorker) — never emitted by a client-driven recordOutcome call.
     public static final String CUSTOMER_QUOTATION_EXPIRED   = "CUSTOMER_QUOTATION_EXPIRED";
+    // Step 6: Deposit, Payment, and Order Confirmation.
+    public static final String ORDER_CONFIRMED               = "ORDER_CONFIRMED";
+    public static final String DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION = "DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION";
 
     public static final Set<String> VALUES = Set.of(
         PRICING_REQUEST_CREATED, PRICING_REQUEST_UPDATED, PRICING_REQUEST_SUBMITTED,
@@ -50,7 +53,8 @@ public final class PricingRequestEventKind {
         PRICING_DECISION_APPROVED, PRICING_DECISION_RETURNED,
         CUSTOMER_QUOTATION_CREATED, CUSTOMER_QUOTATION_UPDATED, CUSTOMER_QUOTATION_ISSUED,
         CUSTOMER_QUOTATION_CANCELLED, CUSTOMER_QUOTATION_REVISED, CUSTOMER_QUOTATION_ACCEPTED,
-        CUSTOMER_QUOTATION_REJECTED, CUSTOMER_QUOTATION_REVISION_REQUESTED, CUSTOMER_QUOTATION_EXPIRED);
+        CUSTOMER_QUOTATION_REJECTED, CUSTOMER_QUOTATION_REVISION_REQUESTED, CUSTOMER_QUOTATION_EXPIRED,
+        ORDER_CONFIRMED, DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION);
 
     public static boolean isValid(String value) {
         return value != null && VALUES.contains(value);

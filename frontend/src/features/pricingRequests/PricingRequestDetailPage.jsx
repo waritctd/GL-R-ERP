@@ -11,8 +11,10 @@ import { formatMoney, formatThaiDate, pricingRequestStatusLabel } from '../../ut
 import { downloadBlob } from '../../utils/download.js';
 import {
   canActOnPricingDecision,
+  canConfirmOrder,
   canCreateCommercialOnlyRevision,
   canCreateCustomerQuotation,
+  canCreateDepositNoticeFromQuotation,
   canManageCustomerQuotation,
   canRecordCustomerQuotationOutcome,
   canRequestInformation,
@@ -293,6 +295,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // Step 5: Customer Decision and Commercial Revisions.
   const [outcomeClientRequestId, setOutcomeClientRequestId] = useState(() => generateClientRequestId());
   const [outcomeNote, setOutcomeNote] = useState('');
+  // Step 6: Deposit, Payment, and Order Confirmation.
+  const [confirmOrderClientRequestId, setConfirmOrderClientRequestId] = useState(() => generateClientRequestId());
+  const [depositPercentInput, setDepositPercentInput] = useState('0.5');
   const startCeoReview = useActionMutation(
     () => api.pricingRequests.startPricingDecision(pricingRequestId, {
       defaultMarginPct: cleanNumber(decisionDefaultMargin),
@@ -395,6 +400,30 @@ export function PricingRequestDetailPage({ user, showToast }) {
       setOutcomeNote('');
       showToast?.('success', 'บันทึกผลใบเสนอราคาแล้ว');
       invalidate();
+    },
+    onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+  });
+  // Step 6: Deposit, Payment, and Order Confirmation.
+  const confirmOrder = useMutation({
+    mutationFn: () => api.pricingRequests.confirmOrder(pricingRequestId, {
+      clientRequestId: confirmOrderClientRequestId,
+    }),
+    onSuccess: () => {
+      setConfirmOrderClientRequestId(generateClientRequestId());
+      showToast?.('success', 'ยืนยันคำสั่งซื้อแล้ว');
+      invalidate();
+    },
+    onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+  });
+  const createDepositNoticeFromQuotation = useMutation({
+    mutationFn: () => api.pricingRequests.createDepositNoticeFromQuotation(pricingRequestId, {
+      depositPercent: cleanNumber(depositPercentInput),
+    }),
+    onSuccess: () => {
+      showToast?.('success', 'สร้างร่างใบแจ้งยอดเงินรับมัดจำแล้ว');
+      // Reuse the existing (legacy) deposit-notice page as-is — it already loads/edits/issues a
+      // DRAFT by ticketId; the draft this just created is exactly what it will find and show.
+      navigate(`/tickets/${summary.ticketId}/deposit`);
     },
     onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
   });
@@ -1146,6 +1175,52 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 </div>
               );
             })() : null}
+          </div>
+        </section>
+      ) : null}
+
+      {/* Step 6: Deposit, Payment, and Order Confirmation — only once the customer has accepted
+          the quotation (Step 5's terminal status). Bridges into the existing, already-tested
+          dual-track payment pipeline (TicketService.confirmCustomer/DepositNoticeService) rather
+          than inventing a new one — see OrderConfirmationService's own class Javadoc. */}
+      {summary.status === 'QUOTATION_ACCEPTED' ? (
+        <section className="table-panel">
+          <div className="panel-header"><h2>ยืนยันคำสั่งซื้อและออกใบแจ้งยอดเงินรับมัดจำ</h2></div>
+          <div className="flex flex-col gap-3 p-4">
+            {canConfirmOrder(user, summary) ? (
+              <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
+                <p className="text-sm text-text-muted">
+                  ลูกค้ายอมรับใบเสนอราคาแล้ว — ยืนยันคำสั่งซื้อเพื่อเริ่มขั้นตอนรับมัดจำและนำเข้าสินค้า
+                </p>
+                <button type="button" className="primary-button self-start" disabled={confirmOrder.isPending}
+                  onClick={() => confirmOrder.mutate()}>
+                  ยืนยันคำสั่งซื้อ
+                </button>
+              </div>
+            ) : null}
+            {canCreateDepositNoticeFromQuotation(user, summary) ? (
+              <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
+                <p className="text-sm text-text-muted">
+                  ยืนยันคำสั่งซื้อแล้ว — สร้างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคาที่ลูกค้ายอมรับ (แก้ไข/ออกเอกสารในหน้าใบแจ้งยอดเงินรับมัดจำ)
+                </p>
+                <label className="flex items-center gap-2 text-sm">
+                  % มัดจำ
+                  <input type="number" min="0" max="1" step="0.05" className="w-24 rounded border border-border p-1 text-sm"
+                    value={depositPercentInput} onChange={(e) => setDepositPercentInput(e.target.value)} />
+                </label>
+                <button type="button" className="primary-button self-start" disabled={createDepositNoticeFromQuotation.isPending}
+                  onClick={() => createDepositNoticeFromQuotation.mutate()}>
+                  สร้างใบแจ้งยอดเงินรับมัดจำ
+                </button>
+              </div>
+            ) : null}
+            {!canConfirmOrder(user, summary) && !canCreateDepositNoticeFromQuotation(user, summary) ? (
+              <p className="text-sm text-text-muted">
+                {summary.orderConfirmedAt
+                  ? `ยืนยันคำสั่งซื้อแล้วเมื่อ ${formatThaiDate(summary.orderConfirmedAt)} — ดูใบแจ้งยอดเงินรับมัดจำได้ที่หน้าดีล`
+                  : 'ยืนยันคำสั่งซื้อได้เฉพาะเจ้าของดีล (sales)'}
+              </p>
+            ) : null}
           </div>
         </section>
       ) : null}
