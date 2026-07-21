@@ -32,14 +32,22 @@ RUN apt-get update && \
 # not by git. See backend/fonts/README.md for how to supply them.
 COPY fonts/ /usr/local/share/fonts/glr/
 
-# Rebuild the system font cache and fail the build if registration fails. Checked individually
-# (not one combined grep) so a single missing family fails loudly instead of being masked by the
-# others still matching — these are exactly the families the three live templates reference (see
-# backend/fonts/README.md).
+# Rebuild the system font cache. If NO font files were supplied at all (nothing currently
+# populates backend/fonts/ on Render — see backend/fonts/README.md), don't fail the build: warn
+# and continue, same graceful degradation as before this file existed (LibreOffice substitutes a
+# wider font; PDFs still render, just not pixel-perfect). But if fonts WERE supplied, verify every
+# required family registered — checked individually, not one combined grep, so a single missing
+# family fails loudly instead of being masked by the others still matching. A partial/broken font
+# set (e.g. a truncated fetch) is a real bug and should fail; an intentionally fontless build
+# (Render today) should not.
 RUN fc-cache -f -v && \
-    for f in "Arial" "Calibri" "Cambria" "Tahoma" "Angsana New" "Browallia New" "BrowalliaUPC" "Cordia New"; do \
-      fc-list | grep -qi "$f" || { echo "Missing font: $f" >&2; exit 1; }; \
-    done
+    if find /usr/local/share/fonts/glr -type f \( -iname '*.ttf' -o -iname '*.ttc' -o -iname '*.otf' \) -print -quit | grep -q .; then \
+      for f in "Arial" "Calibri" "Cambria" "Tahoma" "Angsana New" "Browallia New" "BrowalliaUPC" "Cordia New"; do \
+        fc-list | grep -qi "$f" || { echo "Missing font: $f" >&2; exit 1; }; \
+      done; \
+    else \
+      echo "WARNING: no fonts supplied in backend/fonts/ — PDFs will render with substitute fonts. See backend/fonts/README.md." >&2; \
+    fi
 
 # finalName defaults to ${artifactId}-${version} -> glr-hr-backend-0.1.0.jar
 COPY --from=build /app/target/glr-hr-backend-0.1.0.jar app.jar
