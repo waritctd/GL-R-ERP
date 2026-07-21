@@ -16,8 +16,8 @@
 -- V72 is free everywhere checked. As with every prior migration on this chain, the true
 -- production-numbering conflict is tracked separately in
 -- docs/flyway-version-collision-audit / docs/agent-handoffs/88_feat-sales-factory-quote-costing.md
--- §8 (production's own V55 diverges from this line's) — resolved at merge time by whichever
--- branch merges second, not by renumbering here.
+-- §8. That production V55 divergence is now RESOLVED on this line: "quotation doc terms" was
+-- adopted byte-identical as V55 and this chain's V55-V59 shifted to V56-V60 (see V74's header).
 --
 -- Re-verified again at the end of this task's session (same command, all worktrees re-listed):
 -- payroll-recon's own migration had moved on to V73 in the meantime (a different agent's

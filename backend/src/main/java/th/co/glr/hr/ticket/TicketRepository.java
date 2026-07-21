@@ -175,7 +175,7 @@ public class TicketRepository {
     }
 
     /**
-     * Record an event AND the document it produced (V57), so "which receipt did
+     * Record an event AND the document it produced (V58), so "which receipt did
      * this payment event write" is a query rather than a timestamp match.
      */
     public void addEventWithDocument(long ticketId, long actorId, String actorName,

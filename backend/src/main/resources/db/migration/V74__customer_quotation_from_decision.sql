@@ -15,12 +15,12 @@
 --     V66__special_money_request_schema.sql.
 --   - No other open worktree (top-level GL-R-ERP, GL-R-ERP-employees, GL-R-ERP-main,
 --     flyway-audit, nav-menu-grouping, profile-avatar-menu) has any migration file above V71.
--- V74 is free everywhere checked (V73 is taken by payroll-recon). As with every prior migration
--- on this chain, the true production-numbering conflict is tracked separately in
--- docs/flyway-version-collision-audit / docs/agent-handoffs/88_feat-sales-factory-quote-costing.md
--- §8 (production's own V55 diverges from this line's) — resolved at merge time by whichever
--- branch merges second, not by renumbering here. Re-verify again before merging if time has
--- passed, per that same note.
+-- V74 is free everywhere checked (V73 is taken by payroll-recon). The production V55 divergence
+-- (prod had V55 = "quotation doc terms" from the unmerged feat/doc-gen-real-templates) is now
+-- RESOLVED on this line: that migration was adopted byte-identical as V55 and this chain's own
+-- close_verification..product_description_idempotency were shifted V55-V59 -> V56-V60, so prod
+-- correctly skips the already-applied V55 and applies V56+ forward. See
+-- docs/flyway-version-collision-audit / docs/agent-handoffs/88_feat-sales-factory-quote-costing.md §8.
 --
 -- ─────────────────────────────────────────────────────────────────────────────────────────
 -- Owner's decision: EXTEND sales.quotation / sales.quotation_item — do NOT create a parallel

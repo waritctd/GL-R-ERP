@@ -231,7 +231,7 @@ public class TicketController {
             .body(bytes);
     }
 
-    // Three-party close (V55): ฝ่ายบัญชี confirms, then the CEO verifies. The old
+    // Three-party close (V56): ฝ่ายบัญชี confirms, then the CEO verifies. The old
     // single-step POST /{id}/close (sales owner, one signature) is gone.
     @PostMapping("/{id}/close/confirm")
     TicketDetailResponse confirmCloseReady(@PathVariable long id, HttpSession session) {
@@ -346,7 +346,7 @@ public class TicketController {
     record MarkLostRequest(@jakarta.validation.constraints.NotBlank String reason,
                            @jakarta.validation.constraints.Size(max = 2000) String note) {}
 
-    /** Same shape as MarkLostRequest — cancel now carries a structured reason too (V56). */
+    /** Same shape as MarkLostRequest — cancel now carries a structured reason too (V57). */
     record CancelRequest(@jakarta.validation.constraints.NotBlank String reason,
                          @jakarta.validation.constraints.Size(max = 2000) String note) {}
 

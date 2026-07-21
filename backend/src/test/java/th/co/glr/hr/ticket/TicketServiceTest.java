@@ -1425,7 +1425,7 @@ class TicketServiceTest {
 
     @Test
     void reopenedDealIsFullyOperableAndKeepsItsLostReason() {
-        // V57 stopped nulling lost_reason on reopen, so a live reopened deal now
+        // V58 stopped nulling lost_reason on reopen, so a live reopened deal now
         // carries one. Every guard that used `lostReason != null` to mean "is
         // currently lost" had to move to the lifecycle — otherwise reopening a deal
         // silently bricked it: no stage changes, no auto-advance, un-losable again.
@@ -2147,7 +2147,7 @@ class TicketServiceTest {
     }
 
     /**
-     * Close-flow stub (V55): the compat constructor can't express close_confirmed_at
+     * Close-flow stub (V56): the compat constructor can't express close_confirmed_at
      * or invoice_on_file, and both drive the three-party gate.
      */
     private TicketDto stubCloseDeal(long ticketId, String status, String paymentStatus,

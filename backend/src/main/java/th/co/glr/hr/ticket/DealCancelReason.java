@@ -3,7 +3,7 @@ package th.co.glr.hr.ticket;
 import java.util.Set;
 
 /**
- * Reasons a deal is cancelled (V56). Mirrors {@link DealLostReason}'s shape.
+ * Reasons a deal is cancelled (V57). Mirrors {@link DealLostReason}'s shape.
  *
  * Cancelled is NOT lost, and the distinction is the point: lost means the
  * customer bought elsewhere or we failed to win the work — a competitive

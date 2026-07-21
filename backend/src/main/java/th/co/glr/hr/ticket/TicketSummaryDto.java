@@ -56,7 +56,7 @@ public record TicketSummaryDto(
     String closeConfirmedByName,
     /** An INVOICE attachment is on file — a prerequisite for confirming the close. */
     boolean invoiceOnFile,
-    /** Why the opportunity went away (V56). Distinct from lostReason. */
+    /** Why the opportunity went away (V57). Distinct from lostReason. */
     String cancelReason,
     Instant cancelledAt
 ) {
