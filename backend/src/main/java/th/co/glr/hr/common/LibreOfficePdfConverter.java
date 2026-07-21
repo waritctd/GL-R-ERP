@@ -13,8 +13,15 @@ import java.util.concurrent.TimeUnit;
 //
 // A temporary XLS file is written to the system temp dir, converted, and
 // both temp files are deleted when done. The --env:UserInstallation flag
-// points LibreOffice's user-profile scratch space to /tmp so this works
+// points LibreOffice's user-profile scratch space to a temp dir so this works
 // even when running as a service account with no home directory.
+//
+// The profile directory is unique per JVM process (…/glr-lo-profile-<pid>).
+// LibreOffice takes an exclusive lock on its user profile, so two soffice
+// processes sharing one profile collide and one fails. Scoping it per process
+// keeps a single JVM reusing one warm profile across calls (no behaviour change
+// for the app), while separate processes — parallel test forks, or two app
+// instances on one host — no longer clobber each other.
 public final class LibreOfficePdfConverter {
 
     private static final List<String> SOFFICE_CANDIDATES = List.of(
@@ -23,6 +30,10 @@ public final class LibreOfficePdfConverter {
         "/usr/local/bin/soffice",
         "/usr/bin/soffice"
     );
+
+    private static final String USER_INSTALLATION = Path.of(
+        System.getProperty("java.io.tmpdir"),
+        "glr-lo-profile-" + ProcessHandle.current().pid()).toUri().toString();
 
     private LibreOfficePdfConverter() {}
 
@@ -55,7 +66,7 @@ public final class LibreOfficePdfConverter {
                 "--headless",
                 "--nofirststartwizard",
                 "--norestore",
-                "-env:UserInstallation=file:///tmp/lo-profile",
+                "-env:UserInstallation=" + USER_INSTALLATION,
                 "--convert-to", "pdf",
                 "--outdir", outDir.toAbsolutePath().toString(),
                 tmpXls.toAbsolutePath().toString()

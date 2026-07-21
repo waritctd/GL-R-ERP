@@ -19,6 +19,11 @@
 
     <properties>
         <java.version>21</java.version>
+        <!-- Number of parallel test JVMs. Each fork is a separate process, so on the Testcontainers
+             path it gets its OWN throwaway Postgres (and its own golden/wrk clone) — tests stay fully
+             isolated with no test-code changes. Override with -Dtest.fork.count=1 when running against
+             an external TEST_DB_URL: forks would otherwise share and clobber that single database. -->
+        <test.fork.count>2</test.fork.count>
     </properties>
 
     <dependencies>
@@ -145,6 +150,18 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
+            <!-- Run tests in parallel JVM forks. reuseForks=true keeps each fork alive across the
+                 classes assigned to it (one Testcontainers Postgres + one Spring context cache per
+                 fork, not per class). argLine is left to the inherited default so jacoco's agent
+                 argLine still flows through; forkCount is the ${test.fork.count} property. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <forkCount>${test.fork.count}</forkCount>
+                    <reuseForks>true</reuseForks>
+                </configuration>
+            </plugin>
             <!-- Coverage ratchet: measures line coverage during `verify` and fails the build if it
                  regresses below the current floor. The minimum is set to the measured coverage
                  rounded DOWN (a regression guard, not an aspirational target). DTO/records and the
@@ -167,6 +184,33 @@
                         <goals>
                             <goal>prepare-agent</goal>
                         </goals>
+                        <configuration>
+                            <!-- One exec file per surefire fork. ${surefire.forkNumber} is not a Maven
+                                 property, so it survives POM interpolation and surefire substitutes it
+                                 per fork when it builds each JVM's argLine — otherwise parallel forks
+                                 would corrupt a single shared jacoco.exec. Merged below before report. -->
+                            <destFile>${project.build.directory}/jacoco-exec/jacoco-${surefire.forkNumber}.exec</destFile>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <!-- Merge the per-fork exec files into the single jacoco.exec that report and
+                             check read by default. Runs after `test`, before `verify`. -->
+                        <id>jacoco-merge</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>merge</goal>
+                        </goals>
+                        <configuration>
+                            <fileSets>
+                                <fileSet>
+                                    <directory>${project.build.directory}/jacoco-exec</directory>
+                                    <includes>
+                                        <include>*.exec</include>
+                                    </includes>
+                                </fileSet>
+                            </fileSets>
+                            <destFile>${project.build.directory}/jacoco.exec</destFile>
+                        </configuration>
                     </execution>
                     <execution>
                         <id>jacoco-report</id>
