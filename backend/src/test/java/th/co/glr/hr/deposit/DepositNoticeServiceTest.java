@@ -105,6 +105,33 @@ class DepositNoticeServiceTest {
         assertThat(doc.id()).isEqualTo(99L);
     }
 
+    // ── Phase B (role-scoped views): import has no business reading deposit ─
+    // notices — a customer financial document, unlike a ticket's other fields
+    // which import may still see. Mirrors salesViewScope.js hiding the whole
+    // "depositNotice" section from import's TicketDetailPage.
+
+    private final UserPrincipal importActor = new UserPrincipal(
+        3L, "import@glr.co.th", "Import", "import", 3L, true, LocalDate.of(2026, 1, 1), false, null, false);
+
+    @Test
+    void listByTicket_importDenied() {
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
+        assertForbidden(() -> service.listByTicket(10L, importActor));
+    }
+
+    @Test
+    void getById_importDenied() {
+        stubDraft(99L, 10L);
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
+        assertForbidden(() -> service.getById(99L, importActor));
+    }
+
+    @Test
+    void downloadRemainingInvoice_importDenied() {
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
+        assertForbidden(() -> service.getRemainingInvoiceXlsx(10L, importActor));
+    }
+
     @Test
     void createDraft_rejectsSalesManagerRole() {
         // Role-gated (SALES_ROLES) as the very first check.

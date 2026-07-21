@@ -74,13 +74,30 @@ class TicketServiceTest {
     @Test
     void list_salesActorFiltersToOwnTickets() {
         service.list(null, salesActor);
-        verify(ticketRepo).findSummaries(null, 1L);
+        verify(ticketRepo).findSummaries(null, null, 1L, "sales", null);
     }
 
     @Test
-    void list_nonSalesActorSeesAllTickets() {
+    void list_ceoSeesAllTicketsUnfiltered() {
+        service.list(null, ceoActor);
+        verify(ticketRepo).findSummaries(null, null, null, "ceo", null);
+    }
+
+    // Phase B (role-scoped views): the createdBy filter stays null for import/account
+    // (they are not ticket owners) but the actor's role now passes through so the
+    // repository can apply its own list-scoping predicate — see
+    // TicketRepositoryIntegrationTest / TicketScopeIntegrationTest for the actual
+    // WHERE-clause enforcement this unit test cannot reach (Mockito never runs SQL).
+    @Test
+    void list_importActorPassesRoleThroughForRepositoryScopingNoOwnerFilter() {
         service.list(null, importActor);
-        verify(ticketRepo).findSummaries(null, null);
+        verify(ticketRepo).findSummaries(null, null, null, "import", null);
+    }
+
+    @Test
+    void list_accountActorPassesRoleThroughForRepositoryScopingNoOwnerFilter() {
+        service.list(null, accountActor);
+        verify(ticketRepo).findSummaries(null, null, null, "account", null);
     }
 
     // ── get ───────────────────────────────────────────────────────────────
@@ -101,6 +118,70 @@ class TicketServiceTest {
     void get_importCanViewAnyTicket() {
         TicketDto ticket = stubTicket(10L, 99L, TicketStatus.SUBMITTED);
         assertThat(service.get(10L, importActor)).isEqualTo(ticket);
+    }
+
+    // ── Phase B: role-scoped views (import quotation projection) ───────────
+
+    @Test
+    void get_importSeesTicketButQuotationIsProjectedOut() {
+        QuotationDto quotation = quotationOf(1L, 10L, "QT-2026-0001");
+        stubDealWithQuotations(10L, 99L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.QUOTE_DESIGN_SIDE, DealLifecycle.ACTIVE, List.of(quotation));
+
+        TicketDto seen = service.get(10L, importActor);
+
+        assertThat(seen.quotation()).isNull();
+        assertThat(seen.quotations()).isEmpty();
+        // A projection, not a wholesale redaction — everything else is unchanged.
+        assertThat(seen.summary().id()).isEqualTo(10L);
+    }
+
+    @Test
+    void get_salesStillSeesTheFullQuotationChain() {
+        QuotationDto quotation = quotationOf(1L, 10L, "QT-2026-0001");
+        stubDealWithQuotations(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.QUOTE_DESIGN_SIDE, DealLifecycle.ACTIVE, List.of(quotation));
+
+        TicketDto seen = service.get(10L, salesActor);
+
+        assertThat(seen.quotation()).isEqualTo(quotation);
+        assertThat(seen.quotations()).containsExactly(quotation);
+    }
+
+    @Test
+    void comment_importSeesTicketButQuotationIsProjectedOut() {
+        QuotationDto quotation = quotationOf(1L, 10L, "QT-2026-0001");
+        stubDealWithQuotations(10L, 99L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.QUOTE_DESIGN_SIDE, DealLifecycle.ACTIVE, List.of(quotation));
+
+        TicketDto seen = service.comment(10L, new CommentRequest("hi"), importActor);
+
+        assertThat(seen.quotation()).isNull();
+        assertThat(seen.quotations()).isEmpty();
+    }
+
+    @Test
+    void quotationFile_importDenied() {
+        QuotationDto quotation = quotationOf(1L, 10L, "QT-2026-0001");
+        stubDealWithQuotations(10L, 99L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.QUOTE_DESIGN_SIDE, DealLifecycle.ACTIVE, List.of(quotation));
+
+        assertForbidden(() -> service.getQuotationXlsx(10L, 1L, importActor));
+        assertForbidden(() -> service.getQuotationPdf(10L, 1L, importActor));
+    }
+
+    @Test
+    void listPayments_importDenied() {
+        stubTicket(10L, 99L, TicketStatus.QUOTATION_ISSUED);
+        assertForbidden(() -> service.listPayments(10L, importActor));
+    }
+
+    @Test
+    void listPayments_accountAndCeoAllowed() {
+        stubTicket(10L, 99L, TicketStatus.QUOTATION_ISSUED);
+        // Just proving the gate doesn't throw — the actual rows come from the repository.
+        service.listPayments(10L, accountActor);
+        service.listPayments(10L, ceoActor);
     }
 
     // ── read authz (viewer roles) ─────────────────────────────────────────
@@ -2029,7 +2110,7 @@ class TicketServiceTest {
     void list_salesManagerSeesAllTicketsUnfiltered() {
         // Same as any non-sales viewer: no createdBy scoping.
         service.list(null, salesManagerActor);
-        verify(ticketRepo).findSummaries(null, null);
+        verify(ticketRepo).findSummaries(null, null, null, "sales_manager", null);
     }
 
     @Test

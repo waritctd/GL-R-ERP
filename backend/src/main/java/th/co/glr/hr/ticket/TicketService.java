@@ -84,7 +84,7 @@ public class TicketService {
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
         Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
-        return tickets.findSummaries(status, createdByFilter);
+        return tickets.findSummaries(status, null, createdByFilter, actor.role(), null);
     }
 
     public Page<TicketSummaryDto> listPage(String status, UserPrincipal actor, PageRequest page) {
@@ -98,11 +98,14 @@ public class TicketService {
     public Page<TicketSummaryDto> listPage(String status, String salesStage, UserPrincipal actor, PageRequest page) {
         requireRole(actor, VIEWER_ROLES);
         Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
-        List<TicketSummaryDto> rows = tickets.findSummaries(status, salesStage, createdByFilter, page);
+        // Phase B (role-scoped views): import/account only see the slice of the deal
+        // pipeline relevant to their own worklist — see TicketRepository.appendRoleScope.
+        // ceo/sales_manager/sales are unaffected (the repository ignores any other role).
+        List<TicketSummaryDto> rows = tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page);
         // Skip the COUNT round-trip when the whole result set fits on page 0.
         int total = (page.page() == 0 && rows.size() < page.size())
             ? rows.size()
-            : tickets.countSummaries(status, salesStage, createdByFilter);
+            : tickets.countSummaries(status, salesStage, createdByFilter, actor.role());
         return new Page<>(rows, page.page(), page.size(), total);
     }
 
@@ -112,6 +115,12 @@ public class TicketService {
 
     public List<PaymentReceiptDto> listPayments(long ticketId, UserPrincipal actor) {
         requireViewAccess(ticketId, actor);
+        // Phase B: the payment ledger is ฝ่ายบัญชี's own document — import has no
+        // business reading it (mirrors salesViewScope.js hiding the "payment" section
+        // from import's view of TicketDetailPage).
+        if (IMPORT_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
         return tickets.findReceiptsByTicket(ticketId);
     }
 
@@ -126,7 +135,28 @@ public class TicketService {
         if ("sales".equals(actor.role()) && ticket.summary().createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
-        return ticket;
+        return projectForRole(ticket, actor.role());
+    }
+
+    /**
+     * Phase B (role-scoped views): import has no business reading the customer-facing
+     * quotation chain (mirrors salesViewScope.js hiding the "quotation" section from
+     * import's TicketDetailPage) — project it out here rather than trust every one of
+     * requireViewAccess's callers (get, comment, listDeliveries, actions, the quotation
+     * file download) to re-check. Every other viewer role gets the DTO unchanged.
+     *
+     * <p>NOTE: mutation responses built via {@code requireTicket} directly (e.g. import's
+     * own procurement actions — reserveStock, recordDelivery, markGoodsReceived) do NOT
+     * go through this projection and so still embed quotations in their return value.
+     * That is a narrower, accepted residual gap (transient, tied to import legitimately
+     * performing its own action) recorded in the branch handoff rather than silently
+     * closed by touching every one of those call sites.
+     */
+    private TicketDto projectForRole(TicketDto ticket, String role) {
+        if (!IMPORT_ROLES.contains(role)) {
+            return ticket;
+        }
+        return new TicketDto(ticket.summary(), ticket.items(), ticket.events(), null, List.of());
     }
 
     @Transactional
@@ -387,6 +417,12 @@ public class TicketService {
 
     private QuotationRenderContext loadQuotationContext(long ticketId, long quotationId, UserPrincipal actor) {
         TicketDto ticket = requireViewAccess(ticketId, actor);
+        // Phase B: explicit denial rather than relying on projectForRole's stripped
+        // quotations list to fall through to a "quotation not found" 404 — import
+        // downloading a quotation file is a permission question, not a lookup miss.
+        if (IMPORT_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
         QuotationDto quotation = ticket.quotations().stream()
             .filter(q -> q.id() == quotationId)
             .findFirst()
@@ -1408,11 +1444,13 @@ public class TicketService {
     @Transactional
     public TicketDto comment(long ticketId, CommentRequest request, UserPrincipal actor) {
         // Same access rule as GET /tickets/{id} — commenting returns the full ticket,
-        // so it must not be a side door around the read scoping.
+        // so it must not be a side door around the read scoping (nor, per Phase B,
+        // around the import quotation projection — the ticket is re-fetched below to
+        // pick up the new event, so it must be re-projected too).
         requireViewAccess(ticketId, actor);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.COMMENTED, null, null, request.message());
-        return requireTicket(ticketId);
+        return projectForRole(requireTicket(ticketId), actor.role());
     }
 
     @Transactional

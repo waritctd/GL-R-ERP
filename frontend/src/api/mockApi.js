@@ -1202,6 +1202,55 @@ function requireTicketViewer(id) {
   return { user, ticket };
 }
 
+// Phase B (role-scoped views): deposit notices are a customer financial document
+// end to end — mirrors DepositNoticeService.requireTicketViewer, which denies
+// import outright (unlike requireTicketViewer above, which still lets import see
+// the rest of the ticket). Not just a "same gate, plus one check" wrapper: keep
+// this separate from requireTicketViewer so listDeliveries/actions (which import
+// DOES need) never accidentally inherit the deposit-notice denial.
+function requireDepositNoticeViewer(ticketId) {
+  const result = requireTicketViewer(ticketId);
+  if (result.user.role === 'import') fail('Forbidden', 403);
+  return result;
+}
+
+// Phase B: import has no business reading the quotation chain — mirrors
+// TicketService.projectForRole. A projection, not a wholesale redaction: every
+// other field of the ticket detail response is untouched.
+function projectTicketDetailForRole(detail, role) {
+  if (role !== 'import') return detail;
+  return { ...detail, quotation: null, quotations: [] };
+}
+
+// Phase B: role-scoped list membership — mirrors TicketRepository.appendRoleScope
+// (backend ticket/ package), the actual enforcement; salesViewScope.js#dealInScope
+// is presentation-only. import: an active (non-terminal) pricing request exists for
+// the deal, OR the deal has reached PROCUREMENT or later. A closed/lost/cancelled
+// deal is never in scope, even at a late stage.
+const IMPORT_STAGE_SCOPE_START = dealStageIndex('PROCUREMENT');
+const PRICING_REQUEST_TERMINAL_STATUSES = ['CANCELLED', 'SUPERSEDED', 'QUOTATION_ACCEPTED'];
+const ACCOUNT_PENDING_PAYMENT_STATUSES = ['DEPOSIT_NOTICE_ISSUED', 'AWAITING_FINAL_PAYMENT'];
+
+function isDealClosedOrLost(ticket) {
+  return ['CLOSED_LOST', 'CANCELLED'].includes(ticket.lifecycle)
+    || ['closed', 'cancelled'].includes(ticket.status);
+}
+
+function importListScopeIncludes(ticket) {
+  if (isDealClosedOrLost(ticket)) return false;
+  const hasActivePricingRequest = mockPricingRequests.some((pr) => pr.ticketId === ticket.id
+    && !PRICING_REQUEST_TERMINAL_STATUSES.includes(pr.status));
+  return hasActivePricingRequest || dealStageIndex(ticket.salesStage) >= IMPORT_STAGE_SCOPE_START;
+}
+
+// account: a deposit or final-payment confirmation is awaited, or the deal is
+// overdue on an outstanding balance — same fields derivePaymentFields already
+// computes for every list row (paymentStatus / overdue), so this just filters on them.
+function accountListScopeIncludes(ticket) {
+  if (ACCOUNT_PENDING_PAYMENT_STATUSES.includes(ticket.paymentStatus)) return true;
+  return Boolean(derivePaymentFields(ticket).overdue);
+}
+
 function findTicketRaw(id) {
   const ticket = db.tickets.find((t) => t.id === id);
   if (!ticket) fail('Ticket not found', 404);
@@ -2640,6 +2689,11 @@ export const api = {
       if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('Forbidden', 403);
       let list = structuredClone(db.tickets);
       if (user.role === 'sales') list = list.filter((t) => t.createdById === user.id);
+      // Phase B (role-scoped views): import/account only see the slice of the deal
+      // pipeline relevant to their own worklist — see importListScopeIncludes /
+      // accountListScopeIncludes above. ceo/sales_manager/sales are unaffected.
+      if (user.role === 'import') list = list.filter(importListScopeIncludes);
+      if (user.role === 'account') list = list.filter(accountListScopeIncludes);
       if (params.status) list = list.filter((t) => t.status === params.status);
       // Step 9 addition: additive filter on the deal pipeline stage (e.g. CLOSED_PAID) — mirrors
       // TicketController's new `salesStage` query param, used by the commission "Linked Deal" picker.
@@ -2674,11 +2728,14 @@ export const api = {
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
       if (!ticket) fail('Ticket not found', 404);
       if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
-      return delay({ ticket: buildTicketDetail(ticket) });
+      return delay({ ticket: projectTicketDetailForRole(buildTicketDetail(ticket), user.role) });
     },
 
     async listPayments(id) {
-      requireTicketViewer(id);
+      // Phase B: the payment ledger is ฝ่ายบัญชี's own document — import has no
+      // business reading it (mirrors TicketService.listPayments).
+      const { user } = requireTicketViewer(id);
+      if (user.role === 'import') fail('Forbidden', 403);
       return delay({ items: receiptsForTicket(id) });
     },
 
@@ -3199,11 +3256,17 @@ export const api = {
     },
 
     async downloadQuotationXlsx(ticketId, quotationId) {
+      // Phase B: mirrors TicketService.loadQuotationContext's explicit import denial —
+      // a permission question, not a lookup miss, so it must not silently 404 instead.
+      const { user } = requireTicketViewer(ticketId);
+      if (user.role === 'import') fail('Forbidden', 403);
       const blob = await tryBackendBlob(`/api/tickets/${ticketId}/quotations/${quotationId}/file?format=xlsx`);
       return blob ?? buildMockQuotationXlsx(ticketId, quotationId);
     },
 
     async downloadQuotationPdf(ticketId, quotationId) {
+      const { user } = requireTicketViewer(ticketId);
+      if (user.role === 'import') fail('Forbidden', 403);
       const blob = await tryBackendBlob(`/api/tickets/${ticketId}/quotations/${quotationId}/file?format=pdf`);
       return blob ?? buildMockQuotationHtml(ticketId, quotationId);
     },
@@ -3282,10 +3345,11 @@ export const api = {
 
     async comment(id, payload) {
       // Mirrors TicketService.comment: same read gate as get() — commenting
-      // returns the full ticket.
+      // returns the full ticket, so it must not be a side door around the read
+      // scoping (nor, per Phase B, around the import quotation projection).
       const { user, ticket } = requireTicketViewer(id);
       pushEvent(ticket, user, 'COMMENTED', null, null, payload.message);
-      return delay({ ticket: buildTicketDetail(ticket) });
+      return delay({ ticket: projectTicketDetailForRole(buildTicketDetail(ticket), user.role) });
     },
 
     async createDocDraft(ticketId, payload) {
@@ -3319,8 +3383,9 @@ export const api = {
     // ── Dual-track post-quotation (ข้อ 13) ──────────────────────────────────
 
     async downloadRemainingInvoice(id) {
-      // Mirrors DepositNoticeService.getRemainingInvoiceXlsx: read gate first.
-      const { ticket } = requireTicketViewer(id);
+      // Mirrors DepositNoticeService.getRemainingInvoiceXlsx: read gate first — and,
+      // per Phase B, that gate now denies import outright (a financial document).
+      const { ticket } = requireDepositNoticeViewer(id);
       if (ticket.status !== 'quotation_issued') fail('Expected quotation_issued', 409);
       const blob = await tryBackendBlob(`/api/tickets/${id}/remaining-invoice/file`);
       return blob ?? buildMockRemainingInvoiceXlsx(Number(id));
@@ -4843,8 +4908,9 @@ export const api = {
     },
 
     async listByTicket(ticketId) {
-      // Mirrors DepositNoticeService.listByTicket: viewer role + sales owner scoping.
-      requireTicketViewer(ticketId);
+      // Mirrors DepositNoticeService.listByTicket: viewer role + sales owner scoping
+      // (and, per Phase B, import denied outright — a customer financial document).
+      requireDepositNoticeViewer(ticketId);
       return delay({ depositNotices: structuredClone(mockDepositNotices.filter((d) => d.ticketId === Number(ticketId))) });
     },
 
@@ -4852,7 +4918,7 @@ export const api = {
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!doc) fail('Deposit notice not found', 404);
       // Mirrors DepositNoticeService.getById: read gate on the owning ticket.
-      requireTicketViewer(doc.ticketId);
+      requireDepositNoticeViewer(doc.ticketId);
       return delay({ depositNotice: structuredClone(doc) });
     },
 
@@ -4881,7 +4947,7 @@ export const api = {
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!doc) fail('Deposit notice not found', 404);
       // Mirrors DepositNoticeService.preview: read gate on the owning ticket.
-      requireTicketViewer(doc.ticketId);
+      requireDepositNoticeViewer(doc.ticketId);
       // Return HTML string directly (not wrapped in JSON)
       return mockPreviewHtml(buildMockDoc(doc));
     },
@@ -4923,7 +4989,7 @@ export const api = {
       const rawDoc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!rawDoc) fail('Deposit notice not found', 404);
       // Mirrors DepositNoticeService.getXlsx: read gate on the owning ticket.
-      requireTicketViewer(rawDoc.ticketId);
+      requireDepositNoticeViewer(rawDoc.ticketId);
       const backendBlob = await tryBackendBlob(`/api/deposit-notices/${docId}/file?format=xlsx`);
       if (backendBlob) return backendBlob;
       const doc = buildMockDoc(rawDoc);
@@ -4955,7 +5021,7 @@ export const api = {
       const rawDoc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!rawDoc) fail('Deposit notice not found', 404);
       // Mirrors DepositNoticeService.getPdf: read gate on the owning ticket.
-      requireTicketViewer(rawDoc.ticketId);
+      requireDepositNoticeViewer(rawDoc.ticketId);
       const blob = await tryBackendBlob(`/api/deposit-notices/${docId}/file?format=pdf`);
       if (blob) return blob;
       const html = mockPreviewHtml(buildMockDoc(rawDoc));
