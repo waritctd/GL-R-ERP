@@ -3,10 +3,12 @@ import {
   activePricingRequestsSummary,
   canActOnPricingDecision,
   canCancelPricingRequest,
+  canCreateCommercialOnlyRevision,
   canCreateCustomerQuotation,
   canCreatePricingRequest,
   canManageCustomerQuotation,
   canPickupPricingRequest,
+  canRecordCustomerQuotationOutcome,
   canRequestInformation,
   canRespondInformation,
   canSeePricingDecisionSalesView,
@@ -67,6 +69,15 @@ describe('canTransition', () => {
     expect(canTransition('APPROVED_FOR_QUOTATION', 'COSTING_IN_PROGRESS')).toBe(false);
     expect(canTransition('READY_FOR_CEO_REVIEW', 'CANCELLED')).toBe(false);
     expect(canTransition('CANCELLED', 'DRAFT')).toBe(false);
+    // Step 4 (fixed alongside Step 5 — this entry was stale/missing, see the source file's own
+    // comment): issuing a customer quotation is the ONE forward exit from APPROVED_FOR_QUOTATION.
+    expect(canTransition('APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED')).toBe(true);
+    // Step 5: the customer's ACCEPTED outcome is the one forward exit from QUOTATION_ISSUED.
+    expect(canTransition('QUOTATION_ISSUED', 'QUOTATION_ACCEPTED')).toBe(true);
+    expect(canTransition('QUOTATION_ISSUED', 'CANCELLED')).toBe(false);
+    // QUOTATION_ACCEPTED is terminal.
+    expect(canTransition('QUOTATION_ACCEPTED', 'QUOTATION_ISSUED')).toBe(false);
+    expect(canTransition('QUOTATION_ACCEPTED', 'CANCELLED')).toBe(false);
   });
 });
 
@@ -240,6 +251,37 @@ describe('isCustomerQuotationEditable', () => {
     expect(isCustomerQuotationEditable({ docStatus: 'ISSUED' })).toBe(false);
     expect(isCustomerQuotationEditable({ docStatus: 'CANCELLED' })).toBe(false);
     expect(isCustomerQuotationEditable({ docStatus: 'SUPERSEDED' })).toBe(false);
+  });
+});
+
+describe('canRecordCustomerQuotationOutcome', () => {
+  it('allows the owner sales rep only while the quotation is ISSUED', () => {
+    expect(canRecordCustomerQuotationOutcome(salesOwner, pr(), { docStatus: 'ISSUED' })).toBe(true);
+  });
+  it('rejects every other docStatus, even for the owner', () => {
+    for (const docStatus of ['DRAFT', 'READY_TO_ISSUE', 'ACCEPTED', 'REJECTED', 'REVISION_REQUESTED', 'EXPIRED', 'CANCELLED', 'SUPERSEDED']) {
+      expect(canRecordCustomerQuotationOutcome(salesOwner, pr(), { docStatus })).toBe(false);
+    }
+  });
+  it('rejects a non-owning sales rep, ceo, and import', () => {
+    expect(canRecordCustomerQuotationOutcome(otherSales, pr(), { docStatus: 'ISSUED' })).toBe(false);
+    expect(canRecordCustomerQuotationOutcome(ceo, pr(), { docStatus: 'ISSUED' })).toBe(false);
+    expect(canRecordCustomerQuotationOutcome(importUser, pr(), { docStatus: 'ISSUED' })).toBe(false);
+  });
+});
+
+describe('canCreateCommercialOnlyRevision', () => {
+  it('allows the owner sales rep from ISSUED or REVISION_REQUESTED', () => {
+    expect(canCreateCommercialOnlyRevision(salesOwner, pr(), { docStatus: 'ISSUED' })).toBe(true);
+    expect(canCreateCommercialOnlyRevision(salesOwner, pr(), { docStatus: 'REVISION_REQUESTED' })).toBe(true);
+  });
+  it('rejects every other docStatus', () => {
+    for (const docStatus of ['DRAFT', 'READY_TO_ISSUE', 'ACCEPTED', 'REJECTED', 'EXPIRED', 'CANCELLED', 'SUPERSEDED']) {
+      expect(canCreateCommercialOnlyRevision(salesOwner, pr(), { docStatus })).toBe(false);
+    }
+  });
+  it('rejects a non-owning sales rep', () => {
+    expect(canCreateCommercialOnlyRevision(otherSales, pr(), { docStatus: 'ISSUED' })).toBe(false);
   });
 });
 

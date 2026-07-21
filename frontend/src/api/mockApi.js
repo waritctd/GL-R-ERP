@@ -5946,7 +5946,12 @@ export const api = {
     async createCustomerQuotationRevision(id, payload = {}) {
       const user = hasRole('sales');
       const source = mockCustomerQuotationEditAccess(id, user);
-      if (source.docStatus !== 'ISSUED') fail('แก้ไข revision ใหม่ได้จากใบเสนอราคาที่ออกแล้วเท่านั้น', 409);
+      // Step 5 (design correction 3): a commercial-only correction is reachable from ISSUED OR
+      // REVISION_REQUESTED (recordOutcome writes ISSUED -> REVISION_REQUESTED immediately, before
+      // Sales picks commercial-only vs cost-affecting) — nothing else.
+      if (!['ISSUED', 'REVISION_REQUESTED'].includes(source.docStatus)) {
+        fail('แก้ไข revision ใหม่ได้จากใบเสนอราคาที่ออกแล้วเท่านั้น', 409);
+      }
       if (payload.clientRequestId) {
         const replay = mockCustomerQuotations.find(
           (q) => q.issuedById === user.id && q.clientRequestId === payload.clientRequestId);
@@ -5969,6 +5974,55 @@ export const api = {
       pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_REVISED', null, null,
         `สร้างใบเสนอราคาลูกค้า revision ${revision.quotationRevisionNo}${payload.reason ? ` — ${payload.reason}` : ''}`);
       return delay({ quotation: revision });
+    },
+
+    // ── Step 5: Customer Decision and Commercial Revisions — mirrors
+    // CustomerQuotationController.recordOutcome + CustomerQuotationService.recordOutcome.
+    // Authorization is NOT authoritative (CLAUDE.md); verify against the real Java service.
+
+    async recordCustomerQuotationOutcome(id, payload = {}) {
+      const user = hasRole('sales');
+      const quotation = mockCustomerQuotationEditAccess(id, user);
+      if (payload.outcome === 'EXPIRED') {
+        fail('EXPIRED ไม่สามารถบันทึกผ่าน API นี้ได้ — ระบบตั้งเป็นอัตโนมัติเท่านั้น', 400);
+      }
+      if (!['ACCEPTED', 'REJECTED', 'REVISION_REQUESTED'].includes(payload.outcome)) {
+        fail('outcome ไม่ถูกต้อง', 400);
+      }
+      if (payload.clientRequestId) {
+        const replay = mockCustomerQuotations.find(
+          (q) => q.issuedById === user.id && q.outcomeClientRequestId === payload.clientRequestId);
+        if (replay) return delay({ quotation: replay });
+      }
+      if (quotation.docStatus !== 'ISSUED') {
+        fail(`บันทึกผลได้เฉพาะใบเสนอราคาที่ออกแล้วเท่านั้น (ปัจจุบัน: ${quotation.docStatus})`, 409);
+      }
+      const now = new Date().toISOString();
+      quotation.docStatus = payload.outcome;
+      quotation.outcomeNote = payload.customerNote ?? null;
+      quotation.outcomeRecordedAt = now;
+      quotation.outcomeClientRequestId = payload.clientRequestId ?? null;
+      if (payload.outcome === 'ACCEPTED') quotation.acceptedAt = now;
+      if (payload.outcome === 'REJECTED') quotation.rejectedAt = now;
+
+      const pr = findPricingRequestRaw(quotation.pricingRequestId);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      const eventKind = payload.outcome === 'ACCEPTED' ? 'CUSTOMER_QUOTATION_ACCEPTED'
+        : payload.outcome === 'REJECTED' ? 'CUSTOMER_QUOTATION_REJECTED' : 'CUSTOMER_QUOTATION_REVISION_REQUESTED';
+      const label = payload.outcome === 'ACCEPTED' ? 'ลูกค้ายอมรับแล้ว'
+        : payload.outcome === 'REJECTED' ? 'ถูกลูกค้าปฏิเสธ' : 'ลูกค้าขอแก้ไข';
+      pushPricingRequestEvent(pr, user, eventKind, null, null,
+        `บันทึกผลใบเสนอราคาลูกค้า ${quotation.number}: ${payload.outcome}${payload.customerNote ? ` — ${payload.customerNote}` : ''}`);
+      const ceoUsers = db.users.filter((u) => u.role === 'ceo');
+      ceoUsers.forEach((ceo) => addNotification(ceo.id, pr.ticketId, ticket?.code, eventKind,
+        `ใบเสนอราคาลูกค้า ${quotation.number} ${label}`));
+
+      // Design correction 2: ACCEPTED is the ONE forward exit from QUOTATION_ISSUED.
+      // REJECTED/REVISION_REQUESTED/EXPIRED deliberately never change pr.status.
+      if (payload.outcome === 'ACCEPTED' && pr.status === 'QUOTATION_ISSUED') {
+        pr.status = 'QUOTATION_ACCEPTED';
+      }
+      return delay({ quotation });
     },
 
     async downloadCustomerQuotationPdf(id) {
@@ -6135,6 +6189,16 @@ export const api = {
         attachments: [],
       };
       mockPricingRequests.push(revision);
+      // Step 5 (design correction 1, "the cascade gap"): also supersede any DRAFT/APPROVED
+      // pricing_decision and any non-terminal quotation left over from Steps 3/4 — without this,
+      // both stayed silently readable as current after the parent pricing request superseded.
+      mockPricingDecisions
+        .filter((d) => d.pricingRequestId === parent.id && ['DRAFT', 'APPROVED'].includes(d.status))
+        .forEach((d) => { d.status = 'SUPERSEDED'; });
+      mockCustomerQuotations
+        .filter((q) => q.pricingRequestId === parent.id
+          && ['ISSUED', 'READY_TO_ISSUE', 'SENT', 'REVISION_REQUESTED'].includes(q.docStatus))
+        .forEach((q) => { q.docStatus = 'SUPERSEDED'; });
       pushPricingRequestEvent(parent, user, 'PRICING_REQUEST_REVISED', parentStatus, 'SUPERSEDED', payload.revisionReason);
       pushPricingRequestEvent(revision, user, 'PRICING_REQUEST_CREATED', null, 'DRAFT', payload.revisionReason);
       return delay({ pricingRequest: buildPricingRequestDetail(revision) });

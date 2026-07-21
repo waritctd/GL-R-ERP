@@ -30,6 +30,7 @@ import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationIte
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateRevisionRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuotationRequest;
+import th.co.glr.hr.customerquotation.CustomerQuotationRequests.RecordQuotationOutcomeRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.UpdateCustomerQuotationItemRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.UpdateCustomerQuotationRequest;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
@@ -72,6 +73,7 @@ import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
+import th.co.glr.hr.ticket.DealLostReason;
 import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
@@ -476,6 +478,352 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThatThrownBy(() -> quotationService.create(pricingRequestId,
             new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Step 5: Customer Decision and Commercial Revisions
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void recordOutcome_accepted_transitionsPricingRequest_exactlyOneEventAndNotification_dealStageUnchanged() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+
+        String salesStageBefore = jdbc.queryForObject(
+            "SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class);
+
+        String outcomeKey = UUID.randomUUID().toString();
+        CustomerQuotationDto accepted = quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest("ACCEPTED", "ลูกค้าโอเคกับใบเสนอราคา", outcomeKey), salesActor);
+        assertThat(accepted.docStatus()).isEqualTo(QuotationStatus.ACCEPTED);
+        assertThat(accepted.outcomeNote()).isEqualTo("ลูกค้าโอเคกับใบเสนอราคา");
+        assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
+            .isEqualTo(PricingRequestStatus.QUOTATION_ACCEPTED);
+
+        String salesStageAfter = jdbc.queryForObject(
+            "SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class);
+        assertThat(salesStageAfter).isEqualTo(salesStageBefore);
+
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id AND event_kind = 'CUSTOMER_QUOTATION_ACCEPTED'
+            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM hr.notification WHERE type = 'CUSTOMER_QUOTATION_ACCEPTED'
+            """, Map.of(), Long.class)).isEqualTo(1L);
+
+        // Idempotent replay — no second event.
+        CustomerQuotationDto replay = quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest("ACCEPTED", "ลูกค้าโอเคกับใบเสนอราคา", outcomeKey), salesActor);
+        assertThat(replay.id()).isEqualTo(accepted.id());
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id AND event_kind = 'CUSTOMER_QUOTATION_ACCEPTED'
+            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
+    }
+
+    @Test
+    void recordOutcome_rejected_doesNotChangePricingRequestStatus() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+
+        CustomerQuotationDto rejected = quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest("REJECTED", "ราคาสูงเกินไป", UUID.randomUUID().toString()), salesActor);
+        assertThat(rejected.docStatus()).isEqualTo(QuotationStatus.REJECTED);
+        // No QUOTATION_REJECTED status exists — the pricing request stays exactly where it was.
+        assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
+            .isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id AND event_kind = 'CUSTOMER_QUOTATION_REJECTED'
+            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
+    }
+
+    @Test
+    void recordOutcome_revisionRequested_thenCommercialOnlyRevision_supersedesOldQuotation() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+
+        CustomerQuotationDto revisionRequested = quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest("REVISION_REQUESTED", "ขอปรับเงื่อนไขชำระเงิน", UUID.randomUUID().toString()), salesActor);
+        assertThat(revisionRequested.docStatus()).isEqualTo(QuotationStatus.REVISION_REQUESTED);
+        // No pricing-request status change on a revision-requested outcome either.
+        assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
+            .isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
+
+        // Commercial-only path: createRevision, now reachable from REVISION_REQUESTED.
+        CustomerQuotationDto rev2 = quotationService.createRevision(revisionRequested.id(),
+            new CreateRevisionRequest("ปรับเงื่อนไขชำระเงินตามที่ลูกค้าขอ", UUID.randomUUID().toString()), salesActor);
+        assertThat(rev2.docStatus()).isEqualTo(QuotationStatus.DRAFT);
+        assertThat(rev2.quotationRevisionNo()).isEqualTo(2);
+        assertThat(rev2.parentQuotationId()).isEqualTo(revisionRequested.id());
+
+        // createRevision still supersedes its source after the guard widening (confirmed, not
+        // assumed — supersede()'s own WHERE clause needed widening too, see the repository).
+        CustomerQuotationDto oldAfter = quotationService.get(revisionRequested.id(), salesActor);
+        assertThat(oldAfter.docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
+    }
+
+    @Test
+    void recordOutcome_revisionRequested_thenCostAffectingRevision_supersedesOldDecisionAndQuotation() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        CustomerQuotationDto revisionRequested = quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest("REVISION_REQUESTED", "ขอเปลี่ยนจำนวนสินค้า", UUID.randomUUID().toString()), salesActor);
+
+        // Preconditions: an APPROVED decision exists for this pricing request.
+        assertThat(jdbc.queryForObject(
+            "SELECT status FROM sales.pricing_decision WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId), String.class)).isEqualTo("APPROVED");
+
+        // Cost-affecting path: PricingRequestService.createCustomerChangeRevision (a
+        // product/quantity change — the mechanism createRevision structurally cannot do).
+        var parentSummary = pricingRequestService.get(pricingRequestId, salesActor).summary();
+        PricingRequestRequests.CustomerChangeRevisionRequest changeRequest = new PricingRequestRequests.CustomerChangeRevisionRequest(
+            "ลูกค้าขอเปลี่ยนจำนวนสินค้า", UUID.randomUUID().toString(), parentSummary.recipientType(), null, "Designer Co.",
+            LocalDate.now().plusDays(14), null, "THB", "cost-affecting revision (design correction 1 test)",
+            List.of(pricingItem("SCG", "Tile A4", "Factory A4", new BigDecimal("99"))));
+        var revisionDetail = pricingRequestService.createCustomerChangeRevision(pricingRequestId, changeRequest, salesActor);
+
+        // Design correction 1: the OLD pricing request, OLD decision, and OLD quotation are all
+        // now SUPERSEDED — none of them silently reads as current any more.
+        assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
+            .isEqualTo(PricingRequestStatus.SUPERSEDED);
+        assertThat(jdbc.queryForObject(
+            "SELECT status FROM sales.pricing_decision WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId), String.class)).isEqualTo("SUPERSEDED");
+        CustomerQuotationDto oldQuotation = quotationService.get(revisionRequested.id(), salesActor);
+        assertThat(oldQuotation.docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
+
+        // The NEW pricing request revision is a fresh DRAFT, untouched by the cascade.
+        assertThat(revisionDetail.summary().status()).isEqualTo(PricingRequestStatus.DRAFT);
+        assertThat(revisionDetail.summary().parentPricingRequestId()).isEqualTo(pricingRequestId);
+    }
+
+    /**
+     * Review follow-up to design correction 1: {@code cancelOpenStep2Children}'s other caller,
+     * {@code cancelOpenForTicket} (the deal-lost/deal-cancelled cascade from {@code
+     * TicketService}), had exactly the same gap as {@code createCustomerChangeRevision} did
+     * before this fix — it cancels the pricing request but never touched a DRAFT/APPROVED
+     * decision or a non-terminal quotation. Unlike {@code PricingRequestService.cancel} (whose
+     * own {@code canTransition}-gated statuses can never co-exist with an open decision, so the
+     * equivalent fix there is defensive-only — see that method's comment), this path uses {@code
+     * cancelForDeadDeal}, which deliberately bypasses {@code canTransition} to cancel from ANY
+     * open status once the deal itself goes terminal — so it genuinely CAN reach a pricing
+     * request with an APPROVED decision and an ISSUED quotation, exactly this scenario.
+     */
+    @Test
+    void ticketMarkLost_cascadesToSupersedeAnOpenPricingDecisionAndQuotation() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+
+        ticketService.markLost(ticketId, DealLostReason.PRICE, null, salesActor);
+
+        assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
+            .isEqualTo(PricingRequestStatus.CANCELLED);
+        assertThat(jdbc.queryForObject(
+            "SELECT status FROM sales.pricing_decision WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId), String.class)).isEqualTo("SUPERSEDED");
+        assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
+    }
+
+    @Test
+    void createRevision_widenedGuard_succeedsFromRevisionRequested() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        CustomerQuotationDto revisionRequested = quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest("REVISION_REQUESTED", null, UUID.randomUUID().toString()), salesActor);
+
+        CustomerQuotationDto rev2 = quotationService.createRevision(revisionRequested.id(),
+            new CreateRevisionRequest("ok", UUID.randomUUID().toString()), salesActor);
+        assertThat(rev2.docStatus()).isEqualTo(QuotationStatus.DRAFT);
+    }
+
+    /**
+     * Negative space for design correction 3's widened guard: EVERY status other than ISSUED and
+     * REVISION_REQUESTED must still be rejected — proves the widening did not silently become
+     * "any status", per the task's explicit instruction to test both directions.
+     */
+    @Test
+    void createRevision_widenedGuard_stillRejectsEveryOtherStatus() {
+        // DRAFT: never issued.
+        long draftPr = approvedPricingRequest();
+        CustomerQuotationDto draftQuotation = quotationService.create(draftPr,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        assertRevisionRejected(draftQuotation.id());
+
+        // CANCELLED: a draft that was cancelled.
+        long cancelledPr = approvedPricingRequest();
+        CustomerQuotationDto toCancel = quotationService.create(cancelledPr,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        quotationService.cancel(toCancel.id(), new CustomerQuotationRequests.CancelCustomerQuotationRequest(null), salesActor);
+        assertRevisionRejected(toCancel.id());
+
+        // SUPERSEDED: rev 1 of an already-revised quotation.
+        long supersededPr = approvedPricingRequest();
+        CustomerQuotationDto rev1Draft = quotationService.create(supersededPr,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto rev1Issued = quotationService.issue(rev1Draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        quotationService.createRevision(rev1Issued.id(), new CreateRevisionRequest(null, UUID.randomUUID().toString()), salesActor);
+        assertRevisionRejected(rev1Issued.id());
+
+        // EXPIRED: flipped by the sweep (past validity_date).
+        long expiredPr = approvedPricingRequest();
+        CustomerQuotationDto expiredDraft = quotationService.create(expiredPr, new CreateCustomerQuotationRequest(
+            null, null, null, LocalDate.now().minusDays(1), null, null), salesActor);
+        CustomerQuotationDto expiredIssued = quotationService.issue(expiredDraft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        quotationService.expireOverdueQuotations();
+        assertThat(quotationService.get(expiredIssued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.EXPIRED);
+        assertRevisionRejected(expiredIssued.id());
+
+        // ACCEPTED.
+        long acceptedPr = approvedPricingRequest();
+        CustomerQuotationDto acceptedDraft = quotationService.create(acceptedPr,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto acceptedIssued = quotationService.issue(acceptedDraft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        quotationService.recordOutcome(acceptedIssued.id(),
+            new RecordQuotationOutcomeRequest("ACCEPTED", null, UUID.randomUUID().toString()), salesActor);
+        assertRevisionRejected(acceptedIssued.id());
+
+        // REJECTED.
+        long rejectedPr = approvedPricingRequest();
+        CustomerQuotationDto rejectedDraft = quotationService.create(rejectedPr,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto rejectedIssued = quotationService.issue(rejectedDraft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        quotationService.recordOutcome(rejectedIssued.id(),
+            new RecordQuotationOutcomeRequest("REJECTED", null, UUID.randomUUID().toString()), salesActor);
+        assertRevisionRejected(rejectedIssued.id());
+    }
+
+    private void assertRevisionRejected(long quotationId) {
+        assertThatThrownBy(() -> quotationService.createRevision(quotationId,
+            new CreateRevisionRequest(null, UUID.randomUUID().toString()), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    @Test
+    void expireOverdueQuotations_sweep_pastValidityFlips_futureValidityAndAcceptedUntouched() {
+        long prPast = approvedPricingRequest();
+        CustomerQuotationDto draftPast = quotationService.create(prPast, new CreateCustomerQuotationRequest(
+            null, null, null, LocalDate.now().minusDays(1), null, null), salesActor);
+        CustomerQuotationDto issuedPast = quotationService.issue(draftPast.id(), new IssueCustomerQuotationRequest(null), salesActor);
+
+        long prFuture = approvedPricingRequest();
+        CustomerQuotationDto draftFuture = quotationService.create(prFuture, new CreateCustomerQuotationRequest(
+            null, null, null, LocalDate.now().plusDays(30), null, null), salesActor);
+        CustomerQuotationDto issuedFuture = quotationService.issue(draftFuture.id(), new IssueCustomerQuotationRequest(null), salesActor);
+
+        long prAccepted = approvedPricingRequest();
+        CustomerQuotationDto draftAccepted = quotationService.create(prAccepted, new CreateCustomerQuotationRequest(
+            null, null, null, LocalDate.now().minusDays(1), null, null), salesActor);
+        CustomerQuotationDto issuedAccepted = quotationService.issue(draftAccepted.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        quotationService.recordOutcome(issuedAccepted.id(),
+            new RecordQuotationOutcomeRequest("ACCEPTED", null, UUID.randomUUID().toString()), salesActor);
+
+        int expiredCount = quotationService.expireOverdueQuotations();
+        assertThat(expiredCount).isEqualTo(1);
+
+        assertThat(quotationService.get(issuedPast.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.EXPIRED);
+        assertThat(quotationService.get(issuedFuture.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ISSUED);
+        assertThat(quotationService.get(issuedAccepted.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ACCEPTED);
+
+        // No pricing-request status change on expiry.
+        assertThat(pricingRequestService.get(prPast, salesActor).summary().status())
+            .isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
+
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id AND event_kind = 'CUSTOMER_QUOTATION_EXPIRED'
+            """, Map.of("id", prPast), Long.class)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM hr.notification WHERE type = 'CUSTOMER_QUOTATION_EXPIRED'
+            """, Map.of(), Long.class)).isEqualTo(1L);
+
+        // Idempotent: a second sweep with nothing new to expire touches nothing further.
+        assertThat(quotationService.expireOverdueQuotations()).isEqualTo(0);
+    }
+
+    @Test
+    void recordOutcome_expiredOutcome_isRejectedRegardlessOfRole() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+
+        assertThatThrownBy(() -> quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest("EXPIRED", null, UUID.randomUUID().toString()), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        // Still rejected for a role that also has no other access to this aggregate — proves
+        // EXPIRED is refused unconditionally, not merely "not an owner".
+        assertThatThrownBy(() -> quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest("EXPIRED", null, UUID.randomUUID().toString()), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isIn(HttpStatus.BAD_REQUEST, HttpStatus.FORBIDDEN));
+
+        // Data itself is unchanged.
+        assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ISSUED);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Step 5: Authorization — wrong-way-round
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void recordOutcome_nonOwningSalesRep_cannotRecordOutcome() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+
+        assertThatThrownBy(() -> quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest("ACCEPTED", null, UUID.randomUUID().toString()), otherSalesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        // The owner still can — proves the guard is scoped, not a blanket lockout.
+        assertThat(quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest("ACCEPTED", null, UUID.randomUUID().toString()), salesActor)).isNotNull();
+    }
+
+    @Test
+    void recordOutcome_ceoAndImport_areReadOnly_cannotRecordOutcome() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+
+        assertThatThrownBy(() -> quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest("ACCEPTED", null, UUID.randomUUID().toString()), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest("ACCEPTED", null, UUID.randomUUID().toString()), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        // Read access is untouched by this guard — still visible, just never mutable.
+        assertThat(quotationService.get(issued.id(), ceoActor)).isNotNull();
+        assertThat(quotationService.get(issued.id(), importActor)).isNotNull();
+    }
+
+    @Test
+    void recordOutcome_accountRole_cannotReachAtAll() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+
+        assertThatThrownBy(() -> quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest("ACCEPTED", null, UUID.randomUUID().toString()), accountActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

@@ -199,6 +199,8 @@ export const API_ROUTES = {
     customerQuotationCancel: (id) => `/api/customer-quotations/${id}/cancel`,
     customerQuotationRevisions: (id) => `/api/customer-quotations/${id}/revisions`,
     customerQuotationFile: (id, format) => `/api/customer-quotations/${id}/file?format=${format}`,
+    // Step 5: Customer Decision and Commercial Revisions.
+    customerQuotationOutcome: (id) => `/api/customer-quotations/${id}/outcome`,
     submit: (id) => `/api/pricing-requests/${id}/submit`,
     pickup: (id) => `/api/pricing-requests/${id}/pickup`,
     requestInformation: (id) => `/api/pricing-requests/${id}/request-information`,

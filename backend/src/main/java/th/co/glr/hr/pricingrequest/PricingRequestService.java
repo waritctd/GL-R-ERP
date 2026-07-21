@@ -429,6 +429,15 @@ public class PricingRequestService {
             throw new ApiException(HttpStatus.CONFLICT, "Pricing request was updated by another user");
         }
         requests.cancelOpenStep2Children(id, request.reason(), actor.id());
+        // Step 5 (V75, review follow-up): defensive, currently unreachable in practice —
+        // PricingRequestStatus.canTransition only allows cancel() from pre-costing-submission
+        // statuses (DRAFT/SUBMITTED/IMPORT_REVIEWING/AWAITING_FACTORY_RESPONSE/
+        // COSTING_IN_PROGRESS/MORE_INFO_REQUIRED), none of which can co-exist with an open
+        // pricing_decision (that requires READY_FOR_CEO_REVIEW+). Kept anyway, at zero cost (a
+        // no-op UPDATE today), so a future widening of that map cannot silently reintroduce
+        // design correction 1's bug. See cancelOpenForTicket below for the path that DOES need
+        // this today — it deliberately bypasses canTransition (cancelForDeadDeal's own Javadoc).
+        requests.supersedeOpenPricingDecisionAndQuotation(id);
         String metadataJson = toReasonMetadataJson(request.reason());
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_CANCELLED, summary.status(), PricingRequestStatus.CANCELLED,
@@ -482,6 +491,10 @@ public class PricingRequestService {
             throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
         }
         requests.cancelOpenStep2Children(parent.id(), "Customer change revision created", actor.id());
+        // Step 5 (V75, design correction 1): also supersede any DRAFT/APPROVED pricing_decision
+        // and any non-terminal quotation left over from Steps 3/4 — cancelOpenStep2Children above
+        // predates both and does not touch them.
+        requests.supersedeOpenPricingDecisionAndQuotation(parent.id());
         requests.addEvent(parent.id(), parent.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_REVISED, parent.status(), PricingRequestStatus.SUPERSEDED,
             request.revisionReason(), toRevisionMetadataJson(newId));
@@ -671,6 +684,10 @@ public class PricingRequestService {
                 int rows = requests.cancelForDeadDeal(id, summary.status(), actor.id());
                 if (rows == 1) {
                     requests.cancelOpenStep2Children(id, reason, actor.id());
+                    // Step 5 (V75, review follow-up): same fix as cancel()/createCustomerChangeRevision
+                    // — a deal reaching a terminal lifecycle must also close out an open decision/
+                    // quotation on this pricing request, not just its factory-quote/costing children.
+                    requests.supersedeOpenPricingDecisionAndQuotation(id);
                     requests.addEvent(id, ticketId, actor.id(), actor.name(),
                         PricingRequestEventKind.PRICING_REQUEST_CANCELLED, summary.status(), PricingRequestStatus.CANCELLED,
                         reason, metadataJson);

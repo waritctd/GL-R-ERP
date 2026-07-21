@@ -43,6 +43,11 @@ public final class CustomerQuotationDtos {
         Instant acceptedAt,
         Instant rejectedAt,
         Instant createdAt,
+        // Step 5 (V75): the customer's own note recorded alongside an ACCEPTED/REJECTED/
+        // REVISION_REQUESTED outcome (CustomerQuotationService.recordOutcome) — distinct from
+        // customerNotes above (Sales-authored, written into the document pre-issue).
+        String outcomeNote,
+        Instant outcomeRecordedAt,
         List<CustomerQuotationItemDto> items
     ) {}
 

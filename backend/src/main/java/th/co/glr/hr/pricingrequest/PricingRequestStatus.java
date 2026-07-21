@@ -29,6 +29,13 @@ public final class PricingRequestStatus {
     // pricing request stays QUOTATION_ISSUED throughout (see CustomerQuotationService.issue,
     // which only calls PricingRequestRepository.transition on the FIRST issue).
     public static final String QUOTATION_ISSUED = "QUOTATION_ISSUED";
+    // Step 5 (Customer Decision and Commercial Revisions, V75, design correction 2): the customer
+    // accepted the issued quotation (th.co.glr.hr.customerquotation.CustomerQuotationService.
+    // recordOutcome, outcome=ACCEPTED). Terminal. Deliberately no QUOTATION_REJECTED counterpart
+    // — REJECTED lives entirely on quotation.doc_status; Sales decides what happens next (a new
+    // revision, or a separate ticket-level lost-deal action outside this step's scope). Same for
+    // EXPIRED (sweep-only, never rolls the pricing request back).
+    public static final String QUOTATION_ACCEPTED = "QUOTATION_ACCEPTED";
     // The CEO returned the request to Import for a new costing version
     // (PricingDecisionService.returnToImport). This is the ONE named "return to Import" state —
     // PricingCostingService.createDraft is reachable from here (not from READY_FOR_CEO_REVIEW,
@@ -43,7 +50,7 @@ public final class PricingRequestStatus {
     public static final Set<String> VALUES = Set.of(
         DRAFT, SUBMITTED, IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE, COSTING_IN_PROGRESS,
         READY_FOR_CEO_REVIEW, CEO_REVIEWING, APPROVED_FOR_QUOTATION, COSTING_REVISION_REQUIRED,
-        QUOTATION_ISSUED, MORE_INFO_REQUIRED, CANCELLED, SUPERSEDED);
+        QUOTATION_ISSUED, QUOTATION_ACCEPTED, MORE_INFO_REQUIRED, CANCELLED, SUPERSEDED);
 
     /**
      * Allowed forward/lateral transitions. DRAFT -> DRAFT is deliberately absent:
@@ -79,8 +86,13 @@ public final class PricingRequestStatus {
         // DRAFT quotation (rule 6: drafts do not move the deal stage OR the pricing request
         // status) — only the first successful issue moves the pricing request on.
         Map.entry(APPROVED_FOR_QUOTATION, Set.of(QUOTATION_ISSUED)),
-        // Terminal for Step 4's first cut — see QUOTATION_ISSUED's own Javadoc above.
-        Map.entry(QUOTATION_ISSUED,    Set.<String>of()),
+        // Step 5: the customer's ACCEPTED outcome is the one forward exit from QUOTATION_ISSUED
+        // (CustomerQuotationService.recordOutcome). REJECTED/REVISION_REQUESTED/EXPIRED
+        // deliberately do NOT transition the pricing request at all — see QUOTATION_ACCEPTED's
+        // own Javadoc above for why.
+        Map.entry(QUOTATION_ISSUED,    Set.of(QUOTATION_ACCEPTED)),
+        // Terminal.
+        Map.entry(QUOTATION_ACCEPTED,  Set.<String>of()),
         Map.entry(SUPERSEDED,          Set.<String>of()),
         Map.entry(CANCELLED,           Set.<String>of()));
 

@@ -392,6 +392,8 @@ export const api = {
     issueCustomerQuotation: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotationIssue(id), { method: 'POST', body: payload }),
     cancelCustomerQuotation: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotationCancel(id), { method: 'POST', body: payload }),
     createCustomerQuotationRevision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotationRevisions(id), { method: 'POST', body: payload }),
+    // Step 5: Customer Decision and Commercial Revisions. Mirrors CustomerQuotationController.recordOutcome.
+    recordCustomerQuotationOutcome: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotationOutcome(id), { method: 'POST', body: payload }),
     downloadCustomerQuotationPdf: async (id) => {
       const res = await fetch(API_ROUTES.pricingRequests.customerQuotationFile(id, 'pdf'), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');

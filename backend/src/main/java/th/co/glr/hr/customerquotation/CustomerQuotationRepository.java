@@ -69,6 +69,20 @@ public class CustomerQuotationRepository {
         }
     }
 
+    /** Step 5: recordOutcome's own idempotency lookup, mirrors {@link #findIdByIssueClientRequestId}. */
+    public Optional<Long> findIdByOutcomeClientRequestId(long issuedBy, String outcomeClientRequestId) {
+        try {
+            return Optional.ofNullable(jdbc.queryForObject("""
+                SELECT quotation_id FROM sales.quotation
+                 WHERE issued_by = :issuedBy AND outcome_client_request_id = CAST(:outcomeClientRequestId AS uuid)
+                """, new MapSqlParameterSource().addValue("issuedBy", issuedBy)
+                    .addValue("outcomeClientRequestId", outcomeClientRequestId),
+                Long.class));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
     public record NewItem(
         long pricingRequestItemId, long pricingDecisionItemId, String description,
         String requestedUnitBasis, BigDecimal requestedQuantity, BigDecimal approvedUnitPrice,
@@ -292,13 +306,73 @@ public class CustomerQuotationRepository {
             """, Map.of("id", quotationId));
     }
 
-    /** Only this recipient chain's currently-ISSUED row supersedes when a revision is created —
-     * mirrors {@code TicketRepository.createQuotation}'s own supersede scope. */
+    /** Only this recipient chain's currently-ISSUED (or, Step 5: REVISION_REQUESTED — a
+     * commercial-only correction created after recordOutcome already moved the source off
+     * ISSUED) row supersedes when a revision is created — mirrors
+     * {@code TicketRepository.createQuotation}'s own supersede scope, widened the same way
+     * {@code CustomerQuotationService.createRevision}'s own predecessor guard was (design
+     * correction 3): exactly these two statuses, nothing else. */
     public int supersede(long quotationId) {
         return jdbc.update("""
             UPDATE sales.quotation SET doc_status = 'SUPERSEDED'
-             WHERE quotation_id = :id AND doc_status = 'ISSUED'
+             WHERE quotation_id = :id AND doc_status IN ('ISSUED', 'REVISION_REQUESTED')
             """, Map.of("id", quotationId));
+    }
+
+    /**
+     * Step 5: compare-and-set ISSUED -> {@code outcome} (ACCEPTED/REJECTED/REVISION_REQUESTED —
+     * the service validates the value before calling this). Rowcount 0 means not open for
+     * recording (already terminal/not ISSUED) — the service distinguishes an idempotent replay
+     * (checked separately via {@link #findIdByOutcomeClientRequestId}, under the same lock hold as
+     * every other Step 4/5 mutation) from a genuine conflict, exactly like {@link #issue}.
+     */
+    public int recordOutcome(long quotationId, String outcome, String outcomeNote, long actorId,
+                             String outcomeClientRequestId) {
+        return jdbc.update("""
+            UPDATE sales.quotation
+               SET doc_status = :outcome,
+                   outcome_note = :outcomeNote,
+                   outcome_recorded_by = :actorId,
+                   outcome_recorded_at = now(),
+                   outcome_client_request_id = CAST(:outcomeClientRequestId AS uuid),
+                   accepted_at = CASE WHEN :outcome = 'ACCEPTED' THEN now() ELSE accepted_at END,
+                   rejected_at = CASE WHEN :outcome = 'REJECTED' THEN now() ELSE rejected_at END
+             WHERE quotation_id = :id AND doc_status = 'ISSUED'
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", quotationId)
+                .addValue("outcome", outcome)
+                .addValue("outcomeNote", outcomeNote)
+                .addValue("actorId", actorId)
+                .addValue("outcomeClientRequestId", outcomeClientRequestId));
+    }
+
+    /** One row per quotation the sweep just flipped ISSUED -> EXPIRED, for the service to emit a
+     * pricing_request_event/notification per row. */
+    public record ExpiredQuotationRow(long quotationId, long pricingRequestId, long ticketId, String number) {}
+
+    /**
+     * Step 5 ("EXPIRED — automatic, following the established worker pattern"): a single guarded
+     * UPDATE, not the outbox/claim/retry machinery {@code FactoryQuoteEmailDispatchWorker} needs
+     * — this isn't calling an external system. Scoped to {@code pricing_request_id IS NOT NULL}
+     * (Step 4/5 quotations only) because emitting a {@code sales.pricing_request_event} requires
+     * that link; a legacy ticket-item-driven quotation's own EXPIRED handling (if any is ever
+     * added) is out of this step's scope. Never touches an ACCEPTED/REJECTED/CANCELLED/SUPERSEDED
+     * row, and never rolls the pricing request back (design correction 2's own "no pricing-request
+     * status change on expiry").
+     */
+    public List<ExpiredQuotationRow> expireOverdueQuotations() {
+        return jdbc.query("""
+            UPDATE sales.quotation
+               SET doc_status = 'EXPIRED'
+             WHERE doc_status = 'ISSUED'
+               AND pricing_request_id IS NOT NULL
+               AND validity_date IS NOT NULL
+               AND validity_date < CURRENT_DATE
+            RETURNING quotation_id, pricing_request_id, ticket_id, number
+            """, Map.of(), (rs, rowNum) -> new ExpiredQuotationRow(
+                rs.getLong("quotation_id"), rs.getLong("pricing_request_id"),
+                rs.getLong("ticket_id"), rs.getString("number")));
     }
 
     public Optional<CustomerQuotationDto> findById(long quotationId) {
@@ -345,7 +419,7 @@ public class CustomerQuotationRepository {
                    NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS issued_by_name,
                    q.issued_at, q.total_amount, q.currency, q.payment_terms, q.lead_time, q.delivery_terms,
                    q.validity_date, q.customer_notes, q.sent_at, q.accepted_at, q.rejected_at,
-                   q.issued_at AS created_at
+                   q.issued_at AS created_at, q.outcome_note, q.outcome_recorded_at
               FROM sales.quotation q
               LEFT JOIN hr.employee e ON e.employee_id = q.issued_by
             """;
@@ -385,6 +459,8 @@ public class CustomerQuotationRepository {
             instant(rs, "accepted_at"),
             instant(rs, "rejected_at"),
             instant(rs, "created_at"),
+            rs.getString("outcome_note"),
+            instant(rs, "outcome_recorded_at"),
             items
         );
     }
