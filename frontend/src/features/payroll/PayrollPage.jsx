@@ -91,6 +91,12 @@ const deductionInputKeys = [
   'studentLoanDeduction',
   'legalExecutionDeduction',
   'otherPostTaxDeductions',
+  // Reconciliation additions (2026-07-21, C4): the three pre-tax deductions the accountant's sheet
+  // subtracts before tax (columns Z/AA/AB). Editable per run, like the other deduction inputs above —
+  // unlike director remuneration below, which is fixed on the employee record.
+  'warningLetterDeduction',
+  'customerReturnDeduction',
+  'otherPretaxDeduction',
 ];
 const payrollInputKeys = [...specialPayKeys, ...incomeInputKeys, ...deductionInputKeys];
 
@@ -119,6 +125,9 @@ function blankAdjustment(employeeId, { applyDefaults = false } = {}) {
     studentLoanDeduction: '',
     legalExecutionDeduction: '',
     otherPostTaxDeductions: '',
+    warningLetterDeduction: '',
+    customerReturnDeduction: '',
+    otherPretaxDeduction: '',
   };
 }
 
@@ -133,6 +142,9 @@ function adjustmentFromLine(line, { applyDefaults = false } = {}) {
   adjustment.studentLoanDeduction = draftValue(line.studentLoanDeduction);
   adjustment.legalExecutionDeduction = draftValue(line.legalExecutionDeduction);
   adjustment.otherPostTaxDeductions = draftValue(line.otherPostTaxDeductions);
+  adjustment.warningLetterDeduction = draftValue(line.warningLetterDeduction);
+  adjustment.customerReturnDeduction = draftValue(line.customerReturnDeduction);
+  adjustment.otherPretaxDeduction = draftValue(line.otherPretaxDeduction);
   return adjustment;
 }
 
@@ -449,12 +461,36 @@ export function PayrollPage({ showToast }) {
                 </FormGrid>
               </CollapsibleSection>
 
+              <CollapsibleSection
+                title="รายการหักก่อนภาษี"
+                defaultOpen={false}
+                headerRight={<InfoTip label="รายการหักก่อนภาษี" text="รายการเหล่านี้จะถูกหักออกจากรายได้ก่อนคำนวณภาษี ต่างจากรายการหักหลังภาษีด้านบน" />}
+              >
+                <FormGrid>
+                  <label htmlFor="payroll-warning-letter-deduction">
+                    หักตามใบเตือน
+                    <MoneyInput id="payroll-warning-letter-deduction" value={selectedAdjustment.warningLetterDeduction} onChange={(value) => updateAdjustment('warningLetterDeduction', value)} />
+                  </label>
+                  <label htmlFor="payroll-customer-return-deduction">
+                    หักลูกค้าคืนสินค้า
+                    <MoneyInput id="payroll-customer-return-deduction" value={selectedAdjustment.customerReturnDeduction} onChange={(value) => updateAdjustment('customerReturnDeduction', value)} />
+                  </label>
+                  <label htmlFor="payroll-other-pretax-deduction">
+                    หักอื่น ๆ ก่อนภาษี
+                    <MoneyInput id="payroll-other-pretax-deduction" value={selectedAdjustment.otherPretaxDeduction} onChange={(value) => updateAdjustment('otherPretaxDeduction', value)} />
+                  </label>
+                </FormGrid>
+              </CollapsibleSection>
+
               <div className="payroll-breakdown">
                 <span><b>SSO</b>{formatMoney(selectedLine.socialSecurity)}</span>
                 <span><b>ฐาน ปกส.</b>{formatMoney(selectedLine.ssoWageBase)}</span>
                 <span><b>รายได้ทั้งปีประมาณการ</b>{formatMoney(selectedLine.projectedAnnualIncome)}</span>
                 <span><b>ค่าลดหย่อนรวม</b>{formatMoney(selectedLine.taxAllowanceTotal)}</span>
                 <span><b>รายได้ไม่คิดภาษี</b>{formatMoney(selectedLine.nonTaxableIncome)}</span>
+                {Number(selectedLine.directorRemuneration || 0) > 0 && (
+                  <span><b>ค่าตอบแทนกรรมการ</b>{formatMoney(selectedLine.directorRemuneration)}</span>
+                )}
               </div>
             </>
           ) : (
