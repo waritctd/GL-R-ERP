@@ -16,5 +16,7 @@ public record SubmitCommissionRequest(
     @DecimalMin("0.00") BigDecimal suspenseVat,
     @DecimalMin("0.00") BigDecimal transportFee,
     @DecimalMin("0.00") BigDecimal cutFee,
-    @DecimalMin("0.00") BigDecimal shortfall
+    @DecimalMin("0.00") BigDecimal shortfall,
+    @DecimalMin("0.00") BigDecimal withholdingTax,
+    @DecimalMin("0.00") BigDecimal overpayment
 ) {}

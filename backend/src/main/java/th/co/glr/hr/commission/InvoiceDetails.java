@@ -14,6 +14,8 @@ public record InvoiceDetails(
     BigDecimal transportFee,
     BigDecimal cutFee,
     BigDecimal shortfall,
+    BigDecimal withholdingTax,
+    BigDecimal overpayment,
     Long invoiceAttachmentId,
     String invoiceAttachmentFileName,
     Instant createdAt,
