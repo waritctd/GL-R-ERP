@@ -103,38 +103,88 @@ class QuotationRendererTest {
     }
 
     @Test
-    void pdfRendersUpToTheTemplateItemCapButSubtotalStillReflectsEveryItem() throws Exception {
-        // The real quotation template has a fixed FOUR line-item slots (QuotationRenderer.MAX_ITEMS
-        // = 4 items × 3 rows). With more items than that, only the first four render as rows — but
-        // the subtotal must still sum EVERY priced item, so the customer is never quoted a total
-        // that silently excludes lines. (The 4-slot limit is a property of the source-of-truth
-        // .xls template; rendering more would require a paginating/multi-page template — see the
-        // known-limitation note in the branch handoff.)
+    void pdfFlowsEveryItemAcrossPagesBeyondTheTemplateZone() throws Exception {
+        // More than 4 items switches QuotationRenderer to the one-row-per-item flow layout: EVERY
+        // item renders (items past the template's item zone get cloned table styling), the footer
+        // relocates below the last item, and the quote paginates across pages. Items 12 and 20 sit
+        // well past the old 4-slot cap, so their presence proves the flow renders the overflow.
         List<TicketItemDto> items = new ArrayList<>();
         for (int i = 1; i <= 20; i++) {
             items.add(item(i, "Brand" + i, "Model" + i, BigDecimal.ONE, new BigDecimal("10.00")));
         }
 
-        String text = strip(renderer.toPdf(ticket(items), quotation(), customer(null)));
+        byte[] pdf = renderer.toPdf(ticket(items), quotation(), customer(null));
+        String text = strip(pdf);
+        int pages;
+        try (org.apache.pdfbox.pdmodel.PDDocument doc = Loader.loadPDF(pdf)) {
+            pages = doc.getNumberOfPages();
+        }
 
-        // buildDesc() renders "กระเบื้อง รุ่น {model}". The first four items get their own rows;
-        // items past the cap do not.
         assertThat(text).contains("Model1");
-        assertThat(text).contains("Model4");
-        assertThat(text).doesNotContain("Model5");
-        // Subtotal reflects all 20 × 10.00 = 200.00, then +7% VAT → 214.00 grand total.
+        assertThat(text).contains("Model12");   // past the old 4-item cap
+        assertThat(text).contains("Model20");   // last item still renders
+        // Subtotal reflects all 20 × 10.00 = 200.00, then +7% VAT → 214.00 grand total; no cell errors.
         assertThat(text).contains("200.00");
         assertThat(text).contains("214.00");
+        assertThat(text).doesNotContain("#VALUE!").doesNotContain("#REF!").doesNotContain("###");
+        assertThat(pages).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    void aQuoteWithinTheTemplateItemZoneStaysASinglePage() throws Exception {
+        // Up to SINGLE_PAGE_CAPACITY (12) one-line items keep the footer at its anchored native
+        // rows and fit on one page — the "fills the page like Excel" layout.
+        List<TicketItemDto> items = new ArrayList<>();
+        for (int i = 1; i <= 6; i++) {
+            items.add(item(i, "Brand" + i, "Model" + i, new BigDecimal("10"), new BigDecimal("100.00")));
+        }
+        byte[] pdf = renderer.toPdf(ticket(items), quotation(), customer(null));
+        int pages;
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            pages = doc.getNumberOfPages();
+        }
+        assertThat(pages).isEqualTo(1);
+        String text = strip(pdf);
+        assertThat(text).contains("6,000.00");     // 6 × 10 × 100 subtotal
+        assertThat(text).contains("พนักงานขาย");   // signature block present on the page
+        assertThat(text).doesNotContain("###");
+    }
+
+    @Test
+    void aQuoteLargerThanOnePageOfItemsPaginatesWithTotalsOnTheLastPage() throws Exception {
+        // Enough items that the quote must span multiple pages in ANY font environment — the exact
+        // page count is font-dependent (CI runs without the Thai fonts, which over-shrink), but 120
+        // one-line items cannot fit a single page even at maximum shrink. Every item renders and the
+        // grand total is correct.
+        List<TicketItemDto> items = new ArrayList<>();
+        for (int i = 1; i <= 120; i++) {
+            items.add(item(i, "Brand" + i, "Model" + i, BigDecimal.ONE, new BigDecimal("10.00")));
+        }
+        byte[] pdf = renderer.toPdf(ticket(items), quotation(), customer(null));
+        int pages;
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            pages = doc.getNumberOfPages();
+        }
+        assertThat(pages).isGreaterThanOrEqualTo(2);
+        String text = strip(pdf);
+        assertThat(text).contains("Model1");
+        assertThat(text).contains("Model60");
+        assertThat(text).contains("Model120");        // last item rendered
+        assertThat(text).contains("1,200.00");         // 120 × 10 subtotal
+        assertThat(text).contains("1,284.00");         // + 7% VAT grand total
+        assertThat(text).doesNotContain("#VALUE!").doesNotContain("#REF!").doesNotContain("###");
     }
 
     @Test
     void xlsxSubtotalCellSumsAllPricedItemsNotJustTheRenderedFifteen() throws Exception {
-        // 2026-07-16 pricing-integrity audit, finding #5: the template only has 15 render
-        // rows, but the I38 subtotal must match TicketService.generateQuotation's
-        // total_amount, which sums ALL priced items — not just the rendered subset.
+        // 2026-07-16 pricing-integrity audit, finding #5: the subtotal cell must match
+        // TicketService.generateQuotation's total_amount, which sums ALL priced items — not just a
+        // rendered subset. Every item now flows onto its own row, so the subtotal cell is relocated
+        // below the last item rather than sitting at the template's original I38.
+        int count = 20;
         List<TicketItemDto> items = new ArrayList<>();
         BigDecimal expectedTotal = BigDecimal.ZERO;
-        for (int i = 1; i <= 20; i++) {
+        for (int i = 1; i <= count; i++) {
             BigDecimal price = new BigDecimal(i + ".00");
             items.add(item(i, "Brand" + i, "Model" + i, BigDecimal.ONE, price));
             expectedTotal = expectedTotal.add(price);
@@ -144,8 +194,11 @@ class QuotationRendererTest {
 
         try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
             var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
-            // I38 is 1-based row 38, col I → 0-based row 37, col 8.
-            double subtotalCell = sheet.getRow(37).getCell(8).getNumericCellValue();
+            // Flow layout: items occupy rows 9..(9+count-1); the footer block (whose subtotal is
+            // originally at 0-based row 37) is relocated by delta = (9 + count) - 22, so the subtotal
+            // lands at row 37 + delta = 24 + count. Col I → index 8.
+            int subtotalRow = 24 + count;
+            double subtotalCell = sheet.getRow(subtotalRow).getCell(8).getNumericCellValue();
             assertThat(BigDecimal.valueOf(subtotalCell).setScale(2, RoundingMode.HALF_UP))
                 .isEqualByComparingTo(expectedTotal.setScale(2, RoundingMode.HALF_UP));
         }
