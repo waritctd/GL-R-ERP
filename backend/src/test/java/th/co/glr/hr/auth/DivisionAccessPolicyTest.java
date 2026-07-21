@@ -53,9 +53,25 @@ class DivisionAccessPolicyTest {
     }
 
     @Test
-    void nonSalesManagerKeepsBaseEmployeeRole() {
-        // A ฝ่าย manager outside sales/accounting is an employee by role; manager power comes from isManager.
-        assertThat(DivisionAccessPolicy.roleFor(record("WH", "WH-คลังสินค้า", "ผู้จัดการฝ่ายคลังสินค้า"))).isEqualTo("employee");
+    void warehouseDivisionDerivesWarehouse() {
+        // WH-คลังสินค้า is now its own warehouse role (employee-tier access for now).
+        assertThat(DivisionAccessPolicy.roleFor(record("WH", "WH-คลังสินค้า", "พนักงาน"))).isEqualTo("warehouse");
+        // Legacy rows without a source_code map via the WH- name prefix.
+        assertThat(DivisionAccessPolicy.roleFor(record(null, "WH-คลังสินค้า", "พนักงาน"))).isEqualTo("warehouse");
+        // A warehouse manager keeps the warehouse role; manager power comes from isManager.
+        assertThat(DivisionAccessPolicy.roleFor(record("WH", "WH-คลังสินค้า", "ผู้จัดการฝ่ายคลังสินค้า"))).isEqualTo("warehouse");
+    }
+
+    @Test
+    void qcDivisionDerivesQc() {
+        // QC&ISO (source_code QC) is now its own qc role (employee-tier access for now).
+        assertThat(DivisionAccessPolicy.roleFor(record("QC", "QC&ISO", "พนักงาน"))).isEqualTo("qc");
+    }
+
+    @Test
+    void nonMappedDivisionManagerKeepsBaseEmployeeRole() {
+        // A ฝ่าย manager outside the mapped divisions is an employee by role; manager power comes from isManager.
+        assertThat(DivisionAccessPolicy.roleFor(record("PD", "PD-ฝ่ายผลิต", "ผู้จัดการฝ่ายผลิต"))).isEqualTo("employee");
     }
 
     @Test

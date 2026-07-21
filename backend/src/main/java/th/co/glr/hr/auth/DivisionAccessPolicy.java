@@ -13,6 +13,9 @@ import java.util.Locale;
  *   <li>HR-บุคคล division → {@code hr}.</li>
  *   <li>PCIM-จัดซื้อต่างประเทศ division → {@code import} (foreign-purchasing price proposals).</li>
  *   <li>AC-ฝ่ายบัญชี division → {@code account} (money-receipt confirmations on sales tickets).</li>
+ *   <li>WH-คลังสินค้า division → {@code warehouse}; QC&amp;ISO division → {@code qc}. These are
+ *       currently employee-tier (same self-service access as {@code employee}); their scoped
+ *       งานขาย involvement is a separate, later change.</li>
  *   <li>SA-ฝ่ายขาย division → {@code sales_manager} if the person is a manager, else {@code sales}.</li>
  *   <li>everything else (including null/blank — treated as inactive employees) → {@code employee}.</li>
  * </ol>
@@ -41,6 +44,12 @@ public final class DivisionAccessPolicy {
         }
         if ("ac".equals(code)) {
             return "account";
+        }
+        if ("wh".equals(code)) {
+            return "warehouse";
+        }
+        if ("qc".equals(code)) {
+            return "qc";
         }
         if ("sa".equals(code)) {
             return isManager(employee) ? "sales_manager" : "sales";
