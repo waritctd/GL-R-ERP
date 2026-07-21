@@ -54,7 +54,8 @@ export function LoginPage({ onLogin, loading, error }) {
               <input
                 value={form.email}
                 onChange={(event) => updateField('email', event.target.value)}
-                type="email"
+                type="text"
+                inputMode="email"
                 autoComplete="email"
                 required
               />

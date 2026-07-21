@@ -27,6 +27,13 @@ jobs:
           java-version: '21'
           cache: maven
 
+      # LibreOffice Calc is required by the quotation/deposit PDF renderer tests, which convert the
+      # real .xls templates to PDF by shelling out to `soffice --headless`. Without it those tests
+      # self-skip (Assumptions.assumeTrue on LibreOfficePdfConverter.isAvailable), so install it here
+      # to actually exercise the document-generation path. Mirrors backend/Dockerfile's Render setup.
+      - name: Install LibreOffice (for PDF renderer tests)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-calc
+
       # Testcontainers spins its own throwaway Postgres via the runner's Docker daemon, so the
       # integration + security + Flyway tests run without a manually provisioned DB service. The
       # TEST_DB_URL override path still exists in PostgresTestSupport as a one-line revert if needed.

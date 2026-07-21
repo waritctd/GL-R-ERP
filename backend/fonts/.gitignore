@@ -1,0 +1,7 @@
+# Proprietary Windows Thai fonts — supplied per-environment, never committed.
+*.ttf
+*.ttc
+*.otf
+# Keep the folder and its docs tracked.
+!README.md
+!.gitignore

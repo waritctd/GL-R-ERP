@@ -2466,6 +2466,26 @@ function factoryNameFor(factoryId) {
   return mockPriceImportFactories.find((item) => item.factoryId === factoryId)?.name ?? null;
 }
 
+// Demo credentials for each role — mirrors V21__demo_seed_accounts.sql
+const DEMO_ROLE_EMAIL = {
+  sales:         'demo.sales@demo.invalid',
+  hr:            'demo.hr@demo.invalid',
+  ceo:           'demo.ceo@demo.invalid',
+  import:        'demo.import@demo.invalid',
+  sales_manager: 'demo.salesmanager@demo.invalid',
+  employee:      'demo.employee@demo.invalid',
+  account:       'demo.import@demo.invalid', // no dedicated account demo
+};
+
+// Try a real backend fetch (credentials included) and return the Blob, or null on failure.
+async function tryBackendBlob(url) {
+  try {
+    const res = await fetch(url, { credentials: 'include' });
+    if (res.ok) return res.blob();
+  } catch { /* backend offline or not authed */ }
+  return null;
+}
+
 export const api = {
   // Mirrors AuthController + AuthService (auth/).
   auth: {
@@ -2482,6 +2502,19 @@ export const api = {
       if (!requestedRole && payload?.password && payload.password !== user.password) fail('Invalid email or password', 401);
 
       sessionUser = user;
+
+      // Fire-and-forget: also create a real backend session so document downloads
+      // (quotation XLS/PDF, deposit notice, remaining invoice) return real files.
+      const demoEmail = DEMO_ROLE_EMAIL[requestedRole ?? user.role];
+      if (demoEmail) {
+        fetch('/api/auth/login', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: demoEmail, password: 'Demo@2026' }),
+        }).catch(() => {});
+      }
+
       return delay({ user: publicUser(user) });
     },
     async logout() {
@@ -3166,11 +3199,13 @@ export const api = {
     },
 
     async downloadQuotationXlsx(ticketId, quotationId) {
-      return buildMockQuotationXlsx(ticketId, quotationId);
+      const blob = await tryBackendBlob(`/api/tickets/${ticketId}/quotations/${quotationId}/file?format=xlsx`);
+      return blob ?? buildMockQuotationXlsx(ticketId, quotationId);
     },
 
     async downloadQuotationPdf(ticketId, quotationId) {
-      return buildMockQuotationHtml(ticketId, quotationId);
+      const blob = await tryBackendBlob(`/api/tickets/${ticketId}/quotations/${quotationId}/file?format=pdf`);
+      return blob ?? buildMockQuotationHtml(ticketId, quotationId);
     },
 
     // Three-party close (V55). Mirrors TicketService.confirmCloseReady /
@@ -3287,7 +3322,8 @@ export const api = {
       // Mirrors DepositNoticeService.getRemainingInvoiceXlsx: read gate first.
       const { ticket } = requireTicketViewer(id);
       if (ticket.status !== 'quotation_issued') fail('Expected quotation_issued', 409);
-      return buildMockRemainingInvoiceXlsx(Number(id));
+      const blob = await tryBackendBlob(`/api/tickets/${id}/remaining-invoice/file`);
+      return blob ?? buildMockRemainingInvoiceXlsx(Number(id));
     },
 
     async confirmCustomer(id) {
@@ -4888,6 +4924,8 @@ export const api = {
       if (!rawDoc) fail('Deposit notice not found', 404);
       // Mirrors DepositNoticeService.getXlsx: read gate on the owning ticket.
       requireTicketViewer(rawDoc.ticketId);
+      const backendBlob = await tryBackendBlob(`/api/deposit-notices/${docId}/file?format=xlsx`);
+      if (backendBlob) return backendBlob;
       const doc = buildMockDoc(rawDoc);
 
       // Demo placeholder — real xlsx from DepositNoticeRenderer.java (server, Apache POI)
@@ -4918,6 +4956,8 @@ export const api = {
       if (!rawDoc) fail('Deposit notice not found', 404);
       // Mirrors DepositNoticeService.getPdf: read gate on the owning ticket.
       requireTicketViewer(rawDoc.ticketId);
+      const blob = await tryBackendBlob(`/api/deposit-notices/${docId}/file?format=pdf`);
+      if (blob) return blob;
       const html = mockPreviewHtml(buildMockDoc(rawDoc));
       return new Blob([html], { type: 'text/html;charset=utf-8' });
     },

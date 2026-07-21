@@ -228,9 +228,8 @@ public class TicketController {
         }
         byte[] bytes = ticketService.getQuotationXlsx(id, quotationId, user);
         return ResponseEntity.ok()
-            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"quotation-" + quotationId + ".xlsx\"")
-            .contentType(MediaType.parseMediaType(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"quotation-" + quotationId + ".xls\"")
+            .contentType(MediaType.parseMediaType("application/vnd.ms-excel"))
             .body(bytes);
     }
 

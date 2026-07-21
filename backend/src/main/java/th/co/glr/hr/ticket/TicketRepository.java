@@ -357,13 +357,14 @@ public class TicketRepository {
     @Transactional
     public QuotationDto createQuotation(long ticketId, String number, long issuedById, BigDecimal totalAmount) {
         return createQuotation(ticketId, number, issuedById, totalAmount, QuotationRecipient.UNSPECIFIED,
-            null, null, null, null, null);
+            null, null, null, null, null, null, null, null);
     }
 
     @Transactional
     public QuotationDto createQuotation(long ticketId, String number, long issuedById, BigDecimal totalAmount,
                                         String recipientType, String recipientLabel, String paymentTerms,
-                                        String leadTime, String deliveryTerms, LocalDate validityDate) {
+                                        String leadTime, String deliveryTerms, LocalDate validityDate,
+                                        LocalDate offerDate, Integer depositPct, Integer deliveryDays) {
         List<Long> parentIds = jdbc.query("""
             SELECT quotation_id
               FROM sales.quotation
@@ -406,10 +407,10 @@ public class TicketRepository {
             INSERT INTO sales.quotation
                 (ticket_id, number, issued_by, total_amount, currency, quotation_version, doc_status,
                  recipient_type, recipient_label, payment_terms, lead_time, delivery_terms,
-                 validity_date, parent_quotation_id)
+                 validity_date, parent_quotation_id, offer_date, deposit_pct, delivery_days)
             VALUES (:ticketId, :number, :issuedBy, :totalAmount, 'THB', :version, 'ISSUED',
                     :recipientType, :recipientLabel, :paymentTerms, :leadTime, :deliveryTerms,
-                    :validityDate, :parentQuotationId)
+                    :validityDate, :parentQuotationId, :offerDate, :depositPct, :deliveryDays)
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId)
@@ -423,7 +424,10 @@ public class TicketRepository {
                 .addValue("leadTime", leadTime)
                 .addValue("deliveryTerms", deliveryTerms)
                 .addValue("validityDate", validityDate)
-                .addValue("parentQuotationId", parentQuotationId));
+                .addValue("parentQuotationId", parentQuotationId)
+                .addValue("offerDate", offerDate)
+                .addValue("depositPct", depositPct != null ? java.math.BigDecimal.valueOf(depositPct).divide(java.math.BigDecimal.valueOf(100)) : null)
+                .addValue("deliveryDays", deliveryDays));
 
         int versionToFind = nextVersion;
         return findQuotationsByTicketId(ticketId).stream()
@@ -692,7 +696,8 @@ public class TicketRepository {
                    q.quotation_version, q.doc_status,
                    q.recipient_type, q.recipient_label, q.payment_terms, q.lead_time,
                    q.delivery_terms, q.validity_date, q.sent_at, q.accepted_at,
-                   q.rejected_at, q.parent_quotation_id
+                   q.rejected_at, q.parent_quotation_id,
+                   q.offer_date, q.deposit_pct, q.delivery_days
               FROM sales.quotation q
               JOIN hr.employee e ON e.employee_id = q.issued_by
              WHERE q.ticket_id = :id
@@ -705,6 +710,11 @@ public class TicketRepository {
                 Timestamp rejectedAt = rs.getTimestamp("rejected_at");
                 long parentRaw = rs.getLong("parent_quotation_id");
                 Long parentQuotationId = rs.wasNull() ? null : parentRaw;
+                java.math.BigDecimal depositPctDecimal = rs.getBigDecimal("deposit_pct");
+                Integer depositPct = depositPctDecimal == null ? null
+                    : (int) Math.round(depositPctDecimal.doubleValue() * 100);
+                int deliveryDaysRaw = rs.getInt("delivery_days");
+                Integer deliveryDays = rs.wasNull() ? null : deliveryDaysRaw;
                 return new QuotationDto(
                     rs.getLong("quotation_id"),
                     rs.getLong("ticket_id"),
@@ -726,7 +736,10 @@ public class TicketRepository {
                     sentAt != null ? sentAt.toInstant() : null,
                     acceptedAt != null ? acceptedAt.toInstant() : null,
                     rejectedAt != null ? rejectedAt.toInstant() : null,
-                    parentQuotationId
+                    parentQuotationId,
+                    rs.getObject("offer_date", LocalDate.class),
+                    depositPct,
+                    deliveryDays
                 );
             });
     }

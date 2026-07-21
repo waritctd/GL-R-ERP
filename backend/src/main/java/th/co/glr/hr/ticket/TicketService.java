@@ -282,7 +282,8 @@ public class TicketService {
         String number = tickets.nextQuotationCode();
         QuotationDto created = tickets.createQuotation(ticketId, number, actor.id(), total, recipientType,
             blankToNull(request.recipientLabel()), blankToNull(request.paymentTerms()),
-            blankToNull(request.leadTime()), blankToNull(request.deliveryTerms()), request.validityDate());
+            blankToNull(request.leadTime()), blankToNull(request.deliveryTerms()), request.validityDate(),
+            request.offerDate(), request.depositPercent(), request.deliveryLeadDays());
 
         // Freeze this quotation at issue time (V49): item data + customer/project header,
         // in the same transaction as createQuotation, so a later ticket edit or customer-
