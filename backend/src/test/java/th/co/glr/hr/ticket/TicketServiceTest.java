@@ -1009,9 +1009,9 @@ class TicketServiceTest {
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
 
         service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งบางส่วน",
-            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("40.00")))), importActor);
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("40.00"))), null), importActor);
 
-        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(3L), eq("ส่งบางส่วน"),
+        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(3L), eq("ส่งบางส่วน"), any(),
             argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("40.00")) == 0));
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.PARTIALLY_DELIVERED);
         verify(ticketRepo).addEventWithDocument(eq(10L), eq(3L), anyString(),
@@ -1032,7 +1032,7 @@ class TicketServiceTest {
         when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
 
         service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งส่วนที่เหลือ",
-            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00")))), importActor);
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00"))), null), importActor);
 
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
         verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERED);
@@ -1048,7 +1048,7 @@ class TicketServiceTest {
             "FULLY_PAID", FulfilmentStatus.GOODS_RECEIVED, DealStage.PROCUREMENT, null);
 
         RecordDeliveryRequest over = new RecordDeliveryRequest("WAREHOUSE", null,
-            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("70.00"))));
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("70.00"))), null);
         assertConflict(() -> service.recordPartialDelivery(10L, over, importActor));
         assertForbidden(() -> service.recordPartialDelivery(10L, over, salesActor));
         assertForbidden(() -> service.recordPartialDelivery(10L, over, accountActor));
@@ -1063,7 +1063,7 @@ class TicketServiceTest {
             DealLifecycle.ON_HOLD, DepositPolicy.REQUIRED);
 
         assertConflict(() -> service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", null,
-            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("10.00")))), importActor));
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("10.00"))), null), importActor));
     }
 
     @Test
@@ -1075,9 +1075,9 @@ class TicketServiceTest {
             FulfilmentStatus.FROM_STOCK);
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
 
-        service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบจากสต็อก"), importActor);
+        service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบจากสต็อก", null), importActor);
 
-        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("STOCK"), eq(3L), eq("ส่งครบจากสต็อก"),
+        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("STOCK"), eq(3L), eq("ส่งครบจากสต็อก"), any(),
             argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0));
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
     }
@@ -1100,9 +1100,9 @@ class TicketServiceTest {
         when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
 
         service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งของนำเข้าที่เหลือ",
-            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00")))), importActor);
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00"))), null), importActor);
 
-        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(3L), anyString(),
+        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(3L), anyString(), any(),
             argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0));
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
     }
@@ -1673,7 +1673,7 @@ class TicketServiceTest {
             Optional.of(delivered), Optional.of(delivered));
         when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
 
-        service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบ"), importActor);
+        service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบ", null), importActor);
 
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
         verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERED);

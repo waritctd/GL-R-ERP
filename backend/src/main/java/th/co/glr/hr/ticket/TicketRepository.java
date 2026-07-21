@@ -1134,17 +1134,18 @@ public class TicketRepository {
 
     @Transactional
     public long insertDeliveryRecord(long ticketId, String source, long deliveredBy, String note,
-                                     List<RecordDeliveryRequest.Line> lines) {
+                                     String recipientName, List<RecordDeliveryRequest.Line> lines) {
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
-            INSERT INTO sales.delivery_record (ticket_id, source, delivered_by, note)
-            VALUES (:ticketId, :source, :deliveredBy, :note)
+            INSERT INTO sales.delivery_record (ticket_id, source, delivered_by, note, recipient_name)
+            VALUES (:ticketId, :source, :deliveredBy, :note, :recipientName)
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId)
                 .addValue("source", source)
                 .addValue("deliveredBy", deliveredBy)
-                .addValue("note", note),
+                .addValue("note", note)
+                .addValue("recipientName", recipientName),
             keyHolder,
             new String[] {"delivery_id"});
         long deliveryId = keyHolder.getKey().longValue();
@@ -1179,7 +1180,7 @@ public class TicketRepository {
         List<DeliveryRecordDto> records = jdbc.query("""
             SELECT dr.delivery_id, dr.ticket_id, dr.source, dr.delivered_at, dr.delivered_by,
                    NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS delivered_by_name,
-                   dr.note, dr.created_at
+                   dr.note, dr.recipient_name, dr.created_at
               FROM sales.delivery_record dr
               JOIN hr.employee e ON e.employee_id = dr.delivered_by
              WHERE dr.ticket_id = :ticketId
@@ -1194,6 +1195,7 @@ public class TicketRepository {
                 rs.getLong("delivered_by"),
                 rs.getString("delivered_by_name"),
                 rs.getString("note"),
+                rs.getString("recipient_name"),
                 rs.getTimestamp("created_at").toInstant(),
                 findDeliveryItems(rs.getLong("delivery_id"))
             ));
@@ -1322,5 +1324,149 @@ public class TicketRepository {
         jdbc.update(
             "UPDATE sales.ticket SET has_edits = :v, updated_at = now() WHERE ticket_id = :id",
             Map.of("id", ticketId, "v", value));
+    }
+
+    // ── Step 8 (V78): ticket_item <-> pricing-request-chain quantity reconciliation ─────────
+    //
+    // sales.ticket_item.qty is set exactly ONCE, at ticket creation (insertItems above), and is
+    // never written by the PricingRequest chain (Steps 1-6 deliberately never touch this table's
+    // legacy price columns — that same discipline turned out to have silently extended to qty
+    // too). A pricing_request_item's own requested_qty can differ from the ticket_item it traces
+    // back to via source_ticket_item_id from the very first submission, and can diverge further
+    // still after a customer-change revision (PricingRequestService.createCustomerChangeRevision
+    // is reachable even from QUOTATION_ACCEPTED — see that method's own status guard). Called
+    // from OrderConfirmationService.confirmOrder, the one bridge point that always runs exactly
+    // once before any delivery machinery (reserveStock/completeDelivery, both keyed on this same
+    // qty column) becomes reachable for the deal.
+
+    /**
+     * Reconciles ONE existing ticket_item row's {@code qty}/{@code qty_sqm} to whatever the
+     * pricing-request chain actually settled on. Scoped to {@code ticketId} as a defense-in-depth
+     * check — {@code sourceTicketItemId} is already validated to belong to the same ticket at
+     * pricing-request-item creation time (see {@code PricingRequestService
+     * .validateSourceItemsBelongToTicket}), so this should never filter anything out in practice.
+     *
+     * <p>Relies on the EXISTING {@code chk_ticket_item_qty_delivered}/
+     * {@code chk_ticket_item_qty_from_stock} CHECK constraints (V54) to refuse — via a thrown
+     * {@link org.springframework.dao.DataIntegrityViolationException} — a downward reconciliation
+     * that would drop {@code qty} below already-recorded {@code qty_delivered}/
+     * {@code qty_from_stock}. The caller converts that into a clean 409; this method never
+     * suppresses or works around it.
+     *
+     * @return true if a row was found AND its qty genuinely changed (the caller uses this only to
+     *         decide whether a "quantities were reconciled" event is worth logging, never for
+     *         correctness — a false return with zero rows updated is not itself an error, since a
+     *         same-ticket item id is guaranteed to exist by the FK on
+     *         {@code pricing_request_item.source_ticket_item_id} once V59 is applied... except
+     *         that FK does not exist (source_ticket_item_id is a plain nullable BIGINT, not an FK
+     *         — see V59's own column definition), so this IS defensive, not merely decorative).
+     */
+    public boolean reconcileItemQty(long ticketId, long itemId, BigDecimal qty, BigDecimal qtySqm) {
+        return jdbc.update("""
+            UPDATE sales.ticket_item
+               SET qty = :qty, qty_sqm = :qtySqm
+             WHERE ticket_id = :ticketId AND item_id = :itemId
+               AND qty IS DISTINCT FROM :qty
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("itemId", itemId)
+                .addValue("qty", qty)
+                .addValue("qtySqm", qtySqm)) > 0;
+    }
+
+    /**
+     * Closes out any {@code ticket_item} row that WAS part of this pricing-request chain (some
+     * revision in the {@code rootPricingRequestId} chain had a {@code pricing_request_item} whose
+     * {@code source_ticket_item_id} points at it) but is absent from the CURRENTLY-accepted
+     * revision ({@code currentPricingRequestId}) — a line the customer dropped entirely via a
+     * customer-change revision.
+     *
+     * <p>Bug found on review (not by the implementing pass): {@link #reconcileItemQty} only
+     * touches items still PRESENT in the current revision, so a dropped line's {@code ticket_item}
+     * row keeps its stale {@code qty} forever. {@code TicketService.completeDelivery}/{@code
+     * reserveStock} iterate {@code ticket.items()} unconditionally (no filter by "is this item
+     * part of the accepted pricing request") — a stale row with open quantity
+     * ({@code qty > qty_delivered}) makes {@code completeDelivery}'s "any remaining?" check see a
+     * phantom undeliverable balance FOREVER, since nobody can ever deliver units of a product the
+     * customer no longer ordered. The deal can never reach {@code FulfilmentStatus.FULLY_DELIVERED}
+     * / {@code DealStage.DELIVERED}. This is a real, deal-blocking correctness bug, not a cosmetic
+     * gap — found and fixed as part of this same step, not deferred.
+     *
+     * <p>Closes by setting {@code qty = qty_delivered} (never below — the boundary case is always
+     * legal under {@code chk_ticket_item_qty_delivered}/{@code chk_ticket_item_qty_from_stock},
+     * V54): a line with nothing yet delivered closes to zero remaining; a line ALREADY PARTIALLY
+     * delivered before being dropped keeps exactly what was truly delivered as history, closing
+     * only the open remainder — it never fabricates a false "fully delivered" claim beyond what
+     * actually happened, and never needs to touch the CHECK-constraint boundary the way a naive
+     * "set qty to 0" would.
+     *
+     * <p>Deliberately scoped to the {@code rootPricingRequestId} CHAIN, not the whole ticket — a
+     * ticket can carry independent pricing requests for different recipients (designer/owner/
+     * buyer; Step 1's "0..N Pricing Requests per deal" model), and this must never touch a
+     * ticket_item that legitimately belongs only to a DIFFERENT recipient's quote just because it
+     * is absent from the one being confirmed right now.
+     *
+     * @return the number of ticket_item rows closed — the caller uses this only to decide whether
+     *         a "quantities reconciled" event is worth a distinct log line, never for correctness.
+     */
+    public int closeOutDroppedChainItems(long ticketId, long rootPricingRequestId, long currentPricingRequestId) {
+        return jdbc.update("""
+            UPDATE sales.ticket_item ti
+               SET qty = ti.qty_delivered
+             WHERE ti.ticket_id = :ticketId
+               AND ti.qty IS DISTINCT FROM ti.qty_delivered
+               AND EXISTS (
+                   SELECT 1
+                     FROM sales.pricing_request_item pri
+                     JOIN sales.pricing_request pr ON pr.pricing_request_id = pri.pricing_request_id
+                    WHERE pri.source_ticket_item_id = ti.item_id
+                      AND (pr.pricing_request_id = :rootId OR pr.root_pricing_request_id = :rootId)
+               )
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM sales.pricing_request_item pri2
+                    WHERE pri2.source_ticket_item_id = ti.item_id
+                      AND pri2.pricing_request_id = :currentId
+               )
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("rootId", rootPricingRequestId)
+                .addValue("currentId", currentPricingRequestId));
+    }
+
+    /**
+     * Inserts a brand-new ticket_item row for a pricing_request_item that has NO
+     * {@code sourceTicketItemId} — a line added entirely within a customer-change revision, with
+     * no original ticket_item to reconcile against. {@code brand} is NOT NULL on this table (V8);
+     * the caller is responsible for a non-blank fallback (see
+     * OrderConfirmationService#resolveBrand) since a pricing-request item's own brand is
+     * optional (it may be identified only by {@code productId}/{@code productDescription}).
+     */
+    public long insertReconciledItem(long ticketId, String brand, String model, String color, String texture,
+                                     String size, String factory, BigDecimal qty, BigDecimal qtySqm,
+                                     String unitBasis) {
+        return jdbc.queryForObject("""
+            INSERT INTO sales.ticket_item
+                (ticket_id, brand, model, color, texture, size, factory, qty, qty_sqm, unit_basis,
+                 currency, sort_order)
+            VALUES (:ticketId, :brand, :model, :color, :texture, :size, :factory, :qty, :qtySqm,
+                    :unitBasis, 'THB',
+                    (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM sales.ticket_item WHERE ticket_id = :ticketId))
+            RETURNING item_id
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("brand", brand)
+                .addValue("model", model)
+                .addValue("color", color)
+                .addValue("texture", texture)
+                .addValue("size", size)
+                .addValue("factory", factory)
+                .addValue("qty", qty)
+                .addValue("qtySqm", qtySqm)
+                .addValue("unitBasis", unitBasis),
+            Long.class);
     }
 }

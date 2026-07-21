@@ -47,6 +47,10 @@ public final class PricingRequestEventKind {
     public static final String FACTORY_PO_SHIPPING_RECORDED   = "FACTORY_PO_SHIPPING_RECORDED";
     public static final String FACTORY_PO_GOODS_RECEIVED      = "FACTORY_PO_GOODS_RECEIVED";
     public static final String FACTORY_PO_CANCELLED           = "FACTORY_PO_CANCELLED";
+    // Step 8: Receiving, Inventory Allocation, and Delivery. Logged by
+    // OrderConfirmationService#reconcileTicketItems the first time confirmOrder actually has to
+    // change/add a sales.ticket_item row to match this pricing request's own settled quantities.
+    public static final String TICKET_ITEMS_RECONCILED        = "TICKET_ITEMS_RECONCILED";
 
     public static final Set<String> VALUES = Set.of(
         PRICING_REQUEST_CREATED, PRICING_REQUEST_UPDATED, PRICING_REQUEST_SUBMITTED,
@@ -62,7 +66,7 @@ public final class PricingRequestEventKind {
         CUSTOMER_QUOTATION_REJECTED, CUSTOMER_QUOTATION_REVISION_REQUESTED, CUSTOMER_QUOTATION_EXPIRED,
         ORDER_CONFIRMED, DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION,
         FACTORY_PO_CREATED, FACTORY_PO_PROFORMA_RECORDED, FACTORY_PO_SHIPPING_RECORDED,
-        FACTORY_PO_GOODS_RECEIVED, FACTORY_PO_CANCELLED);
+        FACTORY_PO_GOODS_RECEIVED, FACTORY_PO_CANCELLED, TICKET_ITEMS_RECONCILED);
 
     public static boolean isValid(String value) {
         return value != null && VALUES.contains(value);
