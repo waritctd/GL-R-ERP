@@ -335,4 +335,172 @@ class PayrollCalculatorTest {
         assertThat(result.grossTaxableIncome()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(result.netPay()).isEqualByComparingTo(BigDecimal.ZERO);
     }
+
+    // ------------------------------------------------------------------------------------------
+    // Reconciliation additions (2026-07-21, C3/C4) -- see PayrollExcelReconciliationTest for the
+    // accountant's-workbook rationale. These are separate from that file (which must not be edited)
+    // and cover the engine-level behaviour the reconciliation only demonstrates by example.
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * Byte-identical regression: with every new (C3/C4) input at zero, the calculator must reproduce
+     * exactly what it produced before the reconciliation change. This uses the legacy 12-arg
+     * constructor (so it is exercised the same way the pre-existing tests exercise it) against a
+     * fully-populated scenario that exercises allowances, unpaid leave, YTD and legal execution
+     * together, and asserts every output field.
+     */
+    @Test
+    void withEveryNewInputAtZeroTheCalculatorIsByteIdenticalToBeforeTheReconciliationChange() {
+        PayrollCalculationInput legacyShapedInput = new PayrollCalculationInput(
+            new BigDecimal("40000.00"),
+            List.of(),
+            new BigDecimal("2500.00"),
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            new BigDecimal("1.00"),
+            new BigDecimal("1500.00"),
+            new BigDecimal("12350.00"),
+            BigDecimal.ZERO,
+            new PayrollTaxAllowanceInput(
+                BigDecimal.ZERO, new BigDecimal("30000.00"), BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("15000.00"), BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+            ),
+            PayrollYearToDate.empty(),
+            1
+        );
+        PayrollCalculationInput explicitZeroInput = new PayrollCalculationInput(
+            legacyShapedInput.baseSalary(), legacyShapedInput.specialPays(), legacyShapedInput.overtimePay(),
+            legacyShapedInput.commissionPay(), legacyShapedInput.nonTaxableIncome(), legacyShapedInput.unpaidLeaveDays(),
+            legacyShapedInput.studentLoanDeduction(), legacyShapedInput.legalExecutionRequested(),
+            legacyShapedInput.otherPostTaxDeductions(), legacyShapedInput.taxAllowances(), legacyShapedInput.yearToDate(),
+            legacyShapedInput.payrollMonthValue(),
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+        );
+
+        PayrollCalculation viaLegacyConstructor = calculator.calculate(legacyShapedInput);
+        PayrollCalculation viaExplicitZeros = calculator.calculate(explicitZeroInput);
+
+        assertThat(viaExplicitZeros.grossEarnings()).isEqualByComparingTo(viaLegacyConstructor.grossEarnings());
+        assertThat(viaExplicitZeros.grossTaxableIncome()).isEqualByComparingTo(viaLegacyConstructor.grossTaxableIncome());
+        assertThat(viaExplicitZeros.ssoWageBase()).isEqualByComparingTo(viaLegacyConstructor.ssoWageBase());
+        assertThat(viaExplicitZeros.socialSecurity()).isEqualByComparingTo(viaLegacyConstructor.socialSecurity());
+        assertThat(viaExplicitZeros.projectedAnnualIncome()).isEqualByComparingTo(viaLegacyConstructor.projectedAnnualIncome());
+        assertThat(viaExplicitZeros.taxAllowanceTotal()).isEqualByComparingTo(viaLegacyConstructor.taxAllowanceTotal());
+        assertThat(viaExplicitZeros.annualTax()).isEqualByComparingTo(viaLegacyConstructor.annualTax());
+        assertThat(viaExplicitZeros.withholdingTax()).isEqualByComparingTo(viaLegacyConstructor.withholdingTax());
+        assertThat(viaExplicitZeros.legalExecutionDeduction()).isEqualByComparingTo(viaLegacyConstructor.legalExecutionDeduction());
+        assertThat(viaExplicitZeros.totalDeductions()).isEqualByComparingTo(viaLegacyConstructor.totalDeductions());
+        assertThat(viaExplicitZeros.netPay()).isEqualByComparingTo(viaLegacyConstructor.netPay());
+
+        // And the absolute figures still match what this exact scenario asserted before the change
+        // (see the equivalent case earlier in this file / the original commit).
+        assertThat(viaExplicitZeros.netPay()).isEqualByComparingTo(new BigDecimal("25906.25"));
+    }
+
+    @Test
+    void directorRemunerationRaisesGrossAndTaxButNeverTouchesSocialSecurity() {
+        PayrollCalculation withoutDirectorPay = calculator.calculate(director(BigDecimal.ZERO));
+        PayrollCalculation withDirectorPay = calculator.calculate(director(new BigDecimal("150000.00")));
+
+        // Director remuneration IS taxable (joins grossEarnings / grossTaxableIncome / annual tax)...
+        assertThat(withDirectorPay.grossEarnings())
+            .isEqualByComparingTo(withoutDirectorPay.grossEarnings().add(new BigDecimal("150000.00")));
+        assertThat(withDirectorPay.grossTaxableIncome())
+            .isEqualByComparingTo(withoutDirectorPay.grossTaxableIncome().add(new BigDecimal("150000.00")));
+        assertThat(withDirectorPay.annualTax()).isGreaterThan(withoutDirectorPay.annualTax());
+        // ...but it is NOT wages under the Social Security Act, so SSO is untouched either way.
+        assertThat(withDirectorPay.socialSecurity()).isEqualByComparingTo(withoutDirectorPay.socialSecurity());
+        assertThat(withDirectorPay.ssoWageBase()).isEqualByComparingTo(withoutDirectorPay.ssoWageBase());
+    }
+
+    /**
+     * The real director profile, and the case that actually guards the SSO exclusion.
+     *
+     * <p>{@link #directorRemunerationRaisesGrossAndTaxButNeverTouchesSocialSecurity()} cannot catch a
+     * regression here on its own: it uses a 30,000 base salary, which is already above the 17,500
+     * wage ceiling, so social security is capped at 875 whether or not director remuneration is
+     * folded into the base. Mutating {@code ssoWageBase} to include it leaves that test green.
+     *
+     * <p>In the accountant's workbook a director has column G filled and D/H (เงินเดือน) EMPTY —
+     * there is no salary at all — and no social security row. With a zero base the cap no longer
+     * hides anything: the contribution must be exactly zero, and folding 150,000 of director pay
+     * into the SSO base would produce 875.
+     */
+    @Test
+    void aDirectorWithNoSalaryPaysNoSocialSecurityAtAll() {
+        PayrollCalculation result = calculator.calculate(new PayrollCalculationInput(
+            BigDecimal.ZERO, List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1,
+            new BigDecimal("150000.00"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
+
+        assertThat(result.grossEarnings()).isEqualByComparingTo(new BigDecimal("150000.00"));
+        assertThat(result.ssoWageBase()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(result.socialSecurity())
+            .withFailMessage("a director has no wages, so no social security is due")
+            .isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    private PayrollCalculationInput director(BigDecimal directorRemuneration) {
+        return new PayrollCalculationInput(
+            new BigDecimal("30000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1,
+            directorRemuneration, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+        );
+    }
+
+    @Test
+    void eachPreTaxDeductionReducesBothTaxableIncomeAndNetPay() {
+        PayrollCalculation baseline = calculator.calculate(pretax(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
+        PayrollCalculation withWarningLetter = calculator.calculate(pretax(new BigDecimal("1000.00"), BigDecimal.ZERO, BigDecimal.ZERO));
+        PayrollCalculation withCustomerReturn = calculator.calculate(pretax(BigDecimal.ZERO, new BigDecimal("1000.00"), BigDecimal.ZERO));
+        PayrollCalculation withOtherPretax = calculator.calculate(pretax(BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("1000.00")));
+
+        for (PayrollCalculation withDeduction : List.of(withWarningLetter, withCustomerReturn, withOtherPretax)) {
+            assertThat(withDeduction.grossTaxableIncome())
+                .isEqualByComparingTo(baseline.grossTaxableIncome().subtract(new BigDecimal("1000.00")));
+            assertThat(withDeduction.netPay()).isLessThan(baseline.netPay());
+        }
+    }
+
+    /**
+     * C4's whole point: a pre-tax deduction changes the tax base (and therefore withholding), while
+     * an equal-sized post-tax deduction does not. Same 1,000 THB, same employee, different treatment.
+     */
+    @Test
+    void aPreTaxDeductionIsTaxedDifferentlyFromTheSameAmountAsAPostTaxDeduction() {
+        PayrollCalculationInput asPreTax = new PayrollCalculationInput(
+            new BigDecimal("50000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("1000.00")
+        );
+        PayrollCalculationInput asPostTax = new PayrollCalculationInput(
+            new BigDecimal("50000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("1000.00"),
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1
+        );
+
+        PayrollCalculation preTaxResult = calculator.calculate(asPreTax);
+        PayrollCalculation postTaxResult = calculator.calculate(asPostTax);
+
+        assertThat(preTaxResult.grossTaxableIncome())
+            .isEqualByComparingTo(postTaxResult.grossTaxableIncome().subtract(new BigDecimal("1000.00")));
+        assertThat(preTaxResult.withholdingTax()).isLessThan(postTaxResult.withholdingTax());
+        // Both deduct the same 1,000 from net pay, but the pre-tax version withholds less tax, so its
+        // net pay ends up higher by exactly that tax difference -- the whole point of C4.
+        assertThat(preTaxResult.netPay()).isGreaterThan(postTaxResult.netPay());
+    }
+
+    private PayrollCalculationInput pretax(BigDecimal warningLetter, BigDecimal customerReturn, BigDecimal otherPretax) {
+        return new PayrollCalculationInput(
+            new BigDecimal("40000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1,
+            BigDecimal.ZERO, warningLetter, customerReturn, otherPretax
+        );
+    }
 }

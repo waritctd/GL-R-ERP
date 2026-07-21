@@ -43,12 +43,24 @@ public class PayslipRenderer {
             pdf.text(regular, 10, "เงินพิเศษรวม: " + fmt2(line.specialPayTotal()) + " บาท");
             pdf.text(regular, 10, "ค่าล่วงเวลา: " + fmt2(line.overtimePay()) + " บาท");
             pdf.text(regular, 10, "ค่าคอมมิชชั่น: " + fmt2(line.commissionPay()) + " บาท");
+            if (nonZero(line.directorRemuneration())) {
+                pdf.text(regular, 10, "ค่าตอบแทนกรรมการ: " + fmt2(line.directorRemuneration()) + " บาท");
+            }
             pdf.text(regular, 10, "รายได้ไม่คิดภาษี: " + fmt2(line.nonTaxableIncome()) + " บาท");
             pdf.text(bold, 11, "รายได้รวม: " + fmt2(line.grossEarnings()) + " บาท");
             pdf.gap(10);
 
             pdf.text(bold, 11, "เงินหักและภาษี");
             pdf.text(regular, 10, "วันลาไม่รับค่าจ้าง: " + fmt2(line.unpaidLeaveDays()) + " วัน  หัก: " + fmt2(line.unpaidLeaveDeduction()) + " บาท");
+            if (nonZero(line.warningLetterDeduction())) {
+                pdf.text(regular, 10, "หักตามใบเตือน: " + fmt2(line.warningLetterDeduction()) + " บาท");
+            }
+            if (nonZero(line.customerReturnDeduction())) {
+                pdf.text(regular, 10, "หักลูกค้าคืนสินค้า: " + fmt2(line.customerReturnDeduction()) + " บาท");
+            }
+            if (nonZero(line.otherPretaxDeduction())) {
+                pdf.text(regular, 10, "หักอื่น ๆ ก่อนภาษี: " + fmt2(line.otherPretaxDeduction()) + " บาท");
+            }
             pdf.text(regular, 10, "รายได้คิดภาษี: " + fmt2(line.grossTaxableIncome()) + " บาท");
             pdf.text(regular, 10, "ฐานประกันสังคม: " + fmt2(line.ssoWageBase()) + " บาท  ประกันสังคม: " + fmt2(line.socialSecurity()) + " บาท");
             pdf.text(regular, 10, "รายได้ทั้งปีประมาณการ: " + fmt2(line.projectedAnnualIncome()) + " บาท");
@@ -94,6 +106,10 @@ public class PayslipRenderer {
 
     private String nullSafe(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private boolean nonZero(BigDecimal value) {
+        return value != null && value.signum() != 0;
     }
 
     private String fmt2(BigDecimal value) {
