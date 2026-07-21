@@ -20,7 +20,7 @@ public class CommissionRepository {
         SELECT cr.commission_id, cr.source_ticket_id, cr.sales_rep_id,
                NULLIF(TRIM(CONCAT_WS(' ', sr.first_name_th, sr.last_name_th)), '') AS sales_rep_name,
                cr.submitted_by_id, cr.kind, cr.status, cr.payroll_month,
-               cr.actual_received, cr.commissionable_base,
+               cr.actual_received, cr.commissionable_base, cr.weight_multiplier,
                cr.approved_by_id, cr.approved_at, cr.cancellation_of_id, cr.cancellation_reason,
                cr.manager_approved_by,
                NULLIF(TRIM(CONCAT_WS(' ', manager_approver.first_name_th, manager_approver.last_name_th)), '') AS manager_approved_by_name,
@@ -36,6 +36,7 @@ public class CommissionRepository {
                cr.deal_payable_amount_snapshot, cr.deal_amount_mismatch,
                inv.invoice_id, inv.invoice_number, inv.invoice_date, inv.gross_amount,
                inv.bank_fees, inv.suspense_vat, inv.transport_fee, inv.cut_fee, inv.shortfall,
+               inv.withholding_tax, inv.overpayment,
                inv.invoice_attachment_id, fa.file_name AS invoice_attachment_file_name,
                inv.created_at AS invoice_created_at, inv.updated_at AS invoice_updated_at
           FROM sales.commission_record cr
@@ -105,9 +106,42 @@ public class CommissionRepository {
             ));
     }
 
-    public BigDecimal sumActiveMonthlyBase(long salesRepId, LocalDate payrollMonth) {
+    /**
+     * Commission redesign calc-refine (2026-07-22): the exact, un-divided sum of {@code
+     * actual_received &times; weight_multiplier} across every active (non-VOID, non-REJECTED)
+     * commission record for the rep/month. This is real money multiplied by a small integer, so
+     * the sum is exact -- no precision is lost here. The caller ({@link
+     * CommissionCalculator#monthlyTierBase}) divides by VAT exactly once, at full precision,
+     * instead of this repository summing each receipt's already-2dp-rounded {@code
+     * commissionable_base} column (the old {@code sumActiveMonthlyBase}, which let per-receipt
+     * rounding accumulate across many small receipts).
+     */
+    public BigDecimal sumActiveWeightedActualReceived(long salesRepId, LocalDate payrollMonth) {
         BigDecimal value = jdbc.queryForObject("""
-            SELECT COALESCE(SUM(commissionable_base), 0)
+            SELECT COALESCE(SUM(actual_received * weight_multiplier), 0)
+              FROM sales.commission_record
+             WHERE sales_rep_id = :salesRepId
+               AND payroll_month = :payrollMonth
+               AND status NOT IN ('VOID', 'REJECTED')
+            """,
+            new MapSqlParameterSource()
+                .addValue("salesRepId", salesRepId)
+                .addValue("payrollMonth", payrollMonth),
+            BigDecimal.class);
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    /**
+     * Commission redesign calc-refine: the UNWEIGHTED sum of {@code actual_received} -- real cash
+     * actually received, with no 2x/3x tier-base weighting applied. Kept deliberately separate
+     * from {@link #sumActiveWeightedActualReceived}: "real cash received" and "weighted tier
+     * base" are two different numbers once any receipt is weighted, and a future team-commission
+     * slice needs the unweighted one. Not currently wired into any response DTO — available here
+     * for that slice and for tests that need to assert the two totals diverge.
+     */
+    public BigDecimal sumActiveActualReceived(long salesRepId, LocalDate payrollMonth) {
+        BigDecimal value = jdbc.queryForObject("""
+            SELECT COALESCE(SUM(actual_received), 0)
               FROM sales.commission_record
              WHERE sales_rep_id = :salesRepId
                AND payroll_month = :payrollMonth
@@ -164,10 +198,10 @@ public class CommissionRepository {
         jdbc.update("""
             INSERT INTO sales.invoice_details
                 (invoice_number, invoice_date, gross_amount, bank_fees, suspense_vat,
-                 transport_fee, cut_fee, shortfall)
+                 transport_fee, cut_fee, shortfall, withholding_tax, overpayment)
             VALUES
                 (:invoiceNumber, :invoiceDate, :grossAmount, :bankFees, :suspenseVat,
-                 :transportFee, :cutFee, :shortfall)
+                 :transportFee, :cutFee, :shortfall, :withholdingTax, :overpayment)
             """,
             amountParams()
                 .addValue("invoiceNumber", request.invoiceNumber().trim())
@@ -177,7 +211,9 @@ public class CommissionRepository {
                 .addValue("suspenseVat", money(request.suspenseVat()))
                 .addValue("transportFee", money(request.transportFee()))
                 .addValue("cutFee", money(request.cutFee()))
-                .addValue("shortfall", money(request.shortfall())),
+                .addValue("shortfall", money(request.shortfall()))
+                .addValue("withholdingTax", money(request.withholdingTax()))
+                .addValue("overpayment", money(request.overpayment())),
             keyHolder,
             new String[]{"invoice_id"});
         return keyHolder.getKey().longValue();
@@ -248,17 +284,23 @@ public class CommissionRepository {
         return keyHolder.getKey().longValue();
     }
 
+    /**
+     * Commission redesign calc-refine: the clawback copies the original's {@code
+     * weight_multiplier} (not the column default of 1). Without this, a clawback of a 2x-weighted
+     * sale would only reverse 1x of the original's contribution to the monthly TIER BASE,
+     * silently leaving half of the original's weighted credit in place after the "cancellation".
+     */
     public long createClawback(CommissionRecord original, long submittedById, LocalDate payrollMonth, String reason) {
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO sales.commission_record
                 (invoice_id, source_ticket_id, sales_rep_id, submitted_by_id, kind, status,
-                 payroll_month, actual_received, commissionable_base, approved_by_id, approved_at,
-                 cancellation_of_id, cancellation_reason)
+                 payroll_month, actual_received, commissionable_base, weight_multiplier,
+                 approved_by_id, approved_at, cancellation_of_id, cancellation_reason)
             VALUES
                 (:invoiceId, :sourceTicketId, :salesRepId, :submittedById, 'CLAWBACK', 'APPROVED',
-                 :payrollMonth, :actualReceived, :commissionableBase, :submittedById, now(),
-                 :cancellationOfId, :reason)
+                 :payrollMonth, :actualReceived, :commissionableBase, :weightMultiplier,
+                 :submittedById, now(), :cancellationOfId, :reason)
             """,
             new MapSqlParameterSource()
                 .addValue("invoiceId", original.invoiceDetails().id())
@@ -268,6 +310,7 @@ public class CommissionRepository {
                 .addValue("payrollMonth", payrollMonth)
                 .addValue("actualReceived", original.actualReceived().abs().negate())
                 .addValue("commissionableBase", original.commissionableBase().abs().negate())
+                .addValue("weightMultiplier", original.weightMultiplier())
                 .addValue("cancellationOfId", original.id())
                 .addValue("reason", reason),
             keyHolder,
@@ -275,20 +318,75 @@ public class CommissionRepository {
         return keyHolder.getKey().longValue();
     }
 
-    public void updateDeductions(long invoiceId, BigDecimal transportFee, BigDecimal cutFee, BigDecimal shortfall) {
+    /**
+     * Slice A2: the sales-manager review step can now rewrite any invoice input, not just the
+     * three original deduction fields — {@code grossAmount}/{@code bankFees}/{@code suspenseVat}
+     * joined {@code transportFee}/{@code cutFee}/{@code shortfall}/{@code withholdingTax}/
+     * {@code overpayment}. Every value here is already the resolved "new value or keep existing"
+     * result (see {@code CommissionService#valueOrExisting}); this method just persists it.
+     */
+    public void updateDeductions(long invoiceId, BigDecimal grossAmount, BigDecimal bankFees, BigDecimal suspenseVat,
+                                  BigDecimal transportFee, BigDecimal cutFee, BigDecimal shortfall,
+                                  BigDecimal withholdingTax, BigDecimal overpayment) {
         jdbc.update("""
             UPDATE sales.invoice_details
-               SET transport_fee = :transportFee,
+               SET gross_amount = :grossAmount,
+                   bank_fees = :bankFees,
+                   suspense_vat = :suspenseVat,
+                   transport_fee = :transportFee,
                    cut_fee = :cutFee,
                    shortfall = :shortfall,
+                   withholding_tax = :withholdingTax,
+                   overpayment = :overpayment,
                    updated_at = now()
              WHERE invoice_id = :invoiceId
             """,
             amountParams()
                 .addValue("invoiceId", invoiceId)
+                .addValue("grossAmount", money(grossAmount))
+                .addValue("bankFees", money(bankFees))
+                .addValue("suspenseVat", money(suspenseVat))
                 .addValue("transportFee", money(transportFee))
                 .addValue("cutFee", money(cutFee))
-                .addValue("shortfall", money(shortfall)));
+                .addValue("shortfall", money(shortfall))
+                .addValue("withholdingTax", money(withholdingTax))
+                .addValue("overpayment", money(overpayment)));
+    }
+
+    /**
+     * Commission redesign calc-refine: sets a commission record's tier-base weight multiplier
+     * (1/2/3). Separate statement from {@link #updateDeductions} because the multiplier lives on
+     * {@code sales.commission_record}, not {@code sales.invoice_details}. Only reachable through
+     * {@link CommissionService#updateDeductions} (sales-manager/CEO review path) -- sales has no
+     * access to that endpoint at all, so no separate role check is needed here.
+     */
+    public void updateWeightMultiplier(long commissionId, int weightMultiplier) {
+        jdbc.update("""
+            UPDATE sales.commission_record
+               SET weight_multiplier = :weightMultiplier,
+                   updated_at = now()
+             WHERE commission_id = :commissionId
+            """,
+            Map.of("commissionId", commissionId, "weightMultiplier", weightMultiplier));
+    }
+
+    /**
+     * Slice A2 duplicate guard for the accountant auto-create trigger ({@code
+     * CommissionService#createFromDeal}): a deal that already has a live (non-VOID, non-REJECTED)
+     * SALE commission must not get a second one, regardless of the invoice number used the second
+     * time (the invoice_number UNIQUE constraint alone would not catch a genuine second invoice
+     * number for the same deal).
+     */
+    public boolean hasActiveCommissionForTicket(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS(
+                SELECT 1 FROM sales.commission_record
+                 WHERE source_ticket_id = :ticketId
+                   AND kind = 'SALE'
+                   AND status NOT IN ('VOID', 'REJECTED')
+            )
+            """, Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
     }
 
     public void updateCommissionAmountsForInvoice(long invoiceId, InvoiceCalculation calculation) {
@@ -393,6 +491,8 @@ public class CommissionRepository {
             rs.getBigDecimal("transport_fee"),
             rs.getBigDecimal("cut_fee"),
             rs.getBigDecimal("shortfall"),
+            rs.getBigDecimal("withholding_tax"),
+            rs.getBigDecimal("overpayment"),
             nullableLong(rs, "invoice_attachment_id"),
             rs.getString("invoice_attachment_file_name"),
             rs.getTimestamp("invoice_created_at").toInstant(),
@@ -420,6 +520,7 @@ public class CommissionRepository {
             rs.getObject("payroll_month", LocalDate.class),
             rs.getBigDecimal("actual_received"),
             rs.getBigDecimal("commissionable_base"),
+            rs.getInt("weight_multiplier"),
             approvedById,
             approvedAt == null ? null : approvedAt.toInstant(),
             nullableLong(rs, "manager_approved_by"),
