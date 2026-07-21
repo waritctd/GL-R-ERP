@@ -9,5 +9,6 @@ public record PayrollEmployeeSnapshot(
     String departmentName,
     String bankName,
     String bankAccount,
-    BigDecimal baseSalary
+    BigDecimal baseSalary,
+    BigDecimal directorRemuneration
 ) {}

@@ -21,6 +21,7 @@ export const API_ROUTES = {
     punches: '/api/attendance/punches',
     unmapped: '/api/attendance/unmapped',
     employees: '/api/attendance/employees',
+    recalculate: '/api/attendance/daily/recalculate',
     cardsBackfill: '/api/attendance/cards/backfill',
     importDat: '/api/attendance/imports/dat',
     devices: '/api/attendance/devices',
@@ -142,6 +143,8 @@ export const API_ROUTES = {
     payslip: (periodId, lineId) => `/api/payroll/${periodId}/lines/${lineId}/payslip.pdf`,
     ownPayslip: (periodId) => `/api/payroll/${periodId}/payslip/me`,
     distribute: (periodId) => `/api/payroll/${periodId}/distribute`,
+    taxAllowances: '/api/payroll/tax-allowances',
+    ytdSeed: '/api/payroll/ytd-seed',
   },
   priceImport: {
     factories: '/api/price-import/factories',

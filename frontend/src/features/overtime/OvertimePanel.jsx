@@ -52,7 +52,8 @@ const monthStartIso = () => {
 };
 
 function defaultForm(employeeId = '') {
-  const date = addDaysIso(3);
+  // Same-day is the common case now that advance notice is gone.
+  const date = todayIso();
   return {
     employeeId: employeeId ? String(employeeId) : '',
     workDate: date,
@@ -65,7 +66,18 @@ function defaultForm(employeeId = '') {
 
 const OT_TIME_RANGE_MESSAGE = 'เวลาสิ้นสุดต้องอยู่หลังเวลาเริ่ม';
 
-function createOvertimeFormSchema({ requireEmployeeId }) {
+// Mirrors OvertimeService: advance notice was removed, so the only limits on a backdated request
+// are how far back it may reach and that the reason explains why it is late.
+export const OT_RETROACTIVE_WINDOW_DAYS = 60;
+export const OT_BACKDATED_REASON_MIN_LENGTH = 20;
+const OT_WINDOW_MESSAGE = `ย้อนหลังได้ไม่เกิน ${OT_RETROACTIVE_WINDOW_DAYS} วัน`;
+const OT_BACKDATED_REASON_MESSAGE =
+  `กรุณาอธิบายเหตุผลที่ขอย้อนหลังให้ชัดเจน (อย่างน้อย ${OT_BACKDATED_REASON_MIN_LENGTH} ตัวอักษร)`;
+
+export function createOvertimeFormSchema({
+  requireEmployeeId,
+  retroactiveWindowDays = OT_RETROACTIVE_WINDOW_DAYS,
+} = {}) {
   return z.object({
     employeeId: z.string(),
     workDate: z.string().min(1, 'กรุณาเลือกวันที่ทำ OT'),
@@ -87,6 +99,22 @@ function createOvertimeFormSchema({ requireEmployeeId }) {
         path: ['plannedEndAt'],
         message: OT_TIME_RANGE_MESSAGE,
       });
+    }
+    if (data.workDate && data.workDate < todayIso()) {
+      if (data.workDate < addDaysIso(-retroactiveWindowDays)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['workDate'],
+          message: OT_WINDOW_MESSAGE,
+        });
+      }
+      if (data.reason.trim().length < OT_BACKDATED_REASON_MIN_LENGTH) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['reason'],
+          message: OT_BACKDATED_REASON_MESSAGE,
+        });
+      }
     }
   });
 }
@@ -190,10 +218,11 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     mode: 'onChange',
     reValidateMode: 'onChange',
   });
-  const [plannedStartAt, plannedEndAt, selectedEmployeeId, selectedDayType] = useWatch({
+  const [plannedStartAt, plannedEndAt, selectedEmployeeId, selectedDayType, selectedWorkDate] = useWatch({
     control,
-    name: ['plannedStartAt', 'plannedEndAt', 'employeeId', 'dayType'],
+    name: ['plannedStartAt', 'plannedEndAt', 'employeeId', 'dayType', 'workDate'],
   });
+  const isBackdated = Boolean(selectedWorkDate) && selectedWorkDate < todayIso();
   const hasTimeRangeError = Boolean(
     plannedStartAt && plannedEndAt && plannedEndAt <= plannedStartAt,
   );
@@ -441,13 +470,19 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               <input id="ot-employee-display" value={currentEmployee?.nameTh || user.name || '-'} disabled />
             </FormField>
           )}
-          <FormField label="วันที่ทำ OT" htmlFor="ot-work-date" error={errors.workDate?.message} required>
+          <FormField
+            label="วันที่ทำ OT"
+            htmlFor="ot-work-date"
+            error={errors.workDate?.message}
+            hint={isBackdated ? 'คำขอย้อนหลัง — โปรดระบุเหตุผลให้ชัดเจน' : undefined}
+            required
+          >
             <input
               id="ot-work-date"
               type="date"
+              min={addDaysIso(-OT_RETROACTIVE_WINDOW_DAYS)}
               {...register('workDate', { onChange: handleWorkDateChange })}
               aria-invalid={Boolean(errors.workDate)}
-              aria-describedby={errors.workDate ? fieldErrorId('ot-work-date') : undefined}
               required
             />
           </FormField>

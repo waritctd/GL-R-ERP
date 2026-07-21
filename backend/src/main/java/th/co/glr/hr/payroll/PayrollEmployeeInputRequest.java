@@ -35,7 +35,12 @@ public record PayrollEmployeeInputRequest(
     @PositiveOrZero BigDecimal homeLoanInterestAllowance,
     @PositiveOrZero BigDecimal educationDonation,
     @PositiveOrZero BigDecimal generalDonation,
-    @PositiveOrZero BigDecimal politicalDonation
+    @PositiveOrZero BigDecimal politicalDonation,
+    // Reconciliation additions (2026-07-21, C4): the three missing pre-tax deductions (sheet columns
+    // Z/AA/AB). HR types these per run, unlike director remuneration which lives on the employee.
+    @PositiveOrZero BigDecimal warningLetterDeduction,
+    @PositiveOrZero BigDecimal customerReturnDeduction,
+    @PositiveOrZero BigDecimal otherPretaxDeduction
 ) {
     public List<BigDecimal> specialPays() {
         return List.of(

@@ -3,7 +3,10 @@ package th.co.glr.hr.attendance.daily;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
@@ -19,6 +22,9 @@ public class AttendanceDailyRepository {
      * divergence here would make a punch visible in one view and invisible in the other, silently.
      */
     private static final String RESOLVED_EMPLOYEE_JOIN = AttendanceSql.RESOLVED_EMPLOYEE_JOIN;
+
+    /** Rows per batched upsert during a backfill. */
+    private static final int UPSERT_CHUNK = 500;
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -47,6 +53,88 @@ public class AttendanceDailyRepository {
             params,
             (rs, rowNum) -> new EmployeeDay(rs.getLong("employee_id"), rs.getObject("work_date", LocalDate.class))
         );
+    }
+
+    /**
+     * Every punch in the range, grouped by (employee, date), in one query.
+     *
+     * <p>The bulk counterpart to {@link #findPunchesFor}. A historical backfill covers thousands of
+     * employee-days; fetching each one separately meant thousands of round trips to a hosted
+     * database inside a single transaction, which times out and rolls back the whole job rather
+     * than being merely slow.
+     */
+    public Map<EmployeeDay, List<PunchRecord>> findPunchesInRange(
+            LocalDate fromDate, LocalDate toDate, Long employeeId) {
+        MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("fromDate", fromDate)
+            .addValue("toDate", toDate)
+            .addValue("employeeId", employeeId);
+
+        String employeeClause = employeeId == null
+            ? ""
+            : " AND COALESCE(p.employee_id, e.employee_id) = :employeeId";
+
+        Map<EmployeeDay, List<PunchRecord>> grouped = new LinkedHashMap<>();
+        jdbc.query(
+            "SELECT COALESCE(p.employee_id, e.employee_id) AS employee_id,"
+                + "       p.work_date, p.punch_id, p.punch_time, p.site_code"
+                + "  FROM hr.attendance_punch p"
+                + RESOLVED_EMPLOYEE_JOIN
+                + " WHERE p.work_date BETWEEN :fromDate AND :toDate"
+                + "   AND COALESCE(p.employee_id, e.employee_id) IS NOT NULL"
+                + employeeClause
+                + " ORDER BY employee_id, p.work_date, p.punch_time, p.punch_id",
+            params,
+            rs -> {
+                EmployeeDay key = new EmployeeDay(
+                    rs.getLong("employee_id"), rs.getObject("work_date", LocalDate.class));
+                grouped.computeIfAbsent(key, unused -> new ArrayList<>()).add(new PunchRecord(
+                    rs.getLong("punch_id"),
+                    rs.getObject("punch_time", OffsetDateTime.class),
+                    rs.getString("site_code")
+                ));
+            });
+        return grouped;
+    }
+
+    /** Division per employee, in one query — the schedule resolver needs it for every row. */
+    public Map<Long, Long> findDivisionIdsByEmployee() {
+        Map<Long, Long> byEmployee = new HashMap<>();
+        jdbc.query(
+            "SELECT employee_id, division_id FROM hr.employee",
+            new MapSqlParameterSource(),
+            rs -> {
+                byEmployee.put(rs.getLong("employee_id"), nullableLong(rs.getObject("division_id")));
+            });
+        return byEmployee;
+    }
+
+    /**
+     * APPROVED overtime minutes for every employee-day in the range, in one query.
+     *
+     * <p>Same APPROVED-only rule as {@link #findApprovedOvertimeMinutes} — MANAGER_APPROVED is half
+     * of the dual-approval gate and must contribute nothing.
+     */
+    public Map<EmployeeDay, Integer> findApprovedOvertimeMinutesInRange(
+            LocalDate fromDate, LocalDate toDate) {
+        MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("fromDate", fromDate)
+            .addValue("toDate", toDate);
+
+        Map<EmployeeDay, Integer> byDay = new HashMap<>();
+        jdbc.query("""
+            SELECT employee_id, work_date,
+                   COALESCE(SUM(COALESCE(NULLIF(payable_minutes, 0), actual_minutes, 0)), 0) AS minutes
+              FROM hr.overtime_request
+             WHERE work_date BETWEEN :fromDate AND :toDate
+               AND status = 'APPROVED'
+             GROUP BY employee_id, work_date
+            """, params, rs -> {
+            byDay.put(
+                new EmployeeDay(rs.getLong("employee_id"), rs.getObject("work_date", LocalDate.class)),
+                rs.getInt("minutes"));
+        });
+        return byDay;
     }
 
     /** That employee's punches on that date, oldest first. */
@@ -108,11 +196,28 @@ public class AttendanceDailyRepository {
         return upsertAll(List.of(record)) > 0;
     }
 
-    /** Batch form of {@link #upsert}, carrying the same override guard. */
+    /**
+     * Batch form of {@link #upsert}, carrying the same override guard.
+     *
+     * <p>Chunked because a full backfill produces thousands of rows and a single unbounded batch
+     * risks exceeding the driver's statement limits.
+     */
     public int upsertAll(List<AttendanceDailyRecord> records) {
         if (records.isEmpty()) {
             return 0;
         }
+        if (records.size() > UPSERT_CHUNK) {
+            int written = 0;
+            for (int start = 0; start < records.size(); start += UPSERT_CHUNK) {
+                written += upsertChunk(
+                    records.subList(start, Math.min(start + UPSERT_CHUNK, records.size())));
+            }
+            return written;
+        }
+        return upsertChunk(records);
+    }
+
+    private int upsertChunk(List<AttendanceDailyRecord> records) {
         SqlParameterSource[] batch = records.stream()
             .map(AttendanceDailyRepository::upsertParams)
             .toArray(SqlParameterSource[]::new);

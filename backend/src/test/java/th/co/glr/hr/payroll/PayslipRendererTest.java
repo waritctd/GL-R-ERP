@@ -88,7 +88,11 @@ class PayslipRendererTest {
             money("8750.00"),
             money("10000.00"),
             money("32000.00"),
-            "calculated"
+            "calculated",
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO
         );
     }
 

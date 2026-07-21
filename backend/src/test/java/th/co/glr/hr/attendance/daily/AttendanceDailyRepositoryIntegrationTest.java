@@ -277,6 +277,65 @@ class AttendanceDailyRepositoryIntegrationTest extends AbstractPostgresIntegrati
         assertThat(repository.findDivisionId(withoutDivision)).isNull();
     }
 
+    /**
+     * The production failure this bulk path exists for: a real backfill spans thousands of
+     * employee-days. The per-day form issued three queries each — ~14k round trips in one
+     * transaction — which timed out against the hosted database and wrote nothing at all.
+     *
+     * <p>Also exercises the chunked upsert, since the row count here exceeds UPSERT_CHUNK.
+     */
+    @Test
+    void bulkRangeLoadReturnsEveryEmployeeDayAndSurvivesChunkedUpsert() {
+        LocalDate start = LocalDate.of(2026, 3, 2);
+        int employees = 12;
+        int days = 60;
+
+        List<Long> ids = new java.util.ArrayList<>();
+        for (int e = 0; e < employees; e++) {
+            ids.add(insertEmployee("BULK" + e, "BULK" + e, null, LocalDate.of(2020, 1, 1)));
+        }
+        for (int d = 0; d < days; d++) {
+            LocalDate date = start.plusDays(d);
+            for (int e = 0; e < employees; e++) {
+                insertPunch("BULK" + e, at(date, 8, 20));
+                insertPunch("BULK" + e, at(date, 17, 40));
+            }
+        }
+
+        LocalDate end = start.plusDays(days - 1);
+        Map<EmployeeDay, List<PunchRecord>> byDay = repository.findPunchesInRange(start, end, null);
+        assertThat(byDay).hasSize(employees * days);
+        assertThat(byDay.values()).allSatisfy(punches -> assertThat(punches).hasSize(2));
+
+        Map<Long, Long> divisions = repository.findDivisionIdsByEmployee();
+        assertThat(divisions.keySet()).containsAll(ids);
+
+        List<AttendanceDailyRecord> records = byDay.entrySet().stream()
+            .map(entry -> calculator.calculate(
+                entry.getKey().employeeId(), entry.getKey().workDate(),
+                entry.getValue(), SCHEDULE, 0))
+            .toList();
+
+        assertThat(repository.upsertAll(records)).isEqualTo(employees * days);
+        assertThat(jdbc.queryForObject(
+            "SELECT count(*) FROM hr.attendance_daily", Map.of(), Long.class))
+            .isEqualTo((long) employees * days);
+    }
+
+    /** The bulk overtime lookup must keep the APPROVED-only rule of its per-day counterpart. */
+    @Test
+    void bulkOvertimeLookupCountsOnlyApprovedRequests() {
+        long employeeId = insertEmployee("E120", "E120", null, LocalDate.of(2020, 1, 1));
+        insertOvertime(employeeId, WEDNESDAY, "APPROVED", 90);
+        insertOvertime(employeeId, WEDNESDAY.plusDays(1), "MANAGER_APPROVED", 120);
+
+        Map<EmployeeDay, Integer> byDay =
+            repository.findApprovedOvertimeMinutesInRange(WEDNESDAY, WEDNESDAY.plusDays(1));
+
+        assertThat(byDay.get(new EmployeeDay(employeeId, WEDNESDAY))).isEqualTo(90);
+        assertThat(byDay).doesNotContainKey(new EmployeeDay(employeeId, WEDNESDAY.plusDays(1)));
+    }
+
     private void insertOvertime(long employeeId, LocalDate workDate, String status, int payable) {
         jdbc.update("""
             INSERT INTO hr.overtime_request (

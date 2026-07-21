@@ -34,6 +34,8 @@ export const api = {
     list: (params) => apiRequest(withQuery(API_ROUTES.attendance.punches, params)),
     unmapped: (params) => apiRequest(withQuery(API_ROUTES.attendance.unmapped, params)),
     employees: () => apiRequest(API_ROUTES.attendance.employees),
+    recalculate: (payload) =>
+      apiRequest(API_ROUTES.attendance.recalculate, { method: 'POST', body: payload }),
     backfillCards: (payload) =>
       apiRequest(API_ROUTES.attendance.cardsBackfill, { method: 'POST', body: payload }),
     importDat: (payload) => apiRequest(API_ROUTES.attendance.importDat, { method: 'POST', body: payload }),
@@ -277,6 +279,13 @@ export const api = {
       return res.blob();
     },
     distributePayslips: (periodId) => apiRequest(API_ROUTES.payroll.distribute(periodId), { method: 'POST' }),
+    // C1: standing tax-allowance declaration, persisted per employee/tax-year so HR does not retype
+    // it every run. GET is HR+CEO (view), PUT is HR-only (edit).
+    getTaxAllowances: (year) => apiRequest(withQuery(API_ROUTES.payroll.taxAllowances, { year })),
+    saveTaxAllowances: (year, items) => apiRequest(withQuery(API_ROUTES.payroll.taxAllowances, { year }), { method: 'PUT', body: { items } }),
+    // C2: year-to-date backfill seed for a mid-year go-live. Same view/edit split.
+    getYtdSeed: (year) => apiRequest(withQuery(API_ROUTES.payroll.ytdSeed, { year })),
+    saveYtdSeed: (year, items) => apiRequest(withQuery(API_ROUTES.payroll.ytdSeed, { year }), { method: 'PUT', body: { items } }),
   },
   priceImport: {
     factories: () => apiRequest(API_ROUTES.priceImport.factories),

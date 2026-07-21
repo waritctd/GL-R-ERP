@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/index.js';
 import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -23,6 +24,11 @@ import {
 // OvertimePage/LeavePage (docs/agent-handoffs/29_tw-convert-overtime-leave.md).
 const FILTER_BAR_CLASS =
   'flex flex-wrap gap-[10px] items-center bg-surface border border-border rounded-md p-[14px]';
+
+// Earlier than any punch the scanners have produced (the oldest on record is Nov 2020), so a
+// backfill covers everything without needing to look up where history starts. The backend walks
+// only the days that actually have punches, so an over-wide start costs nothing.
+const BACKFILL_START = '2015-01-01';
 
 /**
  * Which view of attendance this user gets. Mirrors `dashboardMode()` in EmployeeDashboard so the
@@ -70,6 +76,8 @@ export function AttendancePage({ user, showToast }) {
 
   const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [recalcOpen, setRecalcOpen] = useState(false);
+  const [recalculating, setRecalculating] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [lastImport, setLastImport] = useState(null);
   const [devices, setDevices] = useState([]);
@@ -185,6 +193,35 @@ export function AttendancePage({ user, showToast }) {
     // Clamp to the current month in both directions — see monthBounds().
     if (iso < monthStart || iso > today) return;
     setSelectedDate(iso);
+  }
+
+  /**
+   * Rolls existing punches up into daily rows.
+   *
+   * Needed because the roll-up only runs forward — on live punches and on import — so a database
+   * with historical scans shows nothing until this is run once. Recalculation is idempotent and
+   * skips rows HR has manually overridden, so it is safe to re-run after any .dat import or badge
+   * mapping fix.
+   *
+   * The range starts well before the oldest expected punch rather than being derived from the UI's
+   * current month, which is deliberately narrow.
+   */
+  async function runBackfill() {
+    setRecalculating(true);
+    try {
+      const response = await api.attendance.recalculate({
+        fromDate: BACKFILL_START,
+        toDate: today,
+      });
+      const written = response?.recalculatedDays ?? 0;
+      showToast('success', `คำนวณข้อมูลย้อนหลังเรียบร้อย — ${written.toLocaleString()} รายการ`);
+      setRecalcOpen(false);
+      await loadDays();
+    } catch (error) {
+      showToast('error', error.message || 'คำนวณข้อมูลย้อนหลังไม่สำเร็จ');
+    } finally {
+      setRecalculating(false);
+    }
   }
 
   async function importFile(event) {
@@ -360,8 +397,41 @@ export function AttendancePage({ user, showToast }) {
               ) : null}
             </form>
           ) : null}
+          {importOpen ? (
+            <div className="flex flex-wrap items-center gap-3 border-t border-border p-[14px]">
+              <div className="min-w-0 grow">
+                <strong className="block text-sm font-bold text-text">คำนวณข้อมูลย้อนหลัง</strong>
+                <small className="text-xs text-text-muted">
+                  สร้างสรุปเวลาเข้า-ออกรายวันจากรายการสแกนทั้งหมดที่มีอยู่
+                  — ใช้เมื่อเปิดใช้งานครั้งแรก หรือหลังแก้ไขการแมปบัตร
+                </small>
+              </div>
+              <Button
+                variant="secondary"
+                onClick={() => setRecalcOpen(true)}
+                disabled={recalculating}
+                className="max-[720px]:min-h-11 max-[720px]:w-full"
+              >
+                <Icon name="refresh" />
+                {recalculating ? 'กำลังคำนวณ' : 'คำนวณข้อมูลย้อนหลัง'}
+              </Button>
+            </div>
+          ) : null}
         </div>
       ) : null}
+
+      <ConfirmDialog
+        open={recalcOpen}
+        title="คำนวณข้อมูลย้อนหลัง"
+        message={
+          'ระบบจะอ่านรายการสแกนทั้งหมดที่มีอยู่ แล้วสร้างสรุปเวลาเข้า-ออกรายวันใหม่ '
+          + 'รายการที่ HR แก้ไขด้วยตนเองไว้จะไม่ถูกเขียนทับ และสามารถสั่งซ้ำได้'
+        }
+        confirmLabel="เริ่มคำนวณ"
+        busy={recalculating}
+        onConfirm={runBackfill}
+        onCancel={() => setRecalcOpen(false)}
+      />
 
       {!isSelfView ? (
         <div className={FILTER_BAR_CLASS}>

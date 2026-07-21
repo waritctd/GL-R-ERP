@@ -1610,6 +1610,33 @@ function overtimeMinutesBetween(startAt, endAt) {
   return diff;
 }
 
+// Mirrors OvertimeService.validateRetroactiveWindow(). Advance notice was removed, so same-day and
+// backdated requests are accepted — bounded by how far back they reach and by a reason that
+// explains the delay.
+//
+// KNOWN GAP: the Java service also refuses a work date whose payroll month is already PROCESSED
+// (OvertimeService.requirePayrollMonthOpen). There is no payroll_period collection in this mock, so
+// that rule is absent here. The mock is therefore more permissive than prod on that one case — the
+// dangerous direction, so do not read a successful mock submit as proof the backend would accept it.
+const OT_RETROACTIVE_WINDOW_DAYS = 60;
+const OT_BACKDATED_REASON_MIN_LENGTH = 20;
+
+function validateOvertimeRetroactiveWindow(payload) {
+  const workDate = payload.workDate;
+  if (!workDate) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if (workDate >= today) return;
+  const earliest = new Date(Date.now() - OT_RETROACTIVE_WINDOW_DAYS * 86400000)
+    .toISOString().slice(0, 10);
+  if (workDate < earliest) {
+    fail(`Overtime can only be filed up to ${OT_RETROACTIVE_WINDOW_DAYS} days after the work date`, 400);
+  }
+  const reason = (payload.reason || '').trim();
+  if (reason.length < OT_BACKDATED_REASON_MIN_LENGTH) {
+    fail('A retroactive overtime request must explain clearly why it is late', 400);
+  }
+}
+
 function buildOvertimeRecord(record) {
   const employee = db.employees.find((item) => item.id === record.employeeId);
   const managerEmployeeId = managerIdForEmployee(employee);
@@ -3067,6 +3094,7 @@ export const api = {
       // ("Employees can only request their own overtime").
       if (employeeId !== user.employeeId && !canReviewOvertime(user, employeeId)) fail('Forbidden', 403);
       findEmployee(employeeId);
+      validateOvertimeRetroactiveWindow(payload);
       const plannedMinutes = overtimeMinutesBetween(payload.plannedStartAt, payload.plannedEndAt);
       const id = Math.max(0, ...db.overtimeRequests.map((item) => item.id)) + 1;
       const now = new Date().toISOString();
@@ -3673,6 +3701,27 @@ export const api = {
       hasRole('hr');
       throw new Error('ส่งอีเมลสลิปเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
+    // C1/C2 reconciliation additions (2026-07-21): same "view broader than edit" split as the rest
+    // of this namespace (GET is hr/ceo, PUT is hr-only). Like preview/process above, these carry
+    // real payroll numbers (tax allowances, YTD income), so mock mode surfaces a clear
+    // "not supported" error on writes rather than fabricating figures; GET returns an empty list so
+    // the UI's empty state renders correctly.
+    async getTaxAllowances() {
+      hasRole('hr', 'ceo');
+      return delay({ taxYear: new Date().getFullYear(), items: [] });
+    },
+    async saveTaxAllowances() {
+      hasRole('hr');
+      throw new Error('บันทึกค่าลดหย่อนภาษีไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async getYtdSeed() {
+      hasRole('hr', 'ceo');
+      return delay({ taxYear: new Date().getFullYear(), items: [] });
+    },
+    async saveYtdSeed() {
+      hasRole('hr');
+      throw new Error('บันทึกยอดสะสมต้นปีไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
   },
 
   // Mirrors AttendanceController + AttendanceService (attendance/).
@@ -3721,6 +3770,12 @@ export const api = {
           division_name: employee.divisionTh ?? null,
         })),
       });
+    },
+    async recalculate() {
+      hasRole('hr', 'ceo');
+      // The mock generates days on the fly, so there is nothing to roll up — report zero rather
+      // than pretending work happened. The real endpoint returns the count actually written.
+      return delay({ recalculatedDays: 0 });
     },
     async backfillCards() {
       hasRole('hr', 'ceo');

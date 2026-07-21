@@ -203,14 +203,19 @@ public class AppProperties {
     }
 
     public static class Overtime {
-        private int advanceNoticeDays = 3;
+        /**
+         * How far back a request may reach. The advance-notice rule it replaced was removed on CEO
+         * instruction: overtime may now be filed same-day or retroactively, provided the reason
+         * explains why. This bound only stops claims arriving so late they can no longer be paid.
+         */
+        private int retroactiveWindowDays = 60;
 
-        public int getAdvanceNoticeDays() {
-            return advanceNoticeDays;
+        public int getRetroactiveWindowDays() {
+            return retroactiveWindowDays;
         }
 
-        public void setAdvanceNoticeDays(int advanceNoticeDays) {
-            this.advanceNoticeDays = advanceNoticeDays;
+        public void setRetroactiveWindowDays(int retroactiveWindowDays) {
+            this.retroactiveWindowDays = retroactiveWindowDays;
         }
     }
 
