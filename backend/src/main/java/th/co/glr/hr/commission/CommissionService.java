@@ -1,6 +1,7 @@
 package th.co.glr.hr.commission;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -19,6 +20,8 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.notification.NotificationService;
+import th.co.glr.hr.ticket.DealStage;
+import th.co.glr.hr.ticket.TicketRepository;
 
 @Service
 public class CommissionService {
@@ -34,12 +37,17 @@ public class CommissionService {
         "image/png"
     );
 
+    // Step 9 cross-check threshold: flag (never block) when the hand-typed grossAmount diverges
+    // from the linked deal's actual payableAmount by more than this fraction.
+    private static final BigDecimal MISMATCH_THRESHOLD = new BigDecimal("0.05");
+
     private final CommissionRepository commissions;
     private final CommissionAttachmentRepository commissionAttachments;
     private final CommissionCalculator calculator;
     private final FileStorageService fileStorage;
     private final AuditService auditService;
     private final NotificationService notificationService;
+    private final TicketRepository tickets;
 
     public CommissionService(
             CommissionRepository commissions,
@@ -47,13 +55,15 @@ public class CommissionService {
             CommissionCalculator calculator,
             FileStorageService fileStorage,
             AuditService auditService,
-            NotificationService notificationService) {
+            NotificationService notificationService,
+            TicketRepository tickets) {
         this.commissions = commissions;
         this.commissionAttachments = commissionAttachments;
         this.calculator = calculator;
         this.fileStorage = fileStorage;
         this.auditService = auditService;
         this.notificationService = notificationService;
+        this.tickets = tickets;
     }
 
     public List<CommissionRecord> list(LocalDate payrollMonth, UserPrincipal actor) {
@@ -88,6 +98,7 @@ public class CommissionService {
             safeRequest.cutFee(),
             safeRequest.shortfall()
         );
+        DealLinkage linkage = resolveDealLinkage(safeRequest);
 
         try {
             long invoiceId = commissions.createInvoice(safeRequest);
@@ -112,7 +123,9 @@ public class CommissionService {
                 salesRepId,
                 actor.id(),
                 payrollMonth(safeRequest.invoiceDate()),
-                calculation
+                calculation,
+                linkage.payableSnapshot(),
+                linkage.mismatch()
             );
             CommissionRecord created = requireRecord(commissionId);
             auditService.record(actor, "SUBMIT_COMMISSION", "commission_record", commissionId, null, created);
@@ -122,6 +135,42 @@ public class CommissionService {
             throw new ApiException(HttpStatus.CONFLICT, "Invoice number already exists");
         }
     }
+
+    /**
+     * Step 9 gate + cross-check. When {@code sourceTicketId} is null, the commission is unlinked
+     * (manual) — behavior stays exactly as it was pre-Step-9: no snapshot, no mismatch. When it is
+     * set, the linked deal must have already reached {@link DealStage#CLOSED_PAID} (final payment
+     * recorded) or the submission is rejected outright; a divergence between the hand-typed
+     * grossAmount and the deal's actual payableAmount is flagged for reviewers but never blocks
+     * submission — see {@link #MISMATCH_THRESHOLD}.
+     */
+    private DealLinkage resolveDealLinkage(SubmitCommissionRequest request) {
+        Long ticketId = request.sourceTicketId();
+        if (ticketId == null) {
+            return new DealLinkage(null, false);
+        }
+        String salesStage = tickets.findSalesStage(ticketId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+        if (!DealStage.CLOSED_PAID.equals(salesStage)) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Deal has not reached final payment (CLOSED_PAID); commission cannot be submitted yet.");
+        }
+        BigDecimal payable = tickets.payableAmount(ticketId);
+        boolean mismatch = isMismatch(request.grossAmount(), payable);
+        return new DealLinkage(payable, mismatch);
+    }
+
+    private boolean isMismatch(BigDecimal grossAmount, BigDecimal payable) {
+        BigDecimal gross = grossAmount == null ? BigDecimal.ZERO : grossAmount;
+        if (payable == null || payable.signum() == 0) {
+            return gross.signum() > 0;
+        }
+        BigDecimal deviation = gross.subtract(payable).abs()
+            .divide(payable.abs(), 6, RoundingMode.HALF_UP);
+        return deviation.compareTo(MISMATCH_THRESHOLD) > 0;
+    }
+
+    private record DealLinkage(BigDecimal payableSnapshot, boolean mismatch) {}
 
     @Transactional
     public CommissionRecord updateDeductions(long id, UpdateCommissionDeductionsRequest request, UserPrincipal actor) {

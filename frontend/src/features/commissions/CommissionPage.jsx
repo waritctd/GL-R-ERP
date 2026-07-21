@@ -17,6 +17,7 @@ const thisMonth = new Date().toISOString().slice(0, 7);
 
 const emptyForm = {
   salesRepId: '',
+  sourceTicketId: '',
   invoiceNumber: '',
   invoiceDate: today,
   grossAmount: '',
@@ -70,6 +71,10 @@ function CommissionCard({ record, canReview, isCeoReview, saving, onApprove, onR
         <span className="text-2xs text-text-muted">ฐาน {formatMoney(record.commissionableBase)}</span>
       </span>
 
+      {record.dealAmountMismatch && (
+        <StatusBadge tone="warning">ยอดต่างจากยอดที่เรียกเก็บ</StatusBadge>
+      )}
+
       {canReview && (
         <div className="mt-1 flex gap-2">
           <button
@@ -108,6 +113,7 @@ export function CommissionPage({ user, showToast }) {
   const [records, setRecords] = useState([]);
   const [summary, setSummary] = useState(null);
   const [form, setForm] = useState(emptyForm);
+  const [eligibleTickets, setEligibleTickets] = useState([]);
   const [simulation, setSimulation] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [deductionDraft, setDeductionDraft] = useState({ transportFee: 0, cutFee: 0, shortfall: 0 });
@@ -143,6 +149,20 @@ export function CommissionPage({ user, showToast }) {
   }
 
   useEffect(() => { load(); }, [month, payrollOnly]);
+
+  // Step 9 "Linked Deal" picker: only deals that have actually reached final payment
+  // (CLOSED_PAID) can be linked to a commission submission. Scoping to "own tickets only"
+  // for a sales rep vs. "every rep's" for manager/CEO is handled server-side (both the real
+  // TicketService.listPage and the mock mirror scope by createdByFilter when role === 'sales'),
+  // so no extra role branching is needed here beyond deciding whether to fetch at all.
+  useEffect(() => {
+    if (!canSubmit) return;
+    let cancelled = false;
+    api.tickets.list({ salesStage: 'CLOSED_PAID' })
+      .then((response) => { if (!cancelled) setEligibleTickets(response.tickets ?? []); })
+      .catch(() => { if (!cancelled) setEligibleTickets([]); });
+    return () => { cancelled = true; };
+  }, [canSubmit]);
 
   const totals = useMemo(() => {
     const base = records.reduce((sum, item) => sum + Number(item.commissionableBase || 0), 0);
@@ -193,7 +213,18 @@ export function CommissionPage({ user, showToast }) {
       align: 'right',
       sortable: true,
       sortAccessor: (record) => Number(record.actualReceived || 0),
-      render: (record) => <code>{formatMoney(record.actualReceived)}</code>,
+      render: (record) => (
+        <span>
+          <code>{formatMoney(record.actualReceived)}</code>
+          {record.dealAmountMismatch && (
+            // The whole point of the Step 9 cross-check flag: surfaced right next to the
+            // amount so a reviewer sees it before approving, never buried elsewhere.
+            <span style={{ display: 'block', marginTop: 4 }}>
+              <StatusBadge tone="warning">ยอดต่างจากยอดที่เรียกเก็บ</StatusBadge>
+            </span>
+          )}
+        </span>
+      ),
     },
     {
       key: 'commissionableBase',
@@ -281,6 +312,7 @@ export function CommissionPage({ user, showToast }) {
   function payloadFromForm() {
     return {
       salesRepId: form.salesRepId ? Number(form.salesRepId) : null,
+      sourceTicketId: form.sourceTicketId ? Number(form.sourceTicketId) : null,
       invoiceNumber: form.invoiceNumber.trim(),
       invoiceDate: form.invoiceDate,
       grossAmount: numberOrNull(form.grossAmount),
@@ -449,6 +481,32 @@ export function CommissionPage({ user, showToast }) {
                   <input value={form.invoiceNumber} onChange={(event) => updateForm('invoiceNumber', event.target.value)} required />
                 </label>
                 <div className="grid gap-[7px]">
+                  <label htmlFor="commission-source-ticket">
+                    ดีลที่เกี่ยวข้อง (Linked Deal)
+                  </label>
+                  <select
+                    id="commission-source-ticket"
+                    value={form.sourceTicketId}
+                    onChange={(event) => updateForm('sourceTicketId', event.target.value)}
+                  >
+                    <option value="">— ไม่ระบุ (บันทึกแบบ manual) —</option>
+                    {eligibleTickets.map((ticket) => (
+                      <option key={ticket.id} value={ticket.id}>
+                        {ticket.code} · {ticket.customerName || 'ไม่ระบุลูกค้า'}
+                      </option>
+                    ))}
+                  </select>
+                  {form.sourceTicketId && (() => {
+                    const linked = eligibleTickets.find((ticket) => String(ticket.id) === String(form.sourceTicketId));
+                    if (!linked) return null;
+                    return (
+                      <small className="text-2xs text-text-muted">
+                        เชื่อมกับดีล {linked.code} · {linked.customerName || 'ไม่ระบุลูกค้า'} (CLOSED_PAID)
+                      </small>
+                    );
+                  })()}
+                </div>
+                <div className="grid gap-[7px]">
                   <label htmlFor="commission-invoice-file">Tax Invoice File *</label>
                   <FileUploadField
                     id="commission-invoice-file"
@@ -594,6 +652,12 @@ export function CommissionPage({ user, showToast }) {
               <p className="confirm-dialog-message" style={{ margin: 0 }}>
                 ตรวจสอบยอดก่อนอนุมัติใบกำกับ <strong>{record.invoiceDetails.invoiceNumber}</strong> ของ <strong>{record.salesRepName || record.salesRepId}</strong>
               </p>
+              {record.dealAmountMismatch && (
+                // Step 9 cross-check: grossAmount diverged >5% from the linked deal's actual
+                // payableAmount at submission time. Never blocked submission — surfaced here so
+                // the approver sees it before signing off, which is the entire point of the flag.
+                <StatusBadge tone="warning">ยอดต่างจากยอดที่เรียกเก็บ — โปรดตรวจสอบก่อนอนุมัติ</StatusBadge>
+              )}
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid #e6eaf0', paddingTop: 8 }}>
                 <span style={{ color: '#475569' }}>ยอดรับจริง</span>
                 <code className="font-mono">{formatMoney(record.actualReceived)}</code>

@@ -63,8 +63,18 @@ public class TicketRepository {
     }
 
     public List<TicketSummaryDto> findSummaries(String status, Long createdByFilter, PageRequest page) {
+        return findSummaries(status, null, createdByFilter, page);
+    }
+
+    /**
+     * @param salesStage optional {@link DealStage} filter (e.g. {@code CLOSED_PAID}), additive to
+     *                    {@code status} — used by the Step 9 commission "Linked Deal" picker to list
+     *                    only deals that have actually reached final payment.
+     */
+    public List<TicketSummaryDto> findSummaries(String status, String salesStage, Long createdByFilter, PageRequest page) {
         StringBuilder sql = new StringBuilder(SUMMARY_SELECT).append("""
              WHERE (:status::varchar IS NULL OR t.status = :status)
+               AND (:salesStage::varchar IS NULL OR t.sales_stage = :salesStage)
                AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
              GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
                       ea.first_name_th, ea.last_name_th,
@@ -74,6 +84,7 @@ public class TicketRepository {
             """);
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("status", status)
+            .addValue("salesStage", salesStage)
             .addValue("createdBy", createdByFilter);
         if (page != null) {
             sql.append(" LIMIT :limit OFFSET :offset");
@@ -84,16 +95,39 @@ public class TicketRepository {
     }
 
     public int countSummaries(String status, Long createdByFilter) {
+        return countSummaries(status, null, createdByFilter);
+    }
+
+    public int countSummaries(String status, String salesStage, Long createdByFilter) {
         Integer total = jdbc.queryForObject("""
             SELECT COUNT(*) FROM sales.ticket t
              WHERE (:status::varchar IS NULL OR t.status = :status)
+               AND (:salesStage::varchar IS NULL OR t.sales_stage = :salesStage)
                AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
             """,
             new MapSqlParameterSource()
                 .addValue("status", status)
+                .addValue("salesStage", salesStage)
                 .addValue("createdBy", createdByFilter),
             Integer.class);
         return total == null ? 0 : total;
+    }
+
+    /**
+     * Lean accessor for the commission-submission gate (Step 9): resolves just the deal's current
+     * pipeline stage without pulling a full ticket-detail load. Empty means the ticket does not
+     * exist; {@code sales_stage} itself is {@code NOT NULL} (V50), so a present row always yields a
+     * non-empty stage.
+     */
+    public Optional<String> findSalesStage(long ticketId) {
+        try {
+            String stage = jdbc.queryForObject(
+                "SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id",
+                Map.of("id", ticketId), String.class);
+            return Optional.ofNullable(stage);
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
     }
 
     public Optional<TicketDto> findById(long id) {

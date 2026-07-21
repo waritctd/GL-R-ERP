@@ -42,12 +42,15 @@ public class TicketController {
     @GetMapping
     TicketListResponse list(
         @RequestParam(required = false) String status,
+        // Step 9 addition: additive filter on the deal pipeline stage (e.g. CLOSED_PAID) — lets the
+        // commission "Linked Deal" picker ask for only deals eligible for a commission submission.
+        @RequestParam(required = false) String salesStage,
         @RequestParam(required = false) Integer page,
         @RequestParam(required = false) Integer size,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        Page<TicketSummaryDto> result = ticketService.listPage(status, user, PageRequest.resolve(page, size));
+        Page<TicketSummaryDto> result = ticketService.listPage(status, salesStage, user, PageRequest.resolve(page, size));
         return new TicketListResponse(result.items(), result.page(), result.size(), result.total());
     }
 

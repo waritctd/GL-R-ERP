@@ -88,13 +88,21 @@ public class TicketService {
     }
 
     public Page<TicketSummaryDto> listPage(String status, UserPrincipal actor, PageRequest page) {
+        return listPage(status, null, actor, page);
+    }
+
+    /**
+     * @param salesStage optional {@link DealStage} filter (e.g. {@code CLOSED_PAID}), additive to
+     *                    {@code status} — used by the Step 9 commission "Linked Deal" picker.
+     */
+    public Page<TicketSummaryDto> listPage(String status, String salesStage, UserPrincipal actor, PageRequest page) {
         requireRole(actor, VIEWER_ROLES);
         Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
-        List<TicketSummaryDto> rows = tickets.findSummaries(status, createdByFilter, page);
+        List<TicketSummaryDto> rows = tickets.findSummaries(status, salesStage, createdByFilter, page);
         // Skip the COUNT round-trip when the whole result set fits on page 0.
         int total = (page.page() == 0 && rows.size() < page.size())
             ? rows.size()
-            : tickets.countSummaries(status, createdByFilter);
+            : tickets.countSummaries(status, salesStage, createdByFilter);
         return new Page<>(rows, page.page(), page.size(), total);
     }
 

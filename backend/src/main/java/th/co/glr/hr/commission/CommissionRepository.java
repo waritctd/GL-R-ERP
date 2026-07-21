@@ -33,6 +33,7 @@ public class CommissionRepository {
                cr.rejected_at,
                cr.rejection_reason,
                cr.created_at AS record_created_at, cr.updated_at AS record_updated_at,
+               cr.deal_payable_amount_snapshot, cr.deal_amount_mismatch,
                inv.invoice_id, inv.invoice_number, inv.invoice_date, inv.gross_amount,
                inv.bank_fees, inv.suspense_vat, inv.transport_fee, inv.cut_fee, inv.shortfall,
                inv.invoice_attachment_id, fa.file_name AS invoice_attachment_file_name,
@@ -199,14 +200,38 @@ public class CommissionRepository {
         LocalDate payrollMonth,
         InvoiceCalculation calculation
     ) {
+        return createCommissionRecord(invoiceId, sourceTicketId, salesRepId, submittedById,
+            payrollMonth, calculation, null, false);
+    }
+
+    /**
+     * @param dealPayableAmountSnapshot Step 9 cross-check snapshot of the linked deal's payable
+     *                                  amount at submission time, or {@code null} when
+     *                                  {@code sourceTicketId} is {@code null} (unlinked commission).
+     * @param dealAmountMismatch        Step 9 flag — {@code true} when grossAmount diverged from the
+     *                                  snapshot by more than the gate's threshold. Never blocks
+     *                                  submission; surfaced for reviewers at approval time.
+     */
+    public long createCommissionRecord(
+        long invoiceId,
+        Long sourceTicketId,
+        long salesRepId,
+        long submittedById,
+        LocalDate payrollMonth,
+        InvoiceCalculation calculation,
+        BigDecimal dealPayableAmountSnapshot,
+        boolean dealAmountMismatch
+    ) {
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO sales.commission_record
                 (invoice_id, source_ticket_id, sales_rep_id, submitted_by_id, kind, status,
-                 payroll_month, actual_received, commissionable_base)
+                 payroll_month, actual_received, commissionable_base,
+                 deal_payable_amount_snapshot, deal_amount_mismatch)
             VALUES
                 (:invoiceId, :sourceTicketId, :salesRepId, :submittedById, 'SALE', 'SUBMITTED',
-                 :payrollMonth, :actualReceived, :commissionableBase)
+                 :payrollMonth, :actualReceived, :commissionableBase,
+                 :dealPayableAmountSnapshot, :dealAmountMismatch)
             """,
             new MapSqlParameterSource()
                 .addValue("invoiceId", invoiceId)
@@ -215,7 +240,9 @@ public class CommissionRepository {
                 .addValue("submittedById", submittedById)
                 .addValue("payrollMonth", payrollMonth)
                 .addValue("actualReceived", calculation.actualReceived())
-                .addValue("commissionableBase", calculation.commissionableBase()),
+                .addValue("commissionableBase", calculation.commissionableBase())
+                .addValue("dealPayableAmountSnapshot", dealPayableAmountSnapshot)
+                .addValue("dealAmountMismatch", dealAmountMismatch),
             keyHolder,
             new String[]{"commission_id"});
         return keyHolder.getKey().longValue();
@@ -408,7 +435,9 @@ public class CommissionRepository {
             cancellationOfId,
             rs.getString("cancellation_reason"),
             rs.getTimestamp("record_created_at").toInstant(),
-            rs.getTimestamp("record_updated_at").toInstant()
+            rs.getTimestamp("record_updated_at").toInstant(),
+            rs.getBigDecimal("deal_payable_amount_snapshot"),
+            rs.getBoolean("deal_amount_mismatch")
         );
     }
 

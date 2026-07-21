@@ -1748,6 +1748,17 @@ function progressiveCommission(baseValue) {
   return Number(total.toFixed(2));
 }
 
+// Step 9 cross-check threshold: flag (never block) when the hand-typed grossAmount diverges from
+// the linked deal's actual payableAmount by more than this fraction. Mirrors
+// CommissionService.MISMATCH_THRESHOLD.
+const COMMISSION_MISMATCH_THRESHOLD = 0.05;
+
+function commissionDealMismatch(grossAmount, payable) {
+  const gross = Number(grossAmount) || 0;
+  if (!payable) return gross > 0;
+  return Math.abs(gross - payable) / Math.abs(payable) > COMMISSION_MISMATCH_THRESHOLD;
+}
+
 function buildCommissionRecord(record) {
   return structuredClone({
     managerApprovedBy: null,
@@ -1760,6 +1771,8 @@ function buildCommissionRecord(record) {
     rejectedByName: null,
     rejectedAt: null,
     rejectionReason: null,
+    dealPayableAmountSnapshot: null,
+    dealAmountMismatch: false,
     ...record,
     invoiceDetails: {
       invoiceAttachmentId: null,
@@ -2595,6 +2608,9 @@ export const api = {
       let list = structuredClone(db.tickets);
       if (user.role === 'sales') list = list.filter((t) => t.createdById === user.id);
       if (params.status) list = list.filter((t) => t.status === params.status);
+      // Step 9 addition: additive filter on the deal pipeline stage (e.g. CLOSED_PAID) — mirrors
+      // TicketController's new `salesStage` query param, used by the commission "Linked Deal" picker.
+      if (params.salesStage) list = list.filter((t) => t.salesStage === params.salesStage);
       const tickets = list.map((t) => ({
         id: t.id, code: t.code, type: t.type, title: t.title,
         status: t.status, priority: t.priority,
@@ -4100,6 +4116,19 @@ export const api = {
       if (db.commissions.some((item) => item.invoiceDetails.invoiceNumber === payload.invoiceNumber)) {
         fail('Invoice number already exists', 409);
       }
+      // Step 9 gate + cross-check — mirrors CommissionService#resolveDealLinkage exactly. Unlinked
+      // (sourceTicketId absent) commissions are unaffected: snapshot stays null, mismatch false.
+      let dealPayableAmountSnapshot = null;
+      let dealAmountMismatch = false;
+      if (payload.sourceTicketId != null) {
+        const linkedTicket = db.tickets.find((t) => t.id === Number(payload.sourceTicketId));
+        if (!linkedTicket) fail('Ticket not found', 404);
+        if (linkedTicket.salesStage !== 'CLOSED_PAID') {
+          fail('Deal has not reached final payment (CLOSED_PAID); commission cannot be submitted yet.', 422);
+        }
+        dealPayableAmountSnapshot = payableAmount(linkedTicket);
+        dealAmountMismatch = commissionDealMismatch(payload.grossAmount, dealPayableAmountSnapshot);
+      }
       const id = Math.max(0, ...db.commissions.map((item) => item.id)) + 1;
       const salesRepId = user.role === 'sales' ? user.id : Number(payload.salesRepId || user.id);
       const calc = invoiceCalculation({
@@ -4133,6 +4162,8 @@ export const api = {
         rejectionReason: null,
         cancellationOfId: null,
         cancellationReason: null,
+        dealPayableAmountSnapshot,
+        dealAmountMismatch,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         invoiceDetails: {
