@@ -12,6 +12,47 @@ independent tracks:
 The display stage is mostly the stored `sales_stage`, with monotonic auto-advance after commercial
 milestones. Auto-advance never moves a deal backward and does not run on lost/inactive deals.
 
+## Executable Flow On `main`
+
+The current `main` backend still uses the ticket-level pricing path. A sales owner submits the
+ticket directly with `POST /api/tickets/{id}/submit`; the newer standalone pricing-request chain is
+not present on this branch.
+
+```mermaid
+flowchart TD
+    A["Sales creates deal/ticket"] --> B{"Has product lines?"}
+    B -->|"No"| B1["Draft lead / add items later"]
+    B1 --> B
+    B -->|"Yes"| C["Sales submits ticket<br/>POST /api/tickets/{id}/submit"]
+    C --> D["Import picks up<br/>submitted -> in_review"]
+    D --> E["Import proposes prices"]
+    E --> F{"CEO price decision"}
+    F -->|"Reject"| D
+    F -->|"Approve"| G["Ticket approved"]
+    G --> H["Sales generates quotation<br/>recipient: designer / owner / buyer"]
+    H --> I["Quotation issued/sent/accepted"]
+    I --> J["Sales confirms customer<br/>payment_status=CUSTOMER_CONFIRMED"]
+    J --> K{"Deposit policy"}
+    K -->|"Required"| L["Sales issues deposit notice"]
+    L --> M["Account/CEO records deposit paid"]
+    K -->|"Waived / not required / credit"| N["Deposit bypass allowed"]
+    M --> O{"Fulfilment source"}
+    N --> O
+    O -->|"Import path"| P["Import issues IR"]
+    P --> Q["IR sent"]
+    Q --> R["Shipping"]
+    R --> S["Goods received at GLR warehouse"]
+    O -->|"Stock path"| T["Import/CEO reserves stock"]
+    S --> U["Schedule / record delivery"]
+    T --> U
+    U --> V["Fully delivered to customer"]
+    V --> W["Account/CEO records final payment"]
+    W --> X{"Full payment and full delivery?"}
+    X -->|"Yes"| Y["sales_stage=CLOSED_PAID"]
+    Y --> Z["Sales owner closes ticket"]
+    X -->|"No"| U
+```
+
 ## The 14 Stages
 
 | No. | Code | Thai label | Phase | S-map | Mode |
@@ -48,7 +89,7 @@ milestones. Auto-advance never moves a deal backward and does not run on lost/in
 - `recordPartialDelivery`/`completeDelivery` set `PARTIALLY_DELIVERED` or `FULLY_DELIVERED`.
   Full delivery advances to `DELIVERED`.
 - `confirmFinalPayment` or a balancing `recordPayment` can set `payment_status=FULLY_PAID`.
-  Full payment advances to `CLOSED_PAID`, independent of delivery.
+  `CLOSED_PAID` auto-advances only after both `FULLY_PAID` and `FULLY_DELIVERED`.
 - `close` changes ticket status to `closed` only after both payment and delivery gates pass.
 
 ## State Vocabularies
@@ -126,7 +167,7 @@ Lost reasons:
 | `RESUME` | `ON_HOLD`/`DORMANT` | sales owner or CEO | note | restores `ACTIVE` |
 | `REOPEN` | `CLOSED_LOST` | sales owner or CEO | note | restores `ACTIVE` |
 | `CANCEL` | not closed/cancelled, owner | sales owner | - | `cancelled` |
-| `CLOSE` | owner; payment and delivery complete | sales owner | - | `closed` |
+| `CLOSE` | owner; legacy `document_issued` with no payment track or full payment; dual-track `quotation_issued` with payment and delivery complete | sales owner | - | `closed` |
 
 ## The 12 Branching Cases
 
@@ -168,7 +209,7 @@ Lost reasons:
 | S17 | `GOODS_RECEIVED`; goods arrived at GLR warehouse |
 | S18 | `DELIVERY_SCHEDULING`; manual stage |
 | S19 | `DELIVERED`; auto from `FULLY_DELIVERED` |
-| S20 | `CLOSED_PAID`; auto from `FULLY_PAID`; ticket close still needs delivery gate |
+| S20 | `CLOSED_PAID`; auto only when `FULLY_PAID` and `FULLY_DELIVERED`; ticket close still runs the close gate |
 
 Aliases: `SENT` and `ISSUED` are document statuses, not separate sales stages. `GOODS_RECEIVED`
 is warehouse arrival; customer delivery is represented by delivery records and

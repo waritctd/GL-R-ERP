@@ -4,10 +4,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Instant;
@@ -16,6 +18,7 @@ import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpSession;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import th.co.glr.hr.audit.AuditService;
@@ -65,6 +68,40 @@ class AttachmentControllerTest {
     void deleteRequiresAuthentication() throws Exception {
         mvc.perform(delete("/api/attachments/{id}", ATTACHMENT_ID))
             .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void ticketCreatorCanUpload() throws Exception {
+        when(ticketRepository.findById(TICKET_ID)).thenReturn(Optional.of(ticket()));
+        when(fileStorageService.store(eq("tickets"), eq(TICKET_ID), any(), eq(java.util.Set.of())))
+            .thenReturn(new FileStorageService.StoredFile(
+                "invoice.pdf", "/uploads/tickets/10/invoice.pdf", "application/pdf", 3L));
+        when(attachmentRepository.save(
+            eq(TICKET_ID), isNull(), eq("invoice.pdf"), eq("/uploads/tickets/10/invoice.pdf"),
+            eq("application/pdf"), eq(3L), eq("INVOICE"), eq(CREATOR_ID)))
+            .thenReturn(new AttachmentDto(
+                ATTACHMENT_ID, TICKET_ID, null, "invoice.pdf", "INVOICE",
+                "application/pdf", 3L, CREATOR_ID, Instant.parse("2026-07-01T00:00:00Z")));
+
+        mvc.perform(multipart("/api/tickets/{ticketId}/attachments", TICKET_ID)
+                .file(pdfFile())
+                .param("attachType", "invoice")
+                .session(session(CREATOR_ID, "sales")))
+            .andExpect(status().isOk());
+    }
+
+    @Test
+    void strangerWithSalesRoleForbiddenOnUpload() throws Exception {
+        when(ticketRepository.findById(TICKET_ID)).thenReturn(Optional.of(ticket()));
+
+        mvc.perform(multipart("/api/tickets/{ticketId}/attachments", TICKET_ID)
+                .file(pdfFile())
+                .session(session(STRANGER_ID, "sales")))
+            .andExpect(status().isForbidden());
+
+        verify(fileStorageService, never()).store(eq("tickets"), eq(TICKET_ID), any(), any());
+        verify(attachmentRepository, never()).save(
+            eq(TICKET_ID), any(), any(), any(), any(), any(), any(), eq(STRANGER_ID));
     }
 
     @Test
@@ -187,6 +224,10 @@ class AttachmentControllerTest {
 
     private String missingFilePath() {
         return "/nonexistent/path/does-not-exist.pdf";
+    }
+
+    private MockMultipartFile pdfFile() {
+        return new MockMultipartFile("file", "invoice.pdf", "application/pdf", "pdf".getBytes());
     }
 
     private TicketDto ticket() {

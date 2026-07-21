@@ -68,6 +68,7 @@ public class AttachmentController {
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
+        requireTicketAccess(ticketId, user);
         if (file.isEmpty()) throw new ApiException(HttpStatus.BAD_REQUEST, "ไฟล์ว่างเปล่า");
 
         FileStorageService.StoredFile storedFile = fileStorage.store("tickets", ticketId, file, Set.of());
