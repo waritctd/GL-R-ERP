@@ -20,28 +20,41 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const drawerId = 'mobile-navigation-drawer';
   const navItems = [
     { path: '/', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
-    { path: '/hr', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', show: hasPermission(user.role, 'canViewEmployees') },
     // งานขาย is one workspace: the deal pipeline (/tickets — one ticket = one deal,
     // ใบขอราคา and โครงการ merged into one page) plus the ภาพรวม dashboard as a tab
     // (SalesTabs). `match` keeps this item highlighted across both and detail pages.
+    // Distinct from the "งานขาย" (Sales) group header it sits under below —
+    // repeating the group name on its first item read as a stutter.
     {
       path: '/tickets',
-      label: 'งานขาย',
-      helper: 'Sales',
+      label: 'รายการดีล',
+      helper: 'Deal pipeline',
       icon: 'briefcase',
+      group: 'sales',
       show: hasPermission(user.role, 'canViewTickets') && SALES_ENABLED,
       match: ['/tickets', '/ticket-overview'],
     },
-    { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', show: user.role === 'ceo' && SALES_ENABLED },
-    { path: '/catalog', label: 'แคตตาล็อกสินค้า', helper: 'Product catalog', icon: 'search', show: SALES_ENABLED },
-    { path: '/price-import', label: 'นำเข้าราคา', helper: 'Price import', icon: 'upload', show: hasPermission(user.role, 'canManagePriceImport') && SALES_ENABLED },
+    { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', group: 'sales', show: user.role === 'ceo' && SALES_ENABLED },
+    // Catalog browsing is scoped to the sales/CRM audience (canViewCatalog),
+    // not just the feature flag — previously any authenticated role could
+    // reach it once SALES_ENABLED, even employee.
+    { path: '/catalog', label: 'แคตตาล็อกสินค้า', helper: 'Product catalog', icon: 'search', group: 'sales', show: hasPermission(user.role, 'canViewCatalog') && SALES_ENABLED },
+    { path: '/price-import', label: 'นำเข้าราคา', helper: 'Price import', icon: 'upload', group: 'sales', show: hasPermission(user.role, 'canManagePriceImport') && SALES_ENABLED },
+    // Import's cross-deal PricingRequest queue — see permissions.js's PATH_GUARDS
+    // comment for why this is a narrower audience than a single request's detail page.
+    { path: '/pricing-requests', label: 'คิวใบขอราคา', helper: 'Pricing request queue', icon: 'clipboard', group: 'sales', show: hasPermission(user.role, 'canViewPricingRequestQueue') && SALES_ENABLED },
     // Step 7: Factory Purchase Order and Import Execution — Import/CEO only, mirrors
     // ProcurementService.RAW_PO_ROLES. Sales never sees raw supplier PO detail.
-    { path: '/factory-purchase-orders', label: 'ใบสั่งซื้อโรงงาน', helper: 'Factory purchase orders', icon: 'fileText', show: hasPermission(user.role, 'canManageProcurement') && SALES_ENABLED },
-    { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED },
-    { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', show: hasPermission(user.role, 'canManagePayroll') },
-    { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', show: hasPermission(user.role, 'canViewEmployees') },
-    { path: '/attendance', label: 'เวลาทำงาน', helper: 'Attendance', icon: 'calendar', show: true },
+    { path: '/factory-purchase-orders', label: 'ใบสั่งซื้อโรงงาน', helper: 'Factory purchase orders', icon: 'fileText', group: 'sales', show: hasPermission(user.role, 'canManageProcurement') && SALES_ENABLED },
+    { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', group: 'sales', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED },
+    { path: '/hr', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
+    { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
+    // ข้อมูลของฉัน / คำขอของฉัน are deliberately absent: personal admin lives in
+    // the topbar UserMenu, and the two pages are merged into /profile. /requests
+    // stays here because an HR review queue is work, not personal admin.
+    { path: '/requests', label: 'คำขอแก้ไขข้อมูล', helper: 'Profile requests', icon: 'clipboard', group: 'hr', show: hasPermission(user.role, 'canReviewProfileRequests'), badge: pendingRequestCount },
+    { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canManagePayroll') },
+    { path: '/attendance', label: 'เวลาทำงาน', helper: 'Attendance', icon: 'calendar', group: 'self', show: true },
     // Combined OT + welfare/special-money page (RequestsPage.jsx, tabs carried
     // in ?tab=). `match` keeps this item highlighted on both /employee-requests and
     // the /overtime redirect alias, mirroring the /tickets pattern above.
@@ -50,14 +63,11 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       label: 'คำขอ',
       helper: 'Requests (overtime / welfare)',
       icon: 'clock',
+      group: 'self',
       show: !!user.employeeId || hasPermission(user.role, 'canViewAllOvertime') || hasPermission(user.role, 'canViewAllSpecialMoney'),
       match: ['/employee-requests', '/overtime'],
     },
-    { path: '/leave', label: 'วันลา', helper: 'Leave', icon: 'clipboard', show: !!user.employeeId || hasPermission(user.role, 'canViewAllLeave') },
-    // ข้อมูลของฉัน / คำขอของฉัน are deliberately absent: personal admin lives in
-    // the topbar UserMenu, and the two pages are merged into /profile. /requests
-    // stays here because an HR review queue is work, not personal admin.
-    { path: '/requests', label: 'คำขอแก้ไขข้อมูล', helper: 'Profile requests', icon: 'clipboard', show: hasPermission(user.role, 'canReviewProfileRequests'), badge: pendingRequestCount },
+    { path: '/leave', label: 'วันลา', helper: 'Leave', icon: 'clipboard', group: 'self', show: !!user.employeeId || hasPermission(user.role, 'canViewAllLeave') },
   ].filter((item) => item.show);
 
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);

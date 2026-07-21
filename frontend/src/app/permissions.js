@@ -43,6 +43,7 @@ const PATH_GUARDS = [
   // notification link to a page they are allowed to see.
   { test: (p) => p === '/my-requests' || p === '/profile', can: (u) => !!u.employeeId },
   { test: (p) => p === '/tickets' || p.startsWith('/tickets/'), can: (u) => hasPermission(u.role, 'canViewTickets') },
+  { test: (p) => p === '/catalog', can: (u) => hasPermission(u.role, 'canViewCatalog') },
   { test: (p) => p === '/commissions', can: (u) => hasPermission(u.role, 'canViewCommissions') },
   { test: (p) => p === '/payroll', can: (u) => hasPermission(u.role, 'canManagePayroll') },
   // /employee-requests hosts both the overtime and welfare/special-money tabs
