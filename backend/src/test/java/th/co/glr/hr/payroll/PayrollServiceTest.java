@@ -241,7 +241,11 @@ class PayrollServiceTest {
             money("8750.00"),
             money("10000.00"),
             money("30000.00"),
-            null
+            null,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO
         );
     }
 

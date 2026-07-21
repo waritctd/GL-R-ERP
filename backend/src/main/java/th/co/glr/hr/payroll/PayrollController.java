@@ -14,6 +14,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -21,6 +22,10 @@ import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.payroll.PayrollReconciliationDtos.TaxAllowanceBulkUpsertRequest;
+import th.co.glr.hr.payroll.PayrollReconciliationDtos.TaxAllowanceListResponse;
+import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedBulkUpsertRequest;
+import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedListResponse;
 import th.co.glr.hr.payroll.PayrollResponses.PayrollPeriodResponse;
 
 @RestController
@@ -106,6 +111,42 @@ public class PayrollController {
                 .toString())
             .contentType(MediaType.APPLICATION_PDF)
             .body(body);
+    }
+
+    // ---- C1: standing tax-allowance declaration, GET broader than PUT (HR + CEO view, HR-only edit) ----
+
+    @GetMapping("/tax-allowances")
+    @PreAuthorize("hasAnyRole('HR','CEO')")
+    public TaxAllowanceListResponse getTaxAllowances(@RequestParam int year, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return payrollService.getTaxAllowances(year, user);
+    }
+
+    @PutMapping("/tax-allowances")
+    @PreAuthorize("hasRole('HR')")
+    public TaxAllowanceListResponse putTaxAllowances(
+        @RequestParam int year, @Valid @RequestBody TaxAllowanceBulkUpsertRequest request, HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return payrollService.upsertTaxAllowances(year, request, user);
+    }
+
+    // ---- C2: year-to-date backfill seed, same view/edit split ----
+
+    @GetMapping("/ytd-seed")
+    @PreAuthorize("hasAnyRole('HR','CEO')")
+    public YtdSeedListResponse getYtdSeed(@RequestParam int year, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return payrollService.getYtdSeed(year, user);
+    }
+
+    @PutMapping("/ytd-seed")
+    @PreAuthorize("hasRole('HR')")
+    public YtdSeedListResponse putYtdSeed(
+        @RequestParam int year, @Valid @RequestBody YtdSeedBulkUpsertRequest request, HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return payrollService.upsertYtdSeed(year, request, user);
     }
 
     private ProcessPayrollRequest normalizedRequest(ProcessPayrollRequest request) {

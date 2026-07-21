@@ -3221,6 +3221,27 @@ export const api = {
       hasRole('hr');
       throw new Error('ส่งอีเมลสลิปเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
+    // C1/C2 reconciliation additions (2026-07-21): same "view broader than edit" split as the rest
+    // of this namespace (GET is hr/ceo, PUT is hr-only). Like preview/process above, these carry
+    // real payroll numbers (tax allowances, YTD income), so mock mode surfaces a clear
+    // "not supported" error on writes rather than fabricating figures; GET returns an empty list so
+    // the UI's empty state renders correctly.
+    async getTaxAllowances() {
+      hasRole('hr', 'ceo');
+      return delay({ taxYear: new Date().getFullYear(), items: [] });
+    },
+    async saveTaxAllowances() {
+      hasRole('hr');
+      throw new Error('บันทึกค่าลดหย่อนภาษีไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async getYtdSeed() {
+      hasRole('hr', 'ceo');
+      return delay({ taxYear: new Date().getFullYear(), items: [] });
+    },
+    async saveYtdSeed() {
+      hasRole('hr');
+      throw new Error('บันทึกยอดสะสมต้นปีไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
   },
 
   // Mirrors AttendanceController + AttendanceService (attendance/).

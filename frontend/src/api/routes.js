@@ -133,6 +133,8 @@ export const API_ROUTES = {
     payslip: (periodId, lineId) => `/api/payroll/${periodId}/lines/${lineId}/payslip.pdf`,
     ownPayslip: (periodId) => `/api/payroll/${periodId}/payslip/me`,
     distribute: (periodId) => `/api/payroll/${periodId}/distribute`,
+    taxAllowances: '/api/payroll/tax-allowances',
+    ytdSeed: '/api/payroll/ytd-seed',
   },
   priceImport: {
     factories: '/api/price-import/factories',
