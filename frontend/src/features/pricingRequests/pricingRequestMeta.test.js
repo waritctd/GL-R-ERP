@@ -3,8 +3,10 @@ import {
   activePricingRequestsSummary,
   canActOnPricingDecision,
   canCancelPricingRequest,
+  canConfirmOrder,
   canCreateCommercialOnlyRevision,
   canCreateCustomerQuotation,
+  canCreateDepositNoticeFromQuotation,
   canCreatePricingRequest,
   canManageCustomerQuotation,
   canPickupPricingRequest,
@@ -282,6 +284,41 @@ describe('canCreateCommercialOnlyRevision', () => {
   });
   it('rejects a non-owning sales rep', () => {
     expect(canCreateCommercialOnlyRevision(otherSales, pr(), { docStatus: 'ISSUED' })).toBe(false);
+  });
+});
+
+describe('canConfirmOrder', () => {
+  it('allows the owner sales rep only from QUOTATION_ACCEPTED, before the bridge has run', () => {
+    expect(canConfirmOrder(salesOwner, pr({ status: 'QUOTATION_ACCEPTED' }))).toBe(true);
+  });
+  it('rejects every other pricing-request status, even for the owner', () => {
+    for (const status of ['DRAFT', 'SUBMITTED', 'QUOTATION_ISSUED', 'CANCELLED', 'SUPERSEDED']) {
+      expect(canConfirmOrder(salesOwner, pr({ status }))).toBe(false);
+    }
+  });
+  it('rejects once orderConfirmedAt is already set (the bridge already ran)', () => {
+    expect(canConfirmOrder(salesOwner, pr({ status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' })))
+      .toBe(false);
+  });
+  it('rejects a non-owning sales rep, ceo, and import', () => {
+    const accepted = pr({ status: 'QUOTATION_ACCEPTED' });
+    expect(canConfirmOrder(otherSales, accepted)).toBe(false);
+    expect(canConfirmOrder(ceo, accepted)).toBe(false);
+    expect(canConfirmOrder(importUser, accepted)).toBe(false);
+  });
+});
+
+describe('canCreateDepositNoticeFromQuotation', () => {
+  it('allows the owner sales rep only AFTER the bridge has run (orderConfirmedAt set)', () => {
+    expect(canCreateDepositNoticeFromQuotation(salesOwner,
+      pr({ status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' }))).toBe(true);
+  });
+  it('rejects QUOTATION_ACCEPTED before the bridge has run', () => {
+    expect(canCreateDepositNoticeFromQuotation(salesOwner, pr({ status: 'QUOTATION_ACCEPTED' }))).toBe(false);
+  });
+  it('rejects a non-owning sales rep', () => {
+    expect(canCreateDepositNoticeFromQuotation(otherSales,
+      pr({ status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' }))).toBe(false);
   });
 });
 

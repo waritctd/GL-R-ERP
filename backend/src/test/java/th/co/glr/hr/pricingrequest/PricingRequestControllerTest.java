@@ -276,7 +276,7 @@ class PricingRequestControllerTest {
             20L, "PCR-2026-0001", 10L, "PR-2026-0001", "Test Project", "Test Customer",
             1L, PricingRequestRecipient.BUYER, 1L, null,
             PricingRequestStatus.DRAFT, 1L, "Sales User", null, null, null, null, null, null,
-            1, 1, null, null, null, null, Instant.now(), Instant.now());
+            1, 1, null, null, null, null, Instant.now(), Instant.now(), null);
         return new PricingRequestDetailDto(summary, List.of(), List.of());
     }
 

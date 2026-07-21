@@ -37,7 +37,12 @@ public final class PricingRequestDtos {
         Instant pickedUpAt,
         Instant cancelledAt,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        // Step 6 (V76): non-null once OrderConfirmationService.confirmOrder has bridged this
+        // (terminal, QUOTATION_ACCEPTED) request into the legacy ticket payment/deposit
+        // pipeline. QUOTATION_ACCEPTED itself never changes again, so this is the only signal
+        // the frontend (or a replay) has that the bridge already ran.
+        Instant orderConfirmedAt
     ) {}
 
     public record PricingRequestItemDto(

@@ -116,7 +116,10 @@ public class NotificationRepository {
         Map.entry("CUSTOMER_QUOTATION_ACCEPTED", "ลูกค้ายอมรับใบเสนอราคาแล้ว"),
         Map.entry("CUSTOMER_QUOTATION_REJECTED", "ลูกค้าปฏิเสธใบเสนอราคา"),
         Map.entry("CUSTOMER_QUOTATION_REVISION_REQUESTED", "ลูกค้าขอแก้ไขใบเสนอราคา"),
-        Map.entry("CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ")
+        Map.entry("CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ"),
+        // Step 6: Deposit, Payment, and Order Confirmation.
+        Map.entry("ORDER_CONFIRMED", "ยืนยันคำสั่งซื้อแล้ว"),
+        Map.entry("DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION", "สร้างร่างใบแจ้งยอดเงินรับมัดจำแล้ว")
     );
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {

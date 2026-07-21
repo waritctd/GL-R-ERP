@@ -1272,6 +1272,26 @@ public class TicketRepository {
         return Boolean.TRUE.equals(value);
     }
 
+    /**
+     * Step 6 (V76): the ONE deliberate bridge write outside the legacy ticket status state
+     * machine — see {@code th.co.glr.hr.orderconfirmation.OrderConfirmationService}'s class
+     * Javadoc for the full reasoning. Since {@link th.co.glr.hr.ticket.TicketService#submit}
+     * permanently 409s (Step 1), a deal driven entirely through the new PricingRequest chain can
+     * never leave {@link TicketStatus#DRAFT} via the legacy flow, so this guarded compare-and-set
+     * (FROM {@code draft} only) can never collide with a live legacy transition. A ticket that
+     * already carries a real legacy status (created before Step 1, or otherwise mid-flow) is
+     * never silently overwritten — 0 rows signals "not eligible", which the caller turns into a
+     * 409 unless the current status already happens to be {@code quotation_issued} (an idempotent
+     * replay of this same bridge).
+     */
+    public int markQuotationIssuedForOrderConfirmation(long ticketId) {
+        return jdbc.update("""
+            UPDATE sales.ticket
+               SET status = 'quotation_issued', updated_at = now()
+             WHERE ticket_id = :id AND status = 'draft'
+            """, Map.of("id", ticketId));
+    }
+
     public void updatePaymentStatus(long ticketId, String paymentStatus) {
         jdbc.update(
             "UPDATE sales.ticket SET payment_status = :s WHERE ticket_id = :id",

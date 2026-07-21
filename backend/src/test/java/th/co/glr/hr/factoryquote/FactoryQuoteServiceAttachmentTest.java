@@ -139,7 +139,7 @@ class FactoryQuoteServiceAttachmentTest {
             pricingRequestId, "PCR-2026-0001", 50L, "T-1", "Project", "Customer", 2L,
             PricingRequestRecipient.BUYER, null, null, status, 2L, "Sales User", importActor.id(), "Import User",
             LocalDate.now().plusDays(7), new BigDecimal("100.00"), "THB", null, 1, 1, null, null, null, null,
-            Instant.now(), Instant.now())));
+            Instant.now(), Instant.now(), null)));
     }
 
     private static UserPrincipal actor(long id, String role) {

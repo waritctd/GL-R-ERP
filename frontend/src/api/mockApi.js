@@ -657,6 +657,18 @@ function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 }
 
+// Step 6: mirrors OrderConfirmationService's own private unitLabel(), used when building a
+// deposit-notice item from a customer-quotation item's requestedUnitBasis.
+function mockUnitBasisLabel(unitBasis) {
+  switch (unitBasis) {
+    case 'PER_SQM': return 'ตร.ม.';
+    case 'PER_PIECE': return 'แผ่น';
+    case 'PER_BOX': return 'กล่อง';
+    case 'PER_LINEAR_M': return 'เมตร';
+    default: return unitBasis ?? 'หน่วย';
+  }
+}
+
 /** Builds a fresh Step 4 DRAFT quotation, snapshotting prices from the current APPROVED
  * pricing_decision — mirrors CustomerQuotationService.create/createRevision's item-building
  * (buildItem). `priorDiscounts` (keyed by pricingRequestItemId) is empty for a first-ever
@@ -835,6 +847,9 @@ function buildPricingRequestSummary(pr) {
     cancelledAt: pr.cancelledAt ?? null,
     createdAt: pr.createdAt,
     updatedAt: pr.updatedAt,
+    // Step 6: non-null once pricingRequests.confirmOrder has bridged this (terminal,
+    // QUOTATION_ACCEPTED) request into the legacy ticket payment/deposit pipeline.
+    orderConfirmedAt: pr.orderConfirmedAt ?? null,
   };
 }
 
@@ -6023,6 +6038,110 @@ export const api = {
         pr.status = 'QUOTATION_ACCEPTED';
       }
       return delay({ quotation });
+    },
+
+    // ── Step 6: Deposit, Payment, and Order Confirmation — mirrors
+    // OrderConfirmationController/OrderConfirmationService. Authorization is NOT authoritative
+    // (CLAUDE.md); verify against the real Java service.
+
+    async confirmOrder(id, payload = {}) {
+      const user = hasRole('sales');
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      // Owner-only, mirrors OrderConfirmationService.requireOwner (ticket owner, not merely the
+      // pricing request's own requestedById).
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+
+      if (pr.orderConfirmedAt) {
+        if (payload.clientRequestId && payload.clientRequestId === pr.orderConfirmClientRequestId) {
+          return delay({ result: { ticket: buildTicketDetail(ticket), pricingRequest: buildPricingRequestSummary(pr) } });
+        }
+        fail('คำสั่งซื้อนี้ได้รับการยืนยันไปแล้ว', 409);
+      }
+      if (pr.status !== 'QUOTATION_ACCEPTED') {
+        fail(`ยืนยันคำสั่งซื้อได้เฉพาะใบขอราคาที่ลูกค้ายอมรับใบเสนอราคาแล้วเท่านั้น (ปัจจุบัน: ${pr.status})`, 409);
+      }
+
+      const now = new Date().toISOString();
+      pr.orderConfirmedAt = now;
+      pr.orderConfirmedBy = user.id;
+      pr.orderConfirmClientRequestId = payload.clientRequestId ?? null;
+
+      // The one deliberate bridge write (mirrors TicketRepository
+      // .markQuotationIssuedForOrderConfirmation): guarded FROM 'draft' only.
+      if (ticket.status === 'draft') {
+        const fromStatus = ticket.status;
+        ticket.status = 'quotation_issued';
+        ticket.updatedAt = now;
+        pushEvent(ticket, user, 'ORDER_CONFIRMED_FROM_QUOTATION', fromStatus, 'quotation_issued',
+          `ยืนยันคำสั่งซื้อจากใบเสนอราคาลูกค้าที่ยอมรับแล้ว (ใบขอราคา ${pr.requestCode})`);
+      }
+
+      // The existing, already-tested pipeline takes over from here, unmodified (mirrors calling
+      // TicketService.confirmCustomer).
+      if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
+        fail('Payment track already past CUSTOMER_CONFIRMED', 409);
+      }
+      ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
+      ticket.updatedAt = now;
+      pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
+      autoAdvanceStage(ticket, 'ORDER_RECEIVED', user);
+
+      pushPricingRequestEvent(pr, user, 'ORDER_CONFIRMED', pr.status, pr.status, 'ยืนยันคำสั่งซื้อแล้ว');
+      const ceoUsers = db.users.filter((u) => u.role === 'ceo');
+      ceoUsers.forEach((ceo) => addNotification(ceo.id, pr.ticketId, ticket?.code, 'ORDER_CONFIRMED',
+        `ใบขอราคา ${pr.requestCode} ยืนยันคำสั่งซื้อแล้ว`));
+
+      return delay({ result: { ticket: buildTicketDetail(ticket), pricingRequest: buildPricingRequestSummary(pr) } });
+    },
+
+    async createDepositNoticeFromQuotation(id, payload = {}) {
+      const user = hasRole('sales');
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+
+      const accepted = mockCustomerQuotations.find(
+        (q) => q.pricingRequestId === pr.id && q.docStatus === 'ACCEPTED');
+      if (!accepted) fail('ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับใบขอราคานี้', 409);
+
+      // Mirrors OrderConfirmationService.createDepositNoticeFromQuotation: items/amounts trace
+      // to the quotation, never to any sales.ticket_item row.
+      const items = accepted.items.map((item, idx) => ({
+        seq: item.seq ?? idx + 1,
+        description: item.description?.trim() || 'รายการสินค้า',
+        qty: item.requestedQuantity,
+        unit: mockUnitBasisLabel(item.requestedUnitBasis),
+        unitPrice: item.approvedUnitPrice,
+        discountLabel: item.salesDiscount > 0 ? `ส่วนลด ${item.salesDiscount} ต่อหน่วย` : null,
+        netUnitPrice: item.finalUnitPrice,
+      }));
+
+      // Requires quotation_issued (one of DepositNoticeService.requireApprovedTicket's three
+      // accepted statuses) — mirrors what confirmOrder above already left in place; calling this
+      // BEFORE confirmOrder fails here exactly like the real backend's requireApprovedTicket.
+      requireActive(ticket);
+      if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) {
+        fail('Deposit notice can only be created for approved tickets', 409);
+      }
+
+      const notes = mockNoteTemplates.filter((t) => t.defaultSelected).map((t) => t.text);
+      const nextVer = mockDepositNotices.filter((d) => d.ticketId === pr.ticketId).length + 1;
+      const doc = buildMockDoc({
+        id: mockDocSeq++, ticketId: pr.ticketId, docType: 'DEPOSIT_NOTICE',
+        version: nextVer, docNumber: null, issueDate: null, status: 'DRAFT',
+        customerName: ticket.customerName ?? '', customerTaxId: '', customerAddress: '',
+        projectName: '', reference: accepted.number,
+        depositPercent: payload.depositPercent ?? 0.5, vatPercent: 0.07,
+        notes, items, issuedByName: null, preparerName: 'จินตนา หาญมนตรี',
+        hasPdf: false, hasXlsx: false,
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      });
+      mockDepositNotices.push(doc);
+
+      pushPricingRequestEvent(pr, user, 'DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION', pr.status, pr.status,
+        `สร้างร่างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคา ${accepted.number}`);
+      return delay({ depositNotice: structuredClone(doc) });
     },
 
     async downloadCustomerQuotationPdf(id) {

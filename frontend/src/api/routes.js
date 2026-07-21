@@ -201,6 +201,9 @@ export const API_ROUTES = {
     customerQuotationFile: (id, format) => `/api/customer-quotations/${id}/file?format=${format}`,
     // Step 5: Customer Decision and Commercial Revisions.
     customerQuotationOutcome: (id) => `/api/customer-quotations/${id}/outcome`,
+    // Step 6: Deposit, Payment, and Order Confirmation. Mirrors OrderConfirmationController.
+    confirmOrder: (id) => `/api/pricing-requests/${id}/confirm-order`,
+    depositNoticeFromQuotation: (id) => `/api/pricing-requests/${id}/deposit-notice`,
     submit: (id) => `/api/pricing-requests/${id}/submit`,
     pickup: (id) => `/api/pricing-requests/${id}/pickup`,
     requestInformation: (id) => `/api/pricing-requests/${id}/request-information`,

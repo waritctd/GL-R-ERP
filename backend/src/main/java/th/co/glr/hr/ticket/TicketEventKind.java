@@ -52,6 +52,12 @@ public final class TicketEventKind {
     // Three-party close (V56). CLOSED is now written only by the CEO's verification.
     public static final String CLOSE_CONFIRMED        = "CLOSE_CONFIRMED";
     public static final String CLOSE_CONFIRM_REVOKED  = "CLOSE_CONFIRM_REVOKED";
+    // Step 6 (V76): the ONE place outside the legacy state machine that writes
+    // sales.ticket.status directly — see OrderConfirmationService's class Javadoc. Written once,
+    // by TicketRepository.markQuotationIssuedForOrderConfirmation, immediately before
+    // TicketService.confirmCustomer (unmodified) takes over the rest of the existing dual-track
+    // payment pipeline.
+    public static final String ORDER_CONFIRMED_FROM_QUOTATION = "ORDER_CONFIRMED_FROM_QUOTATION";
 
     private TicketEventKind() {}
 }

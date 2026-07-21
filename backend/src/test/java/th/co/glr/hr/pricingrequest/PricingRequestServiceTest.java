@@ -1530,7 +1530,7 @@ class PricingRequestServiceTest {
             id, "PCR-2026-0001", ticketId, "PR-2026-0001", "Test Project", "Test Customer",
             ticketCreatedById, PricingRequestRecipient.BUYER, recipientContactId, recipientLabel,
             status, ticketCreatedById, "Sales User", null, null, requiredDate, null, null, null,
-            1, 1, null, null, null, null, Instant.now(), Instant.now());
+            1, 1, null, null, null, null, Instant.now(), Instant.now(), null);
         when(requestRepo.findSummary(id)).thenReturn(java.util.Optional.of(summary));
         return summary;
     }
@@ -1543,7 +1543,7 @@ class PricingRequestServiceTest {
             ticketCreatedById, PricingRequestRecipient.BUYER, 1L, null,
             status, ticketCreatedById, "Sales User", assignedImportId,
             assignedImportId != null ? "Import User" : null, null, null, null, null,
-            1, 1, null, null, null, null, Instant.now(), Instant.now());
+            1, 1, null, null, null, null, Instant.now(), Instant.now(), null);
         when(requestRepo.findSummary(id)).thenReturn(java.util.Optional.of(summary));
         return summary;
     }

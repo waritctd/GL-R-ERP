@@ -64,6 +64,9 @@ vi.mock('../../api/index.js', () => ({
       downloadCustomerQuotationXlsx: vi.fn(),
       // Step 5: Customer Decision and Commercial Revisions.
       recordCustomerQuotationOutcome: vi.fn(),
+      // Step 6: Deposit, Payment, and Order Confirmation.
+      confirmOrder: vi.fn(),
+      createDepositNoticeFromQuotation: vi.fn(),
     },
     catalog: {
       prices: vi.fn(),
@@ -219,6 +222,10 @@ function setApiDefaults() {
   api.pricingRequests.downloadCustomerQuotationPdf.mockResolvedValue(new Blob(['pdf']));
   api.pricingRequests.downloadCustomerQuotationXlsx.mockResolvedValue(new Blob(['xlsx']));
   api.pricingRequests.recordCustomerQuotationOutcome.mockResolvedValue({ quotation: buildCustomerQuotation({ docStatus: 'ACCEPTED' }) });
+  api.pricingRequests.confirmOrder.mockResolvedValue({
+    result: { ticket: { summary: { id: 701 } }, pricingRequest: { id: 501, orderConfirmedAt: '2026-07-21T00:00:00Z' } },
+  });
+  api.pricingRequests.createDepositNoticeFromQuotation.mockResolvedValue({ depositNotice: { id: 9901, status: 'DRAFT' } });
   api.catalog.prices.mockResolvedValue({ items: [] });
 }
 
@@ -1027,5 +1034,56 @@ describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revi
     // the always-present static "Customer Change Revision" section heading elsewhere on the page).
     fireEvent.click(screen.getByRole('button', { name: 'มีการเปลี่ยนแปลงสินค้า/จำนวน/โรงงาน (Customer Change Revision)' }));
     expect(await screen.findByRole('dialog', { name: 'สร้าง Customer Change Revision' })).not.toBeNull();
+  });
+});
+
+describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmation', () => {
+  it('offers "ยืนยันคำสั่งซื้อ" to the owning sales rep once QUOTATION_ACCEPTED, before the bridge has run', async () => {
+    const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    const button = await screen.findByRole('button', { name: 'ยืนยันคำสั่งซื้อ' });
+    expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+    fireEvent.click(button);
+
+    await waitFor(() => expect(api.pricingRequests.confirmOrder).toHaveBeenCalledWith(
+      request.summary.id,
+      expect.objectContaining({ clientRequestId: expect.any(String) }),
+    ));
+  });
+
+  it('offers "สร้างใบแจ้งยอดเงินรับมัดจำ" (not the confirm button) once the bridge has already run', async () => {
+    const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    expect(screen.queryByRole('button', { name: 'ยืนยันคำสั่งซื้อ' })).toBeNull();
+    const button = await screen.findByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(api.pricingRequests.createDepositNoticeFromQuotation).toHaveBeenCalledWith(
+      request.summary.id,
+      expect.objectContaining({ depositPercent: expect.any(Number) }),
+    ));
+  });
+
+  it('never shows either Step 6 button to CEO or Import — read-only', async () => {
+    const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null } });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+
+    expect(screen.queryByRole('button', { name: 'ยืนยันคำสั่งซื้อ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+    expect(screen.getByText('ยืนยันคำสั่งซื้อได้เฉพาะเจ้าของดีล (sales)')).not.toBeNull();
+  });
+
+  it('hides the whole Step 6 section before QUOTATION_ACCEPTED', async () => {
+    const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    expect(screen.queryByRole('button', { name: 'ยืนยันคำสั่งซื้อ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
   });
 });
