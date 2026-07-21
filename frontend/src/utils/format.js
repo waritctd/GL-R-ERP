@@ -52,6 +52,8 @@ export function roleLabel(role) {
     sales: 'SALES',
     sales_manager: 'SALES MANAGER',
     import: 'IMPORT',
+    warehouse: 'WAREHOUSE',
+    qc: 'QC',
     ceo: 'CEO',
     admin: 'ADMIN',
   };

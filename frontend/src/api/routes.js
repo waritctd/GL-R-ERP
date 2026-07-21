@@ -231,8 +231,11 @@ export const API_ROUTES = {
 };
 
 export const ROLE_PERMISSIONS = {
-  canUseEmployeeExperience: ['employee'],
-  canSubmitProfileRequests: ['employee'],
+  // warehouse (WH-คลังสินค้า) and qc (QC&ISO) are new roles that, for now, get the same
+  // self-service experience as a plain employee — no งานขาย / sales access yet. Their scoped
+  // warehouse/QC involvement is a separate, later change (see DivisionAccessPolicy).
+  canUseEmployeeExperience: ['employee', 'warehouse', 'qc'],
+  canSubmitProfileRequests: ['employee', 'warehouse', 'qc'],
   canViewEmployees: ['hr'],
   canManageEmployees: ['hr'],
   // Salary, salary history, and the "ข้อมูลอ่อนไหว" (sensitive) tab on the
