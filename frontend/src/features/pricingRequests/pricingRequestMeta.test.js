@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   activePricingRequestsSummary,
+  canActOnPricingDecision,
   canCancelPricingRequest,
   canCreatePricingRequest,
   canPickupPricingRequest,
   canRequestInformation,
   canRespondInformation,
+  canSeePricingDecisionSalesView,
+  canSeeRawPricingDecision,
+  canStartCeoReview,
   canSubmitPricingRequest,
   canTransition,
   canUpdatePricingRequest,
@@ -46,10 +50,17 @@ describe('canTransition', () => {
     expect(canTransition('MORE_INFO_REQUIRED', 'IMPORT_REVIEWING')).toBe(true);
     expect(canTransition('MORE_INFO_REQUIRED', 'CANCELLED')).toBe(true);
     expect(canTransition('READY_FOR_CEO_REVIEW', 'SUPERSEDED')).toBe(true);
-    // Costing v2 path (review remediation COMMIT 5): added to PricingRequestStatus.ALLOWED
-    // alongside the backend fix making that map authoritative (PricingRequestRepository
-    // .transition() now enforces it — previously decorative).
-    expect(canTransition('READY_FOR_CEO_REVIEW', 'COSTING_IN_PROGRESS')).toBe(true);
+    // Step 3 (CEO Selling Price Decision, "one return-to-Import path"): the old direct
+    // READY_FOR_CEO_REVIEW -> COSTING_IN_PROGRESS entry (Costing v2 path, commit 5) is removed —
+    // it let Import silently reopen a SUBMITTED costing with no CEO action, which made
+    // "submitted costing is immutable" false. The CEO must now explicitly start review.
+    expect(canTransition('READY_FOR_CEO_REVIEW', 'COSTING_IN_PROGRESS')).toBe(false);
+    expect(canTransition('READY_FOR_CEO_REVIEW', 'CEO_REVIEWING')).toBe(true);
+    expect(canTransition('CEO_REVIEWING', 'APPROVED_FOR_QUOTATION')).toBe(true);
+    expect(canTransition('CEO_REVIEWING', 'COSTING_REVISION_REQUIRED')).toBe(true);
+    // The single named return-to-Import state — Import reopening costing goes through here.
+    expect(canTransition('COSTING_REVISION_REQUIRED', 'COSTING_IN_PROGRESS')).toBe(true);
+    expect(canTransition('APPROVED_FOR_QUOTATION', 'COSTING_IN_PROGRESS')).toBe(false);
     expect(canTransition('READY_FOR_CEO_REVIEW', 'CANCELLED')).toBe(false);
     expect(canTransition('CANCELLED', 'DRAFT')).toBe(false);
   });
@@ -119,6 +130,58 @@ describe('canRespondInformation', () => {
   });
   it('rejects any other status', () => {
     expect(canRespondInformation(salesOwner, pr({ status: 'IMPORT_REVIEWING' }))).toBe(false);
+  });
+});
+
+describe('canStartCeoReview', () => {
+  it('allows the CEO on a READY_FOR_CEO_REVIEW request', () => {
+    expect(canStartCeoReview(ceo, pr({ status: 'READY_FOR_CEO_REVIEW' }))).toBe(true);
+  });
+  it('rejects a non-ceo role', () => {
+    expect(canStartCeoReview(importUser, pr({ status: 'READY_FOR_CEO_REVIEW' }))).toBe(false);
+  });
+  it('rejects any other status', () => {
+    expect(canStartCeoReview(ceo, pr({ status: 'COSTING_IN_PROGRESS' }))).toBe(false);
+  });
+});
+
+describe('canActOnPricingDecision', () => {
+  it('allows the CEO while CEO_REVIEWING', () => {
+    expect(canActOnPricingDecision(ceo, pr({ status: 'CEO_REVIEWING' }))).toBe(true);
+  });
+  it('rejects a non-ceo role even while CEO_REVIEWING', () => {
+    expect(canActOnPricingDecision(importUser, pr({ status: 'CEO_REVIEWING' }))).toBe(false);
+  });
+  it('rejects the ceo outside CEO_REVIEWING', () => {
+    expect(canActOnPricingDecision(ceo, pr({ status: 'READY_FOR_CEO_REVIEW' }))).toBe(false);
+  });
+});
+
+describe('canSeeRawPricingDecision', () => {
+  it('allows import and ceo', () => {
+    expect(canSeeRawPricingDecision(importUser)).toBe(true);
+    expect(canSeeRawPricingDecision(ceo)).toBe(true);
+  });
+  it('rejects sales and sales_manager — design correction 2, never leak cost to Sales', () => {
+    expect(canSeeRawPricingDecision(salesOwner)).toBe(false);
+    expect(canSeeRawPricingDecision({ id: 9, role: 'sales_manager' })).toBe(false);
+  });
+});
+
+describe('canSeePricingDecisionSalesView', () => {
+  it('allows the owning sales rep', () => {
+    expect(canSeePricingDecisionSalesView(salesOwner, pr())).toBe(true);
+  });
+  it('rejects a non-owning sales rep — wrong-way-round', () => {
+    expect(canSeePricingDecisionSalesView(otherSales, pr())).toBe(false);
+  });
+  it('allows sales_manager/ceo/import regardless of ownership', () => {
+    expect(canSeePricingDecisionSalesView({ id: 9, role: 'sales_manager' }, pr())).toBe(true);
+    expect(canSeePricingDecisionSalesView(ceo, pr())).toBe(true);
+    expect(canSeePricingDecisionSalesView(importUser, pr())).toBe(true);
+  });
+  it('rejects account — no access to pricing decisions at all', () => {
+    expect(canSeePricingDecisionSalesView({ id: 9, role: 'account' }, pr())).toBe(false);
   });
 });
 

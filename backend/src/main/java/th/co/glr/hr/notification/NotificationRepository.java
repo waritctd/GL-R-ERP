@@ -106,7 +106,10 @@ public class NotificationRepository {
         Map.entry("FACTORY_NOT_AVAILABLE", "โรงงานไม่สามารถเสนอราคาได้"),
         Map.entry("PRICING_COSTING_STARTED", "เริ่มร่างต้นทุน"),
         Map.entry("PRICING_COSTING_CALCULATED", "คำนวณต้นทุนแล้ว"),
-        Map.entry("PRICING_COSTING_SUBMITTED", "ส่งต้นทุนให้ CEO แล้ว")
+        Map.entry("PRICING_COSTING_SUBMITTED", "ส่งต้นทุนให้ CEO แล้ว"),
+        Map.entry("PRICING_DECISION_STARTED", "CEO เริ่มพิจารณาราคาขาย"),
+        Map.entry("PRICING_DECISION_APPROVED", "ราคาขายได้รับการอนุมัติแล้ว"),
+        Map.entry("PRICING_DECISION_RETURNED", "CEO ตีกลับให้แก้ไขต้นทุน")
     );
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {

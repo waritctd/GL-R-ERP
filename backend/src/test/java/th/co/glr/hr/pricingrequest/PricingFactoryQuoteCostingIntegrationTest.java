@@ -1166,8 +1166,16 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
      * (permitted — a READY_FOR_CEO_REVIEW pricing request's current quote may still be revised,
      * see FactoryQuoteService.receive's RESPONSE_STATUSES): the old, costed revision becomes
      * SUPERSEDED (not READY_FOR_COSTING), so only guard 3 can be why its attachment stays
-     * undeletable. Isolated from guard 1 because the pricing request is back in
-     * COSTING_IN_PROGRESS after the new revision reopens it — inside ATTACHMENT_DELETE_STATUSES.
+     * undeletable. Isolated from guard 1 by driving the pricing request to COSTING_IN_PROGRESS
+     * afterward (inside ATTACHMENT_DELETE_STATUSES) via direct SQL — Step 3 (design corrections
+     * 3+4) removed FactoryQuoteService.receive()'s own auto-transition into COSTING_IN_PROGRESS
+     * (a second, divergent reopen path this branch's own change eliminates; see that method's
+     * comment), so a real caller would now go through
+     * PricingDecisionService.returnToImport() + PricingCostingService.createDraft() to get there
+     * — this test only cares about isolating guard 3, not re-proving that state-machine path
+     * (covered separately by PricingRequestRepositoryIntegrationTest /
+     * PricingRequestStatusTest), so it takes the direct-SQL shortcut like other setup in this
+     * file already does.
      */
     @Test
     void factoryQuoteAttachmentDeletion_isRefusedOnceReferencedByASubmittedCosting() {
@@ -1190,12 +1198,17 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
 
         // Revise AFTER submit: revision1 (the costed one) becomes SUPERSEDED — not
-        // READY_FOR_COSTING — and the pricing request reopens to COSTING_IN_PROGRESS.
+        // READY_FOR_COSTING. The pricing request stays READY_FOR_CEO_REVIEW (Step 3's change —
+        // see this test's own javadoc); drive it on to COSTING_IN_PROGRESS directly so guard 1
+        // (READY_FOR_CEO_REVIEW excluded from ATTACHMENT_DELETE_STATUSES) cannot be why deletion
+        // is refused, isolating guard 3.
         factoryQuoteService.receive(revision1.id(),
             response("REF-A-2", "THB", "90.00", revision1.items().get(0).pricingRequestItemId()), importActor);
         assertThat(factoryQuoteService.get(revision1.id(), importActor).status()).isEqualTo(FactoryQuoteStatus.SUPERSEDED);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.COSTING_IN_PROGRESS); // guard 1 cannot fire
+            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
+        jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
+            Map.of("status", PricingRequestStatus.COSTING_IN_PROGRESS, "id", pricingRequestId));
 
         assertThat(factoryQuoteRepository.existsSubmittedCostingReferencingQuote(revision1.id())).isTrue();
 

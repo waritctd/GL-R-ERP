@@ -523,15 +523,20 @@ public class FactoryQuoteService {
                 request.paymentTerms(), request.leadTimeText(), request.revisionReason(), request.negotiationNote(), actor.id());
             quotes.replaceResponseItems(newId, normalizedItems);
             quotes.markOpenCostingsStale(summary.id(), "Factory quote revision changed");
+            // Step 3 (design corrections 3+4, "submitted costing is immutable... actually
+            // true" / "one return-to-Import path"): this used to auto-transition
+            // READY_FOR_CEO_REVIEW -> COSTING_IN_PROGRESS directly, a SECOND place (besides the
+            // old PricingCostingService.createDraft path) that silently reopened a SUBMITTED
+            // costing with no CEO action. It no longer does — a factory quote revision received
+            // while READY_FOR_CEO_REVIEW is recorded (superseding the current quote,
+            // markOpenCostingsStale above — a no-op here since there is no open DRAFT/CALCULATED
+            // costing at this point, the current one is already SUBMITTED) but the pricing
+            // request status is left exactly where it was. The submitted costing itself is
+            // unaffected; if the CEO wants the new factory price reflected, they return the
+            // request via PricingDecisionService.returnToImport (-> COSTING_REVISION_REQUIRED),
+            // and Import's next costing draft naturally picks up this latest revision (
+            // PricingCostingService.resolveSources always reads the CURRENT factory quote).
             String toStatus = summary.status();
-            if (PricingRequestStatus.READY_FOR_CEO_REVIEW.equals(summary.status())) {
-                int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.READY_FOR_CEO_REVIEW,
-                    PricingRequestStatus.COSTING_IN_PROGRESS, null, null);
-                if (transitioned == 0) {
-                    throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
-                }
-                toStatus = PricingRequestStatus.COSTING_IN_PROGRESS;
-            }
             respondedQuoteId = newId;
             saved = requireQuote(newId);
             addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_REVISED, summary.status(), toStatus,

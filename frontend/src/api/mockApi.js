@@ -418,6 +418,10 @@ let mockFactoryQuoteItemSeq = 1;
 let mockFactoryQuoteAttachmentSeq = 1;
 let mockPricingRequestAttachmentSeq = 1;
 let mockPricingCostingSeq = 1;
+// Step 3: CEO Selling Price Decision (sales.pricing_decision / pricing_decision_item).
+const mockPricingDecisions = [];
+let mockPricingDecisionSeq = 1;
+let mockPricingDecisionItemSeq = 1;
 const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'sales_manager'];
 const PRICING_REQUEST_RECIPIENT_VALUES = PRICING_REQUEST_RECIPIENT_OPTIONS.map((o) => o.code);
 const PRICING_REQUEST_QUANTITY_TYPE_VALUES = PRICING_REQUEST_QUANTITY_TYPE_OPTIONS.map((o) => o.code);
@@ -457,6 +461,16 @@ function scheduleMockFactoryQuoteDispatch(quote, actor) {
     if (['IMPORT_REVIEWING', 'COSTING_IN_PROGRESS'].includes(pr.status)) pr.status = 'AWAITING_FACTORY_RESPONSE';
     pushPricingRequestEvent(pr, actor, 'FACTORY_EMAIL_SENT', fromStatus, pr.status);
   }, 700);
+}
+
+// Step 3, design correction 3 ("freeze factory mutations from CEO_REVIEWING"): mirrors
+// FactoryQuoteService's RESPONSE_STATUSES/MUTABLE_STATUSES/DRAFT_STATUSES all deliberately
+// excluding CEO_REVIEWING (the CEO owns the request from here until approve/return). Called at
+// the top of every factory-quote mutation this branch touches.
+function mockRequireNotCeoReviewing(pr) {
+  if (pr.status === 'CEO_REVIEWING') {
+    fail('Pricing request is under CEO review — factory quote mutations are frozen', 409);
+  }
 }
 
 function pushPricingRequestEvent(pr, actor, eventKind, fromStatus, toStatus, message = null, metadata = null) {
@@ -4675,6 +4689,7 @@ export const api = {
       }
       if (!quote.current) fail('Only the current factory quote revision can receive a response', 409);
       const pr = findPricingRequestRaw(quote.pricingRequestId);
+      mockRequireNotCeoReviewing(pr);
       const applyResponse = (target) => {
         target.status = 'RESPONSE_RECEIVED';
         target.supplierQuoteRef = payload.supplierQuoteRef ?? null;
@@ -4736,6 +4751,7 @@ export const api = {
       const user = hasRole('import');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
       if (!quote) fail('Factory quote not found', 404);
+      mockRequireNotCeoReviewing(findPricingRequestRaw(quote.pricingRequestId));
       if (quote.status !== 'RESPONSE_RECEIVED' || !quote.current) fail('Only a current received response can enter negotiation', 409);
       quote.status = 'NEGOTIATING';
       quote.negotiationNote = payload.note;
@@ -4748,6 +4764,7 @@ export const api = {
       const user = hasRole('import');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
       if (!quote) fail('Factory quote not found', 404);
+      mockRequireNotCeoReviewing(findPricingRequestRaw(quote.pricingRequestId));
       if (!['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) || !quote.current) fail('Current response must have raw prices before it can be marked ready', 409);
       quote.status = 'READY_FOR_COSTING';
       quote.updatedAt = new Date().toISOString();
@@ -4759,6 +4776,7 @@ export const api = {
       const user = hasRole('import');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
       if (!quote) fail('Factory quote not found', 404);
+      mockRequireNotCeoReviewing(findPricingRequestRaw(quote.pricingRequestId));
       quote.status = 'NOT_AVAILABLE';
       quote.note = payload.reason;
       pushPricingRequestEvent(findPricingRequestRaw(quote.pricingRequestId), user, 'FACTORY_NOT_AVAILABLE', null, null, payload.reason);
@@ -4769,6 +4787,7 @@ export const api = {
       hasRole('import');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
       if (!quote) fail('Factory quote not found', 404);
+      mockRequireNotCeoReviewing(findPricingRequestRaw(quote.pricingRequestId));
       const attachment = {
         id: mockFactoryQuoteAttachmentSeq++,
         factoryQuoteId: quote.id,
@@ -4797,6 +4816,12 @@ export const api = {
     async createCosting(id, payload = {}) {
       const user = hasRole('import');
       const pr = findPricingRequestRaw(id);
+      // Mirrors PricingCostingService.COSTING_CREATE_STATUSES (Step 3, design corrections 3+4):
+      // READY_FOR_CEO_REVIEW/CEO_REVIEWING are deliberately excluded — a submitted costing is
+      // frozen until the CEO explicitly returns the request (-> COSTING_REVISION_REQUIRED).
+      if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS', 'COSTING_REVISION_REQUIRED'].includes(pr.status)) {
+        fail('Pricing request is not ready for costing', 409);
+      }
       const readyFactories = new Set(mockFactoryQuotes.filter((q) => q.pricingRequestId === pr.id && q.current && q.status === 'READY_FOR_COSTING').map((q) => q.factoryName));
       for (const item of pr.items) if (!readyFactories.has(item.factory)) fail(`Factory quote for ${item.factory} is not ready for costing`, 422);
       const existing = mockPricingCostings.find((c) => c.pricingRequestId === pr.id && ['DRAFT', 'CALCULATED'].includes(c.status));
@@ -4885,6 +4910,231 @@ export const api = {
       pr.status = 'READY_FOR_CEO_REVIEW';
       pushPricingRequestEvent(pr, user, 'PRICING_COSTING_SUBMITTED', 'COSTING_IN_PROGRESS', 'READY_FOR_CEO_REVIEW');
       return delay({ costing });
+    },
+
+    // ── Step 3: CEO Selling Price Decision — mirrors PricingDecisionController +
+    // PricingDecisionService (pricingdecision/). Authorization is NOT authoritative (CLAUDE.md);
+    // verify role/scope behavior against the real Java service.
+    //
+    // Simplifications vs the real backend (documented, not silent): FX is always THB (rate 1) —
+    // the same simplification the costing mock above already makes (no fxRate/fxSource fields on
+    // a mock costing item, no BOT validation); selling price is computed in THB only.
+
+    async startPricingDecision(id, payload = {}) {
+      const user = hasRole('ceo');
+      const pr = findPricingRequestRaw(id);
+      if (pr.status !== 'READY_FOR_CEO_REVIEW') fail('Pricing request is not ready for CEO review', 409);
+      const openDraft = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'DRAFT');
+      if (openDraft) return delay({ decision: openDraft });
+      const submittedCostings = mockPricingCostings.filter((c) => c.pricingRequestId === pr.id && c.status === 'SUBMITTED');
+      const costing = submittedCostings[submittedCostings.length - 1];
+      if (!costing) fail('Pricing request has no submitted costing', 409);
+      const currency = (payload.currency || pr.targetCurrency || 'THB').toUpperCase();
+      const defaultMarginPct = payload.defaultMarginPct ?? null;
+      const decisionVersionNo = mockPricingDecisions.filter((d) => d.pricingRequestId === pr.id).length + 1;
+      const decision = {
+        id: mockPricingDecisionSeq++,
+        decisionCode: `PCD-2026-${String(mockPricingDecisionSeq).padStart(4, '0')}`,
+        pricingRequestId: pr.id,
+        pricingCostingId: costing.id,
+        decisionVersionNo,
+        status: 'DRAFT',
+        defaultMarginPct,
+        currency,
+        fxRateUsed: 1,
+        fxSource: 'THB',
+        fxEffectiveDate: new Date().toISOString().slice(0, 10),
+        ceoNote: payload.ceoNote ?? null,
+        returnReason: null,
+        approveClientRequestId: null,
+        createdBy: user.id,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        approvedBy: null,
+        approvedAt: null,
+        returnedAt: null,
+        items: costing.items.map((costingItem) => {
+          const prItem = pr.items.find((i) => i.id === costingItem.pricingRequestItemId);
+          const frozenPerPiece = Number(costingItem.landedCostPerUnitThb ?? 0);
+          const requestedQuantity = Number(costingItem.requestedQuantity ?? prItem?.requestedQty ?? 0);
+          const frozenPerRequestedUnit = requestedQuantity > 0
+            ? Number(costingItem.totalLandedCostThb ?? 0) / requestedQuantity : frozenPerPiece;
+          const proposedSellingPricePerRequestedUnit = defaultMarginPct != null
+            ? frozenPerRequestedUnit * (1 + Number(defaultMarginPct)) : null;
+          return {
+            id: mockPricingDecisionItemSeq++,
+            pricingDecisionId: decision?.id,
+            pricingRequestItemId: costingItem.pricingRequestItemId,
+            pricingCostingItemId: costingItem.pricingRequestItemId,
+            brand: prItem?.brand ?? null,
+            model: prItem?.model ?? null,
+            productDescription: prItem?.productDescription ?? null,
+            factoryName: costingItem.factoryName ?? null,
+            requestedUnitBasis: costingItem.requestedUnitBasis,
+            requestedQuantity,
+            normalizedQuantityPieces: costingItem.normalizedQuantityPieces,
+            frozenLandedCostPerPieceThb: frozenPerPiece,
+            frozenLandedCostPerRequestedUnitThb: frozenPerRequestedUnit,
+            currency,
+            proposedMarginPct: defaultMarginPct,
+            approvedMarginPct: null,
+            proposedSellingPricePerRequestedUnit,
+            approvedSellingPricePerRequestedUnit: null,
+            discountCeilingPct: null,
+            minimumSellingPricePerRequestedUnit: null,
+            decisionNote: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        }),
+      };
+      // Fix up the self-reference now that decision.id is known (items were built before push).
+      decision.items.forEach((item) => { item.pricingDecisionId = decision.id; });
+      mockPricingDecisions.push(decision);
+      pr.status = 'CEO_REVIEWING';
+      pushPricingRequestEvent(pr, user, 'PRICING_DECISION_STARTED', 'READY_FOR_CEO_REVIEW', 'CEO_REVIEWING');
+      return delay({ decision });
+    },
+
+    async listPricingDecisions(id) {
+      hasRole('import', 'ceo');
+      return delay({ items: mockPricingDecisions.filter((d) => d.pricingRequestId === Number(id)) });
+    },
+
+    async getPricingDecisionSalesView(id) {
+      const user = hasRole('sales', 'sales_manager', 'ceo', 'import');
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (user.role === 'sales' && ticket?.createdById !== user.id) fail('Forbidden', 403);
+      const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
+      if (!decision) fail('No approved pricing decision yet', 404);
+      // Design correction 2 ("never leak cost to Sales"): a fresh object literal per item with
+      // ONLY these fields — never a spread of the raw (cost/margin-bearing) decision item.
+      return delay({
+        decision: {
+          pricingRequestId: pr.id,
+          pricingDecisionId: decision.id,
+          currency: decision.currency,
+          approvedAt: decision.approvedAt,
+          items: decision.items.map((item) => ({
+            pricingRequestItemId: item.pricingRequestItemId,
+            brand: item.brand,
+            model: item.model,
+            productDescription: item.productDescription,
+            requestedUnitBasis: item.requestedUnitBasis,
+            requestedQuantity: item.requestedQuantity,
+            approvedSellingPricePerRequestedUnit: item.approvedSellingPricePerRequestedUnit,
+            discountCeilingPct: item.discountCeilingPct,
+            minimumSellingPricePerRequestedUnit: item.minimumSellingPricePerRequestedUnit,
+          })),
+        },
+      });
+    },
+
+    async getPricingDecision(id) {
+      hasRole('import', 'ceo');
+      const decision = mockPricingDecisions.find((d) => d.id === Number(id));
+      if (!decision) fail('Pricing decision not found', 404);
+      return delay({ decision });
+    },
+
+    async updatePricingDecision(id, payload) {
+      hasRole('ceo');
+      const decision = mockPricingDecisions.find((d) => d.id === Number(id));
+      if (!decision) fail('Pricing decision not found', 404);
+      if (decision.status !== 'DRAFT') fail('Decision is not open for editing', 409);
+      if (payload.ceoNote != null) decision.ceoNote = payload.ceoNote;
+      for (const itemPayload of payload.items ?? []) {
+        const item = decision.items.find((i) => i.id === Number(itemPayload.pricingDecisionItemId));
+        if (!item) fail(`Item ${itemPayload.pricingDecisionItemId} does not belong to this decision`, 400);
+        if (itemPayload.marginPct != null) {
+          item.proposedMarginPct = itemPayload.marginPct;
+          item.proposedSellingPricePerRequestedUnit =
+            item.frozenLandedCostPerRequestedUnitThb * (1 + Number(itemPayload.marginPct));
+        }
+        if (itemPayload.discountCeilingPct != null) item.discountCeilingPct = itemPayload.discountCeilingPct;
+        if (itemPayload.minimumSellingPrice != null) item.minimumSellingPricePerRequestedUnit = itemPayload.minimumSellingPrice;
+        if (itemPayload.decisionNote != null) item.decisionNote = itemPayload.decisionNote;
+        item.updatedAt = new Date().toISOString();
+      }
+      decision.updatedAt = new Date().toISOString();
+      return delay({ decision });
+    },
+
+    async recalculatePricingDecision(id, payload = {}) {
+      hasRole('ceo');
+      const decision = mockPricingDecisions.find((d) => d.id === Number(id));
+      if (!decision) fail('Pricing decision not found', 404);
+      if (decision.status !== 'DRAFT') fail('Decision is not open for editing', 409);
+      if (payload.defaultMarginPct != null) decision.defaultMarginPct = payload.defaultMarginPct;
+      for (const item of decision.items) {
+        const margin = payload.defaultMarginPct != null ? payload.defaultMarginPct : item.proposedMarginPct;
+        if (margin == null) continue;
+        item.proposedMarginPct = margin;
+        item.proposedSellingPricePerRequestedUnit = item.frozenLandedCostPerRequestedUnitThb * (1 + Number(margin));
+        item.updatedAt = new Date().toISOString();
+      }
+      decision.updatedAt = new Date().toISOString();
+      return delay({ decision });
+    },
+
+    async approvePricingDecision(id, payload = {}) {
+      const user = hasRole('ceo');
+      const decision = mockPricingDecisions.find((d) => d.id === Number(id));
+      if (!decision) fail('Pricing decision not found', 404);
+      if (payload.clientRequestId && decision.approveClientRequestId === payload.clientRequestId
+          && decision.status === 'APPROVED') {
+        return delay({ decision });
+      }
+      if (decision.status !== 'DRAFT') fail('Decision is not open for approval', 409);
+      const pr = findPricingRequestRaw(decision.pricingRequestId);
+      if (pr.status !== 'CEO_REVIEWING') fail('Pricing request is not under CEO review', 409);
+      const missingMargin = decision.items.filter((i) => i.proposedMarginPct == null).map((i) => i.id);
+      const missingMinimum = decision.items.filter((i) => i.minimumSellingPricePerRequestedUnit == null).map((i) => i.id);
+      if (missingMargin.length || missingMinimum.length) {
+        fail(`Every item needs a margin and a minimum selling price before approval — missing margin: [${missingMargin}], missing minimum selling price: [${missingMinimum}]`, 422);
+      }
+      // Never trust a stored/client-supplied selling price — recompute from frozen cost + margin.
+      for (const item of decision.items) {
+        item.approvedMarginPct = item.proposedMarginPct;
+        item.approvedSellingPricePerRequestedUnit =
+          item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
+        item.updatedAt = new Date().toISOString();
+      }
+      decision.status = 'APPROVED';
+      decision.approvedBy = user.id;
+      decision.approvedAt = new Date().toISOString();
+      decision.approveClientRequestId = payload.clientRequestId ?? null;
+      if (payload.ceoNote != null) decision.ceoNote = payload.ceoNote;
+      decision.updatedAt = new Date().toISOString();
+      pr.status = 'APPROVED_FOR_QUOTATION';
+      pushPricingRequestEvent(pr, user, 'PRICING_DECISION_APPROVED', 'CEO_REVIEWING', 'APPROVED_FOR_QUOTATION');
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      addNotification(pr.requestedById, pr.ticketId, ticket?.code, 'PRICING_DECISION_APPROVED',
+        `ใบขอราคา ${pr.requestCode} ได้รับอนุมัติราคาขายแล้ว`);
+      return delay({ decision });
+    },
+
+    async returnPricingDecisionToImport(id, payload) {
+      const user = hasRole('ceo');
+      if (!payload?.returnReason?.trim()) fail('returnReason is required', 400);
+      const decision = mockPricingDecisions.find((d) => d.id === Number(id));
+      if (!decision) fail('Pricing decision not found', 404);
+      if (decision.status !== 'DRAFT') fail('Decision is not open for editing', 409);
+      const pr = findPricingRequestRaw(decision.pricingRequestId);
+      if (pr.status !== 'CEO_REVIEWING') fail('Pricing request is not under CEO review', 409);
+      decision.status = 'RETURNED';
+      decision.returnReason = payload.returnReason;
+      decision.returnedAt = new Date().toISOString();
+      decision.updatedAt = new Date().toISOString();
+      pr.status = 'COSTING_REVISION_REQUIRED';
+      pushPricingRequestEvent(pr, user, 'PRICING_DECISION_RETURNED', 'CEO_REVIEWING', 'COSTING_REVISION_REQUIRED', payload.returnReason);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (pr.assignedImportId != null) {
+        addNotification(pr.assignedImportId, pr.ticketId, ticket?.code, 'PRICING_DECISION_RETURNED',
+          `ใบขอราคา ${pr.requestCode} ถูก CEO ตีกลับให้แก้ไขต้นทุน`);
+      }
+      return delay({ decision });
     },
 
     async submit(id) {

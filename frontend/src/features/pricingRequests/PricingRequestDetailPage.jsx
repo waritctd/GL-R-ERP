@@ -8,7 +8,16 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
-import { canRequestInformation, canRespondInformation, pricingRequestRecipientLabel, quantityTypeLabel } from './pricingRequestMeta.js';
+import {
+  canActOnPricingDecision,
+  canRequestInformation,
+  canRespondInformation,
+  canSeePricingDecisionSalesView,
+  canSeeRawPricingDecision,
+  canStartCeoReview,
+  pricingRequestRecipientLabel,
+  quantityTypeLabel,
+} from './pricingRequestMeta.js';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 
 function isImport(user) {
@@ -147,6 +156,25 @@ export function PricingRequestDetailPage({ user, showToast }) {
     enabled: Number.isFinite(pricingRequestId) && canSeeRaw(user),
   });
 
+  // Step 3: CEO Selling Price Decision. Raw (cost/margin-bearing) history is import/ceo only
+  // (design correction 2 — never leak cost to Sales); this query must never even fire for a
+  // sales/sales_manager actor, not just be hidden in the DOM.
+  const decisionsQuery = useQuery({
+    queryKey: queryKeys.pricingDecisions(pricingRequestId),
+    queryFn: () => api.pricingRequests.listPricingDecisions(pricingRequestId).then((r) => r.items ?? []),
+    enabled: Number.isFinite(pricingRequestId) && canSeeRawPricingDecision(user),
+  });
+
+  // Sales-facing approved-price projection — a distinct query/DTO, not a client-side filter of
+  // decisionsQuery above (which sales never even fetches).
+  const decisionSalesViewQuery = useQuery({
+    queryKey: queryKeys.pricingDecisionSalesView(pricingRequestId),
+    queryFn: () => api.pricingRequests.getPricingDecisionSalesView(pricingRequestId).then((r) => r.decision),
+    enabled: Number.isFinite(pricingRequestId) && !canSeeRawPricingDecision(user)
+      && canSeePricingDecisionSalesView(user, detailQuery.data?.summary),
+    retry: false,
+  });
+
   // Pricing Request attachments (V69, review remediation COMMIT 4): Sales-level supporting
   // attachments on the request itself — every viewer role can see the list (requireViewable's
   // usual scoping already applies server-side: a non-owner sales rep never even reaches this
@@ -162,6 +190,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestFactoryQuotes(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestCostings(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestAttachments(pricingRequestId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.pricingDecisions(pricingRequestId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.pricingDecisionSalesView(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: ['pricingRequests', 'queue'] });
   }
 
@@ -216,6 +246,45 @@ export function PricingRequestDetailPage({ user, showToast }) {
     (attachment) => api.pricingRequests.setAttachmentIncludeInFactoryEmail(attachment.id, !attachment.includeInFactoryEmail),
     'อัปเดตไฟล์แนบแล้ว',
   );
+  // Step 3: CEO Selling Price Decision.
+  const [decisionDefaultMargin, setDecisionDefaultMargin] = useState('0.20');
+  const [startReviewClientRequestId] = useState(() => generateClientRequestId());
+  const [decisionItemDrafts, setDecisionItemDrafts] = useState({});
+  const [approveClientRequestId, setApproveClientRequestId] = useState(() => generateClientRequestId());
+  const startCeoReview = useActionMutation(
+    () => api.pricingRequests.startPricingDecision(pricingRequestId, {
+      defaultMarginPct: cleanNumber(decisionDefaultMargin),
+      clientRequestId: startReviewClientRequestId,
+    }),
+    'เริ่มพิจารณาราคาขายแล้ว',
+  );
+  const saveDecisionItems = useActionMutation(({ decision, items }) => api.pricingRequests.updatePricingDecision(decision.id, {
+    items: items.map((item) => {
+      const draft = decisionItemDrafts[item.id] ?? {};
+      return {
+        pricingDecisionItemId: item.id,
+        marginPct: cleanNumber(draft.marginPct ?? item.proposedMarginPct),
+        discountCeilingPct: cleanNumber(draft.discountCeilingPct ?? item.discountCeilingPct),
+        minimumSellingPrice: cleanNumber(draft.minimumSellingPrice ?? item.minimumSellingPricePerRequestedUnit),
+        decisionNote: draft.decisionNote ?? item.decisionNote ?? null,
+      };
+    }),
+  }), 'บันทึกราคาขายที่เสนอแล้ว');
+  const approveDecision = useMutation({
+    mutationFn: (decision) => api.pricingRequests.approvePricingDecision(decision.id, {
+      clientRequestId: approveClientRequestId,
+    }),
+    onSuccess: () => {
+      setApproveClientRequestId(generateClientRequestId());
+      showToast?.('success', 'อนุมัติราคาขายแล้ว');
+      invalidate();
+    },
+    onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+  });
+  const returnDecisionToImport = useActionMutation(
+    ({ decision, reason }) => api.pricingRequests.returnPricingDecisionToImport(decision.id, { returnReason: reason }),
+    'ตีกลับให้ Import แก้ไขต้นทุนแล้ว',
+  );
   const request = detailQuery.data;
   const summary = request?.summary;
   const status = pricingRequestStatusLabel(summary?.status);
@@ -225,6 +294,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
     () => [...costings].reverse().find((costing) => ['DRAFT', 'CALCULATED'].includes(costing.status)),
     [costings],
   );
+  const pricingDecisions = useMemo(() => decisionsQuery.data ?? [], [decisionsQuery.data]);
+  // The currently-relevant decision: the open DRAFT if one exists (the CEO's active review),
+  // else the most recent one (so a just-approved or just-returned decision still renders).
+  const currentDecision = useMemo(
+    () => pricingDecisions.find((d) => d.status === 'DRAFT') ?? [...pricingDecisions].reverse()[0] ?? null,
+    [pricingDecisions],
+  );
+  const decisionSalesView = decisionSalesViewQuery.data;
   const canCreateCustomerRevision = isSales(user)
     && summary?.ticketCreatedById === user?.employeeId
     && !['DRAFT', 'CANCELLED', 'SUPERSEDED'].includes(summary?.status);
@@ -563,20 +640,195 @@ export function PricingRequestDetailPage({ user, showToast }) {
         </section>
       ) : null}
 
+      {canSeeRawPricingDecision(user) ? (
+        <section className="table-panel">
+          <div className="panel-header">
+            <h2>CEO Selling Price Decision</h2>
+          </div>
+          <div className="flex flex-col gap-3 p-3">
+            {!currentDecision && canStartCeoReview(user, summary) ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="text-xs text-text-muted">
+                  Default margin
+                  <input
+                    className="form-input ml-2 w-24"
+                    value={decisionDefaultMargin}
+                    onChange={(e) => setDecisionDefaultMargin(e.target.value)}
+                    placeholder="0.20"
+                  />
+                </label>
+                <button type="button" className="primary-button" disabled={startCeoReview.isPending} onClick={() => startCeoReview.mutate()}>
+                  เริ่มพิจารณาราคาขาย
+                </button>
+              </div>
+            ) : null}
+            {!currentDecision && !canStartCeoReview(user, summary) ? (
+              <p className="text-sm text-text-muted">ยังไม่มีการพิจารณาราคาขาย</p>
+            ) : null}
+            {currentDecision ? (() => {
+              const decision = currentDecision;
+              const isDraft = decision.status === 'DRAFT';
+              const editable = isDraft && canActOnPricingDecision(user, summary);
+              const missingBeforeApprove = decision.items.filter((item) => {
+                const draft = decisionItemDrafts[item.id] ?? {};
+                const margin = draft.marginPct ?? item.proposedMarginPct;
+                const minPrice = draft.minimumSellingPrice ?? item.minimumSellingPricePerRequestedUnit;
+                return margin == null || margin === '' || minPrice == null || minPrice === '';
+              });
+              return (
+                <div className="rounded-md border border-border bg-surface p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <strong>{decision.decisionCode}</strong>
+                    <StatusBadge tone="neutral">Version {decision.decisionVersionNo}</StatusBadge>
+                    <StatusBadge tone={decision.status === 'APPROVED' ? 'success' : decision.status === 'RETURNED' ? 'danger' : 'warning'}>
+                      {decision.status}
+                    </StatusBadge>
+                    <span className="text-xs text-text-muted">
+                      {decision.currency} · FX {decision.fxRateUsed} ({decision.fxSource}, {decision.fxEffectiveDate})
+                    </span>
+                  </div>
+                  <div className="mt-3 flex flex-col gap-2">
+                    {decision.items.map((item) => {
+                      const draft = decisionItemDrafts[item.id] ?? {};
+                      const effectiveMargin = draft.marginPct ?? item.proposedMarginPct ?? '';
+                      const effectiveMinimum = draft.minimumSellingPrice ?? item.minimumSellingPricePerRequestedUnit ?? '';
+                      const effectiveCeiling = draft.discountCeilingPct ?? item.discountCeilingPct ?? '';
+                      const belowMinimum = effectiveMinimum !== '' && item.proposedSellingPricePerRequestedUnit != null
+                        && Number(item.proposedSellingPricePerRequestedUnit) < Number(effectiveMinimum);
+                      return (
+                        <div key={item.id} className="rounded-md border border-border-subtle p-2">
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
+                            <strong className="text-text">{[item.brand, item.model].filter(Boolean).join(' ') || item.productDescription || '-'}</strong>
+                            <span>{item.factoryName ?? '-'}</span>
+                            <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
+                            <span>ต้นทุน/หน่วย: {formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</span>
+                            {belowMinimum ? <StatusBadge tone="danger">ต่ำกว่าราคาขั้นต่ำ</StatusBadge> : null}
+                          </div>
+                          {editable ? (
+                            <div className="mt-2 grid gap-2 md:grid-cols-4">
+                              <input
+                                className="form-input"
+                                value={effectiveMargin}
+                                onChange={(e) => setDecisionItemDrafts((cur) => ({ ...cur, [item.id]: { ...draft, marginPct: e.target.value } }))}
+                                placeholder="Margin (0.20 = 20%)"
+                              />
+                              <input
+                                className="form-input"
+                                value={effectiveMinimum}
+                                onChange={(e) => setDecisionItemDrafts((cur) => ({ ...cur, [item.id]: { ...draft, minimumSellingPrice: e.target.value } }))}
+                                placeholder="ราคาขั้นต่ำ"
+                              />
+                              <input
+                                className="form-input"
+                                value={effectiveCeiling}
+                                onChange={(e) => setDecisionItemDrafts((cur) => ({ ...cur, [item.id]: { ...draft, discountCeilingPct: e.target.value } }))}
+                                placeholder="Discount ceiling (0.10 = 10%)"
+                              />
+                              <span className="self-center text-xs text-text-muted">
+                                ราคาขายเสนอ: {formatCurrency(item.proposedSellingPricePerRequestedUnit, decision.currency)}
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
+                              <span>Margin: {item.approvedMarginPct ?? item.proposedMarginPct ?? '-'}</span>
+                              <span>ราคาขาย: {formatCurrency(item.approvedSellingPricePerRequestedUnit ?? item.proposedSellingPricePerRequestedUnit, decision.currency)}</span>
+                              <span>ราคาขั้นต่ำ: {item.minimumSellingPricePerRequestedUnit != null ? formatCurrency(item.minimumSellingPricePerRequestedUnit, decision.currency) : '-'}</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {editable ? (
+                    <div className="mt-3 flex flex-wrap gap-2 border-t border-border-subtle pt-3">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={saveDecisionItems.isPending}
+                        onClick={() => saveDecisionItems.mutate({ decision, items: decision.items })}
+                      >
+                        บันทึกการเปลี่ยนแปลง
+                      </button>
+                      <button
+                        type="button"
+                        className="primary-button"
+                        disabled={approveDecision.isPending || missingBeforeApprove.length > 0}
+                        onClick={() => setConfirmAction({ type: 'approveDecision', decision })}
+                      >
+                        อนุมัติราคาขาย
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={returnDecisionToImport.isPending}
+                        onClick={() => setConfirmAction({ type: 'returnDecision', decision })}
+                      >
+                        ตีกลับให้ Import แก้ไข
+                      </button>
+                      {missingBeforeApprove.length > 0 ? (
+                        <span className="self-center text-xs text-danger">ทุกรายการต้องมี margin และราคาขั้นต่ำก่อนอนุมัติ</span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })() : null}
+            {pricingDecisions.length > 1 ? (
+              <div className="text-xs text-text-muted">
+                ประวัติ: {pricingDecisions.map((d) => `v${d.decisionVersionNo} (${d.status})`).join(' · ')}
+              </div>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      {!canSeeRawPricingDecision(user) && canSeePricingDecisionSalesView(user, summary) && decisionSalesView ? (
+        <section className="table-panel">
+          <div className="panel-header"><h2>ราคาขายที่อนุมัติ</h2></div>
+          <div className="flex flex-col gap-2 p-3">
+            {decisionSalesView.items.map((item) => (
+              <div key={item.pricingRequestItemId} className="rounded-md border border-border bg-surface p-3 text-sm">
+                <strong>{[item.brand, item.model].filter(Boolean).join(' ') || item.productDescription || '-'}</strong>
+                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
+                  <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
+                  <span>ราคาขาย: {formatCurrency(item.approvedSellingPricePerRequestedUnit, decisionSalesView.currency)}</span>
+                  {item.discountCeilingPct != null ? <span>ส่วนลดสูงสุด: {item.discountCeilingPct}</span> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <ConfirmDialog
         open={Boolean(confirmAction)}
-        title={confirmAction?.type === 'submitCosting' ? 'Submit costing to CEO' : 'ส่งอีเมลถึงโรงงาน'}
+        title={confirmAction?.type === 'submitCosting' ? 'Submit costing to CEO'
+          : confirmAction?.type === 'approveDecision' ? 'อนุมัติราคาขาย'
+          : confirmAction?.type === 'returnDecision' ? 'ตีกลับให้ Import แก้ไขต้นทุน'
+          : 'ส่งอีเมลถึงโรงงาน'}
         message={confirmAction?.type === 'submitCosting'
           ? 'เมื่อ submit แล้ว costing version นี้จะแก้ไขไม่ได้'
-          : 'ยืนยันการส่งคำขอราคาให้โรงงานด้วยรายละเอียดอีเมลนี้'}
-        confirmLabel={confirmAction?.type === 'submitCosting' ? 'Submit to CEO' : 'ส่งอีเมล'}
-        busy={sendQuote.isPending || submitCosting.isPending}
+          : confirmAction?.type === 'approveDecision'
+            ? 'เมื่ออนุมัติแล้ว ราคาขายจะถูกส่งให้ฝ่ายขายและไม่สามารถแก้ไขราคานี้ได้อีก'
+            : confirmAction?.type === 'returnDecision'
+              ? 'ระบุเหตุผลที่ตีกลับให้ Import คำนวณต้นทุนใหม่'
+              : 'ยืนยันการส่งคำขอราคาให้โรงงานด้วยรายละเอียดอีเมลนี้'}
+        confirmLabel={confirmAction?.type === 'submitCosting' ? 'Submit to CEO'
+          : confirmAction?.type === 'approveDecision' ? 'อนุมัติ'
+          : confirmAction?.type === 'returnDecision' ? 'ตีกลับ'
+          : 'ส่งอีเมล'}
+        tone={confirmAction?.type === 'returnDecision' ? 'danger' : 'default'}
+        requireReason={confirmAction?.type === 'returnDecision'}
+        reasonLabel="เหตุผลที่ตีกลับ"
+        busy={sendQuote.isPending || submitCosting.isPending || approveDecision.isPending || returnDecisionToImport.isPending}
         onCancel={() => setConfirmAction(null)}
-        onConfirm={() => {
+        onConfirm={(reason) => {
           const action = confirmAction;
           setConfirmAction(null);
           if (action?.type === 'submitCosting') submitCosting.mutate(action.costing);
           if (action?.type === 'sendQuote') sendQuote.mutate({ quote: action.quote, draft: action.emailDraft });
+          if (action?.type === 'approveDecision') approveDecision.mutate(action.decision);
+          if (action?.type === 'returnDecision') returnDecisionToImport.mutate({ decision: action.decision, reason });
         }}
       />
 

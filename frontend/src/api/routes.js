@@ -172,6 +172,13 @@ export const API_ROUTES = {
     costing: (id) => `/api/pricing-costings/${id}`,
     costingRecalculate: (id) => `/api/pricing-costings/${id}/recalculate`,
     costingSubmit: (id) => `/api/pricing-costings/${id}/submit`,
+    // Step 3: CEO Selling Price Decision. Mirrors PricingDecisionController.
+    pricingDecisions: (id) => `/api/pricing-requests/${id}/pricing-decisions`,
+    pricingDecisionSalesView: (id) => `/api/pricing-requests/${id}/pricing-decision/sales-view`,
+    pricingDecision: (id) => `/api/pricing-decisions/${id}`,
+    pricingDecisionRecalculate: (id) => `/api/pricing-decisions/${id}/recalculate`,
+    pricingDecisionApprove: (id) => `/api/pricing-decisions/${id}/approve`,
+    pricingDecisionReturnToImport: (id) => `/api/pricing-decisions/${id}/return-to-import`,
     submit: (id) => `/api/pricing-requests/${id}/submit`,
     pickup: (id) => `/api/pricing-requests/${id}/pickup`,
     requestInformation: (id) => `/api/pricing-requests/${id}/request-information`,

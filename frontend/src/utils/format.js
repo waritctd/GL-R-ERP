@@ -85,6 +85,10 @@ export function pricingRequestStatusLabel(status) {
     AWAITING_FACTORY_RESPONSE: { label: 'รอราคาโรงงาน', tone: 'warning' },
     COSTING_IN_PROGRESS: { label: 'กำลังร่างต้นทุน', tone: 'info' },
     READY_FOR_CEO_REVIEW: { label: 'ส่งให้ CEO ตรวจแล้ว', tone: 'success' },
+    // Step 3 (CEO Selling Price Decision).
+    CEO_REVIEWING: { label: 'CEO กำลังพิจารณาราคาขาย', tone: 'info' },
+    APPROVED_FOR_QUOTATION: { label: 'อนุมัติราคาขายแล้ว', tone: 'success' },
+    COSTING_REVISION_REQUIRED: { label: 'CEO ตีกลับให้แก้ไขต้นทุน', tone: 'danger' },
     MORE_INFO_REQUIRED: { label: 'รอข้อมูลเพิ่มเติม', tone: 'warning' },
     SUPERSEDED: { label: 'ถูกแทนที่แล้ว', tone: 'neutral' },
     CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },

@@ -42,15 +42,21 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
 
 @Service
 public class PricingCostingService {
-    private static final BigDecimal ONE = BigDecimal.ONE;
     private static final BigDecimal ZERO = BigDecimal.ZERO;
     private static final Set<String> IMPORT_ROLES = Set.of("import");
     private static final Set<String> RAW_COSTING_ROLES = Set.of("import", "ceo");
+    // Step 3 (CEO Selling Price Decision, "submitted costing is immutable... actually true"):
+    // READY_FOR_CEO_REVIEW is deliberately EXCLUDED here, unlike before — Import used to be able
+    // to silently reopen a SUBMITTED costing any time the request sat at READY_FOR_CEO_REVIEW,
+    // which made a "submitted costing is immutable" claim false. COSTING_REVISION_REQUIRED is
+    // the one replacement: it is only reachable via PricingDecisionService.returnToImport (the
+    // CEO's own action), so createDraft can no longer bypass the CEO. See
+    // PricingRequestStatus's ALLOWED map for the corresponding state-machine change.
     private static final Set<String> COSTING_CREATE_STATUSES = Set.of(
         PricingRequestStatus.IMPORT_REVIEWING,
         PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
         PricingRequestStatus.COSTING_IN_PROGRESS,
-        PricingRequestStatus.READY_FOR_CEO_REVIEW);
+        PricingRequestStatus.COSTING_REVISION_REQUIRED);
 
     private final PricingCostingRepository costings;
     private final PricingRequestRepository pricingRequests;
@@ -309,24 +315,12 @@ public class PricingCostingService {
         return result;
     }
 
+    /**
+     * Delegates to {@link th.co.glr.hr.pricing.FxResolver#resolve} (Step 3 extraction — see that
+     * class's Javadoc). Behaviour unchanged from before the extraction.
+     */
     private FxSnapshot resolveFx(String currencyValue) {
-        String currency = firstText(currencyValue, "THB").toUpperCase();
-        if ("THB".equals(currency)) {
-            return fxRates.findByCurrency("THB")
-                .map(rate -> new FxSnapshot(rate.rateToThb(), rate.source(), rate.effectiveDate(), rate.fetchedAt()))
-                .orElseGet(() -> new FxSnapshot(ONE, "THB", LocalDate.now(), null));
-        }
-        FxRateDto rate = fxRates.findByCurrency(currency)
-            .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "ไม่พบอัตราแลกเปลี่ยนสำหรับสกุลเงิน " + currency));
-        if (!"BOT".equalsIgnoreCase(rate.source()) || rate.fetchedAt() == null) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "อัตราแลกเปลี่ยน " + currency + " ต้องมาจาก BOT ก่อนคำนวณต้นทุน");
-        }
-        if (rate.effectiveDate() == null || rate.effectiveDate().isBefore(LocalDate.now().minusDays(7))) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "อัตราแลกเปลี่ยน BOT สำหรับ " + currency + " เก่าเกินไป");
-        }
+        FxRateDto rate = th.co.glr.hr.pricing.FxResolver.resolve(fxRates, currencyValue);
         return new FxSnapshot(rate.rateToThb(), rate.source(), rate.effectiveDate(), rate.fetchedAt());
     }
 

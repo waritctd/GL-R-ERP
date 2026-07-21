@@ -15,13 +15,47 @@ import org.junit.jupiter.api.Test;
 class PricingRequestStatusTest {
 
     @Test
-    void readyForCeoReview_toCostingInProgress_isNowAllowed() {
-        // The new entry this commit adds: PricingCostingService.createDraft() (a fresh costing
-        // draft opened against an already-submitted-to-CEO request) and
-        // FactoryQuoteService.receive()'s revision branch (a factory revising its quote after CEO
-        // review has already started) both legitimately reopen costing from here.
+    void readyForCeoReview_toCostingInProgress_isNoLongerAllowed() {
+        // Step 3 (CEO Selling Price Decision, "one return-to-Import path"): the direct
+        // READY_FOR_CEO_REVIEW -> COSTING_IN_PROGRESS entry (added by the commit this test used to
+        // document) let Import silently reopen a SUBMITTED costing without any CEO action, which
+        // made "submitted costing is immutable" false. It is removed; the only way back to
+        // COSTING_IN_PROGRESS from a submitted-to-CEO request is now
+        // CEO_REVIEWING -> COSTING_REVISION_REQUIRED -> COSTING_IN_PROGRESS (the CEO must
+        // explicitly return it) — see the next two tests.
         assertThat(PricingRequestStatus.canTransition(
-            PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.COSTING_IN_PROGRESS)).isTrue();
+            PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.COSTING_IN_PROGRESS)).isFalse();
+    }
+
+    @Test
+    void readyForCeoReview_toCeoReviewing_isAllowed() {
+        // The CEO explicitly starting review (PricingDecisionService.startReview) — the one entry
+        // point into Step 3.
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.CEO_REVIEWING)).isTrue();
+    }
+
+    @Test
+    void ceoReviewing_toApprovedForQuotationOrCostingRevisionRequired_isAllowed() {
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.CEO_REVIEWING, PricingRequestStatus.APPROVED_FOR_QUOTATION)).isTrue();
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.CEO_REVIEWING, PricingRequestStatus.COSTING_REVISION_REQUIRED)).isTrue();
+    }
+
+    @Test
+    void costingRevisionRequired_toCostingInProgress_isAllowed() {
+        // The single named return-to-Import state (design correction 4) — Import calling
+        // PricingCostingService.createDraft is what actually performs this transition.
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.COSTING_REVISION_REQUIRED, PricingRequestStatus.COSTING_IN_PROGRESS)).isTrue();
+    }
+
+    @Test
+    void approvedForQuotation_isTerminalForStep3() {
+        for (String to : PricingRequestStatus.VALUES) {
+            assertThat(PricingRequestStatus.canTransition(PricingRequestStatus.APPROVED_FOR_QUOTATION, to)).isFalse();
+        }
     }
 
     @Test

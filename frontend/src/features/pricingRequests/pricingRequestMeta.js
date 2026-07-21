@@ -17,6 +17,9 @@ export const PRICING_REQUEST_STATUSES = [
   'AWAITING_FACTORY_RESPONSE',
   'COSTING_IN_PROGRESS',
   'READY_FOR_CEO_REVIEW',
+  'CEO_REVIEWING',
+  'APPROVED_FOR_QUOTATION',
+  'COSTING_REVISION_REQUIRED',
   'MORE_INFO_REQUIRED',
   'CANCELLED',
   'SUPERSEDED',
@@ -31,12 +34,17 @@ const ALLOWED_TRANSITIONS = {
   IMPORT_REVIEWING: ['AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS', 'MORE_INFO_REQUIRED', 'CANCELLED', 'SUPERSEDED'],
   AWAITING_FACTORY_RESPONSE: ['COSTING_IN_PROGRESS', 'MORE_INFO_REQUIRED', 'CANCELLED', 'SUPERSEDED'],
   COSTING_IN_PROGRESS: ['AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW', 'MORE_INFO_REQUIRED', 'CANCELLED', 'SUPERSEDED'],
-  // Costing v2 path (review remediation COMMIT 5): a factory revising its quote after CEO review
-  // has already started, or Import opening a new costing draft against an already-submitted
-  // request, both reopen costing rather than only allowing SUPERSEDED — mirrors the backend fix
-  // to PricingRequestStatus.ALLOWED (previously decorative; PricingRequestRepository.transition()
-  // now enforces it server-side too).
-  READY_FOR_CEO_REVIEW: ['COSTING_IN_PROGRESS', 'SUPERSEDED'],
+  // Step 3 (CEO Selling Price Decision, "one return-to-Import path"): the old
+  // READY_FOR_CEO_REVIEW -> COSTING_IN_PROGRESS direct reopen entry (Costing v2 path, commit 5)
+  // let Import silently reopen a SUBMITTED costing without any CEO action — removed, since that
+  // is exactly what made "submitted costing is immutable" false. The CEO must now explicitly
+  // start review (-> CEO_REVIEWING); the only reopen path afterward is
+  // CEO_REVIEWING -> COSTING_REVISION_REQUIRED -> COSTING_IN_PROGRESS. Mirrors the backend fix to
+  // PricingRequestStatus.ALLOWED.
+  READY_FOR_CEO_REVIEW: ['CEO_REVIEWING', 'SUPERSEDED'],
+  CEO_REVIEWING: ['APPROVED_FOR_QUOTATION', 'COSTING_REVISION_REQUIRED'],
+  COSTING_REVISION_REQUIRED: ['COSTING_IN_PROGRESS'],
+  APPROVED_FOR_QUOTATION: [],
   MORE_INFO_REQUIRED: ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS', 'CANCELLED'],
   SUPERSEDED: [],
   CANCELLED: [],
@@ -118,6 +126,32 @@ export function canRespondInformation(user, pr) {
   return user?.role === 'sales' && pr?.ticketCreatedById != null
     && Number(pr.ticketCreatedById) === Number(user.id)
     && pr?.status === 'MORE_INFO_REQUIRED';
+}
+
+// ── Step 3: CEO Selling Price Decision. Mirrors PricingDecisionService. ──────────────────
+
+/** Mirrors PricingDecisionService.startReview: ceo only, READY_FOR_CEO_REVIEW only. */
+export function canStartCeoReview(user, pr) {
+  return user?.role === 'ceo' && pr?.status === 'READY_FOR_CEO_REVIEW';
+}
+
+/** Mirrors PricingDecisionService.update/recalculate/approve/returnToImport: ceo only, and
+ * only while the request is CEO_REVIEWING (the decision itself must also be DRAFT — the caller
+ * passes the decision, not just the pricing request, when that distinction matters). */
+export function canActOnPricingDecision(user, pr) {
+  return user?.role === 'ceo' && pr?.status === 'CEO_REVIEWING';
+}
+
+/** Mirrors PricingDecisionService.RAW_DECISION_ROLES: only import/ceo ever see cost/margin. */
+export function canSeeRawPricingDecision(user) {
+  return user?.role === 'import' || user?.role === 'ceo';
+}
+
+/** Mirrors PricingDecisionService.salesView's SALES_VIEW_ROLES + owner scoping for 'sales'. */
+export function canSeePricingDecisionSalesView(user, pr) {
+  if (!user || !['sales', 'sales_manager', 'ceo', 'import'].includes(user.role)) return false;
+  if (user.role === 'sales') return pr?.ticketCreatedById != null && Number(pr.ticketCreatedById) === Number(user.id);
+  return true;
 }
 
 /** Mirrors PricingRequestService.cancel: owner sales OR ceo, any cancellable status. */

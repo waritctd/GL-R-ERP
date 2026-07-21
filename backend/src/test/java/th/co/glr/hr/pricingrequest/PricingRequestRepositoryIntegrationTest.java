@@ -165,16 +165,33 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
     }
 
     @Test
-    void transition_readyForCeoReviewToCostingInProgress_isNowPermittedByTheCanonicalMap() {
-        // Repository-level test (no full costing workflow needed): drive the row directly to
-        // READY_FOR_CEO_REVIEW via SQL, then prove transition() itself (not just the DB's CHECK
-        // constraint, which never restricted this) now accepts the reopen this commit's ALLOWED
-        // entry adds.
+    void transition_readyForCeoReviewToCostingInProgress_isNoLongerPermitted() {
+        // Step 3 (design corrections 3+4): a submitted costing must be genuinely immutable once
+        // READY_FOR_CEO_REVIEW, so this direct reopen (Costing v2 path, commit 5) is removed —
+        // the only route back to COSTING_IN_PROGRESS now goes through the CEO explicitly
+        // returning the request (CEO_REVIEWING -> COSTING_REVISION_REQUIRED -> COSTING_IN_PROGRESS,
+        // see the next test).
         long id = createDraft();
         jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
             Map.of("status", PricingRequestStatus.READY_FOR_CEO_REVIEW, "id", id));
 
-        int rows = requests.transition(id, PricingRequestStatus.READY_FOR_CEO_REVIEW,
+        assertThatThrownBy(() -> requests.transition(id, PricingRequestStatus.READY_FOR_CEO_REVIEW,
+            PricingRequestStatus.COSTING_IN_PROGRESS, null, null))
+            .isInstanceOf(IllegalStateException.class);
+
+        assertThat(requests.findSummary(id).orElseThrow().status()).isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
+    }
+
+    @Test
+    void transition_costingRevisionRequiredToCostingInProgress_isPermittedByTheCanonicalMap() {
+        // The Step 3 replacement: repository-level proof that the single named return-to-Import
+        // state (COSTING_REVISION_REQUIRED) can transition on to COSTING_IN_PROGRESS, the same
+        // way READY_FOR_CEO_REVIEW used to before this branch's change.
+        long id = createDraft();
+        jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
+            Map.of("status", PricingRequestStatus.COSTING_REVISION_REQUIRED, "id", id));
+
+        int rows = requests.transition(id, PricingRequestStatus.COSTING_REVISION_REQUIRED,
             PricingRequestStatus.COSTING_IN_PROGRESS, null, null);
 
         assertThat(rows).isEqualTo(1);

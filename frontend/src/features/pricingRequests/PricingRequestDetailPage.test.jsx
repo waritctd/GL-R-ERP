@@ -46,6 +46,12 @@ vi.mock('../../api/index.js', () => ({
       deleteAttachment: vi.fn(),
       setAttachmentIncludeInFactoryEmail: vi.fn(),
       createCustomerChangeRevision: vi.fn(),
+      listPricingDecisions: vi.fn(),
+      getPricingDecisionSalesView: vi.fn(),
+      startPricingDecision: vi.fn(),
+      updatePricingDecision: vi.fn(),
+      approvePricingDecision: vi.fn(),
+      returnPricingDecisionToImport: vi.fn(),
     },
     catalog: {
       prices: vi.fn(),
@@ -186,7 +192,90 @@ function setApiDefaults() {
   api.pricingRequests.deleteAttachment.mockResolvedValue({});
   api.pricingRequests.setAttachmentIncludeInFactoryEmail.mockResolvedValue({});
   api.pricingRequests.createCustomerChangeRevision.mockResolvedValue({ pricingRequest: { summary: { id: 999 } } });
+  api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [] });
+  api.pricingRequests.getPricingDecisionSalesView.mockRejectedValue(new Error('No approved pricing decision yet'));
+  api.pricingRequests.startPricingDecision.mockResolvedValue({});
+  api.pricingRequests.updatePricingDecision.mockResolvedValue({});
+  api.pricingRequests.approvePricingDecision.mockResolvedValue({});
+  api.pricingRequests.returnPricingDecisionToImport.mockResolvedValue({});
   api.catalog.prices.mockResolvedValue({ items: [] });
+}
+
+// Step 3 (CEO Selling Price Decision) fixtures. Mirrors PricingDecisionDtos.PricingDecisionDto /
+// PricingDecisionItemDto — never spread into the sales-facing view builder below, which mirrors
+// PricingDecisionSalesViewDto/PricingDecisionSalesItemDto instead (design correction 2).
+function buildDecisionItem(overrides = {}) {
+  return {
+    id: 8001,
+    pricingDecisionId: 7001,
+    pricingRequestItemId: 1,
+    pricingCostingItemId: 1,
+    brand: 'SCG',
+    model: 'A1',
+    productDescription: 'กระเบื้องพื้น SCG A1',
+    factoryName: 'SCG Ceramics',
+    requestedUnitBasis: 'PER_PIECE',
+    requestedQuantity: 20,
+    normalizedQuantityPieces: 20,
+    frozenLandedCostPerPieceThb: 60,
+    frozenLandedCostPerRequestedUnitThb: 60,
+    currency: 'THB',
+    proposedMarginPct: 0.2,
+    approvedMarginPct: null,
+    proposedSellingPricePerRequestedUnit: 72,
+    approvedSellingPricePerRequestedUnit: null,
+    discountCeilingPct: 0.1,
+    minimumSellingPricePerRequestedUnit: 65,
+    decisionNote: null,
+    ...overrides,
+  };
+}
+
+function buildDecision(overrides = {}) {
+  return {
+    id: 7001,
+    decisionCode: 'PCD-2026-0001',
+    pricingRequestId: 501,
+    pricingCostingId: 601,
+    decisionVersionNo: 1,
+    status: 'DRAFT',
+    defaultMarginPct: 0.2,
+    currency: 'THB',
+    fxRateUsed: 1,
+    fxSource: 'THB',
+    fxEffectiveDate: '2026-07-21',
+    ceoNote: null,
+    returnReason: null,
+    createdBy: 4,
+    approvedBy: null,
+    approvedAt: null,
+    returnedAt: null,
+    items: [buildDecisionItem()],
+    ...overrides,
+  };
+}
+
+function buildSalesView(overrides = {}) {
+  return {
+    pricingRequestId: 501,
+    pricingDecisionId: 7001,
+    currency: 'THB',
+    approvedAt: '2026-07-21T00:00:00Z',
+    items: [
+      {
+        pricingRequestItemId: 1,
+        brand: 'SCG',
+        model: 'A1',
+        productDescription: 'กระเบื้องพื้น SCG A1',
+        requestedUnitBasis: 'PER_PIECE',
+        requestedQuantity: 20,
+        approvedSellingPricePerRequestedUnit: 72,
+        discountCeilingPct: 0.1,
+        minimumSellingPricePerRequestedUnit: 65,
+      },
+    ],
+    ...overrides,
+  };
 }
 
 function renderDetailPage({
@@ -509,6 +598,140 @@ describe('PricingRequestDetailPage pricing-request attachments (COMMIT 4)', () =
     fireEvent.click(await screen.findByRole('button', { name: 'ลบไฟล์แนบ spec.pdf' }));
 
     await waitFor(() => expect(api.pricingRequests.deleteAttachment).toHaveBeenCalledWith(7));
+  });
+});
+
+describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level only — see file header)', () => {
+  it('lets the CEO start a review from READY_FOR_CEO_REVIEW, calling startPricingDecision', async () => {
+    const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'เริ่มพิจารณาราคาขาย' }));
+
+    await waitFor(() => expect(api.pricingRequests.startPricingDecision).toHaveBeenCalledWith(
+      request.summary.id,
+      expect.objectContaining({ defaultMarginPct: 0.2, clientRequestId: expect.any(String) }),
+    ));
+  });
+
+  it('does not offer "เริ่มพิจารณาราคาขาย" to Import — ceo only, mirrors PricingDecisionService.startReview', async () => {
+    const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    expect(screen.queryByRole('button', { name: 'เริ่มพิจารณาราคาขาย' })).toBeNull();
+  });
+
+  it('never fetches pricing-decision history for sales/sales_manager — a distinct gate from the raw quote/costing one', async () => {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    await waitFor(() => expect(api.pricingRequests.listFactoryQuotes).not.toHaveBeenCalled());
+    expect(api.pricingRequests.listPricingDecisions).not.toHaveBeenCalled();
+  });
+
+  it('lets the CEO edit an item margin/minimum price and save via updatePricingDecision', async () => {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+    await screen.findByText('PCD-2026-0001');
+
+    const marginInput = screen.getByPlaceholderText('Margin (0.20 = 20%)');
+    fireEvent.change(marginInput, { target: { value: '0.35' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการเปลี่ยนแปลง' }));
+
+    await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+      7001,
+      expect.objectContaining({
+        items: [expect.objectContaining({ pricingDecisionItemId: 8001, marginPct: 0.35, minimumSellingPrice: 65 })],
+      }),
+    ));
+  });
+
+  it('disables approval until every item has a margin and a minimum selling price (mirrors the server 422 gate)', async () => {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({
+      items: [buildDecision({ items: [buildDecisionItem({ minimumSellingPricePerRequestedUnit: null })] })],
+    });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+    await screen.findByText('PCD-2026-0001');
+
+    expect(screen.getByRole('button', { name: 'อนุมัติราคาขาย' }).disabled).toBe(true);
+  });
+
+  it('approves through the confirm dialog, calling approvePricingDecision', async () => {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+    await screen.findByText('PCD-2026-0001');
+
+    fireEvent.click(screen.getByRole('button', { name: 'อนุมัติราคาขาย' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'อนุมัติ' }));
+
+    await waitFor(() => expect(api.pricingRequests.approvePricingDecision).toHaveBeenCalledWith(
+      7001,
+      expect.objectContaining({ clientRequestId: expect.any(String) }),
+    ));
+  });
+
+  it('returns to Import through the confirm dialog, requiring a reason, calling returnPricingDecisionToImport', async () => {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+    await screen.findByText('PCD-2026-0001');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ตีกลับให้ Import แก้ไข' }));
+    const dialog = await screen.findByRole('dialog');
+    const reasonInput = within(dialog).getByLabelText('เหตุผลที่ตีกลับ');
+    fireEvent.change(reasonInput, { target: { value: 'ราคาต้นทุนคลาดเคลื่อน' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ตีกลับ' }));
+
+    await waitFor(() => expect(api.pricingRequests.returnPricingDecisionToImport).toHaveBeenCalledWith(
+      7001,
+      { returnReason: 'ราคาต้นทุนคลาดเคลื่อน' },
+    ));
+  });
+
+  it('shows Import the raw decision read-only — no margin/price editing controls', async () => {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    expect(await screen.findByText('PCD-2026-0001')).not.toBeNull();
+    expect(screen.queryByPlaceholderText('Margin (0.20 = 20%)')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'อนุมัติราคาขาย' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ตีกลับให้ Import แก้ไข' })).toBeNull();
+  });
+
+  it('shows Sales the approved selling price via the sales-view projection, with no cost/margin figure anywhere on the page', async () => {
+    const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
+    api.pricingRequests.getPricingDecisionSalesView.mockResolvedValue({ decision: buildSalesView() });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    expect(await screen.findByText('ราคาขายที่อนุมัติ')).not.toBeNull();
+    // The approved selling price (72 THB) is shown...
+    expect(screen.getByText(/72/)).not.toBeNull();
+    // ...but the underlying frozen cost (60 THB) never appears anywhere — the sales-view DTO
+    // this page renders structurally has no cost/margin field at all (design correction 2).
+    expect(screen.queryByText(/ต้นทุน/)).toBeNull();
+    expect(screen.queryByText(/Margin/)).toBeNull();
+  });
+
+  it('does not fetch the sales-view projection for a non-owning sales rep', async () => {
+    const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION', ticketCreatedById: 999 } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    await waitFor(() => expect(api.pricingRequests.listFactoryQuotes).not.toHaveBeenCalled());
+    expect(api.pricingRequests.getPricingDecisionSalesView).not.toHaveBeenCalled();
   });
 });
 

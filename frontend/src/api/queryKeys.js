@@ -35,4 +35,8 @@ export const queryKeys = {
   pricingRequestCostings: (id) => ['pricingRequests', 'costings', id],
   pricingRequestAttachments: (id) => ['pricingRequests', 'attachments', id],
   pricingCostingDetail: (id) => ['pricingCostings', 'detail', id],
+  // Step 3: CEO Selling Price Decision.
+  pricingDecisions: (id) => ['pricingRequests', 'pricingDecisions', id],
+  pricingDecisionSalesView: (id) => ['pricingRequests', 'pricingDecisionSalesView', id],
+  pricingDecisionDetail: (id) => ['pricingDecisions', 'detail', id],
 };
