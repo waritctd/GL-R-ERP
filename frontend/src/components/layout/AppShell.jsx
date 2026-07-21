@@ -35,6 +35,9 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', show: user.role === 'ceo' && SALES_ENABLED },
     { path: '/catalog', label: 'แคตตาล็อกสินค้า', helper: 'Product catalog', icon: 'search', show: SALES_ENABLED },
     { path: '/price-import', label: 'นำเข้าราคา', helper: 'Price import', icon: 'upload', show: hasPermission(user.role, 'canManagePriceImport') && SALES_ENABLED },
+    // Step 7: Factory Purchase Order and Import Execution — Import/CEO only, mirrors
+    // ProcurementService.RAW_PO_ROLES. Sales never sees raw supplier PO detail.
+    { path: '/factory-purchase-orders', label: 'ใบสั่งซื้อโรงงาน', helper: 'Factory purchase orders', icon: 'fileText', show: hasPermission(user.role, 'canManageProcurement') && SALES_ENABLED },
     { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED },
     { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', show: hasPermission(user.role, 'canManagePayroll') },
     { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', show: hasPermission(user.role, 'canViewEmployees') },

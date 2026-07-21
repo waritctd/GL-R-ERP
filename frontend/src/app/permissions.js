@@ -66,6 +66,9 @@ const PATH_GUARDS = [
   { test: (p) => p.startsWith('/pricing-requests/'), can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') || u.role === 'sales' },
   // Matches the sidebar's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
   { test: (p) => p === '/ceo-settings', can: (u) => u.role === 'ceo' },
+  // Step 7: Factory Purchase Order and Import Execution — Import/CEO only, mirrors
+  // ProcurementService.RAW_PO_ROLES and AppShell.jsx's own nav condition.
+  { test: (p) => p === '/factory-purchase-orders' || p.startsWith('/factory-purchase-orders/'), can: (u) => hasPermission(u.role, 'canManageProcurement') },
 ];
 
 export function canAccessPath(path, user) {
