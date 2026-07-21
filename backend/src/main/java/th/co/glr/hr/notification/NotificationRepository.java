@@ -109,7 +109,9 @@ public class NotificationRepository {
         Map.entry("PRICING_COSTING_SUBMITTED", "ส่งต้นทุนให้ CEO แล้ว"),
         Map.entry("PRICING_DECISION_STARTED", "CEO เริ่มพิจารณาราคาขาย"),
         Map.entry("PRICING_DECISION_APPROVED", "ราคาขายได้รับการอนุมัติแล้ว"),
-        Map.entry("PRICING_DECISION_RETURNED", "CEO ตีกลับให้แก้ไขต้นทุน")
+        Map.entry("PRICING_DECISION_RETURNED", "CEO ตีกลับให้แก้ไขต้นทุน"),
+        Map.entry("CUSTOMER_QUOTATION_ISSUED", "ออกใบเสนอราคาลูกค้าแล้ว"),
+        Map.entry("CUSTOMER_QUOTATION_CANCELLED", "ใบเสนอราคาลูกค้าถูกยกเลิก")
     );
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {

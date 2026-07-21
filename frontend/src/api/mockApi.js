@@ -422,6 +422,14 @@ let mockPricingCostingSeq = 1;
 const mockPricingDecisions = [];
 let mockPricingDecisionSeq = 1;
 let mockPricingDecisionItemSeq = 1;
+// Step 4: Customer Quotation Generation and Issuance — extends sales.quotation/quotation_item
+// (owner's decision: ONE quotation aggregate, not a parallel table). Kept as its own flat mock
+// array (like mockPricingDecisions) rather than nested inside a ticket's `.quotations`, since a
+// Step 4 quotation is keyed by pricingRequestId first — the legacy ticket-item-driven
+// `ticket.quotations` array is untouched by this section.
+const mockCustomerQuotations = [];
+let mockCustomerQuotationSeq = 1;
+let mockCustomerQuotationItemSeq = 1;
 const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'sales_manager'];
 const PRICING_REQUEST_RECIPIENT_VALUES = PRICING_REQUEST_RECIPIENT_OPTIONS.map((o) => o.code);
 const PRICING_REQUEST_QUANTITY_TYPE_VALUES = PRICING_REQUEST_QUANTITY_TYPE_OPTIONS.map((o) => o.code);
@@ -487,6 +495,154 @@ function pushPricingRequestEvent(pr, actor, eventKind, fromStatus, toStatus, mes
     metadata,
     createdAt: new Date().toISOString(),
   });
+}
+
+function round2(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
+/** Builds a fresh Step 4 DRAFT quotation, snapshotting prices from the current APPROVED
+ * pricing_decision — mirrors CustomerQuotationService.create/createRevision's item-building
+ * (buildItem). `priorDiscounts` (keyed by pricingRequestItemId) is empty for a first-ever
+ * create and carries forward each line's discount for a revision. */
+function buildMockCustomerQuotationDraft(pr, decision, ticket, user, payload, parentQuotationId, revisionNo, priorDiscounts) {
+  const customer = ticket?.customerId ? mockCustomers.find((c) => c.id === ticket.customerId) : null;
+  const project = ticket?.projectId ? mockProjects.find((p) => p.id === ticket.projectId) : null;
+  const id = mockCustomerQuotationSeq++;
+  const items = decision.items
+    .filter((di) => di.approvedSellingPricePerRequestedUnit != null)
+    .map((di, idx) => {
+      const discount = Number(priorDiscounts?.[di.pricingRequestItemId] ?? 0);
+      const approvedUnitPrice = Number(di.approvedSellingPricePerRequestedUnit);
+      const finalUnitPrice = approvedUnitPrice - discount;
+      const lineSubtotal = round2(finalUnitPrice * Number(di.requestedQuantity));
+      const vat = round2(lineSubtotal * 0.07);
+      return {
+        id: mockCustomerQuotationItemSeq++,
+        seq: idx + 1,
+        pricingRequestItemId: di.pricingRequestItemId,
+        pricingDecisionItemId: di.id,
+        description: di.productDescription || [di.brand, di.model].filter(Boolean).join(' '),
+        itemNotes: null,
+        requestedUnitBasis: di.requestedUnitBasis,
+        requestedQuantity: Number(di.requestedQuantity),
+        approvedUnitPrice,
+        salesDiscount: discount,
+        finalUnitPrice,
+        minimumSellingPricePerRequestedUnit: di.minimumSellingPricePerRequestedUnit ?? null,
+        lineSubtotal,
+        vat,
+        lineTotal: round2(lineSubtotal + vat),
+      };
+    });
+  const quotation = {
+    id,
+    number: `QT-2026-${String(id).padStart(4, '0')}`,
+    ticketId: pr.ticketId,
+    pricingRequestId: pr.id,
+    pricingDecisionId: decision.id,
+    recipientType: pr.recipientType,
+    recipientLabel: pr.recipientLabel ?? null,
+    docStatus: 'DRAFT',
+    quotationVersion: revisionNo,
+    quotationRevisionNo: revisionNo,
+    parentQuotationId: parentQuotationId ?? null,
+    issuedById: user.id,
+    issuedByName: user.name,
+    issuedAt: null,
+    subtotalAmount: 0,
+    vatAmount: 0,
+    grandTotal: 0,
+    currency: decision.currency || 'THB',
+    paymentTerms: payload.paymentTerms || null,
+    leadTime: payload.leadTime || null,
+    deliveryTerms: payload.deliveryTerms || null,
+    validityDate: payload.validityDate || null,
+    customerNotes: payload.customerNotes || null,
+    sentAt: null,
+    acceptedAt: null,
+    rejectedAt: null,
+    createdAt: new Date().toISOString(),
+    clientRequestId: payload.clientRequestId ?? null,
+    issueClientRequestId: null,
+    customerName: ticket?.customerName ?? (customer ? customer.name : null),
+    customerAddress: customer ? customer.address : null,
+    customerTaxId: customer ? customer.taxId : null,
+    customerPhone: customer ? customer.phone : null,
+    projectName: project ? project.name : null,
+    items,
+  };
+  recalcMockCustomerQuotationTotals(quotation);
+  return quotation;
+}
+
+function recalcMockCustomerQuotationTotals(quotation) {
+  quotation.subtotalAmount = round2(quotation.items.reduce((sum, it) => sum + it.lineSubtotal, 0));
+  quotation.vatAmount = round2(quotation.items.reduce((sum, it) => sum + it.vat, 0));
+  quotation.grandTotal = round2(quotation.items.reduce((sum, it) => sum + it.lineTotal, 0));
+}
+
+// Read access: sales/sales_manager/ceo/import, sales scoped to their own deal. account is
+// deliberately excluded end-to-end (task brief: "account role: no quotation editing", and
+// Step 3's own precedent excludes account from every raw-pricing-adjacent view on this chain).
+function mockCustomerQuotationViewAccess(id) {
+  const user = hasRole('sales', 'sales_manager', 'ceo', 'import');
+  const quotation = mockCustomerQuotations.find((q) => q.id === Number(id));
+  if (!quotation) fail('Customer quotation not found', 404);
+  if (user.role === 'sales') {
+    const pr = findPricingRequestRaw(quotation.pricingRequestId);
+    const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+    if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+  }
+  return quotation;
+}
+
+// Write access: sales, ticket owner only — ceo/import/sales_manager are read-only everywhere
+// on this aggregate (caller must already have called hasRole('sales') for `user`).
+function mockCustomerQuotationEditAccess(id, user) {
+  const quotation = mockCustomerQuotations.find((q) => q.id === Number(id));
+  if (!quotation) fail('Customer quotation not found', 404);
+  const pr = findPricingRequestRaw(quotation.pricingRequestId);
+  const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+  if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+  return quotation;
+}
+
+// Demo-mode file preview for a Step 4 quotation — mirrors buildMockQuotationXlsx/
+// buildMockQuotationHtml's own placeholder pattern (same styling/colors, same "real file comes
+// from the server template" banner) rather than inventing a second preview style.
+function buildMockCustomerQuotationDocument(quotation, format) {
+  if (format === 'xlsx') {
+    const lines = [
+      `ใบเสนอราคา  เลขที่ ${quotation.number ?? ''} (revision ${quotation.quotationRevisionNo})`,
+      `วันที่: ${mockThaiDate(quotation.issuedAt ? new Date(quotation.issuedAt) : new Date())}`,
+      `ลูกค้า: ${quotation.customerName ?? ''}`,
+      ...(quotation.projectName ? [`Project: ${quotation.projectName}`] : []),
+      '',
+      ...quotation.items.map((it, i) => `${i + 1}. ${it.description} — ${it.requestedQuantity} × ${it.finalUnitPrice}`),
+    ];
+    return Promise.resolve(mockDocPlaceholderBlob(lines));
+  }
+  const fmtNum = (n) => Number(n).toLocaleString('th-TH', { minimumFractionDigits: 2 });
+  const rowsHtml = quotation.items.map((it, i) =>
+    `<tr><td>${i + 1}</td><td>${it.description}</td><td style="text-align:right">${it.requestedQuantity}</td><td style="text-align:right">${fmtNum(it.finalUnitPrice)}</td><td style="text-align:right">${fmtNum(it.lineSubtotal)}</td></tr>`
+  ).join('');
+  const html = `<!DOCTYPE html><html lang="th"><head><meta charset="utf-8"/><title>ใบเสนอราคา ${quotation.number}</title>
+<style>body{font-family:sans-serif;padding:40px;color:#1e293b;max-width:900px;margin:auto}
+h2{margin:0 0 4px}.meta{color:#64748b;font-size:13px;margin-bottom:24px}
+table{width:100%;border-collapse:collapse;margin-top:16px}
+th{background:#f1f5f9;border:1px solid #cbd5e1;padding:8px 10px;text-align:left;font-size:13px}
+td{border:1px solid #e2e8f0;padding:8px 10px;font-size:13px}
+.banner{background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:10px 14px;margin-bottom:20px;font-size:13px;color:#92400e}
+.total{font-weight:700;font-size:15px;text-align:right;margin-top:16px}</style></head>
+<body><div class="banner">⚠ Demo Mode — PDF จริงสร้างจาก template บน server</div>
+<h2>ใบเสนอราคา</h2>
+<div class="meta">เลขที่: <strong>${quotation.number}</strong> revision ${quotation.quotationRevisionNo} &nbsp;|&nbsp; ลูกค้า: <strong>${quotation.customerName ?? ''}</strong></div>
+<table><thead><tr><th>#</th><th>รายละเอียด</th><th>จำนวน</th><th>ราคา/หน่วย</th><th>เป็นเงิน (บาท)</th></tr></thead>
+<tbody>${rowsHtml}</tbody>
+<tfoot><tr><td colspan="4" style="text-align:right;font-weight:700">รวมเป็นเงิน</td><td style="text-align:right;font-weight:700">${fmtNum(quotation.subtotalAmount)}</td></tr></tfoot></table>
+<div class="total">VAT 7%: ${fmtNum(quotation.vatAmount)} บาท &nbsp;|&nbsp; รวมทั้งสิ้น: ${fmtNum(quotation.grandTotal)} บาท</div></body></html>`;
+  return Promise.resolve(new Blob([html], { type: 'text/html;charset=utf-8' }));
 }
 
 // Mirrors PricingRequestService.detail()'s join: the ticket a request belongs
@@ -5135,6 +5291,193 @@ export const api = {
           `ใบขอราคา ${pr.requestCode} ถูก CEO ตีกลับให้แก้ไขต้นทุน`);
       }
       return delay({ decision });
+    },
+
+    // ── Step 4: Customer Quotation Generation and Issuance — mirrors
+    // CustomerQuotationController + CustomerQuotationService (customerquotation/).
+    // Authorization is NOT authoritative (CLAUDE.md); verify against the real Java service.
+    // Simplification vs the real backend (documented, not silent): FX/currency mirrors Step 3's
+    // own mock simplification — THB only, rate 1 (no fxRate/fxSource fields anywhere on this
+    // aggregate either, same as the pricing-decision mock above).
+
+    async createCustomerQuotation(id, payload = {}) {
+      const user = hasRole('sales');
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (payload.clientRequestId) {
+        const replay = mockCustomerQuotations.find(
+          (q) => q.issuedById === user.id && q.clientRequestId === payload.clientRequestId);
+        if (replay) return delay({ quotation: replay });
+      }
+      if (pr.status !== 'APPROVED_FOR_QUOTATION') {
+        fail(`ใบขอราคาต้องอยู่ในสถานะ 'อนุมัติราคาขายแล้ว' ก่อนจึงจะออกใบเสนอราคาลูกค้าได้ (ปัจจุบัน: ${pr.status})`, 409);
+      }
+      const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
+      if (!decision) fail('ยังไม่มีราคาขายที่ CEO อนุมัติสำหรับใบขอราคานี้', 409);
+      const quotation = buildMockCustomerQuotationDraft(pr, decision, ticket, user, payload, null, 1, {});
+      mockCustomerQuotations.push(quotation);
+      pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_CREATED', pr.status, pr.status, 'สร้างร่างใบเสนอราคาลูกค้า');
+      return delay({ quotation });
+    },
+
+    async listCustomerQuotations(id) {
+      const user = hasRole('sales', 'sales_manager', 'ceo', 'import');
+      const pr = findPricingRequestRaw(id);
+      if (user.role === 'sales') {
+        const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+        if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      }
+      return delay({
+        items: mockCustomerQuotations
+          .filter((q) => q.pricingRequestId === pr.id)
+          .sort((a, b) => a.quotationRevisionNo - b.quotationRevisionNo),
+      });
+    },
+
+    async getCustomerQuotation(id) {
+      const quotation = mockCustomerQuotationViewAccess(id);
+      return delay({ quotation });
+    },
+
+    async updateCustomerQuotation(id, payload = {}) {
+      const user = hasRole('sales');
+      const quotation = mockCustomerQuotationEditAccess(id, user);
+      if (!['DRAFT', 'READY_TO_ISSUE'].includes(quotation.docStatus)) {
+        fail(`แก้ไขได้เฉพาะใบเสนอราคาที่ยังเป็นร่างเท่านั้น (ปัจจุบัน: ${quotation.docStatus})`, 409);
+      }
+      if (payload.paymentTerms != null) quotation.paymentTerms = payload.paymentTerms;
+      if (payload.leadTime != null) quotation.leadTime = payload.leadTime;
+      if (payload.deliveryTerms != null) quotation.deliveryTerms = payload.deliveryTerms;
+      if (payload.validityDate != null) quotation.validityDate = payload.validityDate;
+      if (payload.customerNotes != null) quotation.customerNotes = payload.customerNotes;
+      for (const itemPayload of payload.items ?? []) {
+        const item = quotation.items.find((i) => i.id === Number(itemPayload.quotationItemId));
+        if (!item) fail(`รายการ ${itemPayload.quotationItemId} ไม่ได้อยู่ในใบเสนอราคานี้`, 400);
+        const discount = itemPayload.salesDiscount != null ? Number(itemPayload.salesDiscount) : (item.salesDiscount ?? 0);
+        if (discount < 0) fail('ส่วนลดต้องไม่ติดลบ', 400);
+        const finalUnitPrice = item.approvedUnitPrice - discount;
+        if (finalUnitPrice < 0) fail('ส่วนลดต้องไม่เกินราคาที่อนุมัติ', 400);
+        // Discount Policy B (owner's decision): never below the CEO-approved minimum — hard
+        // 422, no auto-escalation.
+        if (item.minimumSellingPricePerRequestedUnit != null && finalUnitPrice < item.minimumSellingPricePerRequestedUnit) {
+          fail(`ราคาหลังหักส่วนลดของรายการ ${itemPayload.quotationItemId} ต่ำกว่าราคาขั้นต่ำที่ CEO อนุมัติ`, 422);
+        }
+        if (itemPayload.description != null) item.description = itemPayload.description;
+        if (itemPayload.itemNotes != null) item.itemNotes = itemPayload.itemNotes;
+        item.salesDiscount = discount;
+        item.finalUnitPrice = finalUnitPrice;
+        item.lineSubtotal = round2(finalUnitPrice * item.requestedQuantity);
+        item.vat = round2(item.lineSubtotal * 0.07);
+        item.lineTotal = round2(item.lineSubtotal + item.vat);
+      }
+      recalcMockCustomerQuotationTotals(quotation);
+      pushPricingRequestEvent(findPricingRequestRaw(quotation.pricingRequestId), user, 'CUSTOMER_QUOTATION_UPDATED',
+        null, null, `แก้ไขใบเสนอราคาลูกค้า ${quotation.number}`);
+      return delay({ quotation });
+    },
+
+    async previewCustomerQuotation(id) {
+      // Rule 12: pure read, zero writes — same object the last create/update already computed.
+      const quotation = mockCustomerQuotationViewAccess(id);
+      return delay({ quotation });
+    },
+
+    async issueCustomerQuotation(id, payload = {}) {
+      const user = hasRole('sales');
+      const preview = mockCustomerQuotationEditAccess(id, user);
+      if (payload.clientRequestId) {
+        const replay = mockCustomerQuotations.find(
+          (q) => q.issuedById === user.id && q.issueClientRequestId === payload.clientRequestId);
+        if (replay) {
+          if (replay.id !== preview.id) fail('clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น', 409);
+          return delay({ quotation: replay });
+        }
+      }
+      if (!['DRAFT', 'READY_TO_ISSUE'].includes(preview.docStatus)) {
+        if (preview.docStatus === 'ISSUED') fail('ใบเสนอราคานี้ออกไปแล้ว', 409);
+        fail(`ใบเสนอราคาไม่ได้อยู่ในสถานะที่ออกได้ (${preview.docStatus})`, 409);
+      }
+      for (const item of preview.items) {
+        if (item.minimumSellingPricePerRequestedUnit != null && item.finalUnitPrice < item.minimumSellingPricePerRequestedUnit) {
+          fail(`ไม่สามารถออกใบเสนอราคาได้ — รายการ ${item.id} ต่ำกว่าราคาขั้นต่ำ`, 422);
+        }
+      }
+      preview.docStatus = 'ISSUED';
+      preview.issuedAt = new Date().toISOString();
+      preview.issueClientRequestId = payload.clientRequestId ?? null;
+
+      const pr = findPricingRequestRaw(preview.pricingRequestId);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      // Only the FIRST issue moves the pricing request — a revision's re-issue is a no-op
+      // transition (mirrors PricingRequestStatus.QUOTATION_ISSUED being terminal).
+      if (pr.status === 'APPROVED_FOR_QUOTATION') {
+        pr.status = 'QUOTATION_ISSUED';
+      }
+      // Rule 7: reuse the EXACT SAME stage-advance the legacy quotation() mock action already
+      // performs — not a second path.
+      if (['DESIGNER', 'OWNER'].includes(preview.recipientType)) autoAdvanceStage(ticket, 'QUOTE_DESIGN_SIDE', user);
+      if (preview.recipientType === 'BUYER') autoAdvanceStage(ticket, 'QUOTE_BUYER', user);
+      pushEvent(ticket, user, 'QUOTATION_ISSUED', null, null,
+        `ออกใบเสนอราคาลูกค้า ${preview.number} (revision ${preview.quotationRevisionNo})`);
+      pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_ISSUED', null, null, `ออกใบเสนอราคาลูกค้า ${preview.number}`);
+      // "Customer notification" — no customer user account exists in this system to notify
+      // in-app, so (matching the real service) the closest equivalent is a CEO-visibility
+      // notification. Documented, not silently substituted.
+      const ceoUsers = db.users.filter((u) => u.role === 'ceo');
+      ceoUsers.forEach((ceo) => addNotification(ceo.id, pr.ticketId, ticket?.code, 'CUSTOMER_QUOTATION_ISSUED',
+        `ใบเสนอราคาลูกค้า ${preview.number} ถูกออกแล้ว`));
+      return delay({ quotation: preview });
+    },
+
+    async cancelCustomerQuotation(id, payload = {}) {
+      const user = hasRole('sales');
+      const quotation = mockCustomerQuotationEditAccess(id, user);
+      if (!['DRAFT', 'READY_TO_ISSUE'].includes(quotation.docStatus)) {
+        fail('ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงยกเลิกไม่ได้', 409);
+      }
+      quotation.docStatus = 'CANCELLED';
+      pushPricingRequestEvent(findPricingRequestRaw(quotation.pricingRequestId), user, 'CUSTOMER_QUOTATION_CANCELLED',
+        null, null, `ยกเลิกร่างใบเสนอราคาลูกค้า ${quotation.number}${payload.reason ? ` — ${payload.reason}` : ''}`);
+      return delay({ quotation });
+    },
+
+    async createCustomerQuotationRevision(id, payload = {}) {
+      const user = hasRole('sales');
+      const source = mockCustomerQuotationEditAccess(id, user);
+      if (source.docStatus !== 'ISSUED') fail('แก้ไข revision ใหม่ได้จากใบเสนอราคาที่ออกแล้วเท่านั้น', 409);
+      if (payload.clientRequestId) {
+        const replay = mockCustomerQuotations.find(
+          (q) => q.issuedById === user.id && q.clientRequestId === payload.clientRequestId);
+        if (replay) return delay({ quotation: replay });
+      }
+      const pr = findPricingRequestRaw(source.pricingRequestId);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
+      if (!decision) fail('ยังไม่มีราคาขายที่ CEO อนุมัติ', 409);
+      // Preserve each prior line's discount by pricingRequestItemId, same as the real service.
+      const priorDiscounts = {};
+      source.items.forEach((item) => { priorDiscounts[item.pricingRequestItemId] = item.salesDiscount; });
+      const revision = buildMockCustomerQuotationDraft(pr, decision, ticket, user, {
+        paymentTerms: source.paymentTerms, leadTime: source.leadTime, deliveryTerms: source.deliveryTerms,
+        validityDate: source.validityDate, customerNotes: source.customerNotes,
+        clientRequestId: payload.clientRequestId,
+      }, source.id, source.quotationRevisionNo + 1, priorDiscounts);
+      mockCustomerQuotations.push(revision);
+      source.docStatus = 'SUPERSEDED';
+      pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_REVISED', null, null,
+        `สร้างใบเสนอราคาลูกค้า revision ${revision.quotationRevisionNo}${payload.reason ? ` — ${payload.reason}` : ''}`);
+      return delay({ quotation: revision });
+    },
+
+    async downloadCustomerQuotationPdf(id) {
+      const quotation = mockCustomerQuotationViewAccess(id);
+      return buildMockCustomerQuotationDocument(quotation, 'pdf');
+    },
+
+    async downloadCustomerQuotationXlsx(id) {
+      const quotation = mockCustomerQuotationViewAccess(id);
+      return buildMockCustomerQuotationDocument(quotation, 'xlsx');
     },
 
     async submit(id) {

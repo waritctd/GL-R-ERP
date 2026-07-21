@@ -21,6 +21,14 @@ public final class PricingRequestStatus {
     // (sales.pricing_decision, status APPROVED). Step 4 (quotation generation) picks up from
     // here; this status itself does not create a quotation or touch the deal stage.
     public static final String APPROVED_FOR_QUOTATION = "APPROVED_FOR_QUOTATION";
+    // Step 4 (Customer Quotation Generation and Issuance): the sales rep has issued a customer
+    // quotation sourced from the current APPROVED pricing_decision
+    // (th.co.glr.hr.customerquotation.CustomerQuotationService.issue). Terminal for Step 4's
+    // first cut — a cancelled/superseded quotation does not currently roll this back to
+    // APPROVED_FOR_QUOTATION; a correction creates a new quotation revision instead and the
+    // pricing request stays QUOTATION_ISSUED throughout (see CustomerQuotationService.issue,
+    // which only calls PricingRequestRepository.transition on the FIRST issue).
+    public static final String QUOTATION_ISSUED = "QUOTATION_ISSUED";
     // The CEO returned the request to Import for a new costing version
     // (PricingDecisionService.returnToImport). This is the ONE named "return to Import" state —
     // PricingCostingService.createDraft is reachable from here (not from READY_FOR_CEO_REVIEW,
@@ -35,7 +43,7 @@ public final class PricingRequestStatus {
     public static final Set<String> VALUES = Set.of(
         DRAFT, SUBMITTED, IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE, COSTING_IN_PROGRESS,
         READY_FOR_CEO_REVIEW, CEO_REVIEWING, APPROVED_FOR_QUOTATION, COSTING_REVISION_REQUIRED,
-        MORE_INFO_REQUIRED, CANCELLED, SUPERSEDED);
+        QUOTATION_ISSUED, MORE_INFO_REQUIRED, CANCELLED, SUPERSEDED);
 
     /**
      * Allowed forward/lateral transitions. DRAFT -> DRAFT is deliberately absent:
@@ -66,8 +74,13 @@ public final class PricingRequestStatus {
         // COSTING_CREATE_STATUSES) transitions here to COSTING_IN_PROGRESS, and
         // PricingCostingService.submit() carries it back to READY_FOR_CEO_REVIEW as before.
         Map.entry(COSTING_REVISION_REQUIRED, Set.of(COSTING_IN_PROGRESS)),
-        // Terminal for Step 3 (Step 4 will extend this once quotation generation lands).
-        Map.entry(APPROVED_FOR_QUOTATION, Set.<String>of()),
+        // Step 4: the ONLY forward exit from APPROVED_FOR_QUOTATION is issuing a customer
+        // quotation (CustomerQuotationService.issue). No transition is needed for creating a
+        // DRAFT quotation (rule 6: drafts do not move the deal stage OR the pricing request
+        // status) — only the first successful issue moves the pricing request on.
+        Map.entry(APPROVED_FOR_QUOTATION, Set.of(QUOTATION_ISSUED)),
+        // Terminal for Step 4's first cut — see QUOTATION_ISSUED's own Javadoc above.
+        Map.entry(QUOTATION_ISSUED,    Set.<String>of()),
         Map.entry(SUPERSEDED,          Set.<String>of()),
         Map.entry(CANCELLED,           Set.<String>of()));
 

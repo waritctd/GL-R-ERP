@@ -3,7 +3,9 @@ import {
   activePricingRequestsSummary,
   canActOnPricingDecision,
   canCancelPricingRequest,
+  canCreateCustomerQuotation,
   canCreatePricingRequest,
+  canManageCustomerQuotation,
   canPickupPricingRequest,
   canRequestInformation,
   canRespondInformation,
@@ -13,6 +15,8 @@ import {
   canSubmitPricingRequest,
   canTransition,
   canUpdatePricingRequest,
+  canViewCustomerQuotation,
+  isCustomerQuotationEditable,
   pricingRequestRecipientLabel,
   quantityTypeLabel,
 } from './pricingRequestMeta.js';
@@ -182,6 +186,60 @@ describe('canSeePricingDecisionSalesView', () => {
   });
   it('rejects account — no access to pricing decisions at all', () => {
     expect(canSeePricingDecisionSalesView({ id: 9, role: 'account' }, pr())).toBe(false);
+  });
+});
+
+// ── Step 4: Customer Quotation Generation and Issuance ───────────────────────────────────
+describe('canCreateCustomerQuotation', () => {
+  it('allows the owning sales rep once APPROVED_FOR_QUOTATION', () => {
+    expect(canCreateCustomerQuotation(salesOwner, pr({ status: 'APPROVED_FOR_QUOTATION' }))).toBe(true);
+  });
+  it('rejects a non-owning sales rep even at the right status (wrong-way-round)', () => {
+    expect(canCreateCustomerQuotation(otherSales, pr({ status: 'APPROVED_FOR_QUOTATION' }))).toBe(false);
+  });
+  it('rejects the owner before APPROVED_FOR_QUOTATION', () => {
+    expect(canCreateCustomerQuotation(salesOwner, pr({ status: 'CEO_REVIEWING' }))).toBe(false);
+  });
+  it('rejects ceo/import entirely — quotation creation is sales-only', () => {
+    expect(canCreateCustomerQuotation(ceo, pr({ status: 'APPROVED_FOR_QUOTATION' }))).toBe(false);
+    expect(canCreateCustomerQuotation(importUser, pr({ status: 'APPROVED_FOR_QUOTATION' }))).toBe(false);
+  });
+});
+
+describe('canManageCustomerQuotation', () => {
+  it('allows only the owning sales rep, regardless of status (the service re-checks docStatus itself)', () => {
+    expect(canManageCustomerQuotation(salesOwner, pr())).toBe(true);
+    expect(canManageCustomerQuotation(otherSales, pr())).toBe(false);
+  });
+  it('rejects ceo/import/sales_manager — always read-only on this aggregate', () => {
+    expect(canManageCustomerQuotation(ceo, pr())).toBe(false);
+    expect(canManageCustomerQuotation(importUser, pr())).toBe(false);
+    expect(canManageCustomerQuotation({ id: 9, role: 'sales_manager' }, pr())).toBe(false);
+  });
+});
+
+describe('canViewCustomerQuotation', () => {
+  it('scopes sales to their own deal', () => {
+    expect(canViewCustomerQuotation(salesOwner, pr())).toBe(true);
+    expect(canViewCustomerQuotation(otherSales, pr())).toBe(false);
+  });
+  it('allows sales_manager/ceo/import unscoped', () => {
+    expect(canViewCustomerQuotation({ id: 9, role: 'sales_manager' }, pr())).toBe(true);
+    expect(canViewCustomerQuotation(ceo, pr())).toBe(true);
+    expect(canViewCustomerQuotation(importUser, pr())).toBe(true);
+  });
+  it('rejects account — no positive grant anywhere on this aggregate', () => {
+    expect(canViewCustomerQuotation({ id: 9, role: 'account' }, pr())).toBe(false);
+  });
+});
+
+describe('isCustomerQuotationEditable', () => {
+  it('is true for DRAFT and READY_TO_ISSUE, false for every other status', () => {
+    expect(isCustomerQuotationEditable({ docStatus: 'DRAFT' })).toBe(true);
+    expect(isCustomerQuotationEditable({ docStatus: 'READY_TO_ISSUE' })).toBe(true);
+    expect(isCustomerQuotationEditable({ docStatus: 'ISSUED' })).toBe(false);
+    expect(isCustomerQuotationEditable({ docStatus: 'CANCELLED' })).toBe(false);
+    expect(isCustomerQuotationEditable({ docStatus: 'SUPERSEDED' })).toBe(false);
   });
 });
 

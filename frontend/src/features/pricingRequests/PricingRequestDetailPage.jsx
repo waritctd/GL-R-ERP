@@ -8,13 +8,18 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
+import { downloadBlob } from '../../utils/download.js';
 import {
   canActOnPricingDecision,
+  canCreateCustomerQuotation,
+  canManageCustomerQuotation,
   canRequestInformation,
   canRespondInformation,
   canSeePricingDecisionSalesView,
   canSeeRawPricingDecision,
   canStartCeoReview,
+  canViewCustomerQuotation,
+  isCustomerQuotationEditable,
   pricingRequestRecipientLabel,
   quantityTypeLabel,
 } from './pricingRequestMeta.js';
@@ -175,6 +180,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
     retry: false,
   });
 
+  // Step 4: Customer Quotation Generation and Issuance. Every viewer role canViewCustomerQuotation
+  // allows may fetch the list (owner-scoped for sales, same as the sales-view decision query
+  // above); account never fires this query, matching its total exclusion server-side.
+  const customerQuotationsQuery = useQuery({
+    queryKey: queryKeys.customerQuotations(pricingRequestId),
+    queryFn: () => api.pricingRequests.listCustomerQuotations(pricingRequestId).then((r) => r.items ?? []),
+    enabled: Number.isFinite(pricingRequestId) && canViewCustomerQuotation(user, detailQuery.data?.summary),
+  });
+
   // Pricing Request attachments (V69, review remediation COMMIT 4): Sales-level supporting
   // attachments on the request itself — every viewer role can see the list (requireViewable's
   // usual scoping already applies server-side: a non-owner sales rep never even reaches this
@@ -192,6 +206,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestAttachments(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingDecisions(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingDecisionSalesView(pricingRequestId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.customerQuotations(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: ['pricingRequests', 'queue'] });
   }
 
@@ -251,6 +266,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const [startReviewClientRequestId] = useState(() => generateClientRequestId());
   const [decisionItemDrafts, setDecisionItemDrafts] = useState({});
   const [approveClientRequestId, setApproveClientRequestId] = useState(() => generateClientRequestId());
+  // Step 4: Customer Quotation Generation and Issuance.
+  const [createQuotationClientRequestId, setCreateQuotationClientRequestId] = useState(() => generateClientRequestId());
+  const [issueQuotationClientRequestId, setIssueQuotationClientRequestId] = useState(() => generateClientRequestId());
+  const [revisionClientRequestId, setRevisionClientRequestId] = useState(() => generateClientRequestId());
+  const [quotationHeaderDraft, setQuotationHeaderDraft] = useState({});
+  const [quotationItemDrafts, setQuotationItemDrafts] = useState({});
+  const [downloadingQuotationFormat, setDownloadingQuotationFormat] = useState(null);
   const startCeoReview = useActionMutation(
     () => api.pricingRequests.startPricingDecision(pricingRequestId, {
       defaultMarginPct: cleanNumber(decisionDefaultMargin),
@@ -285,6 +307,75 @@ export function PricingRequestDetailPage({ user, showToast }) {
     ({ decision, reason }) => api.pricingRequests.returnPricingDecisionToImport(decision.id, { returnReason: reason }),
     'ตีกลับให้ Import แก้ไขต้นทุนแล้ว',
   );
+  // Step 4: Customer Quotation Generation and Issuance.
+  const createQuotation = useMutation({
+    mutationFn: () => api.pricingRequests.createCustomerQuotation(pricingRequestId, {
+      clientRequestId: createQuotationClientRequestId,
+    }),
+    onSuccess: () => {
+      setCreateQuotationClientRequestId(generateClientRequestId());
+      showToast?.('success', 'สร้างร่างใบเสนอราคาลูกค้าแล้ว');
+      invalidate();
+    },
+    onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+  });
+  const saveQuotation = useActionMutation((quotation) => api.pricingRequests.updateCustomerQuotation(quotation.id, {
+    paymentTerms: quotationHeaderDraft.paymentTerms ?? quotation.paymentTerms,
+    leadTime: quotationHeaderDraft.leadTime ?? quotation.leadTime,
+    deliveryTerms: quotationHeaderDraft.deliveryTerms ?? quotation.deliveryTerms,
+    validityDate: quotationHeaderDraft.validityDate ?? quotation.validityDate,
+    customerNotes: quotationHeaderDraft.customerNotes ?? quotation.customerNotes,
+    items: quotation.items.map((item) => {
+      const draft = quotationItemDrafts[item.id] ?? {};
+      return {
+        quotationItemId: item.id,
+        description: draft.description ?? item.description,
+        itemNotes: draft.itemNotes ?? item.itemNotes,
+        salesDiscount: cleanNumber(draft.salesDiscount ?? item.salesDiscount) ?? 0,
+      };
+    }),
+  }), 'บันทึกใบเสนอราคาแล้ว');
+  const issueQuotation = useMutation({
+    mutationFn: (quotation) => api.pricingRequests.issueCustomerQuotation(quotation.id, {
+      clientRequestId: issueQuotationClientRequestId,
+    }),
+    onSuccess: () => {
+      setIssueQuotationClientRequestId(generateClientRequestId());
+      showToast?.('success', 'ออกใบเสนอราคาลูกค้าแล้ว');
+      invalidate();
+    },
+    onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+  });
+  const cancelQuotation = useActionMutation(
+    (quotation) => api.pricingRequests.cancelCustomerQuotation(quotation.id, {}),
+    'ยกเลิกร่างใบเสนอราคาแล้ว',
+  );
+  const createQuotationRevision = useMutation({
+    mutationFn: (quotation) => api.pricingRequests.createCustomerQuotationRevision(quotation.id, {
+      clientRequestId: revisionClientRequestId,
+    }),
+    onSuccess: () => {
+      setRevisionClientRequestId(generateClientRequestId());
+      setQuotationItemDrafts({});
+      setQuotationHeaderDraft({});
+      showToast?.('success', 'สร้าง revision ใหม่แล้ว');
+      invalidate();
+    },
+    onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+  });
+  async function handleDownloadCustomerQuotation(quotation, format) {
+    setDownloadingQuotationFormat(format);
+    try {
+      const blob = format === 'pdf'
+        ? await api.pricingRequests.downloadCustomerQuotationPdf(quotation.id)
+        : await api.pricingRequests.downloadCustomerQuotationXlsx(quotation.id);
+      downloadBlob(blob, quotation.number ?? 'customer-quotation', format);
+    } catch (err) {
+      showToast?.('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
+    } finally {
+      setDownloadingQuotationFormat(null);
+    }
+  }
   const request = detailQuery.data;
   const summary = request?.summary;
   const status = pricingRequestStatusLabel(summary?.status);
@@ -302,6 +393,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
     [pricingDecisions],
   );
   const decisionSalesView = decisionSalesViewQuery.data;
+  // Step 4: newest revision last (creation order) — the OPEN draft/ready-to-issue revision if
+  // one exists, else the most recent (so a just-issued or just-cancelled quotation still shows).
+  const customerQuotations = useMemo(
+    () => [...(customerQuotationsQuery.data ?? [])].sort((a, b) => a.quotationRevisionNo - b.quotationRevisionNo),
+    [customerQuotationsQuery.data],
+  );
+  const currentCustomerQuotation = useMemo(
+    () => customerQuotations.find((q) => isCustomerQuotationEditable(q)) ?? [...customerQuotations].reverse()[0] ?? null,
+    [customerQuotations],
+  );
   const canCreateCustomerRevision = isSales(user)
     && summary?.ticketCreatedById === user?.employeeId
     && !['DRAFT', 'CANCELLED', 'SUPERSEDED'].includes(summary?.status);
@@ -800,11 +901,183 @@ export function PricingRequestDetailPage({ user, showToast }) {
         </section>
       ) : null}
 
+      {canViewCustomerQuotation(user, summary) ? (
+        <section className="table-panel">
+          <div className="panel-header">
+            <h2>ใบเสนอราคาลูกค้า</h2>
+            {currentCustomerQuotation ? (
+              <StatusBadge tone={currentCustomerQuotation.docStatus === 'ISSUED' ? 'success'
+                : currentCustomerQuotation.docStatus === 'CANCELLED' ? 'danger'
+                : currentCustomerQuotation.docStatus === 'SUPERSEDED' ? 'neutral' : 'warning'}>
+                {currentCustomerQuotation.docStatus} · rev {currentCustomerQuotation.quotationRevisionNo}
+              </StatusBadge>
+            ) : null}
+          </div>
+          <div className="flex flex-col gap-3 p-3">
+            {!currentCustomerQuotation && canCreateCustomerQuotation(user, summary) ? (
+              <button type="button" className="primary-button self-start" onClick={() => createQuotation.mutate()} disabled={createQuotation.isPending}>
+                สร้างร่างใบเสนอราคาลูกค้า
+              </button>
+            ) : null}
+            {!currentCustomerQuotation && !canCreateCustomerQuotation(user, summary) ? (
+              <p className="text-sm text-text-muted">
+                ยังไม่มีใบเสนอราคาลูกค้า — ต้องรออนุมัติราคาขาย (APPROVED_FOR_QUOTATION) ก่อนจึงจะสร้างได้
+              </p>
+            ) : null}
+
+            {currentCustomerQuotation ? (() => {
+              const quotation = currentCustomerQuotation;
+              const editable = isCustomerQuotationEditable(quotation) && canManageCustomerQuotation(user, summary);
+              return (
+                <div className="flex flex-col gap-3">
+                  <div className="text-sm"><strong>เลขที่</strong> {quotation.number}</div>
+                  <div className="flex flex-col gap-2">
+                    {quotation.items.map((item) => {
+                      const draft = quotationItemDrafts[item.id] ?? {};
+                      const discount = cleanNumber(draft.salesDiscount ?? item.salesDiscount) ?? 0;
+                      const previewFinal = item.approvedUnitPrice - discount;
+                      const belowMinimum = item.minimumSellingPricePerRequestedUnit != null
+                        && previewFinal < item.minimumSellingPricePerRequestedUnit;
+                      return (
+                        <div key={item.id} className="rounded-md border border-border bg-surface p-3 text-sm">
+                          {editable ? (
+                            <input
+                              className="w-full rounded border border-border p-1 text-sm"
+                              value={draft.description ?? item.description ?? ''}
+                              onChange={(e) => setQuotationItemDrafts((cur) => ({
+                                ...cur, [item.id]: { ...cur[item.id], description: e.target.value },
+                              }))}
+                            />
+                          ) : (
+                            <strong>{item.description || '-'}</strong>
+                          )}
+                          <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
+                            <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
+                            <span>ราคาที่อนุมัติ: {formatCurrency(item.approvedUnitPrice, quotation.currency)}</span>
+                            {editable ? (
+                              <label className="flex items-center gap-1">
+                                ส่วนลด/หน่วย
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  className="w-24 rounded border border-border p-1 text-xs"
+                                  value={draft.salesDiscount ?? item.salesDiscount ?? 0}
+                                  onChange={(e) => setQuotationItemDrafts((cur) => ({
+                                    ...cur, [item.id]: { ...cur[item.id], salesDiscount: e.target.value },
+                                  }))}
+                                />
+                              </label>
+                            ) : (
+                              <span>ส่วนลด/หน่วย: {formatCurrency(item.salesDiscount, quotation.currency)}</span>
+                            )}
+                            <span>ราคาสุทธิ: {formatCurrency(editable ? previewFinal : item.finalUnitPrice, quotation.currency)}</span>
+                            <span>รวมรายการ: {formatCurrency(item.lineTotal, quotation.currency)}</span>
+                          </div>
+                          {belowMinimum ? (
+                            <p className="mt-1 text-xs font-medium text-danger">
+                              ⚠ ราคาต่ำกว่าราคาขั้นต่ำที่ CEO อนุมัติ ({formatCurrency(item.minimumSellingPricePerRequestedUnit, quotation.currency)}) — บันทึกไม่ได้
+                            </p>
+                          ) : null}
+                          {editable ? (
+                            <textarea
+                              className="mt-2 w-full rounded border border-border p-1 text-xs"
+                              placeholder="หมายเหตุรายการ"
+                              value={draft.itemNotes ?? item.itemNotes ?? ''}
+                              onChange={(e) => setQuotationItemDrafts((cur) => ({
+                                ...cur, [item.id]: { ...cur[item.id], itemNotes: e.target.value },
+                              }))}
+                            />
+                          ) : item.itemNotes ? <p className="mt-1 text-xs text-text-muted">{item.itemNotes}</p> : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="grid gap-2 text-sm md:grid-cols-3">
+                    <div><strong>ยอดรวม (ก่อน VAT)</strong> {formatCurrency(quotation.subtotalAmount, quotation.currency)}</div>
+                    <div><strong>VAT 7%</strong> {formatCurrency(quotation.vatAmount, quotation.currency)}</div>
+                    <div><strong>รวมทั้งสิ้น</strong> {formatCurrency(quotation.grandTotal, quotation.currency)}</div>
+                  </div>
+
+                  {editable ? (
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <input className="rounded border border-border p-2 text-sm" placeholder="เงื่อนไขการชำระเงิน"
+                        value={quotationHeaderDraft.paymentTerms ?? quotation.paymentTerms ?? ''}
+                        onChange={(e) => setQuotationHeaderDraft((cur) => ({ ...cur, paymentTerms: e.target.value }))} />
+                      <input className="rounded border border-border p-2 text-sm" placeholder="ระยะเวลาส่งมอบ"
+                        value={quotationHeaderDraft.leadTime ?? quotation.leadTime ?? ''}
+                        onChange={(e) => setQuotationHeaderDraft((cur) => ({ ...cur, leadTime: e.target.value }))} />
+                      <input className="rounded border border-border p-2 text-sm" placeholder="เงื่อนไขการจัดส่ง"
+                        value={quotationHeaderDraft.deliveryTerms ?? quotation.deliveryTerms ?? ''}
+                        onChange={(e) => setQuotationHeaderDraft((cur) => ({ ...cur, deliveryTerms: e.target.value }))} />
+                      <input type="date" className="rounded border border-border p-2 text-sm"
+                        value={quotationHeaderDraft.validityDate ?? quotation.validityDate ?? ''}
+                        onChange={(e) => setQuotationHeaderDraft((cur) => ({ ...cur, validityDate: e.target.value }))} />
+                      <textarea className="rounded border border-border p-2 text-sm md:col-span-2" placeholder="หมายเหตุถึงลูกค้า"
+                        value={quotationHeaderDraft.customerNotes ?? quotation.customerNotes ?? ''}
+                        onChange={(e) => setQuotationHeaderDraft((cur) => ({ ...cur, customerNotes: e.target.value }))} />
+                    </div>
+                  ) : (
+                    <div className="grid gap-1 text-sm text-text-muted md:grid-cols-2">
+                      <div>เงื่อนไขการชำระเงิน: {quotation.paymentTerms || '-'}</div>
+                      <div>ระยะเวลาส่งมอบ: {quotation.leadTime || '-'}</div>
+                      <div>เงื่อนไขการจัดส่ง: {quotation.deliveryTerms || '-'}</div>
+                      <div>ยืนราคาถึง: {quotation.validityDate ? formatThaiDate(quotation.validityDate) : '-'}</div>
+                      {quotation.customerNotes ? <div className="md:col-span-2">หมายเหตุ: {quotation.customerNotes}</div> : null}
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" className="secondary-button" disabled={downloadingQuotationFormat === 'pdf'}
+                      onClick={() => handleDownloadCustomerQuotation(quotation, 'pdf')}>
+                      Preview PDF
+                    </button>
+                    <button type="button" className="secondary-button" disabled={downloadingQuotationFormat === 'xlsx'}
+                      onClick={() => handleDownloadCustomerQuotation(quotation, 'xlsx')}>
+                      Preview XLSX
+                    </button>
+                    {editable ? (
+                      <>
+                        <button type="button" className="secondary-button" onClick={() => saveQuotation.mutate(quotation)} disabled={saveQuotation.isPending}>
+                          บันทึก
+                        </button>
+                        <button type="button" className="primary-button" disabled={issueQuotation.isPending}
+                          onClick={() => setConfirmAction({ type: 'issueQuotation', quotation })}>
+                          ออกใบเสนอราคา
+                        </button>
+                        <button type="button" className="danger-button" disabled={cancelQuotation.isPending}
+                          onClick={() => cancelQuotation.mutate(quotation)}>
+                          ยกเลิกร่าง
+                        </button>
+                      </>
+                    ) : null}
+                    {quotation.docStatus === 'ISSUED' && canManageCustomerQuotation(user, summary) ? (
+                      <button type="button" className="secondary-button" disabled={createQuotationRevision.isPending}
+                        onClick={() => createQuotationRevision.mutate(quotation)}>
+                        สร้าง Revision ใหม่
+                      </button>
+                    ) : null}
+                  </div>
+
+                  {customerQuotations.length > 1 ? (
+                    <div className="mt-2 text-xs text-text-muted">
+                      <strong>ประวัติ revision:</strong>{' '}
+                      {customerQuotations.map((q) => `rev ${q.quotationRevisionNo} (${q.docStatus})`).join(' · ')}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })() : null}
+          </div>
+        </section>
+      ) : null}
+
       <ConfirmDialog
         open={Boolean(confirmAction)}
         title={confirmAction?.type === 'submitCosting' ? 'Submit costing to CEO'
           : confirmAction?.type === 'approveDecision' ? 'อนุมัติราคาขาย'
           : confirmAction?.type === 'returnDecision' ? 'ตีกลับให้ Import แก้ไขต้นทุน'
+          : confirmAction?.type === 'issueQuotation' ? 'ออกใบเสนอราคาลูกค้า'
           : 'ส่งอีเมลถึงโรงงาน'}
         message={confirmAction?.type === 'submitCosting'
           ? 'เมื่อ submit แล้ว costing version นี้จะแก้ไขไม่ได้'
@@ -812,15 +1085,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
             ? 'เมื่ออนุมัติแล้ว ราคาขายจะถูกส่งให้ฝ่ายขายและไม่สามารถแก้ไขราคานี้ได้อีก'
             : confirmAction?.type === 'returnDecision'
               ? 'ระบุเหตุผลที่ตีกลับให้ Import คำนวณต้นทุนใหม่'
-              : 'ยืนยันการส่งคำขอราคาให้โรงงานด้วยรายละเอียดอีเมลนี้'}
+              : confirmAction?.type === 'issueQuotation'
+                ? 'เมื่อออกใบเสนอราคาแล้ว จะแก้ไขไม่ได้ — การแก้ไขภายหลังต้องสร้าง revision ใหม่'
+                : 'ยืนยันการส่งคำขอราคาให้โรงงานด้วยรายละเอียดอีเมลนี้'}
         confirmLabel={confirmAction?.type === 'submitCosting' ? 'Submit to CEO'
           : confirmAction?.type === 'approveDecision' ? 'อนุมัติ'
           : confirmAction?.type === 'returnDecision' ? 'ตีกลับ'
+          : confirmAction?.type === 'issueQuotation' ? 'ออกใบเสนอราคา'
           : 'ส่งอีเมล'}
         tone={confirmAction?.type === 'returnDecision' ? 'danger' : 'default'}
         requireReason={confirmAction?.type === 'returnDecision'}
         reasonLabel="เหตุผลที่ตีกลับ"
-        busy={sendQuote.isPending || submitCosting.isPending || approveDecision.isPending || returnDecisionToImport.isPending}
+        busy={sendQuote.isPending || submitCosting.isPending || approveDecision.isPending
+          || returnDecisionToImport.isPending || issueQuotation.isPending}
         onCancel={() => setConfirmAction(null)}
         onConfirm={(reason) => {
           const action = confirmAction;
@@ -829,6 +1106,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           if (action?.type === 'sendQuote') sendQuote.mutate({ quote: action.quote, draft: action.emailDraft });
           if (action?.type === 'approveDecision') approveDecision.mutate(action.decision);
           if (action?.type === 'returnDecision') returnDecisionToImport.mutate({ decision: action.decision, reason });
+          if (action?.type === 'issueQuotation') issueQuotation.mutate(action.quotation);
         }}
       />
 

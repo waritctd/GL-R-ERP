@@ -51,10 +51,28 @@ class PricingRequestStatusTest {
             PricingRequestStatus.COSTING_REVISION_REQUIRED, PricingRequestStatus.COSTING_IN_PROGRESS)).isTrue();
     }
 
+    // Step 4 (Customer Quotation Generation and Issuance) deliberately extends this map:
+    // APPROVED_FOR_QUOTATION -> QUOTATION_ISSUED is now the ONE forward exit (issuing a
+    // customer quotation via CustomerQuotationService.issue). This test used to assert
+    // APPROVED_FOR_QUOTATION was terminal (true for Step 3's own scope, which explicitly
+    // deferred Step 4) — renamed and inverted to assert the new, intentional edge instead of
+    // the old absence, per this repo's own precedent for a map change (see
+    // PricingRequestStatusTest's Step 3 predecessor commit and
+    // docs/agent-handoffs/92_feat-sales-ceo-pricing-decision.md's "isNoLongerAllowed" rename).
     @Test
-    void approvedForQuotation_isTerminalForStep3() {
+    void approvedForQuotation_toQuotationIssued_isNowAllowed_andNothingElseIs() {
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.APPROVED_FOR_QUOTATION, PricingRequestStatus.QUOTATION_ISSUED)).isTrue();
         for (String to : PricingRequestStatus.VALUES) {
+            if (PricingRequestStatus.QUOTATION_ISSUED.equals(to)) continue;
             assertThat(PricingRequestStatus.canTransition(PricingRequestStatus.APPROVED_FOR_QUOTATION, to)).isFalse();
+        }
+    }
+
+    @Test
+    void quotationIssued_isTerminalForStep4() {
+        for (String to : PricingRequestStatus.VALUES) {
+            assertThat(PricingRequestStatus.canTransition(PricingRequestStatus.QUOTATION_ISSUED, to)).isFalse();
         }
     }
 

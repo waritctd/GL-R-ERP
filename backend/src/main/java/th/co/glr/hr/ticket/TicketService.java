@@ -1105,6 +1105,24 @@ public class TicketService {
      * No-throw by construction: no-op when the deal is lost or the target is not
      * strictly forward (monotonic — re-running a transition can never regress).
      */
+    /**
+     * Step 4 (Customer Quotation Generation and Issuance): the EXACT stage-advance
+     * {@link #generateQuotation} already performs for a recipient-scoped quotation, exposed as a
+     * public entry point so {@code th.co.glr.hr.customerquotation.CustomerQuotationService} can
+     * reuse it at issue time instead of inventing a second stage-transition path. Delegates to
+     * the same private {@link #autoAdvanceStage}, so both flows share one implementation and can
+     * never drift apart on which recipient maps to which stage.
+     */
+    @Transactional
+    public void advanceStageForCustomerQuotationIssue(long ticketId, String recipientType, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (QuotationRecipient.DESIGNER.equals(recipientType) || QuotationRecipient.OWNER.equals(recipientType)) {
+            autoAdvanceStage(s, DealStage.QUOTE_DESIGN_SIDE, actor);
+        } else if (QuotationRecipient.BUYER.equals(recipientType)) {
+            autoAdvanceStage(s, DealStage.QUOTE_BUYER, actor);
+        }
+    }
+
     private void autoAdvanceStage(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
         // ACTIVE is the whole test. The old `lostReason != null` clause would now
         // silently disable auto-advance on every reopened deal, since V57 keeps the

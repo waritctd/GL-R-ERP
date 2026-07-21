@@ -39,4 +39,7 @@ export const queryKeys = {
   pricingDecisions: (id) => ['pricingRequests', 'pricingDecisions', id],
   pricingDecisionSalesView: (id) => ['pricingRequests', 'pricingDecisionSalesView', id],
   pricingDecisionDetail: (id) => ['pricingDecisions', 'detail', id],
+  // Step 4: Customer Quotation Generation and Issuance.
+  customerQuotations: (pricingRequestId) => ['pricingRequests', 'customerQuotations', pricingRequestId],
+  customerQuotationDetail: (id) => ['customerQuotations', 'detail', id],
 };

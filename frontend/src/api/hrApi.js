@@ -366,6 +366,25 @@ export const api = {
     recalculatePricingDecision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionRecalculate(id), { method: 'POST', body: payload }),
     approvePricingDecision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionApprove(id), { method: 'POST', body: payload }),
     returnPricingDecisionToImport: (id, payload) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionReturnToImport(id), { method: 'POST', body: payload }),
+    // Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationController.
+    createCustomerQuotation: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotations(id), { method: 'POST', body: payload }),
+    listCustomerQuotations: (id) => apiRequest(API_ROUTES.pricingRequests.customerQuotations(id)),
+    getCustomerQuotation: (id) => apiRequest(API_ROUTES.pricingRequests.customerQuotation(id)),
+    updateCustomerQuotation: (id, payload) => apiRequest(API_ROUTES.pricingRequests.customerQuotation(id), { method: 'PUT', body: payload }),
+    previewCustomerQuotation: (id) => apiRequest(API_ROUTES.pricingRequests.customerQuotationPreview(id), { method: 'POST' }),
+    issueCustomerQuotation: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotationIssue(id), { method: 'POST', body: payload }),
+    cancelCustomerQuotation: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotationCancel(id), { method: 'POST', body: payload }),
+    createCustomerQuotationRevision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotationRevisions(id), { method: 'POST', body: payload }),
+    downloadCustomerQuotationPdf: async (id) => {
+      const res = await fetch(API_ROUTES.pricingRequests.customerQuotationFile(id, 'pdf'), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    downloadCustomerQuotationXlsx: async (id) => {
+      const res = await fetch(API_ROUTES.pricingRequests.customerQuotationFile(id, 'xlsx'), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
     submit: (id) => apiRequest(API_ROUTES.pricingRequests.submit(id), { method: 'POST' }),
     pickup: (id) => apiRequest(API_ROUTES.pricingRequests.pickup(id), { method: 'POST' }),
     requestInformation: (id, payload) => apiRequest(API_ROUTES.pricingRequests.requestInformation(id), { method: 'POST', body: payload }),

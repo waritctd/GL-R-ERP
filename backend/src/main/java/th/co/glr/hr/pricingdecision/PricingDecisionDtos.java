@@ -85,6 +85,10 @@ public final class PricingDecisionDtos {
 
     public record PricingDecisionSalesItemDto(
         long pricingRequestItemId,
+        // Step 4 (Customer Quotation Generation and Issuance) needs this to snapshot the FK
+        // onto sales.quotation_item.pricing_decision_item_id — an id, not a cost/margin/FX
+        // value, so exposing it here does not weaken design correction 2's "no cost leak".
+        long pricingDecisionItemId,
         String brand,
         String model,
         String productDescription,

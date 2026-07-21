@@ -52,6 +52,16 @@ vi.mock('../../api/index.js', () => ({
       updatePricingDecision: vi.fn(),
       approvePricingDecision: vi.fn(),
       returnPricingDecisionToImport: vi.fn(),
+      // Step 4: Customer Quotation Generation and Issuance.
+      listCustomerQuotations: vi.fn(),
+      createCustomerQuotation: vi.fn(),
+      updateCustomerQuotation: vi.fn(),
+      previewCustomerQuotation: vi.fn(),
+      issueCustomerQuotation: vi.fn(),
+      cancelCustomerQuotation: vi.fn(),
+      createCustomerQuotationRevision: vi.fn(),
+      downloadCustomerQuotationPdf: vi.fn(),
+      downloadCustomerQuotationXlsx: vi.fn(),
     },
     catalog: {
       prices: vi.fn(),
@@ -198,7 +208,69 @@ function setApiDefaults() {
   api.pricingRequests.updatePricingDecision.mockResolvedValue({});
   api.pricingRequests.approvePricingDecision.mockResolvedValue({});
   api.pricingRequests.returnPricingDecisionToImport.mockResolvedValue({});
+  api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [] });
+  api.pricingRequests.createCustomerQuotation.mockResolvedValue({ quotation: buildCustomerQuotation() });
+  api.pricingRequests.updateCustomerQuotation.mockResolvedValue({ quotation: buildCustomerQuotation() });
+  api.pricingRequests.issueCustomerQuotation.mockResolvedValue({ quotation: buildCustomerQuotation({ docStatus: 'ISSUED' }) });
+  api.pricingRequests.cancelCustomerQuotation.mockResolvedValue({ quotation: buildCustomerQuotation({ docStatus: 'CANCELLED' }) });
+  api.pricingRequests.createCustomerQuotationRevision.mockResolvedValue({ quotation: buildCustomerQuotation({ quotationRevisionNo: 2 }) });
+  api.pricingRequests.downloadCustomerQuotationPdf.mockResolvedValue(new Blob(['pdf']));
+  api.pricingRequests.downloadCustomerQuotationXlsx.mockResolvedValue(new Blob(['xlsx']));
   api.catalog.prices.mockResolvedValue({ items: [] });
+}
+
+// Step 4 (Customer Quotation Generation and Issuance) fixture. Mirrors
+// CustomerQuotationDtos.CustomerQuotationDto/CustomerQuotationItemDto — deliberately has no
+// cost/margin/FX field anywhere (design correction 2's own precedent, carried into Step 4).
+function buildCustomerQuotationItem(overrides = {}) {
+  return {
+    id: 9001,
+    seq: 1,
+    pricingRequestItemId: 1,
+    pricingDecisionItemId: 8001,
+    description: 'กระเบื้องพื้น SCG A1',
+    itemNotes: null,
+    requestedUnitBasis: 'PER_PIECE',
+    requestedQuantity: 20,
+    approvedUnitPrice: 72,
+    salesDiscount: 0,
+    finalUnitPrice: 72,
+    minimumSellingPricePerRequestedUnit: 65,
+    lineSubtotal: 1440,
+    vat: 100.8,
+    lineTotal: 1540.8,
+    ...overrides,
+  };
+}
+
+function buildCustomerQuotation(overrides = {}) {
+  return {
+    id: 5501,
+    number: 'QT-2026-0001',
+    ticketId: 701,
+    pricingRequestId: 501,
+    pricingDecisionId: 7001,
+    recipientType: 'DESIGNER',
+    recipientLabel: 'ผู้ออกแบบ ก.',
+    docStatus: 'DRAFT',
+    quotationVersion: 1,
+    quotationRevisionNo: 1,
+    parentQuotationId: null,
+    issuedById: 1,
+    issuedByName: 'พนักงานขาย',
+    issuedAt: null,
+    subtotalAmount: 1440,
+    vatAmount: 100.8,
+    grandTotal: 1540.8,
+    currency: 'THB',
+    paymentTerms: null,
+    leadTime: null,
+    deliveryTerms: null,
+    validityDate: null,
+    customerNotes: null,
+    items: overrides.items ?? [buildCustomerQuotationItem()],
+    ...overrides,
+  };
 }
 
 // Step 3 (CEO Selling Price Decision) fixtures. Mirrors PricingDecisionDtos.PricingDecisionDto /
@@ -797,5 +869,95 @@ describe('PricingRequestDetailPage accessibility: no nested interactive controls
     buttons.forEach((button) => {
       expect(button.querySelector('button')).toBeNull();
     });
+  });
+});
+
+// Step 4 (Customer Quotation Generation and Issuance). UI-LEVEL ONLY, same caveat as this
+// file's own header: proves this component's conditional rendering/wiring, not server-side
+// enforcement. The authoritative checks are the real-DB tests in
+// backend/src/test/java/th/co/glr/hr/customerquotation/CustomerQuotationIntegrationTest.java.
+describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
+  it('offers "สร้างร่างใบเสนอราคาลูกค้า" to the owning sales rep only once APPROVED_FOR_QUOTATION, and creates on click', async () => {
+    const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    const button = await screen.findByRole('button', { name: 'สร้างร่างใบเสนอราคาลูกค้า' });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(api.pricingRequests.createCustomerQuotation).toHaveBeenCalledWith(
+      request.summary.id,
+      expect.objectContaining({ clientRequestId: expect.any(String) }),
+    ));
+  });
+
+  it('does not offer the create button before APPROVED_FOR_QUOTATION, and never fetches the quotation list for a non-owning role', async () => {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    expect(screen.queryByRole('button', { name: 'สร้างร่างใบเสนอราคาลูกค้า' })).toBeNull();
+    expect(screen.getByText(/ยังไม่มีใบเสนอราคาลูกค้า/)).not.toBeNull();
+  });
+
+  it('lets the owning sales rep edit an item discount, warns below the CEO-approved minimum, and issues via the confirm dialog', async () => {
+    const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
+    const quotation = buildCustomerQuotation();
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [quotation] });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(quotation.number);
+
+    // Editable discount input is present for a DRAFT quotation owned by this sales rep.
+    const discountInputs = screen.getAllByRole('spinbutton');
+    const discountInput = discountInputs[0];
+    fireEvent.change(discountInput, { target: { value: '10' } });
+    // 72 - 10 = 62, below the item's minimumSellingPricePerRequestedUnit (65) — warns inline.
+    expect(await screen.findByText(/ต่ำกว่าราคาขั้นต่ำที่ CEO อนุมัติ/)).not.toBeNull();
+
+    // Bring the discount back within policy, then issue.
+    fireEvent.change(discountInput, { target: { value: '2' } });
+    expect(screen.queryByText(/ต่ำกว่าราคาขั้นต่ำที่ CEO อนุมัติ/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'ออกใบเสนอราคา' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ออกใบเสนอราคาลูกค้า' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบเสนอราคา' }));
+
+    await waitFor(() => expect(api.pricingRequests.issueCustomerQuotation).toHaveBeenCalledWith(
+      quotation.id,
+      expect.objectContaining({ clientRequestId: expect.any(String) }),
+    ));
+  });
+
+  it('renders the CEO/Import view strictly read-only — no discount input, no save/issue/cancel controls — but Preview still works', async () => {
+    const quotation = buildCustomerQuotation();
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [quotation] });
+    renderDetailPage({ user: ceoUser });
+    await waitForLoaded();
+    await screen.findByText(quotation.number);
+
+    expect(screen.queryByRole('spinbutton')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'บันทึก' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ออกใบเสนอราคา' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ยกเลิกร่าง' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview PDF' }));
+    await waitFor(() => expect(api.pricingRequests.downloadCustomerQuotationPdf).toHaveBeenCalledWith(quotation.id));
+  });
+
+  it('offers "สร้าง Revision ใหม่" only once ISSUED, to the owner', async () => {
+    const issued = buildCustomerQuotation({ docStatus: 'ISSUED' });
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [issued] });
+    renderDetailPage({ user: salesOwner });
+    await waitForLoaded();
+    await screen.findByText(issued.number);
+
+    const revisionButton = await screen.findByRole('button', { name: 'สร้าง Revision ใหม่' });
+    fireEvent.click(revisionButton);
+
+    await waitFor(() => expect(api.pricingRequests.createCustomerQuotationRevision).toHaveBeenCalledWith(
+      issued.id,
+      expect.objectContaining({ clientRequestId: expect.any(String) }),
+    ));
   });
 });

@@ -154,6 +154,40 @@ export function canSeePricingDecisionSalesView(user, pr) {
   return true;
 }
 
+// ── Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationService. ──
+
+/** Mirrors CustomerQuotationService.create's gate: sales (ticket owner) only, and only once the
+ * pricing request is APPROVED_FOR_QUOTATION (the very first quotation for this request — a
+ * correction after issue instead goes through createRevision, gated by
+ * canManageCustomerQuotation on the existing ISSUED quotation, not this). */
+export function canCreateCustomerQuotation(user, pr) {
+  if (user?.role !== 'sales') return false;
+  if (pr?.ticketCreatedById == null || Number(pr.ticketCreatedById) !== Number(user.id)) return false;
+  return pr?.status === 'APPROVED_FOR_QUOTATION';
+}
+
+/** Mirrors CustomerQuotationService's edit/issue/cancel/createRevision owner gate: sales (ticket
+ * owner) only — ceo/import/sales_manager are always read-only on this aggregate, never just
+ * hidden buttons on an otherwise-writable page. */
+export function canManageCustomerQuotation(user, pr) {
+  if (user?.role !== 'sales') return false;
+  return pr?.ticketCreatedById != null && Number(pr.ticketCreatedById) === Number(user.id);
+}
+
+/** Mirrors CustomerQuotationService.VIEW_ROLES: sales (owner-scoped)/sales_manager/ceo/import may
+ * read; account has no positive grant anywhere on this aggregate and stays forbidden. */
+export function canViewCustomerQuotation(user, pr) {
+  if (!user || !['sales', 'sales_manager', 'ceo', 'import'].includes(user.role)) return false;
+  if (user.role === 'sales') return pr?.ticketCreatedById != null && Number(pr.ticketCreatedById) === Number(user.id);
+  return true;
+}
+
+/** Mirrors CustomerQuotationService.requireDraft: only a DRAFT/READY_TO_ISSUE quotation may be
+ * edited, previewed-for-editing, or cancelled — an ISSUED one is immutable (rule 8). */
+export function isCustomerQuotationEditable(quotation) {
+  return ['DRAFT', 'READY_TO_ISSUE'].includes(quotation?.docStatus);
+}
+
 /** Mirrors PricingRequestService.cancel: owner sales OR ceo, any cancellable status. */
 export function canCancelPricingRequest(user, pr) {
   if (!pr) return false;

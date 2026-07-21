@@ -345,8 +345,8 @@ public class PricingDecisionRepository {
                 (rs, rowNum) -> new PricingDecisionSalesViewDto(pricingRequestId, rs.getLong("pricing_decision_id"),
                     rs.getString("currency"), rs.getTimestamp("approved_at").toInstant(), List.of()));
             List<PricingDecisionSalesItemDto> items = jdbc.query("""
-                SELECT pdi.pricing_request_item_id, pri.brand, pri.model, pri.product_description,
-                       pdi.requested_unit_basis, pdi.requested_quantity,
+                SELECT pdi.pricing_decision_item_id, pdi.pricing_request_item_id, pri.brand, pri.model,
+                       pri.product_description, pdi.requested_unit_basis, pdi.requested_quantity,
                        pdi.approved_selling_price_per_requested_unit, pdi.discount_ceiling_pct,
                        pdi.minimum_selling_price_per_requested_unit
                   FROM sales.pricing_decision_item pdi
@@ -355,7 +355,8 @@ public class PricingDecisionRepository {
                  ORDER BY pdi.pricing_decision_item_id
                 """, Map.of("decisionId", header.pricingDecisionId()),
                 (rs, rowNum) -> new PricingDecisionSalesItemDto(
-                    rs.getLong("pricing_request_item_id"), rs.getString("brand"), rs.getString("model"),
+                    rs.getLong("pricing_request_item_id"), rs.getLong("pricing_decision_item_id"),
+                    rs.getString("brand"), rs.getString("model"),
                     rs.getString("product_description"), rs.getString("requested_unit_basis"),
                     rs.getBigDecimal("requested_quantity"), rs.getBigDecimal("approved_selling_price_per_requested_unit"),
                     rs.getBigDecimal("discount_ceiling_pct"), rs.getBigDecimal("minimum_selling_price_per_requested_unit")));

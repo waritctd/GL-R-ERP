@@ -78,4 +78,25 @@ public record TicketSummaryDto(
             depositPolicyReason, entryChannel, null, null, null, null, null, PaymentStage.NOT_REQUIRED,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false, null, null, false, null, null);
     }
+
+    /**
+     * Copy with only {@code customerName}/{@code projectName} overridden — every other field
+     * unchanged. Used to render a document (e.g. a Step 4 customer quotation) against a FROZEN
+     * customer/project header snapshot instead of the ticket's current live values, the same
+     * substitution {@code TicketService.loadQuotationContext}'s own private
+     * {@code withCustomerAndProject} already performs for the legacy quotation flow — exposed
+     * here as a record method so other packages (e.g.
+     * {@code th.co.glr.hr.customerquotation}) can reuse the exact same pattern without a second,
+     * hand-copied field list to keep in sync as this record grows.
+     */
+    public TicketSummaryDto withCustomerAndProject(String frozenCustomerName, String frozenProjectName) {
+        return new TicketSummaryDto(id, code, type, title, status, priority, createdById, createdByName,
+            assignedToId, assignedToName, frozenCustomerName, customerId, projectId, frozenProjectName,
+            contactId, contactName, note, createdAt, updatedAt, closedAt, itemCount, hasEdits,
+            paymentStatus, fulfillmentStatus, salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle,
+            tenderRequirement, depositPolicy, depositPolicyReason, entryChannel, billingDate, dueDate,
+            creditTermDays, lastFollowUpAt, nextFollowUpAt, paymentStage, amountPayable, amountPaid,
+            amountOutstanding, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
+            cancelReason, cancelledAt);
+    }
 }
