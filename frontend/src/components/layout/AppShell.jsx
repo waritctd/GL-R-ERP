@@ -39,7 +39,17 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', show: hasPermission(user.role, 'canManagePayroll') },
     { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', show: hasPermission(user.role, 'canViewEmployees') },
     { path: '/attendance', label: 'เวลาทำงาน', helper: 'Attendance', icon: 'calendar', show: true },
-    { path: '/overtime', label: 'ล่วงเวลา', helper: 'Overtime', icon: 'clock', show: !!user.employeeId || hasPermission(user.role, 'canViewAllOvertime') },
+    // Combined OT + welfare/special-money page (RequestsPage.jsx, tabs carried
+    // in ?tab=). `match` keeps this item highlighted on both /employee-requests and
+    // the /overtime redirect alias, mirroring the /tickets pattern above.
+    {
+      path: '/employee-requests',
+      label: 'คำขอ',
+      helper: 'Requests (overtime / welfare)',
+      icon: 'clock',
+      show: !!user.employeeId || hasPermission(user.role, 'canViewAllOvertime') || hasPermission(user.role, 'canViewAllSpecialMoney'),
+      match: ['/employee-requests', '/overtime'],
+    },
     { path: '/leave', label: 'วันลา', helper: 'Leave', icon: 'clipboard', show: !!user.employeeId || hasPermission(user.role, 'canViewAllLeave') },
     // ข้อมูลของฉัน / คำขอของฉัน are deliberately absent: personal admin lives in
     // the topbar UserMenu, and the two pages are merged into /profile. /requests

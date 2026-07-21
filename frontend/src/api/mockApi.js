@@ -255,6 +255,162 @@ if (db.overtimeRequests.length === 0) {
     },
   ];
 }
+db.specialMoneyRequests = db.specialMoneyRequests || [];
+if (db.specialMoneyRequests.length === 0) {
+  const now = new Date().toISOString();
+  db.specialMoneyRequests = [
+    {
+      id: 1,
+      employeeId: db.employees[8].id,
+      requestType: 'MEDICAL',
+      eventDate: '2026-06-20',
+      eventEndDate: null,
+      receiptDate: '2026-06-20',
+      quantity: 1,
+      requestedAmount: 1200,
+      approvedAmount: null,
+      payrollBucket: 'NON_TAXABLE',
+      policyVersion: 1,
+      reason: 'ค่ารักษาพยาบาลตรวจสุขภาพประจำปี',
+      detail: {},
+      status: 'SUBMITTED',
+      payrollMonth: null,
+      capOverrideReason: null,
+      requestedById: db.employees[8].id,
+      requestedAt: now,
+      managerApprovedBy: null,
+      managerApprovedAt: null,
+      ceoApprovedBy: null,
+      ceoApprovedAt: null,
+      reviewedById: null,
+      reviewedAt: null,
+      reviewerNote: null,
+      cancelledAt: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 2,
+      employeeId: db.employees[12].id,
+      requestType: 'TRAVEL_PER_DIEM',
+      eventDate: '2026-07-10',
+      eventEndDate: '2026-07-12',
+      receiptDate: null,
+      quantity: 3,
+      requestedAmount: 1200,
+      approvedAmount: null,
+      payrollBucket: 'PER_DIEM',
+      policyVersion: 1,
+      reason: 'เดินทางส่งของลูกค้าต่างจังหวัด',
+      detail: { destination: 'DOMESTIC', province: 'เชียงใหม่', role: 'driver' },
+      status: 'MANAGER_APPROVED',
+      payrollMonth: null,
+      capOverrideReason: null,
+      requestedById: db.employees[12].id,
+      requestedAt: now,
+      managerApprovedBy: db.employees[20].id,
+      managerApprovedAt: now,
+      ceoApprovedBy: null,
+      ceoApprovedAt: null,
+      reviewedById: db.employees[20].id,
+      reviewedAt: now,
+      reviewerNote: null,
+      cancelledAt: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 3,
+      employeeId: db.employees[3].id,
+      requestType: 'AID_WEDDING',
+      eventDate: '2026-05-15',
+      eventEndDate: null,
+      receiptDate: null,
+      quantity: 1,
+      requestedAmount: 5000,
+      approvedAmount: 5000,
+      payrollBucket: 'AID',
+      policyVersion: 1,
+      reason: 'เงินช่วยเหลืองานแต่งงาน',
+      detail: {},
+      status: 'APPROVED',
+      payrollMonth: '2026-06-01',
+      capOverrideReason: null,
+      requestedById: db.employees[3].id,
+      requestedAt: now,
+      managerApprovedBy: db.employees[20].id,
+      managerApprovedAt: now,
+      ceoApprovedBy: db.employees[0].id,
+      ceoApprovedAt: now,
+      reviewedById: db.employees[0].id,
+      reviewedAt: now,
+      reviewerNote: null,
+      cancelledAt: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 4,
+      employeeId: db.employees[8].id,
+      requestType: 'UNIFORM_ANNUAL',
+      eventDate: '2026-06-05',
+      eventEndDate: null,
+      receiptDate: '2026-05-28',
+      quantity: 2,
+      requestedAmount: 4000,
+      approvedAmount: null,
+      payrollBucket: 'NON_TAXABLE',
+      policyVersion: 1,
+      reason: 'ชุดฟอร์มประจำปี ตัดใหม่จำนวน 2 ชิ้น',
+      detail: { uniformMode: 'SELF_BUY', shirtCount: '3', trouserCount: '2' },
+      status: 'REJECTED',
+      payrollMonth: null,
+      capOverrideReason: null,
+      requestedById: db.employees[8].id,
+      requestedAt: now,
+      managerApprovedBy: null,
+      managerApprovedAt: null,
+      ceoApprovedBy: null,
+      ceoApprovedAt: null,
+      reviewedById: db.employees[20].id,
+      reviewedAt: now,
+      reviewerNote: 'จำนวนชิ้นเกินเพดานต่อปี กรุณาส่งคำขอใหม่ให้ตรงเพดาน',
+      cancelledAt: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 5,
+      employeeId: db.employees[12].id,
+      requestType: 'TRAINING',
+      eventDate: '2026-06-01',
+      eventEndDate: null,
+      receiptDate: null,
+      quantity: 1,
+      requestedAmount: 2500,
+      approvedAmount: null,
+      payrollBucket: 'NON_TAXABLE',
+      policyVersion: 1,
+      reason: 'อบรมหลักสูตรความปลอดภัยในการขับขี่',
+      detail: {},
+      status: 'CANCELLED',
+      payrollMonth: null,
+      capOverrideReason: null,
+      requestedById: db.employees[12].id,
+      requestedAt: now,
+      managerApprovedBy: null,
+      managerApprovedAt: null,
+      ceoApprovedBy: null,
+      ceoApprovedAt: null,
+      reviewedById: null,
+      reviewedAt: null,
+      reviewerNote: null,
+      cancelledAt: now,
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+}
 let sessionUser = null;
 
 // ── Mock in-memory document store ─────────────────────────────────────────────
@@ -1496,6 +1652,88 @@ function buildOvertimeRecord(record) {
     managerApprovedByName: managerApprover?.nameTh || null,
     ceoApprovedByName: ceoApprover?.nameTh || null,
   };
+}
+
+// Mirrors SpecialMoneyType.java (name -> label/bucket/evidence). Kept as a plain
+// object here (not derived from db) since GET /api/special-money/types is a
+// static catalog, same as the Java controller's `Arrays.stream(SpecialMoneyType.values())`.
+const SPECIAL_MONEY_TYPES = [
+  { requestType: 'UNIFORM_ANNUAL', thaiLabel: 'ชุดฟอร์มประจำปี', payrollBucket: 'NON_TAXABLE', evidenceRequired: true },
+  { requestType: 'UNIFORM_NEW_STAFF', thaiLabel: 'ชุดฟอร์มพนักงานใหม่', payrollBucket: 'NON_TAXABLE', evidenceRequired: true },
+  { requestType: 'UNIFORM_PREPROBATION_KIT', thaiLabel: 'ชุดพนักงานก่อนผ่านทดลองงาน', payrollBucket: 'NON_TAXABLE', evidenceRequired: true },
+  { requestType: 'TRAVEL_PER_DIEM', thaiLabel: 'เบี้ยเลี้ยงเดินทาง', payrollBucket: 'PER_DIEM', evidenceRequired: false },
+  { requestType: 'TRAVEL_LODGING', thaiLabel: 'ค่าที่พัก', payrollBucket: 'PER_DIEM', evidenceRequired: true },
+  { requestType: 'MEDICAL', thaiLabel: 'ค่ารักษาพยาบาล', payrollBucket: 'NON_TAXABLE', evidenceRequired: true },
+  { requestType: 'AID_WEDDING', thaiLabel: 'เงินช่วยเหลืองานแต่งงาน', payrollBucket: 'AID', evidenceRequired: true },
+  { requestType: 'AID_ORDINATION', thaiLabel: 'เงินช่วยเหลืองานบวช', payrollBucket: 'AID', evidenceRequired: true },
+  { requestType: 'AID_CHILDBIRTH', thaiLabel: 'เงินช่วยเหลือคลอดบุตร', payrollBucket: 'AID', evidenceRequired: true },
+  { requestType: 'AID_FUNERAL', thaiLabel: 'เงินช่วยเหลืองานศพ', payrollBucket: 'AID', evidenceRequired: true },
+  { requestType: 'TRAINING', thaiLabel: 'สนับสนุนการฝึกอบรม', payrollBucket: 'NON_TAXABLE', evidenceRequired: true },
+  { requestType: 'OTHER', thaiLabel: 'อื่นๆ', payrollBucket: 'AID', evidenceRequired: true },
+];
+
+function specialMoneyType(requestType) {
+  return SPECIAL_MONEY_TYPES.find((item) => item.requestType === requestType) || null;
+}
+
+// Mirrors SpecialMoneyService.managesEmployee(): direct report (stored FK) OR
+// division manager (position-derived user.manager() sharing the employee's
+// division, excluding self) -- NO hr/admin bypass here either, same shape as
+// canReviewOvertime and deliberately not shared with it (see that function's
+// comment: these gates encode distinct Java classes and must not be merged).
+function canReviewSpecialMoney(user, employeeId) {
+  if (!user.employeeId || employeeId === user.employeeId) return false;
+  const employee = findEmployee(employeeId);
+  const directReport = managerIdForEmployee(employee) === user.employeeId;
+  const divisionManager = dashboardManager(user)
+    && dashboardDivisionId(user) != null
+    && dashboardDivisionId(user) === employee.divisionId
+    && employeeId !== user.employeeId;
+  return directReport || divisionManager;
+}
+
+function canViewAllSpecialMoney(user) {
+  return ['hr', 'ceo'].includes(user.role);
+}
+
+function canAccessSpecialMoneyEmployee(user, employeeId) {
+  return canViewAllSpecialMoney(user)
+    || employeeId === user.employeeId
+    || canReviewSpecialMoney(user, employeeId);
+}
+
+function buildSpecialMoneyRecord(record) {
+  const employee = db.employees.find((item) => item.id === record.employeeId);
+  const managerEmployeeId = managerIdForEmployee(employee);
+  const manager = managerEmployeeId ? db.employees.find((item) => item.id === managerEmployeeId) : null;
+  const requestedBy = record.requestedById ? db.employees.find((item) => item.id === record.requestedById) : null;
+  const managerApprover = record.managerApprovedBy ? db.employees.find((item) => item.id === record.managerApprovedBy) : null;
+  const ceoApprover = record.ceoApprovedBy ? db.employees.find((item) => item.id === record.ceoApprovedBy) : null;
+  const reviewer = record.reviewedById ? db.employees.find((item) => item.id === record.reviewedById) : null;
+  return {
+    ...structuredClone(record),
+    employeeCode: employee?.code || null,
+    employeeName: employee?.nameTh || null,
+    managerEmployeeId,
+    managerName: manager?.nameTh || null,
+    requestedByName: requestedBy?.nameTh || null,
+    managerApprovedByName: managerApprover?.nameTh || null,
+    ceoApprovedByName: ceoApprover?.nameTh || null,
+    reviewedByName: reviewer?.nameTh || null,
+  };
+}
+
+function specialMoneyPayrollMonth() {
+  // Mirrors SpecialMoneyService#ceoApprove's 25th-of-month cutoff
+  // (app.special-money.payroll-cutoff-day, default 25): approved on/before the
+  // 25th lands in the current month, after rolls to next month. The mock has
+  // no payroll-period table to roll further past, so it stops there.
+  const now = new Date();
+  const cutoffDay = 25;
+  const target = now.getDate() <= cutoffDay
+    ? new Date(now.getFullYear(), now.getMonth(), 1)
+    : new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  return target.toISOString().slice(0, 10);
 }
 
 function doTransition(id, fromStatus, toStatus, kind, actor, message) {
@@ -2969,6 +3207,220 @@ export const api = {
       request.reviewerNote = payload.reviewerNote || request.reviewerNote;
       request.updatedAt = now;
       return delay({ request: buildOvertimeRecord(request) });
+    },
+  },
+
+  // Mirrors SpecialMoneyController + SpecialMoneyService (specialmoney/) --
+  // same manager/CEO gate shapes as overtime (see canReviewSpecialMoney's
+  // comment for why it is not shared with canReviewOvertime), but cancel is
+  // stricter: only the employee or the person who filed on their behalf, and
+  // only while still SUBMITTED (no manager-cancel across every active status
+  // the way overtime allows). This mock does NOT reimplement the full policy
+  // cap/eligibility engine (SpecialMoneyPolicyEvaluator) -- it approximates
+  // authorization and status transitions faithfully, but `create` accepts
+  // whatever requestedAmount the caller sends without recomputing/clamping it
+  // against the policy caps. That enforcement is Java-only; never treat a mock
+  // "successful" submit as proof the real cap logic was exercised.
+  specialMoney: {
+    async employees() {
+      const user = requireSession();
+      const includeAll = canViewAllSpecialMoney(user);
+      const isManager = dashboardManager(user);
+      const managerDivisionId = isManager ? dashboardDivisionId(user) : null;
+      const rows = db.employees
+        .filter((employee) => employee.active)
+        .filter((employee) => includeAll
+          || employee.id === user.employeeId
+          || managerIdForEmployee(employee) === user.employeeId
+          || (managerDivisionId != null && employee.divisionId === managerDivisionId))
+        .map((employee) => {
+          const self = employee.id === user.employeeId;
+          const directReport = managerIdForEmployee(employee) === user.employeeId
+            || (managerDivisionId != null && employee.divisionId === managerDivisionId && !self);
+          return {
+            employeeId: employee.id,
+            employeeCode: employee.code,
+            employeeName: employee.nameTh,
+            departmentName: employee.departmentTh,
+            self,
+            directReport,
+          };
+        });
+      return delay({ employees: rows });
+    },
+
+    async types() {
+      requireSession();
+      return delay({ types: SPECIAL_MONEY_TYPES });
+    },
+
+    async usage(params = {}) {
+      const user = requireSession();
+      const employeeId = params.employeeId ? Number(params.employeeId) : null;
+      if (!employeeId) fail('employeeId is required', 400);
+      if (!canAccessSpecialMoneyEmployee(user, employeeId)) fail('Forbidden', 403);
+      const year = params.year ? Number(params.year) : new Date().getFullYear();
+      const approvedAmountThisYearByType = {};
+      const approvedCountLifetimeByType = {};
+      db.specialMoneyRequests
+        .filter((item) => item.employeeId === employeeId && item.status === 'APPROVED')
+        .forEach((item) => {
+          approvedCountLifetimeByType[item.requestType] = (approvedCountLifetimeByType[item.requestType] || 0) + 1;
+          if (new Date(item.eventDate).getFullYear() === year) {
+            approvedAmountThisYearByType[item.requestType] =
+              (approvedAmountThisYearByType[item.requestType] || 0) + Number(item.approvedAmount || 0);
+          }
+        });
+      return delay({
+        usage: { employeeId, year, approvedAmountThisYearByType, approvedCountLifetimeByType },
+      });
+    },
+
+    async list(params = {}) {
+      const user = requireSession();
+      let list = db.specialMoneyRequests;
+      const includeAll = canViewAllSpecialMoney(user);
+      if (!includeAll) {
+        if (params.employeeId && !canAccessSpecialMoneyEmployee(user, Number(params.employeeId))) fail('Forbidden', 403);
+        list = list.filter((item) => item.employeeId === user.employeeId || canReviewSpecialMoney(user, item.employeeId));
+      }
+      if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
+      if (params.status) list = list.filter((item) => item.status === params.status);
+      if (params.type) list = list.filter((item) => item.requestType === params.type);
+      if (params.from) list = list.filter((item) => item.eventDate >= params.from);
+      if (params.to) list = list.filter((item) => item.eventDate <= params.to);
+      return delay({ requests: list.map(buildSpecialMoneyRecord) });
+    },
+
+    async create(payload) {
+      const user = requireSession();
+      const actorEmployeeId = user.employeeId;
+      if (!actorEmployeeId) fail('User is not linked to an employee', 400);
+      const employeeId = payload.employeeId ? Number(payload.employeeId) : actorEmployeeId;
+      // Filing on another employee's behalf is manager-only, not HR -- mirrors
+      // SpecialMoneyService.resolveTargetEmployee(), which has no hr/admin
+      // bypass ("Employees can only submit their own special-money requests").
+      if (employeeId !== actorEmployeeId && !canReviewSpecialMoney(user, employeeId)) fail('Forbidden', 403);
+      findEmployee(employeeId);
+      const type = specialMoneyType(payload.requestType);
+      if (!type) fail('Invalid special money request type', 400);
+      if (!payload.eventDate) fail('eventDate is required', 400);
+      if (!payload.requestedAmount || Number(payload.requestedAmount) <= 0) fail('requestedAmount must be positive', 400);
+      if (!payload.reason || !payload.reason.trim()) fail('reason is required', 400);
+
+      const id = Math.max(0, ...db.specialMoneyRequests.map((item) => item.id)) + 1;
+      const now = new Date().toISOString();
+      const request = {
+        id,
+        employeeId,
+        requestType: payload.requestType,
+        eventDate: payload.eventDate,
+        eventEndDate: payload.eventEndDate || null,
+        receiptDate: payload.receiptDate || null,
+        quantity: payload.quantity ?? 1,
+        requestedAmount: Number(payload.requestedAmount),
+        approvedAmount: null,
+        payrollBucket: type.payrollBucket,
+        policyVersion: 1,
+        reason: payload.reason.trim(),
+        detail: payload.detail || {},
+        status: 'SUBMITTED',
+        payrollMonth: null,
+        capOverrideReason: null,
+        requestedById: actorEmployeeId,
+        requestedAt: now,
+        managerApprovedBy: null,
+        managerApprovedAt: null,
+        ceoApprovedBy: null,
+        ceoApprovedAt: null,
+        reviewedById: null,
+        reviewedAt: null,
+        reviewerNote: null,
+        cancelledAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      db.specialMoneyRequests.unshift(request);
+      return delay({ request: buildSpecialMoneyRecord(request) });
+    },
+
+    async approve(id, payload = {}) {
+      const user = requireSession();
+      const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
+      if (!request) fail('Special money request not found', 404);
+      const now = new Date().toISOString();
+      if (request.status === 'SUBMITTED') {
+        if (!canReviewSpecialMoney(user, request.employeeId)) fail('Forbidden', 403);
+        request.status = 'MANAGER_APPROVED';
+        request.managerApprovedBy = user.employeeId;
+        request.managerApprovedAt = now;
+        request.reviewedById = user.employeeId;
+        request.reviewedAt = now;
+        request.reviewerNote = payload.reviewerNote || null;
+        request.updatedAt = now;
+        return delay({ request: buildSpecialMoneyRecord(request) });
+      }
+      if (request.status === 'MANAGER_APPROVED') {
+        if (user.role !== 'ceo') fail('Only the CEO can approve manager-approved special-money requests', 403);
+        request.status = 'APPROVED';
+        request.approvedAmount = payload.approvedAmount != null ? Number(payload.approvedAmount) : request.requestedAmount;
+        request.capOverrideReason = payload.capOverrideReason || null;
+        request.payrollMonth = specialMoneyPayrollMonth();
+        request.ceoApprovedBy = user.employeeId;
+        request.ceoApprovedAt = now;
+        request.reviewedById = user.employeeId;
+        request.reviewedAt = now;
+        request.reviewerNote = payload.reviewerNote || request.reviewerNote;
+        request.updatedAt = now;
+        return delay({ request: buildSpecialMoneyRecord(request) });
+      }
+      fail('Special money request has already been reviewed', 409);
+    },
+
+    async reject(id, payload = {}) {
+      const user = requireSession();
+      const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
+      if (!request) fail('Special money request not found', 404);
+      const now = new Date().toISOString();
+      if (request.status === 'SUBMITTED') {
+        if (!canReviewSpecialMoney(user, request.employeeId)) fail('Forbidden', 403);
+        request.status = 'REJECTED';
+        request.reviewedById = user.employeeId;
+        request.reviewedAt = now;
+        request.reviewerNote = payload.reviewerNote || null;
+        request.updatedAt = now;
+        return delay({ request: buildSpecialMoneyRecord(request) });
+      }
+      if (request.status === 'MANAGER_APPROVED') {
+        if (user.role !== 'ceo') fail('Only the CEO can approve manager-approved special-money requests', 403);
+        request.status = 'REJECTED';
+        request.reviewedById = user.employeeId;
+        request.reviewedAt = now;
+        request.reviewerNote = payload.reviewerNote || null;
+        request.updatedAt = now;
+        return delay({ request: buildSpecialMoneyRecord(request) });
+      }
+      fail('Special money request has already been reviewed', 409);
+    },
+
+    // Stricter than overtime.cancel: only the employee themselves or whoever
+    // filed on their behalf (requestedById), and only while still SUBMITTED --
+    // mirrors SpecialMoneyService.cancel(), which has no manager-cancel path
+    // for MANAGER_APPROVED/APPROVED the way OvertimeService does.
+    async cancel(id, payload = {}) {
+      const user = requireSession();
+      const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
+      if (!request) fail('Special money request not found', 404);
+      const isEmployee = request.employeeId === user.employeeId;
+      const isRequester = request.requestedById != null && request.requestedById === user.employeeId;
+      if (!isEmployee && !isRequester) fail('Forbidden', 403);
+      if (request.status !== 'SUBMITTED') fail('Only submitted special money requests can be cancelled', 409);
+      const now = new Date().toISOString();
+      request.status = 'CANCELLED';
+      request.cancelledAt = now;
+      request.reviewerNote = payload.reviewerNote || request.reviewerNote;
+      request.updatedAt = now;
+      return delay({ request: buildSpecialMoneyRecord(request) });
     },
   },
 

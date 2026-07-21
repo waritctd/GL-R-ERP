@@ -13,6 +13,10 @@ export const queryKeys = {
   leaveTypes: () => ['leave', 'types'],
   overtimeRequests: (filters = {}) => ['overtime', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   overtimeEmployees: () => ['overtime', 'employees'],
+  specialMoneyRequests: (filters = {}) => ['specialMoney', 'list', filters.from, filters.to, filters.status, filters.employeeId, filters.type],
+  specialMoneyEmployees: () => ['specialMoney', 'employees'],
+  specialMoneyTypes: () => ['specialMoney', 'types'],
+  specialMoneyUsage: (employeeId, year) => ['specialMoney', 'usage', employeeId, year],
   // ticketDetail/ticketAttachments are for slice B (TicketDetailPage) — defined
   // now so the key module is stable across both slices; only ticketList is used here.
   ticketList: (status) => ['tickets', 'list', status ?? ''],

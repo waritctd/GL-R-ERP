@@ -12,6 +12,7 @@ public class AppProperties {
     private final Auth auth = new Auth();
     private final Leave leave = new Leave();
     private final Overtime overtime = new Overtime();
+    private final SpecialMoney specialMoney = new SpecialMoney();
     private final Bot bot = new Bot();
 
     public Cors getCors() {
@@ -36,6 +37,10 @@ public class AppProperties {
 
     public Overtime getOvertime() {
         return overtime;
+    }
+
+    public SpecialMoney getSpecialMoney() {
+        return specialMoney;
     }
 
     public Bot getBot() {
@@ -229,6 +234,24 @@ public class AppProperties {
 
         public void setSeedEmployeeCodePasswords(boolean seedEmployeeCodePasswords) {
             this.seedEmployeeCodePasswords = seedEmployeeCodePasswords;
+        }
+    }
+
+    public static class SpecialMoney {
+        /**
+         * The 25th-of-month payroll cutoff: a special-money request approved on/before this day of
+         * the month lands in that same month's payroll_month; approved after, it rolls to next
+         * month. See {@code SpecialMoneyService#ceoApprove} for why it then rolls further forward
+         * past any already-PROCESSED month.
+         */
+        private int payrollCutoffDay = 25;
+
+        public int getPayrollCutoffDay() {
+            return payrollCutoffDay;
+        }
+
+        public void setPayrollCutoffDay(int payrollCutoffDay) {
+            this.payrollCutoffDay = payrollCutoffDay;
         }
     }
 

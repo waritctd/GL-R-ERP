@@ -45,7 +45,14 @@ const PATH_GUARDS = [
   { test: (p) => p === '/tickets' || p.startsWith('/tickets/'), can: (u) => hasPermission(u.role, 'canViewTickets') },
   { test: (p) => p === '/commissions', can: (u) => hasPermission(u.role, 'canViewCommissions') },
   { test: (p) => p === '/payroll', can: (u) => hasPermission(u.role, 'canManagePayroll') },
-  { test: (p) => p === '/overtime', can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllOvertime') },
+  // /employee-requests hosts both the overtime and welfare/special-money tabs
+  // (RequestsPage.jsx), so it is visible to anyone either sub-page would be
+  // visible to. /overtime stays guarded identically since it's a same-page
+  // redirect alias (App.jsx), not a separate view.
+  {
+    test: (p) => p === '/employee-requests' || p === '/overtime',
+    can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllOvertime') || hasPermission(u.role, 'canViewAllSpecialMoney'),
+  },
   { test: (p) => p === '/leave', can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllLeave') },
   { test: (p) => p === '/price-import', can: (u) => hasPermission(u.role, 'canManagePriceImport') },
   // Matches the sidebar's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
