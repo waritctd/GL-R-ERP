@@ -9,10 +9,21 @@ import java.util.List;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import th.co.glr.hr.common.LibreOfficePdfConverter;
 
 class DepositNoticeRendererTest {
     private final DepositNoticeRenderer renderer = new DepositNoticeRenderer();
+
+    @BeforeEach
+    void requireLibreOffice() {
+        // toPdf() shells out to LibreOffice; skip (don't fail) where it isn't installed —
+        // same policy as the repo's Testcontainers-on-Docker gating. CI installs libreoffice-calc.
+        Assumptions.assumeTrue(LibreOfficePdfConverter.isAvailable(),
+            "LibreOffice (soffice) not installed — skipping PDF render test");
+    }
 
     @Test
     void rendersValidPdfBytes() {
@@ -36,6 +47,31 @@ class DepositNoticeRendererTest {
         assertThat(text).contains("บริษัท เอซีเอ็มอี จำกัด");
         assertThat(text).contains("โครงการโชว์รูม");
         assertThat(text).doesNotContain("?????");
+    }
+
+    @Test
+    void rendersWithoutFormulaErrorsAsASinglePageWithTheCorrectTotal() throws Exception {
+        // Regression test for the two bugs this branch fixed: the address cell used to
+        // evaluate to #N/A (broken VLOOKUP) and every amount cell evaluated to #VALUE!,
+        // and the render leaked extra blank pages. Assert none of that survives, and that
+        // the fixture's real customer address + computed total are present in the output.
+        byte[] pdf = renderer.toPdf(document());
+
+        String text;
+        int pageCount;
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            pageCount = doc.getNumberOfPages();
+            text = new PDFTextStripper().getText(doc);
+        }
+
+        assertThat(text).doesNotContain("#VALUE!");
+        assertThat(text).doesNotContain("#N/A");
+        assertThat(text).doesNotContain("#REF!");
+        assertThat(pageCount).isEqualTo(1);
+        // customerAddress fixture value ("Bangkok") — plain Latin text, no flattening needed.
+        assertThat(text).contains("Bangkok");
+        // totalPayable fixture value (depositAmount 500.00 + vatAmount 35.00 = 535.00).
+        assertThat(text).contains("535.00");
     }
 
     private DepositNoticeDto document() {

@@ -18,6 +18,20 @@ RUN mvn -B -q clean package -DskipTests
 FROM eclipse-temurin:21-jre
 WORKDIR /app
 
+# Install LibreOffice Calc for XLS→PDF conversion (soffice --headless).
+# libreoffice-calc is the spreadsheet-only subset (~150 MB); no GUI needed.
+# fontconfig provides fc-cache so bundled Thai fonts get registered.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libreoffice-calc fontconfig && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install the Windows Thai fonts (Angsana/Browallia/Cordia New) the templates use, so
+# LibreOffice renders the PDF exactly like Excel. The .ttf files are git-ignored and must
+# be present in backend/fonts/ at build time (see backend/fonts/README.md). The COPY of the
+# README guarantees the layer exists even when no fonts are supplied (fc-cache then no-ops).
+COPY fonts/ /usr/share/fonts/truetype/thai/
+RUN fc-cache -f /usr/share/fonts/truetype/thai/ || true
+
 # finalName defaults to ${artifactId}-${version} -> glr-hr-backend-0.1.0.jar
 COPY --from=build /app/target/glr-hr-backend-0.1.0.jar app.jar
 

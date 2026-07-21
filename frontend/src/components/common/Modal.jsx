@@ -6,6 +6,9 @@ const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [ta
 export function Modal({ title, subtitle, children, footer, onClose }) {
   const panelRef = useRef(null);
   const previouslyFocused = useRef(null);
+  const onCloseRef = useRef(onClose);
+  // Keep ref current on every render without re-triggering the effect.
+  useEffect(() => { onCloseRef.current = onClose; });
 
   useEffect(() => {
     previouslyFocused.current = document.activeElement;
@@ -18,7 +21,7 @@ export function Modal({ title, subtitle, children, footer, onClose }) {
     function onKeyDown(event) {
       if (event.key === 'Escape') {
         event.stopPropagation();
-        onClose?.();
+        onCloseRef.current?.();
         return;
       }
       if (event.key !== 'Tab') return;
@@ -38,12 +41,11 @@ export function Modal({ title, subtitle, children, footer, onClose }) {
     document.addEventListener('keydown', onKeyDown);
     return () => {
       document.removeEventListener('keydown', onKeyDown);
-      // Return focus to whatever triggered the modal.
       if (previouslyFocused.current instanceof HTMLElement) {
         previouslyFocused.current.focus();
       }
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>

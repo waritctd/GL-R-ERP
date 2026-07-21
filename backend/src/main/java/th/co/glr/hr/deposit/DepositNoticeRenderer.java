@@ -1,28 +1,27 @@
 package th.co.glr.hr.deposit;
 
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Locale;
-import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
+import org.apache.poi.ss.usermodel.PrintSetup;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
-import th.co.glr.hr.common.PdfDocumentWriter;
+import th.co.glr.hr.common.LibreOfficePdfConverter;
 
 @Component
 public class DepositNoticeRenderer {
 
-    private static final String TEMPLATE = "templates/deposit_notice_template.xlsx";
+    private static final String TEMPLATE = "templates/deposit_notice_template.xls";
     // Thai month names for date display
     private static final String[] THAI_MONTHS = {
         "มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน",
@@ -32,113 +31,97 @@ public class DepositNoticeRenderer {
     // Render to Excel bytes using Apache POI
     public byte[] toXlsx(DepositNoticeDto doc) throws Exception {
         try (InputStream tpl = new ClassPathResource(TEMPLATE).getInputStream();
-             Workbook wb = new XSSFWorkbook(tpl);
+             Workbook wb = WorkbookFactory.create(tpl);
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
             Sheet sh = wb.getSheet("Update");
             if (sh == null) sh = wb.getSheetAt(0);
 
-            // Customer block (row 6 = A7, B7 in 1-based)
-            setText(sh, 6, 0, "เรียน " + nullSafe(doc.customerName()));
-            setText(sh, 6, 7, thaiDate(doc.issueDate() != null ? doc.issueDate() : LocalDate.now()));
-            setText(sh, 7, 0, nullSafe(doc.customerAddress()));
-            setText(sh, 7, 7, nullSafe(doc.docNumber()));
+            // B7 (row 6, col 1) = customer name, I7 (row 6, col 8) = date
+            // B8 (row 7, col 1) = address,       I8 (row 7, col 8) = doc number
+            setStr(sh, 6, 1, nullSafe(doc.customerName()));
+            setStr(sh, 6, 8, thaiDate(doc.issueDate() != null ? doc.issueDate() : LocalDate.now()));
+            setStr(sh, 7, 1, nullSafe(doc.customerAddress()));
+            setStr(sh, 7, 8, nullSafe(doc.docNumber()));
             if (doc.reference() != null && !doc.reference().isBlank()) {
-                setText(sh, 8, 7, doc.reference());
+                setStr(sh, 8, 7, doc.reference());
             }
-            setText(sh, 10, 1, nullSafe(doc.projectName()));
+            setStr(sh, 10, 1, nullSafe(doc.projectName()));
 
-            // Item rows starting at row 12 (A13 in 1-based)
+            // Item rows start at 0-based row 12 (row 13 in 1-based). We fill:
+            //   E ราคา (unit price), G ส่วนลด (discount label, display), H คงเหลือ (net unit price)
+            // and let the template's amount formula  I = IF(H="","", H*C)  compute เป็นเงิน.
+            // The net price is written DIRECTLY into H rather than derived from the template's
+            // H = IF(G="พิเศษ",J,IF(E-E*F=0,"",E-E*F)) formula, because the very first data row
+            // (row 13) has H as a plain cell (not a formula) — leaving it empty made its
+            // I = ROUND(IF(H="","", H*C),2) collapse to ROUND("") = #VALUE!. (The previous code's
+            // other bug — writing the label text into the numeric discount column F — made E-E*F
+            // itself #VALUE! and cascaded into every total.)
             int dataStartRow = 12;
             for (int i = 0; i < doc.items().size(); i++) {
                 DepositNoticeItemDto item = doc.items().get(i);
-                Row row = getOrCreateRow(sh, dataStartRow + i);
-                setCell(row, 0, (double) item.seq());
-                setCell(row, 1, item.description());
-                setCell(row, 2, item.qty().doubleValue());
-                setCell(row, 3, item.unit());
-                setCell(row, 4, item.unitPrice().doubleValue());
-                setCell(row, 5, nullSafe(item.discountLabel()));
-                setCell(row, 6, item.netUnitPrice().doubleValue());
-                setCell(row, 8, item.amount().doubleValue());
+                int r = dataStartRow + i;
+                BigDecimal unitPrice = item.unitPrice() != null ? item.unitPrice() : BigDecimal.ZERO;
+                BigDecimal netPrice = item.netUnitPrice() != null ? item.netUnitPrice() : unitPrice;
+                setNum(sh, r, 0, (double) item.seq());         // A ลำดับ
+                setStr(sh, r, 1, item.description());          // B รายละเอียด
+                setNum(sh, r, 2, item.qty().doubleValue());    // C จำนวน
+                setStr(sh, r, 3, item.unit());                 // D หน่วย
+                setNum(sh, r, 4, unitPrice.doubleValue());     // E ราคา (unit price)
+                setStr(sh, r, 6, nullSafe(item.discountLabel(),
+                    netPrice.compareTo(unitPrice) != 0 ? "พิเศษ" : "Net")); // G ส่วนลด (display)
+                setNum(sh, r, 7, netPrice.doubleValue());      // H คงเหลือ (net) → I = H*C
             }
 
-            // Summary block (rows 43-46 = I44-I47 in 1-based)
-            setNumeric(sh, 43, 8, doc.subtotal());
-            setNumeric(sh, 44, 7, doc.depositPercent());
-            setNumeric(sh, 44, 8, doc.depositAmount());
-            setNumeric(sh, 45, 7, doc.vatPercent());
-            setNumeric(sh, 45, 8, doc.vatAmount());
-            setNumeric(sh, 46, 8, doc.totalPayable());
+            // Summary: only the deposit-rate input (H45) is data. Subtotal (I44), deposit (I45),
+            // VAT (I46) and total (I47) are template formulas that compute from the item rows and
+            // this rate, so we leave them to the template rather than writing literals that could
+            // diverge from its own arithmetic.
+            if (doc.depositPercent() != null) setNum(sh, 44, 7, doc.depositPercent().doubleValue());
 
             // Notes block (rows 36-42 = B37-B43 in 1-based)
             List<String> notes = doc.notes();
             for (int i = 0; i < notes.size() && i < 7; i++) {
-                setText(sh, 36 + i, 1, (i + 1) + ". " + notes.get(i));
+                setStr(sh, 36 + i, 1, (i + 1) + ". " + notes.get(i));
             }
 
             // Preparer
-            setText(sh, 47, 1, nullSafe(doc.preparerName()));
+            setStr(sh, 47, 1, nullSafe(doc.preparerName()));
+
+            // The template's second sheet ("Sheet1") is the customer-master list the B8 VLOOKUP
+            // read. The address is now written directly, so it is unused — and LibreOffice would
+            // otherwise render it as extra PDF pages. Drop every sheet except the notice itself.
+            for (int s = wb.getNumberOfSheets() - 1; s >= 0; s--) {
+                if (!wb.getSheetAt(s).getSheetName().equals(sh.getSheetName())) {
+                    wb.removeSheetAt(s);
+                }
+            }
+            wb.setActiveSheet(wb.getSheetIndex(sh));
+
+            // Give the money columns (ราคา..เป็นเงิน) a floor width so values never render as "###".
+            for (int c = 4; c <= 9; c++) {
+                if (sh.getColumnWidth(c) < 11 * 256) sh.setColumnWidth(c, 11 * 256);
+            }
+
+            // Force fit-to-1-page-wide so LibreOffice never spills columns onto extra
+            // pages when it substitutes the template's Windows Thai fonts with wider ones.
+            sh.setFitToPage(true);
+            sh.setAutobreaks(true);
+            PrintSetup ps = sh.getPrintSetup();
+            ps.setFitWidth((short) 1);
+            ps.setFitHeight((short) 0);
 
             wb.write(out);
             return out.toByteArray();
         }
     }
 
-    // Renders a real PDF with an embedded Thai font (Sarabun), so Thai text displays
-    // correctly instead of the previous ASCII-only fallback (which turned Thai characters
-    // into "?" since this document is almost entirely Thai content).
+    // PDF is the XLS template converted to PDF by LibreOffice — same appearance as the XLS.
     public byte[] toPdf(DepositNoticeDto doc) {
-        try (PdfDocumentWriter pdf = new PdfDocumentWriter()) {
-            PDFont regular = pdf.loadFont(PdfDocumentWriter.FONT_REGULAR);
-            PDFont bold = pdf.loadFont(PdfDocumentWriter.FONT_BOLD);
-
-            pdf.text(bold, 15, "บริษัท จี แอล แอนด์ อาร์ จำกัด");
-            pdf.text(regular, 10, "เลขที่ภาษี 0105542026329");
-            pdf.gap(8);
-            pdf.text(bold, 13, "ใบแจ้งยอด / เงินรับมัดจำ  " + nullSafe(doc.docNumber(), "DRAFT"));
-            pdf.text(regular, 10, "วันที่: " + thaiDate(doc.issueDate() != null ? doc.issueDate() : LocalDate.now()));
-            pdf.gap(10);
-
-            pdf.text(regular, 11, "เรียน " + nullSafe(doc.customerName()));
-            if (doc.customerAddress() != null && !doc.customerAddress().isBlank()) {
-                pdf.text(regular, 10, doc.customerAddress());
-            }
-            if (doc.customerTaxId() != null && !doc.customerTaxId().isBlank()) {
-                pdf.text(regular, 10, "เลขภาษี: " + doc.customerTaxId());
-            }
-            if (doc.projectName() != null && !doc.projectName().isBlank()) {
-                pdf.text(regular, 10, "โครงการ: " + doc.projectName());
-            }
-            pdf.gap(10);
-
-            pdf.text(bold, 11, "รายการ");
-            for (var item : doc.items()) {
-                pdf.text(regular, 10, item.seq() + ". " + item.description()
-                    + "  จำนวน " + fmt2(item.qty()) + " " + nullSafe(item.unit())
-                    + "  ราคา/หน่วย " + fmt2(item.unitPrice())
-                    + "  เป็นเงิน " + fmt2(item.amount()));
-            }
-            pdf.gap(10);
-
-            pdf.text(regular, 11, "รวมเป็นเงิน: " + fmt2(doc.subtotal()) + " " + nullSafe(doc.currency(), "THB"));
-            pdf.text(regular, 11, "ขอรับเงินมัดจำ: " + fmt2(doc.depositAmount()) + " " + nullSafe(doc.currency(), "THB"));
-            pdf.text(regular, 11, "ภาษีมูลค่าเพิ่ม: " + fmt2(doc.vatAmount()) + " " + nullSafe(doc.currency(), "THB"));
-            pdf.text(bold, 12, "รวมเป็นเงินที่ต้องชำระ: " + fmt2(doc.totalPayable()) + " " + nullSafe(doc.currency(), "THB"));
-            pdf.gap(10);
-
-            if (!doc.notes().isEmpty()) {
-                pdf.text(bold, 10, "หมายเหตุ");
-                for (int i = 0; i < doc.notes().size(); i++) {
-                    pdf.text(regular, 9, (i + 1) + ". " + doc.notes().get(i));
-                }
-                pdf.gap(10);
-            }
-
-            pdf.text(regular, 10, "ผู้จัดทำ: " + nullSafe(doc.preparerName()));
-            return pdf.toBytes();
-        } catch (IOException e) {
-            throw new RuntimeException("PDF render failed: " + e.getMessage(), e);
+        try {
+            return LibreOfficePdfConverter.convert(toXlsx(doc));
+        } catch (Exception e) {
+            throw new RuntimeException("Deposit notice PDF render failed: " + e.getMessage(), e);
         }
     }
 
@@ -231,26 +214,32 @@ public class DepositNoticeRenderer {
         return d.getDayOfMonth() + " " + THAI_MONTHS[d.getMonthValue() - 1] + " " + (d.getYear() + 543);
     }
 
-    private void setText(Sheet sh, int rowIdx, int colIdx, String value) {
-        getOrCreateRow(sh, rowIdx).createCell(colIdx, CellType.STRING).setCellValue(value != null ? value : "");
+    // Preserve template cell style: get existing cell, only create if absent.
+    // Never call setCellType — it wipes the template's number format and border.
+    private void setStr(Sheet sh, int rowIdx, int colIdx, String value) {
+        getOrKeep(sh, rowIdx, colIdx).setCellValue(value != null ? value : "");
+    }
+
+    private void setNum(Sheet sh, int rowIdx, int colIdx, double value) {
+        getOrKeep(sh, rowIdx, colIdx).setCellValue(value);
     }
 
     private void setNumeric(Sheet sh, int rowIdx, int colIdx, BigDecimal value) {
         if (value == null) return;
-        getOrCreateRow(sh, rowIdx).createCell(colIdx, CellType.NUMERIC).setCellValue(value.doubleValue());
+        getOrKeep(sh, rowIdx, colIdx).setCellValue(value.doubleValue());
     }
 
-    private void setCell(Row row, int col, double value) {
-        row.createCell(col, CellType.NUMERIC).setCellValue(value);
-    }
-
-    private void setCell(Row row, int col, String value) {
-        row.createCell(col, CellType.STRING).setCellValue(value != null ? value : "");
-    }
-
-    private Row getOrCreateRow(Sheet sh, int rowIdx) {
+    private Cell getOrKeep(Sheet sh, int rowIdx, int colIdx) {
         Row row = sh.getRow(rowIdx);
-        return row != null ? row : sh.createRow(rowIdx);
+        if (row == null) row = sh.createRow(rowIdx);
+        Cell cell = row.getCell(colIdx);
+        if (cell == null) cell = row.createCell(colIdx);
+        // Writing a literal onto a template formula cell (e.g. B8 =VLOOKUP, I7 =TODAY) must clear
+        // the formula first: POI's setCellValue only sets the cached result and leaves the formula,
+        // so LibreOffice recalculates it on PDF export and the literal is lost (→ #N/A). setBlank
+        // keeps the cell's style/number-format/border (unlike setCellType), just drops the formula.
+        if (cell.getCellType() == CellType.FORMULA) cell.setBlank();
+        return cell;
     }
 
     private String nullSafe(String s) { return s != null ? s : ""; }
