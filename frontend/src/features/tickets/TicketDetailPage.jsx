@@ -12,6 +12,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
+  dealStageLabel,
   formatMoney,
   formatThaiDate,
   fulfilmentStatusLabel,
@@ -25,6 +26,7 @@ import { downloadBlob } from '../../utils/download.js';
 import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
 import { CancelDealModal } from './CancelDealModal.jsx';
 import { DealStagePanel } from './DealStagePanel.jsx';
+import { visibleSections } from './salesViewScope.js';
 
 const EVENT_KIND_LABEL = {
   CREATED:            'สร้างดีล',
@@ -114,6 +116,25 @@ function InfoRow({ label, value }) {
     <div style={{ display: 'flex', gap: 8, padding: '6px 0', borderBottom: '1px solid var(--color-surface-subtle)', fontSize: 13 }}>
       <span style={{ color: 'var(--color-text-muted)', minWidth: 120 }}>{label}</span>
       <span style={{ fontWeight: 600, color: 'var(--color-text)' }}>{value || '-'}</span>
+    </div>
+  );
+}
+
+/**
+ * Role-scoped views, Phase A (frontend only — see salesViewScope.js): what a
+ * section collapses to when `visibleSections(role)` says this viewer's role
+ * has no business in it. Never hides the deal itself, only the section's
+ * detail — a one-line "customer · current stage" context row keeps the
+ * cross-team peek the section would otherwise have offered.
+ */
+function SectionPeek({ title, summary }) {
+  const stage = dealStageLabel(summary.salesStage);
+  return (
+    <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-dashed border-border bg-surface-subtle px-4 py-2.5">
+      <span className="shrink-0 text-xs font-bold text-text-muted">{title}</span>
+      <span className="min-w-0 truncate text-xs text-text-secondary">
+        {summary.customerName || summary.title} · {stage.label}
+      </span>
     </div>
   );
 }
@@ -530,6 +551,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const { summary, items, events, quotations } = ticket;
   const st = summary.status;
   const role = user.role;
+  // Role-scoped views, Phase A: which of the sections below this viewer's
+  // role gets in full vs. as a one-line SectionPeek. See salesViewScope.js —
+  // presentation only, never a security boundary.
+  const sections = visibleSections(role);
   const isOwner = user.id === summary.createdById;
 
   const showProposed = ROLE_PERMISSIONS.canProposePrices.includes(role) || ROLE_PERMISSIONS.canApproveReject.includes(role);
@@ -1178,7 +1203,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         onSetTenderRequirement={(payload) => doAction(() => api.tickets.setTenderRequirement(ticketId, payload), 'บันทึกสถานะประมูลแล้ว')}
         onSetDepositPolicy={(payload) => doAction(() => api.tickets.setDepositPolicy(ticketId, payload), 'บันทึกนโยบายมัดจำแล้ว')}
         docActions={(can.generateQuotation || can.generateDocument || can.issueImportRequest
-          || can.downloadRemainingInvoice || latestQuotation || depositNoticeIssued) ? (
+          || can.downloadRemainingInvoice || (sections.quotation && latestQuotation)
+          || (sections.depositNotice && depositNoticeIssued)) ? (
           <>
             {can.generateQuotation && (
               <button type="button" className="secondary-button" disabled={actionLoading}
@@ -1187,7 +1213,12 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 {quotations && quotations.length > 0 ? 'ออกใบเสนอราคาใหม่ (Rev)' : 'ออกใบเสนอราคา'}
               </button>
             )}
-            {latestQuotation && (
+            {/* Import/account (role-scoped views, Phase A): the view-only
+                quotation/deposit-notice download links aren't role-gated by
+                `can.*` (unlike generate/issue, which already require
+                isOwner) — sections.quotation/depositNotice hide them for the
+                role that has no business in that document. */}
+            {sections.quotation && latestQuotation && (
               <button type="button" className="secondary-button"
                 disabled={downloadingQuotationKey === `${latestQuotation.id}-pdf`}
                 onClick={() => handleDownloadQuotation(latestQuotation.id, latestQuotation.number, 'pdf')}>
@@ -1204,7 +1235,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 ออกใบแจ้งยอดมัดจำ
               </button>
             )}
-            {depositNoticeIssued && (
+            {sections.depositNotice && depositNoticeIssued && (
               <button type="button" className="secondary-button"
                 onClick={() => onOpenDocument && onOpenDocument(ticketId)}>
                 <Icon name="fileText" size={14} />
@@ -1227,6 +1258,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         ) : null}
       />
 
+      {sections.payment ? (
       <section className="panel">
         <div className="panel-header" style={{ alignItems: 'center' }}>
           <h2>การชำระเงิน</h2>
@@ -1294,7 +1326,11 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           </div>
         </div>
       </section>
+      ) : (
+        <SectionPeek title="การชำระเงิน" summary={summary} />
+      )}
 
+      {sections.delivery ? (
       <section className="panel">
         <div className="panel-header" style={{ alignItems: 'center' }}>
           <h2>การส่งมอบสินค้า</h2>
@@ -1375,6 +1411,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           </div>
         </div>
       </section>
+      ) : (
+        <SectionPeek title="การส่งมอบสินค้า" summary={summary} />
+      )}
 
       {/* Contextual decision panel — approve/reject is the one action on this page
           with real financial and downstream consequences, so it gets its own
@@ -1382,8 +1421,11 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           action row. Helper text below is quoted from api.tickets.approve/reject
           in src/api/mockApi.js (lines ~1218-1240): approve copies proposedPrice →
           approvedPrice and moves price_proposed → approved; reject moves the
-          ticket back to in_review for Import to re-propose. */}
-      {(can.approve || can.reject) && (
+          ticket back to in_review for Import to re-propose.
+          sections.priceApproval documents (doesn't newly restrict) that this
+          panel is CEO-only: can.approve/can.reject already require
+          ROLE_PERMISSIONS.canApproveReject === ['ceo']. */}
+      {(can.approve || can.reject) && sections.priceApproval && (
         // Warning token rather than a raw amber: DESIGN.md defines
         // --color-warning as the caution / needs-a-decision colour.
         <section className="panel" style={{ borderColor: 'var(--color-warning)', borderWidth: 1.5 }}>
@@ -2061,9 +2103,13 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             )}
           </section>
 
-          {canViewPricingRequests ? (
-            <PricingRequestPanel ticketId={ticketId} deal={summary} ticketItems={items} user={user} />
-          ) : null}
+          {sections.pricingRequest ? (
+            canViewPricingRequests ? (
+              <PricingRequestPanel ticketId={ticketId} deal={summary} ticketItems={items} user={user} />
+            ) : null
+          ) : (
+            <SectionPeek title="ใบขอราคา (Pricing Request)" summary={summary} />
+          )}
 
           {/* D9: Price formula breakdown */}
           {showBreakdown && priceBreakdown.length > 0 && (
@@ -2202,7 +2248,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             )}
           </section>
 
-          {quotationGroups.length > 0 && (
+          {sections.quotation ? (
+            quotationGroups.length > 0 && (
             <section className="panel">
               <div className="panel-header">
                 <h2>ใบเสนอราคา</h2>
@@ -2289,6 +2336,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 </div>
               ))}
             </section>
+            )
+          ) : (
+            <SectionPeek title="ใบเสนอราคา" summary={summary} />
           )}
         </div>
 

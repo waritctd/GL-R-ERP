@@ -10,13 +10,25 @@ const BASE_TABS = [
   { path: '/ticket-overview', label: 'ภาพรวม' },
 ];
 
+const PRICING_QUEUE_TAB = { path: '/pricing-requests', label: 'คิวขอราคา' };
+
 export function SalesTabs({ role }) {
   // Commit 6: Import's cross-deal PricingRequest queue is its own tab, shown
   // only to roles that may view it (import/ceo/sales_manager) — mirrors
   // ROLE_PERMISSIONS.canViewPricingRequestQueue / app/permissions.js
   // PATH_GUARDS for '/pricing-requests'.
-  const tabs = hasPermission(role, 'canViewPricingRequestQueue')
-    ? [...BASE_TABS, { path: '/pricing-requests', label: 'คิวขอราคา' }]
+  //
+  // Role-scoped views, Phase A: import's day starts at the pricing queue, not
+  // the deal list, so it leads the tab order. ceo/sales_manager also pass
+  // canViewPricingRequestQueue but are oversight roles browsing everything
+  // rather than a role with one obvious first stop — they keep the deal-list-
+  // first order. account has no dedicated tab here: its worklist IS
+  // ดีลทั้งหมด (TicketListPage defaults account to its money-worklist inbox —
+  // see salesViewScope.dealInScope), so no extra tab is needed to "lead"
+  // with it.
+  const canViewQueue = hasPermission(role, 'canViewPricingRequestQueue');
+  const tabs = canViewQueue
+    ? (role === 'import' ? [PRICING_QUEUE_TAB, ...BASE_TABS] : [...BASE_TABS, PRICING_QUEUE_TAB])
     : BASE_TABS;
 
   return (

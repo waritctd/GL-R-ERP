@@ -12,14 +12,44 @@ import {
   dealLifecycleLabel,
   dealLostReasonLabel,
   dealStageLabel,
+  formatMoney,
   formatThaiDate,
   fulfilmentStatusLabel,
   overdueBadgeLabel,
   ticketStatusLabel,
 } from '../../utils/format.js';
 import { StageProgressBar } from './DealStageStepper.jsx';
+import { dealInScope } from './salesViewScope.js';
 import { SALES_PHASES, stageMeta } from './stageMeta.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
+
+// Role-scoped views, Phase A: roles whose list page distinguishes "my
+// worklist" from "every deal I may read" — everyone else (sales already only
+// ever receives its own deals from the API; ceo/sales_manager are oversight
+// and want the full list) has no such distinction, so no toggle is shown.
+const WORKLIST_ROLES = new Set(['import', 'account']);
+
+// One-line reason a deal is sitting in `role`'s worklist right now — the
+// per-card emphasis the brief asks for ("account: … the pending money
+// action", "import: lead with the pricing queue"). Presentation only, same
+// spirit as dealInScope in salesViewScope.js but specific enough to this
+// page's cards that it isn't worth exporting from that shared module.
+function worklistReason(role, deal) {
+  if (role === 'account') {
+    if (deal.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') return 'รอยืนยันรับมัดจำ';
+    if (deal.paymentStatus === 'AWAITING_FINAL_PAYMENT') return 'รอชำระส่วนที่เหลือ';
+    if (deal.overdue) return 'เกินกำหนดชำระ';
+    return null;
+  }
+  if (role === 'import') {
+    const meta = stageMeta(deal.salesStage);
+    if (meta?.phase === 2 || meta?.phase === 3) return 'รอเสนอราคา (Pricing Request)';
+    if (deal.salesStage === 'PROCUREMENT') return 'ดำเนินการนำเข้า (IR / จัดส่ง)';
+    if (['DELIVERY_SCHEDULING', 'DELIVERED'].includes(deal.salesStage)) return 'ส่งมอบ / จองสต็อก';
+    return null;
+  }
+  return null;
+}
 
 // Per-phase accents (design tokens --color-phase-N, adopted from the user's
 // Claude Design prototype). Static class map — Tailwind's scanner needs the
@@ -100,8 +130,14 @@ function DealStageCell({ deal }) {
   );
 }
 
-/** Mobile record card for a deal: identity, stage, progress, owner, freshness. */
-function DealCard({ deal }) {
+/**
+ * Mobile record card for a deal: identity, stage, progress, owner, freshness.
+ * `reason`, when given, is a one-line worklist chip ("why this deal is in
+ * your queue right now") shown right under the customer name — used by
+ * import's card to lead with the pricing/procurement queue instead of
+ * making the viewer read the full 14-stage label first.
+ */
+function DealCard({ deal, reason = null }) {
   return (
     <>
       <div className="flex min-w-0 items-start justify-between gap-3">
@@ -115,9 +151,50 @@ function DealCard({ deal }) {
       {deal.projectName ? (
         <span className="min-w-0 truncate text-xs text-text-muted">{deal.projectName}</span>
       ) : null}
+      {reason ? <StatusBadge tone="info">{reason}</StatusBadge> : null}
 
       <DealStageCell deal={deal} />
       <StageProgressBar salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST'} />
+
+      <span className="min-w-0 truncate text-xs text-text-muted">
+        {[deal.createdByName, formatThaiDate(deal.createdAt)].filter(Boolean).join(' · ')}
+      </span>
+    </>
+  );
+}
+
+/**
+ * Account's money-worklist card: leads with the amount and the specific
+ * pending money action instead of the pipeline stage (account doesn't act on
+ * the pipeline stage directly — it acts on a payment).
+ */
+function MoneyWorklistCard({ deal }) {
+  const reason = worklistReason('account', deal);
+  return (
+    <>
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <code className="min-w-0 truncate text-xs text-text-muted">{deal.code}</code>
+        <DaysBadge stageUpdatedAt={deal.stageUpdatedAt} />
+      </div>
+
+      <strong className="min-w-0 text-md leading-snug font-extrabold text-text">
+        {deal.customerName || deal.title}
+      </strong>
+
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <strong className="text-lg font-extrabold text-text">
+          {formatMoney(deal.amountOutstanding ?? 0)}
+        </strong>
+        <span className="text-2xs text-text-muted">
+          คงเหลือ จากยอด {formatMoney(deal.amountPayable ?? 0)}
+        </span>
+      </div>
+
+      {reason ? (
+        <StatusBadge tone={deal.overdue ? 'danger' : 'warning'}>{reason}</StatusBadge>
+      ) : (
+        <StatusBadge tone="neutral">ไม่มีรายการรอดำเนินการ</StatusBadge>
+      )}
 
       <span className="min-w-0 truncate text-xs text-text-muted">
         {[deal.createdByName, formatThaiDate(deal.createdAt)].filter(Boolean).join(' · ')}
@@ -139,6 +216,11 @@ export function TicketListPage({ user, showToast }) {
   const phaseFilter = searchParams.get('phase') ?? '';
   const lifecycleFilter = searchParams.get('life') ?? '';
   const flagFilter = searchParams.get('flag') ?? '';
+  // Role-scoped views, Phase A: import/account default to their own worklist
+  // (dealInScope) — ?inbox=0 opts back into every deal the role may read.
+  // sales/ceo/sales_manager have no such distinction (see WORKLIST_ROLES).
+  const hasWorklistDistinction = WORKLIST_ROLES.has(user.role);
+  const inboxOnly = hasWorklistDistinction && searchParams.get('inbox') !== '0';
   const searchText = searchParams.get('q') ?? '';
   const [creating, setCreating] = useState(false);
 
@@ -190,6 +272,15 @@ export function TicketListPage({ user, showToast }) {
     partial_delivery: allDeals.filter((deal) => deal.fulfillmentStatus === 'PARTIALLY_DELIVERED').length,
   }), [allDeals]);
 
+  // Role-scoped views, Phase A: how many of allDeals are actually in this
+  // role's worklist right now — same counts-from-allDeals convention as
+  // lifecycleCounts/flagCounts above (independent of the other active
+  // filters), used by the inbox toggle chips below.
+  const inboxCounts = useMemo(() => (hasWorklistDistinction ? {
+    inbox: allDeals.filter((deal) => dealInScope(user.role, deal)).length,
+    all: allDeals.length,
+  } : null), [allDeals, hasWorklistDistinction, user.role]);
+
   const deals = useMemo(() => {
     return allDeals.filter((deal) => {
       const lost = deal.lifecycle === 'CLOSED_LOST';
@@ -202,16 +293,18 @@ export function TicketListPage({ user, showToast }) {
       const flagOk = !flagFilter
         || (flagFilter === 'overdue' && deal.overdue)
         || (flagFilter === 'partial_delivery' && deal.fulfillmentStatus === 'PARTIALLY_DELIVERED');
-      return phaseOk && lifeOk && flagOk;
+      const inboxOk = !inboxOnly || dealInScope(user.role, deal);
+      return phaseOk && lifeOk && flagOk && inboxOk;
     });
-  }, [allDeals, flagFilter, lifecycleFilter, phaseFilter]);
+  }, [allDeals, flagFilter, lifecycleFilter, phaseFilter, inboxOnly, user.role]);
 
   const emptyDescription = useMemo(() => {
     if (flagFilter === 'overdue') return 'ไม่มีดีลที่เกินกำหนดชำระ';
     if (flagFilter === 'partial_delivery') return 'ไม่มีดีลที่ส่งมอบบางส่วน';
     if (lifecycleFilter) return `ไม่มีดีลในสถานะ${dealLifecycleLabel(lifecycleFilter).label}`;
+    if (inboxOnly) return 'ไม่มีดีลที่ต้องดำเนินการตอนนี้ — ลองดูแท็บ "ทั้งหมด"';
     return 'ยังไม่มีดีลในเงื่อนไขที่เลือก';
-  }, [flagFilter, lifecycleFilter]);
+  }, [flagFilter, lifecycleFilter, inboxOnly]);
 
   function invalidateTicketsList() {
     return queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
@@ -294,6 +387,32 @@ export function TicketListPage({ user, showToast }) {
         })}
       </div>
 
+      {hasWorklistDistinction ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3">
+          <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">แสดง</span>
+          {[
+            { value: '', label: 'ต้องดำเนินการ', count: inboxCounts.inbox },
+            { value: '0', label: 'ทั้งหมด', count: inboxCounts.all },
+          ].map((item) => {
+            const active = (searchParams.get('inbox') ?? '') === item.value;
+            return (
+              <button
+                key={item.value || 'all'}
+                type="button"
+                aria-pressed={active}
+                className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
+                  active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
+                }`}
+                onClick={() => updateParam('inbox', item.value)}
+              >
+                <span>{item.label}</span>
+                <StatusBadge tone={active ? 'info' : 'neutral'}>{item.count}</StatusBadge>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
       <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">Lifecycle</span>
@@ -343,7 +462,11 @@ export function TicketListPage({ user, showToast }) {
         getRowKey={(deal) => deal.id}
         gridClassName="ticket-table"
         onRowClick={(deal) => navigate(`/tickets/${deal.id}`)}
-        mobileCard={(deal) => <DealCard deal={deal} />}
+        mobileCard={(deal) => (
+          user.role === 'account'
+            ? <MoneyWorklistCard deal={deal} />
+            : <DealCard deal={deal} reason={worklistReason(user.role, deal)} />
+        )}
         searchable
         searchValue={searchText}
         onSearchChange={(value) => updateParam('q', value)}

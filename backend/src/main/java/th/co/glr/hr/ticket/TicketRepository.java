@@ -54,6 +54,28 @@ public class TicketRepository {
 
     private final NamedParameterJdbcTemplate jdbc;
 
+    // ── Role-scoped list membership (Phase B) ────────────────────────────────
+    // Mirrors frontend/src/features/tickets/salesViewScope.js#dealInScope, which is
+    // presentation-only there ("never a security boundary" per its own doc comment) —
+    // this is the actual enforcement. Applied only when the caller's role is "import"
+    // or "account"; every other viewer role (sales/ceo/sales_manager) is unaffected.
+    //
+    // import: an active (non-terminal, non-DRAFT-only... DRAFT counts as non-terminal
+    // here — see PricingRequestStatus) pricing request exists for the deal, OR the deal
+    // has reached PROCUREMENT or later in the 14-stage pipeline. A closed/lost/cancelled
+    // deal is never in scope, even at a late stage (mirrors dealInScope's `closed` guard).
+    private static final List<String> IMPORT_STAGE_SCOPE =
+        DealStage.ORDER.subList(DealStage.indexOf(DealStage.PROCUREMENT), DealStage.ORDER.size());
+    // Mirrors th.co.glr.hr.pricingrequest.PricingRequestStatus's three terminal values.
+    // Not imported directly to avoid a new ticket-package -> pricingrequest-package
+    // repository dependency for three literals; keep in sync if that enum changes.
+    private static final List<String> PRICING_REQUEST_TERMINAL_STATUSES =
+        List.of("CANCELLED", "SUPERSEDED", "QUOTATION_ACCEPTED");
+    // account: a deposit or final-payment confirmation is awaited, or the deal is
+    // overdue on an outstanding balance. Mirrors TicketEventKind's payment-status values.
+    private static final List<String> ACCOUNT_PENDING_PAYMENT_STATUSES =
+        List.of("DEPOSIT_NOTICE_ISSUED", "AWAITING_FINAL_PAYMENT");
+
     public TicketRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }
@@ -63,29 +85,36 @@ public class TicketRepository {
     }
 
     public List<TicketSummaryDto> findSummaries(String status, Long createdByFilter, PageRequest page) {
-        return findSummaries(status, null, createdByFilter, page);
+        return findSummaries(status, null, createdByFilter, null, page);
     }
 
     /**
      * @param salesStage optional {@link DealStage} filter (e.g. {@code CLOSED_PAID}), additive to
      *                    {@code status} — used by the Step 9 commission "Linked Deal" picker to list
      *                    only deals that have actually reached final payment.
+     * @param actorRole when {@code "import"} or {@code "account"}, applies that role's list-scoping
+     *                  predicate (see the class-level comment above); any other value (including
+     *                  null) applies no extra filter.
      */
-    public List<TicketSummaryDto> findSummaries(String status, String salesStage, Long createdByFilter, PageRequest page) {
+    public List<TicketSummaryDto> findSummaries(String status, String salesStage, Long createdByFilter,
+                                                String actorRole, PageRequest page) {
         StringBuilder sql = new StringBuilder(SUMMARY_SELECT).append("""
              WHERE (:status::varchar IS NULL OR t.status = :status)
                AND (:salesStage::varchar IS NULL OR t.sales_stage = :salesStage)
                AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
+            """);
+        MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("status", status)
+            .addValue("salesStage", salesStage)
+            .addValue("createdBy", createdByFilter);
+        appendRoleScope(sql, params, actorRole);
+        sql.append("""
              GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
                       ea.first_name_th, ea.last_name_th,
                       p.name, ct.first_name, ct.last_name,
                       ecc.first_name_th, ecc.last_name_th
              ORDER BY t.created_at DESC
             """);
-        MapSqlParameterSource params = new MapSqlParameterSource()
-            .addValue("status", status)
-            .addValue("salesStage", salesStage)
-            .addValue("createdBy", createdByFilter);
         if (page != null) {
             sql.append(" LIMIT :limit OFFSET :offset");
             params.addValue("limit", page.size());
@@ -95,22 +124,50 @@ public class TicketRepository {
     }
 
     public int countSummaries(String status, Long createdByFilter) {
-        return countSummaries(status, null, createdByFilter);
+        return countSummaries(status, null, createdByFilter, null);
     }
 
-    public int countSummaries(String status, String salesStage, Long createdByFilter) {
-        Integer total = jdbc.queryForObject("""
+    public int countSummaries(String status, String salesStage, Long createdByFilter, String actorRole) {
+        StringBuilder sql = new StringBuilder("""
             SELECT COUNT(*) FROM sales.ticket t
              WHERE (:status::varchar IS NULL OR t.status = :status)
                AND (:salesStage::varchar IS NULL OR t.sales_stage = :salesStage)
                AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
-            """,
-            new MapSqlParameterSource()
-                .addValue("status", status)
-                .addValue("salesStage", salesStage)
-                .addValue("createdBy", createdByFilter),
-            Integer.class);
+            """);
+        MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("status", status)
+            .addValue("salesStage", salesStage)
+            .addValue("createdBy", createdByFilter);
+        appendRoleScope(sql, params, actorRole);
+        Integer total = jdbc.queryForObject(sql.toString(), params, Integer.class);
         return total == null ? 0 : total;
+    }
+
+    /** Additive WHERE fragment for import/account list-scoping — see the class-level comment. */
+    private void appendRoleScope(StringBuilder sql, MapSqlParameterSource params, String actorRole) {
+        if ("import".equals(actorRole)) {
+            sql.append("""
+                   AND t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED')
+                   AND t.status NOT IN ('closed', 'cancelled')
+                   AND (
+                     EXISTS (
+                       SELECT 1 FROM sales.pricing_request pr
+                        WHERE pr.ticket_id = t.ticket_id
+                          AND pr.status NOT IN (:prTerminalStatuses)
+                     )
+                     OR t.sales_stage IN (:importStages)
+                   )
+                """);
+            params.addValue("prTerminalStatuses", PRICING_REQUEST_TERMINAL_STATUSES);
+            params.addValue("importStages", IMPORT_STAGE_SCOPE);
+        } else if ("account".equals(actorRole)) {
+            sql.append(" AND (t.payment_status IN (:accountPendingStatuses) OR (t.due_date IS NOT NULL AND t.due_date < CURRENT_DATE AND ((")
+               .append(payableAmountSelect("t.ticket_id"))
+               .append(") - (")
+               .append(paidAmountSelect("t.ticket_id"))
+               .append(")) > 0)) ");
+            params.addValue("accountPendingStatuses", ACCOUNT_PENDING_PAYMENT_STATUSES);
+        }
     }
 
     /**
@@ -1063,11 +1120,8 @@ public class TicketRepository {
     }
 
     public BigDecimal sumPaid(long ticketId) {
-        BigDecimal value = jdbc.queryForObject("""
-            SELECT COALESCE(SUM(CASE WHEN kind = 'ADJUSTMENT' THEN -amount ELSE amount END), 0)
-              FROM sales.payment_receipt
-             WHERE ticket_id = :ticketId
-            """, Map.of("ticketId", ticketId), BigDecimal.class);
+        BigDecimal value = jdbc.queryForObject(paidAmountSelect(":ticketId"),
+            Map.of("ticketId", ticketId), BigDecimal.class);
         return value == null ? BigDecimal.ZERO : value;
     }
 
@@ -1082,11 +1136,24 @@ public class TicketRepository {
     }
 
     public BigDecimal payableAmount(long ticketId) {
-        BigDecimal value = jdbc.queryForObject("""
+        BigDecimal value = jdbc.queryForObject(payableAmountSelect(":ticketId"),
+            Map.of("ticketId", ticketId), BigDecimal.class);
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    /**
+     * Full "amount payable" SELECT statement, correlated on {@code ticketIdRef} (either a bind
+     * parameter like {@code ":ticketId"} for a standalone query, or an outer-query column
+     * reference like {@code "t.ticket_id"} for use as a parenthesized scalar subquery inside a
+     * bigger SQL statement — see {@link #appendRoleScope}). Single source of truth so the two
+     * contexts can never drift apart; this is the exact SQL {@link #payableAmount} always ran.
+     */
+    private static String payableAmountSelect(String ticketIdRef) {
+        return """
             SELECT COALESCE(
                 (SELECT q.total_amount
                    FROM sales.quotation q
-                  WHERE q.ticket_id = :ticketId AND q.doc_status = 'ACCEPTED'
+                  WHERE q.ticket_id = %1$s AND q.doc_status = 'ACCEPTED'
                   ORDER BY CASE q.recipient_type
                                WHEN 'BUYER' THEN 0
                                WHEN 'OWNER' THEN 1
@@ -1098,7 +1165,7 @@ public class TicketRepository {
                   LIMIT 1),
                 (SELECT q.total_amount
                    FROM sales.quotation q
-                  WHERE q.ticket_id = :ticketId AND q.doc_status IN ('ISSUED','SENT')
+                  WHERE q.ticket_id = %1$s AND q.doc_status IN ('ISSUED','SENT')
                   ORDER BY CASE q.recipient_type
                                WHEN 'BUYER' THEN 0
                                WHEN 'OWNER' THEN 1
@@ -1109,16 +1176,24 @@ public class TicketRepository {
                   LIMIT 1),
                 (SELECT d.total_payable
                    FROM sales.deposit_notice d
-                  WHERE d.ticket_id = :ticketId AND d.status = 'ISSUED'
+                  WHERE d.ticket_id = %1$s AND d.status = 'ISSUED'
                   ORDER BY d.version DESC, d.deposit_notice_id DESC
                   LIMIT 1),
                 (SELECT COALESCE(SUM(COALESCE(ti.approved_price, 0) * ti.qty), 0)
                    FROM sales.ticket_item ti
-                  WHERE ti.ticket_id = :ticketId),
+                  WHERE ti.ticket_id = %1$s),
                 0
             )
-            """, Map.of("ticketId", ticketId), BigDecimal.class);
-        return value == null ? BigDecimal.ZERO : value;
+            """.formatted(ticketIdRef);
+    }
+
+    /** Full "amount paid" SELECT statement — see {@link #payableAmountSelect} for the correlation contract. */
+    private static String paidAmountSelect(String ticketIdRef) {
+        return """
+            SELECT COALESCE(SUM(CASE WHEN kind = 'ADJUSTMENT' THEN -amount ELSE amount END), 0)
+              FROM sales.payment_receipt
+             WHERE ticket_id = %1$s
+            """.formatted(ticketIdRef);
     }
 
     public record DepositNoticePaymentInfo(long id, BigDecimal depositAmount, BigDecimal totalPayable) {}
