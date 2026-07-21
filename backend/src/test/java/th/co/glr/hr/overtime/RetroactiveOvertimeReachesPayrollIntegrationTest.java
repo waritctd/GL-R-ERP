@@ -267,7 +267,8 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
      * falls back to today — still exercising the same path.
      */
     private LocalDate backdatedWorkDateInCurrentMonth() {
-        LocalDate today = LocalDate.now();
+        // Bangkok zone to match OvertimeService.BUSINESS_ZONE; the JVM default zone flakes in UTC CI.
+        LocalDate today = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok"));
         return today.getDayOfMonth() > 1 ? today.withDayOfMonth(1) : today;
     }
 

@@ -120,7 +120,7 @@ class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegratio
      */
     @Test
     void retroactiveOvertimeIsRefusedOnceItsPayrollMonthHasBeenProcessed() {
-        LocalDate workDate = LocalDate.now().minusDays(3);
+        LocalDate workDate = bangkokToday().minusDays(3);
         insertProcessedPeriod(workDate.withDayOfMonth(1));
 
         assertThatThrownBy(() -> service.submit(backdated(null, 3, LATE_REASON), employee(salesStaff)))
@@ -136,9 +136,14 @@ class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegratio
     private static final String LATE_REASON = "Urgent customer escalation, filed after the shift ended";
 
     private SubmitOvertimeRequest backdated(Long employeeId, int daysAgo, String reason) {
-        LocalDate workDate = LocalDate.now().minusDays(daysAgo);
+        LocalDate workDate = bangkokToday().minusDays(daysAgo);
         OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(ZoneOffset.ofHours(7));
         return new SubmitOvertimeRequest(employeeId, workDate, startAt, startAt.plusHours(2), "WORKDAY", reason);
+    }
+
+    /** Match OvertimeService.BUSINESS_ZONE; the JVM default zone flakes in UTC CI (see the unit test). */
+    private LocalDate bangkokToday() {
+        return LocalDate.now(java.time.ZoneId.of("Asia/Bangkok"));
     }
 
     private int storedCountFor(long employeeId) {

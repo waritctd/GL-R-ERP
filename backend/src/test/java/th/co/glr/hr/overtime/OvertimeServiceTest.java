@@ -444,9 +444,16 @@ class OvertimeServiceTest {
         );
     }
 
-    /** A self-filed request {@code daysAgo} in the past (0 = today), with the given reason. */
+    /**
+     * A self-filed request {@code daysAgo} in the past (0 = today), with the given reason.
+     *
+     * <p>"Today" is resolved in {@code Asia/Bangkok} to match {@code OvertimeService.BUSINESS_ZONE}.
+     * Using the JVM default zone makes {@code daysAgo = 0} flake: in CI (UTC) between 17:00 and 23:59
+     * the default-zone date is a day behind the Bangkok date the service compares against, so a
+     * "same day" request is seen as backdated and rejected for a too-short reason.
+     */
     private SubmitOvertimeRequest backdatedSubmit(int daysAgo, String reason) {
-        LocalDate workDate = LocalDate.now().minusDays(daysAgo);
+        LocalDate workDate = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).minusDays(daysAgo);
         OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
         return new SubmitOvertimeRequest(null, workDate, startAt, startAt.plusHours(2), "WORKDAY", reason);
     }
