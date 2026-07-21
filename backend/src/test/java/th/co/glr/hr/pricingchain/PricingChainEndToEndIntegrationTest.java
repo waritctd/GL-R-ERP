@@ -633,10 +633,31 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
 
     /** Simulates one outbox worker tick draining everything currently claimable — the actual
      * production codepath send() enqueues onto, not a shortcut around it. */
+    /**
+     * A single {@link FactoryQuoteService#claimableDispatchIds()} call is not guaranteed to
+     * return every dispatch this test just enqueued — the real production worker
+     * ({@code FactoryQuoteEmailDispatchWorker}) is a {@code @Scheduled} loop that self-heals over
+     * repeated ticks by design (a dispatch that is transiently unclaimed on one tick is picked up
+     * on the next), so a test helper that only calls it ONCE is testing a weaker guarantee than
+     * production actually provides. Observed on CI (not reproducible locally in 5/5 isolated runs
+     * or repeated full-suite runs): one of two same-test dispatches was left un-finalized after a
+     * single pass, failing this test's own FACTORY_EMAIL_SENT count assertion. Loop like the real
+     * worker does, bounded so a GENUINELY stuck dispatch (permanently FAILED past its attempt cap)
+     * still fails loudly instead of hanging.
+     */
     private void drainDispatches() {
-        for (long id : factoryQuoteService.claimableDispatchIds()) {
-            factoryQuoteService.processDispatch(id);
+        for (int tick = 0; tick < 10; tick++) {
+            List<Long> claimable = factoryQuoteService.claimableDispatchIds();
+            if (claimable.isEmpty()) {
+                return;
+            }
+            for (long id : claimable) {
+                factoryQuoteService.processDispatch(id);
+            }
         }
+        assertThat(factoryQuoteService.claimableDispatchIds())
+            .as("dispatches still claimable after 10 drain ticks — a dispatch is genuinely stuck, not just transiently delayed")
+            .isEmpty();
     }
 
     private FactoryQuoteDto quoteFor(List<FactoryQuoteDto> quotes, String factoryName) {
