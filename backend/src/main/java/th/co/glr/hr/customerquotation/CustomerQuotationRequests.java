@@ -45,4 +45,16 @@ public final class CustomerQuotationRequests {
         @Size(max = 2000) String reason,
         String clientRequestId
     ) {}
+
+    /**
+     * Step 5: the customer's response to an ISSUED quotation. {@code outcome} must be one of
+     * {@code ACCEPTED}/{@code REJECTED}/{@code REVISION_REQUESTED} (see
+     * {@code QuotationStatus}) — EXPIRED is sweep-only and is rejected explicitly by
+     * {@code CustomerQuotationService.recordOutcome} if a client sends it here.
+     */
+    public record RecordQuotationOutcomeRequest(
+        String outcome,
+        @Size(max = 4000) String customerNote,
+        String clientRequestId
+    ) {}
 }

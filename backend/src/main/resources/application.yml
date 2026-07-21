@@ -99,6 +99,11 @@ app:
     max-attempts: ${APP_FACTORY_QUOTE_DISPATCH_MAX_ATTEMPTS:8}
     backoff-base-seconds: ${APP_FACTORY_QUOTE_DISPATCH_BACKOFF_BASE_SECONDS:30}
     batch-size: ${APP_FACTORY_QUOTE_DISPATCH_BATCH_SIZE:20}
+  quotation-expiry:
+    # Step 5 (V75): flips ISSUED customer quotations whose validity_date has passed to EXPIRED.
+    # A single guarded UPDATE per tick — no outbox/claim/retry machinery, unlike
+    # factory-quote-dispatch above (this isn't calling an external system).
+    sweep-interval-ms: ${APP_QUOTATION_EXPIRY_SWEEP_INTERVAL_MS:3600000}
   login-rate-limit:
     enabled: ${APP_LOGIN_RATE_LIMIT_ENABLED:true}
     max-account-failures: ${APP_LOGIN_MAX_ACCOUNT_FAILURES:5}

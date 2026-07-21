@@ -89,6 +89,10 @@ export function pricingRequestStatusLabel(status) {
     CEO_REVIEWING: { label: 'CEO กำลังพิจารณาราคาขาย', tone: 'info' },
     APPROVED_FOR_QUOTATION: { label: 'อนุมัติราคาขายแล้ว', tone: 'success' },
     COSTING_REVISION_REQUIRED: { label: 'CEO ตีกลับให้แก้ไขต้นทุน', tone: 'danger' },
+    // Step 4/5 (these two were missing — a pre-existing gap fixed alongside adding
+    // QUOTATION_ACCEPTED; QUOTATION_ISSUED fell back to the raw status string before).
+    QUOTATION_ISSUED: { label: 'ออกใบเสนอราคาลูกค้าแล้ว', tone: 'success' },
+    QUOTATION_ACCEPTED: { label: 'ลูกค้ายอมรับใบเสนอราคาแล้ว', tone: 'success' },
     MORE_INFO_REQUIRED: { label: 'รอข้อมูลเพิ่มเติม', tone: 'warning' },
     SUPERSEDED: { label: 'ถูกแทนที่แล้ว', tone: 'neutral' },
     CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },

@@ -24,6 +24,7 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CancelCustomerQu
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateRevisionRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuotationRequest;
+import th.co.glr.hr.customerquotation.CustomerQuotationRequests.RecordQuotationOutcomeRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.UpdateCustomerQuotationRequest;
 
 /**
@@ -108,6 +109,14 @@ public class CustomerQuotationController {
         UserPrincipal user = sessions.requireUser(session);
         return Map.of("quotation",
             quotations.createRevision(id, request != null ? request : new CreateRevisionRequest(null, null), user));
+    }
+
+    @PostMapping("/customer-quotations/{id}/outcome")
+    Map<String, CustomerQuotationDto> recordOutcome(@PathVariable long id,
+                                                     @Valid @RequestBody RecordQuotationOutcomeRequest request,
+                                                     HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("quotation", quotations.recordOutcome(id, request, user));
     }
 
     @GetMapping("/customer-quotations/{id}/file")

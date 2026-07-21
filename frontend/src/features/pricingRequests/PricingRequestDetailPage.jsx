@@ -11,8 +11,10 @@ import { formatMoney, formatThaiDate, pricingRequestStatusLabel } from '../../ut
 import { downloadBlob } from '../../utils/download.js';
 import {
   canActOnPricingDecision,
+  canCreateCommercialOnlyRevision,
   canCreateCustomerQuotation,
   canManageCustomerQuotation,
+  canRecordCustomerQuotationOutcome,
   canRequestInformation,
   canRespondInformation,
   canSeePricingDecisionSalesView,
@@ -43,6 +45,21 @@ const UNIT_OPTIONS = [
   { code: 'PER_BOX', label: 'per box' },
   { code: 'PER_LINEAR_M', label: 'per linear m' },
 ];
+
+// Step 5: customer-quotation doc_status -> StatusBadge tone. Covers every value the full V52+V74
+// lifecycle declares (ISSUED, SENT, SUPERSEDED, CANCELLED, EXPIRED, ACCEPTED, REJECTED,
+// REVISION_REQUESTED) plus the pre-Step-5 DRAFT/READY_TO_ISSUE; anything unmapped falls back to
+// 'warning' below, same as before this map existed.
+const QUOTATION_STATUS_TONE = {
+  ISSUED: 'success',
+  SENT: 'success',
+  ACCEPTED: 'success',
+  CANCELLED: 'danger',
+  REJECTED: 'danger',
+  EXPIRED: 'danger',
+  SUPERSEDED: 'neutral',
+  REVISION_REQUESTED: 'warning',
+};
 
 const DISPATCH_STATUS_LABEL = {
   PENDING: 'รอส่ง',
@@ -273,6 +290,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const [quotationHeaderDraft, setQuotationHeaderDraft] = useState({});
   const [quotationItemDrafts, setQuotationItemDrafts] = useState({});
   const [downloadingQuotationFormat, setDownloadingQuotationFormat] = useState(null);
+  // Step 5: Customer Decision and Commercial Revisions.
+  const [outcomeClientRequestId, setOutcomeClientRequestId] = useState(() => generateClientRequestId());
+  const [outcomeNote, setOutcomeNote] = useState('');
   const startCeoReview = useActionMutation(
     () => api.pricingRequests.startPricingDecision(pricingRequestId, {
       defaultMarginPct: cleanNumber(decisionDefaultMargin),
@@ -359,6 +379,21 @@ export function PricingRequestDetailPage({ user, showToast }) {
       setQuotationItemDrafts({});
       setQuotationHeaderDraft({});
       showToast?.('success', 'สร้าง revision ใหม่แล้ว');
+      invalidate();
+    },
+    onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+  });
+  // Step 5: Customer Decision and Commercial Revisions.
+  const recordQuotationOutcome = useMutation({
+    mutationFn: ({ quotation, outcome }) => api.pricingRequests.recordCustomerQuotationOutcome(quotation.id, {
+      outcome,
+      customerNote: outcomeNote || null,
+      clientRequestId: outcomeClientRequestId,
+    }),
+    onSuccess: () => {
+      setOutcomeClientRequestId(generateClientRequestId());
+      setOutcomeNote('');
+      showToast?.('success', 'บันทึกผลใบเสนอราคาแล้ว');
       invalidate();
     },
     onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
@@ -906,9 +941,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           <div className="panel-header">
             <h2>ใบเสนอราคาลูกค้า</h2>
             {currentCustomerQuotation ? (
-              <StatusBadge tone={currentCustomerQuotation.docStatus === 'ISSUED' ? 'success'
-                : currentCustomerQuotation.docStatus === 'CANCELLED' ? 'danger'
-                : currentCustomerQuotation.docStatus === 'SUPERSEDED' ? 'neutral' : 'warning'}>
+              <StatusBadge tone={QUOTATION_STATUS_TONE[currentCustomerQuotation.docStatus] ?? 'warning'}>
                 {currentCustomerQuotation.docStatus} · rev {currentCustomerQuotation.quotationRevisionNo}
               </StatusBadge>
             ) : null}
@@ -1051,13 +1084,58 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         </button>
                       </>
                     ) : null}
-                    {quotation.docStatus === 'ISSUED' && canManageCustomerQuotation(user, summary) ? (
+                    {/* Widened per design correction 3: reachable once REVISION_REQUESTED too,
+                        not only ISSUED — same guard the backend's createRevision now enforces. */}
+                    {canCreateCommercialOnlyRevision(user, summary, quotation) ? (
                       <button type="button" className="secondary-button" disabled={createQuotationRevision.isPending}
                         onClick={() => createQuotationRevision.mutate(quotation)}>
-                        สร้าง Revision ใหม่
+                        {quotation.docStatus === 'REVISION_REQUESTED' ? 'แก้ไขเชิงพาณิชย์เท่านั้น (ราคา/เงื่อนไข)' : 'สร้าง Revision ใหม่'}
+                      </button>
+                    ) : null}
+                    {quotation.docStatus === 'REVISION_REQUESTED' && canManageCustomerQuotation(user, summary) ? (
+                      <button type="button" className="secondary-button" onClick={() => setRevisionModalOpen(true)}>
+                        มีการเปลี่ยนแปลงสินค้า/จำนวน/โรงงาน (Customer Change Revision)
                       </button>
                     ) : null}
                   </div>
+
+                  {/* Step 5: outcome-recording — Sales only, ISSUED only. */}
+                  {canRecordCustomerQuotationOutcome(user, summary, quotation) ? (
+                    <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
+                      <strong className="text-sm">บันทึกผลจากลูกค้า</strong>
+                      <textarea
+                        className="rounded border border-border p-2 text-sm"
+                        placeholder="หมายเหตุจากลูกค้า (ถ้ามี)"
+                        value={outcomeNote}
+                        onChange={(e) => setOutcomeNote(e.target.value)}
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        <button type="button" className="primary-button" disabled={recordQuotationOutcome.isPending}
+                          onClick={() => recordQuotationOutcome.mutate({ quotation, outcome: 'ACCEPTED' })}>
+                          ลูกค้ายอมรับ
+                        </button>
+                        <button type="button" className="danger-button" disabled={recordQuotationOutcome.isPending}
+                          onClick={() => recordQuotationOutcome.mutate({ quotation, outcome: 'REJECTED' })}>
+                          ลูกค้าปฏิเสธ
+                        </button>
+                        <button type="button" className="secondary-button" disabled={recordQuotationOutcome.isPending}
+                          onClick={() => recordQuotationOutcome.mutate({ quotation, outcome: 'REVISION_REQUESTED' })}>
+                          ลูกค้าขอแก้ไข
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Read-only outcome summary — visible to everyone (CEO/Import included), once
+                      the customer's response has been recorded or the document has moved past
+                      ISSUED for any other reason. */}
+                  {['ACCEPTED', 'REJECTED', 'REVISION_REQUESTED', 'EXPIRED', 'SUPERSEDED'].includes(quotation.docStatus) ? (
+                    <p className="text-sm text-text-muted">
+                      ผลใบเสนอราคา: <strong>{quotation.docStatus}</strong>
+                      {quotation.outcomeNote ? ` — ${quotation.outcomeNote}` : ''}
+                      {quotation.docStatus === 'SUPERSEDED' ? ' (ถูกแทนที่ด้วยเวอร์ชันใหม่แล้ว)' : ''}
+                    </p>
+                  ) : null}
 
                   {customerQuotations.length > 1 ? (
                     <div className="mt-2 text-xs text-text-muted">

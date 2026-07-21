@@ -62,6 +62,8 @@ vi.mock('../../api/index.js', () => ({
       createCustomerQuotationRevision: vi.fn(),
       downloadCustomerQuotationPdf: vi.fn(),
       downloadCustomerQuotationXlsx: vi.fn(),
+      // Step 5: Customer Decision and Commercial Revisions.
+      recordCustomerQuotationOutcome: vi.fn(),
     },
     catalog: {
       prices: vi.fn(),
@@ -216,6 +218,7 @@ function setApiDefaults() {
   api.pricingRequests.createCustomerQuotationRevision.mockResolvedValue({ quotation: buildCustomerQuotation({ quotationRevisionNo: 2 }) });
   api.pricingRequests.downloadCustomerQuotationPdf.mockResolvedValue(new Blob(['pdf']));
   api.pricingRequests.downloadCustomerQuotationXlsx.mockResolvedValue(new Blob(['xlsx']));
+  api.pricingRequests.recordCustomerQuotationOutcome.mockResolvedValue({ quotation: buildCustomerQuotation({ docStatus: 'ACCEPTED' }) });
   api.catalog.prices.mockResolvedValue({ items: [] });
 }
 
@@ -959,5 +962,70 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
       issued.id,
       expect.objectContaining({ clientRequestId: expect.any(String) }),
     ));
+  });
+});
+
+describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revisions', () => {
+  it('offers the outcome-recording controls to the owning sales rep only while ISSUED, and records ACCEPTED on click', async () => {
+    const issued = buildCustomerQuotation({ docStatus: 'ISSUED' });
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [issued] });
+    renderDetailPage({ user: salesOwner });
+    await waitForLoaded();
+    await screen.findByText(issued.number);
+
+    const acceptButton = await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' });
+    fireEvent.click(acceptButton);
+
+    await waitFor(() => expect(api.pricingRequests.recordCustomerQuotationOutcome).toHaveBeenCalledWith(
+      issued.id,
+      expect.objectContaining({ outcome: 'ACCEPTED', clientRequestId: expect.any(String) }),
+    ));
+  });
+
+  it('never shows the outcome-recording controls to CEO or Import — read-only', async () => {
+    const issued = buildCustomerQuotation({ docStatus: 'ISSUED' });
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [issued] });
+    renderDetailPage({ user: ceoUser });
+    await waitForLoaded();
+    await screen.findByText(issued.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้าปฏิเสธ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้าขอแก้ไข' })).toBeNull();
+  });
+
+  it('hides the outcome-recording controls once the quotation is no longer ISSUED, and shows the recorded outcome read-only', async () => {
+    const accepted = buildCustomerQuotation({ docStatus: 'ACCEPTED', outcomeNote: 'ลูกค้าโอเค' });
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [accepted] });
+    renderDetailPage({ user: salesOwner });
+    await waitForLoaded();
+    await screen.findByText(accepted.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.getByText(/ผลใบเสนอราคา/)).not.toBeNull();
+    expect(screen.getByText(/ลูกค้าโอเค/)).not.toBeNull();
+  });
+
+  it('once REVISION_REQUESTED, offers both the commercial-only correction and the cost-affecting Customer Change Revision path', async () => {
+    const revisionRequested = buildCustomerQuotation({ docStatus: 'REVISION_REQUESTED' });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [revisionRequested] });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(revisionRequested.number);
+
+    // Commercial-only: reuses createRevision, now reachable from REVISION_REQUESTED too.
+    const commercialButton = await screen.findByRole('button', { name: 'แก้ไขเชิงพาณิชย์เท่านั้น (ราคา/เงื่อนไข)' });
+    fireEvent.click(commercialButton);
+    await waitFor(() => expect(api.pricingRequests.createCustomerQuotationRevision).toHaveBeenCalledWith(
+      revisionRequested.id,
+      expect.objectContaining({ clientRequestId: expect.any(String) }),
+    ));
+
+    // Cost-affecting: opens the existing Customer Change Revision modal (mode="revision") — no
+    // second modal built for this. Matched via the modal's own dialog role/title (distinct from
+    // the always-present static "Customer Change Revision" section heading elsewhere on the page).
+    fireEvent.click(screen.getByRole('button', { name: 'มีการเปลี่ยนแปลงสินค้า/จำนวน/โรงงาน (Customer Change Revision)' }));
+    expect(await screen.findByRole('dialog', { name: 'สร้าง Customer Change Revision' })).not.toBeNull();
   });
 });

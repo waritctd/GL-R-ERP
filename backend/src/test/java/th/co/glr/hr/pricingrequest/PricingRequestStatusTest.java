@@ -69,10 +69,27 @@ class PricingRequestStatusTest {
         }
     }
 
+    // Step 5 (Customer Decision and Commercial Revisions) deliberately extends this map again:
+    // QUOTATION_ISSUED -> QUOTATION_ACCEPTED is now the ONE forward exit (recordOutcome's
+    // ACCEPTED path). This test used to assert QUOTATION_ISSUED was terminal (true for Step 4's
+    // own scope) — renamed and inverted to assert the new, intentional edge instead of the old
+    // absence, per this repo's own precedent for a map change (see the
+    // approvedForQuotation_toQuotationIssued_... rename above and
+    // docs/agent-handoffs/92_feat-sales-ceo-pricing-decision.md's "isNoLongerAllowed" rename).
     @Test
-    void quotationIssued_isTerminalForStep4() {
+    void quotationIssued_toQuotationAccepted_isNowAllowed_andNothingElseIs() {
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.QUOTATION_ISSUED, PricingRequestStatus.QUOTATION_ACCEPTED)).isTrue();
         for (String to : PricingRequestStatus.VALUES) {
+            if (PricingRequestStatus.QUOTATION_ACCEPTED.equals(to)) continue;
             assertThat(PricingRequestStatus.canTransition(PricingRequestStatus.QUOTATION_ISSUED, to)).isFalse();
+        }
+    }
+
+    @Test
+    void quotationAccepted_isTerminal() {
+        for (String to : PricingRequestStatus.VALUES) {
+            assertThat(PricingRequestStatus.canTransition(PricingRequestStatus.QUOTATION_ACCEPTED, to)).isFalse();
         }
     }
 

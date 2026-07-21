@@ -20,6 +20,10 @@ export const PRICING_REQUEST_STATUSES = [
   'CEO_REVIEWING',
   'APPROVED_FOR_QUOTATION',
   'COSTING_REVISION_REQUIRED',
+  // Step 4/5 (this list was missing both — a pre-existing gap fixed alongside adding
+  // QUOTATION_ACCEPTED, since both values are otherwise unrepresented anywhere in this array).
+  'QUOTATION_ISSUED',
+  'QUOTATION_ACCEPTED',
   'MORE_INFO_REQUIRED',
   'CANCELLED',
   'SUPERSEDED',
@@ -44,7 +48,15 @@ const ALLOWED_TRANSITIONS = {
   READY_FOR_CEO_REVIEW: ['CEO_REVIEWING', 'SUPERSEDED'],
   CEO_REVIEWING: ['APPROVED_FOR_QUOTATION', 'COSTING_REVISION_REQUIRED'],
   COSTING_REVISION_REQUIRED: ['COSTING_IN_PROGRESS'],
-  APPROVED_FOR_QUOTATION: [],
+  // Step 4: the ONLY forward exit is issuing a customer quotation
+  // (CustomerQuotationService.issue) — this entry was missing (stale from before Step 4 landed),
+  // fixed alongside adding Step 5's QUOTATION_ISSUED -> QUOTATION_ACCEPTED below.
+  APPROVED_FOR_QUOTATION: ['QUOTATION_ISSUED'],
+  // Step 5: the customer's ACCEPTED outcome is the one forward exit from QUOTATION_ISSUED
+  // (CustomerQuotationService.recordOutcome). REJECTED/REVISION_REQUESTED/EXPIRED deliberately
+  // do NOT transition the pricing request at all.
+  QUOTATION_ISSUED: ['QUOTATION_ACCEPTED'],
+  QUOTATION_ACCEPTED: [],
   MORE_INFO_REQUIRED: ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS', 'CANCELLED'],
   SUPERSEDED: [],
   CANCELLED: [],
@@ -186,6 +198,24 @@ export function canViewCustomerQuotation(user, pr) {
  * edited, previewed-for-editing, or cancelled — an ISSUED one is immutable (rule 8). */
 export function isCustomerQuotationEditable(quotation) {
   return ['DRAFT', 'READY_TO_ISSUE'].includes(quotation?.docStatus);
+}
+
+// ── Step 5: Customer Decision and Commercial Revisions. Mirrors CustomerQuotationService.recordOutcome. ──
+
+/** Mirrors CustomerQuotationService.recordOutcome's gate: sales (ticket owner) only, and only
+ * while the quotation is ISSUED — the same owner scoping as canManageCustomerQuotation, plus the
+ * docStatus gate recordOutcome's own WHERE clause enforces server-side. */
+export function canRecordCustomerQuotationOutcome(user, pr, quotation) {
+  return canManageCustomerQuotation(user, pr) && quotation?.docStatus === 'ISSUED';
+}
+
+/** Once a REVISION_REQUESTED outcome is recorded, Sales must explicitly choose commercial-only
+ * (createRevision, reachable from ISSUED or REVISION_REQUESTED) vs cost-affecting
+ * (createCustomerChangeRevision, reachable from most non-terminal pricing-request statuses —
+ * see canCreateCustomerRevision's own inline gate in PricingRequestDetailPage). This predicate
+ * only covers the commercial-only button's own visibility. */
+export function canCreateCommercialOnlyRevision(user, pr, quotation) {
+  return canManageCustomerQuotation(user, pr) && ['ISSUED', 'REVISION_REQUESTED'].includes(quotation?.docStatus);
 }
 
 /** Mirrors PricingRequestService.cancel: owner sales OR ceo, any cancellable status. */

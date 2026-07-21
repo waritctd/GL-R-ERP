@@ -644,6 +644,39 @@ public class PricingRequestRepository {
     }
 
     /**
+     * Step 5 (V75, design correction 1 — "the cascade gap"): {@link #cancelOpenStep2Children}
+     * predates {@code sales.pricing_decision}/{@code sales.quotation} (Steps 3/4) and has zero
+     * knowledge of either, so a customer-change (cost-affecting) revision superseding its parent
+     * pricing request left a DRAFT/APPROVED decision and any non-terminal quotation silently
+     * stale — still readable via {@code PricingDecisionService.salesView}/{@code get} and
+     * {@code CustomerQuotationService.get} as if they were current. Called alongside
+     * {@code cancelOpenStep2Children} from {@code PricingRequestService.createCustomerChangeRevision},
+     * never from plain {@code cancel()}/{@code cancelOpenForTicket} — those cascades are
+     * unchanged by this method existing.
+     *
+     * <p>Not routed through {@code PricingDecisionRepository}/{@code CustomerQuotationRepository}
+     * (this class's own dependency direction stays one-way, same as {@code cancelOpenStep2Children}
+     * already reaching into {@code sales.factory_quote}/{@code sales.pricing_costing} directly) —
+     * the class-level "never call TicketRepository" invariant is specifically about ticket
+     * tables, not every downstream aggregate.
+     */
+    public void supersedeOpenPricingDecisionAndQuotation(long pricingRequestId) {
+        jdbc.update("""
+            UPDATE sales.pricing_decision
+               SET status = 'SUPERSEDED',
+                   updated_at = now()
+             WHERE pricing_request_id = :pricingRequestId
+               AND status IN ('DRAFT', 'APPROVED')
+            """, Map.of("pricingRequestId", pricingRequestId));
+        jdbc.update("""
+            UPDATE sales.quotation
+               SET doc_status = 'SUPERSEDED'
+             WHERE pricing_request_id = :pricingRequestId
+               AND doc_status IN ('ISSUED', 'READY_TO_ISSUE', 'SENT', 'REVISION_REQUESTED')
+            """, Map.of("pricingRequestId", pricingRequestId));
+    }
+
+    /**
      * The ticket_item ids that legally belong to this ticket — used by the
      * service layer to validate a pricing-request item's sourceTicketItemId
      * before persisting (commit 3). Lives here rather than on TicketRepository

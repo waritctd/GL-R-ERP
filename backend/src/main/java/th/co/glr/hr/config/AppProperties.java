@@ -15,6 +15,7 @@ public class AppProperties {
     private final SpecialMoney specialMoney = new SpecialMoney();
     private final Bot bot = new Bot();
     private final FactoryQuoteDispatch factoryQuoteDispatch = new FactoryQuoteDispatch();
+    private final QuotationExpiry quotationExpiry = new QuotationExpiry();
 
     public Cors getCors() {
         return cors;
@@ -50,6 +51,10 @@ public class AppProperties {
 
     public FactoryQuoteDispatch getFactoryQuoteDispatch() {
         return factoryQuoteDispatch;
+    }
+
+    public QuotationExpiry getQuotationExpiry() {
+        return quotationExpiry;
     }
 
     public static class Bot {
@@ -281,6 +286,25 @@ public class AppProperties {
 
         public void setBatchSize(int batchSize) {
             this.batchSize = batchSize;
+        }
+    }
+
+    /**
+     * Tuning for {@code QuotationExpiryWorker} (Step 5, V75) — a small scheduled sweep that flips
+     * ISSUED customer quotations whose validity_date has passed to EXPIRED. Unlike
+     * {@link FactoryQuoteDispatch}, this isn't calling an external system, so it needs no
+     * claim/reclaim/backoff — a single guarded UPDATE on each tick is sufficient.
+     */
+    public static class QuotationExpiry {
+        /** How often the worker sweeps for overdue ISSUED quotations. */
+        private long sweepIntervalMs = 3_600_000;
+
+        public long getSweepIntervalMs() {
+            return sweepIntervalMs;
+        }
+
+        public void setSweepIntervalMs(long sweepIntervalMs) {
+            this.sweepIntervalMs = sweepIntervalMs;
         }
     }
 

@@ -25,6 +25,7 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CancelCustomerQu
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateRevisionRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuotationRequest;
+import th.co.glr.hr.customerquotation.CustomerQuotationRequests.RecordQuotationOutcomeRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.UpdateCustomerQuotationItemRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.UpdateCustomerQuotationRequest;
 import th.co.glr.hr.notification.NotificationRepository;
@@ -350,7 +351,14 @@ public class CustomerQuotationService {
     public CustomerQuotationDto createRevision(long quotationId, CreateRevisionRequest request, UserPrincipal actor) {
         CustomerQuotationDto source = requireQuotation(quotationId);
         requireEditAccess(source, actor);
-        if (!QuotationStatus.ISSUED.equals(source.docStatus())) {
+        // Step 5 (design correction 3, "compatibility fix on createRevision's guard"):
+        // recordOutcome writes ISSUED -> REVISION_REQUESTED immediately when Sales records what
+        // the customer said, BEFORE they pick commercial-only vs cost-affecting — so a
+        // commercial-only correction must be reachable from REVISION_REQUESTED too, not only the
+        // original ISSUED. Widened to accept exactly these two predecessors, nothing else (see
+        // createRevision_widenedGuard_* tests for the full negative-space proof: DRAFT/CANCELLED/
+        // SUPERSEDED/EXPIRED/ACCEPTED/REJECTED must all still be rejected).
+        if (!QuotationStatus.ISSUED.equals(source.docStatus()) && !QuotationStatus.REVISION_REQUESTED.equals(source.docStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "แก้ไข revision ใหม่ได้จากใบเสนอราคาที่ออกแล้วเท่านั้น");
         }
         PricingRequestSummaryDto summary = requirePricingRequest(source.pricingRequestId());
@@ -401,6 +409,118 @@ public class CustomerQuotationService {
             "สร้างใบเสนอราคาลูกค้า revision " + (source.quotationRevisionNo() + 1)
                 + (request.reason() != null && !request.reason().isBlank() ? " — " + request.reason().trim() : ""));
         return requireQuotation(newId);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Step 5: Customer Decision and Commercial Revisions.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /** The only outcomes a client may record — EXPIRED is sweep-only, rejected explicitly below. */
+    private static final Set<String> RECORDABLE_OUTCOMES =
+        Set.of(QuotationStatus.ACCEPTED, QuotationStatus.REJECTED, QuotationStatus.REVISION_REQUESTED);
+
+    /**
+     * Records what the customer said about an ISSUED quotation. Role-gated SALES_ROLES only,
+     * owner-scoped (ticket owner, via {@link #requireEditAccess}), only from ISSUED. Idempotent on
+     * {@code clientRequestId} (this service's usual lock-then-replay-check pattern, mirroring
+     * {@link #issue}). On ACCEPTED, also transitions the pricing request
+     * {@code QUOTATION_ISSUED -> QUOTATION_ACCEPTED}. Emits exactly one
+     * {@code sales.pricing_request_event} and one CEO-visibility notification per outcome —
+     * REJECTED/REVISION_REQUESTED deliberately do NOT change the pricing request's own status
+     * (design correction 2); Sales decides what happens next (a new revision via
+     * {@link #createRevision}/{@code PricingRequestService.createCustomerChangeRevision}, or a
+     * separate ticket-level lost-deal action outside this method's scope).
+     */
+    @Transactional
+    public CustomerQuotationDto recordOutcome(long quotationId, RecordQuotationOutcomeRequest request, UserPrincipal actor) {
+        if (QuotationStatus.EXPIRED.equals(request.outcome())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "EXPIRED ไม่สามารถบันทึกผ่าน API นี้ได้ — ระบบตั้งเป็นอัตโนมัติเท่านั้น");
+        }
+        if (request.outcome() == null || !RECORDABLE_OUTCOMES.contains(request.outcome())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "outcome ไม่ถูกต้อง");
+        }
+        CustomerQuotationDto quotation = requireQuotation(quotationId);
+        requireEditAccess(quotation, actor);
+        quotations.lockPricingRequest(quotation.pricingRequestId());
+        String outcomeClientRequestId = validateUuid(request.clientRequestId());
+        if (outcomeClientRequestId != null) {
+            Optional<Long> replay = quotations.findIdByOutcomeClientRequestId(actor.id(), outcomeClientRequestId);
+            if (replay.isPresent()) {
+                return requireQuotation(replay.get());
+            }
+        }
+        CustomerQuotationDto fresh = requireQuotation(quotationId);
+        if (!QuotationStatus.ISSUED.equals(fresh.docStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "บันทึกผลได้เฉพาะใบเสนอราคาที่ออกแล้วเท่านั้น (ปัจจุบัน: " + fresh.docStatus() + ")");
+        }
+        int rows = quotations.recordOutcome(quotationId, request.outcome(), blankToNull(request.customerNote()),
+            actor.id(), outcomeClientRequestId);
+        if (rows == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
+        }
+
+        PricingRequestSummaryDto summary = requirePricingRequest(fresh.pricingRequestId());
+        String eventKind = outcomeEventKind(request.outcome());
+        addPricingRequestEvent(summary, actor, eventKind,
+            "บันทึกผลใบเสนอราคาลูกค้า " + fresh.number() + ": " + request.outcome()
+                + (request.customerNote() != null && !request.customerNote().isBlank()
+                    ? " — " + request.customerNote().trim() : ""));
+        notifications.notifyByRoleForPricingRequest("ceo", summary.id(), eventKind,
+            "ใบเสนอราคาลูกค้า " + fresh.number() + " " + outcomeLabel(request.outcome()));
+
+        if (QuotationStatus.ACCEPTED.equals(request.outcome())
+                && PricingRequestStatus.QUOTATION_ISSUED.equals(summary.status())) {
+            int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.QUOTATION_ISSUED,
+                PricingRequestStatus.QUOTATION_ACCEPTED, null, null);
+            if (transitioned == 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
+            }
+        }
+        return requireQuotation(quotationId);
+    }
+
+    private String outcomeEventKind(String outcome) {
+        return switch (outcome) {
+            case QuotationStatus.ACCEPTED -> PricingRequestEventKind.CUSTOMER_QUOTATION_ACCEPTED;
+            case QuotationStatus.REJECTED -> PricingRequestEventKind.CUSTOMER_QUOTATION_REJECTED;
+            case QuotationStatus.REVISION_REQUESTED -> PricingRequestEventKind.CUSTOMER_QUOTATION_REVISION_REQUESTED;
+            default -> throw new IllegalStateException("Unreachable — validated by RECORDABLE_OUTCOMES");
+        };
+    }
+
+    private String outcomeLabel(String outcome) {
+        return switch (outcome) {
+            case QuotationStatus.ACCEPTED -> "ลูกค้ายอมรับแล้ว";
+            case QuotationStatus.REJECTED -> "ถูกลูกค้าปฏิเสธ";
+            case QuotationStatus.REVISION_REQUESTED -> "ลูกค้าขอแก้ไข";
+            default -> "มีการอัปเดตผล";
+        };
+    }
+
+    /**
+     * Automatic expiry sweep — see {@code QuotationExpiryWorker} for the {@code @Scheduled}
+     * trigger. A single guarded UPDATE (no outbox/claim/retry machinery — this isn't calling an
+     * external system), scoped to Step 4/5 quotations only (see
+     * {@link CustomerQuotationRepository#expireOverdueQuotations}'s own Javadoc). Emits one event
+     * + one CEO-visibility notification per quotation flipped, and NEVER changes the pricing
+     * request's own status (design correction 2). Returns the number of quotations expired, for
+     * the worker/tests to assert against without a second query.
+     */
+    @Transactional
+    public int expireOverdueQuotations() {
+        List<CustomerQuotationRepository.ExpiredQuotationRow> expired = quotations.expireOverdueQuotations();
+        for (CustomerQuotationRepository.ExpiredQuotationRow row : expired) {
+            pricingRequests.findSummary(row.pricingRequestId()).ifPresent(summary -> {
+                pricingRequests.addEvent(summary.id(), summary.ticketId(), null, "System (quotation expiry sweep)",
+                    PricingRequestEventKind.CUSTOMER_QUOTATION_EXPIRED, summary.status(), summary.status(),
+                    "ใบเสนอราคาลูกค้า " + row.number() + " หมดอายุ", null);
+                notifications.notifyByRoleForPricingRequest("ceo", summary.id(),
+                    PricingRequestEventKind.CUSTOMER_QUOTATION_EXPIRED, "ใบเสนอราคาลูกค้า " + row.number() + " หมดอายุ");
+            });
+        }
+        return expired.size();
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
