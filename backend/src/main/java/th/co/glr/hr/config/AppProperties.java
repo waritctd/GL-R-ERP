@@ -12,6 +12,7 @@ public class AppProperties {
     private final Auth auth = new Auth();
     private final Leave leave = new Leave();
     private final Overtime overtime = new Overtime();
+    private final SpecialMoney specialMoney = new SpecialMoney();
     private final Bot bot = new Bot();
     private final FactoryQuoteDispatch factoryQuoteDispatch = new FactoryQuoteDispatch();
 
@@ -37,6 +38,10 @@ public class AppProperties {
 
     public Overtime getOvertime() {
         return overtime;
+    }
+
+    public SpecialMoney getSpecialMoney() {
+        return specialMoney;
     }
 
     public Bot getBot() {
@@ -203,14 +208,19 @@ public class AppProperties {
     }
 
     public static class Overtime {
-        private int advanceNoticeDays = 3;
+        /**
+         * How far back a request may reach. The advance-notice rule it replaced was removed on CEO
+         * instruction: overtime may now be filed same-day or retroactively, provided the reason
+         * explains why. This bound only stops claims arriving so late they can no longer be paid.
+         */
+        private int retroactiveWindowDays = 60;
 
-        public int getAdvanceNoticeDays() {
-            return advanceNoticeDays;
+        public int getRetroactiveWindowDays() {
+            return retroactiveWindowDays;
         }
 
-        public void setAdvanceNoticeDays(int advanceNoticeDays) {
-            this.advanceNoticeDays = advanceNoticeDays;
+        public void setRetroactiveWindowDays(int retroactiveWindowDays) {
+            this.retroactiveWindowDays = retroactiveWindowDays;
         }
     }
 
@@ -289,6 +299,24 @@ public class AppProperties {
 
         public void setSeedEmployeeCodePasswords(boolean seedEmployeeCodePasswords) {
             this.seedEmployeeCodePasswords = seedEmployeeCodePasswords;
+        }
+    }
+
+    public static class SpecialMoney {
+        /**
+         * The 25th-of-month payroll cutoff: a special-money request approved on/before this day of
+         * the month lands in that same month's payroll_month; approved after, it rolls to next
+         * month. See {@code SpecialMoneyService#ceoApprove} for why it then rolls further forward
+         * past any already-PROCESSED month.
+         */
+        private int payrollCutoffDay = 25;
+
+        public int getPayrollCutoffDay() {
+            return payrollCutoffDay;
+        }
+
+        public void setPayrollCutoffDay(int payrollCutoffDay) {
+            this.payrollCutoffDay = payrollCutoffDay;
         }
     }
 

@@ -16,6 +16,10 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceDto;
+import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
+import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedDto;
+import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedUpsertRequest;
 
 @Repository
 public class PayrollRepository {
@@ -33,13 +37,14 @@ public class PayrollRepository {
                    dep.name_th AS department_name,
                    bank.name_th AS bank_name,
                    ba.account_no AS bank_account,
-                   COALESCE(e.current_salary, 0) AS base_salary
+                   COALESCE(e.current_salary, 0) AS base_salary,
+                   COALESCE(e.director_remuneration, 0) AS director_remuneration
               FROM hr.employee e
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
               LEFT JOIN hr.employee_bank_account ba ON ba.employee_id = e.employee_id
               LEFT JOIN hr.bank bank ON bank.bank_id = ba.bank_id
              WHERE e.is_active = TRUE
-               AND COALESCE(e.current_salary, 0) > 0
+               AND (COALESCE(e.current_salary, 0) > 0 OR COALESCE(e.director_remuneration, 0) > 0)
              ORDER BY e.employee_code
             """, Map.of(), (rs, rowNum) -> new PayrollEmployeeSnapshot(
                 rs.getLong("employee_id"),
@@ -48,15 +53,20 @@ public class PayrollRepository {
                 rs.getString("department_name"),
                 rs.getString("bank_name"),
                 rs.getString("bank_account"),
-                rs.getBigDecimal("base_salary")
+                rs.getBigDecimal("base_salary"),
+                rs.getBigDecimal("director_remuneration")
             ));
     }
 
     public Map<Long, BigDecimal> findApprovedOvertimePayByEmployee(LocalDate payrollMonth) {
         return jdbc.query("""
             SELECT ot.employee_id,
+                   -- ot.salary_basis is the authority: it was frozen at manager approval, resolved
+                   -- as of the work date, so a later salary change never re-prices approved work.
+                   -- The employee join/COALESCE is only a safety net for rows approved before that
+                   -- column existed (or any NULL that slips through).
                    COALESCE(SUM((ot.payable_minutes::numeric / 60)
-                       * ((COALESCE(e.current_salary, 0) / 30 / 8) * ot.pay_rate_multiplier)), 0) AS overtime_pay
+                       * ((COALESCE(ot.salary_basis, e.current_salary, 0) / 30 / 8) * ot.pay_rate_multiplier)), 0) AS overtime_pay
               FROM hr.overtime_request ot
               JOIN hr.employee e ON e.employee_id = ot.employee_id
              WHERE ot.status = 'APPROVED'
@@ -69,18 +79,35 @@ public class PayrollRepository {
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
+    /**
+     * Year-to-date figures used to project annual income (C2). Combines actual processed
+     * {@code payroll_line} rows for months already run this year with
+     * {@code hr.payroll_year_to_date_seed} -- the pre-system history back-loaded at go-live. An
+     * employee may have rows in either table, both, or neither; the UNION ALL + GROUP BY sums whatever
+     * exists per employee, equivalent to a FULL OUTER JOIN without the NULL-handling ceremony.
+     */
     public Map<Long, PayrollYearToDate> findYearToDateByEmployee(LocalDate payrollMonth) {
         return jdbc.query("""
-            SELECT pl.employee_id,
-                   COALESCE(SUM(pl.gross_taxable_income), 0) AS taxable_income,
-                   COALESCE(SUM(pl.social_security), 0) AS social_security,
-                   COALESCE(SUM(pl.withholding_tax), 0) AS withholding_tax
-              FROM hr.payroll_line pl
-              JOIN hr.payroll_period pp ON pp.period_id = pl.period_id
-             WHERE pp.payroll_month >= date_trunc('year', :payrollMonth::date)::date
-               AND pp.payroll_month < :payrollMonth
-               AND pp.status <> 'VOID'
-             GROUP BY pl.employee_id
+            SELECT employee_id,
+                   COALESCE(SUM(taxable_income), 0) AS taxable_income,
+                   COALESCE(SUM(social_security), 0) AS social_security,
+                   COALESCE(SUM(withholding_tax), 0) AS withholding_tax
+              FROM (
+                  SELECT pl.employee_id,
+                         pl.gross_taxable_income AS taxable_income,
+                         pl.social_security AS social_security,
+                         pl.withholding_tax AS withholding_tax
+                    FROM hr.payroll_line pl
+                    JOIN hr.payroll_period pp ON pp.period_id = pl.period_id
+                   WHERE pp.payroll_month >= date_trunc('year', :payrollMonth::date)::date
+                     AND pp.payroll_month < :payrollMonth
+                     AND pp.status <> 'VOID'
+                  UNION ALL
+                  SELECT s.employee_id, s.taxable_income, s.social_security, s.withholding_tax
+                    FROM hr.payroll_year_to_date_seed s
+                   WHERE s.tax_year = EXTRACT(YEAR FROM :payrollMonth::date)::int
+              ) combined
+             GROUP BY employee_id
             """,
             Map.of("payrollMonth", payrollMonth),
             (rs, rowNum) -> Map.entry(rs.getLong("employee_id"), new PayrollYearToDate(
@@ -90,6 +117,201 @@ public class PayrollRepository {
             )))
             .stream()
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    /** C1: the standing tax-allowance declaration per employee for a given tax year. */
+    public Map<Long, PayrollTaxAllowanceInput> findTaxAllowancesByEmployee(int taxYear) {
+        return jdbc.query("""
+            SELECT employee_id, spouse_allowance, child_allowance, parent_care_allowance,
+                   disabled_care_allowance, maternity_allowance, life_insurance_allowance,
+                   health_insurance_allowance, parent_health_insurance_allowance, rmf_allowance,
+                   ssf_allowance, pension_insurance_allowance, thai_esg_allowance,
+                   home_loan_interest_allowance, education_donation, general_donation, political_donation
+              FROM hr.employee_tax_allowance
+             WHERE tax_year = :taxYear
+            """,
+            Map.of("taxYear", taxYear),
+            (rs, rowNum) -> Map.entry(rs.getLong("employee_id"), new PayrollTaxAllowanceInput(
+                money(rs.getBigDecimal("spouse_allowance")),
+                money(rs.getBigDecimal("child_allowance")),
+                money(rs.getBigDecimal("parent_care_allowance")),
+                money(rs.getBigDecimal("disabled_care_allowance")),
+                money(rs.getBigDecimal("maternity_allowance")),
+                money(rs.getBigDecimal("life_insurance_allowance")),
+                money(rs.getBigDecimal("health_insurance_allowance")),
+                money(rs.getBigDecimal("parent_health_insurance_allowance")),
+                money(rs.getBigDecimal("rmf_allowance")),
+                money(rs.getBigDecimal("ssf_allowance")),
+                money(rs.getBigDecimal("pension_insurance_allowance")),
+                money(rs.getBigDecimal("thai_esg_allowance")),
+                money(rs.getBigDecimal("home_loan_interest_allowance")),
+                money(rs.getBigDecimal("education_donation")),
+                money(rs.getBigDecimal("general_donation")),
+                money(rs.getBigDecimal("political_donation"))
+            )))
+            .stream()
+            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    /** C1: rows for the GET /api/payroll/tax-allowances listing, joined to employee for display. */
+    public List<EmployeeTaxAllowanceDto> findTaxAllowanceRows(int taxYear) {
+        return jdbc.query("""
+            SELECT e.employee_id, e.employee_code,
+                   COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), e.email, e.employee_code) AS employee_name,
+                   eta.spouse_allowance, eta.child_allowance, eta.parent_care_allowance,
+                   eta.disabled_care_allowance, eta.maternity_allowance, eta.life_insurance_allowance,
+                   eta.health_insurance_allowance, eta.parent_health_insurance_allowance, eta.rmf_allowance,
+                   eta.ssf_allowance, eta.pension_insurance_allowance, eta.thai_esg_allowance,
+                   eta.home_loan_interest_allowance, eta.education_donation, eta.general_donation,
+                   eta.political_donation, eta.updated_at
+              FROM hr.employee e
+              JOIN hr.employee_tax_allowance eta ON eta.employee_id = e.employee_id AND eta.tax_year = :taxYear
+             ORDER BY e.employee_code
+            """,
+            Map.of("taxYear", taxYear),
+            (rs, rowNum) -> new EmployeeTaxAllowanceDto(
+                rs.getLong("employee_id"),
+                rs.getString("employee_code"),
+                rs.getString("employee_name"),
+                new PayrollTaxAllowanceInput(
+                    money(rs.getBigDecimal("spouse_allowance")),
+                    money(rs.getBigDecimal("child_allowance")),
+                    money(rs.getBigDecimal("parent_care_allowance")),
+                    money(rs.getBigDecimal("disabled_care_allowance")),
+                    money(rs.getBigDecimal("maternity_allowance")),
+                    money(rs.getBigDecimal("life_insurance_allowance")),
+                    money(rs.getBigDecimal("health_insurance_allowance")),
+                    money(rs.getBigDecimal("parent_health_insurance_allowance")),
+                    money(rs.getBigDecimal("rmf_allowance")),
+                    money(rs.getBigDecimal("ssf_allowance")),
+                    money(rs.getBigDecimal("pension_insurance_allowance")),
+                    money(rs.getBigDecimal("thai_esg_allowance")),
+                    money(rs.getBigDecimal("home_loan_interest_allowance")),
+                    money(rs.getBigDecimal("education_donation")),
+                    money(rs.getBigDecimal("general_donation")),
+                    money(rs.getBigDecimal("political_donation"))
+                ),
+                rs.getObject("updated_at", OffsetDateTime.class)
+            ));
+    }
+
+    /** C1: bulk upsert of the standing tax-allowance declaration. */
+    public void upsertTaxAllowances(int taxYear, List<EmployeeTaxAllowanceUpsertRequest> items, Long updatedById) {
+        for (EmployeeTaxAllowanceUpsertRequest item : items) {
+            jdbc.update("""
+                INSERT INTO hr.employee_tax_allowance (
+                    employee_id, tax_year, spouse_allowance, child_allowance, parent_care_allowance,
+                    disabled_care_allowance, maternity_allowance, life_insurance_allowance,
+                    health_insurance_allowance, parent_health_insurance_allowance, rmf_allowance,
+                    ssf_allowance, pension_insurance_allowance, thai_esg_allowance,
+                    home_loan_interest_allowance, education_donation, general_donation,
+                    political_donation, updated_by_id, updated_at
+                ) VALUES (
+                    :employeeId, :taxYear, :spouseAllowance, :childAllowance, :parentCareAllowance,
+                    :disabledCareAllowance, :maternityAllowance, :lifeInsuranceAllowance,
+                    :healthInsuranceAllowance, :parentHealthInsuranceAllowance, :rmfAllowance,
+                    :ssfAllowance, :pensionInsuranceAllowance, :thaiEsgAllowance,
+                    :homeLoanInterestAllowance, :educationDonation, :generalDonation,
+                    :politicalDonation, :updatedById, now()
+                )
+                ON CONFLICT (employee_id, tax_year) DO UPDATE SET
+                    spouse_allowance = EXCLUDED.spouse_allowance,
+                    child_allowance = EXCLUDED.child_allowance,
+                    parent_care_allowance = EXCLUDED.parent_care_allowance,
+                    disabled_care_allowance = EXCLUDED.disabled_care_allowance,
+                    maternity_allowance = EXCLUDED.maternity_allowance,
+                    life_insurance_allowance = EXCLUDED.life_insurance_allowance,
+                    health_insurance_allowance = EXCLUDED.health_insurance_allowance,
+                    parent_health_insurance_allowance = EXCLUDED.parent_health_insurance_allowance,
+                    rmf_allowance = EXCLUDED.rmf_allowance,
+                    ssf_allowance = EXCLUDED.ssf_allowance,
+                    pension_insurance_allowance = EXCLUDED.pension_insurance_allowance,
+                    thai_esg_allowance = EXCLUDED.thai_esg_allowance,
+                    home_loan_interest_allowance = EXCLUDED.home_loan_interest_allowance,
+                    education_donation = EXCLUDED.education_donation,
+                    general_donation = EXCLUDED.general_donation,
+                    political_donation = EXCLUDED.political_donation,
+                    updated_by_id = EXCLUDED.updated_by_id,
+                    updated_at = now()
+                """,
+                new MapSqlParameterSource()
+                    .addValue("employeeId", item.employeeId())
+                    .addValue("taxYear", taxYear)
+                    .addValue("spouseAllowance", safe(item.spouseAllowance()))
+                    .addValue("childAllowance", safe(item.childAllowance()))
+                    .addValue("parentCareAllowance", safe(item.parentCareAllowance()))
+                    .addValue("disabledCareAllowance", safe(item.disabledCareAllowance()))
+                    .addValue("maternityAllowance", safe(item.maternityAllowance()))
+                    .addValue("lifeInsuranceAllowance", safe(item.lifeInsuranceAllowance()))
+                    .addValue("healthInsuranceAllowance", safe(item.healthInsuranceAllowance()))
+                    .addValue("parentHealthInsuranceAllowance", safe(item.parentHealthInsuranceAllowance()))
+                    .addValue("rmfAllowance", safe(item.rmfAllowance()))
+                    .addValue("ssfAllowance", safe(item.ssfAllowance()))
+                    .addValue("pensionInsuranceAllowance", safe(item.pensionInsuranceAllowance()))
+                    .addValue("thaiEsgAllowance", safe(item.thaiEsgAllowance()))
+                    .addValue("homeLoanInterestAllowance", safe(item.homeLoanInterestAllowance()))
+                    .addValue("educationDonation", safe(item.educationDonation()))
+                    .addValue("generalDonation", safe(item.generalDonation()))
+                    .addValue("politicalDonation", safe(item.politicalDonation()))
+                    .addValue("updatedById", updatedById));
+        }
+    }
+
+    /** C2: rows for the GET /api/payroll/ytd-seed listing, joined to employee for display. */
+    public List<YtdSeedDto> findYtdSeedRows(int taxYear) {
+        return jdbc.query("""
+            SELECT e.employee_id, e.employee_code,
+                   COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), e.email, e.employee_code) AS employee_name,
+                   s.taxable_income, s.social_security, s.withholding_tax, s.source_note, s.updated_at
+              FROM hr.employee e
+              JOIN hr.payroll_year_to_date_seed s ON s.employee_id = e.employee_id AND s.tax_year = :taxYear
+             ORDER BY e.employee_code
+            """,
+            Map.of("taxYear", taxYear),
+            (rs, rowNum) -> new YtdSeedDto(
+                rs.getLong("employee_id"),
+                rs.getString("employee_code"),
+                rs.getString("employee_name"),
+                money(rs.getBigDecimal("taxable_income")),
+                money(rs.getBigDecimal("social_security")),
+                money(rs.getBigDecimal("withholding_tax")),
+                rs.getString("source_note"),
+                rs.getObject("updated_at", OffsetDateTime.class)
+            ));
+    }
+
+    /** C2: bulk upsert of the year-to-date backfill used at mid-year go-live. */
+    public void upsertYtdSeed(int taxYear, List<YtdSeedUpsertRequest> items, Long updatedById) {
+        for (YtdSeedUpsertRequest item : items) {
+            jdbc.update("""
+                INSERT INTO hr.payroll_year_to_date_seed (
+                    employee_id, tax_year, taxable_income, social_security, withholding_tax,
+                    source_note, updated_by_id, updated_at
+                ) VALUES (
+                    :employeeId, :taxYear, :taxableIncome, :socialSecurity, :withholdingTax,
+                    :sourceNote, :updatedById, now()
+                )
+                ON CONFLICT (employee_id, tax_year) DO UPDATE SET
+                    taxable_income = EXCLUDED.taxable_income,
+                    social_security = EXCLUDED.social_security,
+                    withholding_tax = EXCLUDED.withholding_tax,
+                    source_note = EXCLUDED.source_note,
+                    updated_by_id = EXCLUDED.updated_by_id,
+                    updated_at = now()
+                """,
+                new MapSqlParameterSource()
+                    .addValue("employeeId", item.employeeId())
+                    .addValue("taxYear", taxYear)
+                    .addValue("taxableIncome", safe(item.taxableIncome()))
+                    .addValue("socialSecurity", safe(item.socialSecurity()))
+                    .addValue("withholdingTax", safe(item.withholdingTax()))
+                    .addValue("sourceNote", item.sourceNote())
+                    .addValue("updatedById", updatedById));
+        }
+    }
+
+    private BigDecimal safe(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
     }
 
     public Optional<PayrollPeriodDto> findPeriodByMonth(LocalDate payrollMonth) {
@@ -151,7 +373,9 @@ public class PayrollRepository {
                    pl.taxable_annual_income, pl.annual_tax, pl.withholding_tax,
                    pl.student_loan_deduction, pl.legal_execution_deduction,
                    pl.other_post_tax_deductions, pl.deductions, pl.net_amount,
-                   pl.calculation_note
+                   pl.calculation_note,
+                   pl.director_remuneration, pl.warning_letter_deduction,
+                   pl.customer_return_deduction, pl.other_pretax_deduction
               FROM hr.payroll_line pl
               JOIN hr.employee e ON e.employee_id = pl.employee_id
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
@@ -332,7 +556,9 @@ public class PayrollRepository {
                 tax_expense_deduction, tax_allowance_total, taxable_annual_income,
                 annual_tax, withholding_tax, student_loan_deduction,
                 legal_execution_deduction, other_post_tax_deductions, deductions,
-                net_amount, calculation_note
+                net_amount, calculation_note,
+                director_remuneration, warning_letter_deduction,
+                customer_return_deduction, other_pretax_deduction
             )
             VALUES (
                 :periodId, :employeeId, :baseSalary, :dailyRate, :hourlyRate,
@@ -345,7 +571,9 @@ public class PayrollRepository {
                 :taxExpenseDeduction, :taxAllowanceTotal, :taxableAnnualIncome,
                 :annualTax, :withholdingTax, :studentLoanDeduction,
                 :legalExecutionDeduction, :otherPostTaxDeductions, :deductions,
-                :netAmount, :calculationNote
+                :netAmount, :calculationNote,
+                :directorRemuneration, :warningLetterDeduction,
+                :customerReturnDeduction, :otherPretaxDeduction
             )
             """,
             new MapSqlParameterSource()
@@ -383,7 +611,11 @@ public class PayrollRepository {
                 .addValue("otherPostTaxDeductions", line.otherPostTaxDeductions())
                 .addValue("deductions", line.totalDeductions())
                 .addValue("netAmount", line.netPay())
-                .addValue("calculationNote", line.calculationNote()));
+                .addValue("calculationNote", line.calculationNote())
+                .addValue("directorRemuneration", line.directorRemuneration())
+                .addValue("warningLetterDeduction", line.warningLetterDeduction())
+                .addValue("customerReturnDeduction", line.customerReturnDeduction())
+                .addValue("otherPretaxDeduction", line.otherPretaxDeduction()));
     }
 
     private PayrollPeriodDto toPeriod(PayrollPeriodHeader header, List<PayrollLineDto> lines) {
@@ -440,7 +672,11 @@ public class PayrollRepository {
             money(rs.getBigDecimal("other_post_tax_deductions")),
             money(rs.getBigDecimal("deductions")),
             money(rs.getBigDecimal("net_amount")),
-            rs.getString("calculation_note")
+            rs.getString("calculation_note"),
+            money(rs.getBigDecimal("director_remuneration")),
+            money(rs.getBigDecimal("warning_letter_deduction")),
+            money(rs.getBigDecimal("customer_return_deduction")),
+            money(rs.getBigDecimal("other_pretax_deduction"))
         );
     }
 

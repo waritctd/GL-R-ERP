@@ -5,14 +5,19 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+
 import jakarta.servlet.Filter;
 import java.time.LocalDate;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -49,14 +54,17 @@ class SecurityAuthorizationIntegrationTest {
     }
 
     private final MockMvc mvc;
+    private final NamedParameterJdbcTemplate jdbc;
 
     @Autowired
     SecurityAuthorizationIntegrationTest(WebApplicationContext context,
-                                         @Qualifier("springSecurityFilterChain") Filter securityFilterChain) {
+                                         @Qualifier("springSecurityFilterChain") Filter securityFilterChain,
+                                         NamedParameterJdbcTemplate jdbc) {
         // Wire the real Spring Security filter chain over the full MVC context (no spring-security-test dep).
         this.mvc = MockMvcBuilders.webAppContextSetup(context)
             .addFilters(securityFilterChain)
             .build();
+        this.jdbc = jdbc;
     }
 
     @Test
@@ -106,6 +114,131 @@ class SecurityAuthorizationIntegrationTest {
         // check is what rejects the wrong role (a missing param would 400 before authz runs).
         mvc.perform(get("/api/payroll?payrollMonth=2026-07").session(sessionFor("employee")))
             .andExpect(status().isForbidden());
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Reconciliation additions (2026-07-21, C1/C2): the four new payroll endpoints. GET is broader
+    // (HR + CEO view) than PUT (HR-only edit), mirroring the existing GET /api/payroll split. These
+    // are written wrong-way-round: assert the caller CANNOT reach the edit, and that the table is
+    // provably unchanged afterwards, through the real filter chain + real service + real repository.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void aPlainEmployeeCannotViewOrEditStoredTaxAllowancesOrYtdSeed() throws Exception {
+        mvc.perform(get("/api/payroll/tax-allowances?year=2026").session(sessionFor("employee")))
+            .andExpect(status().isForbidden());
+        mvc.perform(put("/api/payroll/tax-allowances?year=2026")
+                .session(sessionFor("employee"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(taxAllowanceBody(9001L)))
+            .andExpect(status().isForbidden());
+        mvc.perform(get("/api/payroll/ytd-seed?year=2026").session(sessionFor("employee")))
+            .andExpect(status().isForbidden());
+        mvc.perform(put("/api/payroll/ytd-seed?year=2026")
+                .session(sessionFor("employee"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(ytdSeedBody(9001L)))
+            .andExpect(status().isForbidden());
+
+        assertThat(countTaxAllowanceRows(9001L)).isZero();
+        assertThat(countYtdSeedRows(9001L)).isZero();
+    }
+
+    @Test
+    void aSalesRoleCannotEditStoredTaxAllowancesOrYtdSeedEither() throws Exception {
+        mvc.perform(put("/api/payroll/tax-allowances?year=2026")
+                .session(sessionFor("sales"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(taxAllowanceBody(9002L)))
+            .andExpect(status().isForbidden());
+        mvc.perform(put("/api/payroll/ytd-seed?year=2026")
+                .session(sessionFor("sales"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(ytdSeedBody(9002L)))
+            .andExpect(status().isForbidden());
+
+        assertThat(countTaxAllowanceRows(9002L)).isZero();
+        assertThat(countYtdSeedRows(9002L)).isZero();
+    }
+
+    @Test
+    void ceoCanViewStoredTaxAllowancesAndYtdSeedButCannotEditEither() throws Exception {
+        // View: allowed (200), same as the existing GET /api/payroll CEO allowance.
+        mvc.perform(get("/api/payroll/tax-allowances?year=2026").session(sessionFor("ceo")))
+            .andExpect(status().isOk());
+        mvc.perform(get("/api/payroll/ytd-seed?year=2026").session(sessionFor("ceo")))
+            .andExpect(status().isOk());
+
+        // Edit: rejected. CEO has VIEW, not EDIT, on these HR-owned standing declarations.
+        mvc.perform(put("/api/payroll/tax-allowances?year=2026")
+                .session(sessionFor("ceo"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(taxAllowanceBody(9003L)))
+            .andExpect(status().isForbidden());
+        mvc.perform(put("/api/payroll/ytd-seed?year=2026")
+                .session(sessionFor("ceo"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(ytdSeedBody(9003L)))
+            .andExpect(status().isForbidden());
+
+        assertThat(countTaxAllowanceRows(9003L)).isZero();
+        assertThat(countYtdSeedRows(9003L)).isZero();
+    }
+
+    @Test
+    void anHrSessionCanEditStoredTaxAllowancesAndYtdSeed() throws Exception {
+        long employeeId = seedEmployeeForReconciliationAuthz("EMP-AUTHZ-1");
+
+        mvc.perform(put("/api/payroll/tax-allowances?year=2026")
+                .session(sessionFor("hr"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(taxAllowanceBody(employeeId)))
+            .andExpect(status().isOk());
+        mvc.perform(put("/api/payroll/ytd-seed?year=2026")
+                .session(sessionFor("hr"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(ytdSeedBody(employeeId)))
+            .andExpect(status().isOk());
+
+        assertThat(countTaxAllowanceRows(employeeId)).isEqualTo(1);
+        assertThat(countYtdSeedRows(employeeId)).isEqualTo(1);
+    }
+
+    private long seedEmployeeForReconciliationAuthz(String code) {
+        return jdbc.queryForObject(
+            "INSERT INTO hr.employee (employee_code, is_active) VALUES (:code, TRUE) RETURNING employee_id",
+            Map.of("code", code), Long.class);
+    }
+
+    private int countTaxAllowanceRows(long employeeId) {
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM hr.employee_tax_allowance WHERE employee_id = :employeeId",
+            Map.of("employeeId", employeeId), Integer.class);
+        return count == null ? 0 : count;
+    }
+
+    private int countYtdSeedRows(long employeeId) {
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM hr.payroll_year_to_date_seed WHERE employee_id = :employeeId",
+            Map.of("employeeId", employeeId), Integer.class);
+        return count == null ? 0 : count;
+    }
+
+    private String taxAllowanceBody(long employeeId) {
+        return """
+            {"items":[{"employeeId":%d,"spouseAllowance":60000,"childAllowance":0,"parentCareAllowance":0,
+            "disabledCareAllowance":0,"maternityAllowance":0,"lifeInsuranceAllowance":0,"healthInsuranceAllowance":0,
+            "parentHealthInsuranceAllowance":0,"rmfAllowance":0,"ssfAllowance":0,"pensionInsuranceAllowance":0,
+            "thaiEsgAllowance":0,"homeLoanInterestAllowance":0,"educationDonation":0,"generalDonation":0,
+            "politicalDonation":0}]}
+            """.formatted(employeeId);
+    }
+
+    private String ytdSeedBody(long employeeId) {
+        return """
+            {"items":[{"employeeId":%d,"taxableIncome":100000,"socialSecurity":5000,"withholdingTax":2000,
+            "sourceNote":"authz test"}]}
+            """.formatted(employeeId);
     }
 
     private MockHttpSession sessionFor(String role) {

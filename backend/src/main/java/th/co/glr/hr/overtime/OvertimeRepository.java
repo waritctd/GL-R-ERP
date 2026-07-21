@@ -32,6 +32,24 @@ public class OvertimeRepository {
         return Boolean.TRUE.equals(exists);
     }
 
+    /**
+     * True once payroll has been run for the month. Approved overtime is picked up by
+     * {@code PayrollRepository#findApprovedOvertimePayByEmployee}, which keys on
+     * {@code payroll_month}, and a processed period is written once — so anything that lands in a
+     * processed month would never be paid.
+     */
+    public boolean payrollMonthProcessed(LocalDate payrollMonth) {
+        Boolean processed = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM hr.payroll_period
+                 WHERE payroll_month = :payrollMonth
+                   AND status = 'PROCESSED'
+            )
+            """, Map.of("payrollMonth", payrollMonth), Boolean.class);
+        return Boolean.TRUE.equals(processed);
+    }
+
     public Optional<OvertimeEmployeeAccess> findEmployeeAccess(long employeeId) {
         return jdbc.query("""
             SELECT employee_id, reports_to_employee_id, division_id, is_active
@@ -196,7 +214,56 @@ public class OvertimeRepository {
             """, Map.of(), (rs, rowNum) -> rs.getLong("employee_id"));
     }
 
-    public int managerApprove(long id, Long reviewedById, OvertimeCalculation calculation, String reviewerNote) {
+    /**
+     * The salary an overtime request should be priced from, resolved as of the work date rather
+     * than at approval or payroll time. Overtime is paid at the rate in force when the work was
+     * done, so this reads {@code hr.salary_history} in three steps, most authoritative first:
+     *
+     * <ol>
+     *   <li>the latest row <em>effective on or before</em> the work date — its {@code new_amount}
+     *       is the salary that was in force;</li>
+     *   <li>otherwise the earliest row <em>effective after</em> the work date — its
+     *       {@code old_amount} (เงินเก่า) is by definition the salary that preceded that change,
+     *       i.e. the one in force on the work date. This is the case that matters for a backdated
+     *       request filed after a raise: {@code current_salary} is already the new figure, and
+     *       looking only backwards would silently pay the new rate for old work;</li>
+     *   <li>otherwise {@code hr.employee.current_salary}, because the ETL-loaded history table does
+     *       not cover every employee, and finally zero.</li>
+     * </ol>
+     *
+     * <p>Ties on {@code effective_date} are broken by {@code salary_id} so the result is
+     * deterministic when two changes share a date.
+     */
+    public BigDecimal findSalaryBasisAsOf(long employeeId, LocalDate workDate) {
+        BigDecimal basis = jdbc.queryForObject("""
+            SELECT COALESCE(
+                (SELECT sh.new_amount
+                   FROM hr.salary_history sh
+                  WHERE sh.employee_id = :employeeId
+                    AND sh.effective_date IS NOT NULL
+                    AND sh.effective_date <= :workDate
+                    AND sh.new_amount IS NOT NULL
+                  ORDER BY sh.effective_date DESC, sh.salary_id DESC
+                  LIMIT 1),
+                (SELECT sh.old_amount
+                   FROM hr.salary_history sh
+                  WHERE sh.employee_id = :employeeId
+                    AND sh.effective_date IS NOT NULL
+                    AND sh.effective_date > :workDate
+                    AND sh.old_amount IS NOT NULL
+                  ORDER BY sh.effective_date ASC, sh.salary_id ASC
+                  LIMIT 1),
+                (SELECT e.current_salary FROM hr.employee e WHERE e.employee_id = :employeeId),
+                0
+            ) AS salary_basis
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("workDate", workDate), BigDecimal.class);
+        return basis == null ? BigDecimal.ZERO : basis;
+    }
+
+    public int managerApprove(
+            long id, Long reviewedById, OvertimeCalculation calculation, BigDecimal salaryBasis, String reviewerNote) {
         return jdbc.update("""
             UPDATE hr.overtime_request
                SET status = 'MANAGER_APPROVED',
@@ -205,6 +272,7 @@ public class OvertimeRepository {
                    actual_minutes = :actualMinutes,
                    payable_minutes = :payableMinutes,
                    calculation_note = :calculationNote,
+                   salary_basis = :salaryBasis,
                    manager_approved_by = :reviewedById,
                    manager_approved_at = now(),
                    reviewed_by_id = :reviewedById,
@@ -221,6 +289,7 @@ public class OvertimeRepository {
             .addValue("actualMinutes", calculation.actualMinutes())
             .addValue("payableMinutes", calculation.payableMinutes())
             .addValue("calculationNote", calculation.calculationNote())
+            .addValue("salaryBasis", salaryBasis)
             .addValue("reviewerNote", cleanNote(reviewerNote)));
     }
 

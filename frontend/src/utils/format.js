@@ -140,6 +140,21 @@ export function overtimeStatusLabel(status) {
   return map[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
+// Special-money (welfare) request status -> StatusBadge tone. Same status
+// shape as overtime (SUBMITTED -> MANAGER_APPROVED -> APPROVED, or
+// REJECTED/CANCELLED at either step) — see SpecialMoneyStatus.java. Canonical
+// source; do not re-add a page-local `statusInfo`/map elsewhere.
+export function specialMoneyStatusLabel(status) {
+  const map = {
+    SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
+    MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },
+    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
+    REJECTED: { label: 'ปฏิเสธ', tone: 'danger' },
+    CANCELLED: { label: 'ยกเลิก', tone: 'neutral' },
+  };
+  return map[status] ?? { label: status || '-', tone: 'neutral' };
+}
+
 // Leave request status -> StatusBadge tone. Canonical source; do not
 // re-add a page-local `statusInfo`/map for leave status elsewhere.
 export function leaveStatusLabel(status) {

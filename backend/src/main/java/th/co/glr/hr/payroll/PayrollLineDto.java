@@ -36,5 +36,10 @@ public record PayrollLineDto(
     BigDecimal otherPostTaxDeductions,
     BigDecimal totalDeductions,
     BigDecimal netPay,
-    String calculationNote
+    String calculationNote,
+    // Reconciliation additions (2026-07-21, C3/C4).
+    BigDecimal directorRemuneration,
+    BigDecimal warningLetterDeduction,
+    BigDecimal customerReturnDeduction,
+    BigDecimal otherPretaxDeduction
 ) {}

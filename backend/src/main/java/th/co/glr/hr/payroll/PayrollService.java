@@ -21,6 +21,13 @@ import th.co.glr.hr.commission.CommissionRecord;
 import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.TierConfig;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceDto;
+import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
+import th.co.glr.hr.payroll.PayrollReconciliationDtos.TaxAllowanceBulkUpsertRequest;
+import th.co.glr.hr.payroll.PayrollReconciliationDtos.TaxAllowanceListResponse;
+import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedBulkUpsertRequest;
+import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedListResponse;
+import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedUpsertRequest;
 
 @Service
 public class PayrollService {
@@ -143,6 +150,11 @@ public class PayrollService {
         Map<Long, BigDecimal> overtimeByEmployee = payrollRepository.findApprovedOvertimePayByEmployee(payrollMonth);
         Map<Long, BigDecimal> commissionByEmployee = commissionPayByEmployee(payrollMonth);
         Map<Long, PayrollYearToDate> yearToDateByEmployee = payrollRepository.findYearToDateByEmployee(payrollMonth);
+        // C1: the standing tax-allowance declaration for this payroll's tax year is the BASE. Any
+        // field the request body supplies for an employee (non-null) is an in-run correction and wins
+        // over the stored value -- stored = standing declaration, body = this-run override.
+        Map<Long, PayrollTaxAllowanceInput> storedAllowancesByEmployee =
+            payrollRepository.findTaxAllowancesByEmployee(payrollMonth.getYear());
 
         List<PayrollLineDto> lines = employees.stream()
             .map(employee -> calculateLine(
@@ -151,6 +163,7 @@ public class PayrollService {
                 overtimeByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
                 commissionByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
                 yearToDateByEmployee.getOrDefault(employee.employeeId(), PayrollYearToDate.empty()),
+                storedAllowancesByEmployee.get(employee.employeeId()),
                 payrollMonth
             ))
             .sorted(Comparator.comparing(PayrollLineDto::employeeCode))
@@ -183,6 +196,7 @@ public class PayrollService {
         BigDecimal overtimePay,
         BigDecimal commissionPay,
         PayrollYearToDate yearToDate,
+        PayrollTaxAllowanceInput storedAllowances,
         LocalDate payrollMonth
     ) {
         PayrollCalculation calculation = payrollCalculator.calculate(new PayrollCalculationInput(
@@ -195,9 +209,13 @@ public class PayrollService {
             input == null ? BigDecimal.ZERO : input.studentLoanDeduction(),
             input == null ? BigDecimal.ZERO : input.legalExecutionDeduction(),
             input == null ? BigDecimal.ZERO : input.otherPostTaxDeductions(),
-            input == null ? PayrollTaxAllowanceInput.empty() : input.taxAllowances(),
+            mergeAllowances(storedAllowances, input),
             yearToDate,
-            payrollMonth.getMonthValue()
+            payrollMonth.getMonthValue(),
+            employee.directorRemuneration(),
+            input == null ? BigDecimal.ZERO : input.warningLetterDeduction(),
+            input == null ? BigDecimal.ZERO : input.customerReturnDeduction(),
+            input == null ? BigDecimal.ZERO : input.otherPretaxDeduction()
         ));
         return new PayrollLineDto(
             null,
@@ -232,8 +250,95 @@ public class PayrollService {
             calculation.otherPostTaxDeductions(),
             calculation.totalDeductions(),
             calculation.netPay(),
-            calculation.calculationNote()
+            calculation.calculationNote(),
+            calculation.directorRemuneration(),
+            calculation.warningLetterDeduction(),
+            calculation.customerReturnDeduction(),
+            calculation.otherPretaxDeduction()
         );
+    }
+
+    /**
+     * C1: merges the standing stored declaration with this run's request body, field by field. A
+     * non-null field on the request is an explicit in-run correction and wins; a null field falls back
+     * to the stored value (or zero if nothing is stored yet). This is deliberately per-field rather
+     * than "any input present replaces everything" -- HR should be able to correct e.g. just this
+     * month's donation figure without having to retype the other 15 allowances.
+     */
+    private PayrollTaxAllowanceInput mergeAllowances(PayrollTaxAllowanceInput stored, PayrollEmployeeInputRequest input) {
+        PayrollTaxAllowanceInput base = stored == null ? PayrollTaxAllowanceInput.empty() : stored;
+        if (input == null) {
+            return base;
+        }
+        return new PayrollTaxAllowanceInput(
+            firstNonNull(input.spouseAllowance(), base.spouseAllowance()),
+            firstNonNull(input.childAllowance(), base.childAllowance()),
+            firstNonNull(input.parentCareAllowance(), base.parentCareAllowance()),
+            firstNonNull(input.disabledCareAllowance(), base.disabledCareAllowance()),
+            firstNonNull(input.maternityAllowance(), base.maternityAllowance()),
+            firstNonNull(input.lifeInsuranceAllowance(), base.lifeInsuranceAllowance()),
+            firstNonNull(input.healthInsuranceAllowance(), base.healthInsuranceAllowance()),
+            firstNonNull(input.parentHealthInsuranceAllowance(), base.parentHealthInsuranceAllowance()),
+            firstNonNull(input.rmfAllowance(), base.rmfAllowance()),
+            firstNonNull(input.ssfAllowance(), base.ssfAllowance()),
+            firstNonNull(input.pensionInsuranceAllowance(), base.pensionInsuranceAllowance()),
+            firstNonNull(input.thaiEsgAllowance(), base.thaiEsgAllowance()),
+            firstNonNull(input.homeLoanInterestAllowance(), base.homeLoanInterestAllowance()),
+            firstNonNull(input.educationDonation(), base.educationDonation()),
+            firstNonNull(input.generalDonation(), base.generalDonation()),
+            firstNonNull(input.politicalDonation(), base.politicalDonation())
+        );
+    }
+
+    private BigDecimal firstNonNull(BigDecimal requested, BigDecimal stored) {
+        if (requested != null) {
+            return requested;
+        }
+        return stored == null ? BigDecimal.ZERO : stored;
+    }
+
+    // ---- C1 / C2: HR-typed standing declarations, view broader than edit ----------------------
+
+    public TaxAllowanceListResponse getTaxAllowances(int taxYear, UserPrincipal actor) {
+        requireRole(actor, PAYROLL_VIEW_ROLES);
+        return new TaxAllowanceListResponse(taxYear, payrollRepository.findTaxAllowanceRows(taxYear));
+    }
+
+    @Transactional
+    public TaxAllowanceListResponse upsertTaxAllowances(int taxYear, TaxAllowanceBulkUpsertRequest request, UserPrincipal actor) {
+        requireRole(actor, PAYROLL_EDIT_ROLES);
+        List<EmployeeTaxAllowanceUpsertRequest> items = request == null || request.items() == null
+            ? List.of()
+            : request.items();
+        payrollRepository.upsertTaxAllowances(taxYear, items, actor.employeeId());
+        TaxAllowanceListResponse result = new TaxAllowanceListResponse(taxYear, payrollRepository.findTaxAllowanceRows(taxYear));
+        auditService.record(actor, "UPSERT_TAX_ALLOWANCES", "employee_tax_allowance", null,
+            null, Map.of("taxYear", taxYear, "employeeIds", employeeIdsOf(items)));
+        return result;
+    }
+
+    public YtdSeedListResponse getYtdSeed(int taxYear, UserPrincipal actor) {
+        requireRole(actor, PAYROLL_VIEW_ROLES);
+        return new YtdSeedListResponse(taxYear, payrollRepository.findYtdSeedRows(taxYear));
+    }
+
+    @Transactional
+    public YtdSeedListResponse upsertYtdSeed(int taxYear, YtdSeedBulkUpsertRequest request, UserPrincipal actor) {
+        requireRole(actor, PAYROLL_EDIT_ROLES);
+        List<YtdSeedUpsertRequest> items = request == null || request.items() == null ? List.of() : request.items();
+        payrollRepository.upsertYtdSeed(taxYear, items, actor.employeeId());
+        YtdSeedListResponse result = new YtdSeedListResponse(taxYear, payrollRepository.findYtdSeedRows(taxYear));
+        auditService.record(actor, "UPSERT_PAYROLL_YTD_SEED", "payroll_year_to_date_seed", null,
+            null, Map.of("taxYear", taxYear, "employeeIds", ytdEmployeeIdsOf(items)));
+        return result;
+    }
+
+    private List<Long> employeeIdsOf(List<EmployeeTaxAllowanceUpsertRequest> items) {
+        return items.stream().map(EmployeeTaxAllowanceUpsertRequest::employeeId).toList();
+    }
+
+    private List<Long> ytdEmployeeIdsOf(List<YtdSeedUpsertRequest> items) {
+        return items.stream().map(YtdSeedUpsertRequest::employeeId).toList();
     }
 
     private Map<Long, BigDecimal> commissionPayByEmployee(LocalDate payrollMonth) {

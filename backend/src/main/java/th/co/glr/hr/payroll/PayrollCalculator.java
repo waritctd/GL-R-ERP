@@ -37,17 +37,38 @@ public class PayrollCalculator {
         BigDecimal specialPayTotal = specialPays.stream().reduce(ZERO, BigDecimal::add);
         BigDecimal overtimePay = money(input.overtimePay());
         BigDecimal commissionPay = money(input.commissionPay());
+        // ค่าตอบแทนกรรมการ (director remuneration, sheet column G). It IS taxable income (the sheet's
+        // W = SUM(G:V) for directors), so it joins grossEarnings here. It is deliberately NOT folded
+        // into ssoWageBase below: director remuneration is not wages under the Social Security Act, and
+        // the sheet carries no SSO row at all for directors.
+        BigDecimal directorRemuneration = money(input.directorRemuneration());
         // Taxable earnings only (sheet column A). Non-taxable income (sheet column D)
         // is excluded from tax and SSO and added back to net pay at the end.
-        BigDecimal grossEarnings = money(baseSalary.add(specialPayTotal).add(overtimePay).add(commissionPay));
+        BigDecimal grossEarnings = money(baseSalary.add(specialPayTotal).add(overtimePay).add(commissionPay)
+            .add(directorRemuneration));
         BigDecimal nonTaxableIncome = money(input.nonTaxableIncome());
 
         BigDecimal dailyRate = baseSalary.divide(THIRTY, RATE_SCALE, RoundingMode.HALF_UP);
         BigDecimal hourlyRate = dailyRate.divide(EIGHT, RATE_SCALE, RoundingMode.HALF_UP);
         BigDecimal unpaidLeaveDays = quantity(input.unpaidLeaveDays());
         BigDecimal unpaidLeaveDeduction = money(dailyRate.multiply(unpaidLeaveDays));
-        BigDecimal grossTaxableIncome = money(grossEarnings.subtract(unpaidLeaveDeduction).max(ZERO));
+        // The three missing PRE-TAX deductions (sheet columns Z/AA/AB: หักตามใบเตือน, หัก 6
+        // ลูกค้าคืนสินค้า, อื่นๆ). The sheet's AC (รวมรายหักที่ต้องคิดภาษี) is these three plus unpaid
+        // leave, and AD = W - AC is what gets taxed -- so they must reduce grossTaxableIncome exactly
+        // like unpaidLeaveDeduction already does, not land in the post-tax otherPostTaxDeductions.
+        BigDecimal warningLetterDeduction = money(input.warningLetterDeduction());
+        BigDecimal customerReturnDeduction = money(input.customerReturnDeduction());
+        BigDecimal otherPretaxDeduction = money(input.otherPretaxDeduction());
+        BigDecimal grossTaxableIncome = money(grossEarnings
+            .subtract(unpaidLeaveDeduction)
+            .subtract(warningLetterDeduction)
+            .subtract(customerReturnDeduction)
+            .subtract(otherPretaxDeduction)
+            .max(ZERO));
 
+        // ssoWageBase stays derived from baseSalary only -- director remuneration and the pre-tax
+        // deductions above never touch it, matching the sheet's blank SSO column for directors and the
+        // existing base-salary-only SSO treatment for everyone else.
         BigDecimal ssoWageBase = ssoWageBase(baseSalary.subtract(unpaidLeaveDeduction));
         BigDecimal monthlySso = money(ssoWageBase.multiply(SSO_RATE));
         BigDecimal remainingSsoCap = SSO_YEAR_CAP.subtract(money(yearToDate.socialSecurity())).max(ZERO);
@@ -84,6 +105,9 @@ public class PayrollCalculator {
             otherPostTaxDeductions
         );
         BigDecimal totalDeductions = money(unpaidLeaveDeduction
+            .add(warningLetterDeduction)
+            .add(customerReturnDeduction)
+            .add(otherPretaxDeduction)
             .add(socialSecurity)
             .add(withholdingTax)
             .add(studentLoanDeduction)
@@ -117,7 +141,11 @@ public class PayrollCalculator {
             otherPostTaxDeductions,
             totalDeductions,
             netPay,
-            "Annual projection tax, SSO 5% cap, and legal execution floor applied."
+            "Annual projection tax, SSO 5% cap, and legal execution floor applied.",
+            directorRemuneration,
+            warningLetterDeduction,
+            customerReturnDeduction,
+            otherPretaxDeduction
         );
     }
 
