@@ -1376,6 +1376,67 @@ public class TicketRepository {
     }
 
     /**
+     * Closes out any {@code ticket_item} row that WAS part of this pricing-request chain (some
+     * revision in the {@code rootPricingRequestId} chain had a {@code pricing_request_item} whose
+     * {@code source_ticket_item_id} points at it) but is absent from the CURRENTLY-accepted
+     * revision ({@code currentPricingRequestId}) — a line the customer dropped entirely via a
+     * customer-change revision.
+     *
+     * <p>Bug found on review (not by the implementing pass): {@link #reconcileItemQty} only
+     * touches items still PRESENT in the current revision, so a dropped line's {@code ticket_item}
+     * row keeps its stale {@code qty} forever. {@code TicketService.completeDelivery}/{@code
+     * reserveStock} iterate {@code ticket.items()} unconditionally (no filter by "is this item
+     * part of the accepted pricing request") — a stale row with open quantity
+     * ({@code qty > qty_delivered}) makes {@code completeDelivery}'s "any remaining?" check see a
+     * phantom undeliverable balance FOREVER, since nobody can ever deliver units of a product the
+     * customer no longer ordered. The deal can never reach {@code FulfilmentStatus.FULLY_DELIVERED}
+     * / {@code DealStage.DELIVERED}. This is a real, deal-blocking correctness bug, not a cosmetic
+     * gap — found and fixed as part of this same step, not deferred.
+     *
+     * <p>Closes by setting {@code qty = qty_delivered} (never below — the boundary case is always
+     * legal under {@code chk_ticket_item_qty_delivered}/{@code chk_ticket_item_qty_from_stock},
+     * V54): a line with nothing yet delivered closes to zero remaining; a line ALREADY PARTIALLY
+     * delivered before being dropped keeps exactly what was truly delivered as history, closing
+     * only the open remainder — it never fabricates a false "fully delivered" claim beyond what
+     * actually happened, and never needs to touch the CHECK-constraint boundary the way a naive
+     * "set qty to 0" would.
+     *
+     * <p>Deliberately scoped to the {@code rootPricingRequestId} CHAIN, not the whole ticket — a
+     * ticket can carry independent pricing requests for different recipients (designer/owner/
+     * buyer; Step 1's "0..N Pricing Requests per deal" model), and this must never touch a
+     * ticket_item that legitimately belongs only to a DIFFERENT recipient's quote just because it
+     * is absent from the one being confirmed right now.
+     *
+     * @return the number of ticket_item rows closed — the caller uses this only to decide whether
+     *         a "quantities reconciled" event is worth a distinct log line, never for correctness.
+     */
+    public int closeOutDroppedChainItems(long ticketId, long rootPricingRequestId, long currentPricingRequestId) {
+        return jdbc.update("""
+            UPDATE sales.ticket_item ti
+               SET qty = ti.qty_delivered
+             WHERE ti.ticket_id = :ticketId
+               AND ti.qty IS DISTINCT FROM ti.qty_delivered
+               AND EXISTS (
+                   SELECT 1
+                     FROM sales.pricing_request_item pri
+                     JOIN sales.pricing_request pr ON pr.pricing_request_id = pri.pricing_request_id
+                    WHERE pri.source_ticket_item_id = ti.item_id
+                      AND (pr.pricing_request_id = :rootId OR pr.root_pricing_request_id = :rootId)
+               )
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM sales.pricing_request_item pri2
+                    WHERE pri2.source_ticket_item_id = ti.item_id
+                      AND pri2.pricing_request_id = :currentId
+               )
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("rootId", rootPricingRequestId)
+                .addValue("currentId", currentPricingRequestId));
+    }
+
+    /**
      * Inserts a brand-new ticket_item row for a pricing_request_item that has NO
      * {@code sourceTicketItemId} — a line added entirely within a customer-change revision, with
      * no original ticket_item to reconcile against. {@code brand} is NOT NULL on this table (V8);

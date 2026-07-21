@@ -67,10 +67,75 @@ the delivery machinery's `qty_delivered`/`qty_from_stock`/event-logging surface 
 already-working, and entirely keyed off `ticket_item.item_id` — keeping that one source of truth
 correct is a smaller, safer diff than teaching it a second quantity source.
 
-**Known risk, disclosed**: a pricing-request line dropped entirely by a customer-change revision
-(present in the original request, absent from the revision) is left untouched on `ticket_item` —
-neither removed nor zeroed. This is a narrow edge case (a full removal, not a quantity reduction)
-and is NOT handled by this branch. Flag for a follow-up if it proves to matter in practice.
+### Two more bugs found on review — fixed in the same step, not deferred
+
+Per explicit instruction to fix any bug found, not just disclose it, both of the following were
+implemented, tested, and mutation-checked by the reviewer before this branch was pushed.
+
+**Bug A — a dropped line's `ticket_item` was never closed out, permanently blocking delivery.**
+The implementing pass's own draft disclosed this as a "known risk, not handled": a pricing-request
+line dropped entirely by a customer-change revision (present in the original request, absent from
+the revision) was left untouched on `ticket_item` — neither removed nor zeroed. On inspection this
+is not a narrow edge case but a real, deal-blocking correctness bug: `TicketService.completeDelivery`
+iterates `ticket.items()` **unconditionally** — there is no filter for "is this item part of the
+currently-accepted revision." A stale row with `qty > qty_delivered` therefore creates a phantom
+open balance that can never be satisfied (nobody can deliver units of a product the customer no
+longer ordered), so the deal can never reach `FulfilmentStatus.FULLY_DELIVERED` /
+`DealStage.DELIVERED`.
+
+Fixed with `TicketRepository.closeOutDroppedChainItems`, called from `reconcileTicketItems`
+immediately after the existing per-item reconciliation loop: for every `ticket_item` that was
+EVER referenced (via `source_ticket_item_id`) by SOME `pricing_request_item` in this pricing
+request's own **root-anchored chain** (`pricing_request_id = :rootId OR root_pricing_request_id =
+:rootId` — the same shape as `createCustomerChangeRevision`'s own root lookup) but is absent from
+the CURRENTLY-accepted revision's items, close it by setting `qty = qty_delivered` — never below,
+so a line already partially delivered before being dropped keeps exactly its true delivered
+history, never fabricating a false claim and never violating the `chk_ticket_item_qty_delivered`
+CHECK. Deliberately scoped to the chain, not the whole ticket, since a ticket can carry independent
+pricing requests for other recipients (designer/owner/buyer) that must never be touched.
+
+Proven with two new tests: `confirmOrder_revisionDropsALineEntirely_closesItsTicketItemSoItStops
+BlockingDelivery` drives a two-item deal through a full delivery cycle after a dropped line,
+proving the deal genuinely reaches `FULLY_DELIVERED`/`DELIVERED` (not just a data-shape assertion).
+`confirmOrder_revisionDropsAPartiallyDeliveredLine_closesToWhatWasActuallyDelivered` proves the
+already-delivered-2-of-5 case closes to exactly 2, not 0. **Mutation-checked**: neutralizing the
+"still present in current revision" exclusion (kept the SQL syntactically valid — bound
+`:currentId` against an impossible id rather than deleting the clause) turned 7 of 8 tests in the
+class red, because every confirmOrder call's OWN current items got incorrectly closed to zero too
+— confirming the guard protects every call, not just the dropped-line scenario. Reverted, re-ran
+green (8/8).
+
+**Bug B — a later revision's reconciliation was silently unreachable once payment had progressed.**
+Found while writing Bug A's partial-delivery test, not anticipated in advance.
+`OrderConfirmationService.confirmOrder`'s own Javadoc states it is meant to run "exactly once per
+customer-accepted quotation" — i.e., once per accepted PRICING REQUEST, including a later revision
+of the same deal — because the reconciliation above must happen for every accepted revision, not
+just the deal's first one. But the method unconditionally called
+`ticketService.confirmCustomer(ticketId, actor)` at the end, which is a ONE-TIME, TICKET-level
+action whose own guard (correctly, deliberately — see its Javadoc: "never downgrade the payment
+track") throws once `paymentStatus` has progressed past `CUSTOMER_CONFIRMED`. Since the whole
+method is `@Transactional`, that exception rolled back the ENTIRE call — including the
+reconciliation that had just run moments earlier. Concretely: deposit paid, stock reserved, THEN a
+customer-change revision arrives and is accepted — a normal, reachable sequence — and calling
+`confirmOrder` on that revision to reconcile its quantities always 409'd, silently leaving EVERY
+item on that revision unreconciled, not merely the dropped-line case.
+
+Fixed by reading the ticket's current `paymentStatus` before deciding whether to call
+`confirmCustomer`: only invoke it when `paymentStatus == null` (genuinely the first confirmation);
+otherwise the business fact "customer confirmed" is already true for the ticket, and this later
+revision only needs its own reconciliation (already done) plus its own event/notification.
+`confirmCustomer` itself was NOT modified — its refusal is correct and must stay.
+
+Both `confirmOrder_revisionDropsAPartiallyDeliveredLine_closesToWhatWasActuallyDelivered` (Bug A's
+own second test, which happens to drive a deal past deposit-paid before creating the revision) and
+a dedicated **mutation-check** (reverting the `paymentStatus == null` gate to an unconditional
+`confirmCustomer` call) confirm this: exactly that one test goes red with `Payment track already
+past CUSTOMER_CONFIRMED`, reverted, re-ran green (8/8).
+
+Mirrored in `frontend/src/api/mockApi.js` for both fixes (the closeout walks the mock's
+`parentPricingRequestId` linked list to find the chain root, since the mock never modeled a flat
+`rootPricingRequestId` convenience field the way the real schema does; the `confirmCustomer`-skip
+mirrors the `paymentStatus == null` check exactly).
 
 ### A second, independent finding: a real pre-existing production bug
 
@@ -147,7 +212,7 @@ the existing free-text `note` field already carries a proof-of-delivery narrativ
 
 ```
 cd backend && ./mvnw -B -o -DskipTests compile   # confirmed clean before any further work
-cd backend && ./mvnw -B -o clean verify           # 983/983, coverage met, BUILD SUCCESS
+cd backend && ./mvnw -B -o clean verify           # 985/985, coverage met, BUILD SUCCESS
 cd frontend && npm run lint                       # 0 errors, 3 pre-existing warnings
 cd frontend && npx vitest run                     # 47 files / 400 tests, all green
 cd frontend && npm run build                      # succeeds
@@ -160,9 +225,10 @@ the `mvnw verify` run, and via `InventoryDeliveryFulfilmentIntegrationTest` genu
 
 ## Tests / Build Results
 
-- Backend: **983/983**, 0 failures/errors/skipped, Jacoco coverage gate met, `BUILD SUCCESS`.
+- Backend: **985/985**, 0 failures/errors/skipped, Jacoco coverage gate met, `BUILD SUCCESS`.
 - Frontend: **400/400** tests, 0 lint errors, build succeeds.
-- New test file `InventoryDeliveryFulfilmentIntegrationTest`, 7 tests, all real-Postgres
+- Test file `InventoryDeliveryFulfilmentIntegrationTest`, **8 tests** (6 from the implementing
+  pass + 2 added by the reviewer for Bug A/B above), all real-Postgres
   (`AbstractPostgresIntegrationTest`):
   1. `confirmOrder_reconcilesTicketItemQty_fromTicketCreationStubToFirstPricingRequestQty`
   2. `confirmOrder_costAffectingRevisionAfterAcceptance_reconcilesToRevisedQty_notOriginal`
@@ -176,6 +242,12 @@ the `mvnw verify` run, and via `InventoryDeliveryFulfilmentIntegrationTest` genu
      **mutation-checked by the reviewer**: removed the `DataIntegrityViolationException` catch in
      `reconcileTicketItems`; this exact test failed (raw exception instead of the clean 409 it
      asserts); reverted, re-confirmed green.
+  7. `confirmOrder_revisionDropsALineEntirely_closesItsTicketItemSoItStopsBlockingDelivery` —
+     **new, reviewer-added, proves Bug A's fix**; see the "Two more bugs found on review" section
+     above for the mutation-check (7/8 tests in the class red when neutralized, reverted, green).
+  8. `confirmOrder_revisionDropsAPartiallyDeliveredLine_closesToWhatWasActuallyDelivered` — **new,
+     reviewer-added, proves both Bug A's history-preservation AND Bug B's fix** (this exact
+     scenario — deposit paid, stock reserved, THEN a revision arrives — is what surfaced Bug B).
 
 ## Authz Evidence
 
@@ -187,27 +259,24 @@ re-proven. **No authz change in this branch.**
 
 ## Known Risks
 
-- **A revision-dropped line is not cleaned up on `ticket_item`** (see "Design decision" above) —
-  narrow edge case, disclosed, not fixed here.
-- **No dedicated Import-facing receiving/delivery UI was built** — the mock mirrors the new backend
+- **No dedicated Import-facing receiving/delivery UI was built** — the mock mirrors the backend
   behavior (so `VITE_USE_MOCKS=true` verification of the data flow is possible), but there is no
   page exposing `recordGoodsReceived`/delivery-recipient/QC-note to a real user yet. Flag this
   explicitly for whoever picks up Step 9 or a UI-polish pass — the backend is complete and tested,
   the frontend surface for a human to actually use it is not.
-- **This branch is stacked on Step 7**, which was merged to `main` as `ab64dce` during this same
-  review session — this branch has not yet been rebased onto that merge. Do that, re-verify the
-  full suite on the rebased tree, before pushing/opening a PR.
-- **The `chk_event_kind` fix is a real production bug fix riding inside a feature branch.** It is
-  small, additive, and forward-only, and is documented here plainly rather than smuggled in, per
-  CLAUDE.md's own rule — but flag it explicitly in the PR description as "also fixes a pre-existing
-  bug," not just feature work, so a reviewer doesn't miss that this branch fixes something already
-  broken on `main`.
+- **Three real bugs found on review are fixed in this branch, not deferred** (the `chk_event_kind`
+  fix from the implementing pass, plus Bug A and Bug B above) — small, additive/forward-only, and
+  documented here plainly rather than smuggled in, per CLAUDE.md's own rule. Call out all three
+  explicitly in the PR description so a reviewer doesn't mistake this for feature-only work.
 
 ## Suggested Next Prompt
 
-Rebase `feat/inventory-delivery-fulfilment` onto current `main` (Step 7 is now merged), re-run the
-full suite on the rebased tree, push, open a PR calling out the `chk_event_kind` fix explicitly, wait
-for real CI, merge. Then proceed to Step 9 (final payment, closeout, commission) — which will need
-its own "does the existing commission/final-payment machinery already read from the new chain
-correctly, or does it need a Step-6/8-style reconciliation bridge" investigation before writing any
+This branch was already rebased onto `main` (post Step 7 merge, `ab64dce`) and its PR (#255)
+opened before Bugs A and B above were found on review — those two fixes are a follow-up commit on
+top, re-verified on the full suite (985/985 backend, 400/400 frontend) but NOT yet re-verified by a
+fresh CI run at the time of writing. Push the follow-up commit, wait for CI to go green on it
+specifically (a stale pass from before these fixes existed does not count as evidence), then merge.
+Then proceed to Step 9 (final payment, closeout, commission) — which will need its own "does the
+existing commission/final-payment machinery already read from the new chain correctly, or does it
+need a Step-6/8-style reconciliation bridge" investigation before writing any
 code, following the same verify-first discipline this step and Step 6 both required.

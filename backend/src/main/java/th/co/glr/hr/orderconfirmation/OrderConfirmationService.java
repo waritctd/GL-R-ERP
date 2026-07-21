@@ -169,8 +169,26 @@ public class OrderConfirmationService {
         // reconcileTicketItems's own Javadoc for the full "why".
         reconcileTicketItems(pricingRequestId, locked.ticketId(), actor);
 
-        // The existing, already-tested pipeline takes over from here, unmodified.
-        TicketDto ticketDto = ticketService.confirmCustomer(locked.ticketId(), actor);
+        // Bug found on review, fixed in the same step (not deferred): confirmOrder is meant to
+        // run once PER ACCEPTED PRICING REQUEST (its own Javadoc — "the one bridge point that
+        // ALWAYS runs, exactly once per customer-accepted quotation"), since reconciliation
+        // above must happen for every accepted revision, not just the deal's first one. But
+        // ticketService.confirmCustomer is a ONE-TIME, TICKET-level action, and its own guard
+        // (deliberately, correctly — see its Javadoc: "never downgrade the payment track") 409s
+        // if called again once payment has progressed past CUSTOMER_CONFIRMED. Calling it
+        // unconditionally here meant that confirming a SECOND (or later) accepted revision on a
+        // deal whose payment had already progressed — a normal, reachable sequence: deposit paid,
+        // stock reserved, THEN a customer-change revision arrives and is accepted — always threw,
+        // rolling back this ENTIRE @Transactional method INCLUDING the reconciliation that had
+        // just run. The revision's quantities were silently never reconciled at all, not just the
+        // dropped-line case above. Only invoke confirmCustomer when the ticket hasn't been
+        // customer-confirmed yet; a later revision's own confirmOrder call only needs the
+        // reconciliation (already done above) and its own event/notification below.
+        TicketSummaryDto currentTicketState = requireTicketSummary(locked.ticketId());
+        TicketDto ticketDto = currentTicketState.paymentStatus() == null
+            ? ticketService.confirmCustomer(locked.ticketId(), actor)
+            : tickets.findById(locked.ticketId())
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
 
         pricingRequests.addEvent(pricingRequestId, locked.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.ORDER_CONFIRMED, locked.status(), locked.status(),
@@ -277,6 +295,13 @@ public class OrderConfirmationService {
                 anyChange = true;
             }
         }
+        // Bug fix (found on review, not deferred): close out any ticket_item this chain USED to
+        // reference but the currently-accepted revision dropped entirely — see
+        // TicketRepository.closeOutDroppedChainItems's own Javadoc for why an unclosed stale line
+        // permanently blocks completeDelivery's "no open quantities" check.
+        long rootPricingRequestId = pricingRequests.findRootPricingRequestId(pricingRequestId).orElse(pricingRequestId);
+        int closed = tickets.closeOutDroppedChainItems(ticketId, rootPricingRequestId, pricingRequestId);
+        anyChange = anyChange || closed > 0;
         if (anyChange) {
             pricingRequests.addEvent(pricingRequestId, ticketId, actor.id(), actor.name(),
                 PricingRequestEventKind.TICKET_ITEMS_RECONCILED, null, null,

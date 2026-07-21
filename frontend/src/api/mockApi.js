@@ -742,6 +742,44 @@ function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
       anyChange = true;
     }
   }
+  // Bug fix (found on review, not deferred): close out any ticket_item this pricing-request
+  // CHAIN used to reference but the currently-accepted revision dropped entirely — mirrors
+  // TicketRepository.closeOutDroppedChainItems. Without this, a stale ticket_item with
+  // qty > qtyDelivered permanently blocks completeDelivery's "no open quantities" check, since
+  // nobody can ever deliver units of a product the customer no longer ordered.
+  //
+  // Walk to the root of pr's own revision chain (mirrors root_pricing_request_id), scoped to
+  // THIS chain only — a ticket can carry independent pricing requests for other recipients
+  // (designer/owner/buyer), which must never be touched just because they're absent here.
+  let root = pr;
+  while (root.parentPricingRequestId != null) {
+    const parent = mockPricingRequests.find((p) => p.id === root.parentPricingRequestId);
+    if (!parent) break;
+    root = parent;
+  }
+  const chain = mockPricingRequests.filter((p) => {
+    let walk = p;
+    while (walk) {
+      if (walk.id === root.id) return true;
+      walk = walk.parentPricingRequestId != null
+        ? mockPricingRequests.find((x) => x.id === walk.parentPricingRequestId)
+        : null;
+    }
+    return false;
+  });
+  const everReferencedIds = new Set(
+    chain.flatMap((p) => (p.items ?? []).map((i) => i.sourceTicketItemId)).filter((id) => id != null));
+  const currentIds = new Set((pr.items ?? []).map((i) => i.sourceTicketItemId).filter((id) => id != null));
+  for (const droppedId of everReferencedIds) {
+    if (currentIds.has(droppedId)) continue;
+    const ticketItem = ticket.items.find((ti) => ti.id === droppedId);
+    if (!ticketItem) continue;
+    const qtyDelivered = Number(ticketItem.qtyDelivered ?? 0);
+    if (Number(ticketItem.qty) !== qtyDelivered) {
+      ticketItem.qty = qtyDelivered;
+      anyChange = true;
+    }
+  }
   if (anyChange) {
     pushPricingRequestEvent(pr, user, 'TICKET_ITEMS_RECONCILED', null, null,
       'ปรับจำนวนสินค้าในรายการดีลให้ตรงกับใบขอราคาที่ยืนยันคำสั่งซื้อแล้ว');
@@ -6165,15 +6203,19 @@ export const api = {
       // .reconcileTicketItems, called at the same point in the real bridge.
       reconcileTicketItemsFromPricingRequest(ticket, pr, user);
 
-      // The existing, already-tested pipeline takes over from here, unmodified (mirrors calling
-      // TicketService.confirmCustomer).
-      if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
-        fail('Payment track already past CUSTOMER_CONFIRMED', 409);
+      // Bug fix (found on review, not deferred): confirmOrder runs once PER ACCEPTED PRICING
+      // REQUEST — reconciliation above must happen for every accepted revision, not just the
+      // deal's first one — but confirmCustomer is a ONE-TIME, ticket-level action whose guard
+      // correctly refuses a second call once payment has progressed. Calling it unconditionally
+      // meant confirming a later revision (deposit already paid, stock already reserved) always
+      // threw, rolling back this whole transaction INCLUDING the reconciliation that just ran.
+      // Only run the confirmCustomer mirror when the ticket hasn't been customer-confirmed yet.
+      if (ticket.paymentStatus == null) {
+        ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
+        ticket.updatedAt = now;
+        pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
+        autoAdvanceStage(ticket, 'ORDER_RECEIVED', user);
       }
-      ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
-      ticket.updatedAt = now;
-      pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
-      autoAdvanceStage(ticket, 'ORDER_RECEIVED', user);
 
       pushPricingRequestEvent(pr, user, 'ORDER_CONFIRMED', pr.status, pr.status, 'ยืนยันคำสั่งซื้อแล้ว');
       const ceoUsers = db.users.filter((u) => u.role === 'ceo');

@@ -384,10 +384,211 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
+    // Bug found on review, fixed in the same step (not deferred): a pricing-request line DROPPED
+    // entirely by a customer-change revision left its ticket_item row's stale qty untouched —
+    // reconcileTicketItems only ever reconciled items still PRESENT in the current revision.
+    // TicketService.completeDelivery/reserveStock iterate ALL of a ticket's items unconditionally,
+    // so a stale row with qty > qtyDelivered created a phantom, permanently-undeliverable open
+    // balance: the deal could NEVER reach FulfilmentStatus.FULLY_DELIVERED. See
+    // TicketRepository#closeOutDroppedChainItems's own Javadoc for the fix.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void confirmOrder_revisionDropsALineEntirely_closesItsTicketItemSoItStopsBlockingDelivery() {
+        TwoItemDeal deal = createTwoItemDealAndDriveToQuotationAccepted(
+            new BigDecimal("10"), new BigDecimal("5"));
+        // Confirm the ORIGINAL first, so both items are properly reconciled (A=10, B=5) before
+        // the revision that drops B — proving the closeout works on a line that had genuinely
+        // been correct at some point, not one that was merely never touched.
+        orderConfirmation.confirmOrder(deal.pricingRequestId,
+            new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+        assertThat(ticketItemQty(deal.ticketItemBId)).isEqualByComparingTo("5");
+
+        // The revision keeps item A (qty unchanged) but DROPS item B entirely — only A is listed.
+        PricingRequestRequests.PricingRequestItemRequest revisedItemA = new PricingRequestRequests.PricingRequestItemRequest(
+            deal.ticketItemAId, deal.catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A", null, null,
+            "60x60", FACTORY, new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
+            QuantityType.CONFIRMED, null, null, null);
+        CustomerChangeRevisionRequest revisionRequest = new CustomerChangeRevisionRequest(
+            "ลูกค้าขอตัดรายการ B ออก", UUID.randomUUID().toString(), PricingRequestRecipient.DESIGNER, null,
+            "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("5000.00"), "THB",
+            "step 8 dropped-line walk", List.of(revisedItemA));
+        PricingRequestDetailDto revision = pricingRequestService.createCustomerChangeRevision(
+            deal.pricingRequestId, revisionRequest, salesActor);
+        long revisedPricingRequestId = revision.summary().id();
+        driveDraftPricingRequestToQuotationAccepted(revisedPricingRequestId, FACTORY, new BigDecimal("10"));
+
+        orderConfirmation.confirmOrder(revisedPricingRequestId,
+            new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        // B is closed out — qty reconciled down to its qtyDelivered (0), no longer open.
+        assertThat(ticketItemQty(deal.ticketItemBId)).isEqualByComparingTo("0");
+        assertThat(ticketItemQtyDelivered(deal.ticketItemBId)).isEqualByComparingTo("0");
+        // A is untouched by the closeout (it's still current).
+        assertThat(ticketItemQty(deal.ticketItemAId)).isEqualByComparingTo("10");
+
+        // The deal can now actually reach fully-delivered — proving this isn't just a data-shape
+        // assertion but the real, previously-blocking behavior.
+        DepositNoticeDto draftNotice = orderConfirmation.createDepositNoticeFromQuotation(revisedPricingRequestId,
+            new CreateDepositNoticeFromQuotationRequest(null), salesActor);
+        depositNoticeService.issue(draftNotice.id(), salesActor);
+        ticketService.confirmDepositPaid(deal.ticketId, accountActor);
+        ticketService.issueImportRequest(deal.ticketId, importActor);
+        ticketService.reserveStock(deal.ticketId,
+            new StockReservationRequest(List.of(
+                new StockReservationRequest.Line(deal.ticketItemAId, new BigDecimal("10"), null))),
+            importActor);
+        TicketDto delivered = ticketService.completeDelivery(
+            deal.ticketId, new CompleteDeliveryRequest("ส่งครบ", null), importActor);
+        // Reaches FULLY_DELIVERED / DealStage.DELIVERED — the exact outcome B's phantom open
+        // balance used to make permanently unreachable.
+        assertThat(delivered.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
+        assertThat(delivered.summary().salesStage()).isEqualTo(DealStage.DELIVERED);
+    }
+
+    /** Same setup as above but B was PARTIALLY delivered (2 of 5) before the revision drops it —
+     * the closeout must preserve that history (qty -> 2, not 0), never fabricating a false "5
+     * delivered" and never violating chk_ticket_item_qty_delivered by going below what's real. */
+    @Test
+    void confirmOrder_revisionDropsAPartiallyDeliveredLine_closesToWhatWasActuallyDelivered() {
+        TwoItemDeal deal = createTwoItemDealAndDriveToQuotationAccepted(
+            new BigDecimal("10"), new BigDecimal("5"));
+        orderConfirmation.confirmOrder(deal.pricingRequestId,
+            new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+        DepositNoticeDto draftNotice = orderConfirmation.createDepositNoticeFromQuotation(deal.pricingRequestId,
+            new CreateDepositNoticeFromQuotationRequest(null), salesActor);
+        depositNoticeService.issue(draftNotice.id(), salesActor);
+        ticketService.confirmDepositPaid(deal.ticketId, accountActor);
+        ticketService.issueImportRequest(deal.ticketId, importActor);
+        ticketService.reserveStock(deal.ticketId,
+            new StockReservationRequest(List.of(
+                new StockReservationRequest.Line(deal.ticketItemBId, new BigDecimal("2"), null))),
+            importActor);
+        ticketService.recordPartialDelivery(deal.ticketId,
+            new RecordDeliveryRequest("STOCK", null,
+                List.of(new RecordDeliveryRequest.Line(deal.ticketItemBId, new BigDecimal("2"))), null),
+            importActor);
+        assertThat(ticketItemQtyDelivered(deal.ticketItemBId)).isEqualByComparingTo("2");
+
+        PricingRequestRequests.PricingRequestItemRequest revisedItemA = new PricingRequestRequests.PricingRequestItemRequest(
+            deal.ticketItemAId, deal.catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A", null, null,
+            "60x60", FACTORY, new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
+            QuantityType.CONFIRMED, null, null, null);
+        CustomerChangeRevisionRequest revisionRequest = new CustomerChangeRevisionRequest(
+            "ลูกค้าขอตัดรายการ B ออก", UUID.randomUUID().toString(), PricingRequestRecipient.DESIGNER, null,
+            "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("5000.00"), "THB",
+            "step 8 partial-then-dropped walk", List.of(revisedItemA));
+        PricingRequestDetailDto revision = pricingRequestService.createCustomerChangeRevision(
+            deal.pricingRequestId, revisionRequest, salesActor);
+        long revisedPricingRequestId = revision.summary().id();
+        driveDraftPricingRequestToQuotationAccepted(revisedPricingRequestId, FACTORY, new BigDecimal("10"));
+
+        orderConfirmation.confirmOrder(revisedPricingRequestId,
+            new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        // Closed to exactly what was delivered (2), not to 0 — history preserved, nothing fabricated.
+        assertThat(ticketItemQty(deal.ticketItemBId)).isEqualByComparingTo("2");
+        assertThat(ticketItemQtyDelivered(deal.ticketItemBId)).isEqualByComparingTo("2");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixture helpers.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     private record Deal(long ticketId, long ticketItemId, long pricingRequestId, long catalogProductId) {}
+
+    private record TwoItemDeal(long ticketId, long ticketItemAId, long ticketItemBId,
+                               long pricingRequestId, long catalogProductIdA, long catalogProductIdB) {}
+
+    /** Same shape as {@link #createDealAndDriveFirstPricingRequestToQuotationAccepted}, but with
+     * TWO items on the same factory, so a subsequent revision can drop one of them entirely
+     * (the "dropped line" bug fix tests) while keeping the other. */
+    private TwoItemDeal createTwoItemDealAndDriveToQuotationAccepted(BigDecimal qtyA, BigDecimal qtyB) {
+        long catalogProductIdA = insertCatalogProduct(FACTORY, "TH",
+            "TEST-INV-A-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
+        long catalogProductIdB = insertCatalogProduct(FACTORY, "TH",
+            "TEST-INV-B-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
+
+        CustomerRepository customersRepo = new CustomerRepository(jdbc);
+        ProjectRepository projectsRepo = new ProjectRepository(jdbc);
+        CustomerDto customer = customersRepo.create(
+            "บริษัท Inventory " + UUID.randomUUID() + " จำกัด", "0100000000009", "123 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0009");
+        ProjectDto project = projectsRepo.create(customer.id(), "โครงการ Inventory");
+        TicketDto created = ticketService.create(
+            new CreateTicketRequest("ดีล Inventory Two Items", "NORMAL", customer.name(), customer.id(), project.id(),
+                null, null, null, List.of(
+                    ticketItem("SCG", "Tile A", FACTORY), ticketItem("SCG", "Tile B", FACTORY))),
+            salesActor);
+        long ticketId = created.summary().id();
+        long ticketItemAId = created.items().get(0).id();
+        long ticketItemBId = created.items().get(1).id();
+
+        PricingRequestRequests.PricingRequestItemRequest itemA = new PricingRequestRequests.PricingRequestItemRequest(
+            ticketItemAId, catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A", null, null,
+            "60x60", FACTORY, qtyA, qtyA, "piece", UnitBasis.PER_PIECE,
+            QuantityType.CONFIRMED, null, null, null);
+        PricingRequestRequests.PricingRequestItemRequest itemB = new PricingRequestRequests.PricingRequestItemRequest(
+            ticketItemBId, catalogProductIdB, null, "SCG", "Tile B", "SCG Tile B", null, null,
+            "60x60", FACTORY, qtyB, qtyB, "piece", UnitBasis.PER_PIECE,
+            QuantityType.CONFIRMED, null, null, null);
+        PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
+            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
+            new BigDecimal("5000.00"), "THB", "step 8 two-item walk", UUID.randomUUID().toString(),
+            List.of(itemA, itemB));
+        long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
+
+        driveTwoItemDraftToQuotationAccepted(pricingRequestId);
+        return new TwoItemDeal(ticketId, ticketItemAId, ticketItemBId, pricingRequestId, catalogProductIdA, catalogProductIdB);
+    }
+
+    /** Same as {@link #driveDraftPricingRequestToQuotationAccepted} but responds to EVERY item on
+     * the (single, same-factory) draft rather than assuming exactly one — both items share
+     * {@link #FACTORY}, so {@code generateDrafts} produces exactly one draft covering both. */
+    private void driveTwoItemDraftToQuotationAccepted(long pricingRequestId) {
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+
+        List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
+        FactoryQuoteDto draft = drafts.get(0);
+        String email = FACTORY.toLowerCase().replace(" ", "-") + "@example.com";
+        factoryQuoteService.send(draft.id(),
+            new SendFactoryQuoteRequest(email, null, null, UUID.randomUUID().toString()), importActor);
+        drainDispatches();
+        List<ReceiveFactoryQuoteItemRequest> responseItems = draft.items().stream()
+            .map(draftItem -> new ReceiveFactoryQuoteItemRequest(
+                draftItem.pricingRequestItemId(), null, null, draftItem.quotedQuantity(), "piece", UnitBasis.PER_PIECE,
+                new BigDecimal("100.00"), "THB", null, new BigDecimal("1.00"), null, null,
+                "45 days", null, null))
+            .toList();
+        ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest(
+            "REF-" + UUID.randomUUID(), "THB", "30 days", "45 days", "revision", "note",
+            responseItems, UUID.randomUUID().toString());
+        FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
+        factoryQuoteService.markReadyForCosting(responded.id(), importActor);
+
+        PricingCostingDto costingDraft = costingService.createDraft(pricingRequestId,
+            new CreateCostingRequest("step 8 costing", null), importActor);
+        costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 1"), importActor);
+        PricingCostingDto calculated = costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 2"), importActor);
+        costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
+
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        List<UpdatePricingDecisionItemRequest> updates = decision.items().stream()
+            .map(decisionItem -> new UpdatePricingDecisionItemRequest(decisionItem.id(), null, null, new BigDecimal("1.00"), null))
+            .toList();
+        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, updates), ceoActor);
+        decisionService.approve(decision.id(),
+            new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor);
+
+        CustomerQuotationDto draftQuotation = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, LocalDate.now().plusDays(30), null,
+                UUID.randomUUID().toString()), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(
+            draftQuotation.id(), new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
+        quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
+    }
 
     private BigDecimal ticketItemQty(long itemId) {
         return jdbc.queryForObject(
