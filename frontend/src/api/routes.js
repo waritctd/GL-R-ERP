@@ -255,6 +255,10 @@ export const ROLE_PERMISSIONS = {
   // canCreateTickets/canPickupTickets/canProposePrices/canApproveReject/
   // canGenerateQuotation/canConfirmPayments. Mirrors TicketService.VIEWER_ROLES.
   canViewTickets: ['sales', 'import', 'ceo', 'account', 'sales_manager'],
+  // Sales/CRM tool — catalog browsing scoped to the same audience as
+  // canViewTickets. Frontend-only gate: GET /api/catalog has no backend
+  // role check yet.
+  canViewCatalog: ['sales', 'import', 'ceo', 'account', 'sales_manager'],
   // Money-receipt confirmations (รับยอดมัดจำ / รับชำระเต็มจำนวน) belong to
   // ฝ่ายบัญชี, with CEO as fallback. Mirrors TicketService.ACCOUNT_ROLES.
   canConfirmPayments: ['account', 'ceo'],
