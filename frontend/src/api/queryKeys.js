@@ -46,4 +46,8 @@ export const queryKeys = {
   // Step 4: Customer Quotation Generation and Issuance.
   customerQuotations: (pricingRequestId) => ['pricingRequests', 'customerQuotations', pricingRequestId],
   customerQuotationDetail: (id) => ['customerQuotations', 'detail', id],
+  // Step 7: Factory Purchase Order and Import Execution.
+  factoryPurchaseOrderList: (status) => ['factoryPurchaseOrders', 'list', status ?? ''],
+  factoryPurchaseOrdersForPricingRequest: (pricingRequestId) => ['pricingRequests', 'factoryPurchaseOrders', pricingRequestId],
+  factoryPurchaseOrderDetail: (id) => ['factoryPurchaseOrders', 'detail', id],
 };

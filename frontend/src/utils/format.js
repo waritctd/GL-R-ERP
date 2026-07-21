@@ -275,6 +275,19 @@ export function fulfilmentStatusLabel(value) {
   return map[value] ?? { label: value || '-', tone: 'neutral' };
 }
 
+// Step 7: Factory Purchase Order and Import Execution — mirrors
+// th.co.glr.hr.procurement.FactoryPurchaseOrderStatus (a short, linear status, deliberately NOT
+// the same 5-value set as fulfilmentStatusLabel above — see that class's own Javadoc).
+export function factoryPurchaseOrderStatusLabel(value) {
+  const map = {
+    OPEN: { label: 'เปิดใบสั่งซื้อ', tone: 'info' },
+    SHIPPING: { label: 'สินค้าเดินทาง', tone: 'warning' },
+    RECEIVED: { label: 'รับสินค้าแล้ว', tone: 'success' },
+    CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },
+  };
+  return map[value] ?? { label: value || '-', tone: 'neutral' };
+}
+
 export function entryChannelLabel(value) {
   const map = {
     DESIGNER_LED: 'ผู้ออกแบบนำดีล',

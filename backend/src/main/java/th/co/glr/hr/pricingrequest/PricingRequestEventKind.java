@@ -41,6 +41,12 @@ public final class PricingRequestEventKind {
     // Step 6: Deposit, Payment, and Order Confirmation.
     public static final String ORDER_CONFIRMED               = "ORDER_CONFIRMED";
     public static final String DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION = "DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION";
+    // Step 7: Factory Purchase Order and Import Execution.
+    public static final String FACTORY_PO_CREATED             = "FACTORY_PO_CREATED";
+    public static final String FACTORY_PO_PROFORMA_RECORDED   = "FACTORY_PO_PROFORMA_RECORDED";
+    public static final String FACTORY_PO_SHIPPING_RECORDED   = "FACTORY_PO_SHIPPING_RECORDED";
+    public static final String FACTORY_PO_GOODS_RECEIVED      = "FACTORY_PO_GOODS_RECEIVED";
+    public static final String FACTORY_PO_CANCELLED           = "FACTORY_PO_CANCELLED";
 
     public static final Set<String> VALUES = Set.of(
         PRICING_REQUEST_CREATED, PRICING_REQUEST_UPDATED, PRICING_REQUEST_SUBMITTED,
@@ -54,7 +60,9 @@ public final class PricingRequestEventKind {
         CUSTOMER_QUOTATION_CREATED, CUSTOMER_QUOTATION_UPDATED, CUSTOMER_QUOTATION_ISSUED,
         CUSTOMER_QUOTATION_CANCELLED, CUSTOMER_QUOTATION_REVISED, CUSTOMER_QUOTATION_ACCEPTED,
         CUSTOMER_QUOTATION_REJECTED, CUSTOMER_QUOTATION_REVISION_REQUESTED, CUSTOMER_QUOTATION_EXPIRED,
-        ORDER_CONFIRMED, DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION);
+        ORDER_CONFIRMED, DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION,
+        FACTORY_PO_CREATED, FACTORY_PO_PROFORMA_RECORDED, FACTORY_PO_SHIPPING_RECORDED,
+        FACTORY_PO_GOODS_RECEIVED, FACTORY_PO_CANCELLED);
 
     public static boolean isValid(String value) {
         return value != null && VALUES.contains(value);

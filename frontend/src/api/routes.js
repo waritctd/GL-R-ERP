@@ -217,6 +217,17 @@ export const API_ROUTES = {
     attachment: (id) => `/api/pricing-request-attachments/${id}`,
     attachmentIncludeInFactoryEmail: (id) => `/api/pricing-request-attachments/${id}/include-in-factory-email`,
   },
+  // Step 7: Factory Purchase Order and Import Execution. Mirrors ProcurementController.
+  procurement: {
+    create: (pricingRequestId) => `/api/pricing-requests/${pricingRequestId}/factory-purchase-orders`,
+    listForPricingRequest: (pricingRequestId) => `/api/pricing-requests/${pricingRequestId}/factory-purchase-orders`,
+    list: (status) => `/api/factory-purchase-orders${status ? `?status=${encodeURIComponent(status)}` : ''}`,
+    detail: (id) => `/api/factory-purchase-orders/${id}`,
+    proforma: (id) => `/api/factory-purchase-orders/${id}/proforma`,
+    shipping: (id) => `/api/factory-purchase-orders/${id}/shipping`,
+    goodsReceived: (id) => `/api/factory-purchase-orders/${id}/goods-received`,
+    cancel: (id) => `/api/factory-purchase-orders/${id}/cancel`,
+  },
 };
 
 export const ROLE_PERMISSIONS = {
@@ -265,4 +276,7 @@ export const ROLE_PERMISSIONS = {
   // pricing request (sales still sees its own deal's requests via
   // PricingRequestPanel, gated by ticket ownership, not this key).
   canViewPricingRequestQueue: ['import', 'ceo', 'sales_manager'],
+  // Step 7: Factory Purchase Order and Import Execution — Import/CEO only, mirrors
+  // ProcurementService.RAW_PO_ROLES. Raw supplier PO detail is never shown to sales.
+  canManageProcurement: ['import', 'ceo'],
 };

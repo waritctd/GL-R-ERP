@@ -37,6 +37,8 @@ const PriceImportPage = lazy(() => import('./features/catalog/PriceImportPage.js
 const CatalogSearchPage = lazy(() => import('./features/catalog/CatalogSearchPage.jsx').then(toDefault('CatalogSearchPage')));
 const PricingRequestQueuePage = lazy(() => import('./features/pricingRequests/PricingRequestQueuePage.jsx').then(toDefault('PricingRequestQueuePage')));
 const PricingRequestDetailPage = lazy(() => import('./features/pricingRequests/PricingRequestDetailPage.jsx').then(toDefault('PricingRequestDetailPage')));
+const ProcurementListPage = lazy(() => import('./features/procurement/ProcurementListPage.jsx').then(toDefault('ProcurementListPage')));
+const ProcurementDetailPage = lazy(() => import('./features/procurement/ProcurementDetailPage.jsx').then(toDefault('ProcurementDetailPage')));
 
 // Thin wrappers that source the ticket id from the URL for the frozen sales
 // pages (they already fetch by id internally — branch 5 only rewires how the
@@ -311,6 +313,14 @@ export function App() {
                 <Route
                   path="/ceo-settings"
                   element={<CeoSettingsPage showToast={showToast} />}
+                />
+                <Route
+                  path="/factory-purchase-orders"
+                  element={<ProcurementListPage showToast={showToast} />}
+                />
+                <Route
+                  path="/factory-purchase-orders/:id"
+                  element={<ProcurementDetailPage showToast={showToast} />}
                 />
               </>
             )}
