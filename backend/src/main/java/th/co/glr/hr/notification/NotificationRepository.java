@@ -89,7 +89,13 @@ public class NotificationRepository {
         "PRICE_PROPOSED", "รอการอนุมัติราคา",
         "APPROVED", "ราคาได้รับการอนุมัติ",
         "REJECTED", "ราคาถูกตีกลับ",
-        "REVISION_REQUESTED", "ขอแก้ไขเอกสาร"
+        "REVISION_REQUESTED", "ขอแก้ไขเอกสาร",
+        // PricingRequestService.submit()/pickup() — added distinct from the
+        // legacy "SUBMITTED" entry above (which collides with
+        // TicketEventKind.SUBMITTED) so a pricing-request notification is no
+        // longer indistinguishable from a ticket-submitted one.
+        "PRICING_REQUEST_SUBMITTED", "มีคำขอราคาใหม่",
+        "PICKED_UP", "คำขอราคาถูกรับเรื่องแล้ว"
     );
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {

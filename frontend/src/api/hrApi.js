@@ -102,8 +102,15 @@ export const api = {
     markQuotationSent: (id, quotationId, payload = {}) => apiRequest(API_ROUTES.tickets.quotationStatus(id, quotationId, 'sent'), { method: 'POST', body: payload }),
     markQuotationAccepted: (id, quotationId, payload = {}) => apiRequest(API_ROUTES.tickets.quotationStatus(id, quotationId, 'accepted'), { method: 'POST', body: payload }),
     markQuotationRejected: (id, quotationId, payload = {}) => apiRequest(API_ROUTES.tickets.quotationStatus(id, quotationId, 'rejected'), { method: 'POST', body: payload }),
-    close: (id) => apiRequest(API_ROUTES.tickets.action(id, 'close'), { method: 'POST' }),
-    cancel: (id) => apiRequest(API_ROUTES.tickets.action(id, 'cancel'), { method: 'POST' }),
+    // Three-party close (V55): ฝ่ายบัญชี confirms, then the CEO verifies. There is no
+    // single-step close any more — sales is not part of the sequence.
+    confirmCloseReady: (id) =>
+      apiRequest(API_ROUTES.tickets.action(id, 'close/confirm'), { method: 'POST' }),
+    revokeCloseConfirmation: (id, body) =>
+      apiRequest(API_ROUTES.tickets.action(id, 'close/revoke'), { method: 'POST', body }),
+    verifyClose: (id) =>
+      apiRequest(API_ROUTES.tickets.action(id, 'close/verify'), { method: 'POST' }),
+    cancel: (id, body) => apiRequest(API_ROUTES.tickets.action(id, 'cancel'), { method: 'POST', body }),
     editItems: (id, payload) => apiRequest(API_ROUTES.tickets.editItems(id), { method: 'PATCH', body: payload }),
     comment: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'comments'), { method: 'POST', body: payload }),
     overrideItemPrice: (id, itemId, payload) => apiRequest(`/api/tickets/${id}/items/${itemId}/price-override`, { method: 'PUT', body: payload }),
@@ -332,5 +339,21 @@ export const api = {
       method: 'PUT',
       body: JSON.parse(json),
     }),
+  },
+  // Mirrors PricingRequestController + PricingRequestService (pricingrequest/).
+  // Detail-shaped responses (create/get/update/submit/pickup/requestInformation/
+  // respondInformation/cancel) come back wrapped as { pricingRequest }; list-shaped
+  // responses (listForTicket/queue) come back as { items }.
+  pricingRequests: {
+    listForTicket: (ticketId) => apiRequest(API_ROUTES.pricingRequests.listForTicket(ticketId)),
+    create: (ticketId, payload) => apiRequest(API_ROUTES.pricingRequests.create(ticketId), { method: 'POST', body: payload }),
+    queue: (params) => apiRequest(API_ROUTES.pricingRequests.queue(params)),
+    get: (id) => apiRequest(API_ROUTES.pricingRequests.detail(id)),
+    update: (id, payload) => apiRequest(API_ROUTES.pricingRequests.detail(id), { method: 'PUT', body: payload }),
+    submit: (id) => apiRequest(API_ROUTES.pricingRequests.submit(id), { method: 'POST' }),
+    pickup: (id) => apiRequest(API_ROUTES.pricingRequests.pickup(id), { method: 'POST' }),
+    requestInformation: (id, payload) => apiRequest(API_ROUTES.pricingRequests.requestInformation(id), { method: 'POST', body: payload }),
+    respondInformation: (id, payload) => apiRequest(API_ROUTES.pricingRequests.respondInformation(id), { method: 'POST', body: payload }),
+    cancel: (id, payload) => apiRequest(API_ROUTES.pricingRequests.cancel(id), { method: 'POST', body: payload }),
   },
 };

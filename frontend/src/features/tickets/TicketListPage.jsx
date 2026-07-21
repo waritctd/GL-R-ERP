@@ -63,8 +63,11 @@ function DaysBadge({ stageUpdatedAt }) {
   );
 }
 
+// NOTE: 'lost' keys on lifecycle, never on lostReason. Since V57 the reason
+// SURVIVES a reopen, so a live reopened deal still carries one — testing the
+// reason would render it as เสียงาน and drop it out of the phase counts.
 function DealStageCell({ deal }) {
-  if (deal.lifecycle === 'CLOSED_LOST' || deal.lostReason) {
+  if (deal.lifecycle === 'CLOSED_LOST') {
     const lost = dealLostReasonLabel(deal.lostReason);
     return <StatusBadge tone="danger">เสียงาน · {lost.label}</StatusBadge>;
   }
@@ -73,6 +76,15 @@ function DealStageCell({ deal }) {
   const operational = ticketStatusLabel(deal.status);
   const paused = ['ON_HOLD', 'DORMANT'].includes(deal.lifecycle);
   const lifecycle = dealLifecycleLabel(deal.lifecycle);
+  // Since 03b5ba9 stopped ticket-level auto-submit, every newly created deal's
+  // legacy `status` is frozen at 'draft' forever — it no longer advances with
+  // real workflow (that now lives on the deal's PricingRequest(s) and
+  // salesStage instead). Showing "แบบร่าง" under the stage badge for those
+  // deals is not just uninformative, it actively misleads a reader into
+  // thinking nothing has happened. Older deals that already progressed past
+  // draft before that change still have a meaningful legacy status, so keep
+  // showing it for them.
+  const showOperational = deal.status !== 'draft';
   return (
     <span className="flex min-w-0 flex-col gap-0.5">
       <span className="flex flex-wrap items-center gap-1">
@@ -81,7 +93,9 @@ function DealStageCell({ deal }) {
         </StatusBadge>
         {paused ? <StatusBadge tone={lifecycle.tone}>{lifecycle.label}</StatusBadge> : null}
       </span>
-      <span className="pl-0.5 text-2xs text-text-muted">{operational.label}</span>
+      {showOperational ? (
+        <span className="pl-0.5 text-2xs text-text-muted">{operational.label}</span>
+      ) : null}
     </span>
   );
 }
@@ -103,7 +117,7 @@ function DealCard({ deal }) {
       ) : null}
 
       <DealStageCell deal={deal} />
-      <StageProgressBar salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST' || !!deal.lostReason} />
+      <StageProgressBar salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST'} />
 
       <span className="min-w-0 truncate text-xs text-text-muted">
         {[deal.createdByName, formatThaiDate(deal.createdAt)].filter(Boolean).join(' · ')}
@@ -117,8 +131,10 @@ export function TicketListPage({ user, showToast }) {
   const queryClient = useQueryClient();
   // Phase filter + search live in the URL so list → detail → back keeps them.
   // The old operational ?status= chips row was removed as redundant with the
-  // phase cards (user decision) — the stage cell's sublabel still shows where
-  // the paperwork stands per deal.
+  // phase cards (user decision) — the stage cell's sublabel shows where the
+  // legacy ticket-status paperwork stands, for deals where that status still
+  // means something (see DealStageCell's showOperational: it is suppressed
+  // for deals frozen at 'draft').
   const [searchParams, setSearchParams] = useSearchParams();
   const phaseFilter = searchParams.get('phase') ?? '';
   const lifecycleFilter = searchParams.get('life') ?? '';
@@ -145,7 +161,7 @@ export function TicketListPage({ user, showToast }) {
     const counts = {};
     for (const phase of SALES_PHASES) counts[phase.id] = 0;
     for (const deal of allDeals) {
-      if (deal.lifecycle === 'ACTIVE' && !deal.lostReason) {
+      if (deal.lifecycle === 'ACTIVE') {
         const meta = stageMeta(deal.salesStage);
         if (meta) counts[meta.phase] += 1;
       }
@@ -163,7 +179,7 @@ export function TicketListPage({ user, showToast }) {
       COMPLETED: 0,
     };
     for (const deal of allDeals) {
-      const key = deal.lifecycle === 'CLOSED_LOST' || deal.lostReason ? 'CLOSED_LOST' : deal.lifecycle;
+      const key = deal.lifecycle;
       if (Object.hasOwn(counts, key)) counts[key] += 1;
     }
     return counts;
@@ -176,12 +192,12 @@ export function TicketListPage({ user, showToast }) {
 
   const deals = useMemo(() => {
     return allDeals.filter((deal) => {
-      const lost = deal.lifecycle === 'CLOSED_LOST' || deal.lostReason;
+      const lost = deal.lifecycle === 'CLOSED_LOST';
       // Phase cards are the active-pipeline funnel (counts are ACTIVE-only), so the phase
       // filter matches on ACTIVE too — paused/terminal deals are reached via the lifecycle
       // chips below. This keeps each phase card's count equal to the rows it filters to.
       const phaseOk = !phaseFilter
-        || (deal.lifecycle === 'ACTIVE' && !deal.lostReason && stageMeta(deal.salesStage)?.phase === Number(phaseFilter));
+        || (deal.lifecycle === 'ACTIVE' && stageMeta(deal.salesStage)?.phase === Number(phaseFilter));
       const lifeOk = !lifecycleFilter || (lifecycleFilter === 'CLOSED_LOST' ? lost : deal.lifecycle === lifecycleFilter);
       const flagOk = !flagFilter
         || (flagFilter === 'overdue' && deal.overdue)
@@ -211,10 +227,16 @@ export function TicketListPage({ user, showToast }) {
 
   const createMutation = useMutation({
     mutationFn: (payload) => api.tickets.create(payload),
-    onSuccess: () => {
+    onSuccess: (response) => {
       setCreating(false);
       showToast('success', 'สร้างดีลเรียบร้อย');
       invalidateTicketsList();
+      // Commit 6: a new deal starts as an empty DRAFT with no price-request
+      // flow of its own any more (see TicketService.create, commit 5) — land
+      // the user straight on the deal page, where PricingRequestPanel prompts
+      // them to create the pricing request that actually starts pricing.
+      const newTicketId = response?.ticket?.summary?.id;
+      if (newTicketId != null) navigate(`/tickets/${newTicketId}`);
     },
   });
 
@@ -224,10 +246,10 @@ export function TicketListPage({ user, showToast }) {
 
   return (
     <div className="page-stack">
-      <SalesTabs />
+      <SalesTabs role={user.role} />
       <PageHeader
         title="งานขาย"
-        subtitle="ดีลทั้งหมด · 1 ดีล = 1 ใบขอราคา ภายใต้โครงการ"
+        subtitle="ดีลทั้งหมด · 1 ดีล = 1 Ticket ภายใต้โครงการ หนึ่งดีลอาจมีได้หลายใบขอราคา"
         actions={(
           <>
             <button type="button" className="icon-button" onClick={invalidateTicketsList} title="รีเฟรช" aria-label="รีเฟรช">
@@ -366,13 +388,13 @@ const DEAL_COLUMNS = [
     key: 'stage',
     header: 'สถานะดีล',
     sortable: true,
-    sortAccessor: (deal) => (deal.lostReason ? -1 : stageMeta(deal.salesStage)?.no ?? 0),
+    sortAccessor: (deal) => (deal.lifecycle === 'CLOSED_LOST' ? -1 : stageMeta(deal.salesStage)?.no ?? 0),
     render: (deal) => <DealStageCell deal={deal} />,
   },
   {
     key: 'progress',
     header: 'ความคืบหน้า',
-    render: (deal) => <StageProgressBar salesStage={deal.salesStage} lost={!!deal.lostReason} />,
+    render: (deal) => <StageProgressBar salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST'} />,
   },
   {
     key: 'date',

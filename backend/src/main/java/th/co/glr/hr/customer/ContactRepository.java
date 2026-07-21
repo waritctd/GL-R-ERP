@@ -2,6 +2,7 @@ package th.co.glr.hr.customer;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -28,6 +29,18 @@ public class ContactRepository {
         );
     }
 
+    /**
+     * Used by {@code PricingRequestService} to verify a pricing request's
+     * {@code recipientContactId} actually belongs to the deal's customer
+     * before persisting it.
+     */
+    public Optional<ContactDto> findById(long contactId) {
+        return jdbc.query(
+            "SELECT contact_id, customer_id, first_name, last_name, position, email, phone FROM customers.contact WHERE contact_id = :id",
+            Map.of("id", contactId), (rs, i) -> map(rs)
+        ).stream().findFirst();
+    }
+
     public ContactDto create(long customerId, String firstName, String lastName,
                              String position, String email, String phone) {
         var kh = new GeneratedKeyHolder();
@@ -46,10 +59,11 @@ public class ContactRepository {
             kh, new String[]{"contact_id"}
         );
         long id = kh.getKey().longValue();
-        return jdbc.queryForObject(
-            "SELECT contact_id, customer_id, first_name, last_name, position, email, phone FROM customers.contact WHERE contact_id = :id",
-            Map.of("id", id), (rs, i) -> map(rs)
-        );
+        // Reuses findById rather than a second inline query — the row must
+        // exist immediately after its own insert, so an empty result here
+        // means something is badly wrong, not a normal "not found".
+        return findById(id)
+            .orElseThrow(() -> new IllegalStateException("Contact " + id + " not found immediately after insert"));
     }
 
     private ContactDto map(java.sql.ResultSet rs) throws java.sql.SQLException {

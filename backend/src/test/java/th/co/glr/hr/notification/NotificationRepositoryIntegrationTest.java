@@ -52,6 +52,33 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(countLegacySalesNotifications()).isZero();
     }
 
+    // Review-remediation plan Commit D: PricingRequestService.submit() used to
+    // notify with type "SUBMITTED", identical to TicketEventKind.SUBMITTED — a
+    // pricing-request notification was indistinguishable from a ticket-submitted
+    // one. It now notifies as "PRICING_REQUEST_SUBMITTED" with its own title,
+    // and "PICKED_UP" (used by pickup()) gained a title of its own instead of
+    // falling through to the generic "อัปเดตสถานะใบขอราคา".
+    @Test
+    void pricingRequestSubmittedAndPickedUpGetTheirOwnTitles() {
+        long importDivision = insertDivision("PCIM", "Import");
+        long importEmployee = insertEmployee("EMP-300", importDivision, true);
+        long salesDivision = insertDivision("SA", "Sales");
+        long salesEmployee = insertEmployee("EMP-301", salesDivision, true);
+
+        repository.notifyByRole("import", 88L, "PRICING_REQUEST_SUBMITTED", "ใบขอราคา PCR-2026-0001 รอการรับเรื่อง");
+        repository.notifyEmployee(salesEmployee, 88L, "PICKED_UP", "ใบขอราคา PCR-2026-0001 ถูกรับเรื่องแล้ว");
+
+        List<NotificationDto> importRows = repository.findByEmployeeId(importEmployee);
+        assertThat(importRows).hasSize(1);
+        assertThat(importRows.get(0).type()).isEqualTo("PRICING_REQUEST_SUBMITTED");
+        assertThat(importRows.get(0).title()).isEqualTo("มีคำขอราคาใหม่");
+
+        List<NotificationDto> salesRows = repository.findByEmployeeId(salesEmployee);
+        assertThat(salesRows).hasSize(1);
+        assertThat(salesRows.get(0).type()).isEqualTo("PICKED_UP");
+        assertThat(salesRows.get(0).title()).isEqualTo("คำขอราคาถูกรับเรื่องแล้ว");
+    }
+
     private Integer countLegacySalesNotifications() {
         return jdbc.getJdbcTemplate().queryForObject("SELECT COUNT(*) FROM sales.notification", Integer.class);
     }

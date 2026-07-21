@@ -876,6 +876,12 @@ textarea:focus {
   grid-template-columns: minmax(0,2.6fr) minmax(0,1.3fr) minmax(0,1.3fr) minmax(0,1fr);
 }
 
+/* PricingRequestQueuePage (commit 6): requestCode / deal / recipient / status /
+   itemCount / requiredDate / assignedImportName / pickup. */
+.pricing-request-queue-table {
+  grid-template-columns: minmax(0,1fr) minmax(0,1.6fr) minmax(0,1.2fr) minmax(0,1.1fr) minmax(0,0.7fr) minmax(0,1fr) minmax(0,1fr) minmax(0,0.9fr);
+}
+
 .ticket-items-table {
   grid-template-columns: minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr) minmax(0,1.1fr);
 }

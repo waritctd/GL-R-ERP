@@ -19,9 +19,19 @@ import { createDemoDatabase } from '../data/demoData.js';
 import {
   canMarkLost as dealCanMarkLost,
   canSetStage as dealCanSetStage,
+  CANCEL_REASONS as DEAL_CANCEL_REASONS,
+  isRoutineBackwardMove,
   LOST_REASONS as DEAL_LOST_REASONS,
   stageIndex as dealStageIndex,
 } from '../features/tickets/stageMeta.js';
+// PricingRequest (commit 6): status transition table + option lists shared
+// with the UI so the mock's gates can't drift from PricingRequestService's —
+// the authoritative rules live in the backend pricingrequest/ package.
+import {
+  canTransition as pricingRequestCanTransition,
+  QUANTITY_TYPE_OPTIONS as PRICING_REQUEST_QUANTITY_TYPE_OPTIONS,
+  RECIPIENT_OPTIONS as PRICING_REQUEST_RECIPIENT_OPTIONS,
+} from '../features/pricingRequests/pricingRequestMeta.js';
 
 const db = createDemoDatabase();
 
@@ -388,6 +398,143 @@ const mockDepositNotices = []; // used by both depositNotices and documents API 
 let mockDocSeq = 1;
 let mockDocNumberSeq = 1;
 
+// PricingRequest (commit 6): one deal may have several pricing requests (one
+// per recipient / re-quote round). Stored as full detail records (summary
+// fields + items + its own event log) so buildPricingRequestDetail never has
+// to join across a second array.
+const mockPricingRequests = [];
+let mockPricingRequestSeq = 1;
+let mockPricingRequestItemSeq = 1;
+let mockPricingRequestEventSeq = 1;
+const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'sales_manager'];
+const PRICING_REQUEST_RECIPIENT_VALUES = PRICING_REQUEST_RECIPIENT_OPTIONS.map((o) => o.code);
+const PRICING_REQUEST_QUANTITY_TYPE_VALUES = PRICING_REQUEST_QUANTITY_TYPE_OPTIONS.map((o) => o.code);
+
+function nextPricingRequestCode() {
+  return `PCR-2026-${String(mockPricingRequestSeq).padStart(4, '0')}`;
+}
+
+function findPricingRequestRaw(id) {
+  const pr = mockPricingRequests.find((p) => p.id === Number(id));
+  if (!pr) fail('Pricing request not found', 404);
+  return pr;
+}
+
+function pushPricingRequestEvent(pr, actor, eventKind, fromStatus, toStatus, message = null, metadata = null) {
+  pr.events.push({
+    id: mockPricingRequestEventSeq++,
+    pricingRequestId: pr.id,
+    ticketId: pr.ticketId,
+    actorId: actor.id,
+    actorName: actor.name,
+    eventKind,
+    fromStatus,
+    toStatus,
+    message,
+    metadata,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+// Mirrors PricingRequestService.detail()'s join: the ticket a request belongs
+// to is looked up fresh every time (never cached on the request record), same
+// as PricingRequestSummaryDto's ticketCode/projectName/customerName/
+// ticketCreatedById fields.
+function buildPricingRequestSummary(pr) {
+  const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+  return {
+    id: pr.id,
+    requestCode: pr.requestCode,
+    ticketId: pr.ticketId,
+    ticketCode: ticket?.code ?? null,
+    projectName: ticket?.projectId ? (mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null) : null,
+    customerName: ticket?.customerName ?? null,
+    ticketCreatedById: ticket?.createdById ?? null,
+    recipientType: pr.recipientType,
+    recipientContactId: pr.recipientContactId ?? null,
+    recipientLabel: pr.recipientLabel ?? null,
+    status: pr.status,
+    requestedById: pr.requestedById,
+    requestedByName: pr.requestedByName,
+    assignedImportId: pr.assignedImportId ?? null,
+    assignedImportName: pr.assignedImportName ?? null,
+    requiredDate: pr.requiredDate ?? null,
+    customerTargetPrice: pr.customerTargetPrice ?? null,
+    targetCurrency: pr.targetCurrency ?? null,
+    note: pr.note ?? null,
+    itemCount: pr.items.length,
+    revisionNo: pr.revisionNo ?? 1,
+    parentPricingRequestId: pr.parentPricingRequestId ?? null,
+    submittedAt: pr.submittedAt ?? null,
+    pickedUpAt: pr.pickedUpAt ?? null,
+    cancelledAt: pr.cancelledAt ?? null,
+    createdAt: pr.createdAt,
+    updatedAt: pr.updatedAt,
+  };
+}
+
+function buildPricingRequestDetail(pr) {
+  return { summary: buildPricingRequestSummary(pr), items: pr.items, events: pr.events };
+}
+
+function requirePricingRequestViewable(id, user) {
+  if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('Forbidden', 403);
+  const pr = findPricingRequestRaw(id);
+  const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+  const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
+  if (pr.status === 'DRAFT' && !draftOversight && ticket?.createdById !== user.id) {
+    fail('Pricing request not found', 404);
+  }
+  if (user.role === 'sales' && ticket?.createdById !== user.id) fail('Forbidden', 403);
+  return pr;
+}
+
+function requirePricingRequestDealActive(ticket) {
+  if ((ticket?.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+    fail(`ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket?.lifecycle}) จึงสร้าง/แก้ไขคำขอราคาไม่ได้`, 409);
+  }
+}
+
+// Mirrors PricingRequestRepository.normalizeCurrency: trim + uppercase,
+// blank collapses to null. Applied on both insert and update so the mock
+// never stores a raw/mixed-case currency the real column wouldn't have.
+function normalizePricingRequestCurrency(targetCurrency) {
+  if (targetCurrency == null || targetCurrency.trim() === '') return null;
+  return targetCurrency.trim().toUpperCase();
+}
+
+// Mirrors PricingRequestRequests.PricingRequestItemRequest's Bean Validation
+// annotations, which run BEFORE PricingRequestService even sees the request
+// (@NotNull @DecimalMin("0.0001") requestedQty, @NotBlank requestedUnit,
+// @NotBlank quantityType — quantityType's enum-membership is checked
+// separately by the callers of this helper). A mock that skips this is the
+// dangerous direction (issue #199): it would accept a blank unit / zero qty
+// that the real backend 400s on.
+function requirePricingRequestItemFieldsValid(items) {
+  items.forEach((item, index) => {
+    if (item.requestedQty == null || !(Number(item.requestedQty) >= 0.0001)) {
+      fail('requestedQty must be at least 0.0001', 400);
+    }
+    if (!item.requestedUnit?.trim()) {
+      fail('requestedUnit must not be blank', 400);
+    }
+    if (!item.quantityType?.trim()) {
+      fail('quantityType must not be blank', 400);
+    }
+    // Mirrors PricingRequestService.validateItems: an item must actually name
+    // a product somehow — a link to an existing deal line, a catalog
+    // product, a model name, or a dedicated product description. Brand alone
+    // is deliberately NOT sufficient (a brand with no model does not
+    // identify a product), so Import never receives a request for a line
+    // nobody can actually source.
+    const identified = item.sourceTicketItemId != null || item.productId != null
+      || Boolean(item.model?.trim()) || Boolean(item.productDescription?.trim());
+    if (!identified) {
+      fail(`รายการที่ ${index + 1}: ต้องระบุสินค้าที่ต้องการเสนอราคา (เลือกจากรายการในดีล หรือระบุรุ่น/รายละเอียด)`, 400);
+    }
+  });
+}
+
 function buildMockDoc(doc) {
   const items = doc.items ?? [];
   const depositPct = doc.depositPercent ?? 0.5;
@@ -593,18 +740,44 @@ function deliveryRecordsForTicket(ticketId) {
     .map((record) => structuredClone(record));
 }
 
-function deliveryComplete(status, ticketId = null) {
-  if (status === 'FULLY_DELIVERED') return true;
-  if (status !== 'GOODS_RECEIVED') return false;
-  if (ticketId == null) return true;
-  return !(db.deliveryRecords ?? []).some((record) => record.ticketId === Number(ticketId));
+// Mirrors TicketService.deliveryGateComplete. Previously this also accepted
+// GOODS_RECEIVED with no delivery records; that concession was justified as a
+// legacy allowance but legacy tickets close via the DOCUMENT_ISSUED branch and
+// never reach this predicate, so it only ever loosened modern dual-track deals —
+// letting a fully-paid deal close with the goods still in GLR's own warehouse.
+function deliveryComplete(status) {
+  return status === 'FULLY_DELIVERED';
+}
+
+// Attachments live in their own store (mockAttachments), not on the ticket —
+// mirrors sales.attachment being its own table.
+function hasInvoiceAttachment(ticket) {
+  return mockAttachments.some((a) => a.ticketId === ticket.id && a.attachType === 'INVOICE');
+}
+
+// Mirrors TicketService.requireClosePrerequisites. Legacy document_issued deals
+// predate the delivery and invoice tracks, so those two are waived for them —
+// requiring either would strand old data permanently.
+function requireClosePrerequisites(ticket) {
+  const legacyOk = ticket.status === 'document_issued'
+    && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID');
+  const dualTrackOk = ticket.status === 'quotation_issued'
+    && ticket.paymentStatus === 'FULLY_PAID'
+    && deliveryComplete(ticket.fulfillmentStatus);
+  if (!legacyOk && !dualTrackOk) {
+    fail('ปิดงานไม่ได้: ต้องรับเงินครบและส่งมอบสินค้าครบก่อน', 409);
+  }
+  if (derivePaymentFields(ticket).amountOutstanding > 0) {
+    fail('ปิดงานไม่ได้: ยังมียอดค้างชำระ', 409);
+  }
+  if (dualTrackOk && !hasInvoiceAttachment(ticket)) {
+    fail('ปิดงานไม่ได้: ยังไม่ได้แนบใบกำกับภาษี (ฝ่ายบัญชีต้องอัปโหลดก่อน)', 409);
+  }
 }
 
 // Mirrors TicketService.maybeAdvanceClosedPaid: CLOSED_PAID (S20) requires BOTH
 // gates — payment fully paid AND goods actually delivered (FULLY_DELIVERED).
-// Stricter than deliveryComplete (which accepts a legacy GOODS_RECEIVED deal for
-// the manual close): GOODS_RECEIVED means goods are only in GLR's warehouse, so
-// auto-advancing on it would skip DELIVERED for a fully-paid, undelivered deal.
+// Now the same rule the manual close uses; the two agree on "delivered".
 function maybeAdvanceClosedPaid(ticket, user) {
   if (ticket.paymentStatus === 'FULLY_PAID' && ticket.fulfillmentStatus === 'FULLY_DELIVERED') {
     autoAdvanceStage(ticket, 'CLOSED_PAID', user);
@@ -881,7 +1054,9 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
 // Deal pipeline (V50): mirrors TicketService.autoAdvanceStage — monotonic
 // forward-only, no-op while lost. Called from the 4 milestone transitions.
 function autoAdvanceStage(ticket, targetStage, user) {
-  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE' || ticket.lostReason != null) return;
+  // ACTIVE is the whole test — since V57 lost_reason SURVIVES a reopen, so keying
+  // on it would silently disable auto-advance on every reopened deal.
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
   if (dealStageIndex(targetStage) <= dealStageIndex(ticket.salesStage)) return;
   const fromStage = ticket.salesStage;
   ticket.salesStage = targetStage;
@@ -934,12 +1109,18 @@ function buildTicketDetail(ticket) {
       paymentStatus: ticket.paymentStatus ?? null,
       fulfillmentStatus: ticket.fulfillmentStatus ?? null,
       salesStage: ticket.salesStage, lostReason: ticket.lostReason ?? null,
+      reopenedAt: ticket.reopenedAt ?? null, reopenCount: ticket.reopenCount ?? 0,
       lostAt: ticket.lostAt ?? null, stageUpdatedAt: ticket.stageUpdatedAt ?? ticket.updatedAt,
       lifecycle: ticket.lifecycle ?? 'ACTIVE',
       tenderRequirement: ticket.tenderRequirement ?? 'UNKNOWN',
       depositPolicy: ticket.depositPolicy ?? 'REQUIRED',
       depositPolicyReason: ticket.depositPolicyReason ?? null,
       entryChannel: ticket.entryChannel ?? 'DESIGNER_LED',
+      cancelReason: ticket.cancelReason ?? null,
+      cancelledAt: ticket.cancelledAt ?? null,
+      closeConfirmedAt: ticket.closeConfirmedAt ?? null,
+      closeConfirmedByName: ticket.closeConfirmedByName ?? null,
+      invoiceOnFile: hasInvoiceAttachment(ticket),
       ...paymentFields,
     },
     items: ticket.items, events: ticket.events,
@@ -1471,17 +1652,6 @@ function buildOvertimeRecord(record) {
   };
 }
 
-function doTransition(id, fromStatus, toStatus, kind, actor, message) {
-  const ticket = findTicketRaw(id);
-  requireActive(ticket);
-  verifyStatus(ticket, fromStatus);
-  ticket.status = toStatus;
-  ticket.updatedAt = new Date().toISOString().slice(0, 10);
-  if (toStatus === 'closed' || toStatus === 'cancelled') ticket.closedAt = ticket.updatedAt;
-  pushEvent(ticket, actor, kind, fromStatus, toStatus, message);
-  return { ticket: buildTicketDetail(ticket) };
-}
-
 function employeeWithRequestMeta(employee) {
   return {
     ...employee,
@@ -1843,7 +2013,9 @@ export const api = {
           || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')));
 
       if (active) {
-        if (owner && ticket.status === 'draft' && (ticket.items || []).length > 0) add('SUBMIT', 'operational', 'ส่งขอราคา');
+        // Ticket-level SUBMIT is retired (commit 5/6, superseded by the
+        // PricingRequest aggregate) — never advertised, so the UI never shows
+        // a button that would 409 on click.
         if (user.role === 'import' && ticket.status === 'submitted') add('PICKUP', 'operational', 'รับเรื่อง');
         if (user.role === 'import' && ['in_review', 'price_proposed', 'approved'].includes(ticket.status)) add('PROPOSE_PRICE', 'operational', 'เสนอราคา', { requiredFields: ['items'] });
         if (user.role === 'ceo' && ticket.status === 'price_proposed') {
@@ -1885,8 +2057,18 @@ export const api = {
         const finalPaymentAllowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
           || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
         if (['account', 'ceo'].includes(user.role) && finalPaymentAllowed) add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
-        if (ticket.createdById === user.id && ((ticket.status === 'document_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID'))
-          || (ticket.status === 'quotation_issued' && ticket.paymentStatus === 'FULLY_PAID' && deliveryComplete(ticket.fulfillmentStatus, ticket.id)))) add('CLOSE', 'operational', 'ปิดงาน');
+        // Three-party close: account confirms, CEO verifies. Sales is not involved.
+        let closeReady = true;
+        try { requireClosePrerequisites(ticket); } catch { closeReady = false; }
+        if (user.role === 'account' && !ticket.closeConfirmedAt && closeReady) {
+          add('CONFIRM_CLOSE', 'operational', 'ยืนยันพร้อมปิดงาน');
+        }
+        if (['account', 'ceo'].includes(user.role) && ticket.closeConfirmedAt) {
+          add('REVOKE_CLOSE_CONFIRM', 'operational', 'ยกเลิกการยืนยันปิดงาน');
+        }
+        if (user.role === 'ceo' && ticket.closeConfirmedAt && closeReady) {
+          add('VERIFY_CLOSE', 'operational', 'ตรวจสอบและปิดงาน');
+        }
         if (ticket.createdById === user.id && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
         if (owner && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(ticket.status)) add('EDIT_ITEMS', 'operational', 'แก้ไขรายการ');
         for (const stage of ['LEAD_APPROACH','PRESENTATION','SPEC_APPROVED','QUOTE_DESIGN_SIDE','OWNER_SIGNOFF','AWAITING_BUYER','QUOTE_BUYER','NEGOTIATION','ORDER_RECEIVED','DEPOSIT_RECEIVED','PROCUREMENT','DELIVERY_SCHEDULING','DELIVERED','CLOSED_PAID']) {
@@ -1926,12 +2108,14 @@ export const api = {
       const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
       const code = `PR-2026-${String(nextId).padStart(4, '0')}`;
       const now = new Date().toISOString();
-      // Lightweight deal start (V50): no items → DRAFT at the lead stage, no
-      // import/CEO notification; items → the price-request flow as before.
-      const hasItems = (payload.items || []).length > 0;
+      // Every deal begins as a DRAFT at the lead stage, regardless of whether
+      // products were attached at creation time — pricing no longer starts at
+      // ticket creation (commit 5). Items attached here are preliminary deal
+      // products only; nothing reaches Import (no notification, no status
+      // change) until a PricingRequest is created and submitted separately.
       const ticket = {
         id: nextId, code, type: 'PRICE_REQUEST',
-        title: payload.title, status: hasItems ? 'submitted' : 'draft',
+        title: payload.title, status: 'draft',
         priority: payload.priority || 'NORMAL',
         createdById: user.id, createdByName: user.name,
         assignedToId: null, assignedToName: null,
@@ -1956,23 +2140,24 @@ export const api = {
           proposedPrice: null, approvedPrice: null,
           currency: item.currency || 'THB', sortOrder: i,
         })),
-        events: [hasItems
-          ? { id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'SUBMITTED', fromStatus: null, toStatus: 'submitted', message: null, createdAt: now }
-          : { id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: now }],
+        events: [{ id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: now }],
         quotation: null,
       };
       db.tickets.unshift(ticket);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
-    async submit(id) {
-      const user = hasRole('sales');
-      // Mirrors TicketService.submit: the price-request flow needs ≥1 product line.
-      const ticket = findTicketRaw(Number(id));
-      if ((ticket.items || []).length === 0) {
-        fail('ต้องเพิ่มรายการสินค้าอย่างน้อย 1 รายการก่อนส่งขอราคา', 400);
-      }
-      return delay(doTransition(Number(id), 'draft', 'submitted', 'SUBMITTED', user, null));
+    /**
+     * Deprecated: ticket-level price-request submission has been replaced by
+     * the PricingRequest aggregate (commit 5/6). 409s unconditionally, same as
+     * TicketService.submit — create a pricing request via
+     * api.pricingRequests.create + .submit instead.
+     */
+    async submit() {
+      // Mirrors TicketService.submit exactly: 409s unconditionally, regardless
+      // of status, role, or ownership — there is no more role-specific denial.
+      requireSession();
+      fail('การส่งขอราคาย้ายไปอยู่ที่ใบขอราคา (PCR) แล้ว — กรุณาสร้างใบขอราคาจากหน้าดีลแทน', 409);
     },
 
     async pickup(id) {
@@ -2273,43 +2458,75 @@ export const api = {
       return buildMockQuotationHtml(ticketId, quotationId);
     },
 
-    async close(id) {
+    // Three-party close (V55). Mirrors TicketService.confirmCloseReady /
+    // revokeCloseConfirmation / verifyClose. Sales is not part of the sequence.
+    async confirmCloseReady(id) {
       const user = requireSession();
+      hasRole('account'); // NOT ceo — the CEO signs the second half
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
-      // Mirrors TicketService.close(): legacy document_issued path (pre-dual-track
-      // tickets only, or fully paid), or the dual-track completion
-      // (quotation_issued + FULLY_PAID + GOODS_RECEIVED).
-      const legacyOk = ticket.status === 'document_issued'
-        && (ticket.paymentStatus == null || ticket.paymentStatus === 'FULLY_PAID');
-      const dualTrackOk = ticket.status === 'quotation_issued'
-        && ticket.paymentStatus === 'FULLY_PAID'
-        && deliveryComplete(ticket.fulfillmentStatus, ticket.id);
-      if (!legacyOk && !dualTrackOk) {
-        fail('Cannot close: require paymentStatus=FULLY_PAID and delivery complete', 409);
-      }
-      if (derivePaymentFields(ticket).amountOutstanding > 0) {
-        fail('Cannot close: ยังมียอดค้างชำระ', 409);
-      }
+      if (ticket.closeConfirmedAt) fail('ยืนยันปิดงานไปแล้ว — รอ CEO ตรวจสอบ', 409);
+      requireClosePrerequisites(ticket);
+      ticket.closeConfirmedAt = new Date().toISOString();
+      ticket.closeConfirmedByName = user.name;
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'CLOSE_CONFIRMED', ticket.status, ticket.status,
+        'ฝ่ายบัญชียืนยันพร้อมปิดงาน — รอ CEO ตรวจสอบ');
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async revokeCloseConfirmation(id, payload = {}) {
+      const user = requireSession();
+      hasRole('account', 'ceo');
+      const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
+      if (!ticket.closeConfirmedAt) fail('ดีลนี้ยังไม่ได้ยืนยันปิดงาน', 409);
+      ticket.closeConfirmedAt = null;
+      ticket.closeConfirmedByName = null;
+      pushEvent(ticket, user, 'CLOSE_CONFIRM_REVOKED', ticket.status, ticket.status,
+        (payload.note || '').trim() || null);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    async verifyClose(id) {
+      const user = requireSession();
+      hasRole('ceo');
+      const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
+      if (!ticket.closeConfirmedAt) fail('ปิดงานไม่ได้: ต้องให้ฝ่ายบัญชียืนยันก่อน', 409);
+      // Re-checked here too: the CEO verifies, never overrides.
+      requireClosePrerequisites(ticket);
       const prev = ticket.status;
       ticket.status = 'closed';
       ticket.closedAt = new Date().toISOString().slice(0, 10);
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'CLOSED', prev, 'closed', null);
+      pushEvent(ticket, user, 'CLOSED', prev, 'closed', 'CEO ตรวจสอบและปิดงาน');
       ticket.lifecycle = 'COMPLETED';
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
-    async cancel(id) {
+    // Mirrors TicketService.cancel. The reason is mandatory (V56) — a cancelled
+    // deal used to carry no explanation at all, unlike its CLOSED_LOST sibling.
+    async cancel(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
+      if (!DEAL_CANCEL_REASONS.some((r) => r.code === payload.reason)) {
+        fail(`Unknown cancel reason '${payload.reason}'`, 400);
+      }
       if (ticket.status === 'closed' || ticket.status === 'cancelled') fail('Cannot cancel', 409);
+      // Ownership gate — the Java service has always had this; the mock did not,
+      // which made it MORE permissive than production (the dangerous direction).
+      if (ticket.createdById !== user.id) fail('Forbidden', 403);
       const prev = ticket.status;
       ticket.status = 'cancelled';
       ticket.lifecycle = 'CANCELLED';
+      ticket.cancelReason = payload.reason;
+      ticket.cancelledAt = new Date().toISOString();
       ticket.closedAt = new Date().toISOString().slice(0, 10);
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'CANCELLED', prev, 'cancelled', null);
+      const note = (payload.note || '').trim();
+      pushEvent(ticket, user, 'CANCELLED', prev, 'cancelled',
+        note ? `ยกเลิกดีล (${payload.reason}) — ${note}` : `ยกเลิกดีล (${payload.reason})`);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
@@ -2494,9 +2711,11 @@ export const api = {
       requireActive(ticket);
       if (dealStageIndex(payload.stage) < 0) fail(`Unknown stage '${payload.stage}'`, 400);
       if (!dealCanSetStage(user, ticket, payload.stage)) fail('Forbidden', 403);
-      if (ticket.lostReason != null) fail('ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ', 409);
+      // Lifecycle, not lostReason: a reopened deal is ACTIVE and keeps its reason (V57).
+      if (ticket.lifecycle === 'CLOSED_LOST') fail('ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ', 409);
       if (ticket.salesStage === payload.stage) fail(`Deal is already in stage ${payload.stage}`, 409);
-      const backward = dealStageIndex(payload.stage) < dealStageIndex(ticket.salesStage);
+      const backward = dealStageIndex(payload.stage) < dealStageIndex(ticket.salesStage)
+        && !isRoutineBackwardMove(ticket.salesStage, payload.stage);
       const skipForward = dealStageIndex(payload.stage) - dealStageIndex(ticket.salesStage) > 1;
       if (backward && !(payload.note || '').trim()) fail('การย้อนสถานะกลับต้องระบุเหตุผล', 400);
       if (skipForward && !(payload.note || '').trim()) fail('การข้ามขั้นตอนต้องระบุเหตุผล', 400);
@@ -2513,7 +2732,7 @@ export const api = {
       requireActive(ticket);
       if (!DEAL_LOST_REASONS.some((r) => r.code === payload.reason)) fail(`Unknown lost reason '${payload.reason}'`, 400);
       if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
-      if (ticket.lostReason != null) fail('Deal is already marked lost', 409);
+      if (ticket.lifecycle === 'CLOSED_LOST') fail('Deal is already marked lost', 409);
       ticket.lostReason = payload.reason;
       ticket.lostAt = new Date().toISOString();
       ticket.lifecycle = 'CLOSED_LOST';
@@ -2529,9 +2748,12 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
       if (ticket.lifecycle !== 'CLOSED_LOST' || ticket.lostReason == null) fail('Deal is not marked lost', 409);
-      ticket.lostReason = null;
-      ticket.lostAt = null;
+      // lostReason/lostAt deliberately PRESERVED (V57): erasing them left the row
+      // indistinguishable from one never lost, so "why did we lose this before we
+      // reopened it" needed parsing Thai free text out of an event message.
       ticket.lifecycle = 'ACTIVE';
+      ticket.reopenedAt = new Date().toISOString();
+      ticket.reopenCount = (ticket.reopenCount ?? 0) + 1;
       ticket.stageUpdatedAt = new Date().toISOString();
       pushEvent(ticket, user, 'REOPENED', ticket.salesStage, ticket.salesStage, (payload.note || '').trim() || null);
       return delay({ ticket: buildTicketDetail(ticket) });
@@ -3904,6 +4126,362 @@ export const api = {
       hasRole('ceo', 'import');
       void json;
       return delay({ status: 'updated', factoryId: Number(factoryId) });
+    },
+  },
+
+  // Mirrors PricingRequestController + PricingRequestService (pricingrequest/).
+  pricingRequests: {
+    async listForTicket(ticketId) {
+      const user = requireSession();
+      if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('Forbidden', 403);
+      const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+      if (!ticket) fail('Ticket not found', 404);
+      // Mirrors PricingRequestService.listForTicket: sales may only see requests
+      // on tickets they created.
+      if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
+      const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
+      const items = mockPricingRequests
+        .filter((pr) => pr.ticketId === Number(ticketId))
+        .filter((pr) => pr.status !== 'DRAFT' || draftOversight || ticket.createdById === user.id)
+        .map(buildPricingRequestSummary);
+      return delay({ items });
+    },
+
+    async queue(params = {}) {
+      const user = requireSession();
+      // Mirrors PricingRequestService.list: same viewer roles as a single
+      // request, plus sales is scoped to only its own created tickets.
+      if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('Forbidden', 403);
+      if (params.status && !['DRAFT', 'SUBMITTED', 'IMPORT_REVIEWING', 'MORE_INFO_REQUIRED', 'CANCELLED'].includes(params.status)) {
+        fail(`Unknown status '${params.status}'`, 400);
+      }
+      let list = mockPricingRequests;
+      if (user.role === 'sales') {
+        list = list.filter((pr) => db.tickets.find((t) => t.id === pr.ticketId)?.createdById === user.id);
+      }
+      // Mirrors PricingRequestService.list's draft-privacy clause: a DRAFT is the
+      // owning rep's private scratchpad, visible only to them plus ceo/sales_manager
+      // oversight. import must not see it in the queue even though it sees
+      // every other status. Without this the mock is MORE permissive than the Java
+      // service, which is the direction that only surfaces in production (#199).
+      const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
+      list = list.filter((pr) => pr.status !== 'DRAFT'
+        || draftOversight
+        || db.tickets.find((t) => t.id === pr.ticketId)?.createdById === user.id);
+      if (params.status) {
+        list = list.filter((pr) => pr.status === params.status);
+      } else {
+        // Mirrors the same method's default-queue branch: dead rows do not pollute it.
+        list = list.filter((pr) => pr.status !== 'CANCELLED');
+      }
+      if (params.assignedImportId) list = list.filter((pr) => pr.assignedImportId === Number(params.assignedImportId));
+      const activeOnly = params.activeOnly === undefined || params.activeOnly === true || params.activeOnly === 'true';
+      if (activeOnly) {
+        list = list.filter((pr) => (db.tickets.find((t) => t.id === pr.ticketId)?.lifecycle ?? 'ACTIVE') === 'ACTIVE');
+      }
+      return delay({ items: list.map(buildPricingRequestSummary) });
+    },
+
+    async get(id) {
+      const user = requireSession();
+      const pr = requirePricingRequestViewable(id, user);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async create(ticketId, payload) {
+      // Mirrors PricingRequestService.createDraft: sales (deal owner), deal
+      // must be ACTIVE, and every field is validated BEFORE persisting.
+      const user = hasRole('sales');
+      const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+      if (!ticket) fail('Ticket not found', 404);
+      requirePricingRequestDealActive(ticket);
+      if (ticket.createdById !== user.id) fail('Forbidden', 403);
+      if (!payload.clientRequestId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.clientRequestId)) {
+        fail('clientRequestId must be a UUID', 400);
+      }
+      const existing = mockPricingRequests.find((pr) => (
+        pr.requestedById === user.id && pr.clientRequestId === payload.clientRequestId
+      ));
+      if (existing) {
+        if (existing.ticketId !== Number(ticketId)) fail('clientRequestId has already been used for a different ticket', 409);
+        return delay({ pricingRequest: buildPricingRequestDetail(existing) });
+      }
+      if (!PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
+        fail(`Unknown recipient type '${payload.recipientType}'`, 400);
+      }
+      if (!payload.items?.length) fail('items must not be empty', 400);
+      requirePricingRequestItemFieldsValid(payload.items);
+      for (const item of payload.items) {
+        if (!PRICING_REQUEST_QUANTITY_TYPE_VALUES.includes(item.quantityType)) {
+          fail(`Unknown quantity type '${item.quantityType}'`, 400);
+        }
+      }
+      if (payload.targetCurrency && payload.targetCurrency.trim().length !== 3) {
+        fail('targetCurrency must be a 3-letter currency code', 400);
+      }
+      if (payload.recipientContactId == null && !payload.recipientLabel?.trim()) {
+        fail('ต้องระบุผู้รับคำขอราคา (recipientContactId หรือ recipientLabel)', 400);
+      }
+      const validSourceItemIds = new Set((ticket.items ?? []).map((i) => i.id));
+      for (const item of payload.items) {
+        if (item.sourceTicketItemId != null && !validSourceItemIds.has(item.sourceTicketItemId)) {
+          fail(`sourceTicketItemId ${item.sourceTicketItemId} does not belong to ticket ${ticketId}`, 400);
+        }
+      }
+
+      const now = new Date().toISOString();
+      const id = mockPricingRequestSeq++;
+      const requestCode = nextPricingRequestCode();
+      const items = payload.items.map((item, i) => ({
+        id: mockPricingRequestItemSeq++,
+        pricingRequestId: id,
+        sourceTicketItemId: item.sourceTicketItemId ?? null,
+        productId: item.productId ?? null,
+        variantId: item.variantId ?? null,
+        brand: item.brand ?? null,
+        model: item.model ?? null,
+        productDescription: item.productDescription ?? null,
+        color: item.color ?? null,
+        texture: item.texture ?? null,
+        size: item.size ?? null,
+        factory: item.factory ?? null,
+        requestedQty: item.requestedQty,
+        requestedQtySqm: item.requestedQtySqm ?? null,
+        requestedUnit: item.requestedUnit,
+        quantityType: item.quantityType,
+        targetDeliveryDate: item.targetDeliveryDate ?? null,
+        deliveryLocation: item.deliveryLocation ?? null,
+        specialRequirement: item.specialRequirement ?? null,
+        sortOrder: i,
+      }));
+      const pr = {
+        id, requestCode, ticketId: Number(ticketId),
+        recipientType: payload.recipientType,
+        recipientContactId: payload.recipientContactId ?? null,
+        recipientLabel: payload.recipientLabel ?? null,
+        status: 'DRAFT',
+        requestedById: user.id, requestedByName: user.name,
+        assignedImportId: null, assignedImportName: null,
+        requiredDate: payload.requiredDate ?? null,
+        customerTargetPrice: payload.customerTargetPrice ?? null,
+        targetCurrency: normalizePricingRequestCurrency(payload.targetCurrency),
+        note: payload.note ?? null,
+        clientRequestId: payload.clientRequestId,
+        // DB column is `revision_no INTEGER NOT NULL DEFAULT 1` with
+        // `chk_pricing_request_revision CHECK (revision_no >= 1)` (V58) — a
+        // mock row starting at 0 would violate that constraint in production.
+        revisionNo: 1, parentPricingRequestId: null,
+        submittedAt: null, pickedUpAt: null, cancelledAt: null,
+        createdAt: now, updatedAt: now,
+        items, events: [],
+      };
+      // Deliberately no notification, no ticket status change — a draft is the
+      // rep's private scratchpad until submit() (mirrors createDraft's Javadoc).
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_CREATED', null, 'DRAFT');
+      mockPricingRequests.push(pr);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async update(id, payload) {
+      // Mirrors PricingRequestService.updateDraft: owner sales, DRAFT only.
+      // Review-remediation plan Fix 2 made this a FULL-REPLACEMENT PUT (in
+      // sync with PricingRequestRepository.updateDraft dropping its COALESCE)
+      // — every editable scalar field is validated and applied unconditionally
+      // against the payload exactly as sent, never merged with the existing
+      // row first. This mock used to distinguish `undefined` (field omitted,
+      // "leave unchanged") from `null` (field explicitly cleared) for these
+      // columns, which was actually MORE permissive than the real
+      // UpdatePricingRequestRequest Java record ever was: Jackson deserializes
+      // a missing JSON key the same way it deserializes an explicit `null` —
+      // there is no wire-level way to distinguish the two on the real
+      // backend — so "omitted" and "null" must collapse to the same outcome
+      // here too. recipientType is additionally required (recipient_type is
+      // NOT NULL in the real schema), validated unconditionally like create().
+      const user = hasRole('sales');
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (pr.status !== 'DRAFT') fail(`Expected status 'DRAFT' but pricing request is '${pr.status}'`, 409);
+      if (!payload.recipientType?.trim()) fail('recipientType must not be blank', 400);
+      if (!PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
+        fail(`Unknown recipient type '${payload.recipientType}'`, 400);
+      }
+      if (payload.recipientContactId == null && !payload.recipientLabel?.trim()) {
+        fail('ต้องระบุผู้รับคำขอราคา (recipientContactId หรือ recipientLabel)', 400);
+      }
+      if (payload.items != null) {
+        requirePricingRequestItemFieldsValid(payload.items);
+        for (const item of payload.items) {
+          if (!PRICING_REQUEST_QUANTITY_TYPE_VALUES.includes(item.quantityType)) {
+            fail(`Unknown quantity type '${item.quantityType}'`, 400);
+          }
+        }
+        const validSourceItemIds = new Set((ticket?.items ?? []).map((i) => i.id));
+        for (const item of payload.items) {
+          if (item.sourceTicketItemId != null && !validSourceItemIds.has(item.sourceTicketItemId)) {
+            fail(`sourceTicketItemId ${item.sourceTicketItemId} does not belong to ticket ${pr.ticketId}`, 400);
+          }
+        }
+      }
+      if (payload.targetCurrency != null && payload.targetCurrency.trim().length !== 3) {
+        fail('targetCurrency must be a 3-letter currency code', 400);
+      }
+
+      pr.recipientType = payload.recipientType;
+      pr.recipientContactId = payload.recipientContactId ?? null;
+      pr.recipientLabel = payload.recipientLabel ?? null;
+      pr.requiredDate = payload.requiredDate ?? null;
+      pr.customerTargetPrice = payload.customerTargetPrice ?? null;
+      pr.targetCurrency = normalizePricingRequestCurrency(payload.targetCurrency);
+      pr.note = payload.note ?? null;
+      if (payload.items != null) {
+        pr.items = payload.items.map((item, i) => ({
+          id: mockPricingRequestItemSeq++,
+          pricingRequestId: pr.id,
+          sourceTicketItemId: item.sourceTicketItemId ?? null,
+          productId: item.productId ?? null,
+          variantId: item.variantId ?? null,
+          brand: item.brand ?? null,
+          model: item.model ?? null,
+          productDescription: item.productDescription ?? null,
+          color: item.color ?? null,
+          texture: item.texture ?? null,
+          size: item.size ?? null,
+          factory: item.factory ?? null,
+          requestedQty: item.requestedQty,
+          requestedQtySqm: item.requestedQtySqm ?? null,
+          requestedUnit: item.requestedUnit,
+          quantityType: item.quantityType,
+          targetDeliveryDate: item.targetDeliveryDate ?? null,
+          deliveryLocation: item.deliveryLocation ?? null,
+          specialRequirement: item.specialRequirement ?? null,
+          sortOrder: i,
+        }));
+      }
+      pr.updatedAt = new Date().toISOString();
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_UPDATED', 'DRAFT', 'DRAFT');
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async submit(id) {
+      // Mirrors PricingRequestService.submit: owner sales, DRAFT only, deal
+      // ACTIVE, >=1 item, recipient identifiable, requiredDate not in the past,
+      // no duplicate sourceTicketItemId across lines.
+      const user = hasRole('sales');
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (pr.status !== 'DRAFT') fail(`Expected status 'DRAFT' but pricing request is '${pr.status}'`, 409);
+      requirePricingRequestDealActive(ticket);
+      if (pr.items.length === 0) fail('ต้องมีรายการสินค้าอย่างน้อย 1 รายการก่อนส่งคำขอราคา', 400);
+      if (pr.recipientContactId == null && !pr.recipientLabel?.trim()) fail('ต้องระบุผู้รับคำขอราคา', 400);
+      if (pr.requiredDate && new Date(pr.requiredDate) < new Date(new Date().toDateString())) {
+        fail('วันที่ต้องการต้องไม่ใช่วันที่ผ่านมาแล้ว', 400);
+      }
+      // Re-check item identity against the PERSISTED items, not just at
+      // create()/update() time — a draft saved before this rule existed (or
+      // one whose items were never touched again) must still be blocked here.
+      requirePricingRequestItemFieldsValid(pr.items);
+      const seenSourceItemIds = new Set();
+      for (const item of pr.items) {
+        if (item.sourceTicketItemId != null) {
+          if (seenSourceItemIds.has(item.sourceTicketItemId)) fail('มีรายการอ้างอิงสินค้าเดิมซ้ำกัน', 400);
+          seenSourceItemIds.add(item.sourceTicketItemId);
+        }
+      }
+
+      const now = new Date().toISOString();
+      pr.status = 'SUBMITTED';
+      pr.submittedAt = now;
+      pr.updatedAt = now;
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_SUBMITTED', 'DRAFT', 'SUBMITTED');
+      // NotificationRepository.notifyByRole('import', ...) has no single mock
+      // equivalent (no per-role broadcast helper here) — hardcoded to the demo
+      // import user (id 7), same convention as the existing ceo hardcode
+      // (id 8) elsewhere in this file for PRICE_PROPOSED.
+      addNotification(7, pr.ticketId, ticket?.code, 'PRICING_REQUEST_SUBMITTED', `ใบขอราคา ${pr.requestCode} รอการรับเรื่อง`);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async pickup(id) {
+      // Mirrors PricingRequestService.pickup: any import user, SUBMITTED only.
+      // Assigns the PRICING REQUEST only — never sales.ticket.assigned_to (two
+      // pricing requests on the same deal may go to two different Import users).
+      const user = hasRole('import');
+      const pr = findPricingRequestRaw(id);
+      if (pr.status !== 'SUBMITTED') fail('Only a submitted pricing request can be picked up', 409);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      requirePricingRequestDealActive(ticket);
+      const now = new Date().toISOString();
+      pr.status = 'IMPORT_REVIEWING';
+      pr.assignedImportId = user.id;
+      pr.assignedImportName = user.name;
+      pr.pickedUpAt = now;
+      pr.updatedAt = now;
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_PICKED_UP', 'SUBMITTED', 'IMPORT_REVIEWING');
+      addNotification(pr.requestedById, pr.ticketId, ticket?.code, 'PRICING_REQUEST_PICKED_UP', `ใบขอราคา ${pr.requestCode} ถูกรับเรื่องแล้ว`);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async requestInformation(id, payload) {
+      // Mirrors PricingRequestService.requestInformation: only the ASSIGNED
+      // import user, IMPORT_REVIEWING only.
+      const user = hasRole('import');
+      const pr = findPricingRequestRaw(id);
+      if (pr.assignedImportId == null || pr.assignedImportId !== user.id) fail('Forbidden', 403);
+      if (pr.status !== 'IMPORT_REVIEWING') fail(`Expected status 'IMPORT_REVIEWING' but pricing request is '${pr.status}'`, 409);
+      // Mirrors RequestMoreInformationRequest's @NotBlank message.
+      if (!payload.message?.trim()) fail('message must not be blank', 400);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      const now = new Date().toISOString();
+      pr.status = 'MORE_INFO_REQUIRED';
+      pr.updatedAt = now;
+      pushPricingRequestEvent(
+        pr, user, 'MORE_INFO_REQUESTED', 'IMPORT_REVIEWING', 'MORE_INFO_REQUIRED',
+        payload.message, payload.dueDate ? JSON.stringify({ dueDate: payload.dueDate }) : null,
+      );
+      addNotification(pr.requestedById, pr.ticketId, ticket?.code, 'MORE_INFO_REQUIRED', `ใบขอราคา ${pr.requestCode} ต้องการข้อมูลเพิ่มเติม`);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async respondInformation(id, payload) {
+      // Mirrors PricingRequestService.respondInformation: owner sales,
+      // MORE_INFO_REQUIRED only. Goes back to IMPORT_REVIEWING, not SUBMITTED —
+      // Import already owns this request; assignedImportId/pickedUpAt survive.
+      const user = hasRole('sales');
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (pr.status !== 'MORE_INFO_REQUIRED') fail(`Expected status 'MORE_INFO_REQUIRED' but pricing request is '${pr.status}'`, 409);
+      const now = new Date().toISOString();
+      pr.status = 'IMPORT_REVIEWING';
+      pr.updatedAt = now;
+      pushPricingRequestEvent(pr, user, 'MORE_INFO_RESPONDED', 'MORE_INFO_REQUIRED', 'IMPORT_REVIEWING', payload.response);
+      if (pr.assignedImportId != null) {
+        addNotification(pr.assignedImportId, pr.ticketId, ticket?.code, 'MORE_INFO_RESPONDED', `ใบขอราคา ${pr.requestCode} ได้รับข้อมูลเพิ่มเติมแล้ว`);
+      }
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    async cancel(id, payload) {
+      // Mirrors PricingRequestService.cancel: owner sales OR ceo (an explicit
+      // override — unlike TicketService.cancel, which has none), any status the
+      // transition table allows into CANCELLED.
+      const user = requireSession();
+      const pr = findPricingRequestRaw(id);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      const isOwnerOrCeo = user.role === 'ceo' || ticket?.createdById === user.id;
+      if (!isOwnerOrCeo) fail('Forbidden', 403);
+      if (!pricingRequestCanTransition(pr.status, 'CANCELLED')) {
+        fail(`Cannot cancel pricing request in status '${pr.status}'`, 409);
+      }
+      const now = new Date().toISOString();
+      const fromStatus = pr.status;
+      pr.status = 'CANCELLED';
+      pr.cancelledAt = now;
+      pr.updatedAt = now;
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_CANCELLED', fromStatus, 'CANCELLED', payload.reason, JSON.stringify({ reason: payload.reason }));
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
     },
   },
 

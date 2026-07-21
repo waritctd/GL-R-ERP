@@ -22,6 +22,8 @@ import {
   ticketStatusLabel,
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
+import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
+import { CancelDealModal } from './CancelDealModal.jsx';
 import { DealStagePanel } from './DealStagePanel.jsx';
 
 const EVENT_KIND_LABEL = {
@@ -271,6 +273,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // quiet background refetch (window refocus, another tab's invalidate) —
   // same reasoning as TicketDashboard's loading gate in slice A (handoff 62).
   const loading = ticketQuery.isLoading;
+  const canViewPricingRequests = ['sales', 'import', 'ceo', 'sales_manager'].includes(user?.role);
 
   const paymentsQuery = useQuery({
     queryKey: queryKeys.ticketPayments(ticketId),
@@ -285,6 +288,16 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     enabled: !!ticketId && !!ticket,
   });
   const deliveryRecords = deliveriesQuery.data ?? [];
+
+  // Commit 6: the deal's own pricing requests — read here (not inside
+  // PricingRequestPanel) so DealStagePanel's substep strip can also key off
+  // the most recent one, without a second fetch of the same list.
+  const pricingRequestsQuery = useQuery({
+    queryKey: queryKeys.pricingRequestsByTicket(ticketId),
+    queryFn: () => api.pricingRequests.listForTicket(ticketId).then((r) => r.items ?? []),
+    enabled: canViewPricingRequests && !!ticketId && !!ticket,
+  });
+  const pricingRequests = canViewPricingRequests ? (pricingRequestsQuery.data ?? []) : [];
 
   useEffect(() => {
     if (ticketQuery.error) showToast('error', ticketQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
@@ -431,6 +444,11 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     mutationFn: ({ file, attachType }) => api.attachments.upload(ticketId, file, attachType),
     onSuccess: (_res, { file }) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketAttachments(ticketId) });
+      // An INVOICE upload unlocks ฝ่ายบัญชี's close confirmation, so the action
+      // list has to be re-read — otherwise the button only appears after the user
+      // navigates away and back.
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticket(ticketId) });
       showToast('success', `แนบไฟล์ ${file.name} แล้ว`);
     },
     onError: (err) => showToast('error', err.message || 'อัปโหลดไม่สำเร็จ'),
@@ -441,6 +459,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     mutationFn: (id) => api.attachments.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketAttachments(ticketId) });
+      // Deleting the invoice re-locks the close confirmation — same reason as upload.
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticket(ticketId) });
       showToast('success', 'ลบไฟล์แล้ว');
     },
     onError: (err) => showToast('error', err.message || 'ลบไม่สำเร็จ'),
@@ -456,7 +477,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   if (loading) {
     return (
-      <div className="page-stack" aria-busy="true" aria-label="กำลังโหลดข้อมูลใบขอราคา">
+      <div className="page-stack" aria-busy="true" aria-label="กำลังโหลดข้อมูลดีล">
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between' }}>
           <div style={{ flex: 1 }}>
             <Skeleton width={80} height={28} radius="var(--radius-md)" className="skeleton" />
@@ -491,7 +512,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   if (!ticket) {
     return (
       <div className="page-stack">
-        <EmptyState icon="fileText" title="ไม่พบใบขอราคา" description="กลับไปหน้ารายการ" />
+        <EmptyState icon="fileText" title="ไม่พบดีล" description="กลับไปหน้ารายการ" />
         <button type="button" className="secondary-button" onClick={onBack}>
           <Icon name="chevronLeft" />
           กลับ
@@ -521,8 +542,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const isImport  = ROLE_PERMISSIONS.canPickupTickets.includes(role);
   const isFulfilment = isImport || role === 'ceo';
   const isAccount = ROLE_PERMISSIONS.canConfirmPayments.includes(role);
-  const deliveryDone = fs === 'GOODS_RECEIVED' || fs === 'FULLY_DELIVERED';
-  const dualTrackDone = ps === 'FULLY_PAID' && deliveryDone;
+  // (deliveryDone / dualTrackDone removed with the single-step close: the close
+  // gate is now the server's three-party sequence, surfaced via availableActions.)
   const totalOrdered = items.reduce((sum, item) => sum + Number(item.qty || 0), 0);
   const totalDelivered = items.reduce((sum, item) => sum + Number(item.qtyDelivered || 0), 0);
   const deliveryProgress = totalOrdered > 0 ? Math.min(100, Math.round((totalDelivered / totalOrdered) * 100)) : 0;
@@ -553,9 +574,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // quote stages.
   const EDITABLE_STATUSES = ['draft', 'submitted', 'in_review', 'price_proposed'];
   const can = {
-    // Submit is only meaningful once the deal has product lines — the backend
-    // 400s an item-less submit (mirrors TicketService.submit).
-    submit:            hasAction('SUBMIT') && st === 'draft' && isOwner && ROLE_PERMISSIONS.canCreateTickets.includes(role) && items.length > 0,
+    // Ticket-level submit is retired (commit 5/6) — pricing now starts on a
+    // PricingRequest (see PricingRequestPanel below the items table), not on
+    // the ticket itself.
     pickup:            hasAction('PICKUP') && st === 'submitted'       && ROLE_PERMISSIONS.canPickupTickets.includes(role),
     propose:           hasAction('PROPOSE_PRICE') && ['in_review', 'price_proposed', 'approved'].includes(st) && ROLE_PERMISSIONS.canProposePrices.includes(role),
     calculatePrices:   hasAction('CALCULATE_PRICES') && st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
@@ -568,10 +589,12 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     // former no-document "ออกใบแจ้งมัดจำ" action is gone.
     generateDocument:  hasAction('ISSUE_DEPOSIT_NOTICE') && st === 'quotation_issued' && ps === 'CUSTOMER_CONFIRMED' && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     revise:            (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
-    // Legacy document_issued close only for pre-dual-track tickets (ps never set)
-    // or fully paid ones — mirrors TicketService.close().
-    close:            hasAction('CLOSE') && ((st === 'document_issued' && (ps == null || ps === 'FULLY_PAID'))
-                        || (st === 'quotation_issued' && dualTrackDone)) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
+    // Three-party close (V55): ฝ่ายบัญชี confirms, then the CEO verifies. Sales is
+    // no longer part of the sequence, so there is no owner/canCreateTickets gate
+    // here — the server decides and we mirror its availableActions.
+    confirmClose:       hasAction('CONFIRM_CLOSE'),
+    revokeCloseConfirm: hasAction('REVOKE_CLOSE_CONFIRM'),
+    verifyClose:        hasAction('VERIFY_CLOSE'),
     cancel:           hasAction('CANCEL') && !TERMINAL.includes(st)   && isOwner,
     comment:          !TERMINAL.includes(st),
     editItems: hasAction('EDIT_ITEMS') && EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
@@ -600,6 +623,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // DealStagePanel cockpit, and docs live in its เอกสารของขั้นนี้ row. The
   // section hides entirely when none of the remaining actions apply.
   const hasActions = can.calculatePrices || can.revise || can.editItems || can.cancel
+    || can.revokeCloseConfirm
     || (st === 'draft' && isOwner && items.length === 0);
 
   const status = ticketStatusLabel(st);
@@ -610,7 +634,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // reject/pickup/... in src/api/mockApi.js) so the wording matches what the
   // button actually does. Never invents an owner or action the data can't support.
   const NEXT_ACTION_STEPS = [
-    ['submit',           'ส่งขอราคา — รายการสินค้าพร้อมแล้ว ส่งให้ฝ่ายนำเข้าเสนอราคาได้เลย'],
     ['reject',           st === 'price_proposed' ? 'ตรวจสอบราคาที่เสนอ แล้วอนุมัติหรือตีกลับให้ Import แก้ไข' : null],
     ['approve',          st === 'price_proposed' ? 'ตรวจสอบราคาที่เสนอ แล้วอนุมัติหรือตีกลับให้ Import แก้ไข' : null],
     ['pickup',           'รับมอบหมายใบขอราคานี้เพื่อเริ่มเสนอราคา'],
@@ -628,7 +651,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     ['confirmFinalPayment','ยืนยันว่าลูกค้าชำระส่วนที่เหลือครบแล้ว'],
     ['generateQuotation','ออกใบเสนอราคาให้ลูกค้า'],
     ['revise',            'ขอแก้ไขรายละเอียดใบขอราคานี้ได้หากจำเป็น'],
-    ['close',             'ปิดเรื่องนี้เมื่อดำเนินการครบถ้วนแล้ว'],
+    ['confirmClose',      'ส่งมอบและรับเงินครบแล้ว — ยืนยันเพื่อส่งให้ CEO ตรวจสอบปิดงาน'],
+    ['verifyClose',       'ฝ่ายบัญชียืนยันแล้ว — ตรวจสอบและปิดงานได้เลย'],
   ];
   const nextAction = NEXT_ACTION_STEPS.find(([key, text]) => can[key] && text)?.[1] ?? null;
 
@@ -636,24 +660,23 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // confirmations belong to the account role (CEO fallback), so sales/import
   // would otherwise see a stalled payment stepper with no explanation. Shown
   // alongside the personal next-action callout, not instead of it.
-  const waitingHint = (st === 'quotation_issued' && !isAccount)
-    ? (ps === 'DEPOSIT_NOTICE_ISSUED' ? 'รอฝ่ายบัญชียืนยันรับยอดมัดจำ'
-      : ps === 'AWAITING_FINAL_PAYMENT' ? 'รอฝ่ายบัญชียืนยันรับชำระส่วนที่เหลือ'
-      : null)
-    : null;
+  // Awaiting the CEO's verification outranks the payment hints: it is the last
+  // thing standing between this deal and closed, and it is invisible otherwise.
+  const closeConfirmedAt = summary?.closeConfirmedAt ?? null;
+  const waitingHint = closeConfirmedAt && !can.verifyClose
+    ? `ฝ่ายบัญชียืนยันพร้อมปิดงานแล้ว${summary?.closeConfirmedByName ? ` (${summary.closeConfirmedByName})` : ''} — รอ CEO ตรวจสอบ`
+    : (st === 'quotation_issued' && !isAccount)
+      ? (ps === 'DEPOSIT_NOTICE_ISSUED' ? 'รอฝ่ายบัญชียืนยันรับยอดมัดจำ'
+        : ps === 'AWAITING_FINAL_PAYMENT' ? 'รอฝ่ายบัญชียืนยันรับชำระส่วนที่เหลือ'
+        : null)
+      : null;
 
   // The cockpit's primary action: the ONE workflow button for this viewer's
   // current sub-step (moved verbatim out of การดำเนินการอื่น ๆ). Doc-shaped next
   // steps (ออกใบแจ้งยอดมัดจำ, IR) are NOT repeated here — they already sit in the
   // stage panel's docs row and the guidance line points at them. CEO price
   // approve/reject keeps its dedicated decision panel below.
-  const primaryAction = can.submit ? (
-    <button type="button" className="primary-button" disabled={actionLoading}
-      onClick={() => doAction(() => api.tickets.submit(ticketId), 'ส่งขอราคาแล้ว')}>
-      <Icon name="check" size={14} />
-      ส่งขอราคา (เริ่มเสนอราคา)
-    </button>
-  ) : can.pickup ? (
+  const primaryAction = can.pickup ? (
     <button type="button" className="primary-button" disabled={actionLoading}
       onClick={() => doAction(() => api.tickets.pickup(ticketId), 'รับมอบหมายแล้ว')}>
       <Icon name="check" size={14} />
@@ -702,11 +725,18 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       onClick={() => setConfirm({ kind: 'finalPayment' })}>
       ยืนยันชำระครบ (Final Payment)
     </button>
-  ) : can.close ? (
+  ) : can.confirmClose ? (
     <button type="button" className="primary-button" disabled={actionLoading}
-      onClick={() => doAction(() => api.tickets.close(ticketId), 'ปิดใบขอราคาแล้ว')}>
+      onClick={() => doAction(() => api.tickets.confirmCloseReady(ticketId),
+        'ยืนยันพร้อมปิดงานแล้ว — รอ CEO ตรวจสอบ')}>
       <Icon name="check" size={14} />
-      ปิดเรื่อง
+      ยืนยันพร้อมปิดงาน
+    </button>
+  ) : can.verifyClose ? (
+    <button type="button" className="primary-button" disabled={actionLoading}
+      onClick={() => doAction(() => api.tickets.verifyClose(ticketId), 'ตรวจสอบและปิดงานแล้ว')}>
+      <Icon name="check" size={14} />
+      ตรวจสอบและปิดงาน
     </button>
   ) : null;
 
@@ -831,10 +861,13 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     } catch { /* onError above already toasted */ }
   }
 
-  async function handleUploadAttachment(e) {
+  async function handleUploadAttachment(e, explicitType = null) {
     const file = e.target.files?.[0];
     if (!file) return;
-    const attachType = file.name.toLowerCase().includes('po') ? 'PO' : 'OTHER';
+    // INVOICE gates the close, so it is never inferred from the filename — ฝ่ายบัญชี
+    // picks it deliberately via the dedicated upload control.
+    const attachType = explicitType
+      ?? (file.name.toLowerCase().includes('po') ? 'PO' : 'OTHER');
     try {
       await uploadAttachmentMutation.mutateAsync({ file, attachType });
     } catch { /* onError above already toasted */ } finally {
@@ -1085,7 +1118,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   return (
     <div className="page-stack">
-      <Breadcrumbs items={[{ label: 'ใบขอราคา', onClick: onBack }, { label: summary.code || summary.customerName || summary.title }]} />
+      <Breadcrumbs items={[{ label: 'ดีล', onClick: onBack }, { label: summary.code || summary.customerName || summary.title }]} />
       <header style={{ display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between' }}>
         <div style={{ minWidth: 0 }}>
           <button type="button" className="secondary-button" onClick={onBack} style={{ marginBottom: 12 }}>
@@ -1122,6 +1155,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         user={user}
         summary={summary}
         availableActions={availableActions}
+        pricingRequests={pricingRequests}
         primaryAction={primaryAction}
         guidance={nextAction ?? waitingHint}
         actionLoading={actionLoading}
@@ -1454,6 +1488,13 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
               </button>
             )}
 
+            {can.revokeCloseConfirm && (
+              <button type="button" className="secondary-button" disabled={actionLoading}
+                onClick={() => doAction(() => api.tickets.revokeCloseConfirmation(ticketId, {}),
+                  'ยกเลิกการยืนยันปิดงานแล้ว')}>
+                ยกเลิกการยืนยันปิดงาน
+              </button>
+            )}
             {can.cancel && (
               <button type="button" className="secondary-button" disabled={actionLoading}
                 style={{ marginLeft: 'auto', color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}
@@ -2011,6 +2052,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             )}
           </section>
 
+          {canViewPricingRequests ? (
+            <PricingRequestPanel ticketId={ticketId} deal={summary} ticketItems={items} user={user} />
+          ) : null}
+
           {/* D9: Price formula breakdown */}
           {showBreakdown && priceBreakdown.length > 0 && (
             <section className="panel">
@@ -2061,7 +2106,27 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           {/* R5: Attachments */}
           <section className="panel">
             <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2>ไฟล์แนบ (PO / ใบเซ็น)</h2>
+              <h2>ไฟล์แนบ (PO / ใบเซ็น / ใบกำกับภาษี)</h2>
+              {/* ใบกำกับภาษี is issued by an external system and uploaded here; its
+                  presence is a prerequisite for ฝ่ายบัญชี to confirm the close. */}
+              {!TERMINAL.includes(st) && isAccount && (
+                <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-invoice-file">
+                  <input
+                    id="ticket-invoice-file"
+                    type="file"
+                    className="sr-only h-px min-h-0 w-px border-0 p-0"
+                    onChange={(e) => handleUploadAttachment(e, 'INVOICE')}
+                    accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
+                  />
+                  <span
+                    className="secondary-button max-[720px]:min-h-11 max-[720px]:w-full"
+                    style={{ fontSize: 12, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                  >
+                    <Icon name="upload" size={13} />
+                    {uploadingFile ? 'กำลังอัปโหลด...' : 'แนบใบกำกับภาษี'}
+                  </span>
+                </label>
+              )}
               {!TERMINAL.includes(st) && (
                 <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-attachment-file">
                   <input
@@ -2625,18 +2690,18 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         onConfirm={() => confirmDeleteAttachment(confirm?.id)}
       />
 
-      <ConfirmDialog
-        open={confirm?.kind === 'cancelTicket'}
-        tone="danger"
-        title="ยกเลิกใบขอราคา"
-        message="ยืนยันการยกเลิกใบขอราคานี้?"
-        busy={actionLoading}
-        onCancel={() => setConfirm(null)}
-        onConfirm={async () => {
-          await doAction(() => api.tickets.cancel(ticketId), 'ยกเลิกใบขอราคาแล้ว');
-          setConfirm(null);
-        }}
-      />
+      {/* A bare yes/no confirm can't capture WHY, and cancel is irreversible —
+          so this is the mark-lost modal's reason picker, not a ConfirmDialog. */}
+      {confirm?.kind === 'cancelTicket' && (
+        <CancelDealModal
+          submitting={actionLoading}
+          onClose={() => setConfirm(null)}
+          onSubmit={async (payload) => {
+            await doAction(() => api.tickets.cancel(ticketId, payload), 'ยกเลิกดีลแล้ว');
+            setConfirm(null);
+          }}
+        />
+      )}
 
       <ConfirmDialog
         open={confirm?.kind === 'finalPayment'}

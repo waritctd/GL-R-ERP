@@ -39,6 +39,12 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       factoryConfigs: {
         list: vi.fn(),
       },
+      // Commit 6: PricingRequestPanel (mounted below the items table) and
+      // DealStagePanel's substep strip both read this list.
+      pricingRequests: {
+        listForTicket: vi.fn(),
+        get: vi.fn(),
+      },
     },
   };
 });
@@ -48,6 +54,7 @@ const ceoUser = { id: 9, employeeId: 9, name: 'CEO ทดสอบ', role: 'ceo'
 // isOwner (user.id === summary.createdById) — buildTicket()'s default
 // summary.createdById is 1, so this user matches it out of the box.
 const salesOwnerUser = { id: 1, employeeId: 1, name: 'พนักงานขาย', role: 'sales' };
+const accountUser = { id: 5, employeeId: 5, name: 'ฝ่ายบัญชี', role: 'account' };
 
 function buildTicket(overrides = {}) {
   return {
@@ -142,6 +149,7 @@ describe('TicketDetailPage', () => {
     api.tickets.revision.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.overrideItemPrice.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.editItems.mockResolvedValue({ ticket: buildTicket() });
+    api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
   });
 
   it('renders a ticket from a mocked api.tickets.get', async () => {
@@ -293,6 +301,50 @@ describe('TicketDetailPage', () => {
     expect(screen.getByText('฿600')).not.toBeNull();
     expect(await screen.findByText('DEPOSIT')).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
+  });
+
+  it('lets Accounting open Ticket Detail without calling or rendering Pricing Requests', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: {
+          status: 'quotation_issued',
+          paymentStage: 'PARTIALLY_PAID',
+          amountPayable: 1000,
+          amountPaid: 400,
+          amountOutstanding: 600,
+        },
+      }),
+    });
+    api.tickets.listPayments.mockResolvedValueOnce({
+      items: [
+        {
+          receiptId: 1,
+          kind: 'DEPOSIT',
+          amount: 400,
+          receivedAt: '2026-06-20T09:00:00.000Z',
+          recordedByName: 'คุณบัญชี',
+          note: 'โอนแล้ว',
+        },
+      ],
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE',
+        salesStage: 'DEPOSIT_RECEIVED',
+        paymentStatus: 'DEPOSIT_PAID',
+        fulfillmentStatus: null,
+        status: 'quotation_issued',
+      },
+      availableActions: [{ action: 'SET_BILLING', kind: 'payment', label: 'ตั้งค่าการวางบิล' }],
+    });
+
+    renderTicketDetailPage(accountUser);
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' })).not.toBeNull();
+    expect(await screen.findByText('DEPOSIT')).not.toBeNull();
+    expect(screen.getAllByText('฿400').length).toBeGreaterThan(0);
+    expect(api.pricingRequests.listForTicket).not.toHaveBeenCalled();
+    expect(screen.queryByRole('heading', { name: 'ใบขอราคา (Pricing Request)' })).toBeNull();
   });
 
   it('UX-34: Final Payment opens a confirm dialog with the real outstanding amount instead of firing the mutation on click', async () => {

@@ -231,16 +231,35 @@ public class TicketController {
             .body(bytes);
     }
 
-    @PostMapping("/{id}/close")
-    TicketDetailResponse close(@PathVariable long id, HttpSession session) {
+    // Three-party close (V56): ฝ่ายบัญชี confirms, then the CEO verifies. The old
+    // single-step POST /{id}/close (sales owner, one signature) is gone.
+    @PostMapping("/{id}/close/confirm")
+    TicketDetailResponse confirmCloseReady(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.close(id, user));
+        return new TicketDetailResponse(ticketService.confirmCloseReady(id, user));
+    }
+
+    @PostMapping("/{id}/close/revoke")
+    TicketDetailResponse revokeCloseConfirmation(@PathVariable long id,
+                                                 @RequestBody(required = false) NoteRequest body,
+                                                 HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(
+            ticketService.revokeCloseConfirmation(id, body == null ? null : body.note(), user));
+    }
+
+    @PostMapping("/{id}/close/verify")
+    TicketDetailResponse verifyClose(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.verifyClose(id, user));
     }
 
     @PostMapping("/{id}/cancel")
-    TicketDetailResponse cancel(@PathVariable long id, HttpSession session) {
+    TicketDetailResponse cancel(@PathVariable long id,
+                                @Valid @RequestBody CancelRequest request,
+                                HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.cancel(id, user));
+        return new TicketDetailResponse(ticketService.cancel(id, request.reason(), request.note(), user));
     }
 
     // ── Deal pipeline (V50) ─────────────────────────────────────────────────
@@ -326,6 +345,10 @@ public class TicketController {
 
     record MarkLostRequest(@jakarta.validation.constraints.NotBlank String reason,
                            @jakarta.validation.constraints.Size(max = 2000) String note) {}
+
+    /** Same shape as MarkLostRequest — cancel now carries a structured reason too (V57). */
+    record CancelRequest(@jakarta.validation.constraints.NotBlank String reason,
+                         @jakarta.validation.constraints.Size(max = 2000) String note) {}
 
     record ReopenRequest(@jakarta.validation.constraints.Size(max = 2000) String note) {}
 
