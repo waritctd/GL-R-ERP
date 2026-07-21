@@ -273,8 +273,11 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(afterShipping.containerRef()).isEqualTo("CONT-1234567");
         assertThat(afterShipping.customsStatus()).isEqualTo("AWAITING_CLEARANCE");
 
+        // Step 8: no per-item receipt supplied — the backward-compatible default fills
+        // qtyReceived from each line's own ordered quantity (zero discrepancy), so the unmodified
+        // Step 7 caller shape keeps working unchanged.
         FactoryPurchaseOrderDto afterReceived = procurement.recordGoodsReceived(poA.id(),
-            new RecordGoodsReceivedRequest(new BigDecimal("12345.6789")), importActor);
+            new RecordGoodsReceivedRequest(new BigDecimal("12345.6789"), null), importActor);
         assertThat(afterReceived.status()).isEqualTo(FactoryPurchaseOrderStatus.RECEIVED);
         assertThat(afterReceived.actualLandedCostThb()).isEqualByComparingTo("12345.6789");
         assertThat(afterReceived.receivedAt()).isNotNull();
@@ -282,10 +285,13 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(afterReceived.items().get(0).estimatedTotalLandedCostThb()).isNotNull();
         assertThat(afterReceived.items().get(0).estimatedTotalLandedCostThb())
             .isNotEqualByComparingTo(afterReceived.actualLandedCostThb());
+        assertThat(afterReceived.items().get(0).qtyReceived())
+            .isEqualByComparingTo(afterReceived.items().get(0).quantity());
+        assertThat(afterReceived.items().get(0).discrepancyQty()).isEqualByComparingTo(BigDecimal.ZERO);
 
         // A closed PO cannot be touched again.
         assertThatThrownBy(() -> procurement.recordGoodsReceived(poA.id(),
-            new RecordGoodsReceivedRequest(BigDecimal.TEN), importActor))
+            new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
         // ── Composes with the EXISTING ticket-level fulfillment flow — proven independent:
@@ -302,6 +308,91 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         // independently of it, proving the two really are separate layers, not coupled.
         FactoryPurchaseOrderDto poB = created.stream().filter(po -> FACTORY_B.equals(po.factoryName())).findFirst().orElseThrow();
         assertThat(procurement.get(poB.id(), importActor).status()).isEqualTo(FactoryPurchaseOrderStatus.OPEN);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Step 8: Receiving — per-item actual quantity vs ordered, discrepancy, QC/damage note.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void recordGoodsReceived_withExplicitItemReceipt_recordsQtyReceivedDiscrepancyAndQcNote() {
+        DealFixture deal = driveToProcurement(true);
+        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
+            new CreateFactoryPurchaseOrdersRequest(null), importActor);
+        FactoryPurchaseOrderDto poA = created.stream().filter(po -> FACTORY_A.equals(po.factoryName())).findFirst().orElseThrow();
+        long itemId = poA.items().get(0).id();
+        BigDecimal ordered = poA.items().get(0).quantity();
+
+        // Ordered 10 (see driveToQuotationIssuedNotYetAccepted's own itemA), only 8 physically
+        // counted on arrival — a real shortage, with a damage note.
+        FactoryPurchaseOrderDto afterReceived = procurement.recordGoodsReceived(poA.id(),
+            new RecordGoodsReceivedRequest(new BigDecimal("999.99"),
+                List.of(new ProcurementRequests.ItemReceiptRequest(itemId, new BigDecimal("8"), "กล่องเสียหาย 2 กล่อง"))),
+            importActor);
+
+        var receivedItem = afterReceived.items().get(0);
+        assertThat(receivedItem.quantity()).isEqualByComparingTo(ordered);
+        assertThat(receivedItem.qtyReceived()).isEqualByComparingTo("8");
+        assertThat(receivedItem.qcNote()).isEqualTo("กล่องเสียหาย 2 กล่อง");
+        assertThat(receivedItem.discrepancyQty()).isEqualByComparingTo(new BigDecimal("8").subtract(ordered));
+        assertThat(receivedItem.discrepancyQty().signum()).isNegative();
+        assertThat(afterReceived.status()).isEqualTo(FactoryPurchaseOrderStatus.RECEIVED);
+    }
+
+    @Test
+    void recordGoodsReceived_omittingItems_defaultsEveryLineToOrderedQtyWithZeroDiscrepancy() {
+        // Backward compatibility: the unmodified Step 7 caller shape (no items array) must keep
+        // working exactly as before — every line defaults to "received exactly as ordered."
+        DealFixture deal = driveToProcurement(true);
+        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
+            new CreateFactoryPurchaseOrdersRequest(null), importActor);
+        FactoryPurchaseOrderDto poA = created.stream().filter(po -> FACTORY_A.equals(po.factoryName())).findFirst().orElseThrow();
+
+        FactoryPurchaseOrderDto afterReceived = procurement.recordGoodsReceived(poA.id(),
+            new RecordGoodsReceivedRequest(new BigDecimal("500.00"), null), importActor);
+
+        var receivedItem = afterReceived.items().get(0);
+        assertThat(receivedItem.qtyReceived()).isEqualByComparingTo(receivedItem.quantity());
+        assertThat(receivedItem.discrepancyQty()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(receivedItem.qcNote()).isNull();
+    }
+
+    @Test
+    void recordGoodsReceived_partialItemList_isRejected_notSilentlyLeavingLinesUnset() {
+        // A PO with 1 item here (single-factory fixture below), but the guard is exercised via
+        // an explicitly EMPTY-vs-partial distinction: supplying an item list that omits a real
+        // line must be rejected outright, per RecordGoodsReceivedRequest's own Javadoc — a PO
+        // moving to the terminal RECEIVED status while a line keeps qty_received=NULL forever is
+        // worse than not reporting a discrepancy at all.
+        DealFixture deal = driveToProcurement(true);
+        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
+            new CreateFactoryPurchaseOrdersRequest(null), importActor);
+        FactoryPurchaseOrderDto poA = created.stream().filter(po -> FACTORY_A.equals(po.factoryName())).findFirst().orElseThrow();
+
+        assertThatThrownBy(() -> procurement.recordGoodsReceived(poA.id(),
+            new RecordGoodsReceivedRequest(new BigDecimal("100.00"), List.of()), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        // Unaffected — still OPEN/SHIPPING, not silently advanced to RECEIVED.
+        assertThat(procurement.get(poA.id(), importActor).status()).isNotEqualTo(FactoryPurchaseOrderStatus.RECEIVED);
+    }
+
+    @Test
+    void recordGoodsReceived_itemIdFromAnotherPo_isRejected() {
+        // Cross-PO guard: an itemId that legitimately belongs to a DIFFERENT PO (factory B here,
+        // same pricing request even) must not be accepted for factory A's receiving call.
+        DealFixture deal = driveToProcurement(true);
+        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
+            new CreateFactoryPurchaseOrdersRequest(null), importActor);
+        FactoryPurchaseOrderDto poA = created.stream().filter(po -> FACTORY_A.equals(po.factoryName())).findFirst().orElseThrow();
+        FactoryPurchaseOrderDto poB = created.stream().filter(po -> FACTORY_B.equals(po.factoryName())).findFirst().orElseThrow();
+        long foreignItemId = poB.items().get(0).id();
+
+        assertThatThrownBy(() -> procurement.recordGoodsReceived(poA.id(),
+            new RecordGoodsReceivedRequest(new BigDecimal("100.00"),
+                List.of(new ProcurementRequests.ItemReceiptRequest(foreignItemId, BigDecimal.ONE, null))),
+            importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThat(procurement.get(poA.id(), importActor).status()).isNotEqualTo(FactoryPurchaseOrderStatus.RECEIVED);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

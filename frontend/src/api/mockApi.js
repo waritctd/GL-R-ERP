@@ -694,6 +694,60 @@ function mockUnitBasisLabel(unitBasis) {
   }
 }
 
+/**
+ * Step 8: mirrors OrderConfirmationService.reconcileTicketItems — sales.ticket_item.qty is set
+ * once at ticket creation and never touched by the PricingRequest chain, so it can drift from
+ * what the chain actually settled on (both on a first submission and further after a
+ * cost-affecting customer-change revision, which is reachable even from QUOTATION_ACCEPTED — see
+ * that Java method's own Javadoc for the full account). Called once from confirmOrder, before any
+ * delivery machinery becomes reachable, exactly like the real bridge.
+ */
+function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
+  let anyChange = false;
+  for (const item of pr.items ?? []) {
+    const newQty = Number(item.requestedQty);
+    if (item.sourceTicketItemId != null) {
+      const ticketItem = ticket.items.find((ti) => ti.id === item.sourceTicketItemId);
+      if (!ticketItem) continue;
+      const qtyDelivered = Number(ticketItem.qtyDelivered ?? 0);
+      const qtyFromStock = Number(ticketItem.qtyFromStock ?? 0);
+      if (newQty < qtyDelivered || newQty < qtyFromStock) {
+        // Mirrors the DB's chk_ticket_item_qty_delivered/chk_ticket_item_qty_from_stock CHECK
+        // constraints (V54) that back the real reconcileItemQty call — a downward reconciliation
+        // that would drop qty below an already-recorded delivered/reserved amount is refused, not
+        // silently applied.
+        fail(`ไม่สามารถปรับจำนวนสินค้า (item ${item.sourceTicketItemId}) ให้ตรงกับใบขอราคาที่ยืนยันคำสั่งซื้อได้ `
+          + 'เนื่องจากมีการส่งมอบหรือจองสต็อกไปแล้วเกินจำนวนใหม่', 409);
+      }
+      if (Number(ticketItem.qty) !== newQty) {
+        ticketItem.qty = newQty;
+        ticketItem.qtySqm = item.requestedQtySqm ?? null;
+        anyChange = true;
+      }
+    } else {
+      // A wholly new line added by a customer-change revision — no original ticket_item to
+      // reconcile against, so one is created now.
+      const nextId = Math.max(0, ...ticket.items.map((ti) => ti.id)) + 1;
+      ticket.items.push({
+        id: nextId, ticketId: ticket.id,
+        brand: item.brand || item.model || item.productDescription || 'รายการใหม่จากใบขอราคา',
+        model: item.model ?? null, color: item.color ?? null, texture: item.texture ?? null,
+        size: item.size ?? null, factory: item.factory ?? null,
+        qty: newQty, qtySqm: item.requestedQtySqm ?? null,
+        proposedPrice: null, approvedPrice: null,
+        currency: 'THB', sortOrder: ticket.items.length,
+        qtyDelivered: 0, qtyFromStock: 0,
+        unitBasis: item.requestedUnitBasis === 'PER_SQM' ? 'SQM' : 'PIECE',
+      });
+      anyChange = true;
+    }
+  }
+  if (anyChange) {
+    pushPricingRequestEvent(pr, user, 'TICKET_ITEMS_RECONCILED', null, null,
+      'ปรับจำนวนสินค้าในรายการดีลให้ตรงกับใบขอราคาที่ยืนยันคำสั่งซื้อแล้ว');
+  }
+}
+
 /** Builds a fresh Step 4 DRAFT quotation, snapshotting prices from the current APPROVED
  * pricing_decision — mirrors CustomerQuotationService.create/createRevision's item-building
  * (buildItem). `priorDiscounts` (keyed by pricingRequestItemId) is empty for a first-ever
@@ -1364,6 +1418,9 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
     deliveredById: user.id,
     deliveredByName: user.name,
     note: payload.note ?? null,
+    // Step 8: who on the customer's side received/confirmed this delivery — optional, mirrors
+    // TicketRepository.insertDeliveryRecord's new recipientName column (V78).
+    recipientName: payload.recipientName ?? null,
     createdAt: now,
     items: recordItems,
   });
@@ -2583,6 +2640,7 @@ export const api = {
       recordDeliveryForTicket(ticket, user, {
         source: allRemainingCoveredByStock ? 'STOCK' : 'WAREHOUSE',
         note: payload.note ?? null,
+        recipientName: payload.recipientName ?? null,
         lines: remaining,
       }, true);
       return delay({ ticket: buildTicketDetail(ticket) });
@@ -6102,6 +6160,11 @@ export const api = {
           `ยืนยันคำสั่งซื้อจากใบเสนอราคาลูกค้าที่ยอมรับแล้ว (ใบขอราคา ${pr.requestCode})`);
       }
 
+      // Step 8: reconcile ticket_item.qty to what THIS pricing request actually settled on,
+      // before any delivery machinery becomes reachable — mirrors OrderConfirmationService
+      // .reconcileTicketItems, called at the same point in the real bridge.
+      reconcileTicketItemsFromPricingRequest(ticket, pr, user);
+
       // The existing, already-tested pipeline takes over from here, unmodified (mirrors calling
       // TicketService.confirmCustomer).
       if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
@@ -6581,9 +6644,33 @@ export const api = {
     },
 
     async recordGoodsReceived(id, payload) {
+      // Step 8: mirrors ProcurementService.recordGoodsReceived — items is OPTIONAL (null/absent
+      // defaults every line to its own ordered quantity, zero discrepancy, backward-compatible
+      // with the unmodified Step 7 caller); an explicitly-supplied list (even empty) must cover
+      // EVERY line on the PO or the call is rejected.
       const user = hasRole('import', 'ceo');
       const po = findFactoryPurchaseOrderRaw(id);
       if (['RECEIVED', 'CANCELLED'].includes(po.status)) fail('ใบสั่งซื้อนี้ปิดแล้ว ไม่สามารถบันทึกรับสินค้าได้อีก', 409);
+      const items = payload.items ?? null;
+      if (items === null) {
+        po.items.forEach((item) => {
+          item.qtyReceived = item.quantity;
+          item.qcNote = null;
+          item.discrepancyQty = 0;
+        });
+      } else {
+        const validIds = new Set(po.items.map((item) => item.id));
+        const requestedIds = new Set(items.map((line) => Number(line.itemId)));
+        const sameSize = requestedIds.size === validIds.size;
+        const covers = sameSize && [...requestedIds].every((itemId) => validIds.has(itemId));
+        if (!covers) fail('ต้องระบุจำนวนรับสินค้าให้ครบทุกรายการในใบสั่งซื้อนี้ และรายการที่ระบุต้องอยู่ในใบสั่งซื้อนี้เท่านั้น', 400);
+        for (const line of items) {
+          const item = po.items.find((it) => it.id === Number(line.itemId));
+          item.qtyReceived = moneyValue(line.qtyReceived);
+          item.qcNote = line.qcNote ?? null;
+          item.discrepancyQty = moneyValue(item.qtyReceived - Number(item.quantity ?? 0));
+        }
+      }
       po.actualLandedCostThb = payload.actualLandedCostThb;
       po.status = 'RECEIVED';
       po.receivedAt = new Date().toISOString();

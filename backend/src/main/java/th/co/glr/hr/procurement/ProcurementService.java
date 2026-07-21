@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,9 +17,11 @@ import th.co.glr.hr.pricingrequest.PricingRequestEventKind;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.procurement.ProcurementDtos.FactoryPurchaseOrderDto;
+import th.co.glr.hr.procurement.ProcurementDtos.FactoryPurchaseOrderItemDto;
 import th.co.glr.hr.procurement.ProcurementRepository.CostingItemForPo;
 import th.co.glr.hr.procurement.ProcurementRequests.CancelFactoryPurchaseOrderRequest;
 import th.co.glr.hr.procurement.ProcurementRequests.CreateFactoryPurchaseOrdersRequest;
+import th.co.glr.hr.procurement.ProcurementRequests.ItemReceiptRequest;
 import th.co.glr.hr.procurement.ProcurementRequests.RecordGoodsReceivedRequest;
 import th.co.glr.hr.procurement.ProcurementRequests.RecordShippingDetailRequest;
 import th.co.glr.hr.procurement.ProcurementRequests.RecordSupplierProformaRequest;
@@ -205,12 +208,66 @@ public class ProcurementService {
         return requirePo(id);
     }
 
+    /**
+     * Step 8: extends the Step 7 goods-received flag flip with the ACTUAL quantity received per
+     * line (vs the ordered {@code quantity} already frozen on the PO item), plus a QC/damage
+     * note — {@code discrepancyQty} is computed on read (see
+     * {@link ProcurementRepository#withItems}), never stored, mirroring
+     * {@code estimatedLandedCostPerUnitThb}'s own "estimate vs actual, never conflated"
+     * discipline one field over.
+     *
+     * <p><strong>Backward-compatible default:</strong> {@code request.items()} is optional — a
+     * caller that supplies none (every existing caller, including the unmodified Step 7 frontend)
+     * gets the exact prior behavior, with every line's {@code qtyReceived} defaulted to its own
+     * ordered {@code quantity} (zero discrepancy, nothing to report). A caller that DOES supply
+     * items must cover every line on the PO — see {@link RecordGoodsReceivedRequest}'s own
+     * Javadoc for why a partial receiving report is rejected outright rather than silently
+     * accepted (this is a real business-logic guard, not a formatting nicety: without it, the PO
+     * would move to the terminal RECEIVED status while some lines keep {@code qty_received=NULL}
+     * forever, which is a worse state than not reporting a discrepancy at all).
+     */
     @Transactional
     public FactoryPurchaseOrderDto recordGoodsReceived(long id, RecordGoodsReceivedRequest request, UserPrincipal actor) {
         requireRole(actor, RAW_PO_ROLES);
         FactoryPurchaseOrderDto po = requirePo(id);
+        if (FactoryPurchaseOrderStatus.CLOSED.contains(po.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบสั่งซื้อนี้ปิดแล้ว ไม่สามารถบันทึกรับสินค้าได้อีก");
+        }
+        List<ItemReceiptRequest> items = request.items();
+        if (items == null) {
+            // Genuinely absent (JSON omits the field, or sends null) — the backward-compatible
+            // default. An explicitly-supplied EMPTY list is different: the caller told us
+            // something, and zero items never covers a real PO's item set, so it falls into the
+            // strict branch below and is correctly rejected as incomplete, not silently defaulted.
+            items = po.items().stream()
+                .map(item -> new ItemReceiptRequest(item.id(), item.quantity(), null))
+                .toList();
+        } else {
+            // A single set-equality check both rejects an unknown itemId (requestedItemIds would
+            // then contain an element validItemIds structurally cannot) AND rejects a partial/
+            // incomplete list (a missing element) — for two finite sets, "contains something the
+            // other doesn't" and "not equal" are the same fact. An earlier draft had a separate
+            // per-id "unknown item" loop ahead of this check; mutation-testing it (see the branch
+            // handoff's own Authz/Guard Evidence) proved it could NEVER independently reject
+            // anything this check wouldn't already catch on its own, in any fixture — not merely
+            // hard to isolate with the tests at hand, but a set-theory tautology, so it was
+            // removed rather than kept as "unverified-but-harmless" dead code.
+            Set<Long> validItemIds = po.items().stream().map(FactoryPurchaseOrderItemDto::id).collect(Collectors.toSet());
+            Set<Long> requestedItemIds = items.stream().map(ItemReceiptRequest::itemId).collect(Collectors.toSet());
+            if (!requestedItemIds.equals(validItemIds)) {
+                throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "ต้องระบุจำนวนรับสินค้าให้ครบทุกรายการในใบสั่งซื้อนี้ และรายการที่ระบุต้องอยู่ในใบสั่งซื้อนี้เท่านั้น");
+            }
+        }
+        for (ItemReceiptRequest item : items) {
+            purchaseOrders.recordItemReceipt(id, item.itemId(), item.qtyReceived(), item.qcNote());
+        }
         int rows = purchaseOrders.recordGoodsReceived(id, request.actualLandedCostThb());
         if (rows == 0) {
+            // Lost a race against another recordGoodsReceived/cancel call between the status
+            // check above and this compare-and-set — the per-item writes above are harmless to
+            // have run (they only ever touch qty_received/qc_note, never status), the PO simply
+            // stays wherever the concurrent call left it.
             throw new ApiException(HttpStatus.CONFLICT, "ใบสั่งซื้อนี้ปิดแล้ว ไม่สามารถบันทึกรับสินค้าได้อีก");
         }
         logEvent(po, PricingRequestEventKind.FACTORY_PO_GOODS_RECEIVED, actor,

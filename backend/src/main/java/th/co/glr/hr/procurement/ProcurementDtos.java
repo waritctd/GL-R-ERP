@@ -60,6 +60,14 @@ public final class ProcurementDtos {
         // instruction). Deliberately named "estimated..." so no reader can mistake it for the
         // real number.
         BigDecimal estimatedLandedCostPerUnitThb,
-        BigDecimal estimatedTotalLandedCostThb
+        BigDecimal estimatedTotalLandedCostThb,
+        // Step 8 (V78): the ACTUAL quantity Import counted on receipt, and any QC/damage note —
+        // both null until ProcurementService#recordGoodsReceived is called for this line.
+        BigDecimal qtyReceived,
+        String qcNote,
+        // Computed, never stored (same "estimate vs actual, never conflated" discipline as
+        // above): qtyReceived - quantity. Null until qtyReceived is recorded; positive = over-
+        // shipment, negative = shortage, zero = exactly as ordered.
+        BigDecimal discrepancyQty
     ) {}
 }

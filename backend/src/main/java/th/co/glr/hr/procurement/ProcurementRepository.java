@@ -229,6 +229,28 @@ public class ProcurementRepository {
             """, new MapSqlParameterSource().addValue("id", id).addValue("cost", actualLandedCostThb));
     }
 
+    /**
+     * Step 8: records the ACTUAL quantity Import counted for one PO line, plus any QC/damage
+     * note. Scoped to {@code factoryPurchaseOrderId} — an itemId belonging to a DIFFERENT PO is
+     * silently not updated (0 rows), which {@link ProcurementService#recordGoodsReceived} treats
+     * as a hard failure (the caller must not have been able to reach this at all in practice,
+     * since it validates every itemId against THIS PO's own item set first — this is
+     * defense-in-depth, mirroring Step 7's own cross-tenant guard on
+     * {@code insertItems}).
+     */
+    public int recordItemReceipt(long factoryPurchaseOrderId, long itemId, BigDecimal qtyReceived, String qcNote) {
+        return jdbc.update("""
+            UPDATE sales.factory_purchase_order_item
+               SET qty_received = :qtyReceived, qc_note = :qcNote
+             WHERE factory_purchase_order_item_id = :itemId AND factory_purchase_order_id = :poId
+            """,
+            new MapSqlParameterSource()
+                .addValue("poId", factoryPurchaseOrderId)
+                .addValue("itemId", itemId)
+                .addValue("qtyReceived", qtyReceived)
+                .addValue("qcNote", qcNote));
+    }
+
     public int cancel(long id, String reason) {
         return jdbc.update("""
             UPDATE sales.factory_purchase_order
@@ -286,13 +308,19 @@ public class ProcurementRepository {
               JOIN sales.pricing_costing_item pci ON pci.pricing_costing_item_id = poi.pricing_costing_item_id
              WHERE poi.factory_purchase_order_id = :id
              ORDER BY poi.factory_purchase_order_item_id
-            """, Map.of("id", po.id()), (rs, rowNum) -> new FactoryPurchaseOrderItemDto(
-                rs.getLong("factory_purchase_order_item_id"), rs.getLong("factory_purchase_order_id"),
-                rs.getLong("pricing_costing_item_id"), rs.getLong("pricing_request_item_id"),
-                rs.getString("brand"), rs.getString("model"), rs.getString("product_description"),
-                rs.getBigDecimal("quantity"), rs.getBigDecimal("unit_price"), rs.getString("currency"),
-                rs.getBigDecimal("line_total"),
-                rs.getBigDecimal("est_landed_cost_per_unit_thb"), rs.getBigDecimal("est_total_landed_cost_thb")));
+            """, Map.of("id", po.id()), (rs, rowNum) -> {
+                BigDecimal quantity = rs.getBigDecimal("quantity");
+                BigDecimal qtyReceived = rs.getBigDecimal("qty_received");
+                return new FactoryPurchaseOrderItemDto(
+                    rs.getLong("factory_purchase_order_item_id"), rs.getLong("factory_purchase_order_id"),
+                    rs.getLong("pricing_costing_item_id"), rs.getLong("pricing_request_item_id"),
+                    rs.getString("brand"), rs.getString("model"), rs.getString("product_description"),
+                    quantity, rs.getBigDecimal("unit_price"), rs.getString("currency"),
+                    rs.getBigDecimal("line_total"),
+                    rs.getBigDecimal("est_landed_cost_per_unit_thb"), rs.getBigDecimal("est_total_landed_cost_thb"),
+                    qtyReceived, rs.getString("qc_note"),
+                    qtyReceived == null ? null : qtyReceived.subtract(quantity));
+            });
         return new FactoryPurchaseOrderDto(
             po.id(), po.poNumber(), po.pricingRequestId(), po.pricingRequestCode(), po.ticketId(), po.ticketCode(),
             po.factoryId(), po.factoryName(), po.status(), po.supplierProformaRef(), po.supplierPaymentScheduleNote(),

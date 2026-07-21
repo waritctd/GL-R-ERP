@@ -725,7 +725,8 @@ public class TicketService {
         RecordDeliveryRequest delivery = new RecordDeliveryRequest(
             source,
             request == null ? null : request.note(),
-            remaining);
+            remaining,
+            request == null ? null : request.recipientName());
         return recordDeliveryInternal(ticket, delivery, actor, true);
     }
 
@@ -768,7 +769,8 @@ public class TicketService {
         if ("WAREHOUSE".equals(source) && !warehouseDeliveryAvailable(s, ticket.summary().id())) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องรับสินค้าเข้าโกดังก่อนส่งจาก WAREHOUSE");
         }
-        long deliveryId = tickets.insertDeliveryRecord(s.id(), source, actor.id(), request.note(), normalized);
+        long deliveryId = tickets.insertDeliveryRecord(
+            s.id(), source, actor.id(), request.note(), request.recipientName(), normalized);
         TicketDto updated = requireTicket(s.id());
         TicketSummaryDto updatedSummary = updated.summary();
         boolean fullyDelivered = updated.items().stream()
