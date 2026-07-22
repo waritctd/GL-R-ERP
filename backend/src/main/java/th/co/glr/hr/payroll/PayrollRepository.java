@@ -152,7 +152,12 @@ public class PayrollRepository {
                 money(rs.getBigDecimal("special_pay_5")),
                 money(rs.getBigDecimal("non_taxable_income")),
                 money(rs.getBigDecimal("student_loan_deduction")),
-                money(rs.getBigDecimal("legal_execution_deduction"))
+                money(rs.getBigDecimal("legal_execution_deduction")),
+                // Leave-derived unpaidLeaveDays/pendingUnpaidLeaveCorrectionDays are not this query's
+                // concern (it only knows the prior payroll_line) -- PayrollService#suggestedInputs
+                // overlays the real leave-derived figures onto every row after this method returns.
+                BigDecimal.ZERO,
+                BigDecimal.ZERO
             ));
     }
 
@@ -412,7 +417,8 @@ public class PayrollRepository {
                    pl.other_post_tax_deductions, pl.deductions, pl.net_amount,
                    pl.calculation_note,
                    pl.director_remuneration, pl.warning_letter_deduction,
-                   pl.customer_return_deduction, pl.other_pretax_deduction
+                   pl.customer_return_deduction, pl.other_pretax_deduction,
+                   pl.leave_refund_days, pl.leave_deduction_refund
               FROM hr.payroll_line pl
               JOIN hr.employee e ON e.employee_id = pl.employee_id
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
@@ -595,7 +601,8 @@ public class PayrollRepository {
                 legal_execution_deduction, other_post_tax_deductions, deductions,
                 net_amount, calculation_note,
                 director_remuneration, warning_letter_deduction,
-                customer_return_deduction, other_pretax_deduction
+                customer_return_deduction, other_pretax_deduction,
+                leave_refund_days, leave_deduction_refund
             )
             VALUES (
                 :periodId, :employeeId, :baseSalary, :dailyRate, :hourlyRate,
@@ -610,7 +617,8 @@ public class PayrollRepository {
                 :legalExecutionDeduction, :otherPostTaxDeductions, :deductions,
                 :netAmount, :calculationNote,
                 :directorRemuneration, :warningLetterDeduction,
-                :customerReturnDeduction, :otherPretaxDeduction
+                :customerReturnDeduction, :otherPretaxDeduction,
+                :leaveRefundDays, :leaveDeductionRefund
             )
             """,
             new MapSqlParameterSource()
@@ -652,7 +660,9 @@ public class PayrollRepository {
                 .addValue("directorRemuneration", line.directorRemuneration())
                 .addValue("warningLetterDeduction", line.warningLetterDeduction())
                 .addValue("customerReturnDeduction", line.customerReturnDeduction())
-                .addValue("otherPretaxDeduction", line.otherPretaxDeduction()));
+                .addValue("otherPretaxDeduction", line.otherPretaxDeduction())
+                .addValue("leaveRefundDays", line.leaveRefundDays())
+                .addValue("leaveDeductionRefund", line.leaveDeductionRefund()));
     }
 
     private PayrollPeriodDto toPeriod(PayrollPeriodHeader header, List<PayrollLineDto> lines) {
@@ -713,7 +723,9 @@ public class PayrollRepository {
             money(rs.getBigDecimal("director_remuneration")),
             money(rs.getBigDecimal("warning_letter_deduction")),
             money(rs.getBigDecimal("customer_return_deduction")),
-            money(rs.getBigDecimal("other_pretax_deduction"))
+            money(rs.getBigDecimal("other_pretax_deduction")),
+            money(rs.getBigDecimal("leave_refund_days")),
+            money(rs.getBigDecimal("leave_deduction_refund"))
         );
     }
 

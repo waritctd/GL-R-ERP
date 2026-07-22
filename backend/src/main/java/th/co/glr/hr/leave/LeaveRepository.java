@@ -1,14 +1,19 @@
 package th.co.glr.hr.leave;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -118,11 +123,173 @@ public class LeaveRepository {
         return value == null ? BigDecimal.ZERO : value;
     }
 
+    /**
+     * Leave -&gt; payroll unpaid-day deduction (2026-07-23): per employee, the unpaid WORKING days of
+     * APPROVED leave that fall inside payroll month {@code monthStart} (a first-of-month date). Reads
+     * every APPROVED, unpaid-day-bearing request whose date range overlaps the month, then attributes
+     * days to the month in Java via {@link LeaveDayMath#unpaidWorkingDaysByMonth} so a leave spanning
+     * two calendar months splits correctly -- only the unpaid working days that actually fall in this
+     * month count here, not the request's full unpaid_days total. Consumed by {@code
+     * PayrollService#suggestedInputs} (additive; never touches {@code preview()}/{@code process()}).
+     */
+    public Map<Long, BigDecimal> findUnpaidLeaveDaysByEmployeeForMonth(LocalDate monthStart) {
+        LocalDate monthEndInclusive = monthStart.plusMonths(1).minusDays(1);
+        List<UnpaidLeaveSpan> spans = jdbc.query("""
+            SELECT employee_id, start_date, end_date, paid_days
+              FROM hr.leave_request
+             WHERE status = 'APPROVED'
+               AND unpaid_days > 0
+               AND start_date <= :monthEndInclusive
+               AND end_date >= :monthStart
+            """,
+            new MapSqlParameterSource()
+                .addValue("monthStart", monthStart)
+                .addValue("monthEndInclusive", monthEndInclusive),
+            (rs, rowNum) -> new UnpaidLeaveSpan(
+                rs.getLong("employee_id"),
+                rs.getObject("start_date", LocalDate.class),
+                rs.getObject("end_date", LocalDate.class),
+                rs.getObject("paid_days", BigDecimal.class)
+            ));
+
+        Map<Long, BigDecimal> byEmployee = new LinkedHashMap<>();
+        for (UnpaidLeaveSpan span : spans) {
+            int paidDays = span.paidDays() == null ? 0 : span.paidDays().setScale(0, RoundingMode.DOWN).intValue();
+            Integer unpaidInMonth = LeaveDayMath
+                .unpaidWorkingDaysByMonth(span.startDate(), span.endDate(), paidDays)
+                .get(monthStart);
+            if (unpaidInMonth != null && unpaidInMonth > 0) {
+                // Scale(2) to match the NUMERIC(5,2) convention every other day/money figure in this
+                // codebase uses -- callers (and their equality-based test assertions) expect it.
+                BigDecimal days = BigDecimal.valueOf(unpaidInMonth).setScale(2);
+                byEmployee.merge(span.employeeId(), days, BigDecimal::add);
+            }
+        }
+        return byEmployee;
+    }
+
+    /**
+     * Cancel-after-close reversal (2026-07-23): of the given candidate months, which already have a
+     * PROCESSED payroll_period -- i.e. which of the cancelled leave's months are "closed" and can no
+     * longer simply un-happen. Called from {@code LeaveService#cancel}.
+     */
+    public Set<LocalDate> findProcessedPayrollMonths(Collection<LocalDate> candidateMonths) {
+        if (candidateMonths.isEmpty()) {
+            return Set.of();
+        }
+        return new LinkedHashSet<>(jdbc.query("""
+            SELECT payroll_month
+              FROM hr.payroll_period
+             WHERE status = 'PROCESSED'
+               AND payroll_month IN (:months)
+            """,
+            new MapSqlParameterSource().addValue("months", candidateMonths),
+            (rs, rowNum) -> rs.getObject("payroll_month", LocalDate.class)));
+    }
+
+    /**
+     * Cancel-after-close reversal (2026-07-23): records that {@code unpaidDaysToRefund} unpaid days
+     * already deducted for {@code payrollMonth} belong to a leave request that has since been
+     * cancelled, so the credit is still owed to the employee. Never auto-resolved by this codebase yet
+     * -- see the V85 migration comment and the branch handoff for why.
+     */
+    public void recordPayrollCorrection(long leaveRequestId, long employeeId, LocalDate payrollMonth, BigDecimal unpaidDaysToRefund) {
+        jdbc.update("""
+            INSERT INTO hr.leave_payroll_correction (
+                leave_request_id, employee_id, payroll_month, unpaid_days_to_refund
+            )
+            VALUES (:leaveRequestId, :employeeId, :payrollMonth, :unpaidDaysToRefund)
+            """,
+            new MapSqlParameterSource()
+                .addValue("leaveRequestId", leaveRequestId)
+                .addValue("employeeId", employeeId)
+                .addValue("payrollMonth", payrollMonth)
+                .addValue("unpaidDaysToRefund", unpaidDaysToRefund));
+    }
+
+    /**
+     * Cancel-after-close reversal (2026-07-23): unresolved (not yet {@code resolved_at}) correction
+     * totals per employee, across all months -- surfaced by {@code PayrollService#suggestedInputs}
+     * as an early "heads up, something is outstanding" figure for HR, independent of any specific
+     * payroll run. This is deliberately UNSCOPED (no give-back-on-re-run logic) and never mutates
+     * anything -- the actual auto-refund + resolve now lives in {@link
+     * #findRefundableUnpaidDaysByEmployee} / {@link #resolvePendingCorrections}, used by {@code
+     * PayrollService#preview}/{@code #process} directly. Keep this one as-is; it is a separate,
+     * lighter-weight signal, not the source of truth for what a given run will actually refund.
+     */
+    public Map<Long, BigDecimal> findPendingPayrollCorrectionsByEmployee() {
+        return jdbc.query("""
+            SELECT employee_id, SUM(unpaid_days_to_refund)::numeric(5,2) AS total_days
+              FROM hr.leave_payroll_correction
+             WHERE resolved_at IS NULL
+             GROUP BY employee_id
+            """, Map.of(),
+            (rs, rowNum) -> Map.entry(rs.getLong("employee_id"), rs.getBigDecimal("total_days")))
+            .stream()
+            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    /**
+     * Cancel-after-close reversal, AUTO-REFUND (2026-07-23): total unpaid days to refund per
+     * employee that THIS payroll calculation should credit back -- pending corrections
+     * ({@code resolved_at IS NULL}) PLUS, if {@code givingBackPeriodId} is non-null, any correction
+     * already resolved BY THAT SAME period. The give-back half is what makes re-processing a month
+     * idempotent without double-refunding or losing the credit: a re-run recomputes the whole
+     * period from scratch, so corrections that period previously resolved must come back into the
+     * pool for this recomputation, while corrections resolved by any OTHER (earlier or later)
+     * period stay excluded. Pass {@code null} when the period does not exist yet (nothing to give
+     * back -- equivalent to a plain "pending only" read). Called once per {@code
+     * PayrollService#preview}/{@code #process} invocation, in the same transaction as the paired
+     * {@link #resolvePendingCorrections} call on process -- see that method for how the two stay
+     * consistent with each other.
+     */
+    public Map<Long, BigDecimal> findRefundableUnpaidDaysByEmployee(Long givingBackPeriodId) {
+        return jdbc.query("""
+            SELECT employee_id, SUM(unpaid_days_to_refund)::numeric(5,2) AS total_days
+              FROM hr.leave_payroll_correction
+             WHERE resolved_at IS NULL
+                OR resolved_payroll_period_id = :givingBackPeriodId::bigint
+             GROUP BY employee_id
+            """,
+            new MapSqlParameterSource("givingBackPeriodId", givingBackPeriodId),
+            (rs, rowNum) -> Map.entry(rs.getLong("employee_id"), rs.getBigDecimal("total_days")))
+            .stream()
+            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    /**
+     * Cancel-after-close reversal, AUTO-REFUND (2026-07-23): marks every correction consumed by
+     * {@code periodId}'s just-computed calculation as resolved. The WHERE clause is deliberately
+     * the exact same shape as {@link #findRefundableUnpaidDaysByEmployee}'s read for this same
+     * {@code periodId} -- run in the same DB transaction (see {@code PayrollService#process},
+     * {@code @Transactional}), so this UPDATE only ever touches rows the preceding read already
+     * included. Idempotent by construction: a correction with {@code resolved_payroll_period_id =
+     * periodId} already (from a prior run of this same month) just gets {@code resolved_at}
+     * refreshed -- no double-refund, because {@code findRefundableUnpaidDaysByEmployee} would have
+     * included that exact row in the SUM whether or not this method had ever run before. A
+     * correction resolved by a DIFFERENT period is excluded by both the read and this write, so it
+     * is never touched, never re-summed, and never double-counted.
+     */
+    public void resolvePendingCorrections(long periodId) {
+        jdbc.update("""
+            UPDATE hr.leave_payroll_correction
+               SET resolved_at = now(),
+                   resolved_payroll_period_id = :periodId
+             WHERE resolved_at IS NULL
+                OR resolved_payroll_period_id = :periodId
+            """, new MapSqlParameterSource("periodId", periodId));
+    }
+
+    private record UnpaidLeaveSpan(long employeeId, LocalDate startDate, LocalDate endDate, BigDecimal paidDays) {
+    }
+
     public long create(
             long employeeId,
             Long requestedById,
             SubmitLeaveRequest request,
             BigDecimal totalDays,
+            BigDecimal paidDays,
+            BigDecimal unpaidDays,
             int quotaYear,
             LeaveStatus status,
             BigDecimal quotaRemainingBefore,
@@ -130,13 +297,13 @@ public class LeaveRepository {
             String systemNote) {
         Long id = jdbc.queryForObject("""
             INSERT INTO hr.leave_request (
-                employee_id, leave_type_code, start_date, end_date, total_days, quota_year,
-                reason, status, quota_remaining_before,
+                employee_id, leave_type_code, start_date, end_date, total_days, paid_days, unpaid_days,
+                quota_year, reason, status, quota_remaining_before,
                 quota_remaining_after, system_note, requested_by_id
             )
             VALUES (
-                :employeeId, :leaveTypeCode, :startDate, :endDate, :totalDays, :quotaYear,
-                :reason, :status, :quotaRemainingBefore,
+                :employeeId, :leaveTypeCode, :startDate, :endDate, :totalDays, :paidDays, :unpaidDays,
+                :quotaYear, :reason, :status, :quotaRemainingBefore,
                 :quotaRemainingAfter, :systemNote, :requestedById
             )
             RETURNING leave_request_id
@@ -146,6 +313,8 @@ public class LeaveRepository {
             .addValue("startDate", request.startDate())
             .addValue("endDate", request.endDate())
             .addValue("totalDays", totalDays)
+            .addValue("paidDays", paidDays)
+            .addValue("unpaidDays", unpaidDays)
             .addValue("quotaYear", quotaYear)
             .addValue("reason", request.reason().trim())
             .addValue("status", status.name())
@@ -262,6 +431,8 @@ public class LeaveRepository {
                    lr.start_date,
                    lr.end_date,
                    lr.total_days,
+                   lr.paid_days,
+                   lr.unpaid_days,
                    lr.quota_year,
                    lr.reason,
                    lr.attachment_id,
@@ -314,6 +485,8 @@ public class LeaveRepository {
             rs.getObject("start_date", LocalDate.class),
             rs.getObject("end_date", LocalDate.class),
             rs.getObject("total_days", BigDecimal.class),
+            rs.getObject("paid_days", BigDecimal.class),
+            rs.getObject("unpaid_days", BigDecimal.class),
             rs.getInt("quota_year"),
             rs.getString("reason"),
             nullableLong(rs, "attachment_id"),

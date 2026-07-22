@@ -503,4 +503,110 @@ class PayrollCalculatorTest {
             BigDecimal.ZERO, warningLetter, customerReturn, otherPretax
         );
     }
+
+    // ---- Cancel-after-close reversal, AUTO-REFUND (2026-07-23) ------------------------------
+
+    @Test
+    void legacySixteenArgConstructorDefaultsLeaveRefundDaysToZero() {
+        PayrollCalculationInput legacy = new PayrollCalculationInput(
+            new BigDecimal("40000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+        );
+        assertThat(legacy.leaveRefundDays()).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    /**
+     * At a salary BELOW the SSO 17,500 ceiling, the refund visibly moves the SSO wage base --
+     * proving it recomputes SSO, not just a flat add to net pay. Expected figures hand-derived
+     * (dailyRate = 10000/30 = 333.3333; refund = 333.3333 x 2 = 666.67 after HALF_UP rounding).
+     */
+    @Test
+    void leaveDeductionRefundAddsBackPreTaxIncomeAndRecomputesSso() {
+        PayrollCalculation withoutRefund = calculator.calculate(new PayrollCalculationInput(
+            new BigDecimal("10000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 8,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+        ));
+        PayrollCalculation withRefund = calculator.calculate(new PayrollCalculationInput(
+            new BigDecimal("10000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 8,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("2.00")
+        ));
+
+        assertThat(withoutRefund.ssoWageBase()).isEqualByComparingTo("10000.00");
+        assertThat(withoutRefund.socialSecurity()).isEqualByComparingTo("500.00");
+        assertThat(withoutRefund.netPay()).isEqualByComparingTo("9500.00");
+
+        assertThat(withRefund.leaveRefundDays()).isEqualByComparingTo("2.00");
+        assertThat(withRefund.leaveDeductionRefund()).isEqualByComparingTo("666.67");
+        assertThat(withRefund.grossTaxableIncome()).isEqualByComparingTo("10666.67");
+        assertThat(withRefund.ssoWageBase()).isEqualByComparingTo("10666.67");
+        assertThat(withRefund.socialSecurity()).isEqualByComparingTo("533.33");
+        assertThat(withRefund.netPay()).isEqualByComparingTo("10133.34");
+        // Net pay rises by LESS than the raw 666.67 refund, because SSO also grew on the restored
+        // income (500.00 -> 533.33, i.e. 33.33 more) -- proof the refund is genuinely taxed/SSO'd
+        // like real income, not just handed back flat.
+        assertThat(withRefund.netPay().subtract(withoutRefund.netPay()))
+            .isEqualByComparingTo(new BigDecimal("633.34"));
+    }
+
+    /**
+     * At a salary already at the SSO ceiling, the refund cannot move SSO further (proving the
+     * existing [MIN,MAX] clamp protects against a refund pushing the base past 17,500), but DOES
+     * visibly move withholding tax at this larger amount -- proving the refund recomputes tax too.
+     */
+    @Test
+    void leaveDeductionRefundRecomputesWithholdingTaxWithoutBreachingTheSsoCeiling() {
+        PayrollCalculation withoutRefund = calculator.calculate(new PayrollCalculationInput(
+            new BigDecimal("80000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 6,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+        ));
+        PayrollCalculation withRefund = calculator.calculate(new PayrollCalculationInput(
+            new BigDecimal("80000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 6,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("5.00")
+        ));
+
+        assertThat(withoutRefund.annualTax()).isEqualByComparingTo("16887.50");
+        assertThat(withoutRefund.withholdingTax()).isEqualByComparingTo("2412.50");
+
+        assertThat(withRefund.leaveDeductionRefund()).isEqualByComparingTo("13333.33");
+        assertThat(withRefund.grossTaxableIncome()).isEqualByComparingTo("93333.33");
+        assertThat(withRefund.ssoWageBase()).isEqualByComparingTo("17500.00");
+        assertThat(withRefund.socialSecurity()).isEqualByComparingTo(withoutRefund.socialSecurity());
+        assertThat(withRefund.annualTax()).isEqualByComparingTo("26220.83");
+        assertThat(withRefund.withholdingTax()).isEqualByComparingTo("3745.83");
+        assertThat(withRefund.netPay()).isEqualByComparingTo("88712.50");
+        assertThat(withRefund.netPay()).isGreaterThan(withoutRefund.netPay());
+    }
+
+    /**
+     * A refund and this month's OWN new unpaid leave can coexist -- they are independent events
+     * (a credit owed from a past cancelled leave vs. a fresh deduction this month) that combine
+     * additively through the same pre-tax path, not one silently overriding the other.
+     */
+    @Test
+    void leaveDeductionRefundNetsAgainstThisMonthsOwnUnpaidLeaveDeduction() {
+        PayrollCalculation result = calculator.calculate(new PayrollCalculationInput(
+            new BigDecimal("80000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            new BigDecimal("3.00"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 6,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("5.00")
+        ));
+
+        assertThat(result.unpaidLeaveDays()).isEqualByComparingTo("3.00");
+        assertThat(result.unpaidLeaveDeduction()).isEqualByComparingTo("8000.00");
+        assertThat(result.leaveRefundDays()).isEqualByComparingTo("5.00");
+        assertThat(result.leaveDeductionRefund()).isEqualByComparingTo("13333.33");
+        // Net pre-tax effect is +5,333.33 (13,333.33 refund - 8,000.00 new deduction).
+        assertThat(result.grossTaxableIncome()).isEqualByComparingTo("85333.33");
+        assertThat(result.netPay()).isEqualByComparingTo("81512.50");
+    }
 }

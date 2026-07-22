@@ -34,5 +34,10 @@ public record PayrollCalculation(
     BigDecimal directorRemuneration,
     BigDecimal warningLetterDeduction,
     BigDecimal customerReturnDeduction,
-    BigDecimal otherPretaxDeduction
+    BigDecimal otherPretaxDeduction,
+    // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): the pre-tax credit reversing a PRIOR
+    // month's over-deduction. Kept separate from unpaidLeaveDays/unpaidLeaveDeduction (this month's
+    // OWN unpaid leave, if any) throughout -- see PayrollCalculator for how the two combine.
+    BigDecimal leaveRefundDays,
+    BigDecimal leaveDeductionRefund
 ) {}

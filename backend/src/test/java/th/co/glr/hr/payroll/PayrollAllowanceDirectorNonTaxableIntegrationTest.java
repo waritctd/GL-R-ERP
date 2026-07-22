@@ -17,6 +17,7 @@ import th.co.glr.hr.commission.CommissionAttachmentRepository;
 import th.co.glr.hr.commission.CommissionCalculator;
 import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.CommissionService;
+import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -45,12 +46,16 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
             mock(NotificationService.class),
             mock(TicketRepository.class),
             mock(AttachmentRepository.class));
+        // Leave -> payroll unpaid-day deduction (2026-07-23): mechanical constructor-arity fix --
+        // PayrollService gained a LeaveRepository dependency for #suggestedInputs, unrelated to what
+        // this test exercises.
         payrollService = new PayrollService(
             payrollRepository,
             new PayrollCalculator(),
             commissionService,
             mock(AuditService.class),
-            mock(PayslipRenderer.class));
+            mock(PayslipRenderer.class),
+            new LeaveRepository(jdbc));
     }
 
     // ---- P8: a stored tax-allowance declaration changes the bracket/amount through preview -----

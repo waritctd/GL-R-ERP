@@ -15,6 +15,7 @@ vi.mock('../../api/index.js', () => ({
       bankExport: vi.fn(),
       downloadPayslip: vi.fn(),
       distributePayslips: vi.fn(),
+      suggestedInputs: vi.fn(),
     },
   },
 }));
@@ -80,6 +81,7 @@ describe('PayrollPage adjustment inputs', () => {
     api.payroll.preview.mockResolvedValue({ period: previewPeriod() });
     api.payroll.downloadPayslip.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }));
     api.payroll.distributePayslips.mockResolvedValue({ periodId: 7, totalLines: 1, alreadySent: 0, queued: 1 });
+    api.payroll.suggestedInputs.mockResolvedValue({ payrollMonth: '2026-07-01', suggestions: [] });
   });
 
   it('uses Excel-based UAT defaults and shows a Baht prefix on money fields', async () => {
@@ -133,5 +135,117 @@ describe('PayrollPage adjustment inputs', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Email payslips/i }));
 
     await waitFor(() => expect(api.payroll.distributePayslips).toHaveBeenCalledWith(7));
+  });
+
+  // Leave -> payroll unpaid-day deduction (2026-07-23). The unpaidLeaveDays field lives inside the
+  // "รายการหักรายบุคคล" CollapsibleSection, which defaults to collapsed -- and CollapsibleSection
+  // unmounts its body entirely (not CSS-hidden) while collapsed, so every test here must expand it
+  // before the field exists in the DOM.
+  async function expandUnpaidLeaveSection() {
+    fireEvent.click(await screen.findByRole('button', { name: /รายการหักรายบุคคล/ }));
+    // The `selector: 'input'` filter is needed because the field's InfoTip button carries the same
+    // accessible name ("วันลาไม่รับค่าจ้าง") as an aria-label -- without it, getByLabelText matches
+    // both the input and the InfoTip trigger and throws "Found multiple elements".
+    return screen.findByLabelText(/วันลาไม่รับค่าจ้าง/, { selector: 'input' });
+  }
+
+  describe('leave-derived unpaidLeaveDays suggestion', () => {
+    it('pre-fills unpaidLeaveDays from the leave-derived suggestion on a fresh PREVIEW run', async () => {
+      api.payroll.suggestedInputs.mockResolvedValue({
+        payrollMonth: '2026-07-01',
+        suggestions: [{ employeeId: 1, unpaidLeaveDays: 1.5, pendingUnpaidLeaveCorrectionDays: 0 }],
+      });
+
+      renderPayrollPage();
+
+      const unpaidLeaveDays = await expandUnpaidLeaveSection();
+      expect(unpaidLeaveDays.value).toBe('1.5');
+    });
+
+    it('lets HR override the pre-filled unpaidLeaveDays suggestion before submitting', async () => {
+      api.payroll.suggestedInputs.mockResolvedValue({
+        payrollMonth: '2026-07-01',
+        suggestions: [{ employeeId: 1, unpaidLeaveDays: 1.5, pendingUnpaidLeaveCorrectionDays: 0 }],
+      });
+
+      renderPayrollPage();
+
+      const unpaidLeaveDays = await expandUnpaidLeaveSection();
+      expect(unpaidLeaveDays.value).toBe('1.5');
+
+      fireEvent.change(unpaidLeaveDays, { target: { value: '2' } });
+      fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submittedInput = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submittedInput.unpaidLeaveDays).toBe(2);
+    });
+
+    it('a real (already-persisted) line value on a PROCESSED period wins over any suggestion', async () => {
+      api.payroll.current.mockResolvedValue({
+        period: previewPeriod({ id: 7, status: 'PROCESSED', lines: [{ ...payrollLine, unpaidLeaveDays: 3 }] }),
+      });
+      api.payroll.suggestedInputs.mockResolvedValue({
+        payrollMonth: '2026-07-01',
+        suggestions: [{ employeeId: 1, unpaidLeaveDays: 1.5, pendingUnpaidLeaveCorrectionDays: 0 }],
+      });
+
+      renderPayrollPage();
+
+      const unpaidLeaveDays = await expandUnpaidLeaveSection();
+      expect(unpaidLeaveDays.value).toBe('3');
+      // PROCESSED periods never fetch suggestions at all (see load()'s guard).
+      expect(api.payroll.suggestedInputs).not.toHaveBeenCalled();
+    });
+
+    it('shows a hint for an unresolved cancel-after-close correction credit, without changing the field value', async () => {
+      api.payroll.suggestedInputs.mockResolvedValue({
+        payrollMonth: '2026-07-01',
+        suggestions: [{ employeeId: 1, unpaidLeaveDays: 0, pendingUnpaidLeaveCorrectionDays: 1 }],
+      });
+
+      renderPayrollPage();
+
+      const unpaidLeaveDays = await expandUnpaidLeaveSection();
+      expect(unpaidLeaveDays.value).toBe('');
+      // findByText throws (failing the test) if the hint isn't present -- no jest-dom matchers are
+      // set up in this project's vitest config, so there's nothing to chain here.
+      await screen.findByText(/เครดิตวันลาไม่รับค่าจ้างค้างคืน/);
+    });
+
+    // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): the backend now applies the correction
+    // itself (PayrollService#preview/#process) rather than only surfacing a "please adjust manually"
+    // suggestion -- these two fields (leaveRefundDays/leaveDeductionRefund) live on the CALCULATED
+    // line the API returns, not on the suggestion or the HR-editable adjustment form.
+    it('shows the auto-applied refund on a line that already includes one, and drops the stale manual-entry hint', async () => {
+      api.payroll.current.mockResolvedValue({
+        period: previewPeriod({
+          lines: [{ ...payrollLine, leaveRefundDays: 1, leaveDeductionRefund: 1000 }],
+        }),
+      });
+      api.payroll.suggestedInputs.mockResolvedValue({
+        payrollMonth: '2026-07-01',
+        suggestions: [{ employeeId: 1, unpaidLeaveDays: 0, pendingUnpaidLeaveCorrectionDays: 1 }],
+      });
+
+      renderPayrollPage();
+      await expandUnpaidLeaveSection();
+
+      // The new auto-applied hint appears...
+      await screen.findByText(/ระบบคืนเครดิตวันลาไม่รับค่าจ้างค้างคืน 1 วัน/);
+      // ...and the old "please adjust manually, not automatic yet" wording is gone -- that claim is no
+      // longer true and would risk HR double-entering the credit into unpaidLeaveDays by hand.
+      expect(screen.queryByText(/กรุณาปรับตัวเลขด้านบนด้วยตนเอง/)).toBeNull();
+      // The breakdown panel also shows the refund amount as its own line.
+      await screen.findByText(/คืนเครดิตวันลาไม่รับค่าจ้าง \(1 วัน\)/);
+    });
+
+    it('does not show any refund hint when there is no refund on the line and no pending correction', async () => {
+      renderPayrollPage();
+      await expandUnpaidLeaveSection();
+
+      expect(screen.queryByText(/เครดิตวันลาไม่รับค่าจ้างค้างคืน/)).toBeNull();
+      expect(screen.queryByText(/คืนเครดิตวันลาไม่รับค่าจ้าง \(/)).toBeNull();
+    });
   });
 });

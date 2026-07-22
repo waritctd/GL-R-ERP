@@ -25,6 +25,7 @@ import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
+import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -99,12 +100,16 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
             mock(NotificationService.class),
             mock(TicketRepository.class),
             mock(AttachmentRepository.class));
+        // Leave -> payroll unpaid-day deduction (2026-07-23): mechanical constructor-arity fix --
+        // PayrollService gained a LeaveRepository dependency for #suggestedInputs, unrelated to what
+        // this test exercises.
         payrollService = new PayrollService(
             new PayrollRepository(jdbc),
             new PayrollCalculator(),
             commissionService,
             mock(AuditService.class),
-            mock(PayslipRenderer.class));
+            mock(PayslipRenderer.class),
+            new LeaveRepository(jdbc));
 
         managerEmployeeId = createEmployee("ผู้จัดการฝ่ายขาย ทดสอบเพย์โรล", "sm-payroll-calcrefine@glr.co.th", "SA", "แผนกขาย");
         managerActor = new UserPrincipal(managerEmployeeId, managerEmployeeId + "@glr.co.th", "Sales Manager",

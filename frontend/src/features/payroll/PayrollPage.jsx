@@ -165,7 +165,12 @@ function adjustmentFromLine(line, { applyDefaults = false, suggestion = null } =
     adjustment[key] = draftValue(item.amount, fallback);
   });
   adjustment.nonTaxableIncome = draftValue(line.nonTaxableIncome, suggestedFallback(suggestion, 'nonTaxableIncome') ?? '');
-  adjustment.unpaidLeaveDays = draftValue(line.unpaidLeaveDays);
+  // Leave -> payroll unpaid-day deduction (2026-07-23): unpaidLeaveDays is event-driven (this
+  // month's approved-beyond-quota leave, from GET /api/payroll/suggested-inputs), unlike the other
+  // carried fields above which are prior-month recurring amounts -- but it pre-fills the same way:
+  // a real line value (already-submitted/persisted) wins, otherwise fall back to the suggestion.
+  // HR can still edit/clear it before Preview/Process, same as every other field here.
+  adjustment.unpaidLeaveDays = draftValue(line.unpaidLeaveDays, suggestedFallback(suggestion, 'unpaidLeaveDays') ?? '');
   adjustment.studentLoanDeduction = draftValue(line.studentLoanDeduction, suggestedFallback(suggestion, 'studentLoanDeduction') ?? '');
   adjustment.legalExecutionDeduction = draftValue(line.legalExecutionDeduction, suggestedFallback(suggestion, 'legalExecutionDeduction') ?? '');
   adjustment.otherPostTaxDeductions = draftValue(line.otherPostTaxDeductions);
@@ -205,6 +210,11 @@ export function PayrollPage({ showToast }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [confirmProcess, setConfirmProcess] = useState(false);
+  // Leave -> payroll unpaid-day deduction (2026-07-23): the raw suggestions response, kept only so
+  // the pending cancel-after-close correction credit (if any) can be shown as a hint next to the
+  // unpaidLeaveDays field. Never re-applied to `adjustments` after the initial pre-fill in
+  // applyPeriod -- HR's edits always win.
+  const [suggestionsByEmployee, setSuggestionsByEmployee] = useState({});
 
   const selectedLine = useMemo(
     () => (period?.lines || []).find((line) => Number(line.employeeId) === Number(selectedEmployeeId)) || period?.lines?.[0] || null,
@@ -213,6 +223,8 @@ export function PayrollPage({ showToast }) {
   const selectedAdjustment = selectedLine
     ? adjustments[selectedLine.employeeId] || adjustmentFromLine(selectedLine)
     : null;
+  const selectedSuggestion = selectedLine ? suggestionsByEmployee[selectedLine.employeeId] : null;
+  const pendingUnpaidLeaveCorrectionDays = Number(selectedSuggestion?.pendingUnpaidLeaveCorrectionDays || 0);
   const status = statusInfo(period?.status);
 
   async function load() {
@@ -235,6 +247,7 @@ export function PayrollPage({ showToast }) {
           suggestionsByEmployee = {};
         }
       }
+      setSuggestionsByEmployee(suggestionsByEmployee);
       applyPeriod(nextPeriod, { applyUatDefaults: true, suggestionsByEmployee });
     } catch (error) {
       showToast('error', error.message || 'โหลดเงินเดือนไม่สำเร็จ');
@@ -488,7 +501,19 @@ export function PayrollPage({ showToast }) {
                 <FormGrid>
                   <label htmlFor="payroll-unpaid-leave-days">
                     วันลาไม่รับค่าจ้าง
+                    <InfoTip label="วันลาไม่รับค่าจ้าง" text="ตัวเลขนี้ถูกกรอกล่วงหน้าจากวันลาที่อนุมัติเกินโควตาในเดือนนี้ (ระบบวันลา) สามารถแก้ไขได้ก่อนคำนวณ/ประมวลผล" />
                     <input id="payroll-unpaid-leave-days" type="number" min="0" step="0.25" placeholder="0" value={selectedAdjustment.unpaidLeaveDays} onChange={(event) => updateAdjustment('unpaidLeaveDays', event.target.value)} />
+                    {Number(selectedLine.leaveRefundDays || 0) > 0 ? (
+                      <small className="block text-warning">
+                        ระบบคืนเครดิตวันลาไม่รับค่าจ้างค้างคืน {selectedLine.leaveRefundDays} วัน ({formatMoney(selectedLine.leaveDeductionRefund)}) ให้อัตโนมัติในงวดนี้แล้ว
+                        จากการยกเลิกคำขอลาหลังปิดงวดเงินเดือนก่อนหน้า — ไม่ต้องกรอกตัวเลขด้านบนเพิ่ม
+                      </small>
+                    ) : pendingUnpaidLeaveCorrectionDays > 0 && (
+                      <small className="block text-warning">
+                        มีเครดิตวันลาไม่รับค่าจ้างค้างคืน {pendingUnpaidLeaveCorrectionDays} วัน จากการยกเลิกคำขอลาหลังปิดงวดเงินเดือน
+                        ระบบจะคืนเครดิตนี้ให้อัตโนมัติในงวดเงินเดือนถัดไปที่ประมวลผลสำหรับพนักงานคนนี้
+                      </small>
+                    )}
                   </label>
                   <label htmlFor="payroll-student-loan-deduction">
                     หัก กยศ.
@@ -536,6 +561,12 @@ export function PayrollPage({ showToast }) {
                 <span><b>รายได้ไม่คิดภาษี</b>{formatMoney(selectedLine.nonTaxableIncome)}</span>
                 {Number(selectedLine.directorRemuneration || 0) > 0 && (
                   <span><b>ค่าตอบแทนกรรมการ</b>{formatMoney(selectedLine.directorRemuneration)}</span>
+                )}
+                {Number(selectedLine.leaveRefundDays || 0) > 0 && (
+                  <span>
+                    <b>คืนเครดิตวันลาไม่รับค่าจ้าง ({selectedLine.leaveRefundDays} วัน)</b>
+                    {formatMoney(selectedLine.leaveDeductionRefund)}
+                  </span>
                 )}
               </div>
             </>

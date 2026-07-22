@@ -23,17 +23,22 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.leave.LeaveRepository;
 
 class PayrollServiceTest {
     private final PayrollRepository payrollRepository = mock(PayrollRepository.class);
     private final AuditService auditService = mock(AuditService.class);
     private final PayslipRenderer payslipRenderer = mock(PayslipRenderer.class);
+    // Leave -> payroll unpaid-day deduction (2026-07-23): mechanical constructor-arity fix only --
+    // PayrollService gained a LeaveRepository dependency for #suggestedInputs (see PayrollService.java);
+    // this test class does not exercise that method, so an unused mock is sufficient here.
     private final PayrollService service = new PayrollService(
         payrollRepository,
         mock(PayrollCalculator.class),
         mock(CommissionService.class),
         auditService,
-        payslipRenderer
+        payslipRenderer,
+        mock(LeaveRepository.class)
     );
 
     @Test

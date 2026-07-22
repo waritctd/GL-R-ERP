@@ -1,11 +1,12 @@
 package th.co.glr.hr.leave;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Clock;
-import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -136,21 +137,43 @@ public class LeaveService {
         BigDecimal totalDays = workingDaysBetween(request.startDate(), request.endDate());
         int quotaYear = request.startDate().getYear();
         BigDecimal remainingBefore = remainingDays(employeeId, leaveType, quotaYear);
-        boolean quotaAvailable = remainingBefore.compareTo(totalDays) >= 0;
         boolean hasAttachment = attachment != null && !attachment.isEmpty();
-        String systemNote = autoRejectNote(leaveType, request.startDate(), quotaAvailable, hasAttachment, remainingBefore, totalDays);
+        // Leave -> payroll unpaid-day deduction (2026-07-23): the gate no longer auto-rejects purely
+        // for exceeding quota. It approves and splits the requested days into paidDays (covered by
+        // remaining statutory quota) and unpaidDays (no-work-no-pay, deducted downstream in payroll at
+        // base/30 per unpaid WORKING day -- see PayrollCalculator#unpaidLeaveDeduction). The only
+        // remaining auto-reject reasons are non-quota ones: a SICK request missing its required
+        // attachment, and insufficient advance notice. See docs/agent-handoffs for the HR/legal
+        // sign-off caveat this rule still needs before it drives a real payroll run.
+        String systemNote = autoRejectNote(leaveType, request.startDate(), hasAttachment);
         LeaveStatus status = systemNote == null ? LeaveStatus.APPROVED : LeaveStatus.AUTO_REJECTED;
-        BigDecimal remainingAfter = status == LeaveStatus.APPROVED ? remainingBefore.subtract(totalDays) : remainingBefore;
+        BigDecimal paidDays;
+        BigDecimal unpaidDays;
+        BigDecimal remainingAfter;
+        if (status == LeaveStatus.APPROVED) {
+            // paidDays consumes from the request's earliest working days first (chronological order):
+            // that is the only ordering an aggregate paid/unpaid split can represent, and it matches
+            // the natural reading of "day N onward went unpaid". See LeaveDayMath.
+            paidDays = remainingBefore.min(totalDays).max(BigDecimal.ZERO);
+            unpaidDays = totalDays.subtract(paidDays);
+            remainingAfter = remainingBefore.subtract(paidDays).max(BigDecimal.ZERO);
+        } else {
+            paidDays = BigDecimal.ZERO;
+            unpaidDays = BigDecimal.ZERO;
+            remainingAfter = remainingBefore;
+        }
 
         long id = leaveRepository.create(
             employeeId,
             actorEmployeeId,
             request,
             totalDays,
+            paidDays,
+            unpaidDays,
             quotaYear,
             status,
             remainingBefore,
-            remainingAfter.max(BigDecimal.ZERO),
+            remainingAfter,
             systemNote
         );
         if (hasAttachment) {
@@ -236,9 +259,56 @@ public class LeaveService {
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "Leave request can no longer be cancelled");
         }
+        // Cancel-after-close reversal: uses `existing` (the pre-cancel snapshot), not the freshly
+        // cancelled row -- it still carries the paidDays/unpaidDays that were actually granted.
+        recordPayrollCorrectionIfNeeded(existing);
         LeaveRequestDto after = requireRequest(id);
         auditService.record(user, "CANCEL_LEAVE_REQUEST", "leave_request", id, existing, after);
         return after;
+    }
+
+    /**
+     * Cancel-after-close reversal (2026-07-23; AUTO-REFUND added 2026-07-23 same day, owner
+     * decision -- the original record-and-surface-only v1 was not enough). Cancelling a leave
+     * request is allowed unconditionally regardless of whether it overlaps an already-PROCESSED
+     * payroll month (nothing above this method blocks that). Once a leave's month has been
+     * processed, though, its unpaid-day deduction already landed in the employee's net pay for a
+     * closed period -- undoing that in place is out of scope here. Instead, this records an
+     * auditable "credit owed" row per affected processed month in {@code
+     * hr.leave_payroll_correction}.
+     *
+     * <p>This method only ever WRITES a pending correction (never resolves one) -- resolution is
+     * entirely {@code PayrollService}'s concern, on the read side: {@code
+     * PayrollService#suggestedInputs} surfaces the unresolved total as an early heads-up (unscoped,
+     * independent of any specific run), while {@code PayrollService#preview}/{@code #process}
+     * auto-apply it as a real pre-tax credit the NEXT time payroll runs for this employee, and
+     * {@code #process} marks the consumed correction(s) resolved (sets {@code resolved_at} /
+     * {@code resolved_payroll_period_id}) in the same transaction. See {@code
+     * LeaveRepository#findRefundableUnpaidDaysByEmployee}/{@code #resolvePendingCorrections} and
+     * {@code PayrollCalculator}'s {@code leaveRefundDays}/{@code leaveDeductionRefund} handling for
+     * the full mechanism.
+     */
+    private void recordPayrollCorrectionIfNeeded(LeaveRequestDto cancelled) {
+        if (!"APPROVED".equals(cancelled.status())) {
+            return;
+        }
+        BigDecimal unpaidDays = cancelled.unpaidDays();
+        if (unpaidDays == null || unpaidDays.signum() <= 0) {
+            return;
+        }
+        int paidDays = cancelled.paidDays() == null ? 0 : cancelled.paidDays().setScale(0, RoundingMode.DOWN).intValue();
+        Map<LocalDate, Integer> unpaidByMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
+            cancelled.startDate(), cancelled.endDate(), paidDays);
+        if (unpaidByMonth.isEmpty()) {
+            return;
+        }
+        Set<LocalDate> processedMonths = leaveRepository.findProcessedPayrollMonths(unpaidByMonth.keySet());
+        for (LocalDate month : processedMonths) {
+            Integer days = unpaidByMonth.get(month);
+            if (days != null && days > 0) {
+                leaveRepository.recordPayrollCorrection(cancelled.id(), cancelled.employeeId(), month, BigDecimal.valueOf(days));
+            }
+        }
     }
 
     private LeaveBalanceDto balanceFor(long employeeId, int year, LeaveTypeDto type) {
@@ -262,11 +332,7 @@ public class LeaveService {
         return leaveType.annualQuotaDays().subtract(used).max(BigDecimal.ZERO);
     }
 
-    private String autoRejectNote(LeaveTypeDto leaveType, LocalDate startDate, boolean quotaAvailable,
-                                  boolean hasAttachment, BigDecimal remainingBefore, BigDecimal requestedDays) {
-        if (!quotaAvailable) {
-            return insufficientQuotaNote(remainingBefore, requestedDays);
-        }
+    private String autoRejectNote(LeaveTypeDto leaveType, LocalDate startDate, boolean hasAttachment) {
         if ("SICK".equals(leaveType.code()) && !hasAttachment) {
             return "Sick leave requires a medical certificate attachment. Attach the certificate or contact HR for help.";
         }
@@ -281,13 +347,17 @@ public class LeaveService {
 
     private void notifyAfterSubmit(LeaveRequestDto request, LeaveStatus status) {
         if (status == LeaveStatus.APPROVED) {
+            boolean hasUnpaidDays = request.unpaidDays() != null && request.unpaidDays().signum() > 0;
+            String unpaidSuffix = hasUnpaidDays
+                ? " (รวมวันลาไม่รับค่าจ้าง " + formatDays(request.unpaidDays()) + " วัน เนื่องจากเกินโควตา)"
+                : "";
             notificationService.notify(
                 request.employeeId(),
                 "LEAVE_AUTO_APPROVED",
                 "คำขอลาได้รับการอนุมัติอัตโนมัติ",
                 "คำขอลา " + request.leaveTypeNameTh() + " วันที่ " + request.startDate() + " ถึง "
                     + request.endDate() + " ได้รับการอนุมัติแล้ว เหลือโควตา "
-                    + formatDays(request.quotaRemainingAfter()) + " วัน",
+                    + formatDays(request.quotaRemainingAfter()) + " วัน" + unpaidSuffix,
                 "/leave",
                 true);
             if (request.managerEmployeeId() != null) {
@@ -355,15 +425,7 @@ public class LeaveService {
     }
 
     private BigDecimal workingDaysBetween(LocalDate startDate, LocalDate endDate) {
-        int days = 0;
-        LocalDate cursor = startDate;
-        while (!cursor.isAfter(endDate)) {
-            DayOfWeek day = cursor.getDayOfWeek();
-            if (day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY) {
-                days += 1;
-            }
-            cursor = cursor.plusDays(1);
-        }
+        int days = LeaveDayMath.countWorkingDays(startDate, endDate);
         if (days <= 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Leave range must include at least one weekday");
         }
@@ -433,12 +495,6 @@ public class LeaveService {
         return request == null || request.reviewerNote() == null || request.reviewerNote().isBlank()
             ? null
             : request.reviewerNote().trim();
-    }
-
-    private String insufficientQuotaNote(BigDecimal remainingBefore, BigDecimal requestedDays) {
-        return "Remaining quota is " + remainingBefore.stripTrailingZeros().toPlainString()
-            + " day(s), which is not enough for this " + requestedDays.stripTrailingZeros().toPlainString()
-            + " day request. Contact HR to adjust quota or follow the unpaid leave process.";
     }
 
     private String formatDays(BigDecimal value) {

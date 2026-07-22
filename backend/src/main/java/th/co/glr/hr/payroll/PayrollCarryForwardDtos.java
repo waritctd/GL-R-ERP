@@ -15,9 +15,19 @@ import java.util.List;
  * <p>Only the recurring fields are carried: special_pay_1..5 (company allowances), non_taxable_income,
  * student_loan_deduction, legal_execution_deduction. Deliberately excluded: special_pay_6
  * (commission — {@code CommissionService} already feeds this; carrying it would double-count),
- * special_pay_7/8 (KPI / one-off bonus), and every event-driven field (unpaid leave days,
- * warning-letter / customer-return deductions, other pre/post-tax deductions) — those describe THIS
- * month's events, not a standing recurring amount.
+ * special_pay_7/8 (KPI / one-off bonus), and other event-driven fields (warning-letter /
+ * customer-return deductions, other pre/post-tax deductions) — those describe THIS month's events,
+ * not a standing recurring amount.
+ *
+ * <p>Leave -&gt; payroll unpaid-day deduction (2026-07-23): {@code unpaidLeaveDays} IS event-driven
+ * (this month's approved-beyond-quota leave, from {@code LeaveRepository
+ * #findUnpaidLeaveDaysByEmployeeForMonth}) but is included here anyway because, unlike the other
+ * event fields, it has a real system of record ({@code hr.leave_request}) rather than being typed
+ * fresh by HR every run. {@code pendingUnpaidLeaveCorrectionDays} is the unresolved
+ * cancel-after-close credit total from {@code LeaveRepository#findPendingPayrollCorrectionsByEmployee}
+ * — surfaced so HR can see it, NOT auto-netted into {@code unpaidLeaveDays}, and NOT auto-resolved
+ * once shown (see the V85 migration comment and {@code LeaveService#cancel} for why). HR must
+ * manually factor it into the submitted {@code unpaidLeaveDays} value.
  */
 public final class PayrollCarryForwardDtos {
     private PayrollCarryForwardDtos() {
@@ -32,8 +42,20 @@ public final class PayrollCarryForwardDtos {
         BigDecimal specialPay5,
         BigDecimal nonTaxableIncome,
         BigDecimal studentLoanDeduction,
-        BigDecimal legalExecutionDeduction
-    ) {}
+        BigDecimal legalExecutionDeduction,
+        BigDecimal unpaidLeaveDays,
+        BigDecimal pendingUnpaidLeaveCorrectionDays
+    ) {
+        /** A row with only the identity set — used when an employee has leave-derived figures to
+         *  surface but no special-pay carry-forward row (e.g. their first-ever processed month). */
+        public static SuggestedInputRow empty(Long employeeId) {
+            return new SuggestedInputRow(
+                employeeId,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+            );
+        }
+    }
 
     public record SuggestedInputsResponse(LocalDate payrollMonth, List<SuggestedInputRow> suggestions) {}
 }

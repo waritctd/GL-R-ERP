@@ -52,6 +52,17 @@ public class PayrollCalculator {
         BigDecimal hourlyRate = dailyRate.divide(EIGHT, RATE_SCALE, RoundingMode.HALF_UP);
         BigDecimal unpaidLeaveDays = quantity(input.unpaidLeaveDays());
         BigDecimal unpaidLeaveDeduction = money(dailyRate.multiply(unpaidLeaveDays));
+        // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): a positive pre-tax CREDIT reversing
+        // a PRIOR month's over-deduction (the leave that caused it was cancelled after that month's
+        // payroll had already processed -- see hr.leave_payroll_correction / LeaveService#cancel).
+        // Deliberately kept as its own field rather than netted into unpaidLeaveDays beforehand --
+        // that field is HR-typed and @PositiveOrZero, and this month may legitimately have zero of
+        // its own unpaid leave while still owing a refund from an earlier month. It flows through
+        // the exact same PRE-TAX path unpaidLeaveDeduction does (grossTaxableIncome, ssoWageBase,
+        // totalDeductions below), with the opposite sign, so tax + SSO recompute on the restored
+        // income exactly as they would have if the original deduction had never happened.
+        BigDecimal leaveRefundDays = quantity(input.leaveRefundDays());
+        BigDecimal leaveDeductionRefund = money(dailyRate.multiply(leaveRefundDays));
         // The three missing PRE-TAX deductions (sheet columns Z/AA/AB: หักตามใบเตือน, หัก 6
         // ลูกค้าคืนสินค้า, อื่นๆ). The sheet's AC (รวมรายหักที่ต้องคิดภาษี) is these three plus unpaid
         // leave, and AD = W - AC is what gets taxed -- so they must reduce grossTaxableIncome exactly
@@ -61,6 +72,7 @@ public class PayrollCalculator {
         BigDecimal otherPretaxDeduction = money(input.otherPretaxDeduction());
         BigDecimal grossTaxableIncome = money(grossEarnings
             .subtract(unpaidLeaveDeduction)
+            .add(leaveDeductionRefund)
             .subtract(warningLetterDeduction)
             .subtract(customerReturnDeduction)
             .subtract(otherPretaxDeduction)
@@ -68,8 +80,11 @@ public class PayrollCalculator {
 
         // ssoWageBase stays derived from baseSalary only -- director remuneration and the pre-tax
         // deductions above never touch it, matching the sheet's blank SSO column for directors and the
-        // existing base-salary-only SSO treatment for everyone else.
-        BigDecimal ssoWageBase = ssoWageBase(baseSalary.subtract(unpaidLeaveDeduction));
+        // existing base-salary-only SSO treatment for everyone else. The refund credit runs through
+        // this same wage base (added back, mirroring unpaidLeaveDeduction's subtraction) so SSO
+        // recomputes on the restored income too; ssoWageBase(...)'s existing [MIN,MAX] clamp already
+        // protects against a refund pushing the base past the 17,500 ceiling.
+        BigDecimal ssoWageBase = ssoWageBase(baseSalary.subtract(unpaidLeaveDeduction).add(leaveDeductionRefund));
         BigDecimal monthlySso = money(ssoWageBase.multiply(SSO_RATE));
         BigDecimal remainingSsoCap = SSO_YEAR_CAP.subtract(money(yearToDate.socialSecurity())).max(ZERO);
         BigDecimal socialSecurity = min(monthlySso, remainingSsoCap);
@@ -105,6 +120,7 @@ public class PayrollCalculator {
             otherPostTaxDeductions
         );
         BigDecimal totalDeductions = money(unpaidLeaveDeduction
+            .subtract(leaveDeductionRefund)
             .add(warningLetterDeduction)
             .add(customerReturnDeduction)
             .add(otherPretaxDeduction)
@@ -145,7 +161,9 @@ public class PayrollCalculator {
             directorRemuneration,
             warningLetterDeduction,
             customerReturnDeduction,
-            otherPretaxDeduction
+            otherPretaxDeduction,
+            leaveRefundDays,
+            leaveDeductionRefund
         );
     }
 
