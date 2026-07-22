@@ -4,6 +4,8 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -18,6 +20,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceDto;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.TaxAllowanceBulkUpsertRequest;
@@ -37,19 +40,25 @@ public class PayrollService {
     private final CommissionService commissionService;
     private final AuditService auditService;
     private final PayslipRenderer payslipRenderer;
+    // Leave -> payroll unpaid-day deduction (2026-07-23): read-only dependency on the leave package,
+    // used only by #suggestedInputs below to overlay leave-derived unpaidLeaveDays /
+    // pendingUnpaidLeaveCorrectionDays. Never touches preview()/process().
+    private final LeaveRepository leaveRepository;
 
     public PayrollService(
         PayrollRepository payrollRepository,
         PayrollCalculator payrollCalculator,
         CommissionService commissionService,
         AuditService auditService,
-        PayslipRenderer payslipRenderer
+        PayslipRenderer payslipRenderer,
+        LeaveRepository leaveRepository
     ) {
         this.payrollRepository = payrollRepository;
         this.payrollCalculator = payrollCalculator;
         this.commissionService = commissionService;
         this.auditService = auditService;
         this.payslipRenderer = payslipRenderer;
+        this.leaveRepository = leaveRepository;
     }
 
     public PayrollPeriodDto currentOrPreview(LocalDate payrollMonth, UserPrincipal actor) {
@@ -73,12 +82,47 @@ public class PayrollService {
      * here: the carry-forward step happens entirely client-side, before HR submits, and whatever value
      * is in the field when HR hits Preview/Process — carried, edited, or explicitly cleared to 0 — is
      * what goes into {@code inputs} and gets calculated/stored, unchanged from today's behaviour.
+     *
+     * <p>Leave -&gt; payroll unpaid-day deduction (2026-07-23): also overlays, per employee, this
+     * month's leave-derived {@code unpaidLeaveDays} ({@link
+     * LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth}) and any unresolved
+     * cancel-after-close {@code pendingUnpaidLeaveCorrectionDays} ({@link
+     * LeaveRepository#findPendingPayrollCorrectionsByEmployee}). Purely additive to the special-pay
+     * carry-forward rows above: an employee with leave-derived figures but no prior processed
+     * payroll_line still gets a row ({@link PayrollCarryForwardDtos.SuggestedInputRow#empty}). Like
+     * the rest of this method, this NEVER feeds {@code preview()}/{@code process()} directly -- the
+     * frontend pre-fills the unpaidLeaveDays form field from it, and HR can still override.
      */
     public PayrollCarryForwardDtos.SuggestedInputsResponse suggestedInputs(LocalDate payrollMonth, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
         LocalDate month = normalizeMonth(payrollMonth);
-        return new PayrollCarryForwardDtos.SuggestedInputsResponse(
-            month, payrollRepository.findCarryForwardSuggestions(month));
+
+        Map<Long, PayrollCarryForwardDtos.SuggestedInputRow> byEmployee = new LinkedHashMap<>();
+        payrollRepository.findCarryForwardSuggestions(month)
+            .forEach(row -> byEmployee.put(row.employeeId(), row));
+
+        Map<Long, BigDecimal> unpaidLeaveDaysByEmployee = leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(month);
+        Map<Long, BigDecimal> pendingCorrectionsByEmployee = leaveRepository.findPendingPayrollCorrectionsByEmployee();
+
+        Set<Long> employeeIds = new LinkedHashSet<>(byEmployee.keySet());
+        employeeIds.addAll(unpaidLeaveDaysByEmployee.keySet());
+        employeeIds.addAll(pendingCorrectionsByEmployee.keySet());
+
+        List<PayrollCarryForwardDtos.SuggestedInputRow> merged = employeeIds.stream()
+            .map(employeeId -> {
+                PayrollCarryForwardDtos.SuggestedInputRow base = byEmployee.getOrDefault(
+                    employeeId, PayrollCarryForwardDtos.SuggestedInputRow.empty(employeeId));
+                return new PayrollCarryForwardDtos.SuggestedInputRow(
+                    employeeId,
+                    base.specialPay1(), base.specialPay2(), base.specialPay3(), base.specialPay4(), base.specialPay5(),
+                    base.nonTaxableIncome(), base.studentLoanDeduction(), base.legalExecutionDeduction(),
+                    unpaidLeaveDaysByEmployee.getOrDefault(employeeId, BigDecimal.ZERO),
+                    pendingCorrectionsByEmployee.getOrDefault(employeeId, BigDecimal.ZERO)
+                );
+            })
+            .toList();
+
+        return new PayrollCarryForwardDtos.SuggestedInputsResponse(month, merged);
     }
 
     public PayrollPeriodDto preview(ProcessPayrollRequest request, UserPrincipal actor) {

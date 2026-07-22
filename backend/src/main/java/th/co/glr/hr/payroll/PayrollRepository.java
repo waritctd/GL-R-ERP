@@ -152,7 +152,12 @@ public class PayrollRepository {
                 money(rs.getBigDecimal("special_pay_5")),
                 money(rs.getBigDecimal("non_taxable_income")),
                 money(rs.getBigDecimal("student_loan_deduction")),
-                money(rs.getBigDecimal("legal_execution_deduction"))
+                money(rs.getBigDecimal("legal_execution_deduction")),
+                // Leave-derived unpaidLeaveDays/pendingUnpaidLeaveCorrectionDays are not this query's
+                // concern (it only knows the prior payroll_line) -- PayrollService#suggestedInputs
+                // overlays the real leave-derived figures onto every row after this method returns.
+                BigDecimal.ZERO,
+                BigDecimal.ZERO
             ));
     }
 
