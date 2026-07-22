@@ -12,7 +12,7 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.mail.javamail.JavaMailSender;
+import th.co.glr.hr.mail.Mailer;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -92,7 +92,7 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
             notifications, new DepositNoticeRenderer(), new RemainingInvoiceRenderer());
 
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), new FactoryEmailService(mock(JavaMailSender.class), "test@glr.co.th"),
+            new FactoryConfigRepository(jdbc), new FactoryEmailService(mock(Mailer.class)),
             notifications, fileStorage, new AppProperties());
 
         pricingCostingService = new PricingCostingService(pricingCostings, pricingRequests, factoryQuotes,

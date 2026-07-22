@@ -2,7 +2,6 @@ package th.co.glr.hr.mail;
 
 import com.resend.Resend;
 import com.resend.core.exception.ResendException;
-import com.resend.services.emails.model.Attachment;
 import com.resend.services.emails.model.CreateEmailOptions;
 import com.resend.services.emails.model.CreateEmailResponse;
 import java.util.Base64;
@@ -70,13 +69,13 @@ public class ResendMailer implements Mailer {
 
     @Override
     public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {
-        sendWithAttachments(to, subject, body, List.of(new th.co.glr.hr.mail.Mailer.Attachment(filename, bytes, "application/pdf")));
+        sendWithAttachments(to, subject, body, List.of(new Attachment(filename, bytes, "application/pdf")));
     }
 
     @Override
-    public void sendWithAttachments(String to, String subject, String body, List<th.co.glr.hr.mail.Mailer.Attachment> attachments) {
-        List<Attachment> resendAttachments = attachments.stream()
-            .map(a -> Attachment.builder()
+    public void sendWithAttachments(String to, String subject, String body, List<Attachment> attachments) {
+        List<com.resend.services.emails.model.Attachment> resendAttachments = attachments.stream()
+            .map(a -> com.resend.services.emails.model.Attachment.builder()
                 .fileName(a.filename())
                 .content(Base64.getEncoder().encodeToString(a.bytes()))
                 .contentType(a.mimeType() != null ? a.mimeType() : "application/pdf")
