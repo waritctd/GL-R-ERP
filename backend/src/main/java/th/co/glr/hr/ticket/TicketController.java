@@ -21,7 +21,6 @@ import th.co.glr.hr.common.Page;
 import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.factory.FactoryEmailService;
 import org.springframework.web.bind.annotation.PutMapping;
-import th.co.glr.hr.ticket.TicketResponses.CalculatePricesResponse;
 import th.co.glr.hr.ticket.TicketResponses.TicketDetailResponse;
 import th.co.glr.hr.ticket.TicketResponses.TicketListResponse;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionsResponse;
@@ -134,81 +133,16 @@ public class TicketController {
         return new TicketDetailResponse(ticketService.completeDelivery(id, request, user));
     }
 
-    @PostMapping("/{id}/submit")
-    TicketDetailResponse submit(@PathVariable long id, HttpSession session) {
-        UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.submit(id, user));
-    }
-
-    @PostMapping("/{id}/pickup")
-    TicketDetailResponse pickup(@PathVariable long id, HttpSession session) {
-        UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.pickup(id, user));
-    }
-
-    @PostMapping("/{id}/propose-price")
-    TicketDetailResponse proposePrice(
-        @PathVariable long id,
-        @Valid @RequestBody ProposePriceRequest request,
-        HttpSession session
-    ) {
-        UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.proposePrice(id, request, user));
-    }
-
-    @PostMapping("/{id}/approve")
-    TicketDetailResponse approve(@PathVariable long id, HttpSession session) {
-        UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.approve(id, user));
-    }
-
-    @PostMapping("/{id}/reject")
-    TicketDetailResponse reject(
-        @PathVariable long id,
-        @Valid @RequestBody RejectRequest request,
-        HttpSession session
-    ) {
-        UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.reject(id, request, user));
-    }
-
-    @PostMapping("/{id}/quotation")
-    TicketDetailResponse quotation(@PathVariable long id,
-                                   @Valid @RequestBody GenerateQuotationRequest request,
-                                   HttpSession session) {
-        UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.generateQuotation(id, request, user));
-    }
-
-    @PostMapping("/{id}/quotations/{quotationId}/sent")
-    TicketDetailResponse markQuotationSent(@PathVariable long id,
-                                           @PathVariable long quotationId,
-                                           @RequestBody(required = false) NoteRequest request,
-                                           HttpSession session) {
-        UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(
-            ticketService.markQuotationSent(id, quotationId, request == null ? null : request.note(), user));
-    }
-
-    @PostMapping("/{id}/quotations/{quotationId}/accepted")
-    TicketDetailResponse markQuotationAccepted(@PathVariable long id,
-                                               @PathVariable long quotationId,
-                                               @RequestBody(required = false) NoteRequest request,
-                                               HttpSession session) {
-        UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(
-            ticketService.markQuotationAccepted(id, quotationId, request == null ? null : request.note(), user));
-    }
-
-    @PostMapping("/{id}/quotations/{quotationId}/rejected")
-    TicketDetailResponse markQuotationRejected(@PathVariable long id,
-                                               @PathVariable long quotationId,
-                                               @RequestBody(required = false) NoteRequest request,
-                                               HttpSession session) {
-        UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(
-            ticketService.markQuotationRejected(id, quotationId, request == null ? null : request.note(), user));
-    }
+    // Slice S1 "engine collapse" (feat/deal-workspace-unification): the legacy ticket-native
+    // submit/pickup/propose-price/approve/reject/quotation-generate/mark-quotation-lifecycle
+    // routes are RETIRED — pricing now runs through the PricingRequest (PCR) chain, quotation
+    // issuance through CustomerQuotationService, and TicketService.submit() always 409s for
+    // new deals. The backing TicketService methods stay (deprecated, not deleted — see each
+    // method's own Javadoc) so the 3 legacy tickets already stranded in submitted/in_review/
+    // price_proposed status and their historical events stay readable, but no route exposes
+    // them anymore. Quotation READ/DOWNLOAD stays below (getQuotationXlsx/Pdf via
+    // /{id}/quotations/{quotationId}/file) — legacy and PCR-issued quotations are both still
+    // viewable.
 
     @GetMapping("/{id}/quotations/{quotationId}/file")
     ResponseEntity<byte[]> quotationFile(
@@ -342,6 +276,30 @@ public class TicketController {
         return new TicketDetailResponse(ticketService.waiveDeposit(id, request.policy(), request.reason(), user));
     }
 
+    // ── Deal tracking + activity (V83, Slice B1 "kill the weekly report") ───────────────────
+
+    @PostMapping("/{id}/activities")
+    DealActivityDto addActivity(@PathVariable long id,
+                                @Valid @RequestBody DealActivityRequest request,
+                                HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return ticketService.addActivity(id, request, user);
+    }
+
+    @GetMapping("/{id}/activities")
+    Map<String, List<DealActivityDto>> activities(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("items", ticketService.listActivities(id, user));
+    }
+
+    @PutMapping("/{id}/tracking")
+    TicketDetailResponse updateTracking(@PathVariable long id,
+                                        @Valid @RequestBody TrackingUpdateRequest request,
+                                        HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.updateTracking(id, request, user));
+    }
+
     record UpdateStageRequest(@jakarta.validation.constraints.NotBlank String stage,
                               @jakarta.validation.constraints.Size(max = 2000) String note) {}
 
@@ -377,23 +335,9 @@ public class TicketController {
         return Map.of("status", "sent");
     }
 
-    @PostMapping("/{id}/calculate-prices")
-    CalculatePricesResponse calculatePrices(@PathVariable long id, HttpSession session) {
-        UserPrincipal user = sessions.requireUser(session);
-        TicketService.CalculatePricesResult result = ticketService.calculatePrices(id, user);
-        return new CalculatePricesResponse(result.ticket(), result.breakdown());
-    }
-
-    @PutMapping("/{id}/items/{itemId}/price-override")
-    TicketDetailResponse overrideItemPrice(
-        @PathVariable long id,
-        @PathVariable long itemId,
-        @Valid @RequestBody OverridePriceRequest request,
-        HttpSession session
-    ) {
-        UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.overrideItemPrice(id, itemId, request, user));
-    }
+    // calculate-prices and items/{itemId}/price-override are retired too — same Slice S1
+    // rationale as above (legacy price_proposed-only CEO tooling; see
+    // TicketService.calculatePrices/overrideItemPrice's own @Deprecated Javadoc).
 
     @PatchMapping("/{id}/items")
     TicketDetailResponse editItems(

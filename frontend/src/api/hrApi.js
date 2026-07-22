@@ -102,16 +102,12 @@ export const api = {
     recordDelivery: (id, payload) => apiRequest(API_ROUTES.tickets.deliveries(id), { method: 'POST', body: payload }),
     completeDelivery: (id, payload = {}) => apiRequest(API_ROUTES.tickets.completeDelivery(id), { method: 'POST', body: payload }),
     actions: (id) => apiRequest(API_ROUTES.tickets.action(id, 'actions')),
-    submit: (id) => apiRequest(API_ROUTES.tickets.action(id, 'submit'), { method: 'POST' }),
-    pickup: (id) => apiRequest(API_ROUTES.tickets.action(id, 'pickup'), { method: 'POST' }),
-    proposePrice: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'propose-price'), { method: 'POST', body: payload }),
-    calculatePrices: (id) => apiRequest(API_ROUTES.tickets.action(id, 'calculate-prices'), { method: 'POST' }),
-    approve: (id) => apiRequest(API_ROUTES.tickets.action(id, 'approve'), { method: 'POST' }),
-    reject: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'reject'), { method: 'POST', body: payload }),
-    quotation: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'quotation'), { method: 'POST', body: payload }),
-    markQuotationSent: (id, quotationId, payload = {}) => apiRequest(API_ROUTES.tickets.quotationStatus(id, quotationId, 'sent'), { method: 'POST', body: payload }),
-    markQuotationAccepted: (id, quotationId, payload = {}) => apiRequest(API_ROUTES.tickets.quotationStatus(id, quotationId, 'accepted'), { method: 'POST', body: payload }),
-    markQuotationRejected: (id, quotationId, payload = {}) => apiRequest(API_ROUTES.tickets.quotationStatus(id, quotationId, 'rejected'), { method: 'POST', body: payload }),
+    // Ticket-native submit/pickup/propose-price/approve/reject/quotation/mark-quotation-*
+    // and the per-item price override are retired (Phase 2 Slice S1/S2, "engine collapse" —
+    // see docs/agent-handoffs/104_feat-deal-workspace-unification.md): TicketController no
+    // longer routes them, and pricing/quotation now runs through the PricingRequest chain
+    // (api.pricingRequests.* below). Quotation READ/download stays — see
+    // downloadQuotationXlsx/Pdf — so the 3 legacy pre-redesign quotations remain visible.
     // Three-party close (V55): ฝ่ายบัญชี confirms, then the CEO verifies. There is no
     // single-step close any more — sales is not part of the sequence.
     confirmCloseReady: (id) =>
@@ -123,7 +119,6 @@ export const api = {
     cancel: (id, body) => apiRequest(API_ROUTES.tickets.action(id, 'cancel'), { method: 'POST', body }),
     editItems: (id, payload) => apiRequest(API_ROUTES.tickets.editItems(id), { method: 'PATCH', body: payload }),
     comment: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'comments'), { method: 'POST', body: payload }),
-    overrideItemPrice: (id, itemId, payload) => apiRequest(`/api/tickets/${id}/items/${itemId}/price-override`, { method: 'PUT', body: payload }),
     createDocDraft: (id, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(id), { method: 'POST', body: payload }),
     listDocs: (id) => apiRequest(API_ROUTES.tickets.listDocs(id)),
     revision: (id, payload) => apiRequest(API_ROUTES.tickets.revision(id), { method: 'POST', body: payload }),
@@ -159,6 +154,11 @@ export const api = {
       if (!res.ok) throw new Error('Download failed');
       return res.blob();
     },
+    // Deal tracking + activity (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
+    // Mirrors TicketController's addActivity/activities/updateTracking.
+    addActivity: (id, payload) => apiRequest(API_ROUTES.tickets.activities(id), { method: 'POST', body: payload }),
+    listActivities: (id) => apiRequest(API_ROUTES.tickets.activities(id)),
+    updateTracking: (id, payload) => apiRequest(API_ROUTES.tickets.tracking(id), { method: 'PUT', body: payload }),
   },
   depositNotices: {
     noteTemplates: () => apiRequest(API_ROUTES.depositNotices.noteTemplates),
@@ -263,7 +263,45 @@ export const api = {
       }
       return res.json();
     },
+    // Slice A2 auto-create trigger: the accountant records the tax invoice for a
+    // close-eligible deal and the commission is created for the deal's owner
+    // automatically. Always multipart (the invoice file is required, unlike `create`'s
+    // optional-attachment JSON path). Mirrors CommissionController#createFromDeal.
+    createFromDeal: async (payload) => {
+      const formData = new FormData();
+      formData.append('ticketId', String(payload.ticketId));
+      formData.append('invoiceNumber', payload.invoiceNumber);
+      formData.append('invoiceDate', payload.invoiceDate);
+      if (payload.grossAmount !== null && payload.grossAmount !== undefined) {
+        formData.append('grossAmount', String(payload.grossAmount));
+      }
+      formData.append('bankFees', String(payload.bankFees ?? 0));
+      formData.append('suspenseVat', String(payload.suspenseVat ?? 0));
+      formData.append('transportFee', String(payload.transportFee ?? 0));
+      formData.append('cutFee', String(payload.cutFee ?? 0));
+      formData.append('shortfall', String(payload.shortfall ?? 0));
+      formData.append('withholdingTax', String(payload.withholdingTax ?? 0));
+      formData.append('overpayment', String(payload.overpayment ?? 0));
+      if (payload.invoiceAttachment) formData.append('invoiceAttachment', payload.invoiceAttachment);
+      const res = await fetch(API_ROUTES.commissions.createFromDeal, {
+        method: 'POST',
+        credentials: 'include',
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'บันทึกใบกำกับไม่สำเร็จ');
+      }
+      return res.json();
+    },
+    // `payload` passes straight through as the JSON body, so `weightMultiplier` (calc-refine,
+    // V82) rides along with the existing deduction fields automatically — no new plumbing
+    // needed here, only in the caller. Mirrors UpdateCommissionDeductionsRequest verbatim.
     updateDeductions: (id, payload) => apiRequest(API_ROUTES.commissions.deductions(id), { method: 'PATCH', body: payload }),
+    // Manual commission entries (feat/commission-manual-adjustments): sales_manager/ceo submit a
+    // hand-typed { salesRepId, kind, amount, reason, payrollMonth } — no invoice, never touches
+    // the tier calc. Mirrors CommissionController#createManual / ManualCommissionRequest verbatim.
+    createManualCommission: (payload) => apiRequest(API_ROUTES.commissions.manual, { method: 'POST', body: payload }),
     approve: (id) => apiRequest(API_ROUTES.commissions.approve(id), { method: 'POST' }),
     reject: (id, payload = {}) => apiRequest(API_ROUTES.commissions.reject(id), { method: 'POST', body: payload }),
     clawback: (id, payload) => apiRequest(API_ROUTES.commissions.clawback(id), { method: 'POST', body: payload }),

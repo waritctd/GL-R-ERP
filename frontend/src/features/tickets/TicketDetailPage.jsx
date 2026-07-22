@@ -7,7 +7,6 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -15,7 +14,6 @@ import {
   dealStageLabel,
   formatMoney,
   formatThaiDate,
-  fulfilmentStatusLabel,
   overdueBadgeLabel,
   paymentStageLabel,
   quotationRecipientLabel,
@@ -25,7 +23,12 @@ import {
 import { downloadBlob } from '../../utils/download.js';
 import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
 import { CancelDealModal } from './CancelDealModal.jsx';
+import { DealDepositPanel } from './DealDepositPanel.jsx';
+import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
+import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import { DealStagePanel } from './DealStagePanel.jsx';
+import { DealStateHeader } from './DealStateHeader.jsx';
+import { DealTrackingPanel } from './DealTrackingPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
 
 const EVENT_KIND_LABEL = {
@@ -139,51 +142,30 @@ function SectionPeek({ title, summary }) {
   );
 }
 
-export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showToast }) {
+export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const queryClient = useQueryClient();
-
-  // Propose-price mode
-  const [proposeMode, setProposeMode] = useState(false);
-  const [draftRaw, setDraftRaw] = useState({});              // itemId → rawPrice (string)
-  const [draftFactoryCurr, setDraftFactoryCurr] = useState({}); // factoryName → { currency, unit }
-  const [proposeNote, setProposeNote] = useState('');
-
-  // Email drafts (factoryConfigs itself is now a query — see below)
-  const [emailDraft, setEmailDraft] = useState(null);         // { factory, to, subject, body } | null
-  const [emailSending, setEmailSending] = useState(false);
 
   // Edit-items mode
   const [editMode, setEditMode] = useState(false);
   const [editDraft, setEditDraft] = useState([]);
   const [editNote, setEditNote] = useState('');
 
-  // Reject form
-  const [showRejectForm, setShowRejectForm] = useState(false);
-  const [rejectReason, setRejectReason] = useState('');
-
-  // D7/D9/D10: CEO price calculation + breakdown + override.
-  // priceBreakdown has no GET endpoint — it only ever comes back as a mutation
-  // result (calculatePrices), so it stays local state fed by that mutation's
-  // onSuccess rather than a query (see handoff 63 for the reasoning).
-  const [priceBreakdown, setPriceBreakdown] = useState([]); // PriceBreakdownItemDto[]
-  const [showBreakdown, setShowBreakdown] = useState(false);
-  const [overrideDraft, setOverrideDraft] = useState({}); // itemId → { price: string, reason: string }
-
   // Revision form
   const [showReviseForm, setShowReviseForm] = useState(false);
   const [reviseScope, setReviseScope] = useState('QTY_OR_NOTE');
   const [reviseReason, setReviseReason] = useState('');
 
-  // UX-03 (slice 5a + 5b): inline field-level validation for the quotation /
-  // payment / delivery modals, plus (5b) the reject/revise inline forms, the
-  // per-item CEO price override, and the edit-items quantities. One shared
-  // dict, keyed per-form/per-row so a stale error can never bleed into
-  // another: 'quotation.recipientType' | 'quotation.amendmentReason' |
-  // 'payment.amount' | 'delivery.lines' (a group-level rule with no single
-  // owning field — same convention DepositNoticePage.jsx uses for its
-  // 'items' key) | 'reject.reason' | 'revise.reason' |
-  // 'override.<itemId>' (per-item — see handleOverridePrice) |
+  // UX-03 (slice 5a + 5b): inline field-level validation for the payment /
+  // delivery modals, plus (5b) the revise inline form and the edit-items
+  // quantities. One shared dict, keyed per-form/per-row so a stale error can
+  // never bleed into another: 'payment.amount' | 'revise.reason' |
   // 'editItems.qty.<rowIndex>' (per-row — see the edit-items save handler).
+  // ('quotation.*'/'reject.reason'/'override.<itemId>' were retired along
+  // with ticket-native pricing/quotation — Phase 2 Slice S1/S2; 'delivery.lines'
+  // moved out along with the delivery/stock modals themselves — Phase 3 Slice
+  // S4, see docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md —
+  // DealFulfilmentPanel owns its own, simpler mutation-level error toasts
+  // instead, matching DealDepositPanel/DealQuotationPanel's convention.)
   // fieldRefs holds the DOM node for each key so a failed submit can
   // scroll/focus the first invalid control. Same shape as the fieldErrors/
   // fieldRefs/clearFieldError pattern already used in TicketCreateModal.jsx,
@@ -224,21 +206,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     node.focus();
   }
 
-  // Quotation recipient/terms form (Phase 2 recipient-scoped chains)
-  const [quotationModal, setQuotationModal] = useState(null); // { defaultRecipientType, amendmentRequired } | null
-  const [quotationDraft, setQuotationDraft] = useState({
-    recipientType: 'BUYER',
-    recipientLabel: '',
-    paymentTerms: '',
-    leadTime: '',
-    deliveryTerms: '',
-    validityDate: '',
-    amendmentReason: '',
-    offerDate: '',
-    depositPercent: 50,
-    deliveryLeadDays: 90,
-  });
-
   const [paymentModal, setPaymentModal] = useState(false);
   const [paymentDraft, setPaymentDraft] = useState({
     kind: 'DEPOSIT',
@@ -256,10 +223,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     lastFollowUpAt: '',
     nextFollowUpAt: '',
   });
-  const [deliveryModal, setDeliveryModal] = useState(false);
-  const [deliveryDraft, setDeliveryDraft] = useState({ source: 'WAREHOUSE', note: '', lines: {} });
-  const [stockModal, setStockModal] = useState(false);
-  const [stockDraft, setStockDraft] = useState({ note: '', lines: {} });
+  // Delivery/stock-reservation modal state moved into DealFulfilmentPanel
+  // (Phase 3 Slice S4 — see docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md).
 
   // Comment
   const [commentText, setCommentText] = useState('');
@@ -306,12 +271,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   });
   const paymentReceipts = paymentsQuery.data ?? [];
 
-  const deliveriesQuery = useQuery({
-    queryKey: queryKeys.ticketDeliveries(ticketId),
-    queryFn: () => api.tickets.listDeliveries(ticketId).then((r) => r.items ?? []),
-    enabled: !!ticketId && !!ticket,
-  });
-  const deliveryRecords = deliveriesQuery.data ?? [];
+  // Delivery history (ticketDeliveries) moved into DealFulfilmentPanel's own
+  // query (Phase 3 Slice S4) — this page no longer reads it directly.
 
   // Commit 6: the deal's own pricing requests — read here (not inside
   // PricingRequestPanel) so DealStagePanel's substep strip can also key off
@@ -322,6 +283,17 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     enabled: canViewPricingRequests && !!ticketId && !!ticket,
   });
   const pricingRequests = canViewPricingRequests ? (pricingRequestsQuery.data ?? []) : [];
+
+  // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103): visible to
+  // the deal owner (sales), sales_manager, ceo — mirrors salesViewScope.js's dealTracking
+  // section id (import/account have no business in it) and TicketService.requireDealOwnership.
+  const canViewDealTracking = ['sales', 'sales_manager', 'ceo'].includes(user?.role);
+  const activitiesQuery = useQuery({
+    queryKey: queryKeys.ticketActivities(ticketId),
+    queryFn: () => api.tickets.listActivities(ticketId).then((r) => r.items ?? []),
+    enabled: canViewDealTracking && !!ticketId && !!ticket,
+  });
+  const activities = canViewDealTracking ? (activitiesQuery.data ?? []) : [];
 
   useEffect(() => {
     if (ticketQuery.error) showToast('error', ticketQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
@@ -339,21 +311,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // Attachment load failures were silently swallowed before ("non-critical")
   // — preserved as-is, no error toast wired up here.
 
-  // Factory configs used to be lazily fetched once per page instance inside
-  // initPropose(); now a plain query keyed only by ['factoryConfigs'] (no
-  // ticketId), so the whole app shares one fetch per session instead of one
-  // per ticket-detail visit. staleTime: Infinity because this is config data
-  // that doesn't change during a session — see handoff 63.
-  const factoryConfigsQuery = useQuery({
-    queryKey: ['factoryConfigs'],
-    queryFn: () => api.factoryConfigs.list().then((res) => {
-      const map = {};
-      (res.factories ?? []).forEach((fc) => { map[fc.factoryName] = fc; });
-      return map;
-    }),
-    staleTime: Infinity,
-  });
-  const factoryConfigs = factoryConfigsQuery.data ?? {};
+  // Factory-configs email-draft flow lived here only to back the now-removed
+  // propose-price UI (Phase 2 Slice S2 — see docs/agent-handoffs/104); that
+  // whole aggregate is gone from the ticket-native flow, so there is nothing
+  // left on this page to fetch factoryConfigs for.
 
   // Shared post-mutation side effects: the ticket-detail fast path (backend
   // returns the full ticket, so no refetch needed) plus the deliberate
@@ -371,40 +332,19 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   // Same UI-draft reset the old doAction ran on every successful action.
   function resetActionDrafts() {
-    // UX-03: a successful action closes every modal below (quotation/payment/
-    // delivery among them) — clear every field error along with them so a
-    // stale one can never greet the user on the next open.
+    // UX-03: a successful action closes every modal below (payment among
+    // them; delivery/stock moved to DealFulfilmentPanel, Phase 3 Slice S4) —
+    // clear every field error along with them so a stale one can never greet
+    // the user on the next open.
     setFieldErrors({});
-    setProposeMode(false);
     setEditMode(false);
     setEditDraft([]);
     setEditNote('');
-    setShowRejectForm(false);
-    setRejectReason('');
     setShowReviseForm(false);
     setReviseReason('');
-    setQuotationModal(null);
-    setQuotationDraft({
-      recipientType: 'BUYER',
-      recipientLabel: '',
-      paymentTerms: '',
-      leadTime: '',
-      deliveryTerms: '',
-      validityDate: '',
-      amendmentReason: '',
-      offerDate: '',
-      depositPercent: 50,
-      deliveryLeadDays: 90,
-    });
     setPaymentModal(false);
     setBillingModal(false);
-    setDeliveryModal(false);
-    setStockModal(false);
     setCommentText('');
-    setDraftRaw({});
-    setDraftFactoryCurr({});
-    setProposeNote('');
-    setEmailDraft(null);
   }
 
   // Generic action mutation — a drop-in replacement for the old doAction(fn,
@@ -428,41 +368,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     try {
       await actionMutation.mutateAsync({ fn, successMsg });
     } catch { /* onError above already toasted */ }
-  }
-
-  // D7: CEO price calculation. Kept as its own mutation (not routed through
-  // doAction) because it never reset the propose/edit/reject/revise drafts —
-  // it has its own success side effects (priceBreakdown + showBreakdown) and
-  // its own spinner label ("กำลังคำนวณ...") independent of actionLoading.
-  const calculatePricesMutation = useMutation({
-    mutationFn: () => api.tickets.calculatePrices(ticketId),
-    onSuccess: (response) => {
-      applyTicketUpdate(response.ticket);
-      setPriceBreakdown(response.breakdown ?? []);
-      setShowBreakdown(true);
-      showToast('success', 'คำนวณราคาเรียบร้อย — ตรวจสอบรายละเอียดสูตรด้านล่าง แล้วกดอนุมัติได้เลย');
-    },
-    onError: (error) => showToast('error', error.message || 'คำนวณราคาไม่สำเร็จ'),
-  });
-  const calcLoading = calculatePricesMutation.isPending;
-
-  // D10: CEO per-item manual override. One mutation instance shared by every
-  // item row; `overrideMutation.variables` (the last {itemId, payload} passed
-  // to mutateAsync) lets each row derive its OWN pending flag instead of a
-  // useState map — same per-item granularity as before, without juggling a
-  // dynamic set of mutation hooks.
-  const overrideMutation = useMutation({
-    mutationFn: ({ itemId, payload }) => api.tickets.overrideItemPrice(ticketId, itemId, payload),
-    onSuccess: (response, { itemId }) => {
-      applyTicketUpdate(response.ticket);
-      setOverrideDraft((p) => { const n = { ...p }; delete n[itemId]; return n; });
-      clearFieldError(`override.${itemId}`);
-      showToast('success', 'บันทึกราคา override แล้ว');
-    },
-    onError: (err) => showToast('error', err.message || 'บันทึกไม่สำเร็จ'),
-  });
-  function isOverridingItem(itemId) {
-    return overrideMutation.isPending && overrideMutation.variables?.itemId === itemId;
   }
 
   // R5: Attachments upload/delete — invalidate the attachments query instead
@@ -494,6 +399,32 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     onError: (err) => showToast('error', err.message || 'ลบไม่สำเร็จ'),
   });
   const deletingAttachment = deleteAttachmentMutation.isPending;
+
+  // Deal tracking (V83, Slice B1/B2 — handoff 103): full-replace PUT, response is the
+  // full ticket detail (same applyTicketUpdate fast path the actionMutation above uses).
+  const updateTrackingMutation = useMutation({
+    mutationFn: (payload) => api.tickets.updateTracking(ticketId, payload),
+    onSuccess: (response) => {
+      applyTicketUpdate(response.ticket);
+      showToast('success', 'บันทึกข้อมูลติดตามดีลแล้ว');
+    },
+    onError: (err) => showToast('error', err.message || 'บันทึกไม่สำเร็จ'),
+  });
+
+  // addActivity returns the bare DealActivityDto (not a ticket), so it invalidates
+  // rather than reusing applyTicketUpdate's setQueryData fast path — the ticket detail
+  // still needs a refetch because `stale` and the stage-advance readiness both depend
+  // on the activity that was just logged.
+  const addActivityMutation = useMutation({
+    mutationFn: (payload) => api.tickets.addActivity(ticketId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketActivities(ticketId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
+      queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
+      showToast('success', 'บันทึกกิจกรรมแล้ว');
+    },
+    onError: (err) => showToast('error', err.message || 'บันทึกไม่สำเร็จ'),
+  });
 
   // Manual refresh — today's fix: refresh both the ticket AND its attachments
   // (the old button only ever reloaded the ticket).
@@ -570,19 +501,20 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const ps = summary.paymentStatus;
   const fs = summary.fulfillmentStatus;
   const isSales   = ROLE_PERMISSIONS.canCreateTickets.includes(role);
-  const isImport  = ROLE_PERMISSIONS.canPickupTickets.includes(role);
-  const isFulfilment = isImport || role === 'ceo';
   const isAccount = ROLE_PERMISSIONS.canConfirmPayments.includes(role);
   // (deliveryDone / dualTrackDone removed with the single-step close: the close
   // gate is now the server's three-party sequence, surfaced via availableActions.)
+  // Still needed for DealStagePanel's own read-only deliveryProgress prop
+  // below — the percentage/per-item breakdown display itself moved into
+  // DealFulfilmentPanel (Phase 3 Slice S4), which computes its own copy from
+  // the same `items`.
   const totalOrdered = items.reduce((sum, item) => sum + Number(item.qty || 0), 0);
   const totalDelivered = items.reduce((sum, item) => sum + Number(item.qtyDelivered || 0), 0);
-  const deliveryProgress = totalOrdered > 0 ? Math.min(100, Math.round((totalDelivered / totalOrdered) * 100)) : 0;
 
   // Documents that already exist stay reachable from the deal-stage panel
-  // through the later stages: the latest quotation file, and the issued
-  // ใบแจ้งยอดมัดจำ (payment track past CUSTOMER_CONFIRMED means
-  // DepositNoticeService.issue has run — the deposit page then shows/downloads it).
+  // through the later stages: the latest quotation file. The deposit-notice
+  // view/issue affordance moved into DealDepositPanel (Phase 3 Slice S3 — see
+  // docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md).
   const sortedQuotations = [...(quotations ?? [])].sort((a, b) => new Date(b.issuedAt ?? 0) - new Date(a.issuedAt ?? 0));
   const activeQuotations = sortedQuotations.filter((q) => !['SUPERSEDED', 'CANCELLED', 'REJECTED'].includes(q.docStatus));
   const stageRecipientPriority = summary.salesStage === 'QUOTE_BUYER'
@@ -598,27 +530,26 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       quotations: sortedQuotations.filter((q) => (q.recipientType ?? 'UNSPECIFIED') === recipientType),
     }))
     .filter((group) => group.quotations.length > 0);
-  const depositNoticeIssued = ps != null && ps !== 'CUSTOMER_CONFIRMED';
 
   // 'draft' included since V50: a lightweight lead-stage deal gets its product
   // items here, then submits into the price-request flow when it reaches the
   // quote stages.
   const EDITABLE_STATUSES = ['draft', 'submitted', 'in_review', 'price_proposed'];
   const can = {
-    // Ticket-level submit is retired (commit 5/6) — pricing now starts on a
-    // PricingRequest (see PricingRequestPanel below the items table), not on
-    // the ticket itself.
-    pickup:            hasAction('PICKUP') && st === 'submitted'       && ROLE_PERMISSIONS.canPickupTickets.includes(role),
-    propose:           hasAction('PROPOSE_PRICE') && ['in_review', 'price_proposed', 'approved'].includes(st) && ROLE_PERMISSIONS.canProposePrices.includes(role),
-    calculatePrices:   hasAction('CALCULATE_PRICES') && st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    overridePrice:     hasAction('OVERRIDE_ITEM_PRICE') && st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    approve:           hasAction('APPROVE') && st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    reject:            hasAction('REJECT') && st === 'price_proposed'  && ROLE_PERMISSIONS.canApproveReject.includes(role),
-    generateQuotation: hasAction('GENERATE_QUOTATION') && (st === 'approved' || st === 'quotation_issued') && ROLE_PERMISSIONS.canGenerateQuotation.includes(role) && isOwner,
-    // Issuing the deposit-notice DOCUMENT is the payment-track step (mirrors
-    // DepositNoticeService.issue): customer must have confirmed first, and the
-    // former no-document "ออกใบแจ้งมัดจำ" action is gone.
-    generateDocument:  hasAction('ISSUE_DEPOSIT_NOTICE') && st === 'quotation_issued' && ps === 'CUSTOMER_CONFIRMED' && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
+    // Ticket-level submit/pickup/propose-price/calculate-prices/override-item-price/approve/
+    // reject/generate-quotation are retired (Phase 2 Slice S1/S2 "engine collapse" — see
+    // docs/agent-handoffs/104_feat-deal-workspace-unification.md). Pricing now runs entirely on
+    // the PricingRequest chain (PricingRequestPanel below the items table + DealQuotationPanel
+    // for the customer-facing quotation tail + order-confirm). The deposit-notice
+    // create/issue/view affordance (formerly generateDocument here) and the
+    // deposit-payment confirmation (formerly confirmDepositPaid here) both moved
+    // into DealDepositPanel (Phase 3 Slice S3), and the fulfilment chain
+    // (issueImportRequest/markIrSent/markShipping/markGoodsReceived/
+    // reserveStock/recordDelivery/completeDelivery, formerly defined here)
+    // moved into DealFulfilmentPanel (Phase 3 Slice S4 — see
+    // docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md), which
+    // owns its own mutations against the same hrApi methods rather than
+    // routing through this page's shared actionMutation.
     revise:            (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     // Three-party close (V55): ฝ่ายบัญชี confirms, then the CEO verifies. Sales is
     // no longer part of the sequence, so there is no owner/canCreateTickets gate
@@ -631,29 +562,17 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     editItems: hasAction('EDIT_ITEMS') && EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     // Dual-track (ข้อ 13)
     confirmCustomer:    hasAction('CONFIRM_CUSTOMER') && st === 'quotation_issued' && (ps == null || ps === 'CUSTOMER_CONFIRMED') && isSales,
-    // Money receipts are confirmed by ฝ่ายบัญชี (account role, CEO fallback) —
-    // mirrors TicketService.ACCOUNT_ROLES.
-    confirmDepositPaid: hasAction('DEPOSIT_PAID') && st === 'quotation_issued' && ps === 'DEPOSIT_NOTICE_ISSUED' && isAccount,
-    // DEPOSIT_PAID also qualifies: accounting may confirm the deposit before
-    // import gets to the IR (mirrors TicketService.issueImportRequest).
-    issueImportRequest: hasAction('ISSUE_IMPORT_REQUEST') && st === 'quotation_issued' && fs == null && isFulfilment,
-    markIrSent:         hasAction('IR_SENT') && st === 'quotation_issued' && fs === 'IR_ISSUED' && isFulfilment,
-    markShipping:       hasAction('SHIPPING') && st === 'quotation_issued' && fs === 'IR_SENT' && isFulfilment,
-    markGoodsReceived:  hasAction('GOODS_RECEIVED') && st === 'quotation_issued' && fs === 'SHIPPING' && isFulfilment,
     confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && isAccount,
     recordPayment:      hasAction('RECORD_PAYMENT') && isAccount,
     setBilling:         hasAction('SET_BILLING') && isAccount,
-    reserveStock:       hasAction('RESERVE_STOCK') && isFulfilment,
-    recordDelivery:     hasAction('RECORD_PARTIAL_DELIVERY') && isFulfilment,
-    completeDelivery:   hasAction('COMPLETE_DELIVERY') && isFulfilment,
     downloadRemainingInvoice: st === 'quotation_issued' && fs === 'GOODS_RECEIVED' && isSales,
   };
 
   // การดำเนินการอื่น ๆ now holds only the rare actions — everything workflow-
-  // shaped (submit/pickup/propose/dual-track confirmations/close) moved into the
-  // DealStagePanel cockpit, and docs live in its เอกสารของขั้นนี้ row. The
-  // section hides entirely when none of the remaining actions apply.
-  const hasActions = can.calculatePrices || can.revise || can.editItems || can.cancel
+  // shaped (dual-track confirmations/close) moved into the DealStagePanel
+  // cockpit, and docs live in its เอกสารของขั้นนี้ row. The section hides
+  // entirely when none of the remaining actions apply.
+  const hasActions = can.revise || can.editItems || can.cancel
     || can.revokeCloseConfirm
     || (st === 'draft' && isOwner && items.length === 0);
 
@@ -661,26 +580,18 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   // Next-action summary for the current viewer only — derived strictly from the
   // `can` flags above (which already encode real status+role permission checks).
-  // Verified against backend/mock transition handlers (see api.tickets.approve/
-  // reject/pickup/... in src/api/mockApi.js) so the wording matches what the
-  // button actually does. Never invents an owner or action the data can't support.
+  // Verified against backend/mock transition handlers (see api.tickets.* in
+  // src/api/mockApi.js) so the wording matches what the button actually does.
+  // Never invents an owner or action the data can't support.
   const NEXT_ACTION_STEPS = [
-    ['reject',           st === 'price_proposed' ? 'ตรวจสอบราคาที่เสนอ แล้วอนุมัติหรือตีกลับให้ Import แก้ไข' : null],
-    ['approve',          st === 'price_proposed' ? 'ตรวจสอบราคาที่เสนอ แล้วอนุมัติหรือตีกลับให้ Import แก้ไข' : null],
-    ['pickup',           'รับมอบหมายใบขอราคานี้เพื่อเริ่มเสนอราคา'],
-    ['propose',          st === 'approved' ? 'แก้ไขราคาที่เสนอ (ต้องอนุมัติใหม่)' : 'เสนอราคาสินค้าให้ลูกค้า'],
-    // Dual-track steps come BEFORE generateQuotation: re-issuing a quotation is
-    // always available at quotation_issued, so listing it first used to mask the
-    // real next step (e.g. "ยืนยันลูกค้า") behind a generic re-issue suggestion.
+    // Dual-track steps: re-issuing/working the customer quotation lives in
+    // DealQuotationPanel, the deposit-notice/deposit-payment steps live in
+    // DealDepositPanel (Phase 3 Slice S3), and the fulfilment chain
+    // (issueImportRequest/markIrSent/markShipping/markGoodsReceived) lives in
+    // DealFulfilmentPanel (Phase 3 Slice S4) — so this list only covers the
+    // operational chain this page's own primaryAction button still drives.
     ['confirmCustomer',  'ยืนยันว่าลูกค้าตกลงคำสั่งซื้อแล้ว'],
-    ['generateDocument', 'ออกใบแจ้งยอดมัดจำให้ลูกค้า (เริ่มขั้นตอนชำระเงิน)'],
-    ['confirmDepositPaid','ยืนยันว่าลูกค้าชำระมัดจำแล้ว'],
-    ['issueImportRequest','ออก Import Request (IR) ให้โรงงาน'],
-    ['markIrSent',        'บันทึกว่าส่ง IR ให้โรงงานแล้ว'],
-    ['markShipping',      'บันทึกว่าสินค้าออกเดินทางแล้ว'],
-    ['markGoodsReceived', 'บันทึกว่ารับสินค้าแล้ว'],
     ['confirmFinalPayment','ยืนยันว่าลูกค้าชำระส่วนที่เหลือครบแล้ว'],
-    ['generateQuotation','ออกใบเสนอราคาให้ลูกค้า'],
     ['revise',            'ขอแก้ไขรายละเอียดใบขอราคานี้ได้หากจำเป็น'],
     ['confirmClose',      'ส่งมอบและรับเงินครบแล้ว — ยืนยันเพื่อส่งให้ CEO ตรวจสอบปิดงาน'],
     ['verifyClose',       'ฝ่ายบัญชียืนยันแล้ว — ตรวจสอบและปิดงานได้เลย'],
@@ -703,53 +614,19 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       : null;
 
   // The cockpit's primary action: the ONE workflow button for this viewer's
-  // current sub-step (moved verbatim out of การดำเนินการอื่น ๆ). Doc-shaped next
-  // steps (ออกใบแจ้งยอดมัดจำ, IR) are NOT repeated here — they already sit in the
-  // stage panel's docs row and the guidance line points at them. CEO price
-  // approve/reject keeps its dedicated decision panel below.
-  const primaryAction = can.pickup ? (
-    <button type="button" className="primary-button" disabled={actionLoading}
-      onClick={() => doAction(() => api.tickets.pickup(ticketId), 'รับมอบหมายแล้ว')}>
-      <Icon name="check" size={14} />
-      รับเรื่อง
-    </button>
-  ) : can.propose && !proposeMode ? (
-    <button
-      type="button"
-      className={st === 'approved' ? 'secondary-button' : 'primary-button'}
-      style={st === 'approved' ? { borderColor: 'var(--color-warning-border)', color: 'var(--color-warning-dark)', background: 'var(--color-warning-bg-soft)' } : {}}
-      disabled={actionLoading}
-      onClick={initPropose}
-    >
-      <Icon name="pencil" size={14} />
-      {st === 'in_review' && 'เสนอราคาสินค้า'}
-      {st === 'price_proposed' && 'แก้ไขราคาที่เสนอ'}
-      {st === 'approved' && 'แก้ไขราคา (ต้องอนุมัติใหม่)'}
-    </button>
-  ) : can.confirmCustomer ? (
+  // current sub-step (moved verbatim out of การดำเนินการอื่น ๆ). The
+  // customer-quotation issue/outcome/confirm-order actions live in
+  // DealQuotationPanel, the deposit-notice/deposit-payment actions live in
+  // DealDepositPanel (Phase 3 Slice S3), and the fulfilment chain
+  // (issue IR/mark sent/shipping/goods received) lives in
+  // DealFulfilmentPanel (Phase 3 Slice S4 — see
+  // docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md) — all
+  // three have their own primary buttons, so this page's own primaryAction
+  // no longer drives that chain.
+  const primaryAction = can.confirmCustomer ? (
     <button type="button" className="primary-button" disabled={actionLoading}
       onClick={() => doAction(() => api.tickets.confirmCustomer(ticketId), 'ลูกค้ายืนยันแล้ว')}>
       ลูกค้ายืนยัน
-    </button>
-  ) : can.confirmDepositPaid ? (
-    <button type="button" className="primary-button" disabled={actionLoading}
-      onClick={() => doAction(() => api.tickets.confirmDepositPaid(ticketId), 'ยืนยันรับมัดจำแล้ว')}>
-      ยืนยันรับมัดจำ
-    </button>
-  ) : can.markIrSent ? (
-    <button type="button" className="primary-button" disabled={actionLoading}
-      onClick={() => doAction(() => api.tickets.markIrSent(ticketId), 'ส่ง IR แล้ว')}>
-      ส่ง IR แล้ว
-    </button>
-  ) : can.markShipping ? (
-    <button type="button" className="primary-button" disabled={actionLoading}
-      onClick={() => doAction(() => api.tickets.markShipping(ticketId), 'สินค้าอยู่ระหว่างขนส่ง')}>
-      สินค้าออกเดินทาง (Shipping)
-    </button>
-  ) : can.markGoodsReceived ? (
-    <button type="button" className="primary-button" disabled={actionLoading}
-      onClick={() => doAction(() => api.tickets.markGoodsReceived(ticketId), 'รับสินค้าแล้ว')}>
-      รับสินค้าแล้ว (Goods Received)
     </button>
   ) : can.confirmFinalPayment ? (
     <button type="button" className="primary-button" disabled={actionLoading}
@@ -770,127 +647,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       ตรวจสอบและปิดงาน
     </button>
   ) : null;
-
-  function initPropose() {
-    // Factory configs are now a query (fetched once per session, see above);
-    // use whatever's in cache — same fallback-to-empty-object behavior as the
-    // old lazy fetch if it hasn't resolved yet.
-    const fcMap = factoryConfigs;
-
-    // init raw price per item (carry over existing rawPrice if re-opening)
-    const rawMap = {};
-    items.forEach((item) => { rawMap[item.id] = item.rawPrice != null ? String(item.rawPrice) : ''; });
-
-    // init currency/unit per factory group (from config or existing item data)
-    const currMap = {};
-    const groups = groupByFactory(items);
-    groups.forEach(({ factory, items: gItems }) => {
-      const fc = fcMap[factory];
-      // prefer existing raw data on items, fallback to config, fallback to THB/piece
-      const firstWithRaw = gItems.find((it) => it.rawCurrency);
-      currMap[factory] = {
-        currency: firstWithRaw?.rawCurrency ?? fc?.currency ?? 'THB',
-        unit:     firstWithRaw?.rawUnit     ?? fc?.unit     ?? 'piece',
-      };
-    });
-
-    setDraftRaw(rawMap);
-    setDraftFactoryCurr(currMap);
-    setProposeMode(true);
-  }
-
-  async function handleProposePrice() {
-    const payload = {
-      items: items.map((item) => {
-        const rawPriceStr = draftRaw[item.id] ?? '';
-        const fc = draftFactoryCurr[item.factory] ?? {};
-        return {
-          brand: item.brand, model: item.model, color: item.color,
-          texture: item.texture, size: item.size, factory: item.factory ?? null,
-          qty: item.qty, qtySqm: item.qtySqm ?? null,
-          rawPrice:    rawPriceStr !== '' ? Number(rawPriceStr) : null,
-          rawCurrency: fc.currency ?? null,
-          rawUnit:     fc.unit     ?? null,
-          proposedPrice: null, // calculated in R4
-          currency: 'THB',
-        };
-      }),
-      note: proposeNote.trim() || null,
-    };
-    await doAction(() => api.tickets.proposePrice(ticketId, payload), 'ส่งราคาเสนอเรียบร้อย');
-  }
-
-  // Group items by factory for Import propose-price view
-  function groupByFactory(itemList) {
-    const groups = [];
-    const seen = new Map();
-    itemList.forEach((item) => {
-      const key = item.factory || '(ไม่ระบุโรงงาน)';
-      if (!seen.has(key)) { seen.set(key, []); groups.push({ factory: key, items: seen.get(key) }); }
-      seen.get(key).push(item);
-    });
-    return groups;
-  }
-
-  function buildEmailDraft(factory, groupItems) {
-    const fc = factoryConfigs[factory] ?? {};
-    const currency = fc.currency ?? 'THB';
-    const unit = fc.unit ?? 'piece';
-    const unitLabel = unit === 'sqm' ? 'ตร.ม.' : 'แผ่น';
-    const today = new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' });
-    const itemLines = groupItems.map((item, i) => {
-      const qtyDisplay = item.unitBasis === 'SQM' && item.qtySqm != null
-        ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.`
-        : `${item.qty} แผ่น`;
-      return `    ${i + 1}. ${item.brand} ${item.model} ${item.color} ${item.texture} ${item.size} — ${qtyDisplay}`;
-    }).join('\n');
-    return {
-      factory,
-      to: fc.email ?? '',
-      subject: `ขอทราบราคาสินค้า — ${factory}`,
-      body: `วันที่ ${today}\n\nเรียน ทีมขาย ${factory}\n\nด้วยบริษัท จี แอล แอนด์ อาร์ จำกัด มีความประสงค์จะขอทราบราคาสินค้าดังต่อไปนี้\n\nรายการสินค้า:\n${itemLines}\n\nกรุณาแจ้งราคาสินค้าเป็นสกุลเงิน ${currency} ต่อ ${unitLabel} พร้อมระยะเวลาจัดส่ง\n\nจึงเรียนมาเพื่อโปรดพิจารณา\n\nขอแสดงความนับถือ\nฝ่ายนำเข้า\nบริษัท จี แอล แอนด์ อาร์ จำกัด\nโทร. 02-xxx-xxxx`,
-    };
-  }
-
-  async function sendFactoryEmail() {
-    if (!emailDraft) return;
-    setEmailSending(true);
-    try {
-      await api.factoryConfigs.sendEmail(ticketId, emailDraft);
-      showToast('success', `ส่งอีเมลถึง ${emailDraft.factory} แล้ว`);
-      setEmailDraft(null);
-    } catch (err) {
-      showToast('error', err.message || 'ส่งอีเมลไม่สำเร็จ');
-    } finally {
-      setEmailSending(false);
-    }
-  }
-
-  async function handleCalculatePrices() {
-    try {
-      await calculatePricesMutation.mutateAsync();
-    } catch { /* onError above already toasted */ }
-  }
-
-  async function handleOverridePrice(itemId) {
-    const draft = overrideDraft[itemId];
-    const key = `override.${itemId}`;
-    // UX-03 (slice 5b): the error is per-item — keyed by itemId (exact-match
-    // setFieldError, not a prefix) so an invalid price on one row's input
-    // can never mark another row's input.
-    if (!draft?.price || isNaN(Number(draft.price)) || Number(draft.price) <= 0) {
-      setFieldError(key, 'กรุณากรอกราคา override ที่ถูกต้อง');
-      focusFirstInvalid(key);
-      return;
-    }
-    clearFieldError(key);
-    try {
-      await overrideMutation.mutateAsync({
-        itemId,
-        payload: { manualPrice: Number(draft.price), reason: draft.reason || null },
-      });
-    } catch { /* onError above already toasted */ }
-  }
 
   async function handleUploadAttachment(e, explicitType = null) {
     const file = e.target.files?.[0];
@@ -945,71 +701,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     }
   }
 
-  function openQuotationModal(recipientType = null) {
-    const defaultRecipientType = recipientType
-      ?? (summary.salesStage === 'QUOTE_BUYER' ? 'BUYER' : 'DESIGNER');
-    const chainAccepted = (quotations ?? []).some((q) =>
-      (q.recipientType ?? 'UNSPECIFIED') === defaultRecipientType && q.docStatus === 'ACCEPTED');
-    const amendmentRequired = chainAccepted || summary.paymentStatus != null;
-    setQuotationDraft({
-      recipientType: defaultRecipientType,
-      recipientLabel: summary.customerName ?? '',
-      paymentTerms: '',
-      leadTime: '',
-      deliveryTerms: '',
-      validityDate: '',
-      amendmentReason: '',
-      offerDate: '',
-      depositPercent: 50,
-      deliveryLeadDays: 90,
-    });
-    setQuotationModal({ amendmentRequired });
-    // UX-03: reset on open so a stale error from a previous attempt never
-    // greets the user on reopen.
-    setFieldErrorsForPrefix('quotation.', {});
-  }
-
-  function closeQuotationModal() {
-    setQuotationModal(null);
-    setFieldErrorsForPrefix('quotation.', {});
-  }
-
-  async function submitQuotation() {
-    const errors = {};
-    if (!quotationDraft.recipientType) {
-      errors['quotation.recipientType'] = 'กรุณาเลือกผู้รับใบเสนอราคา';
-    }
-    if (quotationModal?.amendmentRequired && !quotationDraft.amendmentReason.trim()) {
-      errors['quotation.amendmentReason'] = 'กรุณาระบุเหตุผลการแก้ไขใบเสนอราคา';
-    }
-    const order = Object.keys(errors);
-    if (order.length > 0) {
-      setFieldErrorsForPrefix('quotation.', errors);
-      focusFirstInvalid(order[0]);
-      return;
-    }
-    setFieldErrorsForPrefix('quotation.', {});
-    const payload = Object.fromEntries(Object.entries(quotationDraft).map(([key, value]) => [
-      key,
-      typeof value === 'string' && value.trim() === '' ? null : value,
-    ]));
-    await doAction(() => api.tickets.quotation(ticketId, payload), 'ออกใบเสนอราคาแล้ว');
-  }
-
-  async function markQuotation(q, action) {
-    const fn = action === 'sent'
-      ? () => api.tickets.markQuotationSent(ticketId, q.id, {})
-      : action === 'accepted'
-        ? () => api.tickets.markQuotationAccepted(ticketId, q.id, {})
-        : () => api.tickets.markQuotationRejected(ticketId, q.id, {});
-    const message = action === 'sent'
-      ? 'บันทึกว่าส่งใบเสนอราคาแล้ว'
-      : action === 'accepted'
-        ? 'บันทึกลูกค้ารับใบเสนอราคาแล้ว'
-        : 'บันทึกลูกค้าปฏิเสธใบเสนอราคาแล้ว';
-    await doAction(fn, message);
-  }
-
   async function handleDownloadRemainingInvoice() {
     setDownloadingInvoice(true);
     try {
@@ -1020,16 +711,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     } finally {
       setDownloadingInvoice(false);
     }
-  }
-
-  async function handleReject() {
-    if (!rejectReason.trim()) {
-      setFieldError('reject.reason', 'กรุณาระบุเหตุผลในการตีกลับ');
-      focusFirstInvalid('reject.reason');
-      return;
-    }
-    clearFieldError('reject.reason');
-    await doAction(() => api.tickets.reject(ticketId, { reason: rejectReason.trim() }), 'ตีกลับใบขอราคาแล้ว');
   }
 
   async function handleComment() {
@@ -1067,32 +748,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     await doAction(() => api.tickets.setBilling(ticketId, payload), 'บันทึกข้อมูลวางบิลแล้ว');
   }
 
-  async function handleRecordDelivery() {
-    const lines = items
-      .map((item) => ({ itemId: item.id, qty: Number(deliveryDraft.lines[item.id] || 0) }))
-      .filter((line) => line.qty > 0);
-    if (lines.length === 0) {
-      setFieldErrorsForPrefix('delivery.', { 'delivery.lines': 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ' });
-      focusFirstInvalid('delivery.lines');
-      return;
-    }
-    setFieldErrorsForPrefix('delivery.', {});
-    await doAction(() => api.tickets.recordDelivery(ticketId, {
-      source: deliveryDraft.source,
-      note: deliveryDraft.note.trim() || null,
-      lines,
-    }), 'บันทึกการส่งสินค้าแล้ว');
-  }
-
-  async function handleReserveStock() {
-    const lines = items.map((item) => ({
-      itemId: item.id,
-      qtyFromStock: Number(stockDraft.lines[item.id] || 0),
-      note: stockDraft.note.trim() || null,
-    }));
-    await doAction(() => api.tickets.reserveStock(ticketId, { lines }), 'บันทึกสินค้าจากสต็อกแล้ว');
-  }
-
   function openBillingModal() {
     setBillingDraft({
       billingDate: summary.billingDate ?? '',
@@ -1125,61 +780,38 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     setFieldErrorsForPrefix('payment.', {});
   }
 
-  function openDeliveryModal() {
-    const source = fs === 'FROM_STOCK' ? 'STOCK' : 'WAREHOUSE';
-    const lines = {};
-    items.forEach((item) => {
-      lines[item.id] = String(Math.max(0, Number(item.qty || 0) - Number(item.qtyDelivered || 0)));
-    });
-    setDeliveryDraft({ source, note: '', lines });
-    setDeliveryModal(true);
-    // UX-03: reset on open so a stale error from a previous attempt never
-    // greets the user on reopen.
-    setFieldErrorsForPrefix('delivery.', {});
-  }
-
-  function closeDeliveryModal() {
-    setDeliveryModal(false);
-    setFieldErrorsForPrefix('delivery.', {});
-  }
-
-  function openStockModal() {
-    const lines = {};
-    items.forEach((item) => { lines[item.id] = String(item.qtyFromStock ?? 0); });
-    setStockDraft({ note: '', lines });
-    setStockModal(true);
-  }
+  // openDeliveryModal/closeDeliveryModal/openStockModal moved into
+  // DealFulfilmentPanel (Phase 3 Slice S4).
 
   return (
     <div className="page-stack">
       <Breadcrumbs items={[{ label: 'ดีล', onClick: onBack }, { label: summary.code || summary.customerName || summary.title }]} />
-      <header style={{ display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between' }}>
-        <div style={{ minWidth: 0 }}>
-          <button type="button" className="secondary-button" onClick={onBack} style={{ marginBottom: 12 }}>
-            <Icon name="chevronLeft" size={14} />
-            กลับ
-          </button>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: 'var(--color-text)' }}>{summary.customerName || summary.title}</h1>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
-            <code style={{ fontSize: 13, background: 'var(--color-surface-subtle)', padding: '2px 8px', borderRadius: 4 }}>{summary.code}</code>
-            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-            {summary.hasEdits && (
-              <StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge>
-            )}
-          </div>
-          {/* Summary: who created it, when, and who is currently handling it — all
-              fields already fetched on `summary` (no new API calls / no invented owner). */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', marginTop: 10, fontSize: 13, color: 'var(--color-text-muted)' }}>
-            <span>สร้างโดย <strong style={{ color: 'var(--color-text-secondary)' }}>{summary.createdByName || '-'}</strong> · {formatThaiDate(summary.createdAt)}</span>
-            {summary.assignedToName && (
-              <span>เจ้าหน้าที่นำเข้าที่ดูแล <strong style={{ color: 'var(--color-text-secondary)' }}>{summary.assignedToName}</strong></span>
-            )}
-          </div>
-        </div>
-        <button type="button" className="icon-button" onClick={refreshTicket} title="รีเฟรช" aria-label="รีเฟรช">
-          <Icon name="refresh" />
-        </button>
-      </header>
+      <button type="button" className="secondary-button self-start" onClick={onBack}>
+        <Icon name="chevronLeft" size={14} />
+        กลับ
+      </button>
+
+      {/* Deal Workspace state header (Phase 2 Slice S2 — see
+          docs/agent-handoffs/104_feat-deal-workspace-unification.md): deal
+          code/title/customer + lifecycle × stage × PCR × payment × fulfilment
+          at a glance, plus "ถึงคิวคุณ" and the one primary CTA that mirrors
+          it. Subsumes the old bare header (title/code/status/refresh). */}
+      <DealStateHeader
+        summary={summary}
+        pricingRequests={pricingRequests}
+        primaryAction={primaryAction}
+        nextAction={nextAction}
+        waitingHint={waitingHint}
+        onRefresh={refreshTicket}
+      />
+      <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted sm:gap-4">
+        <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+        {summary.hasEdits && <StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge>}
+        <span>สร้างโดย <strong className="text-text-secondary">{summary.createdByName || '-'}</strong> · {formatThaiDate(summary.createdAt)}</span>
+        {summary.assignedToName && (
+          <span>เจ้าหน้าที่นำเข้าที่ดูแล <strong className="text-text-secondary">{summary.assignedToName}</strong></span>
+        )}
+      </div>
 
       {/* Deal pipeline (V50): the 14-stage journey with stage-gated doc actions.
           Generation buttons reuse the exact handlers/permissions of the action
@@ -1190,7 +822,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         summary={summary}
         availableActions={availableActions}
         pricingRequests={pricingRequests}
-        primaryAction={primaryAction}
+        // primaryAction now lives solely in DealStateHeader above (Phase 2 Slice S2's
+        // "one primary CTA" — see its own doc comment) — not passed here too, to avoid
+        // rendering the exact same button twice on one page.
         guidance={nextAction ?? waitingHint}
         actionLoading={actionLoading}
         deliveryProgress={{ delivered: totalDelivered, ordered: totalOrdered }}
@@ -1201,23 +835,15 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         onDormant={(payload) => doAction(() => api.tickets.dormant(ticketId, payload), 'พัก dormant แล้ว')}
         onResume={(payload) => doAction(() => api.tickets.resume(ticketId, payload), 'ดำเนินการต่อแล้ว')}
         onSetTenderRequirement={(payload) => doAction(() => api.tickets.setTenderRequirement(ticketId, payload), 'บันทึกสถานะประมูลแล้ว')}
-        onSetDepositPolicy={(payload) => doAction(() => api.tickets.setDepositPolicy(ticketId, payload), 'บันทึกนโยบายมัดจำแล้ว')}
-        docActions={(can.generateQuotation || can.generateDocument || can.issueImportRequest
-          || can.downloadRemainingInvoice || (sections.quotation && latestQuotation)
-          || (sections.depositNotice && depositNoticeIssued)) ? (
+        docActions={(can.downloadRemainingInvoice || (sections.quotation && latestQuotation)) ? (
           <>
-            {can.generateQuotation && (
-              <button type="button" className="secondary-button" disabled={actionLoading}
-                onClick={() => openQuotationModal()}>
-                <Icon name="fileText" size={14} />
-                {quotations && quotations.length > 0 ? 'ออกใบเสนอราคาใหม่ (Rev)' : 'ออกใบเสนอราคา'}
-              </button>
-            )}
             {/* Import/account (role-scoped views, Phase A): the view-only
-                quotation/deposit-notice download links aren't role-gated by
-                `can.*` (unlike generate/issue, which already require
-                isOwner) — sections.quotation/depositNotice hide them for the
-                role that has no business in that document. */}
+                quotation download link isn't role-gated by `can.*` —
+                sections.quotation hides it for the role that has no business
+                in that document. The deposit-notice create/issue/view
+                affordance moved to DealDepositPanel (Phase 3 Slice S3); the
+                Import Request button moved to DealFulfilmentPanel (Phase 3
+                Slice S4). */}
             {sections.quotation && latestQuotation && (
               <button type="button" className="secondary-button"
                 disabled={downloadingQuotationKey === `${latestQuotation.id}-pdf`}
@@ -1226,26 +852,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 {downloadingQuotationKey === `${latestQuotation.id}-pdf`
                   ? 'กำลังดาวน์โหลด...'
                   : `ใบเสนอราคา ${latestQuotation.number} (PDF)`}
-              </button>
-            )}
-            {can.generateDocument && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => onOpenDocument && onOpenDocument(ticketId)}>
-                <Icon name="fileText" size={14} />
-                ออกใบแจ้งยอดมัดจำ
-              </button>
-            )}
-            {sections.depositNotice && depositNoticeIssued && (
-              <button type="button" className="secondary-button"
-                onClick={() => onOpenDocument && onOpenDocument(ticketId)}>
-                <Icon name="fileText" size={14} />
-                ดูใบแจ้งยอดมัดจำ
-              </button>
-            )}
-            {can.issueImportRequest && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.issueImportRequest(ticketId), 'ออก IR แล้ว')}>
-                ออก Import Request (IR)
               </button>
             )}
             {can.downloadRemainingInvoice && (
@@ -1257,6 +863,26 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           </>
         ) : null}
       />
+
+      {/* Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103): the
+          weekly-report replacement. Owner/sales_manager/ceo only — see salesViewScope.js's
+          dealTracking section id. Import/account get a one-line SectionPeek like every
+          other role-scoped section on this page instead of the full panel. */}
+      {sections.dealTracking ? (
+        <DealTrackingPanel
+          summary={summary}
+          events={events}
+          activities={activities}
+          activitiesLoading={activitiesQuery.isLoading}
+          canEdit={canViewDealTracking && (isOwner || role === 'sales_manager' || role === 'ceo')}
+          onUpdateTracking={(payload) => updateTrackingMutation.mutateAsync(payload)}
+          onAddActivity={(payload) => addActivityMutation.mutateAsync(payload)}
+          updating={updateTrackingMutation.isPending}
+          addingActivity={addActivityMutation.isPending}
+        />
+      ) : (
+        <SectionPeek title="การติดตามดีล" summary={summary} />
+      )}
 
       {sections.payment ? (
       <section className="panel">
@@ -1330,166 +956,17 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         <SectionPeek title="การชำระเงิน" summary={summary} />
       )}
 
-      {sections.delivery ? (
-      <section className="panel">
-        <div className="panel-header" style={{ alignItems: 'center' }}>
-          <h2>การส่งมอบสินค้า</h2>
-          <StatusBadge tone={fulfilmentStatusLabel(fs).tone}>
-            {fulfilmentStatusLabel(fs).label}
-          </StatusBadge>
-        </div>
-        <div style={{ padding: '0 18px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 12, alignItems: 'center' }}>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
-                <strong>{totalDelivered.toLocaleString('en-US')} / {totalOrdered.toLocaleString('en-US')}</strong>
-                <span style={{ color: 'var(--color-text-muted)' }}>{deliveryProgress}%</span>
-              </div>
-              <div style={{ height: 8, borderRadius: 999, background: 'var(--color-surface-subtle)', overflow: 'hidden' }}>
-                <div style={{ width: `${deliveryProgress}%`, height: '100%', background: 'var(--color-success)' }} />
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              {can.reserveStock && (
-                <button type="button" className="secondary-button" disabled={actionLoading} onClick={openStockModal}>
-                  จองสินค้าจากสต็อก
-                </button>
-              )}
-              {can.recordDelivery && (
-                <button type="button" className="primary-button" disabled={actionLoading} onClick={openDeliveryModal}>
-                  บันทึกการส่งสินค้า
-                </button>
-              )}
-              {can.completeDelivery && (
-                <button type="button" className="secondary-button" disabled={actionLoading}
-                  onClick={() => doAction(() => api.tickets.completeDelivery(ticketId, { note: 'ส่งมอบครบจากหน้าดีล' }), 'ส่งมอบครบแล้ว')}>
-                  ส่งมอบครบ
-                </button>
-              )}
-            </div>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {items.map((item) => {
-              const ordered = Number(item.qty || 0);
-              const delivered = Number(item.qtyDelivered || 0);
-              const remaining = Math.max(0, ordered - delivered);
-              return (
-                <div key={item.id} style={{ border: '1px solid var(--color-border-subtle)', borderRadius: 8, padding: '10px 12px', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 10 }}>
-                  <div>
-                    <strong>{item.brand} {item.model || ''}</strong>
-                    <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
-                      จากสต็อก {Number(item.qtyFromStock || 0).toLocaleString('en-US')} · คงเหลือ {remaining.toLocaleString('en-US')}
-                    </small>
-                  </div>
-                  <strong>{delivered.toLocaleString('en-US')} / {ordered.toLocaleString('en-US')}</strong>
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 10 }}>
-            <h3 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700 }}>ประวัติส่งมอบ</h3>
-            {deliveriesQuery.isLoading ? (
-              <SkeletonText lines={2} />
-            ) : deliveryRecords.length === 0 ? (
-              <p style={{ margin: 0, fontSize: 13, color: 'var(--color-text-muted)' }}>ยังไม่มีรายการส่งมอบ</p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {deliveryRecords.map((record) => (
-                  <div key={record.deliveryId} style={{ display: 'grid', gridTemplateColumns: '110px 90px 1fr', gap: 10, alignItems: 'start', fontSize: 13 }}>
-                    <span style={{ color: 'var(--color-text-muted)' }}>{formatThaiDate(record.deliveredAt)}</span>
-                    <strong>{record.source}</strong>
-                    <span>
-                      {(record.items ?? []).map((line) => `${line.itemId}: ${Number(line.qty).toLocaleString('en-US')}`).join(', ')}
-                      <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
-                        {record.deliveredByName || '-'}{record.note ? ` · ${record.note}` : ''}
-                      </small>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </section>
-      ) : (
-        <SectionPeek title="การส่งมอบสินค้า" summary={summary} />
-      )}
+      {/* "การส่งมอบ / นำเข้า" (Phase 3 Slice S4 — see
+          docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md): the
+          deal-level IR → shipping → goods-received → delivery chain, plus an
+          optional per-factory PO detail, now live in DealFulfilmentPanel
+          alongside DealQuotationPanel/DealDepositPanel below rather than as
+          a standalone top-level panel here. */}
 
-      {/* Contextual decision panel — approve/reject is the one action on this page
-          with real financial and downstream consequences, so it gets its own
-          visually separated, deliberate block instead of sitting in the general
-          action row. Helper text below is quoted from api.tickets.approve/reject
-          in src/api/mockApi.js (lines ~1218-1240): approve copies proposedPrice →
-          approvedPrice and moves price_proposed → approved; reject moves the
-          ticket back to in_review for Import to re-propose.
-          sections.priceApproval documents (doesn't newly restrict) that this
-          panel is CEO-only: can.approve/can.reject already require
-          ROLE_PERMISSIONS.canApproveReject === ['ceo']. */}
-      {(can.approve || can.reject) && sections.priceApproval && (
-        // Warning token rather than a raw amber: DESIGN.md defines
-        // --color-warning as the caution / needs-a-decision colour.
-        <section className="panel" style={{ borderColor: 'var(--color-warning)', borderWidth: 1.5 }}>
-          <div className="panel-header">
-            <h2>การอนุมัติราคา</h2>
-          </div>
-          <div style={{ padding: '0 18px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <p style={{ margin: 0, fontSize: 13, color: 'var(--color-icon-muted)', lineHeight: 1.6 }}>
-              ตรวจสอบราคาที่เสนอในรายการสินค้าด้านล่างก่อนตัดสินใจ
-              {' — '}<strong>อนุมัติ</strong>จะยืนยันราคาที่เสนอเป็นราคาขายจริง และเปิดให้ฝ่ายขายออกใบเสนอราคาต่อได้
-              {' '}<strong>ไม่อนุมัติ</strong>จะส่งใบขอราคากลับไปที่ฝ่าย Import เพื่อเสนอราคาใหม่
-            </p>
-            {!showRejectForm && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-                {can.approve && (
-                  <button type="button" className="primary-button" disabled={actionLoading || calcLoading}
-                    onClick={() => doAction(() => api.tickets.approve(ticketId), 'อนุมัติราคาแล้ว')}>
-                    <Icon name="check" size={14} />
-                    อนุมัติ
-                  </button>
-                )}
-                {can.reject && (
-                  <button type="button" className="secondary-button" disabled={actionLoading}
-                    onClick={() => { setShowRejectForm(true); clearFieldError('reject.reason'); }}
-                    style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}>
-                    <Icon name="close" size={14} />
-                    ไม่อนุมัติ
-                  </button>
-                )}
-              </div>
-            )}
-            {showRejectForm && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <label style={{ fontSize: 13, fontWeight: 600 }}>
-                  เหตุผลในการตีกลับ *
-                  <textarea rows={2}
-                    id="reject-reason"
-                    ref={(el) => { fieldRefs.current['reject.reason'] = el; }}
-                    value={rejectReason}
-                    onChange={(e) => { setRejectReason(e.target.value); clearFieldError('reject.reason'); }}
-                    placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }}
-                    aria-invalid={fieldErrors['reject.reason'] ? true : undefined}
-                    aria-describedby={fieldErrors['reject.reason'] ? fieldErrorId('reject-reason') : undefined}
-                  />
-                  {fieldErrors['reject.reason'] ? (
-                    <p id={fieldErrorId('reject-reason')} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
-                      {fieldErrors['reject.reason']}
-                    </p>
-                  ) : null}
-                </label>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button type="button" className="secondary-button" onClick={handleReject} disabled={actionLoading}
-                    style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}>
-                    ยืนยันไม่อนุมัติ
-                  </button>
-                  <button type="button" className="secondary-button" onClick={() => { setShowRejectForm(false); setRejectReason(''); clearFieldError('reject.reason'); }} disabled={actionLoading}>
-                    ยกเลิก
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </section>
-      )}
+      {/* The CEO price-approval decision panel (approve/reject a Import-proposed
+          price) is gone along with ticket-native pricing (Phase 2 Slice S1/S2 —
+          see docs/agent-handoffs/104): CEO price decisions now happen on the
+          PricingRequest chain, in PricingRequestDetailPage's Step 3 panel. */}
 
       {hasActions && (
         <section className="panel" style={{ background: 'var(--color-surface-muted)' }}>
@@ -1502,22 +979,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 ดีลนี้ยังไม่มีรายการสินค้า — กด “แก้ไขรายการสินค้า” เพื่อเพิ่มก่อนส่งขอราคา
               </span>
             )}
-            {can.calculatePrices && (
-              <button type="button" className="secondary-button" disabled={calcLoading || actionLoading}
-                onClick={handleCalculatePrices}
-                style={{ background: 'var(--color-info-row-active)', borderColor: 'var(--color-info-border-strong)', color: 'var(--color-info)' }}>
-                <Icon name="calculator" size={14} />
-                {calcLoading ? 'กำลังคำนวณ...' : 'คำนวณราคา (CIF)'}
-              </button>
-            )}
-            {priceBreakdown.length > 0 && (
-              <button type="button" className="secondary-button"
-                style={{ fontSize: 12 }}
-                onClick={() => setShowBreakdown((v) => !v)}>
-                {showBreakdown ? 'ซ่อนรายละเอียดสูตร' : 'ดูรายละเอียดสูตร'}
-              </button>
-            )}
-
             {can.revise && !showReviseForm && (
               <button type="button" className="secondary-button" disabled={actionLoading}
                 onClick={() => { setShowReviseForm(true); clearFieldError('revise.reason'); }}>
@@ -1863,7 +1324,7 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                     </>
                   ) : showProposed ? (
                     <>
-                      <span>ราคาที่เสนอ {proposeMode ? '(แก้ไข)' : ''}</span>
+                      <span>ราคาที่เสนอ</span>
                       <span>ราคาที่อนุมัติ</span>
                     </>
                   ) : (
@@ -1872,114 +1333,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 </div>
                 {items.length === 0 ? (
                   <EmptyState title="ไม่มีรายการสินค้า" />
-                ) : proposeMode ? (
-                  groupByFactory(items).map(({ factory, items: groupItems }) => {
-                    const fc = factoryConfigs[factory];
-                    const isDraftOpen = emailDraft?.factory === factory;
-                    return (
-                      <div key={factory}>
-                        {/* Factory group header */}
-                        <div style={{ padding: '8px 18px', background: 'var(--color-surface-subtle)', fontSize: 12, fontWeight: 700, color: 'var(--color-info-dot)', borderTop: '1px solid var(--color-border-subtle)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                          <Icon name="building" size={13} />
-                          <span>{factory}</span>
-                          <span style={{ fontWeight: 400, color: 'var(--color-text-muted)' }}>({groupItems.length} รายการ)</span>
-                          {fc?.email && <span style={{ fontWeight: 400, color: 'var(--color-text-muted)', fontSize: 11 }}>· {fc.email}</span>}
-                          <button type="button" className="secondary-button"
-                            style={{ marginLeft: 'auto', fontSize: 12, padding: '4px 12px' }}
-                            onClick={() => setEmailDraft(isDraftOpen ? null : buildEmailDraft(factory, groupItems))}>
-                            <Icon name="fileText" size={13} />
-                            {isDraftOpen ? 'ปิดร่างอีเมล' : 'ร่างอีเมล'}
-                          </button>
-                        </div>
-
-                        {/* Currency/unit settings bar */}
-                        <div style={{ padding: '10px 18px', background: 'var(--color-surface-muted)', borderTop: '1px solid var(--color-border)', display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                            <span style={{ fontSize: 13, color: 'var(--color-icon-muted)', fontWeight: 600, whiteSpace: 'nowrap' }}>สกุลเงิน</span>
-                            <InfoTip label="สกุลเงินและหน่วยนับ" text="เลือกครั้งเดียวต่อโรงงาน ใช้กับทุกรายการของโรงงานนี้" />
-                            <select
-                              value={draftFactoryCurr[factory]?.currency ?? 'THB'}
-                              onChange={(e) => setDraftFactoryCurr((p) => ({ ...p, [factory]: { ...p[factory], currency: e.target.value } }))}
-                              style={{ fontSize: 14, padding: '5px 10px', border: '1px solid var(--color-border-muted)', borderRadius: 6, background: 'var(--color-surface)', cursor: 'pointer', fontWeight: 600, color: 'var(--color-info-dot)' }}>
-                              {['THB','EUR','USD','JPY','CNY','GBP'].map((c) => <option key={c}>{c}</option>)}
-                            </select>
-                          </div>
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                            <span style={{ fontSize: 13, color: 'var(--color-icon-muted)', fontWeight: 600, whiteSpace: 'nowrap' }}>หน่วยราคา</span>
-                            <select
-                              value={draftFactoryCurr[factory]?.unit ?? 'piece'}
-                              onChange={(e) => setDraftFactoryCurr((p) => ({ ...p, [factory]: { ...p[factory], unit: e.target.value } }))}
-                              style={{ fontSize: 14, padding: '5px 10px', border: '1px solid var(--color-border-muted)', borderRadius: 6, background: 'var(--color-surface)', cursor: 'pointer', fontWeight: 600, color: 'var(--color-info-dot)' }}>
-                              <option value="piece">/ แผ่น</option>
-                              <option value="sqm">/ ตร.ม.</option>
-                              <option value="box">/ กล่อง</option>
-                            </select>
-                          </div>
-                        </div>
-
-                        {/* Email draft panel */}
-                        {isDraftOpen && emailDraft && (
-                          <div style={{ margin: '0 18px 8px', padding: '12px', border: '1px solid var(--color-info-border)', borderRadius: 8, background: 'var(--color-info-row-active)', fontSize: 13 }}>
-                            <p style={{ margin: '0 0 8px', fontWeight: 700, fontSize: 12, color: 'var(--color-info)' }}>ร่างอีเมลถึง {factory}</p>
-                            <label style={{ display: 'block', marginBottom: 6 }}>
-                              <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>ถึง (To)</span>
-                              <input value={emailDraft.to} onChange={(e) => setEmailDraft((d) => ({ ...d, to: e.target.value }))} style={{ marginTop: 2 }} />
-                            </label>
-                            <label style={{ display: 'block', marginBottom: 6 }}>
-                              <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>หัวข้อ (Subject)</span>
-                              <input value={emailDraft.subject} onChange={(e) => setEmailDraft((d) => ({ ...d, subject: e.target.value }))} style={{ marginTop: 2 }} />
-                            </label>
-                            <label style={{ display: 'block', marginBottom: 8 }}>
-                              <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>เนื้อหา</span>
-                              <textarea rows={8} value={emailDraft.body} onChange={(e) => setEmailDraft((d) => ({ ...d, body: e.target.value }))} style={{ marginTop: 2, fontFamily: 'monospace', fontSize: 12 }} />
-                            </label>
-                            <div style={{ display: 'flex', gap: 8 }}>
-                              <button type="button" className="primary-button" disabled={emailSending || !emailDraft.to} onClick={sendFactoryEmail} style={{ fontSize: 12 }}>
-                                {emailSending ? 'กำลังส่ง...' : 'ส่งอีเมล'}
-                              </button>
-                              <button type="button" className="secondary-button" onClick={() => setEmailDraft(null)} style={{ fontSize: 12 }}>ปิด</button>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Items */}
-                        {groupItems.map((item, i) => {
-                          const selectedCurr = draftFactoryCurr[factory] ?? {};
-                          const currLabel = selectedCurr.currency ?? 'THB';
-                          const unitLabel = selectedCurr.unit === 'sqm' ? 'ตร.ม.' : selectedCurr.unit === 'box' ? 'กล่อง' : 'แผ่น';
-                          return (
-                            <div key={item.id ?? i} className="ticket-items-table data-row" style={{ gridTemplateColumns: itemsGridCols }}>
-                              <span data-label="ยี่ห้อ / รุ่น">
-                                <strong>{item.brand}</strong>
-                                {item.model && <small style={{ color: 'var(--color-text-muted)' }}>{item.model}</small>}
-                              </span>
-                              <span data-label="สี / เนื้อผิว" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                {item.color && <span>{item.color}</span>}
-                                {item.texture && <small style={{ color: 'var(--color-text-muted)' }}>{item.texture}</small>}
-                                {item.size && <small style={{ color: 'var(--color-text-muted)' }}>{item.size}</small>}
-                              </span>
-                              <span data-label="จำนวน">
-                                {item.unitBasis === 'SQM'
-                                  ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small style={{ display: 'block', color: 'var(--color-text-muted)' }}>{item.qty} แผ่น</small></>
-                                  : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
-                                }
-                              </span>
-                              <div data-label="ราคาที่เสนอ (แก้ไข)" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                                <input type="number" min="0" step="0.0001"
-                                  value={draftRaw[item.id] ?? ''}
-                                  onChange={(e) => setDraftRaw((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                                  placeholder={`ราคา/${unitLabel}`}
-                                  title="ราคาต่อหน่วยของรายการนี้เท่านั้น (สกุลเงิน/หน่วยนับใช้ค่าที่ตั้งไว้ของโรงงาน)"
-                                  style={{ width: 110, padding: '4px 8px', border: '1px solid var(--color-info-border-strong)', borderRadius: 4, fontSize: 13 }} />
-                                <span style={{ fontSize: 11, color: 'var(--color-link)', whiteSpace: 'nowrap' }}>{currLabel}/{unitLabel}</span>
-                              </div>
-                              <code data-label="ราคาที่อนุมัติ">{formatMoney(item.approvedPrice)}</code>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  })
                 ) : items.map((item, i) => (
                   <div key={item.id ?? i} className="ticket-items-table data-row" style={{ gridTemplateColumns: itemsGridCols }}>
                     <span data-label="ยี่ห้อ / รุ่น">
@@ -2011,94 +1364,20 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                           <code style={{ color: item.manualPrice != null ? 'var(--color-override)' : 'var(--color-success)', fontWeight: 700 }}>
                             {item.manualPrice != null ? formatMoney(item.manualPrice) : item.calcedPrice != null ? formatMoney(item.calcedPrice) : '—'}
                           </code>
+                          {/* CEO manual-override entry (D10) was ticket-native and retired along
+                              with calculatePrices/approve — this is now a read-only readout of
+                              whatever the 3 stranded legacy tickets already carry. */}
                           {item.manualPrice != null && <small style={{ display: 'block', color: 'var(--color-override)', fontSize: 10 }}>override</small>}
-                          {can.overridePrice && (
-                            overrideDraft[item.id] !== undefined ? (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
-                                <input type="number" step="0.01" min="0"
-                                  id={`override-price-${item.id}`}
-                                  ref={(el) => { fieldRefs.current[`override.${item.id}`] = el; }}
-                                  placeholder="ราคา override"
-                                  value={overrideDraft[item.id]?.price ?? ''}
-                                  onChange={(e) => {
-                                    setOverrideDraft((p) => ({ ...p, [item.id]: { ...p[item.id], price: e.target.value } }));
-                                    clearFieldError(`override.${item.id}`);
-                                  }}
-                                  aria-invalid={fieldErrors[`override.${item.id}`] ? true : undefined}
-                                  aria-describedby={fieldErrors[`override.${item.id}`] ? fieldErrorId(`override-price-${item.id}`) : undefined}
-                                  style={{ width: 90, padding: '2px 6px', fontSize: 12, border: '1px solid var(--color-override-border)', borderRadius: 4 }} />
-                                {fieldErrors[`override.${item.id}`] ? (
-                                  <p id={fieldErrorId(`override-price-${item.id}`)} role="alert" style={{ margin: 0, width: 90, fontSize: 10, fontWeight: 700, color: 'var(--color-danger)' }}>
-                                    {fieldErrors[`override.${item.id}`]}
-                                  </p>
-                                ) : null}
-                                <input type="text" placeholder="เหตุผล (ถ้ามี)"
-                                  value={overrideDraft[item.id]?.reason ?? ''}
-                                  onChange={(e) => setOverrideDraft((p) => ({ ...p, [item.id]: { ...p[item.id], reason: e.target.value } }))}
-                                  style={{ width: 90, padding: '2px 6px', fontSize: 11, border: '1px solid var(--color-override-border)', borderRadius: 4 }} />
-                                <div style={{ display: 'flex', gap: 4 }}>
-                                  <button type="button" className="primary-button"
-                                    style={{ fontSize: 10, padding: '2px 8px', background: 'var(--color-override)', borderColor: 'var(--color-override)' }}
-                                    disabled={isOverridingItem(item.id)}
-                                    onClick={() => handleOverridePrice(item.id)}>
-                                    {isOverridingItem(item.id) ? '...' : 'บันทึก'}
-                                  </button>
-                                  <button type="button" className="secondary-button"
-                                    style={{ fontSize: 10, padding: '2px 6px' }}
-                                    onClick={() => {
-                                      setOverrideDraft((p) => { const n = { ...p }; delete n[item.id]; return n; });
-                                      clearFieldError(`override.${item.id}`);
-                                    }}>
-                                    ✕
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <button type="button" className="secondary-button"
-                                style={{ fontSize: 10, padding: '2px 8px', marginTop: 4, display: 'block' }}
-                                onClick={() => {
-                                  setOverrideDraft((p) => ({ ...p, [item.id]: { price: item.calcedPrice != null ? String(item.calcedPrice) : '', reason: '' } }));
-                                  clearFieldError(`override.${item.id}`);
-                                }}>
-                                override
-                              </button>
-                            )
-                          )}
                         </span>
                       </>
                     ) : (
                       <>
-                        {showProposed && <code data-label={`ราคาที่เสนอ${proposeMode ? ' (แก้ไข)' : ''}`}>{formatMoney(item.proposedPrice)}</code>}
+                        {showProposed && <code data-label="ราคาที่เสนอ">{formatMoney(item.proposedPrice)}</code>}
                         {showApproved && <code data-label="ราคาที่อนุมัติ">{formatMoney(item.approvedPrice)}</code>}
                       </>
                     )}
                   </div>
                 ))}
-
-                {proposeMode && (
-                  <div style={{ padding: '12px 18px', display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--color-border)' }}>
-                    {st === 'approved' && (
-                      <div style={{ padding: '10px 14px', borderRadius: 8, background: 'var(--color-warning-bg-soft)', border: '1px solid var(--color-warning-border)', fontSize: 13, color: 'var(--color-warning-dark)', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-                        <span style={{ fontWeight: 700, flexShrink: 0 }}>⚠</span>
-                        <span>การแก้ไขราคาจะ<strong>ยกเลิกการอนุมัติ</strong> และสถานะจะย้อนกลับเป็น &ldquo;รอการอนุมัติ&rdquo; — CEO และ Sales จะได้รับแจ้งทันที</span>
-                      </div>
-                    )}
-                    <label style={{ fontSize: 13 }}>
-                      หมายเหตุราคา
-                      <input value={proposeNote} onChange={(e) => setProposeNote(e.target.value)}
-                        placeholder="ข้อมูลเพิ่มเติมเกี่ยวกับราคา (ถ้ามี)" style={{ marginTop: 4 }} />
-                    </label>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button type="button" className="primary-button" onClick={handleProposePrice} disabled={actionLoading}>
-                        {st === 'approved' ? 'ยืนยันแก้ไขราคา (รออนุมัติใหม่)' : 'ยืนยันราคาเสนอ'}
-                      </button>
-                      <button type="button" className="secondary-button"
-                        onClick={() => { setProposeMode(false); setDraftRaw({}); setDraftFactoryCurr({}); setProposeNote(''); setEmailDraft(null); }} disabled={actionLoading}>
-                        ยกเลิก
-                      </button>
-                    </div>
-                  </div>
-                )}
               </>
             )}
           </section>
@@ -2111,51 +1390,55 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             <SectionPeek title="ใบขอราคา (Pricing Request)" summary={summary} />
           )}
 
-          {/* D9: Price formula breakdown */}
-          {showBreakdown && priceBreakdown.length > 0 && (
-            <section className="panel">
-              <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h2>รายละเอียดสูตรคำนวณราคา</h2>
-                <button type="button" className="secondary-button" style={{ fontSize: 11, padding: '3px 8px' }}
-                  onClick={() => setShowBreakdown(false)}>ซ่อน</button>
-              </div>
-              <div style={{ overflowX: 'auto', padding: '0 0 8px' }}>
-                {priceBreakdown.map((b) => (
-                  <div key={b.itemId} style={{ marginBottom: 16, padding: '12px 18px', borderBottom: '1px solid var(--color-surface-subtle)' }}>
-                    <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>
-                      {b.brand} {b.model && <span style={{ fontWeight: 400, color: 'var(--color-text-muted)' }}>({b.model})</span>}
-                      {b.factory && <small style={{ color: 'var(--color-text-muted)', marginLeft: 8 }}>{b.factory}</small>}
-                    </div>
-                    <table style={{ fontSize: 11, borderCollapse: 'collapse', width: '100%', maxWidth: 520 }}>
-                      <tbody>
-                        {[
-                          ['ต้นทุนสินค้า (THB/ตร.ม.)', b.goodsCostPerSqm, `อัตราแลกเปลี่ยน ${b.rawCurrency}: ${b.fxRate}`],
-                          ['+ ค่าเรือ (THB/ตร.ม.)', b.freightPerSqm, null],
-                          ['+ ประกัน (THB/ตร.ม.)', b.insurancePerSqm, null],
-                          ['= CIF (THB/ตร.ม.)', b.cifPerSqm, null],
-                          ['+ ภาษีนำเข้า (THB/ตร.ม.)', b.importDutyPerSqm, null],
-                          ['+ ขนส่งภายใน (THB/ตร.ม.)', b.inlandPerSqm, null],
-                          ['= ต้นทุน Landed (THB/ตร.ม.)', b.landedCostPerSqm, null],
-                          [`+ Margin ${b.marginPct != null ? `${(Number(b.marginPct) * 100).toFixed(1)}%` : ''}`, null, null],
-                          ['= ราคาขาย (THB/ตร.ม.)', b.sellPricePerSqm, null],
-                          ['sqm/แผ่น', b.sqmPerPiece, null],
-                          ['ต้นทุน/แผ่น', b.calcedCostPerPiece, `config v${b.configVersion}`],
-                          ['ราคาขาย/แผ่น', b.calcedPricePerPiece, null],
-                        ].map(([label, value, note]) => (
-                          <tr key={label} style={{ borderBottom: '1px solid var(--color-surface-muted)' }}>
-                            <td style={{ padding: '3px 10px 3px 0', color: 'var(--color-icon-muted)', whiteSpace: 'nowrap' }}>{label}</td>
-                            <td style={{ padding: '3px 0', fontWeight: 600, textAlign: 'right', minWidth: 80 }}>
-                              {value != null ? Number(value).toLocaleString('th-TH', { minimumFractionDigits: 4 }) : ''}
-                            </td>
-                            <td style={{ padding: '3px 0 3px 10px', color: 'var(--color-text-muted)', fontSize: 10 }}>{note}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ))}
-              </div>
-            </section>
+          {/* "ราคาและใบเสนอราคา" (Phase 2 Slice S2): the customer-facing tail of
+              the PricingRequest chain (issue/outcome + confirm-order), pulled
+              onto the deal page. Renders nothing until a request reaches
+              APPROVED_FOR_QUOTATION — see DealQuotationPanel's own doc
+              comment. The factory/costing/CEO-price steps that precede that
+              stay on PricingRequestDetailPage, linked from inside the panel. */}
+          {sections.dealQuotation && canViewPricingRequests ? (
+            <DealQuotationPanel ticketId={ticketId} pricingRequests={pricingRequests} user={user} showToast={showToast} />
+          ) : null}
+
+          {/* "มัดจำ" (Phase 3 Slice S3 — see
+              docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md):
+              the one deposit section — policy (account/CEO) → notice (sales)
+              → payment confirmation (account) — replacing the deposit-policy
+              control that used to live in DealStagePanel and the deposit
+              doc/payment bits that used to live directly on this page. */}
+          {sections.depositNotice ? (
+            <DealDepositPanel
+              ticketId={ticketId}
+              user={user}
+              summary={summary}
+              availableActions={availableActions}
+              pricingRequests={pricingRequests}
+              showToast={showToast}
+            />
+          ) : (
+            <SectionPeek title="มัดจำ" summary={summary} />
+          )}
+
+          {/* "การส่งมอบ / นำเข้า" (Phase 3 Slice S4 — see
+              docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md):
+              the deal-level IR → shipping → goods-received → delivery chain
+              (import/CEO act, sales/account/ceo see progress), plus an
+              optional per-factory PO detail — replacing the "การส่งมอบสินค้า"
+              panel and the IR button/delivery/stock modals that used to live
+              directly on this page. Reuses the existing `delivery` section
+              id (salesViewScope.js) rather than adding a parallel one. */}
+          {sections.delivery ? (
+            <DealFulfilmentPanel
+              ticketId={ticketId}
+              user={user}
+              summary={summary}
+              items={items}
+              availableActions={availableActions}
+              pricingRequests={pricingRequests}
+              showToast={showToast}
+            />
+          ) : (
+            <SectionPeek title="การส่งมอบ / นำเข้า" summary={summary} />
           )}
 
           {/* R5: Attachments */}
@@ -2252,25 +1535,20 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             quotationGroups.length > 0 && (
             <section className="panel">
               <div className="panel-header">
-                <h2>ใบเสนอราคา</h2>
+                <h2>ใบเสนอราคา (เอกสารเดิม)</h2>
               </div>
+              {/* Ticket-native quotation generate/mark-sent/accepted/rejected is retired
+                  (Phase 2 Slice S1/S2 — see docs/agent-handoffs/104): these rows predate the
+                  PricingRequest/CustomerQuotation redesign (pricing_request_id IS NULL) and
+                  stay visible read-only/download-only so the 3 legacy deals' history isn't
+                  stranded. New quotations live in DealQuotationPanel above. */}
               {quotationGroups.map((group) => (
                 <div key={group.recipientType} style={{ borderTop: '1px solid var(--color-surface-subtle)' }}>
                   <div style={{ padding: '12px 18px 6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                     <h3 style={{ margin: 0, fontSize: 14 }}>{group.label}</h3>
-                    {can.generateQuotation && (
-                      <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
-                        disabled={actionLoading}
-                        onClick={() => openQuotationModal(group.recipientType)}>
-                        <Icon name="fileText" size={12} /> Revise
-                      </button>
-                    )}
                   </div>
-                  {group.quotations.map((q, index) => {
+                  {group.quotations.map((q) => {
                     const status = quotationStatusLabel(q.docStatus);
-                    const activeHead = index === 0 && !['SUPERSEDED', 'CANCELLED', 'REJECTED'].includes(q.docStatus);
-                    const canMarkSent = activeHead && hasAction('MARK_QUOTATION_SENT') && q.docStatus === 'ISSUED';
-                    const canMarkDecision = activeHead && ['ISSUED', 'SENT'].includes(q.docStatus);
                     return (
                       <div key={q.id} style={{ padding: '10px 18px', borderTop: '1px solid var(--color-surface-subtle)', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
                         <div style={{ flexShrink: 0, marginTop: 2 }}>
@@ -2298,27 +1576,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                           )}
                         </div>
                         <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                          {canMarkSent && (
-                            <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
-                              disabled={actionLoading}
-                              onClick={() => markQuotation(q, 'sent')}>
-                              ส่งแล้ว
-                            </button>
-                          )}
-                          {canMarkDecision && hasAction('MARK_QUOTATION_ACCEPTED') && (
-                            <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
-                              disabled={actionLoading}
-                              onClick={() => markQuotation(q, 'accepted')}>
-                              รับแล้ว
-                            </button>
-                          )}
-                          {canMarkDecision && hasAction('MARK_QUOTATION_REJECTED') && (
-                            <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
-                              disabled={actionLoading}
-                              onClick={() => markQuotation(q, 'rejected')}>
-                              ปฏิเสธ
-                            </button>
-                          )}
                           <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
                             disabled={downloadingQuotationKey === `${q.id}-xlsx`}
                             onClick={() => handleDownloadQuotation(q.id, q.number, 'xlsx')}>
@@ -2406,119 +1663,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           )}
         </section>
       </div>
-
-      {quotationModal && (
-        <Modal
-          title="ออกใบเสนอราคา"
-          onClose={closeQuotationModal}
-          footer={(
-          <>
-            <button type="button" className="secondary-button" onClick={closeQuotationModal}>
-              ยกเลิก
-            </button>
-            <button type="button" className="primary-button" disabled={actionLoading} onClick={submitQuotation}>
-              <Icon name="fileText" size={14} />
-              {actionLoading ? 'กำลังบันทึก...' : 'ออกใบเสนอราคา'}
-            </button>
-          </>
-          )}
-        >
-          <div style={{ display: 'grid', gap: 12 }}>
-          <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
-            ผู้รับใบเสนอราคา
-            <select
-              id="quotation-recipient-type"
-              ref={(el) => { fieldRefs.current['quotation.recipientType'] = el; }}
-              value={quotationDraft.recipientType}
-              onChange={(e) => {
-                const recipientType = e.target.value;
-                const chainAccepted = (quotations ?? []).some((q) =>
-                  (q.recipientType ?? 'UNSPECIFIED') === recipientType && q.docStatus === 'ACCEPTED');
-                setQuotationDraft((draft) => ({ ...draft, recipientType }));
-                setQuotationModal((modal) => ({ ...(modal ?? {}), amendmentRequired: chainAccepted || summary.paymentStatus != null }));
-                clearFieldError('quotation.recipientType');
-              }}
-              aria-invalid={fieldErrors['quotation.recipientType'] ? true : undefined}
-              aria-describedby={fieldErrors['quotation.recipientType'] ? fieldErrorId('quotation-recipient-type') : undefined}
-            >
-              <option value="DESIGNER">ผู้ออกแบบ</option>
-              <option value="OWNER">เจ้าของ</option>
-              <option value="BUYER">ผู้ซื้อ-ผู้รับเหมา</option>
-            </select>
-            {fieldErrors['quotation.recipientType'] ? (
-              <p id={fieldErrorId('quotation-recipient-type')} role="alert" style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
-                {fieldErrors['quotation.recipientType']}
-              </p>
-            ) : null}
-          </label>
-          <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
-            ชื่อผู้รับ/บริษัท
-            <input value={quotationDraft.recipientLabel}
-              onChange={(e) => setQuotationDraft((draft) => ({ ...draft, recipientLabel: e.target.value }))} />
-          </label>
-          <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
-            เงื่อนไขชำระเงิน
-            <textarea rows={2} value={quotationDraft.paymentTerms}
-              onChange={(e) => setQuotationDraft((draft) => ({ ...draft, paymentTerms: e.target.value }))} />
-          </label>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
-              Lead time
-              <input value={quotationDraft.leadTime}
-                onChange={(e) => setQuotationDraft((draft) => ({ ...draft, leadTime: e.target.value }))} />
-            </label>
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
-              ใช้ได้ถึง
-              <input type="date" value={quotationDraft.validityDate}
-                onChange={(e) => setQuotationDraft((draft) => ({ ...draft, validityDate: e.target.value }))} />
-            </label>
-          </div>
-          <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
-            เงื่อนไขส่งมอบ
-            <textarea rows={2} value={quotationDraft.deliveryTerms}
-              onChange={(e) => setQuotationDraft((draft) => ({ ...draft, deliveryTerms: e.target.value }))} />
-          </label>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
-              วันที่เสนอราคา
-              <input type="date" value={quotationDraft.offerDate}
-                onChange={(e) => setQuotationDraft((draft) => ({ ...draft, offerDate: e.target.value }))} />
-            </label>
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
-              มัดจำ (%)
-              <input type="number" min="1" max="100" value={quotationDraft.depositPercent}
-                onChange={(e) => setQuotationDraft((draft) => ({ ...draft, depositPercent: e.target.value === '' ? '' : Number(e.target.value) }))} />
-            </label>
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
-              ระยะส่งมอบ (วัน)
-              <input type="number" min="1" max="3650" value={quotationDraft.deliveryLeadDays}
-                onChange={(e) => setQuotationDraft((draft) => ({ ...draft, deliveryLeadDays: e.target.value === '' ? '' : Number(e.target.value) }))} />
-            </label>
-          </div>
-          {quotationModal?.amendmentRequired && (
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
-              เหตุผลการแก้ไข
-              <textarea rows={3}
-                id="quotation-amendment-reason"
-                ref={(el) => { fieldRefs.current['quotation.amendmentReason'] = el; }}
-                value={quotationDraft.amendmentReason}
-                onChange={(e) => {
-                  setQuotationDraft((draft) => ({ ...draft, amendmentReason: e.target.value }));
-                  clearFieldError('quotation.amendmentReason');
-                }}
-                aria-invalid={fieldErrors['quotation.amendmentReason'] ? true : undefined}
-                aria-describedby={fieldErrors['quotation.amendmentReason'] ? fieldErrorId('quotation-amendment-reason') : undefined}
-              />
-              {fieldErrors['quotation.amendmentReason'] ? (
-                <p id={fieldErrorId('quotation-amendment-reason')} role="alert" style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
-                  {fieldErrors['quotation.amendmentReason']}
-                </p>
-              ) : null}
-            </label>
-          )}
-          </div>
-        </Modal>
-      )}
 
       {paymentModal && (
         <Modal
@@ -2634,127 +1778,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         </Modal>
       )}
 
-      {deliveryModal && (
-        <Modal
-          title="บันทึกการส่งสินค้า"
-          onClose={closeDeliveryModal}
-          footer={(
-            <>
-              <button type="button" className="secondary-button" onClick={closeDeliveryModal}>ยกเลิก</button>
-              <button type="button" className="primary-button" disabled={actionLoading} onClick={handleRecordDelivery}>
-                บันทึก
-              </button>
-            </>
-          )}
-        >
-          <div style={{ display: 'grid', gap: 12 }}>
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
-              แหล่งสินค้า
-              <select value={deliveryDraft.source}
-                onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, source: e.target.value }))}>
-                <option value="WAREHOUSE">WAREHOUSE</option>
-                <option value="STOCK">STOCK</option>
-              </select>
-            </label>
-            {/*
-              UX-03: "at least 1 line item with qty > 0" is a group-level rule
-              with no single owning field — like DepositNoticePage's
-              doc-items-panel, the wrapper itself is the scroll/focus target,
-              carrying aria-invalid/aria-describedby and a tabIndex so a plain
-              div is focusable.
-            */}
-            <div
-              id="delivery-lines-panel"
-              ref={(el) => { fieldRefs.current['delivery.lines'] = el; }}
-              tabIndex={-1}
-              aria-invalid={fieldErrors['delivery.lines'] ? true : undefined}
-              aria-describedby={fieldErrors['delivery.lines'] ? fieldErrorId('delivery-lines-panel') : undefined}
-              style={{ display: 'grid', gap: 8 }}
-            >
-              {items.map((item) => {
-                const remaining = Math.max(0, Number(item.qty || 0) - Number(item.qtyDelivered || 0));
-                return (
-	                  <label key={item.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px', gap: 10, alignItems: 'center', fontSize: 13 }}>
-	                    <span>
-                        <span className="sr-only">จำนวนส่งมอบ</span>
-	                      <strong>{item.brand} {item.model || ''}</strong>
-                      <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
-                        คงเหลือ {remaining.toLocaleString('en-US')} · ส่งแล้ว {Number(item.qtyDelivered || 0).toLocaleString('en-US')}
-                      </small>
-                    </span>
-	                    <input type="number" min="0" max={remaining} step="0.01"
-                        aria-label={`จำนวนส่งมอบ ${item.brand} ${item.model || ''}`}
-	                      value={deliveryDraft.lines[item.id] ?? ''}
-                      onChange={(e) => {
-                        const { value } = e.target;
-                        setDeliveryDraft((draft) => ({
-                          ...draft,
-                          lines: { ...draft.lines, [item.id]: value },
-                        }));
-                        // The group rule is "at least one line qty > 0" — the
-                        // instant THIS line goes positive that rule is
-                        // satisfied regardless of the other lines' values
-                        // (they were all <=0 for the error to have fired).
-                        if (Number(value) > 0) clearFieldError('delivery.lines');
-                      }} />
-                  </label>
-                );
-              })}
-              {fieldErrors['delivery.lines'] ? (
-                <p id={fieldErrorId('delivery-lines-panel')} role="alert" style={{ margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--color-danger)' }}>
-                  {fieldErrors['delivery.lines']}
-                </p>
-              ) : null}
-            </div>
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
-              หมายเหตุ
-              <textarea rows={3} value={deliveryDraft.note}
-                onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, note: e.target.value }))} />
-            </label>
-          </div>
-        </Modal>
-      )}
-
-      {stockModal && (
-        <Modal
-          title="จองสินค้าจากสต็อก"
-          onClose={() => setStockModal(false)}
-          footer={(
-            <>
-              <button type="button" className="secondary-button" onClick={() => setStockModal(false)}>ยกเลิก</button>
-              <button type="button" className="primary-button" disabled={actionLoading} onClick={handleReserveStock}>
-                บันทึก
-              </button>
-            </>
-          )}
-        >
-          <div style={{ display: 'grid', gap: 12 }}>
-            {items.map((item) => (
-	              <label key={item.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px', gap: 10, alignItems: 'center', fontSize: 13 }}>
-	                <span>
-                    <span className="sr-only">จำนวนจากสต็อก</span>
-	                  <strong>{item.brand} {item.model || ''}</strong>
-                  <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
-                    สั่ง {Number(item.qty || 0).toLocaleString('en-US')} · จากสต็อกเดิม {Number(item.qtyFromStock || 0).toLocaleString('en-US')}
-                  </small>
-                </span>
-	                <input type="number" min="0" max={Number(item.qty || 0)} step="0.01"
-                    aria-label={`จำนวนจากสต็อก ${item.brand} ${item.model || ''}`}
-	                  value={stockDraft.lines[item.id] ?? ''}
-                  onChange={(e) => setStockDraft((draft) => ({
-                    ...draft,
-                    lines: { ...draft.lines, [item.id]: e.target.value },
-                  }))} />
-              </label>
-            ))}
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
-              เหตุผล / หมายเหตุ
-              <textarea rows={3} value={stockDraft.note}
-                onChange={(e) => setStockDraft((draft) => ({ ...draft, note: e.target.value }))} />
-            </label>
-          </div>
-        </Modal>
-      )}
+      {/* Delivery/stock-reservation modals moved into DealFulfilmentPanel
+          (Phase 3 Slice S4). */}
 
       <ConfirmDialog
         open={confirm?.kind === 'deleteAttachment'}

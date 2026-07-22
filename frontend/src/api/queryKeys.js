@@ -25,6 +25,8 @@ export const queryKeys = {
   ticketPayments: (id) => ['tickets', 'payments', id],
   ticketDeliveries: (id) => ['tickets', 'deliveries', id],
   ticketAttachments: (id) => ['tickets', 'attachments', id],
+  // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
+  ticketActivities: (id) => ['tickets', 'activities', id],
   // slice C (DepositNoticePage/CeoSettingsPage/NotificationBell)
   depositNotices: (ticketId) => ['depositNotices', ticketId],
   depositNoteTemplates: () => ['depositNotices', 'templates'],
