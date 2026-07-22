@@ -1,8 +1,8 @@
 # Sales Workflow
 
-This document describes the deal workflow as implemented after Phases 1-5. One deal is one
-ticket, stored as one `sales.ticket` row. The UI presents a single journey, but the model is four
-independent tracks:
+This document describes the deal workflow as implemented after Phases 1-5 and the 9-step
+pricing-request (PCR) redesign (handoffs 85-98). One deal is one ticket, stored as one
+`sales.ticket` row. The UI presents a single journey, but the model is four independent tracks:
 
 - Lifecycle: whether the deal is active, paused, lost, cancelled, completed.
 - Sales stage: the 14-stage commercial journey shown in the pipeline.
@@ -14,44 +14,58 @@ milestones. Auto-advance never moves a deal backward and does not run on lost/in
 
 ## Executable Flow On `main`
 
-The current `main` backend still uses the ticket-level pricing path. A sales owner submits the
-ticket directly with `POST /api/tickets/{id}/submit`; the newer standalone pricing-request chain is
-not present on this branch.
+The pricing path on `main` is the **standalone pricing-request (PCR) chain**, not the old
+ticket-level loop. The legacy `POST /api/tickets/{id}/submit` (and `pickup` / `propose-price`) are
+`@Deprecated` and **hard-409** for new deals — see `TicketService.submit()` — because pricing was
+moved out of the ticket into the `PricingRequest` aggregate. A newly created deal is a lightweight
+`DRAFT` ticket; to price it, the owner raises one or more pricing requests from the deal page.
+
+Model: `1 Deal → 0..N Pricing Requests` (one per recipient / re-quote round). The chain is:
+`pricing_request → factory_quote → pricing_costing → pricing_decision → customer_quotation →
+order_confirmation → factory_purchase_order → delivery`. Cost and margin never leave Import/CEO —
+the DTO that reaches Sales carries no cost field. A small set of pre-redesign tickets still hold
+legacy `generateQuotation` quotations; those remain **read-only** and are not produced for new deals.
 
 ```mermaid
 flowchart TD
-    A["Sales creates deal/ticket"] --> B{"Has product lines?"}
-    B -->|"No"| B1["Draft lead / add items later"]
-    B1 --> B
-    B -->|"Yes"| C["Sales submits ticket<br/>POST /api/tickets/{id}/submit"]
-    C --> D["Import picks up<br/>submitted -> in_review"]
-    D --> E["Import proposes prices"]
-    E --> F{"CEO price decision"}
-    F -->|"Reject"| D
-    F -->|"Approve"| G["Ticket approved"]
-    G --> H["Sales generates quotation<br/>recipient: designer / owner / buyer"]
-    H --> I["Quotation issued/sent/accepted"]
-    I --> J["Sales confirms customer<br/>payment_status=CUSTOMER_CONFIRMED"]
-    J --> K{"Deposit policy"}
-    K -->|"Required"| L["Sales issues deposit notice"]
-    L --> M["Account/CEO records deposit paid"]
-    K -->|"Waived / not required / credit"| N["Deposit bypass allowed"]
-    M --> O{"Fulfilment source"}
-    N --> O
-    O -->|"Import path"| P["Import issues IR"]
-    P --> Q["IR sent"]
-    Q --> R["Shipping"]
-    R --> S["Goods received at GLR warehouse"]
-    O -->|"Stock path"| T["Import/CEO reserves stock"]
+    A["Sales creates deal/ticket<br/>lightweight DRAFT"] --> B["Sales raises Pricing Request (PCR)<br/>recipient: designer / owner / buyer"]
+    B --> C["Import reviews PCR<br/>SUBMITTED -> IMPORT_REVIEWING"]
+    C --> D["Factory quote(s)<br/>REQUESTED -> RESPONSE_RECEIVED -> READY_FOR_COSTING"]
+    D --> E["Import builds costing<br/>landed cost = goods+freight+insurance+duty+inland (FX)"]
+    E --> F["Costing submitted to CEO (immutable)<br/>PCR READY_FOR_CEO_REVIEW"]
+    F --> G{"CEO selling-price decision"}
+    G -->|"Return to Import"| E
+    G -->|"Approve (margin + min price)"| H["PCR APPROVED_FOR_QUOTATION"]
+    H --> I["Sales generates customer quotation<br/>sourced from approved decision; floor = CEO min price"]
+    I --> J["Quotation issued<br/>PCR QUOTATION_ISSUED; stage QUOTE_DESIGN_SIDE / QUOTE_BUYER"]
+    J --> K{"Customer outcome"}
+    K -->|"Rejected / expired"| K1["Re-quote / revision"]
+    K1 --> I
+    K -->|"Revision requested"| K1
+    K -->|"Accepted"| L["PCR QUOTATION_ACCEPTED"]
+    L --> M["Order confirmation bridge<br/>confirmCustomer -> CUSTOMER_CONFIRMED, stage ORDER_RECEIVED"]
+    M --> N{"Deposit policy"}
+    N -->|"Required"| O["Sales issues deposit notice"]
+    O --> P["Account/CEO records deposit paid<br/>stage DEPOSIT_RECEIVED"]
+    N -->|"Waived / not required / credit"| Q["Deposit bypass allowed"]
+    P --> R{"Fulfilment source"}
+    Q --> R
+    R -->|"Direct import"| S["Factory purchase order(s)<br/>OPEN -> SHIPPING -> RECEIVED at GLR warehouse"]
+    R -->|"Stock path"| T["Import/CEO reserves stock<br/>FROM_STOCK"]
     S --> U["Schedule / record delivery"]
     T --> U
-    U --> V["Fully delivered to customer"]
-    V --> W["Account/CEO records final payment"]
+    U --> V["Fully delivered to customer<br/>FULLY_DELIVERED"]
+    V --> W["Account/CEO records final payment<br/>FULLY_PAID"]
     W --> X{"Full payment and full delivery?"}
     X -->|"Yes"| Y["sales_stage=CLOSED_PAID"]
-    Y --> Z["Sales owner closes ticket"]
+    Y --> Z["Three-party close<br/>owner confirmCloseReady -> CEO verifyClose -> closed"]
+    Z --> Z1["Commission gated on CLOSED_PAID (422 otherwise)"]
     X -->|"No"| U
 ```
+
+> Sourcing note: only **two** sourcing paths are modeled today — direct factory import and
+> from-stock. "Buy from another importer / reseller" and a real QC inspection step (goods receipt
+> records only a free-text `qcNote`) are owner-confirmed **deferred** work, not yet on `main`.
 
 ## The 14 Stages
 
