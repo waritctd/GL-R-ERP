@@ -17,6 +17,7 @@ import CircleUserRound from 'lucide-react/dist/esm/icons/circle-user-round.mjs';
 import ClipboardCheck from 'lucide-react/dist/esm/icons/clipboard-check.mjs';
 import Clock3 from 'lucide-react/dist/esm/icons/clock-3.mjs';
 import Home from 'lucide-react/dist/esm/icons/home.mjs';
+import Info from 'lucide-react/dist/esm/icons/info.mjs';
 import LayoutDashboard from 'lucide-react/dist/esm/icons/layout-dashboard.mjs';
 import LockKeyhole from 'lucide-react/dist/esm/icons/lock-keyhole.mjs';
 import LogOut from 'lucide-react/dist/esm/icons/log-out.mjs';
@@ -29,6 +30,7 @@ import RefreshCcw from 'lucide-react/dist/esm/icons/refresh-ccw.mjs';
 import Search from 'lucide-react/dist/esm/icons/search.mjs';
 import ShieldCheck from 'lucide-react/dist/esm/icons/shield-check.mjs';
 import SlidersHorizontal from 'lucide-react/dist/esm/icons/sliders-horizontal.mjs';
+import TriangleAlert from 'lucide-react/dist/esm/icons/triangle-alert.mjs';
 import Upload from 'lucide-react/dist/esm/icons/upload.mjs';
 import Paperclip from 'lucide-react/dist/esm/icons/paperclip.mjs';
 import Calculator from 'lucide-react/dist/esm/icons/calculator.mjs';
@@ -56,6 +58,7 @@ const icons = {
   close: X,
   dashboard: LayoutDashboard,
   home: Home,
+  info: Info,
   lock: LockKeyhole,
   logout: LogOut,
   mail: Mail,
@@ -67,6 +70,7 @@ const icons = {
   search: Search,
   setting: SlidersHorizontal,
   shield: ShieldCheck,
+  triangleAlert: TriangleAlert,
   upload: Upload,
   paperclip: Paperclip,
   calculator: Calculator,

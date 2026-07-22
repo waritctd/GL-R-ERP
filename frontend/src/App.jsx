@@ -54,7 +54,6 @@ function TicketDetailRoute({ user, showToast }) {
       // search text — now carried in the URL query string, see
       // TicketListPage.jsx — survive the round trip instead of resetting.
       onBack={() => navigate(-1)}
-      onOpenDocument={(ticketId) => navigate(`/tickets/${ticketId}/deposit`)}
       showToast={showToast}
     />
   );

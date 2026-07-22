@@ -23,12 +23,12 @@ describe('visibleSections', () => {
     }
   });
 
-  it('import does NOT see quotations, deposit notice, payment, or the CEO price-approval panel', () => {
+  it('import does NOT see quotations, deposit notice, payment, or the pulled-in deal-quotation section', () => {
     const sections = visibleSections('import');
     expect(sections.quotation).toBe(false);
     expect(sections.depositNotice).toBe(false);
     expect(sections.payment).toBe(false);
-    expect(sections.priceApproval).toBe(false);
+    expect(sections.dealQuotation).toBe(false);
   });
 
   it('import DOES see the pricing-request/factory-quote/costing panel and procurement/fulfilment', () => {
@@ -37,17 +37,25 @@ describe('visibleSections', () => {
     expect(sections.delivery).toBe(true);
   });
 
-  it('account does NOT see the pricing-request panel, procurement/fulfilment detail, or the CEO price-approval panel', () => {
+  it('account does NOT see the pricing-request panel', () => {
     const sections = visibleSections('account');
     expect(sections.pricingRequest).toBe(false);
-    expect(sections.delivery).toBe(false);
-    expect(sections.priceApproval).toBe(false);
   });
 
-  it('account DOES see the payment section and quotations (for the quotation total)', () => {
+  // Phase 3 Slice S4 (handoff 105): account now sees DealFulfilmentPanel too
+  // (read-only — no `can.*` action inside it ever resolves true for
+  // account's role), since the deal's fulfilment progress is exactly what
+  // gates the final-payment confirmation account is waiting to make.
+  it('account DOES see the fulfilment/delivery section', () => {
+    const sections = visibleSections('account');
+    expect(sections.delivery).toBe(true);
+  });
+
+  it('account DOES see the payment section, legacy quotations (for the total), and the deal-quotation section', () => {
     const sections = visibleSections('account');
     expect(sections.payment).toBe(true);
     expect(sections.quotation).toBe(true);
+    expect(sections.dealQuotation).toBe(true);
   });
 
   it('an unexpected role (never reaches this page in production) defaults to nothing rather than leaking a section', () => {

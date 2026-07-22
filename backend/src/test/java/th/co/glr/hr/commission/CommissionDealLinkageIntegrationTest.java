@@ -18,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
+import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -193,7 +194,8 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         AuditService auditService = mock(AuditService.class);
         NotificationService notificationService = mock(NotificationService.class);
         commissionService = new CommissionService(commissions, commissionAttachments, new CommissionCalculator(),
-            new FileStorageService("/tmp/glr-commission-linkage-test-invoices"), auditService, notificationService, tickets);
+            new FileStorageService("/tmp/glr-commission-linkage-test-invoices"), auditService, notificationService,
+            tickets, new AttachmentRepository(jdbc));
 
         salesRepId = createEmployee(employees, "พนักงานขาย เก้า", "sales-step9@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า เก้า", "import-step9@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
@@ -243,7 +245,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
 
         SubmitCommissionRequest request = submitRequestLinkedTo(ticketId, new BigDecimal("1000.00"));
 
-        assertThatThrownBy(() -> commissionService.submit(request, invoiceFile(), salesActor))
+        assertThatThrownBy(() -> commissionService.submit(request, invoiceFile(), accountActor))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
         assertThat(countCommissionRecords()).isEqualTo(before);
@@ -262,7 +264,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         BigDecimal grossAmount = payable.multiply(new BigDecimal("1.02")).setScale(2, java.math.RoundingMode.HALF_UP);
 
         SubmitCommissionRequest request = submitRequestLinkedTo(ticketId, grossAmount);
-        CommissionRecord created = commissionService.submit(request, invoiceFile(), salesActor);
+        CommissionRecord created = commissionService.submit(request, invoiceFile(), accountActor);
 
         assertThat(created.sourceTicketId()).isEqualTo(ticketId);
         assertThat(created.dealAmountMismatch()).isFalse();
@@ -286,7 +288,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         BigDecimal grossAmount = payable.multiply(new BigDecimal("1.25")).setScale(2, java.math.RoundingMode.HALF_UP);
 
         SubmitCommissionRequest request = submitRequestLinkedTo(ticketId, grossAmount);
-        CommissionRecord created = commissionService.submit(request, invoiceFile(), salesActor);
+        CommissionRecord created = commissionService.submit(request, invoiceFile(), accountActor);
 
         assertThat(created.dealAmountMismatch()).isTrue();
         assertThat(created.dealPayableAmountSnapshot()).isEqualByComparingTo(payable);
@@ -306,9 +308,10 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         SubmitCommissionRequest request = new SubmitCommissionRequest(
             null, salesRepId, "INV-STEP9-UNLINKED-" + UUID.randomUUID().toString().substring(0, 8),
             LocalDate.of(2026, 6, 15), new BigDecimal("1000.00"),
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO);
 
-        CommissionRecord created = commissionService.submit(request, invoiceFile(), salesActor);
+        CommissionRecord created = commissionService.submit(request, invoiceFile(), accountActor);
 
         assertThat(created.sourceTicketId()).isNull();
         assertThat(created.dealPayableAmountSnapshot()).isNull();
@@ -323,7 +326,8 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         return new SubmitCommissionRequest(
             ticketId, salesRepId, "INV-STEP9-" + UUID.randomUUID().toString().substring(0, 8),
             LocalDate.of(2026, 6, 15), grossAmount,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO);
     }
 
     private MockMultipartFile invoiceFile() {

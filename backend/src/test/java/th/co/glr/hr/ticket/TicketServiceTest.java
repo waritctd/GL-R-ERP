@@ -52,6 +52,13 @@ class TicketServiceTest {
         // about an abandoned row override this per-test.
         when(pricingRequestService.cancelOpenForTicket(anyLong(), anyString(), any()))
             .thenReturn(new CancelOpenForTicketResult(0, List.of()));
+        // Slice B1 gate default (handoff 103): the manual forward-updateStage gate needs
+        // hasActivitySinceLastStageChange() to be true, or every stubDeal-backed forward
+        // updateStage call in this Mockito-only file 400s on the missing-tracking-fields
+        // message. The gate's real enforcement (including this exact repository call
+        // against real SQL) is covered by DealTrackingAndActivityIntegrationTest — this file
+        // stays focused on role/ownership/backward-move logic, per its own existing header.
+        when(ticketRepo.hasActivitySinceLastStageChange(anyLong())).thenReturn(true);
     }
     private final TicketService service = new TicketService(
         ticketRepo, notifRepo, priceCalcService, new ObjectMapper(), customerRepo, quotationRenderer,
@@ -1665,17 +1672,22 @@ class TicketServiceTest {
         assertThat(paused).contains("RESUME", "MARK_DORMANT");
         assertThat(paused).doesNotContain("SUBMIT", "UPDATE_STAGE");
 
+        // Slice S1 "engine collapse": MARK_QUOTATION_SENT/ACCEPTED/REJECTED are gone from
+        // actions() entirely (both owner and manager) — the routes behind them
+        // (/{id}/quotations/{quotationId}/{sent,accepted,rejected}) were retired, so
+        // advertising the verb would point a client at a 404. See
+        // actions_neverOffersRetiredLegacyPricingVerbs for the full negative-space proof.
         stubDealWithQuotations(12L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
             DealStage.QUOTE_BUYER, DealLifecycle.ACTIVE, List.of(quotationOf(12L, 12L, "QT-2026-0012",
                 QuotationRecipient.BUYER, 1, QuotationStatus.ISSUED)));
         List<String> quotationOwner = service.actions(12L, salesActor)
             .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
-        assertThat(quotationOwner).contains("MARK_QUOTATION_SENT", "MARK_QUOTATION_ACCEPTED",
-            "MARK_QUOTATION_REJECTED");
+        assertThat(quotationOwner).doesNotContain("MARK_QUOTATION_SENT", "MARK_QUOTATION_ACCEPTED",
+            "MARK_QUOTATION_REJECTED", "GENERATE_QUOTATION");
         List<String> quotationManager = service.actions(12L, salesManagerActor)
             .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
         assertThat(quotationManager).doesNotContain("MARK_QUOTATION_SENT", "MARK_QUOTATION_ACCEPTED",
-            "MARK_QUOTATION_REJECTED");
+            "MARK_QUOTATION_REJECTED", "GENERATE_QUOTATION");
     }
 
     @Test
@@ -1694,6 +1706,38 @@ class TicketServiceTest {
         List<String> withoutItems = service.actions(21L, salesActor)
             .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
         assertThat(withoutItems).doesNotContain("SUBMIT");
+    }
+
+    @Test
+    void actions_neverOffersRetiredLegacyPricingVerbs() {
+        // Slice S1 "engine collapse" (feat/deal-workspace-unification): PICKUP/PROPOSE_PRICE/
+        // APPROVE/REJECT/CALCULATE_PRICES/OVERRIDE_ITEM_PRICE/GENERATE_QUOTATION must never be
+        // advertised by actions() — TicketController no longer exposes the routes behind them
+        // (see TicketService.pickup/proposePrice/approve/reject/calculatePrices/
+        // overrideItemPrice/generateQuotation's own @Deprecated Javadoc). Exercised against
+        // the 3 real stranded pre-redesign statuses (submitted/in_review/price_proposed) —
+        // the only statuses that could ever have surfaced these verbs — for both the role
+        // that used to see them (import/ceo) and the deal owner (sales).
+        stubTicket(30L, 1L, TicketStatus.SUBMITTED);
+        List<String> submitted = service.actions(30L, importActor)
+            .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
+        assertThat(submitted).doesNotContain("PICKUP", "PROPOSE_PRICE");
+
+        stubTicket(31L, 1L, TicketStatus.IN_REVIEW);
+        List<String> inReview = service.actions(31L, importActor)
+            .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
+        assertThat(inReview).doesNotContain("PROPOSE_PRICE");
+
+        stubTicket(32L, 1L, TicketStatus.PRICE_PROPOSED);
+        List<String> priceProposedForCeo = service.actions(32L, ceoActor)
+            .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
+        assertThat(priceProposedForCeo).doesNotContain("APPROVE", "REJECT", "CALCULATE_PRICES",
+            "OVERRIDE_ITEM_PRICE");
+
+        stubTicket(33L, 1L, TicketStatus.APPROVED);
+        List<String> approvedForOwner = service.actions(33L, salesActor)
+            .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
+        assertThat(approvedForOwner).doesNotContain("GENERATE_QUOTATION");
     }
 
     // ── deal pipeline: auto-advance from operational transitions (V50) ────
@@ -2256,7 +2300,7 @@ class TicketServiceTest {
             EntryChannel.DESIGNER_LED, null, null, null, null, null,
             PaymentStage.FULLY_PAID, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false,
             closeConfirmedAt, closeConfirmedAt == null ? null : "Account User", invoiceOnFile,
-            null, null);
+            null, null, null, null, null, null, false);
         TicketDto ticket = new TicketDto(summary, List.of(), List.of(), null, List.of());
         when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
         return ticket;
@@ -2323,7 +2367,14 @@ class TicketServiceTest {
             createdById, "Sales User", null, null, "Test Customer", null, null, null, null, null, null,
             Instant.now(), Instant.now(), null, items.size(), false, paymentStatus, fulfillmentStatus,
             salesStage, lostReason, lostReason == null ? null : Instant.now(), Instant.now(),
-            lifecycle, TenderRequirement.UNKNOWN, depositPolicy, null, EntryChannel.DESIGNER_LED);
+            lifecycle, TenderRequirement.UNKNOWN, depositPolicy, null, EntryChannel.DESIGNER_LED,
+            null, null, null, null,
+            // Slice B1 gate default (handoff 103): a non-null nextFollowUpAt so the manual
+            // forward-updateStage gate's other half is satisfied — see the class-level stub
+            // of hasActivitySinceLastStageChange() above for the same reasoning.
+            LocalDate.now(),
+            PaymentStage.NOT_REQUIRED, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false,
+            null, null, false, null, null, null, null, null, null, false);
         TicketDto ticket = new TicketDto(summary, items, List.of(),
             quotations.isEmpty() ? null : quotations.get(0), quotations);
         when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
@@ -2384,7 +2435,8 @@ class TicketServiceTest {
             s.nextFollowUpAt(), s.paymentStage(), s.amountPayable(), s.amountPaid(),
             s.amountOutstanding(), s.overdue(),
             s.closeConfirmedAt(), s.closeConfirmedByName(), s.invoiceOnFile(),
-            s.cancelReason(), s.cancelledAt());
+            s.cancelReason(), s.cancelledAt(),
+            s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale());
         return new TicketDto(summary, items, source.events(), source.quotation(), source.quotations());
     }
 

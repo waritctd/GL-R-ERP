@@ -68,8 +68,13 @@ export const API_ROUTES = {
     createDocDraft: (id) => `/api/tickets/${id}/deposit-notice/draft`,
     listDocs: (id) => `/api/tickets/${id}/deposit-notices`,
     revision: (id) => `/api/tickets/${id}/revision`,
-    quotationStatus: (id, quotationId, action) => `/api/tickets/${id}/quotations/${quotationId}/${action}`,
+    // quotationStatus (mark-sent/accepted/rejected) is retired along with ticket-native
+    // quotation generation — see hrApi.js's tickets block. quotationFile (read/download)
+    // stays: both legacy and PCR-issued quotations render from it.
     quotationFile: (id, quotationId, fmt) => `/api/tickets/${id}/quotations/${quotationId}/file?format=${fmt ?? 'xlsx'}`,
+    // Deal tracking + activity (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
+    activities: (id) => `/api/tickets/${id}/activities`,
+    tracking: (id) => `/api/tickets/${id}/tracking`,
   },
   depositNotices: {
     get: (id) => `/api/deposit-notices/${id}`,
@@ -128,10 +133,16 @@ export const API_ROUTES = {
   commissions: {
     list: '/api/commissions',
     create: '/api/commissions',
+    // Slice A2: the accountant's auto-create trigger at deal close. Mirrors
+    // CommissionController's POST /api/commissions/from-deal (ACCOUNT-only).
+    createFromDeal: '/api/commissions/from-deal',
     deductions: (id) => `/api/commissions/${id}/deductions`,
     approve: (id) => `/api/commissions/${id}/approve`,
     reject: (id) => `/api/commissions/${id}/reject`,
     clawback: (id) => `/api/commissions/${id}/clawback`,
+    // Manual commission entries (feat/commission-manual-adjustments). Mirrors
+    // CommissionController's POST /api/commissions/manual.
+    manual: '/api/commissions/manual',
     simulator: '/api/commissions/simulator',
     payrollReady: '/api/commissions/payroll-ready',
   },
@@ -270,9 +281,28 @@ export const ROLE_PERMISSIONS = {
   canProposePrices: ['import'],
   canApproveReject: ['ceo'],
   canGenerateQuotation: ['sales'],
-  canViewCommissions: ['sales', 'sales_manager', 'ceo', 'hr'],
-  canSubmitCommissions: ['sales', 'sales_manager', 'ceo'],
+  // Slice A3 (commission redesign): sales is read-only on commissions now — it may reach the
+  // /commissions route to see its own records + calc detail, but has no list()/submit access on
+  // the real backend beyond that read. account is included here purely so the route guard lets
+  // it in for the createFromDeal ("record invoice") flow; account has NO route to
+  // GET /api/commissions (list()) on the real backend — see canListCommissionRecords below,
+  // which intentionally excludes it.
+  canViewCommissions: ['sales', 'sales_manager', 'ceo', 'hr', 'account'],
+  // Mirrors CommissionController's GET /api/commissions PreAuthorize exactly (SALES,
+  // SALES_MANAGER, CEO only — NOT account, NOT hr). hr reads via canViewPayrollCommissions
+  // (payroll-ready) instead; account has no list access at all, only createFromDeal.
+  canListCommissionRecords: ['sales', 'sales_manager', 'ceo'],
+  // Slice A2 (AUTHZ CHANGE): sales removed — commission creation is now the accountant's
+  // auto-create trigger (POST /api/commissions/from-deal) at deal close. Mirrors
+  // CommissionService.CREATE_FROM_DEAL_ROLES exactly.
+  canCreateCommissionFromDeal: ['account'],
   canApproveCommissions: ['sales_manager', 'ceo'],
+  // Manual commission entries (feat/commission-manual-adjustments): a hand-typed ADJUSTMENT/
+  // MANAGER/STOCK_BONUS/INCENTIVE amount, no invoice/tier-calc involved. Mirrors
+  // CommissionController's POST /api/commissions/manual PreAuthorize + CommissionService
+  // .MANUAL_CREATE_ROLES exactly — same role set as canApproveCommissions today, but kept as
+  // its own key since the two gates are defined independently server-side.
+  canCreateManualCommission: ['sales_manager', 'ceo'],
   canViewPayrollCommissions: ['hr'],
   canManagePayroll: ['hr'],
   canManagePriceImport: ['ceo', 'import'],
