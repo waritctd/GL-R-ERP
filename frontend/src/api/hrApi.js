@@ -159,6 +159,11 @@ export const api = {
       if (!res.ok) throw new Error('Download failed');
       return res.blob();
     },
+    // Deal tracking + activity (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
+    // Mirrors TicketController's addActivity/activities/updateTracking.
+    addActivity: (id, payload) => apiRequest(API_ROUTES.tickets.activities(id), { method: 'POST', body: payload }),
+    listActivities: (id) => apiRequest(API_ROUTES.tickets.activities(id)),
+    updateTracking: (id, payload) => apiRequest(API_ROUTES.tickets.tracking(id), { method: 'PUT', body: payload }),
   },
   depositNotices: {
     noteTemplates: () => apiRequest(API_ROUTES.depositNotices.noteTemplates),
@@ -263,6 +268,40 @@ export const api = {
       }
       return res.json();
     },
+    // Slice A2 auto-create trigger: the accountant records the tax invoice for a
+    // close-eligible deal and the commission is created for the deal's owner
+    // automatically. Always multipart (the invoice file is required, unlike `create`'s
+    // optional-attachment JSON path). Mirrors CommissionController#createFromDeal.
+    createFromDeal: async (payload) => {
+      const formData = new FormData();
+      formData.append('ticketId', String(payload.ticketId));
+      formData.append('invoiceNumber', payload.invoiceNumber);
+      formData.append('invoiceDate', payload.invoiceDate);
+      if (payload.grossAmount !== null && payload.grossAmount !== undefined) {
+        formData.append('grossAmount', String(payload.grossAmount));
+      }
+      formData.append('bankFees', String(payload.bankFees ?? 0));
+      formData.append('suspenseVat', String(payload.suspenseVat ?? 0));
+      formData.append('transportFee', String(payload.transportFee ?? 0));
+      formData.append('cutFee', String(payload.cutFee ?? 0));
+      formData.append('shortfall', String(payload.shortfall ?? 0));
+      formData.append('withholdingTax', String(payload.withholdingTax ?? 0));
+      formData.append('overpayment', String(payload.overpayment ?? 0));
+      if (payload.invoiceAttachment) formData.append('invoiceAttachment', payload.invoiceAttachment);
+      const res = await fetch(API_ROUTES.commissions.createFromDeal, {
+        method: 'POST',
+        credentials: 'include',
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'บันทึกใบกำกับไม่สำเร็จ');
+      }
+      return res.json();
+    },
+    // `payload` passes straight through as the JSON body, so `weightMultiplier` (calc-refine,
+    // V82) rides along with the existing deduction fields automatically — no new plumbing
+    // needed here, only in the caller. Mirrors UpdateCommissionDeductionsRequest verbatim.
     updateDeductions: (id, payload) => apiRequest(API_ROUTES.commissions.deductions(id), { method: 'PATCH', body: payload }),
     approve: (id) => apiRequest(API_ROUTES.commissions.approve(id), { method: 'POST' }),
     reject: (id, payload = {}) => apiRequest(API_ROUTES.commissions.reject(id), { method: 'POST', body: payload }),
