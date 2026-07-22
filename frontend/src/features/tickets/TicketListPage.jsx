@@ -327,6 +327,13 @@ export function TicketListPage({ user, showToast }) {
   // replacement, sales_manager/ceo only.
   const isManagerView = MANAGER_PIPELINE_ROLES.has(user.role);
   const [creating, setCreating] = useState(false);
+  // Owner feedback (role-scoped views, Sales branch): the LIFECYCLE/FLAGS chip
+  // rows were competing with the deal list for attention. They stay fully
+  // functional (same URL-param filters as before) but sit behind a collapsed
+  // "ตัวกรองเพิ่มเติม" expander now — collapsed by default for every role, and
+  // forced open whenever one of them is already active (e.g. a deep link with
+  // ?life=... or ?flag=...) so an applied filter is never hidden from view.
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
 
   const canCreate = ROLE_PERMISSIONS.canCreateTickets.includes(user.role);
 
@@ -410,6 +417,10 @@ export function TicketListPage({ user, showToast }) {
       return phaseOk && lifeOk && flagOk && inboxOk;
     });
   }, [allDeals, flagFilter, lifecycleFilter, phaseFilter, inboxOnly, user.role]);
+
+  const hasActiveMoreFilters = Boolean(lifecycleFilter || flagFilter);
+  const showMoreFilters = moreFiltersOpen || hasActiveMoreFilters;
+  const activeMoreFiltersCount = (lifecycleFilter ? 1 : 0) + (flagFilter ? 1 : 0);
 
   const emptyDescription = useMemo(() => {
     if (flagFilter === 'overdue') return 'ไม่มีดีลที่เกินกำหนดชำระ';
@@ -528,47 +539,66 @@ export function TicketListPage({ user, showToast }) {
         </div>
       ) : null}
 
-      <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">Lifecycle</span>
-          {LIFECYCLE_FILTERS.map((item) => {
-            const active = lifecycleFilter === item.value;
-            return (
-              <button
-                key={item.value || 'all'}
-                type="button"
-                aria-pressed={active}
-                className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
-                  active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
-                }`}
-                onClick={() => updateParam('life', active ? '' : item.value)}
-              >
-                <span>{item.label}</span>
-                <StatusBadge tone={item.tone}>{lifecycleCounts[item.value] ?? 0}</StatusBadge>
-              </button>
-            );
-          })}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">Flags</span>
-          {FLAG_FILTERS.map((item) => {
-            const active = flagFilter === item.value;
-            return (
-              <button
-                key={item.value}
-                type="button"
-                aria-pressed={active}
-                className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
-                  active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
-                }`}
-                onClick={() => updateParam('flag', active ? '' : item.value)}
-              >
-                <span>{item.label}</span>
-                <StatusBadge tone={item.tone}>{flagCounts[item.value] ?? 0}</StatusBadge>
-              </button>
-            );
-          })}
-        </div>
+      <div className="rounded-lg border border-border bg-surface">
+        <button
+          type="button"
+          aria-expanded={showMoreFilters}
+          onClick={() => setMoreFiltersOpen((current) => !current)}
+          className="flex min-h-11 w-full items-center justify-between gap-2 px-3 py-2.5 text-left"
+        >
+          <span className="flex items-center gap-2 text-2xs font-extrabold uppercase tracking-wide text-text-muted">
+            <Icon name={showMoreFilters ? 'chevronUp' : 'chevronDown'} size={14} />
+            ตัวกรองเพิ่มเติม
+            <span className="normal-case tracking-normal text-text-faint">(Lifecycle · Flags)</span>
+          </span>
+          {activeMoreFiltersCount > 0 ? (
+            <StatusBadge tone="info">{activeMoreFiltersCount}</StatusBadge>
+          ) : null}
+        </button>
+        {showMoreFilters ? (
+          <div className="flex flex-col gap-2 border-t border-border p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">Lifecycle</span>
+              {LIFECYCLE_FILTERS.map((item) => {
+                const active = lifecycleFilter === item.value;
+                return (
+                  <button
+                    key={item.value || 'all'}
+                    type="button"
+                    aria-pressed={active}
+                    className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
+                      active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
+                    }`}
+                    onClick={() => updateParam('life', active ? '' : item.value)}
+                  >
+                    <span>{item.label}</span>
+                    <StatusBadge tone={item.tone}>{lifecycleCounts[item.value] ?? 0}</StatusBadge>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">Flags</span>
+              {FLAG_FILTERS.map((item) => {
+                const active = flagFilter === item.value;
+                return (
+                  <button
+                    key={item.value}
+                    type="button"
+                    aria-pressed={active}
+                    className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
+                      active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
+                    }`}
+                    onClick={() => updateParam('flag', active ? '' : item.value)}
+                  >
+                    <span>{item.label}</span>
+                    <StatusBadge tone={item.tone}>{flagCounts[item.value] ?? 0}</StatusBadge>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <DataTable

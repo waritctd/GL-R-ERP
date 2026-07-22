@@ -9,11 +9,15 @@ Source plan: `~/.claude/plans/valiant-watching-map.md` ("Role-shaped views for
 every role — role-scoped nav + Overview dashboards"). This file is the living,
 in-repo version of that plan — updated by each role's branch as it ships.
 
+There is no single generic "dashboard" any more — each role lands on a view
+built around *its* work.
+
 ## 1. The pattern
 
 1. **Role-scoped nav** — the sidebar/drawer shows only the workspaces a role
    owns. The deal-pipeline browser item (`รายการดีล`) appears only for roles
-   whose job *is* the pipeline (sales, sales_manager, ceo).
+   whose job *is* the pipeline (sales, sales_manager, ceo) — Import/Account
+   lose it in their own branches; Sales keeps it (see §3).
 2. **Role-shaped Overview = landing** — `/` branches by role to that role's
    Overview (its prioritized worklist / pulse), not the generic dashboard.
 3. **Mechanics** — a permission split gates the pipeline browser
@@ -47,10 +51,18 @@ in-repo version of that plan — updated by each role's branch as it ships.
   and needs the same real-DB integration-test evidence as any other
   permission change — reusing an existing, already-guarded page (e.g. linking
   to `/requests`, `/leave`, `/payroll`) is not.
+- **Branching note** — each role ships on its own branch
+  (`feat/role-views-<role>`), off `origin/main`, so builds run concurrently.
+  Shared files (`routes.js`, `permissions.js`, `AppShell.jsx`, `App.jsx`,
+  `SalesTabs.jsx`) conflict across branches by design — that is expected and
+  resolved at integration, not avoided up front. Each role's own Overview
+  component (`ImportOverview.jsx`, `AccountOverview.jsx`, `SalesOverview.jsx`,
+  `ManagerOverview.jsx`, `HrOverview.jsx`, `CeoOverview.jsx`) is a unique file
+  and never conflicts.
 
 ## 3. Per-role sections
 
-### HR — people-ops *(shipped, this branch: `feat/role-views-hr`)*
+### HR — people-ops *(shipped, branch: `feat/role-views-hr`)*
 
 **Landing:** `frontend/src/features/dashboard/HrOverview.jsx`, rendered at `/`
 when `user.role === 'hr'` (see `App.jsx`). HR's nav is unchanged by this
@@ -110,18 +122,69 @@ No authorization was changed (see "no authz change" in the change-log row
 below) so no real-DB integration test was required or written; this is a
 UI-only reshuffle of pages HR already had server-side access to.
 
-### Import / Account / Sales / Sales Manager / CEO
+### Sales — own deals (keeps the pipeline) *(shipped, branch: `feat/role-views-sales`)*
+
+Sales is the "own deals" role. Unlike Import/Account, Sales **keeps the full
+deal-pipeline browser** (`รายการดีล` / `TicketListPage`) as-is — Sales already
+only ever receives its own deals from `api.tickets.list()` (server-scoped by
+`created_by`), so there is no separate "worklist vs. full list" distinction to
+build for this role (see `TicketListPage.jsx`'s `WORKLIST_ROLES`, which
+deliberately excludes `sales`). The only new surface is a personal-cockpit
+**Overview landing**, plus a visual de-emphasis tweak to the pipeline list
+itself.
+
+- **Nav:** unchanged — แดชบอร์ด (now `SalesOverview`) · `รายการดีล` (kept,
+  gated on `canViewDealPipeline`) · ค่าคอมมิชชัน (read-only) · แคตตาล็อก ·
+  self-service.
+- **Overview (`frontend/src/features/dashboard/SalesOverview.jsx`, NEW):** a
+  personal cockpit —
+  - Greeting + subtitle: "สวัสดี คุณ&lt;firstName&gt;" / "ดีลของฉัน ·
+    &lt;Thai date&gt; — งานและลูกค้าที่ต้องติดตามวันนี้".
+  - Pulse (`StatGrid`): `เกินกำหนดติดตาม` (overdue follow-up) ·
+    `ติดตามวันนี้` (follow-up due today) · `รอออกใบเสนอราคา` (pricing
+    requests at `APPROVED_FOR_QUOTATION`) · `มูลค่า pipeline` (Σ
+    `amountPayable` across the rep's own `ACTIVE` deals).
+  - "สิ่งที่ต้องทำ" worklist — one next-action CTA per deal, overdue-first,
+    via a new shared helper `frontend/src/features/tickets/salesActions.js`
+    (`nextSalesAction`/`sortWorklist`): a 5-bucket priority cascade (create
+    PCR → issue quotation → confirm order → follow up → log activity), each
+    row linking to `/tickets/:id`.
+  - Right rail: "ค่าคอมเดือนนี้" (estimated commission + commissionable base,
+    mirroring `features/commissions/commissionCalc.js` / `CommissionPage.jsx`'s
+    own `monthlyTierSummary` — a read-only informational mirror, never
+    authoritative) and "ติดตามที่ครบกำหนด" (deals due/overdue for follow-up,
+    soonest first).
+- **Data:** `api.tickets.list({})` (own-scoped server-side) +
+  `api.pricingRequests.queue({})` (own-scoped server-side, same viewer-role
+  gate Import's Overview uses) + `api.commissions.list({ payrollMonth })`.
+  **Backend: none** — every field consumed already exists on these three
+  endpoints' response shapes.
+- **Pipeline tweak (`TicketListPage.jsx`):** owner feedback — the LIFECYCLE
+  and FLAGS chip rows were competing with the deal list for attention. Both
+  now sit behind a single collapsed "ตัวกรองเพิ่มเติม" expander (closed by
+  default, auto-opens if a filter from that group is already active via URL
+  params). All existing filter functionality is unchanged — this is a
+  visual-prominence change only, not a functional one. Applies to every role
+  that renders `TicketListPage` (sales, sales_manager, ceo, import, account)
+  since it is one shared component; the primary view for every role now leads
+  with the phase cards + deal list (+ the `ต้องดำเนินการ`/`ทั้งหมด` inbox
+  toggle for import/account) instead of the lifecycle/flags rows.
+- **Unchanged:** deal detail (`TicketDetailPage.jsx`), the commission page,
+  the catalog — none of these were touched. `รายการดีล` stays in the nav for
+  sales.
+- **Verification:** frontend only, mock-driven (`VITE_USE_MOCKS=true`). No
+  authorization was changed.
+
+### Import / Account / Sales Manager / CEO
 
 Not documented in this file yet — each ships (and fills in its own section
 here) on its own branch (`feat/role-views-import`, `feat/role-views-account`,
-`feat/role-views-sales`, `feat/role-views-sales-manager`,
-`feat/role-views-ceo`), per the plan's parallel per-role execution model.
-Shared files (`App.jsx`, `permissions.js`, `AppShell.jsx`, `SalesTabs.jsx`)
-will conflict across branches by design — those conflicts are resolved at
-integration, not avoided up front.
+`feat/role-views-sales-manager`, `feat/role-views-ceo`), per the plan's
+parallel per-role execution model.
 
 ## 4. Change log
 
 | Date | Role | Branch | Summary |
 | --- | --- | --- | --- |
 | 2026-07-23 | HR | `feat/role-views-hr` | New `HrOverview.jsx` landing at `/` for `role==='hr'`; reconciled leave/OT to monitoring-only (no HR approve affordance); no authz/backend change. |
+| 2026-07-23 | Sales | `feat/role-views-sales` | New `SalesOverview` landing + `salesActions.js` next-action helper; `TicketListPage` LIFECYCLE/FLAGS collapsed behind "ตัวกรองเพิ่มเติม". Frontend-only, no authz change. |

@@ -20,6 +20,7 @@ const ChangePasswordModal = lazy(() => import('./features/auth/ChangePasswordMod
 const HrDashboard = lazy(() => import('./features/dashboard/HrDashboard.jsx').then(toDefault('HrDashboard')));
 const HrOverview = lazy(() => import('./features/dashboard/HrOverview.jsx').then(toDefault('HrOverview')));
 const EmployeeDashboard = lazy(() => import('./features/dashboard/EmployeeDashboard.jsx').then(toDefault('EmployeeDashboard')));
+const SalesOverview = lazy(() => import('./features/dashboard/SalesOverview.jsx').then(toDefault('SalesOverview')));
 const TicketDashboard = lazy(() => import('./features/dashboard/TicketDashboard.jsx').then(toDefault('TicketDashboard')));
 // Role-scoped views: Sales Manager's team-cockpit Overview (landing).
 const ManagerOverview = lazy(() => import('./features/dashboard/ManagerOverview.jsx').then(toDefault('ManagerOverview')));
@@ -209,7 +210,8 @@ export function App() {
               // Overview instead of the generic EmployeeDashboard — this generalizes
               // into a role -> Overview map as more roles ship their own (see
               // docs/role-scoped-views.md). Sales-gated roles degrade to
-              // EmployeeDashboard whenever SALES_ENABLED is off, same as every other
+              // EmployeeDashboard whenever SALES_ENABLED is off (SALES_ENABLED is
+              // the off-switch — see app/features.js), same as every other
               // sales-gated surface in this file; hr is people-ops and is NOT gated
               // on SALES_ENABLED.
               user.role === 'hr' ? (
@@ -219,6 +221,8 @@ export function App() {
                 />
               ) : user.role === 'sales_manager' && SALES_ENABLED ? (
                 <ManagerOverview user={user} employee={currentEmployee} showToast={showToast} />
+              ) : user.role === 'sales' && SALES_ENABLED ? (
+                <SalesOverview user={user} employee={currentEmployee} />
               ) : (
                 <EmployeeDashboard
                   user={user}

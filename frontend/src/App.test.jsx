@@ -28,10 +28,20 @@ vi.mock('./api/index.js', () => ({
       list: vi.fn().mockResolvedValue({ notifications: [] }),
       markRead: vi.fn().mockResolvedValue({}),
     },
-    // PricingRequestQueuePage's only query, needed for the /pricing-requests
-    // guard test below.
+    // PricingRequestQueuePage's only query, and (unfiltered) SalesOverview's
+    // own worklist source — both the /pricing-requests guard test and the
+    // sales-redirect-lands-on-SalesOverview test below need this.
     pricingRequests: {
       queue: vi.fn().mockResolvedValue({ items: [] }),
+    },
+    // SalesOverview (role-scoped views, Sales branch) is what a sales user
+    // now lands on at '/' — its own two remaining queries, needed by the
+    // redirect test below.
+    tickets: {
+      list: vi.fn().mockResolvedValue({ tickets: [] }),
+    },
+    commissions: {
+      list: vi.fn().mockResolvedValue({ commissions: [] }),
     },
   },
   ROLE_PERMISSIONS: {
@@ -157,6 +167,8 @@ describe('App route guard for /pricing-requests (commit 6)', () => {
     vi.clearAllMocks();
     api.notifications.list.mockResolvedValue({ notifications: [] });
     api.pricingRequests.queue.mockResolvedValue({ items: [] });
+    api.tickets.list.mockResolvedValue({ tickets: [] });
+    api.commissions.list.mockResolvedValue({ commissions: [] });
   });
 
   function renderAppAt(path, user) {
@@ -183,8 +195,10 @@ describe('App route guard for /pricing-requests (commit 6)', () => {
     renderAppAt('/pricing-requests', salesUser);
 
     // RequireAccess denies the path and <Navigate to="/" replace /> lands on
-    // EmployeeDashboard, whose PageHeader greets the logged-in user by name.
-    expect(await screen.findByRole('heading', { name: `สวัสดี, คุณ${salesUser.name}` })).toBeTruthy();
+    // SalesOverview (role-scoped views, Sales branch — a sales user's own
+    // '/' landing since this branch, replacing the generic EmployeeDashboard
+    // it used to land on), whose PageHeader greets the logged-in user by name.
+    expect(await screen.findByRole('heading', { name: `สวัสดี คุณ${salesUser.name}` })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'คิวขอราคา' })).toBeNull();
   });
 });
