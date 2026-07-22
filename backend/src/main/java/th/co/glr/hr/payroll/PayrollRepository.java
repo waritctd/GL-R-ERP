@@ -119,6 +119,43 @@ public class PayrollRepository {
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
+    /**
+     * Special-pay carry-forward (2026-07-23): per active employee, the carried recurring fields
+     * (special_pay_1..5, non_taxable_income, student_loan_deduction, legal_execution_deduction) from
+     * that employee's most-recent PRIOR processed {@code payroll_line} — the latest period strictly
+     * before {@code payrollMonth} with {@code status <> 'VOID'}. {@code DISTINCT ON} picks exactly one
+     * row per employee: the latest {@code payroll_month}. An employee with no qualifying prior line is
+     * simply absent from the result (no fabricated zero row) — the caller treats "no suggestion" as
+     * "nothing to pre-fill." Restricted to currently active employees so a terminated employee's old
+     * figures never leak into a suggestion for a payroll run they are no longer part of.
+     */
+    public List<PayrollCarryForwardDtos.SuggestedInputRow> findCarryForwardSuggestions(LocalDate payrollMonth) {
+        return jdbc.query("""
+            SELECT DISTINCT ON (pl.employee_id)
+                   pl.employee_id,
+                   pl.special_pay_1, pl.special_pay_2, pl.special_pay_3, pl.special_pay_4, pl.special_pay_5,
+                   pl.non_taxable_income, pl.student_loan_deduction, pl.legal_execution_deduction
+              FROM hr.payroll_line pl
+              JOIN hr.payroll_period pp ON pp.period_id = pl.period_id
+              JOIN hr.employee e ON e.employee_id = pl.employee_id AND e.is_active = TRUE
+             WHERE pp.payroll_month < :payrollMonth
+               AND pp.status <> 'VOID'
+             ORDER BY pl.employee_id, pp.payroll_month DESC
+            """,
+            Map.of("payrollMonth", payrollMonth),
+            (rs, rowNum) -> new PayrollCarryForwardDtos.SuggestedInputRow(
+                rs.getLong("employee_id"),
+                money(rs.getBigDecimal("special_pay_1")),
+                money(rs.getBigDecimal("special_pay_2")),
+                money(rs.getBigDecimal("special_pay_3")),
+                money(rs.getBigDecimal("special_pay_4")),
+                money(rs.getBigDecimal("special_pay_5")),
+                money(rs.getBigDecimal("non_taxable_income")),
+                money(rs.getBigDecimal("student_loan_deduction")),
+                money(rs.getBigDecimal("legal_execution_deduction"))
+            ));
+    }
+
     /** C1: the standing tax-allowance declaration per employee for a given tax year. */
     public Map<Long, PayrollTaxAllowanceInput> findTaxAllowancesByEmployee(int taxYear) {
         return jdbc.query("""

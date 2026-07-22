@@ -148,6 +148,10 @@ export const API_ROUTES = {
   },
   payroll: {
     current: '/api/payroll',
+    // Special-pay carry-forward (2026-07-23): read-only pre-fill suggestions for a brand-new
+    // monthly run, sourced from each employee's most-recent prior processed payroll_line. Mirrors
+    // PayrollController#suggestedInputs.
+    suggestedInputs: '/api/payroll/suggested-inputs',
     preview: '/api/payroll/preview',
     process: '/api/payroll/process',
     bankExport: (periodId) => `/api/payroll/${periodId}/bank-export`,

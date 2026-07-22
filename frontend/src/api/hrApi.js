@@ -310,6 +310,9 @@ export const api = {
   },
   payroll: {
     current: (params) => apiRequest(withQuery(API_ROUTES.payroll.current, params)),
+    // Special-pay carry-forward (2026-07-23): pre-fill suggestions only — read-only, never feeds
+    // preview/process directly. Mirrors PayrollController#suggestedInputs / PayrollService#suggestedInputs.
+    suggestedInputs: (params) => apiRequest(withQuery(API_ROUTES.payroll.suggestedInputs, params)),
     preview: (payload) => apiRequest(API_ROUTES.payroll.preview, { method: 'POST', body: payload }),
     process: (payload) => apiRequest(API_ROUTES.payroll.process, { method: 'POST', body: payload }),
     bankExport: (periodId) => apiRequest(API_ROUTES.payroll.bankExport(periodId)),

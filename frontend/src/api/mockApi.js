@@ -4562,6 +4562,13 @@ export const api = {
       hasRole('hr', 'ceo');
       return delay({ period: null });
     },
+    // Special-pay carry-forward (2026-07-23): no seeded prior payroll_line data in mock mode, so
+    // there is nothing to carry forward — return an empty suggestions list rather than fabricating
+    // figures, same spirit as `current` returning a null period above.
+    async suggestedInputs(params = {}) {
+      hasRole('hr', 'ceo');
+      return delay({ payrollMonth: params.payrollMonth ? `${params.payrollMonth}-01` : null, suggestions: [] });
+    },
     async preview() {
       hasRole('hr', 'ceo');
       throw new Error('คำนวณเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
