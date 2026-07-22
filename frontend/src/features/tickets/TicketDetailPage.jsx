@@ -26,6 +26,7 @@ import { downloadBlob } from '../../utils/download.js';
 import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
 import { CancelDealModal } from './CancelDealModal.jsx';
 import { DealStagePanel } from './DealStagePanel.jsx';
+import { DealTrackingPanel } from './DealTrackingPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
 
 const EVENT_KIND_LABEL = {
@@ -323,6 +324,17 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   });
   const pricingRequests = canViewPricingRequests ? (pricingRequestsQuery.data ?? []) : [];
 
+  // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103): visible to
+  // the deal owner (sales), sales_manager, ceo — mirrors salesViewScope.js's dealTracking
+  // section id (import/account have no business in it) and TicketService.requireDealOwnership.
+  const canViewDealTracking = ['sales', 'sales_manager', 'ceo'].includes(user?.role);
+  const activitiesQuery = useQuery({
+    queryKey: queryKeys.ticketActivities(ticketId),
+    queryFn: () => api.tickets.listActivities(ticketId).then((r) => r.items ?? []),
+    enabled: canViewDealTracking && !!ticketId && !!ticket,
+  });
+  const activities = canViewDealTracking ? (activitiesQuery.data ?? []) : [];
+
   useEffect(() => {
     if (ticketQuery.error) showToast('error', ticketQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
   }, [ticketQuery.error, showToast]);
@@ -494,6 +506,32 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     onError: (err) => showToast('error', err.message || 'ลบไม่สำเร็จ'),
   });
   const deletingAttachment = deleteAttachmentMutation.isPending;
+
+  // Deal tracking (V83, Slice B1/B2 — handoff 103): full-replace PUT, response is the
+  // full ticket detail (same applyTicketUpdate fast path the actionMutation above uses).
+  const updateTrackingMutation = useMutation({
+    mutationFn: (payload) => api.tickets.updateTracking(ticketId, payload),
+    onSuccess: (response) => {
+      applyTicketUpdate(response.ticket);
+      showToast('success', 'บันทึกข้อมูลติดตามดีลแล้ว');
+    },
+    onError: (err) => showToast('error', err.message || 'บันทึกไม่สำเร็จ'),
+  });
+
+  // addActivity returns the bare DealActivityDto (not a ticket), so it invalidates
+  // rather than reusing applyTicketUpdate's setQueryData fast path — the ticket detail
+  // still needs a refetch because `stale` and the stage-advance readiness both depend
+  // on the activity that was just logged.
+  const addActivityMutation = useMutation({
+    mutationFn: (payload) => api.tickets.addActivity(ticketId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketActivities(ticketId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
+      queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
+      showToast('success', 'บันทึกกิจกรรมแล้ว');
+    },
+    onError: (err) => showToast('error', err.message || 'บันทึกไม่สำเร็จ'),
+  });
 
   // Manual refresh — today's fix: refresh both the ticket AND its attachments
   // (the old button only ever reloaded the ticket).
@@ -1257,6 +1295,26 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
           </>
         ) : null}
       />
+
+      {/* Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103): the
+          weekly-report replacement. Owner/sales_manager/ceo only — see salesViewScope.js's
+          dealTracking section id. Import/account get a one-line SectionPeek like every
+          other role-scoped section on this page instead of the full panel. */}
+      {sections.dealTracking ? (
+        <DealTrackingPanel
+          summary={summary}
+          events={events}
+          activities={activities}
+          activitiesLoading={activitiesQuery.isLoading}
+          canEdit={canViewDealTracking && (isOwner || role === 'sales_manager' || role === 'ceo')}
+          onUpdateTracking={(payload) => updateTrackingMutation.mutateAsync(payload)}
+          onAddActivity={(payload) => addActivityMutation.mutateAsync(payload)}
+          updating={updateTrackingMutation.isPending}
+          addingActivity={addActivityMutation.isPending}
+        />
+      ) : (
+        <SectionPeek title="การติดตามดีล" summary={summary} />
+      )}
 
       {sections.payment ? (
       <section className="panel">

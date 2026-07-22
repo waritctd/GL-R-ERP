@@ -24,6 +24,18 @@ import {
   LOST_REASONS as DEAL_LOST_REASONS,
   stageIndex as dealStageIndex,
 } from '../features/tickets/stageMeta.js';
+// Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103): win%
+// defaults, the activity-kind taxonomy, and the stage-advance-gate readiness
+// check, shared with the UI so the mock's numbers/gate can't drift from
+// WinProbabilityDefaults.java / DealActivityKind.java / TicketService.updateStage.
+import {
+  computeStale as dealComputeStale,
+  hasActivitySince as dealHasActivitySince,
+  isReadyToAdvance as dealIsReadyToAdvance,
+  isValidActivityKind as dealIsValidActivityKind,
+  lastStageChangeAt as dealLastStageChangeAt,
+  STAGE_ADVANCE_GATE_MESSAGE as DEAL_STAGE_ADVANCE_GATE_MESSAGE,
+} from '../features/tickets/dealTrackingMeta.js';
 // PricingRequest (commit 6): status transition table + option lists shared
 // with the UI so the mock's gates can't drift from PricingRequestService's —
 // the authoritative rules live in the backend pricingrequest/ package.
@@ -33,6 +45,18 @@ import {
   RECIPIENT_OPTIONS as PRICING_REQUEST_RECIPIENT_OPTIONS,
   UNIT_BASIS_OPTIONS as PRICING_REQUEST_UNIT_BASIS_OPTIONS,
 } from '../features/pricingRequests/pricingRequestMeta.js';
+// Commission redesign (Slices A1/A2/calc-refine + A3): the calculation itself — VAT-strip
+// formula, monthly tier base, progressive tiers/floor — is shared with the UI so the mock's
+// numbers can never drift from CommissionPage's own display math. The authoritative
+// implementation is backend/.../commission/CommissionCalculator.java + TierConfig.java; this
+// mock mirrors it, per CLAUDE.md ("mock authz is not authoritative" — the calculation itself is
+// business logic, not authz, and is mirrored as exactly as this module allows).
+import {
+  invoiceCalculation as calcInvoice,
+  monthlyTierBase as calcMonthlyTierBase,
+  progressiveCommission as calcProgressiveCommission,
+  round2 as commissionRound2,
+} from '../features/commissions/commissionCalc.js';
 
 const db = createDemoDatabase();
 
@@ -482,6 +506,12 @@ let mockPriceConfigSeq = mockPriceCalcConfigs.length + 1;
 // R5: Attachments
 const mockAttachments = [];
 let mockAttachSeq = 1;
+
+// Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103): the
+// deal_activity log. Its own store, not on the ticket, mirrors sales.deal_activity
+// being its own table (same convention as mockAttachments above).
+const mockDealActivities = [];
+let mockDealActivitySeq = 1;
 
 const mockFactoryConfigs = [
   { id: 1, factoryName: 'SCG Ceramics',      email: 'sales@scg.co.th',         currency: 'THB', unit: 'piece', country: 'Thailand' },
@@ -1257,6 +1287,15 @@ function findTicketRaw(id) {
   return ticket;
 }
 
+// Deal tracking (V83): activities for one ticket, oldest first (matches
+// TicketRepository.findActivitiesByTicket's ORDER BY activity_date, created_at).
+function dealActivitiesForTicket(ticketId) {
+  return mockDealActivities
+    .filter((a) => a.ticketId === Number(ticketId))
+    .sort((a, b) => new Date(a.activityDate) - new Date(b.activityDate) || a.id - b.id)
+    .map((a) => structuredClone(a));
+}
+
 function verifyStatus(ticket, expected) {
   if (ticket.status !== expected) fail(`Expected status '${expected}' but ticket is '${ticket.status}'`, 409);
 }
@@ -1759,6 +1798,15 @@ function buildTicketDetail(ticket) {
       closeConfirmedAt: ticket.closeConfirmedAt ?? null,
       closeConfirmedByName: ticket.closeConfirmedByName ?? null,
       invoiceOnFile: hasInvoiceAttachment(ticket),
+      // Deal tracking fields (V83, Slice B1/B2 — handoff 103). effectiveWinProbability is
+      // deliberately NOT included here: it's a Java record method, not a component, so the
+      // real backend never serializes it either — see dealTrackingMeta.js's doc comment.
+      // Every consumer derives it from winProbabilityOverride + salesStage instead.
+      winProbabilityOverride: ticket.winProbabilityOverride ?? null,
+      designerName: ticket.designerName ?? null,
+      ownerName: ticket.ownerName ?? null,
+      buyerName: ticket.buyerName ?? null,
+      stale: dealComputeStale(ticket.lifecycle ?? 'ACTIVE', dealActivitiesForTicket(ticket.id)),
       ...paymentFields,
     },
     items: ticket.items, events: ticket.events,
@@ -1771,31 +1819,13 @@ function commissionMonth(value) {
   return (value || new Date().toISOString()).slice(0, 7);
 }
 
-function invoiceCalculation(payload) {
-  const actualReceived = Number(payload.grossAmount || 0)
-    - Number(payload.bankFees || 0)
-    - Number(payload.suspenseVat || 0)
-    - Number(payload.transportFee || 0)
-    - Number(payload.cutFee || 0)
-    - Number(payload.shortfall || 0);
-  return {
-    actualReceived: Number(actualReceived.toFixed(2)),
-    commissionableBase: Number((actualReceived / 1.07).toFixed(2)),
-  };
-}
-
-function progressiveCommission(baseValue) {
-  const base = Math.max(0, Number(baseValue || 0));
-  let total = 0;
-  for (let tier = 1; tier <= 12; tier++) {
-    const lower = (tier - 1) * 250000;
-    const upper = tier * 250000;
-    const block = Math.max(0, Math.min(base, upper) - lower);
-    total += block * ((tier * 0.25) / 100);
-  }
-  if (base > 3000000) total += (base - 3000000) * 0.075;
-  return Number(total.toFixed(2));
-}
+// Slice A1/calc-refine: `invoiceCalculation` now also subtracts withholdingTax and adds
+// overpayment (before the VAT strip), and `progressiveCommission` applies the <50,000 monthly
+// floor and the V81 tier-13 rate (3.25%, not the old 7.5%) — both imported from
+// commissionCalc.js so this mock can never drift from CommissionPage's own display math or the
+// real CommissionCalculator. See that module for the exact formula.
+const invoiceCalculation = calcInvoice;
+const progressiveCommission = calcProgressiveCommission;
 
 // Step 9 cross-check threshold: flag (never block) when the hand-typed grossAmount diverges from
 // the linked deal's actual payableAmount by more than this fraction. Mirrors
@@ -1810,6 +1840,9 @@ function commissionDealMismatch(grossAmount, payable) {
 
 function buildCommissionRecord(record) {
   return structuredClone({
+    // Commission redesign calc-refine (V82): 1x is the default weight for any record created
+    // before this field existed (or omitted in a test fixture) — matches the column's DB default.
+    weightMultiplier: 1,
     managerApprovedBy: null,
     managerApprovedByName: null,
     managerApprovedAt: null,
@@ -2717,6 +2750,14 @@ export const api = {
         depositPolicy: t.depositPolicy ?? 'REQUIRED',
         depositPolicyReason: t.depositPolicyReason ?? null,
         entryChannel: t.entryChannel ?? 'DESIGNER_LED',
+        // Deal tracking fields (V83, Slice B1/B2 — handoff 103) — same fields as
+        // buildTicketDetail's summary, so the manager pipeline view (TicketListPage)
+        // has win%/stale without a per-row detail fetch.
+        winProbabilityOverride: t.winProbabilityOverride ?? null,
+        designerName: t.designerName ?? null,
+        ownerName: t.ownerName ?? null,
+        buyerName: t.buyerName ?? null,
+        stale: dealComputeStale(t.lifecycle ?? 'ACTIVE', dealActivitiesForTicket(t.id)),
         ...derivePaymentFields(t),
       }));
       return delay({ tickets });
@@ -3535,6 +3576,17 @@ export const api = {
       const skipForward = dealStageIndex(payload.stage) - dealStageIndex(ticket.salesStage) > 1;
       if (backward && !(payload.note || '').trim()) fail('การย้อนสถานะกลับต้องระบุเหตุผล', 400);
       if (skipForward && !(payload.note || '').trim()) fail('การข้ามขั้นตอนต้องระบุเหตุผล', 400);
+      // Deal tracking (V83, Slice B1/B2 — handoff 103): mirrors TicketService.updateStage's
+      // forward-move gate exactly (strictly-greater target index, not merely "not backward" —
+      // see handoff 103's "The Gate Rule" for why that distinction matters for the routine
+      // QUOTE_DESIGN_SIDE → SPEC_APPROVED move). Approximates the Java service, per CLAUDE.md —
+      // the real enforcement is DealTrackingAndActivityIntegrationTest against the real service.
+      const forward = dealStageIndex(payload.stage) > dealStageIndex(ticket.salesStage);
+      if (forward) {
+        const sinceIso = dealLastStageChangeAt(ticket.events, ticket.createdAt);
+        const hasRecentActivity = dealHasActivitySince(dealActivitiesForTicket(ticket.id), sinceIso);
+        if (!dealIsReadyToAdvance(ticket, hasRecentActivity)) fail(DEAL_STAGE_ADVANCE_GATE_MESSAGE, 400);
+      }
       const fromStage = ticket.salesStage;
       ticket.salesStage = payload.stage;
       ticket.stageUpdatedAt = new Date().toISOString();
@@ -3647,6 +3699,63 @@ export const api = {
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage,
         `deposit_policy → ${payload.policy} — ${payload.reason.trim()}`);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    // ── Deal tracking + activity (V83, Slice B1/B2 "kill the weekly report" —
+    // handoff 103). Mirrors TicketController's addActivity/activities/updateTracking
+    // and TicketService's requireDealOwnership gate (reuses dealCanMarkLost — the
+    // same check backing markLost/reopen/hold/dormant/resume above, since the real
+    // service's requireDealOwnership is one shared method too).
+
+    async addActivity(id, payload) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      // Deliberately NOT requireActive: a rep can still log why a deal went quiet
+      // on a non-ACTIVE deal (mirrors TicketService.addActivity — see handoff 103).
+      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      if (!payload?.activityDate) fail('activityDate is required', 400);
+      if (!dealIsValidActivityKind(payload?.kind)) fail(`Unknown activity kind '${payload?.kind}'`, 400);
+      const activity = {
+        id: mockDealActivitySeq++,
+        ticketId: ticket.id,
+        activityDate: payload.activityDate,
+        kind: payload.kind,
+        note: (payload.note || '').trim() || null,
+        createdById: user.id,
+        createdByName: user.name,
+        createdAt: new Date().toISOString(),
+      };
+      mockDealActivities.push(activity);
+      return delay(structuredClone(activity));
+    },
+
+    async listActivities(id) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      return delay({ items: dealActivitiesForTicket(ticket.id) });
+    },
+
+    async updateTracking(id, payload) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      requireActive(ticket);
+      if (payload?.winProbability != null
+        && (Number(payload.winProbability) < 0 || Number(payload.winProbability) > 100)) {
+        fail('win probability ต้องอยู่ระหว่าง 0-100', 400);
+      }
+      // Full-replace semantics (PUT), not a merge — mirrors TrackingUpdateRequest:
+      // an omitted/null field CLEARS it (null winProbability = "fall back to the
+      // stage default", the intended way to clear an override).
+      ticket.winProbabilityOverride = payload?.winProbability ?? null;
+      ticket.designerName = (payload?.designerName || '').trim() || null;
+      ticket.ownerName = (payload?.ownerName || '').trim() || null;
+      ticket.buyerName = (payload?.buyerName || '').trim() || null;
+      ticket.nextFollowUpAt = payload?.nextFollowUpAt || null;
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage, 'อัปเดตข้อมูลติดตามดีล');
       return delay({ ticket: buildTicketDetail(ticket) });
     },
   },
@@ -4199,6 +4308,10 @@ export const api = {
 
   // Mirrors CommissionController + CommissionService (commission/).
   commissions: {
+    // Mirrors CommissionController#list PreAuthorize exactly: SALES, SALES_MANAGER, CEO only.
+    // Neither ACCOUNT nor HR may call this — account only ever gets createFromDeal, hr reads via
+    // payrollReady instead. Do not loosen this to match ROLE_PERMISSIONS.canViewCommissions
+    // (route access), which is deliberately broader for the two roles above.
     async list(params = {}) {
       const user = requireSession();
       if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('Forbidden', 403);
@@ -4208,11 +4321,12 @@ export const api = {
       return delay({ commissions: list.map(buildCommissionRecord) });
     },
 
+    // Slice A2 (AUTHZ CHANGE): sales removed from SUBMIT_ROLES — account replaces it as the
+    // day-to-day creator here too (this JSON/multipart path stays for sales_manager/ceo manual
+    // corrections; CommissionPage's UI only calls createFromDeal for the day-to-day account
+    // flow — this method is not wired into any control in this slice, kept for API parity).
     async create(payload) {
-      const user = hasRole('sales', 'sales_manager', 'ceo');
-      if (user.role === 'sales' && (Number(payload.transportFee || 0) > 0 || Number(payload.cutFee || 0) > 0 || Number(payload.shortfall || 0) > 0)) {
-        fail('Sales cannot edit deduction fields', 403);
-      }
+      const user = hasRole('account', 'sales_manager', 'ceo');
       if (!payload.invoiceAttachment) fail('Tax invoice file is required', 400);
       if (db.commissions.some((item) => item.invoiceDetails.invoiceNumber === payload.invoiceNumber)) {
         fail('Invoice number already exists', 409);
@@ -4231,13 +4345,8 @@ export const api = {
         dealAmountMismatch = commissionDealMismatch(payload.grossAmount, dealPayableAmountSnapshot);
       }
       const id = Math.max(0, ...db.commissions.map((item) => item.id)) + 1;
-      const salesRepId = user.role === 'sales' ? user.id : Number(payload.salesRepId || user.id);
-      const calc = invoiceCalculation({
-        ...payload,
-        transportFee: user.role === 'sales' ? 0 : payload.transportFee,
-        cutFee: user.role === 'sales' ? 0 : payload.cutFee,
-        shortfall: user.role === 'sales' ? 0 : payload.shortfall,
-      });
+      const salesRepId = Number(payload.salesRepId || user.id);
+      const calc = invoiceCalculation(payload);
       const record = {
         id,
         sourceTicketId: payload.sourceTicketId ?? null,
@@ -4249,6 +4358,7 @@ export const api = {
         payrollMonth: `${commissionMonth(payload.invoiceDate)}-01`,
         actualReceived: calc.actualReceived,
         commissionableBase: calc.commissionableBase,
+        weightMultiplier: 1,
         approvedById: null,
         approvedAt: null,
         managerApprovedBy: null,
@@ -4274,9 +4384,11 @@ export const api = {
           grossAmount: Number(payload.grossAmount || 0),
           bankFees: Number(payload.bankFees || 0),
           suspenseVat: Number(payload.suspenseVat || 0),
-          transportFee: user.role === 'sales' ? 0 : Number(payload.transportFee || 0),
-          cutFee: user.role === 'sales' ? 0 : Number(payload.cutFee || 0),
-          shortfall: user.role === 'sales' ? 0 : Number(payload.shortfall || 0),
+          transportFee: Number(payload.transportFee || 0),
+          cutFee: Number(payload.cutFee || 0),
+          shortfall: Number(payload.shortfall || 0),
+          withholdingTax: Number(payload.withholdingTax || 0),
+          overpayment: Number(payload.overpayment || 0),
           invoiceAttachmentId: id,
           invoiceAttachmentFileName: payload.invoiceAttachment?.name || 'tax-invoice.pdf',
           createdAt: new Date().toISOString(),
@@ -4287,16 +4399,151 @@ export const api = {
       return delay({ commission: buildCommissionRecord(record) });
     },
 
+    /**
+     * Slice A2 auto-create trigger: the accountant records the tax invoice for a
+     * close-eligible deal and the commission is created for the deal's owner automatically —
+     * sales does nothing. Mirrors CommissionService#createFromDeal, including its
+     * hasActiveCommissionForTicket duplicate guard (a deal may only ever have one live SALE
+     * commission) and the same CLOSED_PAID/cross-check gate `create` uses. Also records the
+     * same file as an INVOICE-type ticket attachment, so `hasInvoiceAttachment` (the ticket's
+     * close-gate "invoice on file" flag) becomes true from this one upload, same as the real
+     * service's dual write.
+     *
+     * NOTE (mock-only limitation, not a backend gap): the real backend's account-role ticket
+     * LIST scoping (TicketRepository#appendRoleScope / this mock's accountListScopeIncludes)
+     * narrows account's GET /api/tickets to deals with money still pending — a CLOSED_PAID deal
+     * (final payment already confirmed) normally drops out of that list right when the invoice
+     * still needs recording. CommissionPage therefore looks up the deal by ticket id directly
+     * (api.tickets.get, unaffected by that list-scoping) rather than relying solely on the
+     * scoped list dropdown — see the "record invoice" panel's ticket-lookup field.
+     */
+    async createFromDeal(payload) {
+      const user = hasRole('account');
+      if (!payload.invoiceAttachment) fail('Tax invoice file is required', 400);
+      const ticketId = Number(payload.ticketId);
+      const ticket = db.tickets.find((t) => t.id === ticketId);
+      if (!ticket) fail('Ticket not found', 404);
+      const salesRepId = ticket.createdById;
+      if (db.commissions.some((item) => item.sourceTicketId === ticketId
+        && item.kind === 'SALE'
+        && !['VOID', 'REJECTED'].includes(item.status))) {
+        fail('A commission already exists for this deal', 409);
+      }
+      if (db.commissions.some((item) => item.invoiceDetails.invoiceNumber === payload.invoiceNumber)) {
+        fail('Invoice number already exists', 409);
+      }
+      if (ticket.salesStage !== 'CLOSED_PAID') {
+        fail('Deal has not reached final payment (CLOSED_PAID); commission cannot be submitted yet.', 422);
+      }
+      const dealPayableAmountSnapshot = payableAmount(ticket);
+      const effectiveGrossAmount = payload.grossAmount != null && payload.grossAmount !== ''
+        ? Number(payload.grossAmount)
+        : dealPayableAmountSnapshot;
+      const dealAmountMismatch = commissionDealMismatch(effectiveGrossAmount, dealPayableAmountSnapshot);
+      const id = Math.max(0, ...db.commissions.map((item) => item.id)) + 1;
+      const calc = invoiceCalculation({ ...payload, grossAmount: effectiveGrossAmount });
+      const record = {
+        id,
+        sourceTicketId: ticketId,
+        salesRepId,
+        salesRepName: db.users.find((item) => item.id === salesRepId)?.name || ticket.createdByName || null,
+        submittedById: user.id,
+        kind: 'SALE',
+        status: 'SUBMITTED',
+        payrollMonth: `${commissionMonth(payload.invoiceDate)}-01`,
+        actualReceived: calc.actualReceived,
+        commissionableBase: calc.commissionableBase,
+        weightMultiplier: 1,
+        approvedById: null,
+        approvedAt: null,
+        managerApprovedBy: null,
+        managerApprovedByName: null,
+        managerApprovedAt: null,
+        ceoApprovedBy: null,
+        ceoApprovedByName: null,
+        ceoApprovedAt: null,
+        rejectedById: null,
+        rejectedByName: null,
+        rejectedAt: null,
+        rejectionReason: null,
+        cancellationOfId: null,
+        cancellationReason: null,
+        dealPayableAmountSnapshot,
+        dealAmountMismatch,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        invoiceDetails: {
+          id,
+          invoiceNumber: payload.invoiceNumber,
+          invoiceDate: payload.invoiceDate,
+          grossAmount: effectiveGrossAmount,
+          bankFees: Number(payload.bankFees || 0),
+          suspenseVat: Number(payload.suspenseVat || 0),
+          transportFee: Number(payload.transportFee || 0),
+          cutFee: Number(payload.cutFee || 0),
+          shortfall: Number(payload.shortfall || 0),
+          withholdingTax: Number(payload.withholdingTax || 0),
+          overpayment: Number(payload.overpayment || 0),
+          invoiceAttachmentId: id,
+          invoiceAttachmentFileName: payload.invoiceAttachment?.name || 'tax-invoice.pdf',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      };
+      db.commissions.unshift(record);
+      // Dual write, mirrors CommissionService#createFromDeal saving the same file as an
+      // AttachType.INVOICE ticket attachment so hasInvoiceAttachment(ticket) becomes true.
+      mockAttachments.push({
+        id: mockAttachSeq++,
+        ticketId,
+        quotationId: null,
+        fileName: payload.invoiceAttachment?.name || 'tax-invoice.pdf',
+        attachType: 'INVOICE',
+        mimeType: payload.invoiceAttachment?.type || 'application/pdf',
+        fileSize: payload.invoiceAttachment?.size || 0,
+        uploadedBy: user.id,
+        uploadedAt: new Date().toISOString(),
+      });
+      return delay({ commission: buildCommissionRecord(record) });
+    },
+
+    // Slice A2: the sales-manager/CEO review step may edit any invoice input (not just the
+    // three deduction fields it always could) plus the calc-refine weightMultiplier (1/2/3;
+    // only 2x is owner-confirmed policy — see commissionCalc.js / handoff 102's "3x-unconfirmed
+    // note"). Every field is value-or-existing (null leaves it unchanged), and a non-blank
+    // `reason` is required on every call, mirroring UpdateCommissionDeductionsRequest exactly.
+    // The final commission is ALWAYS recomputed here — there is no path that sets it directly.
     async updateDeductions(id, payload) {
       hasRole('sales_manager', 'ceo');
+      if (!payload.reason || !String(payload.reason).trim()) {
+        fail('กรุณาระบุเหตุผลในการแก้ไข', 400);
+      }
       const record = db.commissions.find((item) => item.id === Number(id));
       if (!record) fail('Commission record not found', 404);
+      if (['VOID', 'REJECTED'].includes(record.status)) {
+        fail('Cannot edit a void commission record', 409);
+      }
+      const valueOrExisting = (value, existing) => (value === null || value === undefined || value === '' ? existing : Number(value));
       Object.assign(record.invoiceDetails, {
-        transportFee: Number(payload.transportFee ?? record.invoiceDetails.transportFee),
-        cutFee: Number(payload.cutFee ?? record.invoiceDetails.cutFee),
-        shortfall: Number(payload.shortfall ?? record.invoiceDetails.shortfall),
+        grossAmount: valueOrExisting(payload.grossAmount, record.invoiceDetails.grossAmount),
+        bankFees: valueOrExisting(payload.bankFees, record.invoiceDetails.bankFees),
+        suspenseVat: valueOrExisting(payload.suspenseVat, record.invoiceDetails.suspenseVat),
+        transportFee: valueOrExisting(payload.transportFee, record.invoiceDetails.transportFee),
+        cutFee: valueOrExisting(payload.cutFee, record.invoiceDetails.cutFee),
+        shortfall: valueOrExisting(payload.shortfall, record.invoiceDetails.shortfall),
+        withholdingTax: valueOrExisting(payload.withholdingTax, record.invoiceDetails.withholdingTax),
+        overpayment: valueOrExisting(payload.overpayment, record.invoiceDetails.overpayment),
         updatedAt: new Date().toISOString(),
       });
+      // weightMultiplier lives on commission_record, not invoice_details, and is scoped to only
+      // THIS commission (never shared across other records on the same invoice) — mirrors
+      // CommissionRepository#updateWeightMultiplier being keyed on commission_id, unlike the
+      // amount fields below which key on invoice_id and can touch a shared clawback pair.
+      if (payload.weightMultiplier !== null && payload.weightMultiplier !== undefined && payload.weightMultiplier !== '') {
+        const weight = Number(payload.weightMultiplier);
+        if (![1, 2, 3].includes(weight)) fail('weightMultiplier must be 1, 2, or 3', 400);
+        record.weightMultiplier = weight;
+      }
       const calc = invoiceCalculation(record.invoiceDetails);
       db.commissions
         .filter((item) => item.invoiceDetails.id === record.invoiceDetails.id && !['VOID', 'REJECTED'].includes(item.status))
@@ -4368,6 +4615,11 @@ export const api = {
       if (original.kind !== 'SALE' || original.status !== 'APPROVED') fail('Only approved sale commissions can be clawed back', 409);
       if (db.commissions.some((item) => item.cancellationOfId === original.id && item.status !== 'VOID')) fail('This commission already has an active clawback', 409);
       const nextId = Math.max(0, ...db.commissions.map((item) => item.id)) + 1;
+      // The structuredClone below carries `weightMultiplier` over from the original
+      // automatically (not overridden in the object below) — mirrors CommissionRepository
+      // #createClawback's explicit copy, a correctness fix from the calc-refine slice: without
+      // it, a clawback of a 2x-weighted sale would only reverse 1x of the original's
+      // contribution to the monthly tier base.
       const record = {
         ...structuredClone(original),
         id: nextId,
@@ -4402,23 +4654,31 @@ export const api = {
         cutFee: user.role === 'sales' ? 0 : payload.cutFee,
         shortfall: user.role === 'sales' ? 0 : payload.shortfall,
       });
-      const existingMonthlyBase = db.commissions
+      // Commission redesign calc-refine: the monthly TIER BASE is the full-precision SUM(actual
+      // received x weight_multiplier) / 1.07, divided exactly once — not a sum of already-2dp
+      // commissionableBase rows. The unsaved invoice being simulated has no weight choice yet
+      // (that only happens later, at manager review), so it folds into the weighted sum at the
+      // default weight of 1. Mirrors CommissionService#simulate.
+      const existingWeightedActualReceived = db.commissions
         .filter((item) => item.salesRepId === salesRepId
           && commissionMonth(item.payrollMonth) === month
           && !['VOID', 'REJECTED'].includes(item.status))
-        .reduce((sum, item) => sum + Number(item.commissionableBase || 0), 0);
-      const projectedMonthlyBase = existingMonthlyBase + calc.commissionableBase;
-      const projectedMonthlyCommission = progressiveCommission(projectedMonthlyBase);
-      const incrementalCommission = projectedMonthlyCommission - progressiveCommission(existingMonthlyBase);
+        .reduce((sum, item) => sum + Number(item.actualReceived || 0) * Number(item.weightMultiplier || 1), 0);
+      const projectedWeightedActualReceived = existingWeightedActualReceived + calc.actualReceived;
+      const existingBase = calcMonthlyTierBase(existingWeightedActualReceived);
+      const projectedBase = calcMonthlyTierBase(projectedWeightedActualReceived);
+      const priorCommission = progressiveCommission(existingBase);
+      const projectedCommission = progressiveCommission(projectedBase);
       return delay({
         simulation: {
           payrollMonth: `${month}-01`,
           actualReceived: calc.actualReceived,
           commissionableBase: calc.commissionableBase,
-          existingMonthlyBase,
-          projectedMonthlyBase,
-          projectedMonthlyCommission,
-          incrementalCommission: Number(incrementalCommission.toFixed(2)),
+          // Display-rounded to 2dp — the unrounded value is what fed progressiveCommission above.
+          existingMonthlyBase: commissionRound2(existingBase),
+          projectedMonthlyBase: commissionRound2(projectedBase),
+          projectedMonthlyCommission: projectedCommission,
+          incrementalCommission: commissionRound2(projectedCommission - priorCommission),
         },
       });
     },
@@ -4429,15 +4689,24 @@ export const api = {
       const approved = db.commissions.filter((item) => item.status === 'APPROVED' && commissionMonth(item.payrollMonth) === month);
       const reps = new Map();
       approved.forEach((item) => {
-        const current = reps.get(item.salesRepId) || { salesRepId: item.salesRepId, salesRepName: item.salesRepName, commissionableBase: 0 };
-        current.commissionableBase += Number(item.commissionableBase || 0);
+        // Commission redesign calc-refine: accumulate the WEIGHTED actual-received (real cash x
+        // weight_multiplier), not the already-2dp-rounded commissionableBase column — mirrors
+        // CommissionService#payrollReadySummary's RepAccumulator exactly.
+        const current = reps.get(item.salesRepId) || { salesRepId: item.salesRepId, salesRepName: item.salesRepName, weightedActualReceived: 0 };
+        current.weightedActualReceived += Number(item.actualReceived || 0) * Number(item.weightMultiplier || 1);
         reps.set(item.salesRepId, current);
       });
-      const salesReps = [...reps.values()].map((rep) => ({
-        ...rep,
-        commissionableBase: Math.max(0, Number(rep.commissionableBase.toFixed(2))),
-        commissionAmount: progressiveCommission(rep.commissionableBase),
-      }));
+      const salesReps = [...reps.values()].map((rep) => {
+        const safeWeighted = Math.max(0, rep.weightedActualReceived);
+        // Full precision here (not rounded to 2dp) — only the final commission total rounds.
+        const safeBase = calcMonthlyTierBase(safeWeighted);
+        return {
+          salesRepId: rep.salesRepId,
+          salesRepName: rep.salesRepName,
+          commissionableBase: commissionRound2(safeBase),
+          commissionAmount: progressiveCommission(safeBase),
+        };
+      }).sort((a, b) => String(a.salesRepName || '').localeCompare(String(b.salesRepName || ''), 'th'));
       return delay({
         summary: {
           payrollMonth: `${month}-01`,

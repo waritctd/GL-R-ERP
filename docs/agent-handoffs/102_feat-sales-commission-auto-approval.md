@@ -431,3 +431,267 @@ results (there is no typecheck script). Since this is a frontend-only slice with
 yourself adding any new permission check, treat it as an authz change and follow CLAUDE.md's
 "Permission changes must ship evidence" section.
 ```
+
+---
+
+## A3 Slice (2026-07-22) — Frontend
+
+### Task
+Implement the commission-redesign frontend end to end: sales becomes read-only, account gets a new
+"record invoice / create from deal" flow (`POST /api/commissions/from-deal`), sales_manager/ceo get
+a review queue that edits any invoice input (incl. `weightMultiplier`) with a required reason and a
+live recomputed preview, and the mock (`mockApi.js`) is brought into parity with everything Slices
+A1/A2/calc-refine already shipped on the backend but the frontend never got (WHT/overpayment, the
+<50,000 floor, the V81 tier-13 rate, weight-multiplier-aware monthly aggregation, "round only at
+final"). Owner-authorized commission business-logic/UI change per CLAUDE.md's sales/CRM unfreeze.
+
+### Files Changed
+- `frontend/src/features/commissions/commissionCalc.js` (new): the single source of truth for
+  commission math on the frontend — `invoiceCalculation` (VAT-strip formula incl. WHT/overpayment),
+  `monthlyTierBase` (full-precision, divides once), `tierBreakdown`/`progressiveCommission` (13
+  tiers incl. the V81 3.25% tier-13 rate, the <50,000 floor, "round only at final"). Mirrors
+  `CommissionCalculator.java`/`TierConfig.java` exactly (verified against the handoff's own
+  reconciliation table — see Mock-Calc Parity below). Imported by both `mockApi.js` and
+  `CommissionPage.jsx` so the two can never drift from each other.
+- `frontend/src/features/commissions/CommissionPage.jsx` (rewritten): role-based rendering —
+  see UI Differences below. Kept the file's existing conventions (bare `page-stack`/`panel`/
+  `form-grid` shared classes + Tailwind utilities for new markup, `DataTable` with `mobileCard`,
+  `ConfirmDialog`) rather than introducing a new component vocabulary.
+- `frontend/src/api/routes.js`: added `commissions.createFromDeal` route. `ROLE_PERMISSIONS`:
+  added `account` to `canViewCommissions` (route access only — see below), added
+  `canListCommissionRecords` (`sales`/`sales_manager`/`ceo`, mirrors `CommissionController#list`'s
+  `PreAuthorize` exactly — deliberately excludes `account` and `hr`), replaced `canSubmitCommissions`
+  with `canCreateCommissionFromDeal` (`account` only, mirrors `CommissionService.CREATE_FROM_DEAL_ROLES`).
+  `canApproveCommissions`/`canViewPayrollCommissions` unchanged.
+- `frontend/src/api/hrApi.js`: added `commissions.createFromDeal(payload)` (multipart POST, same
+  shape as the existing `create` multipart path plus `ticketId` and no `salesRepId`/`sourceTicketId`
+  — the server always resolves the rep from the deal). Added a comment on `updateDeductions`
+  clarifying `weightMultiplier` rides through the existing generic JSON-body passthrough with no
+  code change needed.
+- `frontend/src/api/mockApi.js`: full parity pass —
+  - `list()`: unchanged (already matched `CommissionController#list`'s `SALES`/`SALES_MANAGER`/`CEO`
+    gate); added a comment pinning that down explicitly.
+  - `create()`: role gate changed `sales,sales_manager,ceo` → `account,sales_manager,ceo`
+    (mirrors `SUBMIT_ROLES`); dropped the now-dead `sales`-zeroing branches; added
+    `withholdingTax`/`overpayment` to the built `invoiceDetails`.
+  - `createFromDeal()` (new): mirrors `CommissionService#createFromDeal` — resolves `salesRepId`
+    from the ticket's `createdById` (never from the payload), the `hasActiveCommissionForTicket`
+    duplicate guard (one live SALE commission per deal), the CLOSED_PAID gate + cross-check
+    snapshot, defaults `grossAmount` from `payableAmount(ticket)` when omitted, and dual-writes an
+    `INVOICE`-type ticket attachment (`mockAttachments`) the same way the real service does, so
+    `hasInvoiceAttachment`/`invoiceOnFile` becomes true from this one upload.
+  - `updateDeductions()`: now accepts and value-or-existing's every invoice field (not just the
+    three deduction fields) plus `weightMultiplier` (clamped to 1/2/3, scoped to only the specific
+    `commissionId`, never shared across a clawback pair — mirrors
+    `CommissionRepository#updateWeightMultiplier` being keyed on `commission_id` vs. the amount
+    fields keying on `invoice_id`), and now requires a non-blank `reason` (400 otherwise) —
+    mirrors `UpdateCommissionDeductionsRequest`'s `@NotBlank reason`.
+  - `clawback()`: unchanged logic, but now correctly carries `weightMultiplier` over from the
+    original via the existing `structuredClone(original)` spread (no code change needed — added a
+    comment explaining why this already mirrors the calc-refine clawback fix).
+  - `simulate()`/`payrollReady()`: rewritten to aggregate `SUM(actualReceived * weightMultiplier)`
+    and divide once via `calcMonthlyTierBase`, instead of summing already-2dp `commissionableBase`
+    rows — mirrors `CommissionService#simulate`/`#payrollReadySummary` exactly.
+  - `invoiceCalculation`/`progressiveCommission` local functions replaced with re-exports of the
+    shared `commissionCalc.js` implementation (see above).
+- `frontend/src/App.test.jsx`: updated the mocked `ROLE_PERMISSIONS` fixture to match the renamed/
+  added keys (`canListCommissionRecords`, `canCreateCommissionFromDeal`); no route-guard test
+  actually exercises `/commissions`, so this is cosmetic-but-accurate, not a behavior change.
+- `frontend/src/api/contract.test.js`: unchanged — the existing generic method-surface tests cover
+  `createFromDeal` automatically since it now exists symmetrically on both `hrApi` and `mockApi`.
+
+### New API Methods
+- `hrApi.commissions.createFromDeal(payload)` / `mockApi.commissions.createFromDeal(payload)` —
+  multipart POST to `/api/commissions/from-deal`. `payload`: `ticketId` (required), `invoiceNumber`,
+  `invoiceDate`, `invoiceAttachment` (required), `grossAmount` (optional — defaults from the deal),
+  `bankFees`/`suspenseVat`/`transportFee`/`cutFee`/`shortfall`/`withholdingTax`/`overpayment`
+  (optional, default 0).
+
+### How Each Role's UI Differs
+- **sales** (read-only): sees only their own commissions (server-scoped), by payroll month, with
+  totals. No create/edit/approve controls anywhere — the `actions` table column is omitted
+  entirely for this role (not just hidden-but-present). Each row has a "ดูรายละเอียดการคำนวณ"
+  toggle that expands a waterfall (gross → each deduction incl. WHT → actualReceived → ÷1.07 →
+  commissionableBase, weight-multiplier badge when >1, status + manager/CEO approver names/dates).
+  Sales-only "ขั้นบันไดค่าคอมเดือนนี้ (ประมาณการ)" panel above the table shows the tier-by-tier
+  breakdown for the currently-visible (own) records' weighted monthly base — explicitly labeled
+  "ประมาณการ" (estimate) since HR's payroll run is the authoritative source, not this client-side
+  mirror. Verified live in the mock: a 2x-weighted ฿583,177.57 base → ฿1,166,355.14 weighted base →
+  ฿8,329.44 commission, matching `commissionCalc.js` computed independently via a Node script.
+- **account**: a "record invoice / create from deal" panel, not a commission list (the real backend
+  has no `GET /api/commissions` route for `account` at all — see `canListCommissionRecords`
+  in routes.js — so no list is fetched for this role). Flow: enter a Ticket ID → "โหลดข้อมูลดีล"
+  fetches `api.tickets.get(ticketId)` directly (unaffected by the account-role *list* scoping — see
+  Known Risks) → verifies `salesStage === 'CLOSED_PAID'` client-side (also re-verified server-side)
+  → prefills Gross Amount from the deal's `amountPayable` (still editable) → manual entry of
+  invoiceNumber/invoiceDate/all deduction fields (incl. WHT/overpayment) → upload the tax invoice →
+  submit calls `createFromDeal`. A best-effort `<select>` of `salesStage=CLOSED_PAID` tickets is
+  also offered (via the existing `tickets.list` endpoint) for when it happens to be populated. A
+  session-only "บันทึกล่าสุดในเซสชันนี้" list echoes back what was just created (no `GET` needed).
+- **sales_manager / ceo**: the same records table as before (all reps, not self-scoped), now with
+  an added expand-detail toggle (same waterfall component as sales) and an "แก้ไขค่าหัก" (edit)
+  panel that exposes every invoice input — grossAmount, bankFees, suspenseVat, transportFee,
+  cutFee, shortfall, withholdingTax, overpayment — plus a `weightMultiplier` select (1/2 เท่า with
+  no caveat, 3 เท่า flagged "ยังไม่ยืนยันนโยบาย" per the calc-refine 3x-unconfirmed note), a live
+  recomputed ยอดรับจริง/ฐานค่าคอม preview (client-side `invoiceCalculation`, purely for display —
+  the server always recomputes independently and authoritatively), and a required "เหตุผลในการแก้ไข"
+  reason field (Save is disabled until non-empty; this closes a **pre-existing bug** — the old inline
+  edit panel called `updateDeductions` without ever sending a `reason`, which the real backend has
+  required with `@NotBlank` since Slice A2, so every prior manager edit would have 400'd against the
+  real Java service even though it worked against the un-updated mock). Approve/reject/clawback
+  unchanged in behavior (manager approves SUBMITTED→MANAGER_APPROVED, CEO approves
+  MANAGER_APPROVED→APPROVED, clawback only on APPROVED SALE records) — confirmed working live: a
+  manager-approved-then-CEO-approved record correctly shows both approver names/dates and the
+  weight badge throughout.
+- **hr** (`canViewPayrollCommissions`): unchanged `PayrollSummary` view (payroll-ready totals per
+  rep for the month) — now fed by the corrected weighted/full-precision `payrollReady` aggregation.
+
+### Mock-Calc Parity Note
+`commissionCalc.js` was verified independently (Node script, not just visual inspection) against
+every number in the calc-refine section's reconciliation table before wiring it into the mock:
+`progressiveCommission(801204) === 4262.04`, `progressiveCommission(1800079.50) === 18501.59`,
+`progressiveCommission(3587668.62) === 67849.23` (exercises the >3,000,000 V81 tier), plus the
+<50,000 floor (`49999` → `0`, `50000` → `125`). All matched exactly. Live end-to-end verification in
+the running mock app (see Test/Build Results) additionally reproduced a 2x-weighted scenario
+(583,177.57 × 2 = 1,166,355.14 weighted base → 8,329.44 commission) with the UI and an independent
+Node computation agreeing to the cent. Per CLAUDE.md: this is the calculation being mirrored
+faithfully, not an authorization claim — the mock's role gates approximate the Java service and are
+not authoritative (see Authz Evidence below).
+
+### Commands Run
+```bash
+cd frontend && npm run lint
+cd frontend && npm test
+cd frontend && npm run build
+```
+Plus live manual verification against a real running `VITE_USE_MOCKS=true` dev server (see below).
+
+### Test / Build Results
+- **Lint**: PASS — 0 errors, 1 warning (`PayrollPage.jsx:217`, pre-existing, unrelated to this
+  slice — not introduced or touched here).
+- **Test**: PASS — `Test Files 48 passed (48)`, `Tests 418 passed (418)`, including
+  `src/api/contract.test.js` (method-surface parity, `createFromDeal` covered automatically) and
+  `src/app/permissions.test.js` (26 tests, unaffected by the `ROLE_PERMISSIONS` key changes since
+  none of those 26 cases touch the commission keys). No `CommissionPage.test.jsx` exists in this
+  repo to update (confirmed via search before starting).
+- **Build**: PASS — `vite build` succeeds, `CommissionPage-*.js` chunk 35.03 kB (8.32 kB gzip).
+- **Live manual verification** (Browser pane, `VITE_USE_MOCKS=true`, a temporary standalone dev
+  server on port 5201 since the shared `frontend-mock` port 5200 was already running another
+  session's stale build — never disturbed that session): logged in as **account**, looked up real
+  demo ticket 14 (IconSiam Riverside, CLOSED_PAID, ฿624,000 payable, no prior invoice), created a
+  commission via `createFromDeal` (verified the resulting `actualReceived`/`commissionableBase` =
+  624,000 / 624,000÷1.07 = 583,177.57 exactly) → logged in as **sales_manager**, saw it in the
+  review queue, set `weightMultiplier=2` with a reason, saved (verified the live preview matched
+  the eventual persisted value), approved it (SUBMITTED→MANAGER_APPROVED) → logged in as **ceo**,
+  approved it again (→APPROVED) → logged in as **sales** (the deal's actual owner, คุณสมหมาย
+  ขายดี), confirmed the read-only view: no action buttons, correct waterfall, correct weight badge,
+  correct monthly tier panel (1,166,355.14 base → 8,329.44 commission, independently verified via
+  Node). Also confirmed the mobile card layout (375×812) renders the same information with a
+  working expand toggle. Two real bugs were caught and fixed during this pass — see Known Risks/
+  Bugs Fixed below; both are now covered by the fact that this exact flow was replayed successfully
+  after each fix.
+
+### Authz Evidence
+**Unverified beyond mock** — per CLAUDE.md, this is explicitly called out rather than glossed over.
+This slice is UI-only; it does not add, remove, or change any backend role gate (all
+`@PreAuthorize`/`requireRole` decisions were already shipped and tested in Slices A1/A2/calc-refine,
+which this slice's handoff sections document as having real-DB integration test coverage — see
+those sections above). What this slice *does* do is make the **frontend** correctly reflect gates
+that already existed in the Java service (e.g., sales no longer gets a submit UI; account gets a
+create-from-deal UI restricted to what `createFromDeal`'s `@PreAuthorize("hasRole('ACCOUNT')")`
+already enforced server-side). The manual verification above was against `VITE_USE_MOCKS=true`
+only — it proves the UI *calls the right endpoints with the right roles and renders correctly*, not
+that the real Java service enforces them (that was already proven in A1/A2/calc-refine's own
+real-Postgres integration tests, not repeated here). No new permission check was added anywhere in
+this slice, so CLAUDE.md's "Permission changes must ship evidence" real-DB-test requirement does not
+apply here — but if any future slice adds one, that discipline must restart.
+
+### Known Risks / Bugs Fixed During Implementation
+- **Fixed: `api.tickets.get()` response unwrapping.** The account ticket-lookup flow originally read
+  `response.summary` directly; both the mock and the real `TicketController#get` actually return
+  `{ ticket: { summary: {...}, ... } }` (`TicketResponses.TicketDetailResponse`). Caught live via
+  manual testing (`Cannot read properties of undefined (reading 'salesStage')`), fixed to
+  `response.ticket?.summary` with a graceful "ไม่พบดีลนี้" fallback if still absent.
+  **This shape is shared with the real backend, not mock-specific — confirmed by reading
+  `TicketController.java`/`TicketResponses.java` directly, not inferred from the mock.**
+- **Fixed: nested `<button>` accessibility bug.** An earlier draft used `DataTable`'s `onRowClick`
+  to toggle the calc-detail panel, which makes `DataTable` render every row as a `<button>` — but
+  the `actions` column (sales_manager/ceo) already renders several `<button>` icon-buttons inside
+  each row, so this would have nested buttons (invalid HTML, unreliable click semantics). Fixed by
+  using a dedicated expand-toggle column/button instead of `onRowClick`, keeping `renderExpanded`
+  (which does not depend on `onRowClick`). Caught in code review before manual testing, not by a
+  failing test — there is no automated test coverage for this specific DOM-nesting class of bug in
+  this repo; worth keeping in mind for any future `DataTable` + `renderExpanded` + actions-column
+  combination.
+- **Account's ticket-list scoping quirk (pre-existing, not fixed, worked around in the UI):**
+  `TicketRepository#appendRoleScope` (real backend) / `accountListScopeIncludes` (mock) narrows
+  `GET /api/tickets` for the `account` role to deals with money still *pending* (`payment_status IN
+  (DEPOSIT_NOTICE_ISSUED, AWAITING_FINAL_PAYMENT)` or overdue). A `CLOSED_PAID` deal — final payment
+  already confirmed — normally falls *out* of that scope, which is exactly the deal account now
+  needs to record an invoice for post-A2. This is a **real interaction gap between a pre-existing
+  Phase B feature and the new A2 trigger**, not something this UI-only slice is authorized to fix
+  (backend Java is explicitly out of scope for this task, and the underlying repository/service
+  logic predates this slice). Worked around by making the account "record invoice" flow primarily a
+  direct ticket-ID lookup (`api.tickets.get`, which has no such scoping — confirmed by reading
+  `TicketService#requireViewAccess`, which only checks `VIEWER_ROLES` + sales ownership, not the
+  list-scope predicate) rather than depending on the scoped list dropdown, which is offered only as
+  a best-effort convenience. **Flagging for a future slice**: either loosen
+  `appendRoleScope`/`accountListScopeIncludes` to also include `CLOSED_PAID` deals without an
+  invoice on file, or accept that ticket-ID lookup (e.g. via a deep link from a future
+  TicketDetailPage "record invoice" CTA — not built here, out of scope) is the intended primary
+  path. The `/commissions?ticketId=NN` query param is already wired up for that future deep link.
+- **3x weight multiplier**: exposed in the manager-review `<select>` with an explicit "ยังไม่ยืนยัน
+  นโยบาย" (policy not yet confirmed) badge/hint whenever selected — per the calc-refine slice's
+  explicit instruction not to present it as a routine option. Not blocked from being set (matches
+  backend, which also only flags rather than blocks it).
+- **No simulator UI in this slice**: the pre-existing `POST /api/commissions/simulator` endpoint
+  (`hrApi`/`mockApi` `commissions.simulate`) is untouched and still callable, but no control in the
+  new `CommissionPage.jsx` triggers it. Reasoning: its real-backend role gate is
+  `SALES`/`SALES_MANAGER`/`CEO` — **not** `account` — so wiring it into account's create-from-deal
+  form (the only role with an actual "create" UI left after this slice) would have been calling an
+  endpoint account has no access to. Sales no longer submits, so the simulator's original use case
+  (preview before you submit) no longer applies to any role with both a submit UI and simulator
+  access in this redesign. Left as an unused-but-present API method (contract-test-covered) rather
+  than removed, since removing it would be an unrelated regression to a still-valid backend
+  capability.
+- **No manual/unlinked commission-creation UI for sales_manager/ceo**: `create()`
+  (JSON/multipart submit, still allowed server-side for `account`/`sales_manager`/`ceo` per
+  `SUBMIT_ROLES`) has no UI trigger in this slice — the task's role-by-role scope only specified
+  account's create-from-deal flow, a sales_manager review queue, and ceo approval, none of which
+  described a manual-entry creation form. If sales_manager/ceo need to create an unlinked/manual
+  commission record (e.g. a correction), that capability exists on the backend and in both
+  `hrApi`/`mockApi` but has no UI path today — flagged as a possible follow-up, not built here since
+  it wasn't in scope.
+
+### Things Not Finished
+- The account ticket-list scoping gap above (needs a product decision: loosen the backend scope, or
+  formalize the ticket-ID-lookup-first UX with a real deep-link entry point from a future
+  TicketDetailPage "record invoice" action).
+- A manual/unlinked commission-creation UI for sales_manager/ceo, if wanted (see above).
+- Track B (weekly-report elimination) — see Exact Next Prompt.
+
+### Recommended Next Agent
+Claude Opus review (per this repo's Sonnet-implements/Opus-reviews loop) of the full A3 slice —
+particularly the mock/backend calc parity claims and the account ticket-lookup workaround — before
+this branch merges, then Track B implementation.
+
+### Exact Next Prompt
+```
+Implement Track B of the commission redesign in GL-R-ERP: eliminate the weekly commission report
+(or whatever manual/spreadsheet process A3's real-time commission pipeline was meant to replace —
+check with the owner for the exact current weekly-report mechanism and what "elimination" means
+concretely: a scheduled export, a dashboard, or simply confirming the new pipeline is now the
+system of record and the manual report can stop). Branch off origin/main (rebase first — check this
+handoff for whether feat/sales-commission-auto-approval has merged) or stack on
+feat/sales-commission-auto-approval if it has not yet merged.
+
+Before writing anything: read this handoff (102) in full, especially the A3 section's Known Risks
+(the account ticket-list scoping gap in particular — Track B work may be a natural place to also
+fix TicketRepository#appendRoleScope's account scope to include CLOSED_PAID deals without an
+invoice on file, closing that gap properly with a real-DB test, if the owner agrees it's in scope).
+
+This continues to be an OWNER-AUTHORIZED commission-adjacent change. Per CLAUDE.md: if it touches
+any role/scope decision, ship a real-DB integration test through the real Java service (see
+CLAUDE.md's "Permission changes must ship evidence"); run `cd frontend && npm run lint && npm test
+&& npm run build` and `cd backend && ./mvnw -B clean verify` and record exact results.
+```
