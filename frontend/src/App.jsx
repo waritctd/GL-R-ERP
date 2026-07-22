@@ -20,6 +20,8 @@ const ChangePasswordModal = lazy(() => import('./features/auth/ChangePasswordMod
 const HrDashboard = lazy(() => import('./features/dashboard/HrDashboard.jsx').then(toDefault('HrDashboard')));
 const EmployeeDashboard = lazy(() => import('./features/dashboard/EmployeeDashboard.jsx').then(toDefault('EmployeeDashboard')));
 const TicketDashboard = lazy(() => import('./features/dashboard/TicketDashboard.jsx').then(toDefault('TicketDashboard')));
+// Role-scoped views: Sales Manager's team-cockpit Overview (landing).
+const ManagerOverview = lazy(() => import('./features/dashboard/ManagerOverview.jsx').then(toDefault('ManagerOverview')));
 const EmployeeListPage = lazy(() => import('./features/employees/EmployeeListPage.jsx').then(toDefault('EmployeeListPage')));
 const EmployeeDetailPage = lazy(() => import('./features/employees/EmployeeDetailPage.jsx').then(toDefault('EmployeeDetailPage')));
 const ProfileRequestsPage = lazy(() => import('./features/profileRequests/ProfileRequestsPage.jsx').then(toDefault('ProfileRequestsPage')));
@@ -202,13 +204,23 @@ export function App() {
           <Route
             path="/"
             element={(
-              <EmployeeDashboard
-                user={user}
-                employee={currentEmployee}
-                profileRequests={dashboardRequests}
-                dashboardSummary={dashboardSummary}
-                showToast={showToast}
-              />
+              // Role-scoped views: each role's landing branches off `/` to its own
+              // Overview instead of the generic EmployeeDashboard. Sales Manager
+              // is one entry in what generalizes into a role -> Overview map as
+              // more roles ship their own (see docs/role-scoped-views.md) —
+              // degrades to EmployeeDashboard whenever SALES_ENABLED is off, same
+              // as every other sales-gated surface in this file.
+              user.role === 'sales_manager' && SALES_ENABLED ? (
+                <ManagerOverview user={user} employee={currentEmployee} showToast={showToast} />
+              ) : (
+                <EmployeeDashboard
+                  user={user}
+                  employee={currentEmployee}
+                  profileRequests={dashboardRequests}
+                  dashboardSummary={dashboardSummary}
+                  showToast={showToast}
+                />
+              )
             )}
           />
 
