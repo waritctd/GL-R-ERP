@@ -12,7 +12,10 @@ public class AppProperties {
     private final Auth auth = new Auth();
     private final Leave leave = new Leave();
     private final Overtime overtime = new Overtime();
+    private final SpecialMoney specialMoney = new SpecialMoney();
     private final Bot bot = new Bot();
+    private final FactoryQuoteDispatch factoryQuoteDispatch = new FactoryQuoteDispatch();
+    private final QuotationExpiry quotationExpiry = new QuotationExpiry();
 
     public Cors getCors() {
         return cors;
@@ -38,8 +41,20 @@ public class AppProperties {
         return overtime;
     }
 
+    public SpecialMoney getSpecialMoney() {
+        return specialMoney;
+    }
+
     public Bot getBot() {
         return bot;
+    }
+
+    public FactoryQuoteDispatch getFactoryQuoteDispatch() {
+        return factoryQuoteDispatch;
+    }
+
+    public QuotationExpiry getQuotationExpiry() {
+        return quotationExpiry;
     }
 
     public static class Bot {
@@ -198,14 +213,98 @@ public class AppProperties {
     }
 
     public static class Overtime {
-        private int advanceNoticeDays = 3;
+        /**
+         * How far back a request may reach. The advance-notice rule it replaced was removed on CEO
+         * instruction: overtime may now be filed same-day or retroactively, provided the reason
+         * explains why. This bound only stops claims arriving so late they can no longer be paid.
+         */
+        private int retroactiveWindowDays = 60;
 
-        public int getAdvanceNoticeDays() {
-            return advanceNoticeDays;
+        public int getRetroactiveWindowDays() {
+            return retroactiveWindowDays;
         }
 
-        public void setAdvanceNoticeDays(int advanceNoticeDays) {
-            this.advanceNoticeDays = advanceNoticeDays;
+        public void setRetroactiveWindowDays(int retroactiveWindowDays) {
+            this.retroactiveWindowDays = retroactiveWindowDays;
+        }
+    }
+
+    /**
+     * Tuning for {@code FactoryQuoteEmailDispatchWorker}, the background outbox worker that sends
+     * factory quote request emails asynchronously (see V67).
+     */
+    public static class FactoryQuoteDispatch {
+        /** How often the worker polls for claimable dispatch rows. */
+        private long pollIntervalMs = 5000;
+        /**
+         * How long a claim on a SENDING row is honoured before another worker tick may reclaim it
+         * as stale (the fix for a worker crashing between claim and finalize).
+         */
+        private int reclaimTimeoutSeconds = 120;
+        /** Attempts beyond this are never reclaimed again; the row is left FAILED permanently. */
+        private int maxAttempts = 8;
+        /** Backoff unit: next_attempt_at = now() + attemptCount * this, after a failed attempt. */
+        private int backoffBaseSeconds = 30;
+        /** Rows claimed per worker tick. */
+        private int batchSize = 20;
+
+        public long getPollIntervalMs() {
+            return pollIntervalMs;
+        }
+
+        public void setPollIntervalMs(long pollIntervalMs) {
+            this.pollIntervalMs = pollIntervalMs;
+        }
+
+        public int getReclaimTimeoutSeconds() {
+            return reclaimTimeoutSeconds;
+        }
+
+        public void setReclaimTimeoutSeconds(int reclaimTimeoutSeconds) {
+            this.reclaimTimeoutSeconds = reclaimTimeoutSeconds;
+        }
+
+        public int getMaxAttempts() {
+            return maxAttempts;
+        }
+
+        public void setMaxAttempts(int maxAttempts) {
+            this.maxAttempts = maxAttempts;
+        }
+
+        public int getBackoffBaseSeconds() {
+            return backoffBaseSeconds;
+        }
+
+        public void setBackoffBaseSeconds(int backoffBaseSeconds) {
+            this.backoffBaseSeconds = backoffBaseSeconds;
+        }
+
+        public int getBatchSize() {
+            return batchSize;
+        }
+
+        public void setBatchSize(int batchSize) {
+            this.batchSize = batchSize;
+        }
+    }
+
+    /**
+     * Tuning for {@code QuotationExpiryWorker} (Step 5, V75) — a small scheduled sweep that flips
+     * ISSUED customer quotations whose validity_date has passed to EXPIRED. Unlike
+     * {@link FactoryQuoteDispatch}, this isn't calling an external system, so it needs no
+     * claim/reclaim/backoff — a single guarded UPDATE on each tick is sufficient.
+     */
+    public static class QuotationExpiry {
+        /** How often the worker sweeps for overdue ISSUED quotations. */
+        private long sweepIntervalMs = 3_600_000;
+
+        public long getSweepIntervalMs() {
+            return sweepIntervalMs;
+        }
+
+        public void setSweepIntervalMs(long sweepIntervalMs) {
+            this.sweepIntervalMs = sweepIntervalMs;
         }
     }
 
@@ -224,6 +323,24 @@ public class AppProperties {
 
         public void setSeedEmployeeCodePasswords(boolean seedEmployeeCodePasswords) {
             this.seedEmployeeCodePasswords = seedEmployeeCodePasswords;
+        }
+    }
+
+    public static class SpecialMoney {
+        /**
+         * The 25th-of-month payroll cutoff: a special-money request approved on/before this day of
+         * the month lands in that same month's payroll_month; approved after, it rolls to next
+         * month. See {@code SpecialMoneyService#ceoApprove} for why it then rolls further forward
+         * past any already-PROCESSED month.
+         */
+        private int payrollCutoffDay = 25;
+
+        public int getPayrollCutoffDay() {
+            return payrollCutoffDay;
+        }
+
+        public void setPayrollCutoffDay(int payrollCutoffDay) {
+            this.payrollCutoffDay = payrollCutoffDay;
         }
     }
 

@@ -63,7 +63,7 @@ function makeItemSchema(rowNumber) {
 
 const customerRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกบริษัท/ลูกค้า');
 // Mirrors TicketService.create: every new deal belongs to a โครงการ.
-const projectRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกโครงการ (1 ดีล = 1 ใบขอราคา ภายใต้โครงการ)');
+const projectRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกโครงการ (1 ดีล = 1 Ticket ภายใต้โครงการ)');
 
 /**
  * Validates the whole form and returns every invalid field, plus `order`:
@@ -651,7 +651,14 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
         {/* ── Section 2: Items ── */}
         <div className="span-2">
-          <p style={{ margin: '0 0 10px', fontWeight: 700, fontSize: 13 }}>รายการสินค้า (ไม่บังคับ — เพิ่มทีหลังได้)</p>
+          <p style={{ margin: '0 0 4px', fontWeight: 700, fontSize: 13 }}>รายการสินค้า (ไม่บังคับ — เพิ่มทีหลังได้)</p>
+          {/* Commit 6: products added here are only preliminary — Import never
+              sees them until a pricing request is created (from the deal page)
+              and submitted against this ticket (see PricingRequestPanel /
+              TicketService.create, commit 5). */}
+          <p style={{ margin: '0 0 10px', fontSize: 12, color: '#64748b' }}>
+            รายการที่เพิ่มตรงนี้เป็นข้อมูลเบื้องต้นของดีลเท่านั้น — ฝ่ายนำเข้าจะเห็นก็ต่อเมื่อสร้างใบขอราคาจากหน้าดีลแล้วส่งให้ฝ่ายนำเข้าเท่านั้น
+          </p>
           {items.map((item, index) => (
             <div key={index} style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: '12px 14px', marginBottom: 10, background: '#f8fafc', position: 'relative' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>

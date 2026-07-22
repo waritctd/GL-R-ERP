@@ -1,0 +1,76 @@
+package th.co.glr.hr.pricingrequest;
+
+import java.util.Set;
+
+public final class PricingRequestEventKind {
+    public static final String PRICING_REQUEST_CREATED   = "PRICING_REQUEST_CREATED";
+    public static final String PRICING_REQUEST_UPDATED    = "PRICING_REQUEST_UPDATED";
+    public static final String PRICING_REQUEST_SUBMITTED  = "PRICING_REQUEST_SUBMITTED";
+    public static final String PRICING_REQUEST_PICKED_UP  = "PRICING_REQUEST_PICKED_UP";
+    public static final String MORE_INFO_REQUESTED        = "MORE_INFO_REQUESTED";
+    public static final String MORE_INFO_RESPONDED        = "MORE_INFO_RESPONDED";
+    public static final String PRICING_REQUEST_CANCELLED  = "PRICING_REQUEST_CANCELLED";
+    public static final String PRICING_REQUEST_REVISED    = "PRICING_REQUEST_REVISED";
+    public static final String FACTORY_EMAIL_READY        = "FACTORY_EMAIL_READY";
+    public static final String FACTORY_EMAIL_SENT         = "FACTORY_EMAIL_SENT";
+    public static final String FACTORY_RESPONSE_RECEIVED  = "FACTORY_RESPONSE_RECEIVED";
+    public static final String FACTORY_NEGOTIATION_STARTED = "FACTORY_NEGOTIATION_STARTED";
+    public static final String FACTORY_RESPONSE_READY_FOR_COSTING = "FACTORY_RESPONSE_READY_FOR_COSTING";
+    public static final String FACTORY_RESPONSE_REVISED   = "FACTORY_RESPONSE_REVISED";
+    public static final String FACTORY_NOT_AVAILABLE      = "FACTORY_NOT_AVAILABLE";
+    public static final String PRICING_COSTING_STARTED    = "PRICING_COSTING_STARTED";
+    public static final String PRICING_COSTING_CALCULATED = "PRICING_COSTING_CALCULATED";
+    public static final String PRICING_COSTING_SUBMITTED  = "PRICING_COSTING_SUBMITTED";
+    // Step 3: CEO Selling Price Decision.
+    public static final String PRICING_DECISION_STARTED   = "PRICING_DECISION_STARTED";
+    public static final String PRICING_DECISION_UPDATED   = "PRICING_DECISION_UPDATED";
+    public static final String PRICING_DECISION_APPROVED  = "PRICING_DECISION_APPROVED";
+    public static final String PRICING_DECISION_RETURNED  = "PRICING_DECISION_RETURNED";
+    // Step 4: Customer Quotation Generation and Issuance.
+    public static final String CUSTOMER_QUOTATION_CREATED  = "CUSTOMER_QUOTATION_CREATED";
+    public static final String CUSTOMER_QUOTATION_UPDATED  = "CUSTOMER_QUOTATION_UPDATED";
+    public static final String CUSTOMER_QUOTATION_ISSUED   = "CUSTOMER_QUOTATION_ISSUED";
+    public static final String CUSTOMER_QUOTATION_CANCELLED = "CUSTOMER_QUOTATION_CANCELLED";
+    public static final String CUSTOMER_QUOTATION_REVISED  = "CUSTOMER_QUOTATION_REVISED";
+    // Step 5: Customer Decision and Commercial Revisions.
+    public static final String CUSTOMER_QUOTATION_ACCEPTED  = "CUSTOMER_QUOTATION_ACCEPTED";
+    public static final String CUSTOMER_QUOTATION_REJECTED  = "CUSTOMER_QUOTATION_REJECTED";
+    public static final String CUSTOMER_QUOTATION_REVISION_REQUESTED = "CUSTOMER_QUOTATION_REVISION_REQUESTED";
+    // Sweep-only (QuotationExpiryWorker) — never emitted by a client-driven recordOutcome call.
+    public static final String CUSTOMER_QUOTATION_EXPIRED   = "CUSTOMER_QUOTATION_EXPIRED";
+    // Step 6: Deposit, Payment, and Order Confirmation.
+    public static final String ORDER_CONFIRMED               = "ORDER_CONFIRMED";
+    public static final String DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION = "DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION";
+    // Step 7: Factory Purchase Order and Import Execution.
+    public static final String FACTORY_PO_CREATED             = "FACTORY_PO_CREATED";
+    public static final String FACTORY_PO_PROFORMA_RECORDED   = "FACTORY_PO_PROFORMA_RECORDED";
+    public static final String FACTORY_PO_SHIPPING_RECORDED   = "FACTORY_PO_SHIPPING_RECORDED";
+    public static final String FACTORY_PO_GOODS_RECEIVED      = "FACTORY_PO_GOODS_RECEIVED";
+    public static final String FACTORY_PO_CANCELLED           = "FACTORY_PO_CANCELLED";
+    // Step 8: Receiving, Inventory Allocation, and Delivery. Logged by
+    // OrderConfirmationService#reconcileTicketItems the first time confirmOrder actually has to
+    // change/add a sales.ticket_item row to match this pricing request's own settled quantities.
+    public static final String TICKET_ITEMS_RECONCILED        = "TICKET_ITEMS_RECONCILED";
+
+    public static final Set<String> VALUES = Set.of(
+        PRICING_REQUEST_CREATED, PRICING_REQUEST_UPDATED, PRICING_REQUEST_SUBMITTED,
+        PRICING_REQUEST_PICKED_UP, MORE_INFO_REQUESTED, MORE_INFO_RESPONDED,
+        PRICING_REQUEST_CANCELLED, PRICING_REQUEST_REVISED, FACTORY_EMAIL_READY, FACTORY_EMAIL_SENT,
+        FACTORY_RESPONSE_RECEIVED, FACTORY_NEGOTIATION_STARTED,
+        FACTORY_RESPONSE_READY_FOR_COSTING, FACTORY_RESPONSE_REVISED,
+        FACTORY_NOT_AVAILABLE, PRICING_COSTING_STARTED, PRICING_COSTING_CALCULATED,
+        PRICING_COSTING_SUBMITTED, PRICING_DECISION_STARTED, PRICING_DECISION_UPDATED,
+        PRICING_DECISION_APPROVED, PRICING_DECISION_RETURNED,
+        CUSTOMER_QUOTATION_CREATED, CUSTOMER_QUOTATION_UPDATED, CUSTOMER_QUOTATION_ISSUED,
+        CUSTOMER_QUOTATION_CANCELLED, CUSTOMER_QUOTATION_REVISED, CUSTOMER_QUOTATION_ACCEPTED,
+        CUSTOMER_QUOTATION_REJECTED, CUSTOMER_QUOTATION_REVISION_REQUESTED, CUSTOMER_QUOTATION_EXPIRED,
+        ORDER_CONFIRMED, DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION,
+        FACTORY_PO_CREATED, FACTORY_PO_PROFORMA_RECORDED, FACTORY_PO_SHIPPING_RECORDED,
+        FACTORY_PO_GOODS_RECEIVED, FACTORY_PO_CANCELLED, TICKET_ITEMS_RECONCILED);
+
+    public static boolean isValid(String value) {
+        return value != null && VALUES.contains(value);
+    }
+
+    private PricingRequestEventKind() {}
+}

@@ -39,16 +39,42 @@ public class TicketRepository {
                t.lifecycle, t.tender_requirement, t.deposit_policy,
                t.deposit_policy_reason, t.entry_channel,
                t.billing_date, t.due_date, t.credit_term_days,
-               t.last_follow_up_at, t.next_follow_up_at
+               t.last_follow_up_at, t.next_follow_up_at,
+               t.close_confirmed_at,
+               NULLIF(TRIM(CONCAT_WS(' ', ecc.first_name_th, ecc.last_name_th)), '') AS close_confirmed_by_name,
+               t.cancel_reason, t.cancelled_at
           FROM sales.ticket t
           JOIN hr.employee ec ON ec.employee_id = t.created_by
           LEFT JOIN hr.employee ea ON ea.employee_id = t.assigned_to
+          LEFT JOIN hr.employee ecc ON ecc.employee_id = t.close_confirmed_by
           LEFT JOIN sales.ticket_item ti ON ti.ticket_id = t.ticket_id
           LEFT JOIN customers.project p ON p.project_id = t.project_id
           LEFT JOIN customers.contact ct ON ct.contact_id = t.contact_id
         """;
 
     private final NamedParameterJdbcTemplate jdbc;
+
+    // ── Role-scoped list membership (Phase B) ────────────────────────────────
+    // Mirrors frontend/src/features/tickets/salesViewScope.js#dealInScope, which is
+    // presentation-only there ("never a security boundary" per its own doc comment) —
+    // this is the actual enforcement. Applied only when the caller's role is "import"
+    // or "account"; every other viewer role (sales/ceo/sales_manager) is unaffected.
+    //
+    // import: an active (non-terminal, non-DRAFT-only... DRAFT counts as non-terminal
+    // here — see PricingRequestStatus) pricing request exists for the deal, OR the deal
+    // has reached PROCUREMENT or later in the 14-stage pipeline. A closed/lost/cancelled
+    // deal is never in scope, even at a late stage (mirrors dealInScope's `closed` guard).
+    private static final List<String> IMPORT_STAGE_SCOPE =
+        DealStage.ORDER.subList(DealStage.indexOf(DealStage.PROCUREMENT), DealStage.ORDER.size());
+    // Mirrors th.co.glr.hr.pricingrequest.PricingRequestStatus's three terminal values.
+    // Not imported directly to avoid a new ticket-package -> pricingrequest-package
+    // repository dependency for three literals; keep in sync if that enum changes.
+    private static final List<String> PRICING_REQUEST_TERMINAL_STATUSES =
+        List.of("CANCELLED", "SUPERSEDED", "QUOTATION_ACCEPTED");
+    // account: a deposit or final-payment confirmation is awaited, or the deal is
+    // overdue on an outstanding balance. Mirrors TicketEventKind's payment-status values.
+    private static final List<String> ACCOUNT_PENDING_PAYMENT_STATUSES =
+        List.of("DEPOSIT_NOTICE_ISSUED", "AWAITING_FINAL_PAYMENT");
 
     public TicketRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -59,17 +85,36 @@ public class TicketRepository {
     }
 
     public List<TicketSummaryDto> findSummaries(String status, Long createdByFilter, PageRequest page) {
+        return findSummaries(status, null, createdByFilter, null, page);
+    }
+
+    /**
+     * @param salesStage optional {@link DealStage} filter (e.g. {@code CLOSED_PAID}), additive to
+     *                    {@code status} — used by the Step 9 commission "Linked Deal" picker to list
+     *                    only deals that have actually reached final payment.
+     * @param actorRole when {@code "import"} or {@code "account"}, applies that role's list-scoping
+     *                  predicate (see the class-level comment above); any other value (including
+     *                  null) applies no extra filter.
+     */
+    public List<TicketSummaryDto> findSummaries(String status, String salesStage, Long createdByFilter,
+                                                String actorRole, PageRequest page) {
         StringBuilder sql = new StringBuilder(SUMMARY_SELECT).append("""
              WHERE (:status::varchar IS NULL OR t.status = :status)
+               AND (:salesStage::varchar IS NULL OR t.sales_stage = :salesStage)
                AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
-             GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
-                      ea.first_name_th, ea.last_name_th,
-                      p.name, ct.first_name, ct.last_name
-             ORDER BY t.created_at DESC
             """);
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("status", status)
+            .addValue("salesStage", salesStage)
             .addValue("createdBy", createdByFilter);
+        appendRoleScope(sql, params, actorRole);
+        sql.append("""
+             GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
+                      ea.first_name_th, ea.last_name_th,
+                      p.name, ct.first_name, ct.last_name,
+                      ecc.first_name_th, ecc.last_name_th
+             ORDER BY t.created_at DESC
+            """);
         if (page != null) {
             sql.append(" LIMIT :limit OFFSET :offset");
             params.addValue("limit", page.size());
@@ -79,16 +124,67 @@ public class TicketRepository {
     }
 
     public int countSummaries(String status, Long createdByFilter) {
-        Integer total = jdbc.queryForObject("""
+        return countSummaries(status, null, createdByFilter, null);
+    }
+
+    public int countSummaries(String status, String salesStage, Long createdByFilter, String actorRole) {
+        StringBuilder sql = new StringBuilder("""
             SELECT COUNT(*) FROM sales.ticket t
              WHERE (:status::varchar IS NULL OR t.status = :status)
+               AND (:salesStage::varchar IS NULL OR t.sales_stage = :salesStage)
                AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
-            """,
-            new MapSqlParameterSource()
-                .addValue("status", status)
-                .addValue("createdBy", createdByFilter),
-            Integer.class);
+            """);
+        MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("status", status)
+            .addValue("salesStage", salesStage)
+            .addValue("createdBy", createdByFilter);
+        appendRoleScope(sql, params, actorRole);
+        Integer total = jdbc.queryForObject(sql.toString(), params, Integer.class);
         return total == null ? 0 : total;
+    }
+
+    /** Additive WHERE fragment for import/account list-scoping — see the class-level comment. */
+    private void appendRoleScope(StringBuilder sql, MapSqlParameterSource params, String actorRole) {
+        if ("import".equals(actorRole)) {
+            sql.append("""
+                   AND t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED')
+                   AND t.status NOT IN ('closed', 'cancelled')
+                   AND (
+                     EXISTS (
+                       SELECT 1 FROM sales.pricing_request pr
+                        WHERE pr.ticket_id = t.ticket_id
+                          AND pr.status NOT IN (:prTerminalStatuses)
+                     )
+                     OR t.sales_stage IN (:importStages)
+                   )
+                """);
+            params.addValue("prTerminalStatuses", PRICING_REQUEST_TERMINAL_STATUSES);
+            params.addValue("importStages", IMPORT_STAGE_SCOPE);
+        } else if ("account".equals(actorRole)) {
+            sql.append(" AND (t.payment_status IN (:accountPendingStatuses) OR (t.due_date IS NOT NULL AND t.due_date < CURRENT_DATE AND ((")
+               .append(payableAmountSelect("t.ticket_id"))
+               .append(") - (")
+               .append(paidAmountSelect("t.ticket_id"))
+               .append(")) > 0)) ");
+            params.addValue("accountPendingStatuses", ACCOUNT_PENDING_PAYMENT_STATUSES);
+        }
+    }
+
+    /**
+     * Lean accessor for the commission-submission gate (Step 9): resolves just the deal's current
+     * pipeline stage without pulling a full ticket-detail load. Empty means the ticket does not
+     * exist; {@code sales_stage} itself is {@code NOT NULL} (V50), so a present row always yields a
+     * non-empty stage.
+     */
+    public Optional<String> findSalesStage(long ticketId) {
+        try {
+            String stage = jdbc.queryForObject(
+                "SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id",
+                Map.of("id", ticketId), String.class);
+            return Optional.ofNullable(stage);
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
     }
 
     public Optional<TicketDto> findById(long id) {
@@ -122,12 +218,13 @@ public class TicketRepository {
     public long create(CreateTicketRequest request, String code, long actorId, String actorName) {
         String priority = (request.priority() != null && !request.priority().isBlank())
             ? request.priority() : Priority.DEFAULT;
-        // V50 lightweight deal start: a deal created without items begins as a DRAFT
-        // at the lead stage — product items and the price-request flow come later
-        // (editItems then submit). A deal created WITH items enters the price-request
-        // flow immediately, exactly as before.
+        // Every deal begins as a DRAFT at the lead stage, regardless of whether
+        // products were attached at creation time. Items attached here are
+        // preliminary deal products only — pricing does not start until a
+        // PricingRequest is created and submitted against this ticket
+        // (see th.co.glr.hr.pricingrequest.PricingRequestService).
         boolean hasItems = request.items() != null && !request.items().isEmpty();
-        String status = hasItems ? TicketStatus.SUBMITTED : TicketStatus.DRAFT;
+        String status = TicketStatus.DRAFT;
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO sales.ticket
@@ -150,29 +247,39 @@ public class TicketRepository {
                     ? request.entryChannel() : EntryChannel.DESIGNER_LED),
             keyHolder, new String[]{"ticket_id"});
         long ticketId = keyHolder.getKey().longValue();
-        if (hasItems) {
-            insertItems(ticketId, request.items());
-            addEvent(ticketId, actorId, actorName, TicketEventKind.SUBMITTED, null, TicketStatus.SUBMITTED, null);
-        } else {
-            addEvent(ticketId, actorId, actorName, TicketEventKind.CREATED, null, TicketStatus.DRAFT, null);
-        }
+        if (hasItems) insertItems(ticketId, request.items());
+        addEvent(ticketId, actorId, actorName, TicketEventKind.CREATED, null, TicketStatus.DRAFT, null);
         return ticketId;
     }
 
     public void addEvent(long ticketId, long actorId, String actorName,
                          String kind, String fromStatus, String toStatus, String message) {
-        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message, null);
+        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message, null,
+            null, null);
     }
 
     public void addEventWithSnapshot(long ticketId, long actorId, String actorName,
                                      String kind, String fromStatus, String toStatus,
                                      String message, String itemSnapshotJson) {
-        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message, itemSnapshotJson);
+        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message,
+            itemSnapshotJson, null, null);
+    }
+
+    /**
+     * Record an event AND the document it produced (V58), so "which receipt did
+     * this payment event write" is a query rather than a timestamp match.
+     */
+    public void addEventWithDocument(long ticketId, long actorId, String actorName,
+                                     String kind, String fromStatus, String toStatus,
+                                     String message, String documentType, Long documentId) {
+        addEventInternal(ticketId, actorId, actorName, kind, fromStatus, toStatus, message, null,
+            documentType, documentId);
     }
 
     private void addEventInternal(long ticketId, long actorId, String actorName,
                                    String kind, String fromStatus, String toStatus,
-                                   String message, String itemSnapshotJson) {
+                                   String message, String itemSnapshotJson,
+                                   String documentType, Long documentId) {
         if (toStatus != null) {
             // toStatus doubles as the event's "to" timeline label AND, for genuine
             // status transitions, the ticket's new status. Deal-pipeline events
@@ -209,13 +316,17 @@ public class TicketRepository {
             .addValue("kind", kind)
             .addValue("fromStatus", fromStatus)
             .addValue("toStatus", toStatus)
-            .addValue("message", message);
+            .addValue("message", message)
+            .addValue("documentType", documentType)
+            .addValue("documentId", documentId);
 
         if (itemSnapshotJson == null) {
             jdbc.update("""
                 INSERT INTO sales.ticket_event
-                    (ticket_id, actor_id, actor_name, kind, from_status, to_status, message)
-                VALUES (:ticketId, :actorId, :actorName, :kind, :fromStatus, :toStatus, :message)
+                    (ticket_id, actor_id, actor_name, kind, from_status, to_status, message,
+                     related_document_type, related_document_id)
+                VALUES (:ticketId, :actorId, :actorName, :kind, :fromStatus, :toStatus, :message,
+                        :documentType, :documentId)
                 """, params);
             return;
         }
@@ -223,8 +334,10 @@ public class TicketRepository {
         params.addValue("itemSnapshot", itemSnapshotJson);
         jdbc.update("""
             INSERT INTO sales.ticket_event
-                (ticket_id, actor_id, actor_name, kind, from_status, to_status, message, item_snapshot)
-            VALUES (:ticketId, :actorId, :actorName, :kind, :fromStatus, :toStatus, :message, :itemSnapshot::jsonb)
+                (ticket_id, actor_id, actor_name, kind, from_status, to_status, message, item_snapshot,
+                 related_document_type, related_document_id)
+            VALUES (:ticketId, :actorId, :actorName, :kind, :fromStatus, :toStatus, :message,
+                    :itemSnapshot::jsonb, :documentType, :documentId)
             """, params);
     }
 
@@ -301,13 +414,14 @@ public class TicketRepository {
     @Transactional
     public QuotationDto createQuotation(long ticketId, String number, long issuedById, BigDecimal totalAmount) {
         return createQuotation(ticketId, number, issuedById, totalAmount, QuotationRecipient.UNSPECIFIED,
-            null, null, null, null, null);
+            null, null, null, null, null, null, null, null);
     }
 
     @Transactional
     public QuotationDto createQuotation(long ticketId, String number, long issuedById, BigDecimal totalAmount,
                                         String recipientType, String recipientLabel, String paymentTerms,
-                                        String leadTime, String deliveryTerms, LocalDate validityDate) {
+                                        String leadTime, String deliveryTerms, LocalDate validityDate,
+                                        LocalDate offerDate, Integer depositPct, Integer deliveryDays) {
         List<Long> parentIds = jdbc.query("""
             SELECT quotation_id
               FROM sales.quotation
@@ -350,10 +464,10 @@ public class TicketRepository {
             INSERT INTO sales.quotation
                 (ticket_id, number, issued_by, total_amount, currency, quotation_version, doc_status,
                  recipient_type, recipient_label, payment_terms, lead_time, delivery_terms,
-                 validity_date, parent_quotation_id)
+                 validity_date, parent_quotation_id, offer_date, deposit_pct, delivery_days)
             VALUES (:ticketId, :number, :issuedBy, :totalAmount, 'THB', :version, 'ISSUED',
                     :recipientType, :recipientLabel, :paymentTerms, :leadTime, :deliveryTerms,
-                    :validityDate, :parentQuotationId)
+                    :validityDate, :parentQuotationId, :offerDate, :depositPct, :deliveryDays)
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId)
@@ -367,7 +481,10 @@ public class TicketRepository {
                 .addValue("leadTime", leadTime)
                 .addValue("deliveryTerms", deliveryTerms)
                 .addValue("validityDate", validityDate)
-                .addValue("parentQuotationId", parentQuotationId));
+                .addValue("parentQuotationId", parentQuotationId)
+                .addValue("offerDate", offerDate)
+                .addValue("depositPct", depositPct != null ? java.math.BigDecimal.valueOf(depositPct).divide(java.math.BigDecimal.valueOf(100)) : null)
+                .addValue("deliveryDays", deliveryDays));
 
         int versionToFind = nextVersion;
         return findQuotationsByTicketId(ticketId).stream()
@@ -528,7 +645,8 @@ public class TicketRepository {
                  WHERE t.ticket_id = :id
                  GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
                           ea.first_name_th, ea.last_name_th,
-                          p.name, ct.first_name, ct.last_name
+                          p.name, ct.first_name, ct.last_name,
+                          ecc.first_name_th, ecc.last_name_th
                 """,
                 Map.of("id", id), (rs, rowNum) -> mapSummary(rs));
             return Optional.ofNullable(summary).map(this::enrichSummary);
@@ -635,7 +753,8 @@ public class TicketRepository {
                    q.quotation_version, q.doc_status,
                    q.recipient_type, q.recipient_label, q.payment_terms, q.lead_time,
                    q.delivery_terms, q.validity_date, q.sent_at, q.accepted_at,
-                   q.rejected_at, q.parent_quotation_id
+                   q.rejected_at, q.parent_quotation_id,
+                   q.offer_date, q.deposit_pct, q.delivery_days
               FROM sales.quotation q
               JOIN hr.employee e ON e.employee_id = q.issued_by
              WHERE q.ticket_id = :id
@@ -648,6 +767,11 @@ public class TicketRepository {
                 Timestamp rejectedAt = rs.getTimestamp("rejected_at");
                 long parentRaw = rs.getLong("parent_quotation_id");
                 Long parentQuotationId = rs.wasNull() ? null : parentRaw;
+                java.math.BigDecimal depositPctDecimal = rs.getBigDecimal("deposit_pct");
+                Integer depositPct = depositPctDecimal == null ? null
+                    : (int) Math.round(depositPctDecimal.doubleValue() * 100);
+                int deliveryDaysRaw = rs.getInt("delivery_days");
+                Integer deliveryDays = rs.wasNull() ? null : deliveryDaysRaw;
                 return new QuotationDto(
                     rs.getLong("quotation_id"),
                     rs.getLong("ticket_id"),
@@ -669,7 +793,10 @@ public class TicketRepository {
                     sentAt != null ? sentAt.toInstant() : null,
                     acceptedAt != null ? acceptedAt.toInstant() : null,
                     rejectedAt != null ? rejectedAt.toInstant() : null,
-                    parentQuotationId
+                    parentQuotationId,
+                    rs.getObject("offer_date", LocalDate.class),
+                    depositPct,
+                    deliveryDays
                 );
             });
     }
@@ -768,7 +895,13 @@ public class TicketRepository {
             BigDecimal.ZERO,
             BigDecimal.ZERO,
             BigDecimal.ZERO,
-            false
+            false,
+            rs.getTimestamp("close_confirmed_at") != null
+                ? rs.getTimestamp("close_confirmed_at").toInstant() : null,
+            rs.getString("close_confirmed_by_name"),
+            false,
+            rs.getString("cancel_reason"),
+            rs.getTimestamp("cancelled_at") != null ? rs.getTimestamp("cancelled_at").toInstant() : null
         );
     }
 
@@ -792,7 +925,40 @@ public class TicketRepository {
             s.stageUpdatedAt(), s.lifecycle(), s.tenderRequirement(), s.depositPolicy(),
             s.depositPolicyReason(), s.entryChannel(), s.billingDate(), s.dueDate(),
             s.creditTermDays(), s.lastFollowUpAt(), s.nextFollowUpAt(),
-            stage, payable, paid, outstanding, overdue);
+            stage, payable, paid, outstanding, overdue,
+            s.closeConfirmedAt(), s.closeConfirmedByName(), hasInvoiceAttachment(s.id()),
+            s.cancelReason(), s.cancelledAt());
+    }
+
+    /**
+     * An INVOICE document is on file. The invoice is produced by an external
+     * system and uploaded here, so its presence — not its contents — is what the
+     * close gate can check.
+     */
+    public boolean hasInvoiceAttachment(long ticketId) {
+        Integer n = jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.attachment
+             WHERE ticket_id = :id AND attach_type = 'INVOICE'
+            """, Map.of("id", ticketId), Integer.class);
+        return n != null && n > 0;
+    }
+
+    /** ฝ่ายบัญชี signs off that the deal is ready to close; CEO verification still required. */
+    public void confirmClose(long ticketId, long actorId) {
+        jdbc.update("""
+            UPDATE sales.ticket
+               SET close_confirmed_by = :actor, close_confirmed_at = now(), updated_at = now()
+             WHERE ticket_id = :id
+            """, Map.of("id", ticketId, "actor", actorId));
+    }
+
+    /** Withdraw the confirmation so the deal leaves the CEO's verification queue. */
+    public void clearCloseConfirmation(long ticketId) {
+        jdbc.update("""
+            UPDATE sales.ticket
+               SET close_confirmed_by = NULL, close_confirmed_at = NULL, updated_at = now()
+             WHERE ticket_id = :id
+            """, Map.of("id", ticketId));
     }
 
     private String derivePaymentStage(TicketSummaryDto s, BigDecimal payable, BigDecimal paid,
@@ -829,9 +995,36 @@ public class TicketRepository {
                 .addValue("id", ticketId));
     }
 
-    public void clearDealLost(long ticketId) {
+    /** Record why the opportunity went away. Lifecycle is set separately by the caller. */
+    public void cancelDeal(long ticketId, String reason) {
         jdbc.update(
-            "UPDATE sales.ticket SET lost_reason = NULL, lost_at = NULL, lifecycle = :lifecycle, stage_updated_at = now() WHERE ticket_id = :id",
+            "UPDATE sales.ticket SET cancel_reason = :r, cancelled_at = now(), updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource()
+                .addValue("r", reason)
+                .addValue("id", ticketId));
+    }
+
+    /**
+     * Reopen a lost deal — **without erasing why it was lost**.
+     *
+     * This used to null lost_reason/lost_at, leaving a row indistinguishable
+     * from one that was never lost; the reason survived only inside a Thai
+     * free-text event message. The values now stay readable and reopened_at /
+     * reopen_count record that the deal came back, so "reopened deals we
+     * previously lost on PRICE" is a plain query.
+     *
+     * lifecycle=ACTIVE is what makes the deal live again; `lost_reason != null`
+     * no longer implies "currently lost" — check the lifecycle for that.
+     */
+    public void clearDealLost(long ticketId) {
+        jdbc.update("""
+            UPDATE sales.ticket
+               SET lifecycle = :lifecycle,
+                   reopened_at = now(),
+                   reopen_count = reopen_count + 1,
+                   stage_updated_at = now()
+             WHERE ticket_id = :id
+            """,
             new MapSqlParameterSource()
                 .addValue("lifecycle", DealLifecycle.ACTIVE)
                 .addValue("id", ticketId));
@@ -927,11 +1120,8 @@ public class TicketRepository {
     }
 
     public BigDecimal sumPaid(long ticketId) {
-        BigDecimal value = jdbc.queryForObject("""
-            SELECT COALESCE(SUM(CASE WHEN kind = 'ADJUSTMENT' THEN -amount ELSE amount END), 0)
-              FROM sales.payment_receipt
-             WHERE ticket_id = :ticketId
-            """, Map.of("ticketId", ticketId), BigDecimal.class);
+        BigDecimal value = jdbc.queryForObject(paidAmountSelect(":ticketId"),
+            Map.of("ticketId", ticketId), BigDecimal.class);
         return value == null ? BigDecimal.ZERO : value;
     }
 
@@ -946,11 +1136,24 @@ public class TicketRepository {
     }
 
     public BigDecimal payableAmount(long ticketId) {
-        BigDecimal value = jdbc.queryForObject("""
+        BigDecimal value = jdbc.queryForObject(payableAmountSelect(":ticketId"),
+            Map.of("ticketId", ticketId), BigDecimal.class);
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    /**
+     * Full "amount payable" SELECT statement, correlated on {@code ticketIdRef} (either a bind
+     * parameter like {@code ":ticketId"} for a standalone query, or an outer-query column
+     * reference like {@code "t.ticket_id"} for use as a parenthesized scalar subquery inside a
+     * bigger SQL statement — see {@link #appendRoleScope}). Single source of truth so the two
+     * contexts can never drift apart; this is the exact SQL {@link #payableAmount} always ran.
+     */
+    private static String payableAmountSelect(String ticketIdRef) {
+        return """
             SELECT COALESCE(
                 (SELECT q.total_amount
                    FROM sales.quotation q
-                  WHERE q.ticket_id = :ticketId AND q.doc_status = 'ACCEPTED'
+                  WHERE q.ticket_id = %1$s AND q.doc_status = 'ACCEPTED'
                   ORDER BY CASE q.recipient_type
                                WHEN 'BUYER' THEN 0
                                WHEN 'OWNER' THEN 1
@@ -962,7 +1165,7 @@ public class TicketRepository {
                   LIMIT 1),
                 (SELECT q.total_amount
                    FROM sales.quotation q
-                  WHERE q.ticket_id = :ticketId AND q.doc_status IN ('ISSUED','SENT')
+                  WHERE q.ticket_id = %1$s AND q.doc_status IN ('ISSUED','SENT')
                   ORDER BY CASE q.recipient_type
                                WHEN 'BUYER' THEN 0
                                WHEN 'OWNER' THEN 1
@@ -973,16 +1176,24 @@ public class TicketRepository {
                   LIMIT 1),
                 (SELECT d.total_payable
                    FROM sales.deposit_notice d
-                  WHERE d.ticket_id = :ticketId AND d.status = 'ISSUED'
+                  WHERE d.ticket_id = %1$s AND d.status = 'ISSUED'
                   ORDER BY d.version DESC, d.deposit_notice_id DESC
                   LIMIT 1),
                 (SELECT COALESCE(SUM(COALESCE(ti.approved_price, 0) * ti.qty), 0)
                    FROM sales.ticket_item ti
-                  WHERE ti.ticket_id = :ticketId),
+                  WHERE ti.ticket_id = %1$s),
                 0
             )
-            """, Map.of("ticketId", ticketId), BigDecimal.class);
-        return value == null ? BigDecimal.ZERO : value;
+            """.formatted(ticketIdRef);
+    }
+
+    /** Full "amount paid" SELECT statement — see {@link #payableAmountSelect} for the correlation contract. */
+    private static String paidAmountSelect(String ticketIdRef) {
+        return """
+            SELECT COALESCE(SUM(CASE WHEN kind = 'ADJUSTMENT' THEN -amount ELSE amount END), 0)
+              FROM sales.payment_receipt
+             WHERE ticket_id = %1$s
+            """.formatted(ticketIdRef);
     }
 
     public record DepositNoticePaymentInfo(long id, BigDecimal depositAmount, BigDecimal totalPayable) {}
@@ -1045,17 +1256,18 @@ public class TicketRepository {
 
     @Transactional
     public long insertDeliveryRecord(long ticketId, String source, long deliveredBy, String note,
-                                     List<RecordDeliveryRequest.Line> lines) {
+                                     String recipientName, List<RecordDeliveryRequest.Line> lines) {
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
-            INSERT INTO sales.delivery_record (ticket_id, source, delivered_by, note)
-            VALUES (:ticketId, :source, :deliveredBy, :note)
+            INSERT INTO sales.delivery_record (ticket_id, source, delivered_by, note, recipient_name)
+            VALUES (:ticketId, :source, :deliveredBy, :note, :recipientName)
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId)
                 .addValue("source", source)
                 .addValue("deliveredBy", deliveredBy)
-                .addValue("note", note),
+                .addValue("note", note)
+                .addValue("recipientName", recipientName),
             keyHolder,
             new String[] {"delivery_id"});
         long deliveryId = keyHolder.getKey().longValue();
@@ -1090,7 +1302,7 @@ public class TicketRepository {
         List<DeliveryRecordDto> records = jdbc.query("""
             SELECT dr.delivery_id, dr.ticket_id, dr.source, dr.delivered_at, dr.delivered_by,
                    NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS delivered_by_name,
-                   dr.note, dr.created_at
+                   dr.note, dr.recipient_name, dr.created_at
               FROM sales.delivery_record dr
               JOIN hr.employee e ON e.employee_id = dr.delivered_by
              WHERE dr.ticket_id = :ticketId
@@ -1105,6 +1317,7 @@ public class TicketRepository {
                 rs.getLong("delivered_by"),
                 rs.getString("delivered_by_name"),
                 rs.getString("note"),
+                rs.getString("recipient_name"),
                 rs.getTimestamp("created_at").toInstant(),
                 findDeliveryItems(rs.getLong("delivery_id"))
             ));
@@ -1183,6 +1396,26 @@ public class TicketRepository {
         return Boolean.TRUE.equals(value);
     }
 
+    /**
+     * Step 6 (V76): the ONE deliberate bridge write outside the legacy ticket status state
+     * machine — see {@code th.co.glr.hr.orderconfirmation.OrderConfirmationService}'s class
+     * Javadoc for the full reasoning. Since {@link th.co.glr.hr.ticket.TicketService#submit}
+     * permanently 409s (Step 1), a deal driven entirely through the new PricingRequest chain can
+     * never leave {@link TicketStatus#DRAFT} via the legacy flow, so this guarded compare-and-set
+     * (FROM {@code draft} only) can never collide with a live legacy transition. A ticket that
+     * already carries a real legacy status (created before Step 1, or otherwise mid-flow) is
+     * never silently overwritten — 0 rows signals "not eligible", which the caller turns into a
+     * 409 unless the current status already happens to be {@code quotation_issued} (an idempotent
+     * replay of this same bridge).
+     */
+    public int markQuotationIssuedForOrderConfirmation(long ticketId) {
+        return jdbc.update("""
+            UPDATE sales.ticket
+               SET status = 'quotation_issued', updated_at = now()
+             WHERE ticket_id = :id AND status = 'draft'
+            """, Map.of("id", ticketId));
+    }
+
     public void updatePaymentStatus(long ticketId, String paymentStatus) {
         jdbc.update(
             "UPDATE sales.ticket SET payment_status = :s WHERE ticket_id = :id",
@@ -1213,5 +1446,149 @@ public class TicketRepository {
         jdbc.update(
             "UPDATE sales.ticket SET has_edits = :v, updated_at = now() WHERE ticket_id = :id",
             Map.of("id", ticketId, "v", value));
+    }
+
+    // ── Step 8 (V78): ticket_item <-> pricing-request-chain quantity reconciliation ─────────
+    //
+    // sales.ticket_item.qty is set exactly ONCE, at ticket creation (insertItems above), and is
+    // never written by the PricingRequest chain (Steps 1-6 deliberately never touch this table's
+    // legacy price columns — that same discipline turned out to have silently extended to qty
+    // too). A pricing_request_item's own requested_qty can differ from the ticket_item it traces
+    // back to via source_ticket_item_id from the very first submission, and can diverge further
+    // still after a customer-change revision (PricingRequestService.createCustomerChangeRevision
+    // is reachable even from QUOTATION_ACCEPTED — see that method's own status guard). Called
+    // from OrderConfirmationService.confirmOrder, the one bridge point that always runs exactly
+    // once before any delivery machinery (reserveStock/completeDelivery, both keyed on this same
+    // qty column) becomes reachable for the deal.
+
+    /**
+     * Reconciles ONE existing ticket_item row's {@code qty}/{@code qty_sqm} to whatever the
+     * pricing-request chain actually settled on. Scoped to {@code ticketId} as a defense-in-depth
+     * check — {@code sourceTicketItemId} is already validated to belong to the same ticket at
+     * pricing-request-item creation time (see {@code PricingRequestService
+     * .validateSourceItemsBelongToTicket}), so this should never filter anything out in practice.
+     *
+     * <p>Relies on the EXISTING {@code chk_ticket_item_qty_delivered}/
+     * {@code chk_ticket_item_qty_from_stock} CHECK constraints (V54) to refuse — via a thrown
+     * {@link org.springframework.dao.DataIntegrityViolationException} — a downward reconciliation
+     * that would drop {@code qty} below already-recorded {@code qty_delivered}/
+     * {@code qty_from_stock}. The caller converts that into a clean 409; this method never
+     * suppresses or works around it.
+     *
+     * @return true if a row was found AND its qty genuinely changed (the caller uses this only to
+     *         decide whether a "quantities were reconciled" event is worth logging, never for
+     *         correctness — a false return with zero rows updated is not itself an error, since a
+     *         same-ticket item id is guaranteed to exist by the FK on
+     *         {@code pricing_request_item.source_ticket_item_id} once V59 is applied... except
+     *         that FK does not exist (source_ticket_item_id is a plain nullable BIGINT, not an FK
+     *         — see V59's own column definition), so this IS defensive, not merely decorative).
+     */
+    public boolean reconcileItemQty(long ticketId, long itemId, BigDecimal qty, BigDecimal qtySqm) {
+        return jdbc.update("""
+            UPDATE sales.ticket_item
+               SET qty = :qty, qty_sqm = :qtySqm
+             WHERE ticket_id = :ticketId AND item_id = :itemId
+               AND qty IS DISTINCT FROM :qty
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("itemId", itemId)
+                .addValue("qty", qty)
+                .addValue("qtySqm", qtySqm)) > 0;
+    }
+
+    /**
+     * Closes out any {@code ticket_item} row that WAS part of this pricing-request chain (some
+     * revision in the {@code rootPricingRequestId} chain had a {@code pricing_request_item} whose
+     * {@code source_ticket_item_id} points at it) but is absent from the CURRENTLY-accepted
+     * revision ({@code currentPricingRequestId}) — a line the customer dropped entirely via a
+     * customer-change revision.
+     *
+     * <p>Bug found on review (not by the implementing pass): {@link #reconcileItemQty} only
+     * touches items still PRESENT in the current revision, so a dropped line's {@code ticket_item}
+     * row keeps its stale {@code qty} forever. {@code TicketService.completeDelivery}/{@code
+     * reserveStock} iterate {@code ticket.items()} unconditionally (no filter by "is this item
+     * part of the accepted pricing request") — a stale row with open quantity
+     * ({@code qty > qty_delivered}) makes {@code completeDelivery}'s "any remaining?" check see a
+     * phantom undeliverable balance FOREVER, since nobody can ever deliver units of a product the
+     * customer no longer ordered. The deal can never reach {@code FulfilmentStatus.FULLY_DELIVERED}
+     * / {@code DealStage.DELIVERED}. This is a real, deal-blocking correctness bug, not a cosmetic
+     * gap — found and fixed as part of this same step, not deferred.
+     *
+     * <p>Closes by setting {@code qty = qty_delivered} (never below — the boundary case is always
+     * legal under {@code chk_ticket_item_qty_delivered}/{@code chk_ticket_item_qty_from_stock},
+     * V54): a line with nothing yet delivered closes to zero remaining; a line ALREADY PARTIALLY
+     * delivered before being dropped keeps exactly what was truly delivered as history, closing
+     * only the open remainder — it never fabricates a false "fully delivered" claim beyond what
+     * actually happened, and never needs to touch the CHECK-constraint boundary the way a naive
+     * "set qty to 0" would.
+     *
+     * <p>Deliberately scoped to the {@code rootPricingRequestId} CHAIN, not the whole ticket — a
+     * ticket can carry independent pricing requests for different recipients (designer/owner/
+     * buyer; Step 1's "0..N Pricing Requests per deal" model), and this must never touch a
+     * ticket_item that legitimately belongs only to a DIFFERENT recipient's quote just because it
+     * is absent from the one being confirmed right now.
+     *
+     * @return the number of ticket_item rows closed — the caller uses this only to decide whether
+     *         a "quantities reconciled" event is worth a distinct log line, never for correctness.
+     */
+    public int closeOutDroppedChainItems(long ticketId, long rootPricingRequestId, long currentPricingRequestId) {
+        return jdbc.update("""
+            UPDATE sales.ticket_item ti
+               SET qty = ti.qty_delivered
+             WHERE ti.ticket_id = :ticketId
+               AND ti.qty IS DISTINCT FROM ti.qty_delivered
+               AND EXISTS (
+                   SELECT 1
+                     FROM sales.pricing_request_item pri
+                     JOIN sales.pricing_request pr ON pr.pricing_request_id = pri.pricing_request_id
+                    WHERE pri.source_ticket_item_id = ti.item_id
+                      AND (pr.pricing_request_id = :rootId OR pr.root_pricing_request_id = :rootId)
+               )
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM sales.pricing_request_item pri2
+                    WHERE pri2.source_ticket_item_id = ti.item_id
+                      AND pri2.pricing_request_id = :currentId
+               )
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("rootId", rootPricingRequestId)
+                .addValue("currentId", currentPricingRequestId));
+    }
+
+    /**
+     * Inserts a brand-new ticket_item row for a pricing_request_item that has NO
+     * {@code sourceTicketItemId} — a line added entirely within a customer-change revision, with
+     * no original ticket_item to reconcile against. {@code brand} is NOT NULL on this table (V8);
+     * the caller is responsible for a non-blank fallback (see
+     * OrderConfirmationService#resolveBrand) since a pricing-request item's own brand is
+     * optional (it may be identified only by {@code productId}/{@code productDescription}).
+     */
+    public long insertReconciledItem(long ticketId, String brand, String model, String color, String texture,
+                                     String size, String factory, BigDecimal qty, BigDecimal qtySqm,
+                                     String unitBasis) {
+        return jdbc.queryForObject("""
+            INSERT INTO sales.ticket_item
+                (ticket_id, brand, model, color, texture, size, factory, qty, qty_sqm, unit_basis,
+                 currency, sort_order)
+            VALUES (:ticketId, :brand, :model, :color, :texture, :size, :factory, :qty, :qtySqm,
+                    :unitBasis, 'THB',
+                    (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM sales.ticket_item WHERE ticket_id = :ticketId))
+            RETURNING item_id
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("brand", brand)
+                .addValue("model", model)
+                .addValue("color", color)
+                .addValue("texture", texture)
+                .addValue("size", size)
+                .addValue("factory", factory)
+                .addValue("qty", qty)
+                .addValue("qtySqm", qtySqm)
+                .addValue("unitBasis", unitBasis),
+            Long.class);
     }
 }

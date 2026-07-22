@@ -18,6 +18,7 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import th.co.glr.hr.support.PostgresTestSupport;
@@ -39,6 +40,7 @@ import th.co.glr.hr.support.PostgresTestSupport;
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
+@ActiveProfiles("test") // excludes SchedulingConfig so no scheduled worker races this shared-DB context
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 class SessionCookieFlagsIntegrationTest {
 

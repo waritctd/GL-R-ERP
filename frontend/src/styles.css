@@ -406,6 +406,76 @@ textarea:focus {
   font-size: var(--text-xs);
 }
 
+/* Focus rings everywhere else in the app use the indigo ring token, tuned
+   for white surfaces (rgba(99,102,241,0.13) barely registers on Sidebar Navy).
+   --color-teal-focus is this codebase's one existing "bright accent for a
+   dark surface" token (already used for toast-success icons on the dark
+   toast bg), so the sidebar rail reuses it here for the same reason. */
+.nav-item:focus-visible,
+.nav-group-header:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-sidebar-bg), 0 0 0 4px var(--color-teal-focus);
+}
+
+/* Section labels grouping the nav rail (งานขาย, บุคคล, …). Mirrors
+   .nav-item's rhythm (same radius, horizontal padding, 44px+ touch target)
+   but reads as a label, not a destination: Overline type (11px/800/uppercase,
+   the design system's only sanctioned uppercase-tracking use), Ink Faint by
+   default — verified safe on Sidebar Navy, see the .nav-item small comment
+   above — brightening to full white on hover/focus so the affordance reads
+   as interactive. */
+.nav-group,
+.nav-group-panel {
+  display: grid;
+  gap: 4px;
+}
+
+.nav-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-faint);
+  padding: 8px 10px;
+  text-align: left;
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.nav-group-header:hover {
+  color: var(--color-surface);
+}
+
+.nav-group-header-helper {
+  margin-left: 4px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+  opacity: 0.7;
+}
+
+.nav-group-chevron {
+  margin-left: auto;
+  flex: none;
+  transition: transform 0.15s ease;
+}
+
+.nav-group-chevron.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-group-chevron {
+    transition: none;
+  }
+}
+
 .sidebar-account {
   margin-top: auto;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
@@ -874,6 +944,12 @@ textarea:focus {
 
 .ticket-table {
   grid-template-columns: minmax(0,2.6fr) minmax(0,1.3fr) minmax(0,1.3fr) minmax(0,1fr);
+}
+
+/* PricingRequestQueuePage (commit 6): requestCode / deal / recipient / status /
+   itemCount / requiredDate / assignedImportName / pickup. */
+.pricing-request-queue-table {
+  grid-template-columns: minmax(0,1fr) minmax(0,1.6fr) minmax(0,1.2fr) minmax(0,1.1fr) minmax(0,0.7fr) minmax(0,1fr) minmax(0,1fr) minmax(0,0.9fr);
 }
 
 .ticket-items-table {

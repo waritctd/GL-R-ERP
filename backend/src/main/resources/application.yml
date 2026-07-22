@@ -72,7 +72,12 @@ app:
   leave:
     advance-notice-days: ${APP_LEAVE_ADVANCE_NOTICE_DAYS:7}
   overtime:
-    advance-notice-days: ${APP_OVERTIME_ADVANCE_NOTICE_DAYS:3}
+    # Advance notice was removed on CEO instruction; same-day and retroactive requests are allowed
+    # when the reason explains why. APP_OVERTIME_ADVANCE_NOTICE_DAYS is no longer read — remove it
+    # from any deployment environment that still sets it.
+    retroactive-window-days: ${APP_OVERTIME_RETROACTIVE_WINDOW_DAYS:60}
+  special-money:
+    payroll-cutoff-day: ${APP_SPECIAL_MONEY_PAYROLL_CUTOFF_DAY:25}
   uploads-dir: ${APP_UPLOADS_DIR:./uploads}
   mail:
     # Transport is pluggable behind th.co.glr.hr.mail.Mailer. Default `log` = boot/run with no mail
@@ -97,6 +102,20 @@ app:
     app-base-url: ${APP_MAIL_APP_BASE_URL:https://demo-glr-git-uat-waritctds-projects.vercel.app}
   bot:
     api-token: ${BOT_API_TOKEN:}
+  factory-quote-dispatch:
+    # Background outbox worker for factory quote request emails (V67). send() only enqueues a
+    # PENDING row; FactoryQuoteEmailDispatchWorker sends and finalizes it out-of-band so an app
+    # crash between "email accepted" and "quote/pricing-request updated" cannot strand the dispatch.
+    poll-interval-ms: ${APP_FACTORY_QUOTE_DISPATCH_POLL_INTERVAL_MS:5000}
+    reclaim-timeout-seconds: ${APP_FACTORY_QUOTE_DISPATCH_RECLAIM_TIMEOUT_SECONDS:120}
+    max-attempts: ${APP_FACTORY_QUOTE_DISPATCH_MAX_ATTEMPTS:8}
+    backoff-base-seconds: ${APP_FACTORY_QUOTE_DISPATCH_BACKOFF_BASE_SECONDS:30}
+    batch-size: ${APP_FACTORY_QUOTE_DISPATCH_BATCH_SIZE:20}
+  quotation-expiry:
+    # Step 5 (V75): flips ISSUED customer quotations whose validity_date has passed to EXPIRED.
+    # A single guarded UPDATE per tick — no outbox/claim/retry machinery, unlike
+    # factory-quote-dispatch above (this isn't calling an external system).
+    sweep-interval-ms: ${APP_QUOTATION_EXPIRY_SWEEP_INTERVAL_MS:3600000}
   login-rate-limit:
     enabled: ${APP_LOGIN_RATE_LIMIT_ENABLED:true}
     max-account-failures: ${APP_LOGIN_MAX_ACCOUNT_FAILURES:5}

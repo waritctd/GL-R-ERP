@@ -314,12 +314,22 @@ public class DepositNoticeService {
     /**
      * Read gate mirroring TicketService.requireViewAccess: viewer role required,
      * sales reps only for their own tickets.
+     *
+     * <p>Phase B (role-scoped views): import is denied outright, unlike
+     * TicketService.requireViewAccess (which strips only the embedded quotation but
+     * still lets import view the rest of the ticket). A deposit notice IS a customer
+     * financial document end to end — there is no "rest of it" for import to see —
+     * so every read here (list/get/preview/download/remaining-invoice) is off-limits,
+     * matching salesViewScope.js hiding the whole "depositNotice" section from import.
      */
     private TicketDto requireTicketViewer(long ticketId, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
         if ("sales".equals(actor.role()) && t.summary().createdById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        if (IMPORT_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
         return t;

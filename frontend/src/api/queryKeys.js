@@ -13,6 +13,10 @@ export const queryKeys = {
   leaveTypes: () => ['leave', 'types'],
   overtimeRequests: (filters = {}) => ['overtime', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   overtimeEmployees: () => ['overtime', 'employees'],
+  specialMoneyRequests: (filters = {}) => ['specialMoney', 'list', filters.from, filters.to, filters.status, filters.employeeId, filters.type],
+  specialMoneyEmployees: () => ['specialMoney', 'employees'],
+  specialMoneyTypes: () => ['specialMoney', 'types'],
+  specialMoneyUsage: (employeeId, year) => ['specialMoney', 'usage', employeeId, year],
   // ticketDetail/ticketAttachments are for slice B (TicketDetailPage) — defined
   // now so the key module is stable across both slices; only ticketList is used here.
   ticketList: (status) => ['tickets', 'list', status ?? ''],
@@ -27,4 +31,23 @@ export const queryKeys = {
   customersSearch: (q) => ['customers', 'search', q ?? ''],
   fxRates: () => ['fxRates'],
   priceCalcConfigs: () => ['priceCalcConfigs'],
+  // Commit 6 (pricing-request-foundation)
+  pricingRequestsByTicket: (ticketId) => ['pricingRequests', 'byTicket', ticketId],
+  pricingRequestQueue: (filters = {}) => ['pricingRequests', 'queue', filters.status ?? '', filters.assignedImportId ?? '', filters.activeOnly ?? true],
+  pricingRequestDetail: (id) => ['pricingRequests', 'detail', id],
+  pricingRequestFactoryQuotes: (id) => ['pricingRequests', 'factoryQuotes', id],
+  pricingRequestCostings: (id) => ['pricingRequests', 'costings', id],
+  pricingRequestAttachments: (id) => ['pricingRequests', 'attachments', id],
+  pricingCostingDetail: (id) => ['pricingCostings', 'detail', id],
+  // Step 3: CEO Selling Price Decision.
+  pricingDecisions: (id) => ['pricingRequests', 'pricingDecisions', id],
+  pricingDecisionSalesView: (id) => ['pricingRequests', 'pricingDecisionSalesView', id],
+  pricingDecisionDetail: (id) => ['pricingDecisions', 'detail', id],
+  // Step 4: Customer Quotation Generation and Issuance.
+  customerQuotations: (pricingRequestId) => ['pricingRequests', 'customerQuotations', pricingRequestId],
+  customerQuotationDetail: (id) => ['customerQuotations', 'detail', id],
+  // Step 7: Factory Purchase Order and Import Execution.
+  factoryPurchaseOrderList: (status) => ['factoryPurchaseOrders', 'list', status ?? ''],
+  factoryPurchaseOrdersForPricingRequest: (pricingRequestId) => ['pricingRequests', 'factoryPurchaseOrders', pricingRequestId],
+  factoryPurchaseOrderDetail: (id) => ['factoryPurchaseOrders', 'detail', id],
 };

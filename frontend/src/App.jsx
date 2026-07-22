@@ -25,7 +25,7 @@ const EmployeeDetailPage = lazy(() => import('./features/employees/EmployeeDetai
 const ProfileRequestsPage = lazy(() => import('./features/profileRequests/ProfileRequestsPage.jsx').then(toDefault('ProfileRequestsPage')));
 const ProfilePage = lazy(() => import('./features/profile/ProfilePage.jsx').then(toDefault('ProfilePage')));
 const AttendancePage = lazy(() => import('./features/attendance/AttendancePage.jsx').then(toDefault('AttendancePage')));
-const OvertimePage = lazy(() => import('./features/overtime/OvertimePage.jsx').then(toDefault('OvertimePage')));
+const RequestsPage = lazy(() => import('./features/requests/RequestsPage.jsx').then(toDefault('RequestsPage')));
 const LeavePage = lazy(() => import('./features/leave/LeavePage.jsx').then(toDefault('LeavePage')));
 const TicketListPage = lazy(() => import('./features/tickets/TicketListPage.jsx').then(toDefault('TicketListPage')));
 const TicketDetailPage = lazy(() => import('./features/tickets/TicketDetailPage.jsx').then(toDefault('TicketDetailPage')));
@@ -35,6 +35,10 @@ const DepositNoticePage = lazy(() => import('./features/deposits/DepositNoticePa
 const CeoSettingsPage = lazy(() => import('./features/ceoSettings/CeoSettingsPage.jsx').then(toDefault('CeoSettingsPage')));
 const PriceImportPage = lazy(() => import('./features/catalog/PriceImportPage.jsx').then(toDefault('PriceImportPage')));
 const CatalogSearchPage = lazy(() => import('./features/catalog/CatalogSearchPage.jsx').then(toDefault('CatalogSearchPage')));
+const PricingRequestQueuePage = lazy(() => import('./features/pricingRequests/PricingRequestQueuePage.jsx').then(toDefault('PricingRequestQueuePage')));
+const PricingRequestDetailPage = lazy(() => import('./features/pricingRequests/PricingRequestDetailPage.jsx').then(toDefault('PricingRequestDetailPage')));
+const ProcurementListPage = lazy(() => import('./features/procurement/ProcurementListPage.jsx').then(toDefault('ProcurementListPage')));
+const ProcurementDetailPage = lazy(() => import('./features/procurement/ProcurementDetailPage.jsx').then(toDefault('ProcurementDetailPage')));
 
 // Thin wrappers that source the ticket id from the URL for the frozen sales
 // pages (they already fetch by id internally — branch 5 only rewires how the
@@ -255,9 +259,14 @@ export function App() {
               )}
             />
             <Route
-              path="/overtime"
-              element={<OvertimePage user={user} currentEmployee={currentEmployee} showToast={showToast} />}
+              path="/employee-requests"
+              element={<RequestsPage user={user} currentEmployee={currentEmployee} showToast={showToast} />}
             />
+            {/* /overtime moves into the combined /employee-requests tab bar (OT +
+                welfare). This alias keeps existing notification deep-links
+                (OvertimeService hardcodes "/overtime") resolving to the OT tab
+                instead of falling through to the 404 route. */}
+            <Route path="/overtime" element={<Navigate to="/employee-requests?tab=ot" replace />} />
             <Route
               path="/leave"
               element={<LeavePage user={user} currentEmployee={currentEmployee} showToast={showToast} />}
@@ -286,6 +295,14 @@ export function App() {
                   element={<DepositNoticeRoute user={user} showToast={showToast} />}
                 />
                 <Route
+                  path="/pricing-requests"
+                  element={<PricingRequestQueuePage user={user} showToast={showToast} />}
+                />
+                <Route
+                  path="/pricing-requests/:id"
+                  element={<PricingRequestDetailPage user={user} showToast={showToast} />}
+                />
+                <Route
                   path="/commissions"
                   element={<CommissionPage user={user} showToast={showToast} />}
                 />
@@ -296,6 +313,14 @@ export function App() {
                 <Route
                   path="/ceo-settings"
                   element={<CeoSettingsPage showToast={showToast} />}
+                />
+                <Route
+                  path="/factory-purchase-orders"
+                  element={<ProcurementListPage showToast={showToast} />}
+                />
+                <Route
+                  path="/factory-purchase-orders/:id"
+                  element={<ProcurementDetailPage showToast={showToast} />}
                 />
               </>
             )}

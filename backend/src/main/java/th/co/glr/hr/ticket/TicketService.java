@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import th.co.glr.hr.pricing.PriceBreakdownItemDto;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -20,18 +22,27 @@ import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
+import th.co.glr.hr.pricingrequest.PricingRequestService;
+import th.co.glr.hr.pricingrequest.PricingRequestService.CancelOpenForTicketResult;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionDto;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionState;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionsResponse;
 
 @Service
 public class TicketService {
+    private static final Logger log = LoggerFactory.getLogger(TicketService.class);
+
     private static final Set<String> SALES_ROLES  = Set.of("sales");
     private static final Set<String> IMPORT_ROLES = Set.of("import");
     private static final Set<String> CEO_ROLES    = Set.of("ceo");
     private static final Set<String> FULFILMENT_ROLES = Set.of("import", "ceo");
     // Money-receipt confirmations belong to ฝ่ายบัญชี (accounting), with CEO as fallback.
     private static final Set<String> ACCOUNT_ROLES = Set.of("account", "ceo");
+    // Step 1 of the three-party close. Deliberately EXCLUDES ceo, unlike ACCOUNT_ROLES:
+    // the CEO signs the second half (verifyClose), so letting them sign the first half
+    // too would collapse a two-signature gate into one person. Same reasoning as
+    // CommissionService's manager→ceo chain. Do not "fix" this by reusing ACCOUNT_ROLES.
+    private static final Set<String> CLOSE_CONFIRM_ROLES = Set.of("account");
     // Who may read tickets at all. Mirrors the frontend's canViewTickets and the mock's
     // list/get gates — hr/employee have no business reading customer pricing.
     // sales_manager is read+comment-only oversight (a project-manager-style follow-up
@@ -52,32 +63,49 @@ public class TicketService {
     private final ObjectMapper objectMapper;
     private final CustomerRepository customers;
     private final QuotationRenderer quotationRenderer;
+    // Dead-deal cascade only (see markLost/cancel below) — PricingRequestService
+    // injects TicketRepository, not TicketService, so this dependency direction
+    // (TicketService -> PricingRequestService -> TicketRepository) is acyclic.
+    private final PricingRequestService pricingRequests;
 
     public TicketService(TicketRepository tickets, NotificationRepository notifications,
                          PriceCalcService priceCalcService, ObjectMapper objectMapper,
-                         CustomerRepository customers, QuotationRenderer quotationRenderer) {
+                         CustomerRepository customers, QuotationRenderer quotationRenderer,
+                         PricingRequestService pricingRequests) {
         this.tickets           = tickets;
         this.notifications     = notifications;
         this.priceCalcService  = priceCalcService;
         this.objectMapper      = objectMapper;
         this.customers         = customers;
         this.quotationRenderer = quotationRenderer;
+        this.pricingRequests   = pricingRequests;
     }
 
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
         Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
-        return tickets.findSummaries(status, createdByFilter);
+        return tickets.findSummaries(status, null, createdByFilter, actor.role(), null);
     }
 
     public Page<TicketSummaryDto> listPage(String status, UserPrincipal actor, PageRequest page) {
+        return listPage(status, null, actor, page);
+    }
+
+    /**
+     * @param salesStage optional {@link DealStage} filter (e.g. {@code CLOSED_PAID}), additive to
+     *                    {@code status} — used by the Step 9 commission "Linked Deal" picker.
+     */
+    public Page<TicketSummaryDto> listPage(String status, String salesStage, UserPrincipal actor, PageRequest page) {
         requireRole(actor, VIEWER_ROLES);
         Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
-        List<TicketSummaryDto> rows = tickets.findSummaries(status, createdByFilter, page);
+        // Phase B (role-scoped views): import/account only see the slice of the deal
+        // pipeline relevant to their own worklist — see TicketRepository.appendRoleScope.
+        // ceo/sales_manager/sales are unaffected (the repository ignores any other role).
+        List<TicketSummaryDto> rows = tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page);
         // Skip the COUNT round-trip when the whole result set fits on page 0.
         int total = (page.page() == 0 && rows.size() < page.size())
             ? rows.size()
-            : tickets.countSummaries(status, createdByFilter);
+            : tickets.countSummaries(status, salesStage, createdByFilter, actor.role());
         return new Page<>(rows, page.page(), page.size(), total);
     }
 
@@ -87,6 +115,12 @@ public class TicketService {
 
     public List<PaymentReceiptDto> listPayments(long ticketId, UserPrincipal actor) {
         requireViewAccess(ticketId, actor);
+        // Phase B: the payment ledger is ฝ่ายบัญชี's own document — import has no
+        // business reading it (mirrors salesViewScope.js hiding the "payment" section
+        // from import's view of TicketDetailPage).
+        if (IMPORT_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
         return tickets.findReceiptsByTicket(ticketId);
     }
 
@@ -101,7 +135,28 @@ public class TicketService {
         if ("sales".equals(actor.role()) && ticket.summary().createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
-        return ticket;
+        return projectForRole(ticket, actor.role());
+    }
+
+    /**
+     * Phase B (role-scoped views): import has no business reading the customer-facing
+     * quotation chain (mirrors salesViewScope.js hiding the "quotation" section from
+     * import's TicketDetailPage) — project it out here rather than trust every one of
+     * requireViewAccess's callers (get, comment, listDeliveries, actions, the quotation
+     * file download) to re-check. Every other viewer role gets the DTO unchanged.
+     *
+     * <p>NOTE: mutation responses built via {@code requireTicket} directly (e.g. import's
+     * own procurement actions — reserveStock, recordDelivery, markGoodsReceived) do NOT
+     * go through this projection and so still embed quotations in their return value.
+     * That is a narrower, accepted residual gap (transient, tied to import legitimately
+     * performing its own action) recorded in the branch handoff rather than silently
+     * closed by touching every one of those call sites.
+     */
+    private TicketDto projectForRole(TicketDto ticket, String role) {
+        if (!IMPORT_ROLES.contains(role)) {
+            return ticket;
+        }
+        return new TicketDto(ticket.summary(), ticket.items(), ticket.events(), null, List.of());
     }
 
     @Transactional
@@ -127,39 +182,23 @@ public class TicketService {
         }
         String code = tickets.nextTicketCode();
         long id = tickets.create(request, code, actor.id(), actor.name());
-        // A lightweight lead-stage deal (no items yet) is the rep's private draft —
-        // import/CEO are only notified when it actually enters the price-request
-        // flow (created with items, or submitted later).
-        if (request.items() != null && !request.items().isEmpty()) {
-            notifications.notifyByRole("import", id, "SUBMITTED",
-                "Ticket " + code + " รอการรับเรื่อง");
-            notifications.notifyByRole("ceo", id, "SUBMITTED",
-                "Ticket " + code + " ส่งเข้าระบบแล้ว");
-        }
+        // A newly created deal is always the rep's private draft, whether or not
+        // products were attached — import/CEO are notified only once a
+        // PricingRequest is created and submitted against this ticket, never at
+        // deal-creation time.
         return requireTicket(id);
     }
 
-    @Transactional
+    /**
+     * Deprecated: ticket-level price-request submission has been replaced by the
+     * PricingRequest aggregate. Create a pricing request via
+     * {@code POST /api/tickets/{ticketId}/pricing-requests} and submit it via
+     * {@code POST /api/pricing-requests/{id}/submit} instead.
+     */
+    @Deprecated
     public TicketDto submit(long ticketId, UserPrincipal actor) {
-        requireRole(actor, SALES_ROLES);
-        TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.DRAFT);
-        requireActive(s);
-        if (s.createdById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only the ticket owner can submit");
-        }
-        // A lightweight lead-stage deal has no items yet — the price-request flow
-        // needs at least one product line before import can price it.
-        if (s.itemCount() == 0) {
-            throw new ApiException(HttpStatus.BAD_REQUEST,
-                "ต้องเพิ่มรายการสินค้าอย่างน้อย 1 รายการก่อนส่งขอราคา");
-        }
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.SUBMITTED, TicketStatus.DRAFT, TicketStatus.SUBMITTED, null);
-        notifications.notifyByRole("import", ticketId, "SUBMITTED",
-            "Ticket " + s.code() + " รอการรับเรื่อง");
-        notifications.notifyByRole("ceo", ticketId, "SUBMITTED",
-            "Ticket " + s.code() + " ส่งเข้าระบบแล้ว");
-        return requireTicket(ticketId);
+        throw new ApiException(HttpStatus.CONFLICT,
+            "การส่งขอราคาย้ายไปอยู่ที่ใบขอราคา (PCR) แล้ว — กรุณาสร้างใบขอราคาจากหน้าดีลแทน");
     }
 
     @Transactional
@@ -273,7 +312,8 @@ public class TicketService {
         String number = tickets.nextQuotationCode();
         QuotationDto created = tickets.createQuotation(ticketId, number, actor.id(), total, recipientType,
             blankToNull(request.recipientLabel()), blankToNull(request.paymentTerms()),
-            blankToNull(request.leadTime()), blankToNull(request.deliveryTerms()), request.validityDate());
+            blankToNull(request.leadTime()), blankToNull(request.deliveryTerms()), request.validityDate(),
+            request.offerDate(), request.depositPercent(), request.deliveryLeadDays());
 
         // Freeze this quotation at issue time (V49): item data + customer/project header,
         // in the same transaction as createQuotation, so a later ticket edit or customer-
@@ -301,8 +341,9 @@ public class TicketService {
             + (request.amendmentReason() != null && !request.amendmentReason().isBlank()
                 ? " — amendment: " + request.amendmentReason().trim()
                 : "");
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.QUOTATION_ISSUED, fromStatus, TicketStatus.QUOTATION_ISSUED, eventMessage);
+        tickets.addEventWithDocument(ticketId, actor.id(), actor.name(),
+            TicketEventKind.QUOTATION_ISSUED, fromStatus, TicketStatus.QUOTATION_ISSUED, eventMessage,
+            RelatedDocumentType.QUOTATION, created.id());
         if (QuotationRecipient.DESIGNER.equals(recipientType) || QuotationRecipient.OWNER.equals(recipientType)) {
             autoAdvanceStage(s, DealStage.QUOTE_DESIGN_SIDE, actor);
         } else if (QuotationRecipient.BUYER.equals(recipientType)) {
@@ -376,6 +417,12 @@ public class TicketService {
 
     private QuotationRenderContext loadQuotationContext(long ticketId, long quotationId, UserPrincipal actor) {
         TicketDto ticket = requireViewAccess(ticketId, actor);
+        // Phase B: explicit denial rather than relying on projectForRole's stripped
+        // quotations list to fall through to a "quotation not found" 404 — import
+        // downloading a quotation file is a permission question, not a lookup miss.
+        if (IMPORT_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
         QuotationDto quotation = ticket.quotations().stream()
             .filter(q -> q.id() == quotationId)
             .findFirst()
@@ -420,23 +467,25 @@ public class TicketService {
             s.lifecycle(), s.tenderRequirement(), s.depositPolicy(), s.depositPolicyReason(),
             s.entryChannel(), s.billingDate(), s.dueDate(), s.creditTermDays(),
             s.lastFollowUpAt(), s.nextFollowUpAt(), s.paymentStage(), s.amountPayable(),
-            s.amountPaid(), s.amountOutstanding(), s.overdue());
+            s.amountPaid(), s.amountOutstanding(), s.overdue(),
+            s.closeConfirmedAt(), s.closeConfirmedByName(), s.invoiceOnFile(),
+            s.cancelReason(), s.cancelledAt());
     }
 
-    @Transactional
-    public TicketDto close(long ticketId, UserPrincipal actor) {
-        TicketDto ticket = requireTicket(ticketId);
-        TicketSummaryDto s = ticket.summary();
-        requireActive(s);
-        if (s.createdById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
-        }
+    /**
+     * Closing is a three-party sequence, not one person's decision: the goods must
+     * be delivered, the balance paid, the invoice on file, ฝ่ายบัญชี must confirm,
+     * and the CEO must verify. Sales no longer closes deals.
+     *
+     * Throws if the deal is not ready; returns quietly if it is.
+     */
+    private void requireClosePrerequisites(TicketSummaryDto s) {
         String st = s.status();
         // Legacy path: status=DOCUMENT_ISSUED — only for pre-dual-track tickets
         // (paymentStatus never set) or fully-paid ones. A mid-track ticket that
         // reached document_issued must NOT close unpaid (2026-07-16 audit finding #3);
-        // recover it via revision or cancel.
-        // Dual-track path: both tracks complete.
+        // recover it via revision or cancel. These predate the delivery and invoice
+        // tracks entirely, so requiring either would strand them permanently.
         boolean legacyOk = TicketStatus.DOCUMENT_ISSUED.equals(st)
             && (s.paymentStatus() == null || "FULLY_PAID".equals(s.paymentStatus()));
         boolean dualTrackOk = TicketStatus.QUOTATION_ISSUED.equals(st)
@@ -444,13 +493,69 @@ public class TicketService {
             && deliveryGateComplete(s);
         if (!legacyOk && !dualTrackOk) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "Cannot close: require paymentStatus=FULLY_PAID and delivery complete");
+                "ปิดงานไม่ได้: ต้องรับเงินครบและส่งมอบสินค้าครบก่อน");
         }
         if (s.amountOutstanding() != null && s.amountOutstanding().signum() > 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "Cannot close: ยังมียอดค้างชำระ");
+            throw new ApiException(HttpStatus.CONFLICT, "ปิดงานไม่ได้: ยังมียอดค้างชำระ");
         }
+        // The invoice is produced externally and uploaded here; legacy deals predate it.
+        if (dualTrackOk && !s.invoiceOnFile()) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ปิดงานไม่ได้: ยังไม่ได้แนบใบกำกับภาษี (ฝ่ายบัญชีต้องอัปโหลดก่อน)");
+        }
+    }
+
+    /** ฝ่ายบัญชี confirms the deal is ready to close. Step 1 of 2. */
+    @Transactional
+    public TicketDto confirmCloseReady(long ticketId, UserPrincipal actor) {
+        requireRole(actor, CLOSE_CONFIRM_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
+        if (s.closeConfirmedAt() != null) {
+            throw new ApiException(HttpStatus.CONFLICT, "ยืนยันปิดงานไปแล้ว — รอ CEO ตรวจสอบ");
+        }
+        requireClosePrerequisites(s);
+        tickets.confirmClose(ticketId, actor.id());
         tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.CLOSED, st, TicketStatus.CLOSED, null);
+            TicketEventKind.CLOSE_CONFIRMED, s.status(), s.status(),
+            "ฝ่ายบัญชียืนยันพร้อมปิดงาน — รอ CEO ตรวจสอบ");
+        return requireTicket(ticketId);
+    }
+
+    /** Withdraw the confirmation before the CEO acts (account or CEO). */
+    @Transactional
+    public TicketDto revokeCloseConfirmation(long ticketId, String note, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
+        if (s.closeConfirmedAt() == null) {
+            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ยังไม่ได้ยืนยันปิดงาน");
+        }
+        tickets.clearCloseConfirmation(ticketId);
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.CLOSE_CONFIRM_REVOKED, s.status(), s.status(), blankToNull(note));
+        return requireTicket(ticketId);
+    }
+
+    /**
+     * CEO verifies and the deal is closed. Step 2 of 2.
+     *
+     * The CEO verifies, never overrides: every prerequisite is re-checked here, so
+     * a deal that regressed between the two signatures (a refund, a returned
+     * delivery, a deleted invoice) cannot slip through on a stale confirmation.
+     */
+    @Transactional
+    public TicketDto verifyClose(long ticketId, UserPrincipal actor) {
+        requireRole(actor, CEO_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
+        if (s.closeConfirmedAt() == null) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ปิดงานไม่ได้: ต้องให้ฝ่ายบัญชียืนยันก่อน");
+        }
+        requireClosePrerequisites(s);
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.CLOSED, s.status(), TicketStatus.CLOSED, "CEO ตรวจสอบและปิดงาน");
         tickets.updateLifecycle(ticketId, DealLifecycle.COMPLETED);
         return requireTicket(ticketId);
     }
@@ -665,7 +770,8 @@ public class TicketService {
         RecordDeliveryRequest delivery = new RecordDeliveryRequest(
             source,
             request == null ? null : request.note(),
-            remaining);
+            remaining,
+            request == null ? null : request.recipientName());
         return recordDeliveryInternal(ticket, delivery, actor, true);
     }
 
@@ -708,19 +814,22 @@ public class TicketService {
         if ("WAREHOUSE".equals(source) && !warehouseDeliveryAvailable(s, ticket.summary().id())) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องรับสินค้าเข้าโกดังก่อนส่งจาก WAREHOUSE");
         }
-        tickets.insertDeliveryRecord(s.id(), source, actor.id(), request.note(), normalized);
+        long deliveryId = tickets.insertDeliveryRecord(
+            s.id(), source, actor.id(), request.note(), request.recipientName(), normalized);
         TicketDto updated = requireTicket(s.id());
         TicketSummaryDto updatedSummary = updated.summary();
         boolean fullyDelivered = updated.items().stream()
             .allMatch(item -> nullToZero(item.qtyDelivered()).compareTo(nullToZero(item.qty())) >= 0);
         String message = deliveryMessage(updated.items(), normalized);
-        tickets.addEvent(s.id(), actor.id(), actor.name(),
-            TicketEventKind.DELIVERY_RECORDED, updatedSummary.status(), updatedSummary.status(), message);
+        tickets.addEventWithDocument(s.id(), actor.id(), actor.name(),
+            TicketEventKind.DELIVERY_RECORDED, updatedSummary.status(), updatedSummary.status(), message,
+            RelatedDocumentType.DELIVERY_RECORD, deliveryId);
         if (fullyDelivered) {
             tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.FULLY_DELIVERED);
-            tickets.addEvent(s.id(), actor.id(), actor.name(),
+            tickets.addEventWithDocument(s.id(), actor.id(), actor.name(),
                 TicketEventKind.DELIVERY_COMPLETED, updatedSummary.status(), updatedSummary.status(),
-                completing ? "ส่งมอบครบจากปุ่ม completeDelivery" : message);
+                completing ? "ส่งมอบครบจากปุ่ม completeDelivery" : message,
+                RelatedDocumentType.DELIVERY_RECORD, deliveryId);
             autoAdvanceStage(updatedSummary, DealStage.DELIVERED, actor);
             // Second CLOSED_PAID gate: a deal paid in full before delivery closes
             // exactly when delivery completes (reload so fulfilment reflects the
@@ -810,8 +919,9 @@ public class TicketService {
                 "การรับชำระเกินยอดต้องระบุเหตุผล");
         }
         String receiptRef = blankToNull(request.receiptRef());
+        long receiptId;
         try {
-            tickets.insertPaymentReceipt(ticketId, kind, amount, actor.id(), request.receivedAt(),
+            receiptId = tickets.insertPaymentReceipt(ticketId, kind, amount, actor.id(), request.receivedAt(),
                 note, request.depositNoticeId(), receiptRef);
         } catch (DataIntegrityViolationException e) {
             if (receiptRef != null) {
@@ -819,10 +929,11 @@ public class TicketService {
             }
             throw e;
         }
-        tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.PAYMENT_RECORDED,
+        tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.PAYMENT_RECORDED,
             s.status(), s.status(),
             "kind=" + kind + ", amount=" + amount + ", paid=" + newPaid + ", payable=" + payable
-                + (note != null ? " — " + note : ""));
+                + (note != null ? " — " + note : ""),
+            RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
         reconcilePaymentStatus(ticketId, actor);
         return requireTicket(ticketId);
     }
@@ -959,15 +1070,19 @@ public class TicketService {
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireStageWriteAccess(s, targetStage, actor);
-        requireActive(s);
-        if (s.lostReason() != null) {
+        // Keyed on the lifecycle, not on lost_reason: since V58 the reason SURVIVES
+        // a reopen, so a live reopened deal still carries one. Checked before
+        // requireActive so a lost deal gets this specific message.
+        if (DealLifecycle.CLOSED_LOST.equals(s.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ");
         }
+        requireActive(s);
         if (targetStage.equals(s.salesStage())) {
             throw new ApiException(HttpStatus.CONFLICT, "Deal is already in stage " + targetStage);
         }
-        boolean backward = DealStage.indexOf(targetStage) < DealStage.indexOf(s.salesStage());
+        boolean backward = DealStage.indexOf(targetStage) < DealStage.indexOf(s.salesStage())
+            && !DealStage.isRoutineBackwardMove(s.salesStage(), targetStage);
         boolean skipForward = DealStage.indexOf(targetStage) - DealStage.indexOf(s.salesStage()) > 1;
         if (backward && (note == null || note.isBlank())) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
@@ -991,7 +1106,9 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         requireActive(s);
-        if (s.lostReason() != null) {
+        // Lifecycle, not lost_reason — a reopened deal is ACTIVE and still carries
+        // the reason it was lost for last time; it must be losable again.
+        if (DealLifecycle.CLOSED_LOST.equals(s.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT, "Deal is already marked lost");
         }
         tickets.markDealLost(ticketId, reason);
@@ -999,6 +1116,21 @@ public class TicketService {
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.MARKED_LOST, s.salesStage(), s.salesStage(),
             "เสียงาน (" + reason + ")" + (note != null && !note.isBlank() ? " — " + note.trim() : ""));
+        // Terminal deal state: a lost deal can never receive Import's pricing, so
+        // any pricing request still open on it (DRAFT/SUBMITTED/IMPORT_REVIEWING/
+        // MORE_INFO_REQUIRED) is cancelled here too rather than stranded in a queue
+        // forever. See PricingRequestService.cancelOpenForTicket's Javadoc for why
+        // this has no role check of its own. placeOnHold/markDormant deliberately do
+        // NOT do this — see those methods.
+        CancelOpenForTicketResult cancelResult = pricingRequests.cancelOpenForTicket(ticketId, reason, actor);
+        if (cancelResult.hasAbandoned()) {
+            // cancelOpenForTicket already logged the per-row detail; this ties the
+            // abandonment back to the deal action that triggered it, for whoever is
+            // grepping logs after the fact. The deal's own lost-marking above still
+            // committed — an abandoned pricing request must never roll that back.
+            log.warn("markLost: ticket {} left {} pricing request(s) still open after the cascade: {}",
+                ticketId, cancelResult.abandonedCount(), cancelResult.abandonedIds());
+        }
         return requireTicket(ticketId);
     }
 
@@ -1020,8 +1152,29 @@ public class TicketService {
      * No-throw by construction: no-op when the deal is lost or the target is not
      * strictly forward (monotonic — re-running a transition can never regress).
      */
+    /**
+     * Step 4 (Customer Quotation Generation and Issuance): the EXACT stage-advance
+     * {@link #generateQuotation} already performs for a recipient-scoped quotation, exposed as a
+     * public entry point so {@code th.co.glr.hr.customerquotation.CustomerQuotationService} can
+     * reuse it at issue time instead of inventing a second stage-transition path. Delegates to
+     * the same private {@link #autoAdvanceStage}, so both flows share one implementation and can
+     * never drift apart on which recipient maps to which stage.
+     */
+    @Transactional
+    public void advanceStageForCustomerQuotationIssue(long ticketId, String recipientType, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (QuotationRecipient.DESIGNER.equals(recipientType) || QuotationRecipient.OWNER.equals(recipientType)) {
+            autoAdvanceStage(s, DealStage.QUOTE_DESIGN_SIDE, actor);
+        } else if (QuotationRecipient.BUYER.equals(recipientType)) {
+            autoAdvanceStage(s, DealStage.QUOTE_BUYER, actor);
+        }
+    }
+
     private void autoAdvanceStage(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
-        if (!DealLifecycle.ACTIVE.equals(s.lifecycle()) || s.lostReason() != null) {
+        // ACTIVE is the whole test. The old `lostReason != null` clause would now
+        // silently disable auto-advance on every reopened deal, since V58 keeps the
+        // reason after a reopen.
+        if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
             return;
         }
         if (DealStage.indexOf(targetStage) <= DealStage.indexOf(s.salesStage())) {
@@ -1040,6 +1193,13 @@ public class TicketService {
         tickets.updateLifecycle(ticketId, DealLifecycle.ON_HOLD);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.ON_HOLD, s.salesStage(), s.salesStage(), blankToNull(note));
+        // Deliberately does NOT call pricingRequests.cancelOpenForTicket, unlike
+        // markLost/cancel. ON_HOLD is temporary — resume() brings the deal straight
+        // back to ACTIVE — so cancelling in-progress pricing work here would destroy
+        // it for no reason. The default queue already hides these requests while the
+        // deal is not ACTIVE (PricingRequestRepository.findSummaries'
+        // activeDealsOnly); resume() un-hides them with their status intact. Do not
+        // "fix" this into symmetry with the terminal-state methods.
         return requireTicket(ticketId);
     }
 
@@ -1053,6 +1213,9 @@ public class TicketService {
         tickets.updateLifecycle(ticketId, DealLifecycle.DORMANT);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.DORMANT, s.salesStage(), s.salesStage(), blankToNull(note));
+        // Same deliberate asymmetry as placeOnHold: DORMANT is temporary (resume()
+        // returns it to ACTIVE), so no pricingRequests.cancelOpenForTicket call here
+        // either. Do not "fix" this into symmetry with markLost/cancel.
         return requireTicket(ticketId);
     }
 
@@ -1167,8 +1330,22 @@ public class TicketService {
         return s == null || s.isBlank() ? null : s;
     }
 
+    /**
+     * Cancel a deal, recording why the opportunity went away.
+     *
+     * The reason is mandatory, matching {@link #markLost}: an optional one is
+     * skipped in practice and the gap it was added to close stays open.
+     *
+     * Ownership remains the only gate — cancel deliberately has no requireRole,
+     * as before. Tickets are created by sales, so the owner is a sales rep; this
+     * is noted rather than changed because tightening it is an authz decision,
+     * not a side effect of adding a reason column.
+     */
     @Transactional
-    public TicketDto cancel(long ticketId, UserPrincipal actor) {
+    public TicketDto cancel(long ticketId, String reason, String note, UserPrincipal actor) {
+        if (!DealCancelReason.isValid(reason)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown cancel reason '" + reason + "'");
+        }
         TicketDto ticket = requireTicket(ticketId);
         String currentStatus = ticket.summary().status();
         if (TicketStatus.CLOSED.equals(currentStatus) || TicketStatus.CANCELLED.equals(currentStatus)) {
@@ -1177,9 +1354,21 @@ public class TicketService {
         if (ticket.summary().createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
+        tickets.cancelDeal(ticketId, reason);
+        String message = blankToNull(note) == null
+            ? "ยกเลิกดีล (" + reason + ")"
+            : "ยกเลิกดีล (" + reason + ") — " + note.trim();
         tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.CANCELLED, currentStatus, TicketStatus.CANCELLED, null);
+            TicketEventKind.CANCELLED, currentStatus, TicketStatus.CANCELLED, message);
         tickets.updateLifecycle(ticketId, DealLifecycle.CANCELLED);
+        // Terminal deal state: same cascade as markLost above — a cancelled deal
+        // can never receive Import's pricing, so any pricing request still open on
+        // it is cancelled too.
+        CancelOpenForTicketResult cancelResult = pricingRequests.cancelOpenForTicket(ticketId, reason, actor);
+        if (cancelResult.hasAbandoned()) {
+            log.warn("cancel: ticket {} left {} pricing request(s) still open after the cascade: {}",
+                ticketId, cancelResult.abandonedCount(), cancelResult.abandonedIds());
+        }
         return requireTicket(ticketId);
     }
 
@@ -1255,11 +1444,13 @@ public class TicketService {
     @Transactional
     public TicketDto comment(long ticketId, CommentRequest request, UserPrincipal actor) {
         // Same access rule as GET /tickets/{id} — commenting returns the full ticket,
-        // so it must not be a side door around the read scoping.
+        // so it must not be a side door around the read scoping (nor, per Phase B,
+        // around the import quotation projection — the ticket is re-fetched below to
+        // pick up the new event, so it must be re-projected too).
         requireViewAccess(ticketId, actor);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.COMMENTED, null, null, request.message());
-        return requireTicket(ticketId);
+        return projectForRole(requireTicket(ticketId), actor.role());
     }
 
     @Transactional
@@ -1345,7 +1536,6 @@ public class TicketService {
 
     private void addOperationalActions(List<TicketActionDto> actions, TicketDto ticket, UserPrincipal actor) {
         TicketSummaryDto s = ticket.summary();
-        if (canSubmit(s, actor)) actions.add(new TicketActionDto("SUBMIT", "operational", "ส่งขอราคา"));
         if (IMPORT_ROLES.contains(actor.role()) && TicketStatus.SUBMITTED.equals(s.status())) {
             actions.add(new TicketActionDto("PICKUP", "operational", "รับเรื่อง"));
         }
@@ -1399,7 +1589,15 @@ public class TicketService {
         if (ACCOUNT_ROLES.contains(actor.role()) && canConfirmFinalPaymentNow(s)) {
             actions.add(new TicketActionDto("FINAL_PAYMENT", "payment", "รับเงินครบ"));
         }
-        if (canClose(s, actor)) actions.add(new TicketActionDto("CLOSE", "operational", "ปิดงาน"));
+        if (canConfirmClose(s, actor)) {
+            actions.add(new TicketActionDto("CONFIRM_CLOSE", "operational", "ยืนยันพร้อมปิดงาน"));
+        }
+        if (canRevokeCloseConfirmation(s, actor)) {
+            actions.add(new TicketActionDto("REVOKE_CLOSE_CONFIRM", "operational", "ยกเลิกการยืนยันปิดงาน"));
+        }
+        if (canVerifyClose(s, actor)) {
+            actions.add(new TicketActionDto("VERIFY_CLOSE", "operational", "ตรวจสอบและปิดงาน"));
+        }
         if (canCancel(s, actor)) actions.add(new TicketActionDto("CANCEL", "operational", "ยกเลิก"));
         if (canEditItems(s, actor)) actions.add(new TicketActionDto("EDIT_ITEMS", "operational", "แก้ไขรายการ"));
     }
@@ -1448,11 +1646,6 @@ public class TicketService {
             actions.add(new TicketActionDto("MARK_QUOTATION_REJECTED", "doc", "บันทึกลูกค้าปฏิเสธใบเสนอราคา",
                 List.of("quotationId")));
         }
-    }
-
-    private boolean canSubmit(TicketSummaryDto s, UserPrincipal actor) {
-        return SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id()
-            && TicketStatus.DRAFT.equals(s.status()) && s.itemCount() > 0;
     }
 
     private boolean canGenerateQuotation(TicketSummaryDto s, UserPrincipal actor) {
@@ -1512,21 +1705,54 @@ public class TicketService {
         return FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()) || stockAvailable || warehouseAvailable;
     }
 
-    private boolean canClose(TicketSummaryDto s, UserPrincipal actor) {
-        boolean legacyOk = TicketStatus.DOCUMENT_ISSUED.equals(s.status())
-            && (s.paymentStatus() == null || "FULLY_PAID".equals(s.paymentStatus()));
-        boolean dualTrackOk = TicketStatus.QUOTATION_ISSUED.equals(s.status())
-            && "FULLY_PAID".equals(s.paymentStatus())
-            && deliveryGateComplete(s);
-        return s.createdById() == actor.id() && (legacyOk || dualTrackOk);
+    /** Prerequisites only — the role checks live on each action below. */
+    private boolean closeReady(TicketSummaryDto s) {
+        try {
+            requireClosePrerequisites(s);
+            return true;
+        } catch (ApiException e) {
+            return false;
+        }
     }
 
+    private boolean canConfirmClose(TicketSummaryDto s, UserPrincipal actor) {
+        return CLOSE_CONFIRM_ROLES.contains(actor.role())
+            && DealLifecycle.ACTIVE.equals(s.lifecycle())
+            && s.closeConfirmedAt() == null
+            && closeReady(s);
+    }
+
+    private boolean canRevokeCloseConfirmation(TicketSummaryDto s, UserPrincipal actor) {
+        return ACCOUNT_ROLES.contains(actor.role())
+            && DealLifecycle.ACTIVE.equals(s.lifecycle())
+            && s.closeConfirmedAt() != null;
+    }
+
+    private boolean canVerifyClose(TicketSummaryDto s, UserPrincipal actor) {
+        return CEO_ROLES.contains(actor.role())
+            && DealLifecycle.ACTIVE.equals(s.lifecycle())
+            && s.closeConfirmedAt() != null
+            && closeReady(s);
+    }
+
+    /**
+     * The delivery half of the manual {@link #close} gate: the customer must actually
+     * have the goods.
+     *
+     * This previously also accepted GOODS_RECEIVED with no delivery records, justified
+     * as a concession to "legacy coarse deals". That justification did not hold:
+     * legacy tickets close through the {@code legacyOk} branch (status=DOCUMENT_ISSUED),
+     * which never consults this predicate at all. The only deals the concession ever
+     * reached were modern dual-track ones (status=QUOTATION_ISSUED) — and for those it
+     * was simply wrong. GOODS_RECEIVED means the goods reached GLR's own warehouse
+     * (S17); the customer has received nothing. A fully-paid deal in that state was
+     * closeable to COMPLETED with zero delivered units.
+     *
+     * Now aligned with {@link #maybeAdvanceClosedPaid}, so the manual and automatic
+     * paths agree on what "delivered" means.
+     */
     private boolean deliveryGateComplete(TicketSummaryDto s) {
-        if (FulfilmentStatus.FULLY_DELIVERED.equals(s.fulfillmentStatus())) {
-            return true;
-        }
-        return FulfilmentStatus.GOODS_RECEIVED.equals(s.fulfillmentStatus())
-            && !tickets.hasDeliveries(s.id());
+        return FulfilmentStatus.FULLY_DELIVERED.equals(s.fulfillmentStatus());
     }
 
     /**
@@ -1535,13 +1761,11 @@ public class TicketService {
      * (FULLY_DELIVERED). CLOSED_PAID (S20) must not be reachable on payment alone
      * while goods are still undelivered.
      *
-     * This is deliberately STRICTER than {@link #deliveryGateComplete} (used by the
-     * manual {@link #close}): that predicate also accepts a legacy coarse deal at
-     * GOODS_RECEIVED with no delivery records, but GOODS_RECEIVED only means the
-     * goods reached GLR's warehouse (S17) — nothing has been handed to the
-     * customer. Auto-advancing on that would skip DELIVERED (S19) for a fully-paid
-     * deal whose stock is sitting in our warehouse, which is exactly the bug this
-     * gate exists to prevent. {@code paymentFullyPaid} is passed explicitly because
+     * This now matches {@link #deliveryGateComplete} (used by the manual
+     * {@link #close}); that predicate used to be looser, accepting GOODS_RECEIVED
+     * with no delivery records, so the manual path could complete a deal this gate
+     * would have refused. Both now require FULLY_DELIVERED.
+     * {@code paymentFullyPaid} is passed explicitly because
      * the in-hand summary at the payment call sites was loaded before the FULLY_PAID
      * write in the same transaction; fulfilment status is read live from s.
      */

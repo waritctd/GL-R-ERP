@@ -52,6 +52,8 @@ export function roleLabel(role) {
     sales: 'SALES',
     sales_manager: 'SALES MANAGER',
     import: 'IMPORT',
+    warehouse: 'WAREHOUSE',
+    qc: 'QC',
     ceo: 'CEO',
     admin: 'ADMIN',
   };
@@ -72,6 +74,32 @@ export function ticketStatusLabel(status) {
     cancelled:        { label: 'ยกเลิกแล้ว',        tone: 'danger' },
   };
   return map[status] ?? { label: status, tone: 'neutral' };
+}
+
+// PricingRequest status -> StatusBadge tone (commit 6). Canonical source; do
+// not re-add a page-local map for pricing-request status elsewhere. Status
+// order/gates live in features/pricingRequests/pricingRequestMeta.js.
+export function pricingRequestStatusLabel(status) {
+  const map = {
+    DRAFT: { label: 'แบบร่าง', tone: 'neutral' },
+    SUBMITTED: { label: 'รอ Import รับเรื่อง', tone: 'warning' },
+    IMPORT_REVIEWING: { label: 'Import ตรวจคำขอราคา', tone: 'info' },
+    AWAITING_FACTORY_RESPONSE: { label: 'รอราคาโรงงาน', tone: 'warning' },
+    COSTING_IN_PROGRESS: { label: 'กำลังร่างต้นทุน', tone: 'info' },
+    READY_FOR_CEO_REVIEW: { label: 'ส่งให้ CEO ตรวจแล้ว', tone: 'success' },
+    // Step 3 (CEO Selling Price Decision).
+    CEO_REVIEWING: { label: 'CEO กำลังพิจารณาราคาขาย', tone: 'info' },
+    APPROVED_FOR_QUOTATION: { label: 'อนุมัติราคาขายแล้ว', tone: 'success' },
+    COSTING_REVISION_REQUIRED: { label: 'CEO ตีกลับให้แก้ไขต้นทุน', tone: 'danger' },
+    // Step 4/5 (these two were missing — a pre-existing gap fixed alongside adding
+    // QUOTATION_ACCEPTED; QUOTATION_ISSUED fell back to the raw status string before).
+    QUOTATION_ISSUED: { label: 'ออกใบเสนอราคาลูกค้าแล้ว', tone: 'success' },
+    QUOTATION_ACCEPTED: { label: 'ลูกค้ายอมรับใบเสนอราคาแล้ว', tone: 'success' },
+    MORE_INFO_REQUIRED: { label: 'รอข้อมูลเพิ่มเติม', tone: 'warning' },
+    SUPERSEDED: { label: 'ถูกแทนที่แล้ว', tone: 'neutral' },
+    CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },
+  };
+  return map[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
 export function ticketPriorityLabel(priority) {
@@ -114,6 +142,21 @@ export function overtimeStatusLabel(status) {
     APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
     REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
     CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'neutral' },
+  };
+  return map[status] ?? { label: status || '-', tone: 'neutral' };
+}
+
+// Special-money (welfare) request status -> StatusBadge tone. Same status
+// shape as overtime (SUBMITTED -> MANAGER_APPROVED -> APPROVED, or
+// REJECTED/CANCELLED at either step) — see SpecialMoneyStatus.java. Canonical
+// source; do not re-add a page-local `statusInfo`/map elsewhere.
+export function specialMoneyStatusLabel(status) {
+  const map = {
+    SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
+    MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },
+    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
+    REJECTED: { label: 'ปฏิเสธ', tone: 'danger' },
+    CANCELLED: { label: 'ยกเลิก', tone: 'neutral' },
   };
   return map[status] ?? { label: status || '-', tone: 'neutral' };
 }
@@ -230,6 +273,19 @@ export function fulfilmentStatusLabel(value) {
     FROM_STOCK: { label: 'สินค้าจากสต็อก', tone: 'success' },
     PARTIALLY_DELIVERED: { label: 'ส่งมอบบางส่วน', tone: 'warning' },
     FULLY_DELIVERED: { label: 'ส่งมอบครบแล้ว', tone: 'success' },
+  };
+  return map[value] ?? { label: value || '-', tone: 'neutral' };
+}
+
+// Step 7: Factory Purchase Order and Import Execution — mirrors
+// th.co.glr.hr.procurement.FactoryPurchaseOrderStatus (a short, linear status, deliberately NOT
+// the same 5-value set as fulfilmentStatusLabel above — see that class's own Javadoc).
+export function factoryPurchaseOrderStatusLabel(value) {
+  const map = {
+    OPEN: { label: 'เปิดใบสั่งซื้อ', tone: 'info' },
+    SHIPPING: { label: 'สินค้าเดินทาง', tone: 'warning' },
+    RECEIVED: { label: 'รับสินค้าแล้ว', tone: 'success' },
+    CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },
   };
   return map[value] ?? { label: value || '-', tone: 'neutral' };
 }

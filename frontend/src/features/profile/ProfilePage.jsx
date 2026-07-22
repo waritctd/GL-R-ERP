@@ -7,6 +7,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Panel, PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { hasPermission } from '../../app/permissions.js';
 import { formatAddress, formatShortDate, requestStatus } from '../../utils/format.js';
 import { ChangeRequestModal } from './ChangeRequestModal.jsx';
 
@@ -14,7 +15,9 @@ const MY_REQUESTS_TABLE_GRID = 'grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_minmax(
 
 export function ProfilePage({ user, employee, profileRequests, onCreateRequest }) {
   const [requestField, setRequestField] = useState(null);
-  const isEmployee = user.role === 'employee';
+  // Employee-tier users (employee + the new warehouse/qc roles) request profile changes rather
+  // than edit directly — tie the affordance to the permission, not a single hard-coded role.
+  const isEmployee = hasPermission(user.role, 'canSubmitProfileRequests');
   const pendingKeys = useMemo(
     () => new Set(profileRequests.filter((request) => request.status === 'pending').map((request) => request.fieldKey)),
     [profileRequests],

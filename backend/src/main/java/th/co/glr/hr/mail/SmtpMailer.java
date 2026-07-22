@@ -1,5 +1,6 @@
 package th.co.glr.hr.mail;
 
+import java.util.List;
 import java.util.Properties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -86,6 +87,11 @@ public class SmtpMailer implements Mailer {
 
     @Override
     public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {
+        sendWithAttachments(to, subject, body, List.of(new Attachment(filename, bytes, null)));
+    }
+
+    @Override
+    public void sendWithAttachments(String to, String subject, String body, List<Attachment> attachments) {
         try {
             var message = sender.createMimeMessage();
             var helper = new MimeMessageHelper(message, true, "UTF-8");
@@ -93,11 +99,13 @@ public class SmtpMailer implements Mailer {
             helper.setTo(to);
             helper.setSubject(subject);
             helper.setText(body, false);
-            helper.addAttachment(filename, new ByteArrayResource(bytes));
+            for (Attachment attachment : attachments) {
+                helper.addAttachment(attachment.filename(), new ByteArrayResource(attachment.bytes()));
+            }
             sender.send(message);
-            log.info("Email with attachment sent via SMTP: from={} to={} filename={}", fromAddress, to, filename);
+            log.info("Email with {} attachment(s) sent via SMTP: from={} to={}", attachments.size(), fromAddress, to);
         } catch (Exception exception) {
-            throw new MailSendException("SMTP send with attachment failed to " + to + ": "
+            throw new MailSendException("SMTP send with attachment(s) failed to " + to + ": "
                 + exception.getMessage(), exception);
         }
     }

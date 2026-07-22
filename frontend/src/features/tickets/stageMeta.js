@@ -52,6 +52,17 @@ export const LOST_REASONS = [
   { code: 'ALREADY_PURCHASED', label: 'ลูกค้าสั่งซื้อกระเบื้องไปหมดแล้ว' },
 ];
 
+/**
+ * Why the opportunity went away (V56) — distinct from LOST_REASONS, which is why
+ * we lost a deal we were competing for. Mirrors DealCancelReason (backend ticket/).
+ */
+export const CANCEL_REASONS = [
+  { code: 'OWNER_CANCELLED',   label: 'เจ้าของยกเลิกโครงการ' },
+  { code: 'PROJECT_SUSPENDED', label: 'โครงการถูกระงับไม่มีกำหนด' },
+  { code: 'BUDGET_CANCELLED',  label: 'งบประมาณถูกยกเลิก' },
+  { code: 'OTHER',             label: 'อื่น ๆ (ระบุในหมายเหตุ)' },
+];
+
 export const GATE_LABEL = {
   sales: 'ฝ่ายขาย',
   import: 'ฝ่ายนำเข้า',
@@ -69,6 +80,19 @@ export function stageIndex(code) {
 export function nextStage(code) {
   const idx = stageIndex(code);
   return idx >= 0 && idx < SALES_STAGES.length - 1 ? SALES_STAGES[idx + 1] : null;
+}
+
+/**
+ * Backward moves that are a normal part of the sales flow, so they don't need a
+ * written reason. Mirrors DealStage.isRoutineBackwardMove (backend ticket/).
+ *
+ * QUOTE_DESIGN_SIDE (S4+S5) sits after SPEC_APPROVED (S3) in the pipeline order,
+ * but the common business path quotes the designer before the designer signs off
+ * the spec (S1 → S2 → S4 → S3 → S5). Demanding a justification for that everyday
+ * step puts friction on the default path.
+ */
+export function isRoutineBackwardMove(fromStage, toStage) {
+  return fromStage === 'QUOTE_DESIGN_SIDE' && toStage === 'SPEC_APPROVED';
 }
 
 export function phaseOf(code) {
@@ -130,14 +154,12 @@ export const PAYMENT_SUBSTEPS = [
   { code: 'FULLY_PAID',            label: 'ชำระครบแล้ว' },
 ];
 
-// Internal price workflow (keyed by ticket.status) — the inner journey of the
-// quote stages (S4+S5/QUOTE_DESIGN_SIDE, QUOTE_BUYER): sales requests the price,
-// Import proposes it, the CEO calculates/approves the confirmed price, and only
-// then can the quotation be issued. Draft sits before step 1.
-export const PRICING_SUBSTEPS = [
-  { code: 'submitted',        label: 'ส่งขอราคาแล้ว' },
-  { code: 'in_review',        label: 'Import กำลังเสนอราคา' },
-  { code: 'price_proposed',   label: 'รอ CEO อนุมัติราคา' },
-  { code: 'approved',         label: 'ราคายืนยันแล้ว' },
-  { code: 'quotation_issued', label: 'ออกใบเสนอราคาแล้ว' },
-];
+// The internal PricingRequest journey (DRAFT -> SUBMITTED -> IMPORT_REVIEWING
+// <-> MORE_INFO_REQUIRED) used to be keyed off ticket.status here as
+// PRICING_SUBSTEPS. Since commit 5 (ticket creation no longer auto-submits)
+// that status is permanently stuck at 'draft', so it moved to
+// features/pricingRequests/pricingRequestMeta.js. It was briefly a single
+// progress-chip strip keyed off "the deal's most recent PricingRequest"
+// (highest id), but that reduction was itself a bug (review-remediation plan,
+// Fix 3): DealStagePanel's PricingRequestSummaryStrip now renders every
+// non-CANCELLED request instead of picking one "latest".

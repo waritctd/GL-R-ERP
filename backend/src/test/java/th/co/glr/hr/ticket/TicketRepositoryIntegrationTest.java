@@ -79,11 +79,11 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
 
         QuotationDto designerV1 = tickets.createQuotation(ticketId, "QT-2026-0001", actorId, new BigDecimal("1000"),
-            QuotationRecipient.DESIGNER, "Designer Co.", "30 วัน", "45 วัน", "ส่งถึงไซต์", null);
+            QuotationRecipient.DESIGNER, "Designer Co.", "30 วัน", "45 วัน", "ส่งถึงไซต์", null, null, null, null);
         QuotationDto ownerV1 = tickets.createQuotation(ticketId, "QT-2026-0002", actorId, new BigDecimal("1200"),
-            QuotationRecipient.OWNER, "Owner", null, null, null, null);
+            QuotationRecipient.OWNER, "Owner", null, null, null, null, null, null, null);
         QuotationDto designerV2 = tickets.createQuotation(ticketId, "QT-2026-0003", actorId, new BigDecimal("1400"),
-            QuotationRecipient.DESIGNER, null, null, null, null, null);
+            QuotationRecipient.DESIGNER, null, null, null, null, null, null, null, null);
 
         assertThat(designerV1.quotationVersion()).isEqualTo(1);
         assertThat(ownerV1.quotationVersion()).isEqualTo(1);
@@ -250,6 +250,31 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             .filter(e -> TicketEventKind.COMMENTED.equals(e.kind()))
             .findFirst().orElseThrow();
         assertThat(commented.itemSnapshot()).isNull();
+    }
+
+    @Test
+    void addEventWithDocument_persistsTheLinkAndRejectsAHalfSetOne() {
+        // Real SQL only: the CHECK enforcing "both columns or neither" and the type
+        // vocabulary cannot fire against a Mockito stub.
+        long ticketId = tickets.create(sampleTicket(
+            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        tickets.addEventWithDocument(ticketId, actorId, "พนักงานขาย",
+            TicketEventKind.QUOTATION_ISSUED, TicketStatus.APPROVED, TicketStatus.QUOTATION_ISSUED,
+            "linked", RelatedDocumentType.QUOTATION, 4242L);
+
+        assertThat(tickets.findById(ticketId).orElseThrow().events())
+            .anyMatch(e -> TicketEventKind.QUOTATION_ISSUED.equals(e.kind()));
+
+        // An id without a type (or vice versa) must be refused, not silently stored.
+        assertThatThrownBy(() -> tickets.addEventWithDocument(ticketId, actorId, "พนักงานขาย",
+            TicketEventKind.COMMENTED, null, null, "half a link", null, 99L))
+            .isInstanceOf(DataIntegrityViolationException.class);
+
+        // And an unknown document type must be refused too.
+        assertThatThrownBy(() -> tickets.addEventWithDocument(ticketId, actorId, "พนักงานขาย",
+            TicketEventKind.COMMENTED, null, null, "bad type", "INVOICE_PDF", 1L))
+            .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     private CreateTicketRequest sampleTicket(TicketItemRequest... items) {

@@ -4,13 +4,16 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
   dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, depositPolicyLabel,
-  formatThaiDate, overdueBadgeLabel, paymentStageLabel, tenderRequirementLabel,
+  formatThaiDate, overdueBadgeLabel, paymentStageLabel, pricingRequestStatusLabel, tenderRequirementLabel,
 } from '../../utils/format.js';
+import {
+  activePricingRequestsSummary, PRICING_REQUEST_STATUSES, pricingRequestRecipientLabel,
+} from '../pricingRequests/pricingRequestMeta.js';
 import { DealStageStepper, PhaseTracker } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
 import {
   allowedTargetStages, canMarkLost, canSetStage, GATE_LABEL, nextStage,
-  PAYMENT_SUBSTEPS, PRICING_SUBSTEPS, PROCUREMENT_SUBSTEPS, stageMeta,
+  PAYMENT_SUBSTEPS, PROCUREMENT_SUBSTEPS, stageMeta,
 } from './stageMeta.js';
 import { UpdateStageModal } from './UpdateStageModal.jsx';
 
@@ -51,6 +54,42 @@ function SubstepChips({ label, steps, currentCode }) {
 }
 
 /**
+ * Deal-level pricing-request glance strip (Fix 3 of the review-remediation
+ * plan): a roll-up count line, plus one "recipient → status" line per
+ * non-CANCELLED request. Deliberately compact — PricingRequestPanel's cards
+ * (items, event log, actions) remain the source of truth for detail; this
+ * only needs to answer "is there pricing work in flight on this deal, and
+ * with whom" at a glance, without reducing several requests to one.
+ */
+function PricingRequestSummaryStrip({ summary }) {
+  const rollupParts = PRICING_REQUEST_STATUSES
+    .filter((status) => status !== 'CANCELLED' && summary.counts[status])
+    .map((status) => `${pricingRequestStatusLabel(status).label} ${summary.counts[status]}`);
+  const rollupText = [`ใบขอราคา ${summary.total} รายการ`, ...rollupParts].join(' · ');
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-2xs font-bold text-text-muted">การขอราคา:</span>
+        <span className="text-2xs text-text-muted">{rollupText}</span>
+      </div>
+      {summary.requests.map((pr) => {
+        const status = pricingRequestStatusLabel(pr.status);
+        return (
+          <div key={pr.id} className="flex flex-wrap items-center gap-1.5 pl-1">
+            <span className="text-2xs text-text-muted">
+              {pricingRequestRecipientLabel(pr.recipientType)}
+              {pr.recipientLabel ? ` · ${pr.recipientLabel}` : ''}
+            </span>
+            <Icon name="chevronRight" size={10} className="text-text-muted" />
+            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * Deal pipeline panel (V50): the 14-stage journey this deal must travel, with
  * the current stage front and center. One ticket = one deal — the operational
  * price-request/dual-track machinery below the panel is HOW some stages get
@@ -58,7 +97,7 @@ function SubstepChips({ label, steps, currentCode }) {
  * (docActions is rendered by the parent from its real `can` permission flags).
  */
 export function DealStagePanel({
-  user, summary, availableActions = [], docActions, primaryAction, guidance, actionLoading,
+  user, summary, availableActions = [], pricingRequests = [], docActions, primaryAction, guidance, actionLoading,
   deliveryProgress = null,
   onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement, onSetDepositPolicy,
 }) {
@@ -73,7 +112,8 @@ export function DealStagePanel({
 
   const hasAction = (action, targetStage = null) => availableActions.some((item) =>
     item.action === action && (targetStage == null || item.targetStage === targetStage));
-  const lost = !!summary.lostReason;
+  // lifecycle, not lostReason — the reason persists after a reopen (V57).
+  const lost = summary.lifecycle === 'CLOSED_LOST';
   const lifecycle = summary.lifecycle ?? (lost ? 'CLOSED_LOST' : 'ACTIVE');
   const meta = stageMeta(summary.salesStage);
   const label = dealStageLabel(summary.salesStage);
@@ -97,12 +137,18 @@ export function DealStagePanel({
     : null;
   const nextHint = rawNextHint && rawNextHint !== guidance ? rawNextHint : null;
 
-  // Sub-status chip rows — the inner journey of the current stage:
-  // • การขอราคา: the internal sales→Import→CEO confirmed-price flow that lives
-  //   inside the quote stages (until the customer confirms the order).
+  // Sub-status rows — the inner journey of the current stage:
+  // • การขอราคา: every non-CANCELLED PricingRequest on this deal (Fix 3 of the
+  //   review-remediation plan), NOT ticket.status (which is permanently stuck
+  //   at 'draft' now that ticket creation no longer auto-submits; see
+  //   TicketService.create/submit, commit 5) and NOT just "the latest one" —
+  //   reducing several concurrent requests to a single highest-id winner used
+  //   to hide a live IMPORT_REVIEWING request behind a newer DRAFT, or hide
+  //   the whole strip behind a newer CANCELLED one. Renders nothing when the
+  //   deal has no requests, or every request is CANCELLED.
   // • การชำระเงิน / การนำเข้า: replace the old Track P / Track F steppers.
-  const showPricingChips = ['submitted', 'in_review', 'price_proposed', 'approved'].includes(summary.status)
-    || (summary.status === 'quotation_issued' && summary.paymentStatus == null);
+  const pricingSummary = activePricingRequestsSummary(pricingRequests);
+  const showPricingChips = pricingSummary != null;
   const showPaymentChips = summary.paymentStatus != null;
   const derivedPayment = paymentStageLabel(summary.paymentStage);
   const showImportChips = summary.fulfillmentStatus != null;
@@ -231,7 +277,7 @@ export function DealStagePanel({
             {(showPricingChips || showPaymentChips || showImportChips) ? (
               <div className="flex flex-col gap-1.5">
                 {showPricingChips ? (
-                  <SubstepChips label="การขอราคา:" steps={PRICING_SUBSTEPS} currentCode={summary.status} />
+                  <PricingRequestSummaryStrip summary={pricingSummary} />
                 ) : null}
                 {showPaymentChips ? (
                   depositBypassesNotice(summary.depositPolicy) ? null : (

@@ -66,7 +66,7 @@ class LatenessNeverAffectsPayrollTest {
 
     // The companion assertion — that the migration itself records §76 in COMMENT ON COLUMN — lives
     // with that migration on chore/attendance-daily-migration-hold. It is held back because
-    // applying a version above the in-flight sales migrations (V56-V59) would make Flyway silently
+    // applying a version above the in-flight sales migrations (V56-V60, after the V55 quotation_doc_terms reconciliation) would make Flyway silently
     // ignore theirs: out-of-order is off and prod runs with validation disabled. The guard above is
     // the one that actually matters, and it does not depend on the migration.
 }

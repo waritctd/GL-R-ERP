@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { Modal } from '../../components/common/Modal.jsx';
 import { dealStageLabel } from '../../utils/format.js';
-import { allowedTargetStages, stageIndex } from './stageMeta.js';
+import { allowedTargetStages, isRoutineBackwardMove, stageIndex } from './stageMeta.js';
 
 /**
  * Manual stage-change modal (from the Claude Design prototype). The select is
  * limited to stages this user may set on this deal; moving backward or skipping
- * forward multiple stages requires a note (mirrors TicketService.updateStage).
+ * forward multiple stages requires a note (mirrors TicketService.updateStage) —
+ * except for routine backward moves, which are part of the normal flow.
  */
 export function UpdateStageModal({ user, deal, onClose, onSubmit, submitting }) {
   const options = allowedTargetStages(user, deal);
@@ -14,7 +15,7 @@ export function UpdateStageModal({ user, deal, onClose, onSubmit, submitting }) 
   const [note, setNote] = useState('');
 
   const distance = stage !== '' ? stageIndex(stage) - stageIndex(deal.salesStage) : 0;
-  const backward = distance < 0;
+  const backward = distance < 0 && !isRoutineBackwardMove(deal.salesStage, stage);
   const skipForward = distance > 1;
   const noteRequired = backward || skipForward;
   const canSave = stage !== '' && (!noteRequired || note.trim() !== '') && !submitting;

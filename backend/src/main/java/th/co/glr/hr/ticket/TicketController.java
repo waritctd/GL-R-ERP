@@ -42,12 +42,15 @@ public class TicketController {
     @GetMapping
     TicketListResponse list(
         @RequestParam(required = false) String status,
+        // Step 9 addition: additive filter on the deal pipeline stage (e.g. CLOSED_PAID) — lets the
+        // commission "Linked Deal" picker ask for only deals eligible for a commission submission.
+        @RequestParam(required = false) String salesStage,
         @RequestParam(required = false) Integer page,
         @RequestParam(required = false) Integer size,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        Page<TicketSummaryDto> result = ticketService.listPage(status, user, PageRequest.resolve(page, size));
+        Page<TicketSummaryDto> result = ticketService.listPage(status, salesStage, user, PageRequest.resolve(page, size));
         return new TicketListResponse(result.items(), result.page(), result.size(), result.total());
     }
 
@@ -225,22 +228,40 @@ public class TicketController {
         }
         byte[] bytes = ticketService.getQuotationXlsx(id, quotationId, user);
         return ResponseEntity.ok()
-            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"quotation-" + quotationId + ".xlsx\"")
-            .contentType(MediaType.parseMediaType(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"quotation-" + quotationId + ".xls\"")
+            .contentType(MediaType.parseMediaType("application/vnd.ms-excel"))
             .body(bytes);
     }
 
-    @PostMapping("/{id}/close")
-    TicketDetailResponse close(@PathVariable long id, HttpSession session) {
+    // Three-party close (V56): ฝ่ายบัญชี confirms, then the CEO verifies. The old
+    // single-step POST /{id}/close (sales owner, one signature) is gone.
+    @PostMapping("/{id}/close/confirm")
+    TicketDetailResponse confirmCloseReady(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.close(id, user));
+        return new TicketDetailResponse(ticketService.confirmCloseReady(id, user));
+    }
+
+    @PostMapping("/{id}/close/revoke")
+    TicketDetailResponse revokeCloseConfirmation(@PathVariable long id,
+                                                 @RequestBody(required = false) NoteRequest body,
+                                                 HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(
+            ticketService.revokeCloseConfirmation(id, body == null ? null : body.note(), user));
+    }
+
+    @PostMapping("/{id}/close/verify")
+    TicketDetailResponse verifyClose(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.verifyClose(id, user));
     }
 
     @PostMapping("/{id}/cancel")
-    TicketDetailResponse cancel(@PathVariable long id, HttpSession session) {
+    TicketDetailResponse cancel(@PathVariable long id,
+                                @Valid @RequestBody CancelRequest request,
+                                HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.cancel(id, user));
+        return new TicketDetailResponse(ticketService.cancel(id, request.reason(), request.note(), user));
     }
 
     // ── Deal pipeline (V50) ─────────────────────────────────────────────────
@@ -326,6 +347,10 @@ public class TicketController {
 
     record MarkLostRequest(@jakarta.validation.constraints.NotBlank String reason,
                            @jakarta.validation.constraints.Size(max = 2000) String note) {}
+
+    /** Same shape as MarkLostRequest — cancel now carries a structured reason too (V57). */
+    record CancelRequest(@jakarta.validation.constraints.NotBlank String reason,
+                         @jakarta.validation.constraints.Size(max = 2000) String note) {}
 
     record ReopenRequest(@jakarta.validation.constraints.Size(max = 2000) String note) {}
 

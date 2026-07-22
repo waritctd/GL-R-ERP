@@ -1,5 +1,7 @@
 package th.co.glr.hr.mail;
 
+import java.util.List;
+
 /**
  * Transport-agnostic email sender. One implementation is active per deployment, selected by the
  * {@code app.mail.provider} property so the transport is a config switch, not per-environment code:
@@ -30,4 +32,15 @@ public interface Mailer {
      * @throws MailSendException if the underlying transport fails.
      */
     void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes);
+
+    /**
+     * Sends zero or more attachments with a plain-text email body. An empty list behaves like
+     * {@link #send(String, String, String)}.
+     *
+     * @throws MailSendException if the underlying transport fails.
+     */
+    void sendWithAttachments(String to, String subject, String body, List<Attachment> attachments);
+
+    /** One file attached to an outbound email, already resolved to bytes. */
+    record Attachment(String filename, byte[] bytes, String mimeType) {}
 }

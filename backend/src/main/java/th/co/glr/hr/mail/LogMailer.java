@@ -1,5 +1,6 @@
 package th.co.glr.hr.mail;
 
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -25,5 +26,11 @@ public class LogMailer implements Mailer {
         int byteCount = bytes == null ? 0 : bytes.length;
         log.info("[LogMailer] email with attachment NOT sent (provider=log). to={} subject={} filename={} bytes={}",
             to, subject, filename, byteCount);
+    }
+
+    @Override
+    public void sendWithAttachments(String to, String subject, String body, List<Attachment> attachments) {
+        log.info("[LogMailer] email with {} attachment(s) NOT sent (provider=log). to={} subject={}",
+            attachments.size(), to, subject);
     }
 }

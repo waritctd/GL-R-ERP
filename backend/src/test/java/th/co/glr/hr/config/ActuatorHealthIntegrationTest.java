@@ -10,6 +10,7 @@ import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -30,6 +31,7 @@ import th.co.glr.hr.support.PostgresTestSupport;
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
+@ActiveProfiles("test") // excludes SchedulingConfig so no scheduled worker races this shared-DB context
 @SpringBootTest
 class ActuatorHealthIntegrationTest {
 

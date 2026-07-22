@@ -6,6 +6,7 @@ import com.resend.services.emails.model.Attachment;
 import com.resend.services.emails.model.CreateEmailOptions;
 import com.resend.services.emails.model.CreateEmailResponse;
 import java.util.Base64;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -69,18 +70,25 @@ public class ResendMailer implements Mailer {
 
     @Override
     public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {
-        Attachment attachment = Attachment.builder()
-            .fileName(filename)
-            .content(Base64.getEncoder().encodeToString(bytes))
-            .contentType("application/pdf")
-            .build();
+        sendWithAttachments(to, subject, body, List.of(new th.co.glr.hr.mail.Mailer.Attachment(filename, bytes, "application/pdf")));
+    }
+
+    @Override
+    public void sendWithAttachments(String to, String subject, String body, List<th.co.glr.hr.mail.Mailer.Attachment> attachments) {
+        List<Attachment> resendAttachments = attachments.stream()
+            .map(a -> Attachment.builder()
+                .fileName(a.filename())
+                .content(Base64.getEncoder().encodeToString(a.bytes()))
+                .contentType(a.mimeType() != null ? a.mimeType() : "application/pdf")
+                .build())
+            .toList();
 
         CreateEmailOptions request = CreateEmailOptions.builder()
             .from(fromAddress)
             .to(to)
             .subject(subject)
             .text(body)
-            .attachments(attachment)
+            .attachments(resendAttachments)
             .build();
         sendWithRetry(request, to);
     }
