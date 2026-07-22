@@ -1672,17 +1672,22 @@ class TicketServiceTest {
         assertThat(paused).contains("RESUME", "MARK_DORMANT");
         assertThat(paused).doesNotContain("SUBMIT", "UPDATE_STAGE");
 
+        // Slice S1 "engine collapse": MARK_QUOTATION_SENT/ACCEPTED/REJECTED are gone from
+        // actions() entirely (both owner and manager) — the routes behind them
+        // (/{id}/quotations/{quotationId}/{sent,accepted,rejected}) were retired, so
+        // advertising the verb would point a client at a 404. See
+        // actions_neverOffersRetiredLegacyPricingVerbs for the full negative-space proof.
         stubDealWithQuotations(12L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
             DealStage.QUOTE_BUYER, DealLifecycle.ACTIVE, List.of(quotationOf(12L, 12L, "QT-2026-0012",
                 QuotationRecipient.BUYER, 1, QuotationStatus.ISSUED)));
         List<String> quotationOwner = service.actions(12L, salesActor)
             .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
-        assertThat(quotationOwner).contains("MARK_QUOTATION_SENT", "MARK_QUOTATION_ACCEPTED",
-            "MARK_QUOTATION_REJECTED");
+        assertThat(quotationOwner).doesNotContain("MARK_QUOTATION_SENT", "MARK_QUOTATION_ACCEPTED",
+            "MARK_QUOTATION_REJECTED", "GENERATE_QUOTATION");
         List<String> quotationManager = service.actions(12L, salesManagerActor)
             .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
         assertThat(quotationManager).doesNotContain("MARK_QUOTATION_SENT", "MARK_QUOTATION_ACCEPTED",
-            "MARK_QUOTATION_REJECTED");
+            "MARK_QUOTATION_REJECTED", "GENERATE_QUOTATION");
     }
 
     @Test
@@ -1701,6 +1706,38 @@ class TicketServiceTest {
         List<String> withoutItems = service.actions(21L, salesActor)
             .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
         assertThat(withoutItems).doesNotContain("SUBMIT");
+    }
+
+    @Test
+    void actions_neverOffersRetiredLegacyPricingVerbs() {
+        // Slice S1 "engine collapse" (feat/deal-workspace-unification): PICKUP/PROPOSE_PRICE/
+        // APPROVE/REJECT/CALCULATE_PRICES/OVERRIDE_ITEM_PRICE/GENERATE_QUOTATION must never be
+        // advertised by actions() — TicketController no longer exposes the routes behind them
+        // (see TicketService.pickup/proposePrice/approve/reject/calculatePrices/
+        // overrideItemPrice/generateQuotation's own @Deprecated Javadoc). Exercised against
+        // the 3 real stranded pre-redesign statuses (submitted/in_review/price_proposed) —
+        // the only statuses that could ever have surfaced these verbs — for both the role
+        // that used to see them (import/ceo) and the deal owner (sales).
+        stubTicket(30L, 1L, TicketStatus.SUBMITTED);
+        List<String> submitted = service.actions(30L, importActor)
+            .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
+        assertThat(submitted).doesNotContain("PICKUP", "PROPOSE_PRICE");
+
+        stubTicket(31L, 1L, TicketStatus.IN_REVIEW);
+        List<String> inReview = service.actions(31L, importActor)
+            .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
+        assertThat(inReview).doesNotContain("PROPOSE_PRICE");
+
+        stubTicket(32L, 1L, TicketStatus.PRICE_PROPOSED);
+        List<String> priceProposedForCeo = service.actions(32L, ceoActor)
+            .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
+        assertThat(priceProposedForCeo).doesNotContain("APPROVE", "REJECT", "CALCULATE_PRICES",
+            "OVERRIDE_ITEM_PRICE");
+
+        stubTicket(33L, 1L, TicketStatus.APPROVED);
+        List<String> approvedForOwner = service.actions(33L, salesActor)
+            .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
+        assertThat(approvedForOwner).doesNotContain("GENERATE_QUOTATION");
     }
 
     // ── deal pipeline: auto-advance from operational transitions (V50) ────
