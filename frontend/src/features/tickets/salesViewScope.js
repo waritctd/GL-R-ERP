@@ -23,9 +23,12 @@ const SECTION_IDS = [
   'pricingRequest', // PricingRequestPanel: the designer/owner/buyer pricing-request + factory-quote/costing chain
   'payment',        // "การชำระเงิน": amounts payable/paid/outstanding, receipt history, record-payment
   'delivery',       // "การส่งมอบสินค้า": procurement/fulfilment substeps + delivery recording
-  'quotation',      // "ใบเสนอราคา": issued quotation revisions + downloads
+  'quotation',      // "ใบเสนอราคา" (legacy): the 3 pre-redesign ticket-native quotation rows, read-only
   'depositNotice',  // the deposit-notice view/issue affordance inside the stage panel's doc row
-  'priceApproval',  // "การอนุมัติราคา": the CEO approve/reject decision panel
+  // "การอนุมัติราคา" (the CEO approve/reject decision panel) is gone — Phase 2 Slice S2 retired
+  // ticket-native price approval along with its routes (see docs/agent-handoffs/104). CEO price
+  // decisions now happen on the PricingRequest chain (PricingRequestDetailPage), gated there.
+  'dealQuotation',  // "ราคาและใบเสนอราคา" (Slice S2): the PCR customer-quotation tail (issue/outcome) + confirm-order, pulled onto the deal page
   'dealTracking',   // "การติดตามดีล" (Slice B2, handoff 103): win%, designer/owner/buyer, activity log
 ];
 
@@ -68,7 +71,7 @@ export function visibleSections(role) {
       payment: false,
       quotation: false,
       depositNotice: false,
-      priceApproval: false,
+      dealQuotation: false,
       dealTracking: false,
     };
   }
@@ -78,7 +81,6 @@ export function visibleSections(role) {
       ...allTrue(),
       pricingRequest: false,
       delivery: false,
-      priceApproval: false,
       dealTracking: false,
     };
   }

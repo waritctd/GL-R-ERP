@@ -201,6 +201,14 @@ public class TicketService {
             "การส่งขอราคาย้ายไปอยู่ที่ใบขอราคา (PCR) แล้ว — กรุณาสร้างใบขอราคาจากหน้าดีลแทน");
     }
 
+    /**
+     * Deprecated: intake pickup for the legacy submit → pickup → propose-price loop that
+     * {@link #submit} permanently severed for new deals (always 409s from {@code draft}).
+     * Reachable only for the handful of pre-redesign tickets stranded at {@code submitted}
+     * status; no {@code @PostMapping} route exposes this anymore. See
+     * {@link th.co.glr.hr.pricingrequest.PricingRequestService} for the current intake flow.
+     */
+    @Deprecated
     @Transactional
     public TicketDto pickup(long ticketId, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
@@ -211,6 +219,15 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
+    /**
+     * Deprecated: superseded by the PricingRequest → FactoryQuote → PricingDecision chain
+     * ({@link th.co.glr.hr.pricingrequest.PricingRequestService},
+     * {@link th.co.glr.hr.factoryquote.FactoryQuoteService},
+     * {@link th.co.glr.hr.pricingdecision.PricingDecisionService}). Reachable only for
+     * legacy tickets stuck in {@code in_review}/{@code price_proposed}; no controller route
+     * exposes this anymore.
+     */
+    @Deprecated
     @Transactional
     public TicketDto proposePrice(long ticketId, ProposePriceRequest request, UserPrincipal actor) {
         if (!IMPORT_ROLES.contains(actor.role())) {
@@ -249,6 +266,13 @@ public class TicketService {
         }
     }
 
+    /**
+     * Deprecated: CEO price approval now happens on the PricingDecision aggregate — see
+     * {@link th.co.glr.hr.pricingdecision.PricingDecisionService#approve}. Reachable only
+     * for legacy tickets stuck at {@code price_proposed}; no controller route exposes this
+     * anymore.
+     */
+    @Deprecated
     @Transactional
     public TicketDto approve(long ticketId, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
@@ -263,6 +287,13 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
+    /**
+     * Deprecated: CEO price rejection now happens on the PricingDecision aggregate — see
+     * {@link th.co.glr.hr.pricingdecision.PricingDecisionService#returnToImport}. Reachable
+     * only for legacy tickets stuck at {@code price_proposed}; no controller route exposes
+     * this anymore.
+     */
+    @Deprecated
     @Transactional
     public TicketDto reject(long ticketId, RejectRequest request, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
@@ -275,6 +306,15 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
+    /**
+     * Deprecated: ticket-native quotation generation, superseded by
+     * {@link th.co.glr.hr.customerquotation.CustomerQuotationService#create} +
+     * {@link th.co.glr.hr.customerquotation.CustomerQuotationService#issue} against the
+     * PricingRequest/PricingDecision chain. No controller route exposes this anymore.
+     * Quotation download/read for both legacy and PCR-issued quotations stays available via
+     * {@link #getQuotationXlsx}/{@link #getQuotationPdf} — this deprecation is write-only.
+     */
+    @Deprecated
     @Transactional
     public TicketDto generateQuotation(long ticketId, GenerateQuotationRequest request, UserPrincipal actor) {
         if (request == null || request.recipientType() == null || request.recipientType().isBlank()) {
@@ -352,18 +392,39 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
+    /**
+     * Deprecated: ticket-native "mark sent" tracking. The redesigned PCR/CustomerQuotation
+     * flow does not track a separate sent step between issue and customer decision (see
+     * {@link th.co.glr.hr.customerquotation.CustomerQuotationService#issue} /
+     * {@link th.co.glr.hr.customerquotation.CustomerQuotationService#recordOutcome}) — there
+     * is no direct replacement. No controller route exposes this anymore.
+     */
+    @Deprecated
     @Transactional
     public TicketDto markQuotationSent(long ticketId, long quotationId, String note, UserPrincipal actor) {
         return markQuotationLifecycle(ticketId, quotationId, QuotationStatus.SENT,
             TicketEventKind.QUOTATION_SENT, note, actor);
     }
 
+    /**
+     * Deprecated: superseded by
+     * {@link th.co.glr.hr.customerquotation.CustomerQuotationService#recordOutcome} (outcome
+     * {@code ACCEPTED}), which also correctly transitions the owning PricingRequest. No
+     * controller route exposes this anymore.
+     */
+    @Deprecated
     @Transactional
     public TicketDto markQuotationAccepted(long ticketId, long quotationId, String note, UserPrincipal actor) {
         return markQuotationLifecycle(ticketId, quotationId, QuotationStatus.ACCEPTED,
             TicketEventKind.QUOTATION_ACCEPTED, note, actor);
     }
 
+    /**
+     * Deprecated: superseded by
+     * {@link th.co.glr.hr.customerquotation.CustomerQuotationService#recordOutcome} (outcome
+     * {@code REJECTED}). No controller route exposes this anymore.
+     */
+    @Deprecated
     @Transactional
     public TicketDto markQuotationRejected(long ticketId, long quotationId, String note, UserPrincipal actor) {
         return markQuotationLifecycle(ticketId, quotationId, QuotationStatus.REJECTED,
@@ -1513,6 +1574,15 @@ public class TicketService {
         return projectForRole(requireTicket(ticketId), actor.role());
     }
 
+    /**
+     * Deprecated: recalculated legacy {@code ticket_item} prices for the submit → pickup →
+     * propose-price → approve loop. CEO price computation now happens via
+     * {@link th.co.glr.hr.pricingcosting.PricingCostingService} /
+     * {@link th.co.glr.hr.pricingdecision.PricingDecisionService}.
+     * Reachable only for legacy tickets stuck at {@code price_proposed}; no controller route
+     * exposes this anymore.
+     */
+    @Deprecated
     @Transactional
     public CalculatePricesResult calculatePrices(long ticketId, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
@@ -1529,6 +1599,14 @@ public class TicketService {
 
     public record CalculatePricesResult(TicketDto ticket, List<PriceBreakdownItemDto> breakdown) {}
 
+    /**
+     * Deprecated: manual price override for a legacy {@code ticket_item} row. Superseded by
+     * editing sale price on the PricingDecision aggregate — see
+     * {@link th.co.glr.hr.pricingdecision.PricingDecisionService#update}. Reachable only for
+     * legacy tickets stuck at {@code price_proposed}; no controller route exposes this
+     * anymore.
+     */
+    @Deprecated
     @Transactional
     public TicketDto overrideItemPrice(long ticketId, long itemId, OverridePriceRequest request, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
@@ -1574,7 +1652,11 @@ public class TicketService {
             addOperationalActions(actions, ticket, actor);
             addStageActions(actions, s, actor);
             addPolicyActions(actions, s, actor);
-            addQuotationActions(actions, ticket, actor);
+            // Slice S1 "engine collapse": addQuotationActions (MARK_QUOTATION_SENT/
+            // ACCEPTED/REJECTED) was removed — those verbs pointed at retired
+            // /{id}/quotations/{quotationId}/{sent,accepted,rejected} routes; see
+            // markQuotationSent/Accepted/Rejected's own @Deprecated Javadoc for the
+            // CustomerQuotationService replacement.
             if (canDealOwnership(s, actor)) {
                 actions.add(new TicketActionDto("MARK_LOST", "lifecycle", "เสียงาน", List.of("reason")));
                 actions.add(new TicketActionDto("PLACE_ON_HOLD", "lifecycle", "พักดีลไว้"));
@@ -1596,22 +1678,15 @@ public class TicketService {
 
     private void addOperationalActions(List<TicketActionDto> actions, TicketDto ticket, UserPrincipal actor) {
         TicketSummaryDto s = ticket.summary();
-        if (IMPORT_ROLES.contains(actor.role()) && TicketStatus.SUBMITTED.equals(s.status())) {
-            actions.add(new TicketActionDto("PICKUP", "operational", "รับเรื่อง"));
-        }
-        if (IMPORT_ROLES.contains(actor.role()) && PROPOSE_ALLOWED_STATUSES.contains(s.status())) {
-            actions.add(new TicketActionDto("PROPOSE_PRICE", "operational", "เสนอราคา", List.of("items")));
-        }
-        if (CEO_ROLES.contains(actor.role()) && TicketStatus.PRICE_PROPOSED.equals(s.status())) {
-            actions.add(new TicketActionDto("APPROVE", "operational", "อนุมัติราคา"));
-            actions.add(new TicketActionDto("REJECT", "operational", "ตีกลับราคา", List.of("reason")));
-            actions.add(new TicketActionDto("CALCULATE_PRICES", "operational", "คำนวณราคา"));
-            actions.add(new TicketActionDto("OVERRIDE_ITEM_PRICE", "operational", "แก้ไขราคาด้วยตนเอง", List.of("itemId", "manualPrice")));
-        }
-        if (canGenerateQuotation(s, actor)) {
-            actions.add(new TicketActionDto("GENERATE_QUOTATION", "doc", "ออกใบเสนอราคา",
-                List.of("recipientType")));
-        }
+        // Slice S1 "engine collapse": PICKUP/PROPOSE_PRICE/APPROVE/REJECT/CALCULATE_PRICES/
+        // OVERRIDE_ITEM_PRICE/GENERATE_QUOTATION were removed from here — every one of them
+        // pointed at a route TicketController no longer exposes (see the corresponding
+        // TicketService method's own @Deprecated Javadoc for the PCR/PricingDecision/
+        // CustomerQuotationService replacement). Advertising a dead action to a client that
+        // would immediately 404 on click is worse than not offering it — same reasoning as
+        // the pre-existing "actions_neverOffersSubmit" guarantee for SUBMIT. Only the three
+        // stranded pre-redesign tickets (submitted/in_review/price_proposed) could ever have
+        // surfaced these anyway.
         if (canConfirmCustomer(s, actor)) actions.add(new TicketActionDto("CONFIRM_CUSTOMER", "payment", "ลูกค้ายืนยัน"));
         if (canCreateDepositNotice(s, actor)) actions.add(new TicketActionDto("ISSUE_DEPOSIT_NOTICE", "doc", "ออกใบแจ้งมัดจำ"));
         if (ACCOUNT_ROLES.contains(actor.role()) && "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
@@ -1682,35 +1757,6 @@ public class TicketService {
         if (ACCOUNT_ROLES.contains(actor.role())) {
             actions.add(new TicketActionDto("WAIVE_DEPOSIT", "policy", "นโยบายมัดจำ", List.of("policy", "reason")));
         }
-    }
-
-    private void addQuotationActions(List<TicketActionDto> actions, TicketDto ticket, UserPrincipal actor) {
-        if (!canManageQuotation(ticket.summary(), actor)) {
-            return;
-        }
-        boolean canMarkSent = ticket.quotations().stream()
-            .anyMatch(q -> legalQuotationTransition(q.docStatus(), QuotationStatus.SENT));
-        boolean canMarkAccepted = ticket.quotations().stream()
-            .anyMatch(q -> legalQuotationTransition(q.docStatus(), QuotationStatus.ACCEPTED));
-        boolean canMarkRejected = ticket.quotations().stream()
-            .anyMatch(q -> legalQuotationTransition(q.docStatus(), QuotationStatus.REJECTED));
-        if (canMarkSent) {
-            actions.add(new TicketActionDto("MARK_QUOTATION_SENT", "doc", "บันทึกว่าส่งใบเสนอราคาแล้ว",
-                List.of("quotationId")));
-        }
-        if (canMarkAccepted) {
-            actions.add(new TicketActionDto("MARK_QUOTATION_ACCEPTED", "doc", "บันทึกลูกค้ารับใบเสนอราคา",
-                List.of("quotationId")));
-        }
-        if (canMarkRejected) {
-            actions.add(new TicketActionDto("MARK_QUOTATION_REJECTED", "doc", "บันทึกลูกค้าปฏิเสธใบเสนอราคา",
-                List.of("quotationId")));
-        }
-    }
-
-    private boolean canGenerateQuotation(TicketSummaryDto s, UserPrincipal actor) {
-        return SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id()
-            && QUOTATION_ALLOWED_STATUSES.contains(s.status());
     }
 
     private boolean canManageQuotation(TicketSummaryDto s, UserPrincipal actor) {

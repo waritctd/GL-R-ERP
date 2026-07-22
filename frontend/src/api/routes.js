@@ -68,7 +68,9 @@ export const API_ROUTES = {
     createDocDraft: (id) => `/api/tickets/${id}/deposit-notice/draft`,
     listDocs: (id) => `/api/tickets/${id}/deposit-notices`,
     revision: (id) => `/api/tickets/${id}/revision`,
-    quotationStatus: (id, quotationId, action) => `/api/tickets/${id}/quotations/${quotationId}/${action}`,
+    // quotationStatus (mark-sent/accepted/rejected) is retired along with ticket-native
+    // quotation generation — see hrApi.js's tickets block. quotationFile (read/download)
+    // stays: both legacy and PCR-issued quotations render from it.
     quotationFile: (id, quotationId, fmt) => `/api/tickets/${id}/quotations/${quotationId}/file?format=${fmt ?? 'xlsx'}`,
     // Deal tracking + activity (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
     activities: (id) => `/api/tickets/${id}/activities`,
