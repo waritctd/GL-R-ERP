@@ -469,7 +469,8 @@ public class TicketService {
             s.lastFollowUpAt(), s.nextFollowUpAt(), s.paymentStage(), s.amountPayable(),
             s.amountPaid(), s.amountOutstanding(), s.overdue(),
             s.closeConfirmedAt(), s.closeConfirmedByName(), s.invoiceOnFile(),
-            s.cancelReason(), s.cancelledAt());
+            s.cancelReason(), s.cancelledAt(),
+            s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale());
     }
 
     /**
@@ -1092,9 +1093,68 @@ public class TicketService {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "การข้ามขั้นตอนต้องระบุเหตุผล");
         }
+        // Slice B1 "kill the weekly report" gate (handoff 103): real forward progress on a MANUAL
+        // updateStage — genuinely advancing (target index strictly greater than current) — is
+        // blocked unless the rep has kept the deal's tracking fields current. Deliberately keyed
+        // off "forward" rather than "!backward": the routine QUOTE_DESIGN_SIDE -> SPEC_APPROVED
+        // move is index-wise backward and so is already excluded by `backward` being false for it,
+        // but it is also not forward progress, so this condition alone (not "!backward") is what
+        // correctly excludes it too. autoAdvanceStage (the system-driven path) is a separate
+        // method entirely and never runs through here, so it is never gated by this block.
+        boolean forward = DealStage.indexOf(targetStage) > DealStage.indexOf(s.salesStage());
+        if (forward) {
+            boolean hasFollowUp = s.nextFollowUpAt() != null;
+            boolean hasRecentActivity = tickets.hasActivitySinceLastStageChange(ticketId);
+            if (!hasFollowUp || !hasRecentActivity) {
+                throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "เลื่อนสถานะไม่ได้: ต้องระบุวันติดตามครั้งถัดไป และบันทึกกิจกรรมอย่างน้อย 1 รายการหลังเปลี่ยนสถานะล่าสุด");
+            }
+        }
         tickets.updateSalesStage(ticketId, targetStage);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.STAGE_CHANGED, s.salesStage(), targetStage, blankToNull(note));
+        return requireTicket(ticketId);
+    }
+
+    // ── Deal tracking + activity (V83, Slice B1 "kill the weekly report" — handoff 103) ──────
+
+    /**
+     * Log a follow-up. Deliberately NOT gated on {@link #requireActive} — a rep can still record
+     * why a deal went quiet (or what happened before it was lost) on a non-ACTIVE deal, and the
+     * one place this matters for enforcement ({@link #updateStage}'s gate) only ever runs on an
+     * ACTIVE deal anyway (see {@link #requireActive} there).
+     */
+    @Transactional
+    public DealActivityDto addActivity(long ticketId, DealActivityRequest request, UserPrincipal actor) {
+        if (!DealActivityKind.isValid(request.kind())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown activity kind '" + request.kind() + "'");
+        }
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireDealOwnership(s, actor);
+        long id = tickets.insertDealActivity(ticketId, request.activityDate(), request.kind(),
+            blankToNull(request.note()), actor.id());
+        return tickets.findActivitiesByTicket(ticketId).stream()
+            .filter(a -> a.id() == id)
+            .findFirst()
+            .orElseThrow();
+    }
+
+    public List<DealActivityDto> listActivities(long ticketId, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireDealOwnership(s, actor);
+        return tickets.findActivitiesByTicket(ticketId);
+    }
+
+    /** Sets the rep-facing tracking fields (win% override, counterparty names, next follow-up). */
+    @Transactional
+    public TicketDto updateTracking(long ticketId, TrackingUpdateRequest request, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireDealOwnership(s, actor);
+        requireActive(s);
+        tickets.updateTracking(ticketId, request.winProbability(), blankToNull(request.designerName()),
+            blankToNull(request.ownerName()), blankToNull(request.buyerName()), request.nextFollowUpAt());
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(), "tracking fields updated");
         return requireTicket(ticketId);
     }
 
