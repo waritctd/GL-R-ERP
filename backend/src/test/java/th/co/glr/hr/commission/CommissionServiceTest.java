@@ -75,7 +75,9 @@ class CommissionServiceTest {
             .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
         when(commissionAttachments.save(500L, "invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L, 30L))
             .thenReturn(700L);
-        when(commissions.createCommissionRecord(eq(500L), eq((Long) null), eq(30L), eq(30L), eq(LocalDate.of(2026, 6, 1)),
+        // FLAG-10 (2026-07-23): commission on money received in month M is paid in payroll month
+        // M+1 -- invoiceDate June 15 lands payroll_month July 1, not June 1.
+        when(commissions.createCommissionRecord(eq(500L), eq((Long) null), eq(30L), eq(30L), eq(LocalDate.of(2026, 7, 1)),
                 eq(calculation), eq((BigDecimal) null), eq(false)))
             .thenReturn(900L);
         CommissionRecord created = record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED);
@@ -376,6 +378,86 @@ class CommissionServiceTest {
             new BigDecimal("9999.00"), null, null, null, null, null, null, null, invoiceFile(), accountUser());
 
         verify(calculator).calculateInvoice(eq(new BigDecimal("9999.00")), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    /**
+     * FLAG-10 (2026-07-23, owner-confirmed against reconciled real May 2026 accountant data):
+     * commission on money received in month M is paid in payroll month M+1 -- invoiceDate May 20
+     * must land {@code payroll_month} June 1, not May 1.
+     */
+    @Test
+    void submit_shiftsPayrollMonthToTheMonthAfterInvoiceDate_flag10() {
+        SubmitCommissionRequest request = new SubmitCommissionRequest(
+            null, 30L, "INV-FLAG10", LocalDate.of(2026, 5, 20), new BigDecimal("1000.00"),
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO);
+        InvoiceCalculation calculation = new InvoiceCalculation(new BigDecimal("1000.00"), new BigDecimal("1000.00"));
+        when(calculator.calculateInvoice(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(calculation);
+        when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
+        when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
+            .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
+        when(commissionAttachments.save(eq(500L), any(), any(), any(), any(), anyLong())).thenReturn(700L);
+        when(commissions.createCommissionRecord(eq(500L), eq((Long) null), eq(30L), eq(30L), eq(LocalDate.of(2026, 6, 1)),
+                eq(calculation), eq((BigDecimal) null), eq(false)))
+            .thenReturn(900L);
+        when(commissions.findById(900L)).thenReturn(
+            Optional.of(record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED)));
+        when(commissions.findSalesManagerApproverEmployeeIds()).thenReturn(List.of(88L));
+
+        service.submit(request, invoiceFile(), accountUser());
+
+        verify(commissions).createCommissionRecord(eq(500L), eq((Long) null), eq(30L), eq(30L), eq(LocalDate.of(2026, 6, 1)),
+            eq(calculation), eq((BigDecimal) null), eq(false));
+    }
+
+    /**
+     * FLAG-10 companion for the other SALE-commission creation site: the accountant auto-create
+     * trigger must shift by the same +1 month, not just the manual {@link #submit} path.
+     */
+    @Test
+    void createFromDeal_shiftsPayrollMonthToTheMonthAfterInvoiceDate_flag10() {
+        long ticketId = 42L;
+        when(tickets.findById(ticketId)).thenReturn(Optional.of(ticketWithOwner(ticketId, 30L)));
+        when(commissions.hasActiveCommissionForTicket(ticketId)).thenReturn(false);
+        when(tickets.findSalesStage(ticketId)).thenReturn(Optional.of(DealStage.CLOSED_PAID));
+        when(tickets.payableAmount(ticketId)).thenReturn(new BigDecimal("1000.00"));
+        InvoiceCalculation calculation = new InvoiceCalculation(new BigDecimal("1000.00"), new BigDecimal("1000.00"));
+        when(calculator.calculateInvoice(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(calculation);
+        when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
+        when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
+            .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
+        when(commissionAttachments.save(eq(500L), any(), any(), any(), any(), anyLong())).thenReturn(700L);
+        when(commissions.createCommissionRecord(eq(500L), eq(ticketId), eq(30L), eq(30L), eq(LocalDate.of(2026, 6, 1)),
+                eq(calculation), any(), eq(false))).thenReturn(900L);
+        when(commissions.findById(900L)).thenReturn(
+            Optional.of(record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED)));
+        when(commissions.findSalesManagerApproverEmployeeIds()).thenReturn(List.of(88L));
+
+        service.createFromDeal(ticketId, "INV-FLAG10-DEAL", LocalDate.of(2026, 5, 20),
+            null, null, null, null, null, null, null, null, invoiceFile(), accountUser());
+
+        verify(commissions).createCommissionRecord(eq(500L), eq(ticketId), eq(30L), eq(30L), eq(LocalDate.of(2026, 6, 1)),
+            eq(calculation), any(), eq(false));
+    }
+
+    /**
+     * FLAG-10 boundary: the HR-picked manual-entry month is already a target payroll month, not a
+     * money-received date, so it must NOT go through the +1 shift -- only get normalized to day 1
+     * exactly as before. A May 15 pick must land May 1, never June 1.
+     */
+    @Test
+    void createManualCommission_explicitPayrollMonthIsNormalizedButNotShifted_flag10() {
+        when(commissions.createManualCommission(eq(CommissionKind.INCENTIVE), eq(30L), eq(500L),
+                eq(LocalDate.of(2026, 5, 1)), eq(new BigDecimal("15000.00")), eq("incentive bonus"), eq(true)))
+            .thenReturn(900L);
+        when(commissions.findById(900L)).thenReturn(
+            Optional.of(record(900L, 30L, CommissionKind.INCENTIVE, CommissionStatus.APPROVED)));
+
+        service.createManualCommission(30L, CommissionKind.INCENTIVE, new BigDecimal("15000.00"),
+            "incentive bonus", LocalDate.of(2026, 5, 15), ceoUser());
+
+        verify(commissions).createManualCommission(eq(CommissionKind.INCENTIVE), eq(30L), eq(500L),
+            eq(LocalDate.of(2026, 5, 1)), eq(new BigDecimal("15000.00")), eq("incentive bonus"), eq(true));
     }
 
     private TicketDto ticketWithOwner(long ticketId, long ownerId) {
