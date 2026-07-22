@@ -48,6 +48,18 @@ public class PayrollController {
         return new PayrollPeriodResponse(payrollService.currentOrPreview(parseMonth(payrollMonth), user));
     }
 
+    /**
+     * Special-pay carry-forward (2026-07-23): read-only pre-fill suggestions for a brand-new monthly
+     * payroll run, sourced from each employee's most-recent prior processed payroll_line. HR/CEO view
+     * only, same split as {@code GET /api/payroll} — this endpoint never writes anything.
+     */
+    @GetMapping("/suggested-inputs")
+    @PreAuthorize("hasAnyRole('HR','CEO')")
+    public PayrollCarryForwardDtos.SuggestedInputsResponse suggestedInputs(@RequestParam String payrollMonth, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return payrollService.suggestedInputs(parseMonth(payrollMonth), user);
+    }
+
     @PostMapping("/preview")
     @PreAuthorize("hasAnyRole('HR','CEO')")
     public PayrollPeriodResponse preview(@Valid @RequestBody ProcessPayrollRequest request, HttpSession session) {

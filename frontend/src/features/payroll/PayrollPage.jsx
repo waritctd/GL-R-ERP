@@ -110,6 +110,29 @@ function draftValue(value, fallback = '') {
   return amount > 0 ? String(amount) : fallback;
 }
 
+// Special-pay carry-forward (2026-07-23): the recurring fields pre-filled from the employee's most
+// recent prior processed payroll_line (via GET /api/payroll/suggested-inputs) when HR starts a
+// brand-new run. Deliberately excludes specialPay6 (commission — already fed by the commission
+// engine), specialPay7/8 (KPI/bonus — one-off) and every event-driven field. This is a client-side
+// pre-fill convenience only: whatever value sits in the field when HR hits Preview/Process — carried,
+// edited, or explicitly cleared to 0 — is submitted as-is via `payload()` below, same as today.
+function indexSuggestionsByEmployee(rows) {
+  const map = {};
+  (rows || []).forEach((row) => {
+    if (row && row.employeeId != null) map[row.employeeId] = row;
+  });
+  return map;
+}
+
+// A real carried figure from last month beats the hardcoded UAT demo default (500) below — the
+// carried value is an actual prior figure, the hardcoded one is only a guess for when nothing else
+// is known. Returns a numeric string, or null when there is nothing to carry for this key.
+function suggestedFallback(suggestion, key) {
+  if (!suggestion) return null;
+  const amount = Number(suggestion[key] || 0);
+  return amount > 0 ? String(amount) : null;
+}
+
 function parsePayrollNumber(value) {
   if (value === '' || value === null || value === undefined) return 0;
   const amount = Number(value);
@@ -131,16 +154,20 @@ function blankAdjustment(employeeId, { applyDefaults = false } = {}) {
   };
 }
 
-function adjustmentFromLine(line, { applyDefaults = false } = {}) {
+function adjustmentFromLine(line, { applyDefaults = false, suggestion = null } = {}) {
   const adjustment = blankAdjustment(line.employeeId, { applyDefaults });
   (line.specialPays || []).forEach((item, index) => {
     const key = `specialPay${index + 1}`;
-    adjustment[key] = draftValue(item.amount, defaultSpecialPayValue(key, applyDefaults));
+    // Priority: the line's own real value (already-submitted/persisted) > a carried figure from
+    // last month > the hardcoded UAT demo default. A suggestion only ever fills in for a genuinely
+    // blank/zero field on a fresh run.
+    const fallback = suggestedFallback(suggestion, key) ?? defaultSpecialPayValue(key, applyDefaults);
+    adjustment[key] = draftValue(item.amount, fallback);
   });
-  adjustment.nonTaxableIncome = draftValue(line.nonTaxableIncome);
+  adjustment.nonTaxableIncome = draftValue(line.nonTaxableIncome, suggestedFallback(suggestion, 'nonTaxableIncome') ?? '');
   adjustment.unpaidLeaveDays = draftValue(line.unpaidLeaveDays);
-  adjustment.studentLoanDeduction = draftValue(line.studentLoanDeduction);
-  adjustment.legalExecutionDeduction = draftValue(line.legalExecutionDeduction);
+  adjustment.studentLoanDeduction = draftValue(line.studentLoanDeduction, suggestedFallback(suggestion, 'studentLoanDeduction') ?? '');
+  adjustment.legalExecutionDeduction = draftValue(line.legalExecutionDeduction, suggestedFallback(suggestion, 'legalExecutionDeduction') ?? '');
   adjustment.otherPostTaxDeductions = draftValue(line.otherPostTaxDeductions);
   adjustment.warningLetterDeduction = draftValue(line.warningLetterDeduction);
   adjustment.customerReturnDeduction = draftValue(line.customerReturnDeduction);
@@ -192,7 +219,23 @@ export function PayrollPage({ showToast }) {
     setLoading(true);
     try {
       const response = await api.payroll.current({ payrollMonth: month });
-      applyPeriod(response.period, { applyUatDefaults: true });
+      const nextPeriod = response.period;
+      // Special-pay carry-forward: only fetch suggestions when starting a fresh run for this month
+      // (PREVIEW with no processed period yet) — a PROCESSED period already reflects real, submitted
+      // values and must never be overwritten by a stale suggestion.
+      let suggestionsByEmployee = {};
+      if (nextPeriod?.status === 'PREVIEW' && !nextPeriod?.id) {
+        try {
+          // Optional chaining keeps this resilient if a caller's api.payroll mock predates this
+          // method (e.g. an older test double) — suggestions are a convenience pre-fill only and
+          // must never block payroll from loading.
+          const suggestionResponse = await api.payroll.suggestedInputs?.({ payrollMonth: month });
+          suggestionsByEmployee = indexSuggestionsByEmployee(suggestionResponse?.suggestions);
+        } catch {
+          suggestionsByEmployee = {};
+        }
+      }
+      applyPeriod(nextPeriod, { applyUatDefaults: true, suggestionsByEmployee });
     } catch (error) {
       showToast('error', error.message || 'โหลดเงินเดือนไม่สำเร็จ');
     } finally {
@@ -200,12 +243,15 @@ export function PayrollPage({ showToast }) {
     }
   }
 
-  function applyPeriod(nextPeriod, { applyUatDefaults = false } = {}) {
+  function applyPeriod(nextPeriod, { applyUatDefaults = false, suggestionsByEmployee = {} } = {}) {
     setPeriod(nextPeriod);
     const nextAdjustments = {};
     const applyDefaults = applyUatDefaults && nextPeriod?.status === 'PREVIEW';
     (nextPeriod?.lines || []).forEach((line) => {
-      nextAdjustments[line.employeeId] = adjustmentFromLine(line, { applyDefaults });
+      nextAdjustments[line.employeeId] = adjustmentFromLine(line, {
+        applyDefaults,
+        suggestion: suggestionsByEmployee[line.employeeId],
+      });
     });
     setAdjustments(nextAdjustments);
     setSelectedEmployeeId((current) => current || nextPeriod?.lines?.[0]?.employeeId || null);

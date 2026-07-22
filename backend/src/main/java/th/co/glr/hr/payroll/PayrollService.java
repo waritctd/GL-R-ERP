@@ -64,6 +64,23 @@ public class PayrollService {
             .orElseGet(() -> preview(month, List.of(), actor));
     }
 
+    /**
+     * Special-pay carry-forward (2026-07-23): read-only suggestions to pre-fill a brand-new monthly
+     * payroll run from each employee's most-recent PRIOR processed {@code payroll_line}. Does NOT feed
+     * {@link #preview(ProcessPayrollRequest, UserPrincipal)} or {@link #process}, which keep taking
+     * explicit inputs exactly as before — the frontend reads this endpoint separately and pre-fills
+     * form fields HR can still edit/override. There is no "omitted means carry" ambiguity to resolve
+     * here: the carry-forward step happens entirely client-side, before HR submits, and whatever value
+     * is in the field when HR hits Preview/Process — carried, edited, or explicitly cleared to 0 — is
+     * what goes into {@code inputs} and gets calculated/stored, unchanged from today's behaviour.
+     */
+    public PayrollCarryForwardDtos.SuggestedInputsResponse suggestedInputs(LocalDate payrollMonth, UserPrincipal actor) {
+        requireRole(actor, PAYROLL_VIEW_ROLES);
+        LocalDate month = normalizeMonth(payrollMonth);
+        return new PayrollCarryForwardDtos.SuggestedInputsResponse(
+            month, payrollRepository.findCarryForwardSuggestions(month));
+    }
+
     public PayrollPeriodDto preview(ProcessPayrollRequest request, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
         return preview(normalizeMonth(request.payrollMonth()), safeInputs(request.inputs()), actor);
