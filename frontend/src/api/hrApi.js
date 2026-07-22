@@ -102,16 +102,12 @@ export const api = {
     recordDelivery: (id, payload) => apiRequest(API_ROUTES.tickets.deliveries(id), { method: 'POST', body: payload }),
     completeDelivery: (id, payload = {}) => apiRequest(API_ROUTES.tickets.completeDelivery(id), { method: 'POST', body: payload }),
     actions: (id) => apiRequest(API_ROUTES.tickets.action(id, 'actions')),
-    submit: (id) => apiRequest(API_ROUTES.tickets.action(id, 'submit'), { method: 'POST' }),
-    pickup: (id) => apiRequest(API_ROUTES.tickets.action(id, 'pickup'), { method: 'POST' }),
-    proposePrice: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'propose-price'), { method: 'POST', body: payload }),
-    calculatePrices: (id) => apiRequest(API_ROUTES.tickets.action(id, 'calculate-prices'), { method: 'POST' }),
-    approve: (id) => apiRequest(API_ROUTES.tickets.action(id, 'approve'), { method: 'POST' }),
-    reject: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'reject'), { method: 'POST', body: payload }),
-    quotation: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'quotation'), { method: 'POST', body: payload }),
-    markQuotationSent: (id, quotationId, payload = {}) => apiRequest(API_ROUTES.tickets.quotationStatus(id, quotationId, 'sent'), { method: 'POST', body: payload }),
-    markQuotationAccepted: (id, quotationId, payload = {}) => apiRequest(API_ROUTES.tickets.quotationStatus(id, quotationId, 'accepted'), { method: 'POST', body: payload }),
-    markQuotationRejected: (id, quotationId, payload = {}) => apiRequest(API_ROUTES.tickets.quotationStatus(id, quotationId, 'rejected'), { method: 'POST', body: payload }),
+    // Ticket-native submit/pickup/propose-price/approve/reject/quotation/mark-quotation-*
+    // and the per-item price override are retired (Phase 2 Slice S1/S2, "engine collapse" —
+    // see docs/agent-handoffs/104_feat-deal-workspace-unification.md): TicketController no
+    // longer routes them, and pricing/quotation now runs through the PricingRequest chain
+    // (api.pricingRequests.* below). Quotation READ/download stays — see
+    // downloadQuotationXlsx/Pdf — so the 3 legacy pre-redesign quotations remain visible.
     // Three-party close (V55): ฝ่ายบัญชี confirms, then the CEO verifies. There is no
     // single-step close any more — sales is not part of the sequence.
     confirmCloseReady: (id) =>
@@ -123,7 +119,6 @@ export const api = {
     cancel: (id, body) => apiRequest(API_ROUTES.tickets.action(id, 'cancel'), { method: 'POST', body }),
     editItems: (id, payload) => apiRequest(API_ROUTES.tickets.editItems(id), { method: 'PATCH', body: payload }),
     comment: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'comments'), { method: 'POST', body: payload }),
-    overrideItemPrice: (id, itemId, payload) => apiRequest(`/api/tickets/${id}/items/${itemId}/price-override`, { method: 'PUT', body: payload }),
     createDocDraft: (id, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(id), { method: 'POST', body: payload }),
     listDocs: (id) => apiRequest(API_ROUTES.tickets.listDocs(id)),
     revision: (id, payload) => apiRequest(API_ROUTES.tickets.revision(id), { method: 'POST', body: payload }),

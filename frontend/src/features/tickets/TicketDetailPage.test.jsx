@@ -1,6 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketDetailPage } from './TicketDetailPage.jsx';
 import { api } from '../../api/index.js';
@@ -23,14 +24,12 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         recordDelivery: vi.fn(),
         completeDelivery: vi.fn(),
         actions: vi.fn(),
-        approve: vi.fn(),
         comment: vi.fn(),
         confirmFinalPayment: vi.fn(),
-        quotation: vi.fn(),
-        reject: vi.fn(),
         revision: vi.fn(),
-        overrideItemPrice: vi.fn(),
         editItems: vi.fn(),
+        downloadQuotationXlsx: vi.fn(),
+        downloadQuotationPdf: vi.fn(),
         // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
         listActivities: vi.fn(),
         addActivity: vi.fn(),
@@ -40,14 +39,22 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         list: vi.fn(),
         fileUrl: (id) => `#mock-file-${id}`,
       },
-      factoryConfigs: {
-        list: vi.fn(),
-      },
-      // Commit 6: PricingRequestPanel (mounted below the items table) and
-      // DealStagePanel's substep strip both read this list.
+      // Commit 6: PricingRequestPanel (mounted below the items table),
+      // DealStagePanel's substep strip, and DealStateHeader's PCR chip all
+      // read this list. DealQuotationPanel (Phase 2 Slice S2) reads the
+      // customer-quotation tail for whichever request reaches
+      // APPROVED_FOR_QUOTATION+ — see its own tests below.
       pricingRequests: {
         listForTicket: vi.fn(),
         get: vi.fn(),
+        listCustomerQuotations: vi.fn(),
+        createCustomerQuotation: vi.fn(),
+        issueCustomerQuotation: vi.fn(),
+        recordCustomerQuotationOutcome: vi.fn(),
+        confirmOrder: vi.fn(),
+        createDepositNoticeFromQuotation: vi.fn(),
+        downloadCustomerQuotationPdf: vi.fn(),
+        downloadCustomerQuotationXlsx: vi.fn(),
       },
     },
   };
@@ -106,13 +113,17 @@ function renderTicketDetailPage(user = ceoUser, showToast = vi.fn()) {
 
   const utils = render(
     <QueryClientProvider client={queryClient}>
-      <TicketDetailPage
-        user={user}
-        ticketId={701}
-        onBack={vi.fn()}
-        onOpenDocument={vi.fn()}
-        showToast={showToast}
-      />
+      {/* DealQuotationPanel (Phase 2 Slice S2) links out to
+          /pricing-requests/:id and uses useNavigate — needs Router context. */}
+      <MemoryRouter>
+        <TicketDetailPage
+          user={user}
+          ticketId={701}
+          onBack={vi.fn()}
+          onOpenDocument={vi.fn()}
+          showToast={showToast}
+        />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
   return { ...utils, queryClient };
@@ -130,30 +141,24 @@ describe('TicketDetailPage', () => {
         fulfillmentStatus: null,
         status: 'price_proposed',
       },
-      availableActions: [
-        { action: 'APPROVE', kind: 'operational', label: 'อนุมัติราคา' },
-        { action: 'REJECT', kind: 'operational', label: 'ตีกลับราคา', requiredFields: ['reason'] },
-      ],
+      // PICKUP/PROPOSE_PRICE/CALCULATE_PRICES/OVERRIDE_ITEM_PRICE/APPROVE/REJECT/
+      // GENERATE_QUOTATION/MARK_QUOTATION_* are retired (Phase 2 Slice S1/S2) — the
+      // real actions() endpoint never advertises them any more either.
+      availableActions: [],
     });
     api.attachments.list.mockResolvedValue({ attachments: [] });
     api.tickets.listPayments.mockResolvedValue({ items: [] });
     api.tickets.listDeliveries.mockResolvedValue({ items: [] });
-    api.factoryConfigs.list.mockResolvedValue({ factories: [] });
-    api.tickets.approve.mockResolvedValue({
-      ticket: buildTicket({ summary: { status: 'approved' } }),
-    });
     api.tickets.comment.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.recordPayment.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.setBilling.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.reserveStock.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.recordDelivery.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.completeDelivery.mockResolvedValue({ ticket: buildTicket() });
-    api.tickets.quotation.mockResolvedValue({ ticket: buildTicket() });
-    api.tickets.reject.mockResolvedValue({ ticket: buildTicket({ summary: { status: 'in_review' } }) });
     api.tickets.revision.mockResolvedValue({ ticket: buildTicket() });
-    api.tickets.overrideItemPrice.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.editItems.mockResolvedValue({ ticket: buildTicket() });
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [] });
     api.tickets.listActivities.mockResolvedValue({ items: [] });
     api.tickets.addActivity.mockResolvedValue({
       id: 1, ticketId: 701, activityDate: '2026-07-10', kind: 'CALL', note: null,
@@ -170,34 +175,26 @@ describe('TicketDetailPage', () => {
     expect(api.tickets.get).toHaveBeenCalledWith(701);
   });
 
-  it('approve calls the api and updates the displayed status via setQueryData (no extra ticket refetch)', async () => {
-    renderTicketDetailPage();
-
-    await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
-    // Status starts at "รอการอนุมัติ" (price_proposed)
-    expect(screen.getByText('รอการอนุมัติ')).not.toBeNull();
-    expect(api.tickets.get).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(await screen.findByRole('button', { name: /^อนุมัติ$/ }));
-
-    await waitFor(() => expect(api.tickets.approve).toHaveBeenCalledWith(701));
-    // New status renders from the mutation's setQueryData fast path.
-    expect(await screen.findByText('อนุมัติแล้ว')).not.toBeNull();
-    // The ticket-detail query itself was never re-fetched — the mutation
-    // wrote the response straight into the cache instead.
-    expect(api.tickets.get).toHaveBeenCalledTimes(1);
-  });
-
-  it('hides cockpit actions that are absent from api.tickets.actions', async () => {
+  // Phase 2 Slice S1/S2 "engine collapse" (docs/agent-handoffs/104): ticket-native
+  // submit/pickup/propose-price/calculate-prices/override-item-price/approve/reject/
+  // generate-quotation/mark-quotation-* have no route, no hrApi method, and no render
+  // path any more. These assert the dead controls are actually GONE — even under a
+  // (deliberately unrealistic) actions() payload that still lists the retired verbs,
+  // proving the page no longer reads them at all rather than merely not being handed
+  // them today.
+  it('never renders the retired price-approval/quotation-generate controls, even if actions() lists the retired verbs', async () => {
     api.tickets.actions.mockResolvedValueOnce({
       currentState: {
-        lifecycle: 'ACTIVE',
-        salesStage: 'QUOTE_DESIGN_SIDE',
-        paymentStatus: null,
-        fulfillmentStatus: null,
-        status: 'price_proposed',
+        lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed',
       },
-      availableActions: [],
+      availableActions: [
+        { action: 'APPROVE', kind: 'operational', label: 'อนุมัติราคา' },
+        { action: 'REJECT', kind: 'operational', label: 'ตีกลับราคา' },
+        { action: 'PICKUP', kind: 'operational', label: 'รับเรื่อง' },
+        { action: 'PROPOSE_PRICE', kind: 'operational', label: 'เสนอราคา' },
+        { action: 'CALCULATE_PRICES', kind: 'operational', label: 'คำนวณราคา' },
+        { action: 'GENERATE_QUOTATION', kind: 'operational', label: 'ออกใบเสนอราคา' },
+      ],
     });
 
     renderTicketDetailPage();
@@ -206,9 +203,33 @@ describe('TicketDetailPage', () => {
     await waitFor(() => expect(api.tickets.actions).toHaveBeenCalledWith(701));
 
     expect(screen.queryByRole('button', { name: /^อนุมัติ$/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^ไม่อนุมัติ$/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'รับเรื่อง' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'เสนอราคาสินค้า' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /คำนวณราคา/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ออกใบเสนอราคา' })).toBeNull();
+    expect(screen.queryByRole('heading', { level: 2, name: 'การอนุมัติราคา' })).toBeNull();
   });
 
-  it('renders quotation recipient groups and hides mark actions absent from api.tickets.actions', async () => {
+  // Phase 2 Slice S2: the state header sits above every other section and
+  // names the sales stage, PCR status, payment/fulfilment status, and deal
+  // value at a glance.
+  it('renders the DealStateHeader stat strip', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({ summary: { salesStage: 'QUOTE_DESIGN_SIDE', amountPayable: 50000 } }),
+    });
+
+    renderTicketDetailPage();
+
+    expect(await screen.findByText('ขั้นตอนดีล')).not.toBeNull();
+    // DealStagePanel below also names the current stage — assert presence, not uniqueness.
+    expect(screen.getAllByText('เสนอราคาผู้ออกแบบ/เจ้าของ').length).toBeGreaterThan(0);
+    expect(screen.getByText('มูลค่าดีล')).not.toBeNull();
+    // The payment panel below also renders amountPayable — assert presence, not uniqueness.
+    expect(screen.getAllByText('฿50,000').length).toBeGreaterThan(0);
+  });
+
+  it('renders legacy quotation revisions read-only — no revise/mark-sent/mark-decision buttons', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
         quotations: [
@@ -263,6 +284,10 @@ describe('TicketDetailPage', () => {
     expect(screen.getByText('QT-2026-0902')).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'ส่งแล้ว' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'รับแล้ว' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ปฏิเสธ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Revise/ })).toBeNull();
+    // Download stays — legacy quotations remain reachable, just read-only.
+    expect(screen.getAllByRole('button', { name: /PDF/ }).length).toBeGreaterThan(0);
   });
 
   it('renders payment totals, overdue badge, and hides record payment without the action', async () => {
@@ -306,7 +331,8 @@ describe('TicketDetailPage', () => {
 
     expect((await screen.findAllByText('ชำระบางส่วน')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('เกินกำหนด').length).toBeGreaterThan(0);
-    expect(screen.getByText('฿1,000')).not.toBeNull();
+    // DealStateHeader's "มูลค่าดีล" chip also renders amountPayable — assert presence, not uniqueness.
+    expect(screen.getAllByText('฿1,000').length).toBeGreaterThan(0);
     expect(screen.getByText('฿400')).not.toBeNull();
     expect(screen.getByText('฿600')).not.toBeNull();
     expect(await screen.findByText('DEPOSIT')).not.toBeNull();
@@ -520,106 +546,6 @@ describe('TicketDetailPage', () => {
     expect(amountInput.getAttribute('aria-invalid')).toBeNull();
   });
 
-  it('quotation modal: submitting with no recipient marks the recipient control inline and does not call the quotation API', async () => {
-    api.tickets.get.mockResolvedValueOnce({
-      ticket: buildTicket({ summary: { status: 'approved', createdById: 1 } }),
-    });
-    api.tickets.actions.mockResolvedValueOnce({
-      currentState: {
-        lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'approved',
-      },
-      availableActions: [{ action: 'GENERATE_QUOTATION', kind: 'operational', label: 'ออกใบเสนอราคา' }],
-    });
-
-    renderTicketDetailPage(salesOwnerUser);
-
-    fireEvent.click(await screen.findByRole('button', { name: 'ออกใบเสนอราคา' }));
-    const dialog = await screen.findByRole('dialog', { name: 'ออกใบเสนอราคา' });
-
-    // No blank option exists on the select (DESIGNER/OWNER/BUYER only) — this
-    // simulates the recipientType being cleared out from under the control,
-    // which is exactly what `!quotationDraft.recipientType` guards against.
-    const recipientSelect = within(dialog).getByLabelText('ผู้รับใบเสนอราคา');
-    fireEvent.change(recipientSelect, { target: { value: '' } });
-
-    fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบเสนอราคา' }));
-
-    const error = await within(dialog).findByText('กรุณาเลือกผู้รับใบเสนอราคา');
-    expect(error.getAttribute('role')).toBe('alert');
-    expect(recipientSelect.getAttribute('aria-invalid')).toBe('true');
-    expect(recipientSelect.getAttribute('aria-describedby')).toBe(error.id);
-    expect(api.tickets.quotation).not.toHaveBeenCalled();
-  });
-
-  it('quotation modal: the amendment-reason rule only fires when amendmentRequired is true', async () => {
-    // amendmentRequired = chainAccepted || summary.paymentStatus != null —
-    // a non-null paymentStatus is the simplest way to force it true.
-    api.tickets.get.mockResolvedValueOnce({
-      ticket: buildTicket({ summary: { status: 'approved', createdById: 1, paymentStatus: 'DEPOSIT_PAID' } }),
-    });
-    api.tickets.actions.mockResolvedValueOnce({
-      currentState: {
-        lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'approved',
-      },
-      availableActions: [{ action: 'GENERATE_QUOTATION', kind: 'operational', label: 'ออกใบเสนอราคา' }],
-    });
-
-    renderTicketDetailPage(salesOwnerUser);
-
-    // buildTicket()'s default quotations is [] (no prior quotation), so the
-    // open-trigger button reads plain 'ออกใบเสนอราคา' (the '...ใหม่ (Rev)'
-    // label only appears once quotations.length > 0) — amendmentRequired is
-    // still forced true here via summary.paymentStatus, independent of that.
-    fireEvent.click(await screen.findByRole('button', { name: 'ออกใบเสนอราคา' }));
-    const dialog = await screen.findByRole('dialog', { name: 'ออกใบเสนอราคา' });
-
-    // recipientType already defaults to a valid value (DESIGNER) — only the
-    // amendment reason is missing, isolating this one rule. Grab the field
-    // reference before submitting: once its inline error renders, the error
-    // <p> is a descendant of the same <label> (same convention as
-    // TicketCreateModal.jsx), which would make the label's accessible name
-    // ambiguous for a later getByLabelText lookup.
-    const reasonField = within(dialog).getByLabelText('เหตุผลการแก้ไข');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบเสนอราคา' }));
-
-    const error = await within(dialog).findByText('กรุณาระบุเหตุผลการแก้ไขใบเสนอราคา');
-    expect(error.getAttribute('role')).toBe('alert');
-    expect(reasonField.getAttribute('aria-invalid')).toBe('true');
-    expect(api.tickets.quotation).not.toHaveBeenCalled();
-
-    // Fixing it clears the error and lets the submit through.
-    fireEvent.change(reasonField, { target: { value: 'ลูกค้าขอปรับราคาใหม่' } });
-    await waitFor(() => expect(within(dialog).queryByText('กรุณาระบุเหตุผลการแก้ไขใบเสนอราคา')).toBeNull());
-    fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบเสนอราคา' }));
-    await waitFor(() => expect(api.tickets.quotation).toHaveBeenCalledTimes(1));
-  });
-
-  it('quotation modal: amendment reason is not required when amendmentRequired is false', async () => {
-    // Default fixture: no accepted quotation in the chain, no paymentStatus
-    // — amendmentRequired stays false, so the field never even renders and
-    // submit must go straight through without any inline error.
-    api.tickets.get.mockResolvedValueOnce({
-      ticket: buildTicket({ summary: { status: 'approved', createdById: 1 } }),
-    });
-    api.tickets.actions.mockResolvedValueOnce({
-      currentState: {
-        lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'approved',
-      },
-      availableActions: [{ action: 'GENERATE_QUOTATION', kind: 'operational', label: 'ออกใบเสนอราคา' }],
-    });
-
-    renderTicketDetailPage(salesOwnerUser);
-
-    fireEvent.click(await screen.findByRole('button', { name: 'ออกใบเสนอราคา' }));
-    const dialog = await screen.findByRole('dialog', { name: 'ออกใบเสนอราคา' });
-
-    expect(within(dialog).queryByLabelText('เหตุผลการแก้ไข')).toBeNull();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบเสนอราคา' }));
-
-    await waitFor(() => expect(api.tickets.quotation).toHaveBeenCalledTimes(1));
-    expect(within(dialog).queryByRole('alert')).toBeNull();
-  });
-
   it('delivery modal: submitting with no line quantities shows the group-level error and does not call recordDelivery', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
@@ -659,81 +585,9 @@ describe('TicketDetailPage', () => {
     expect(panel.getAttribute('aria-invalid')).toBeNull();
   });
 
-  // ── UX-03 (slice 5b — final slice): the 4 remaining inline page-body
-  // validations (reject / revise / per-item override / edit-items qty). ──
-
-  it('reject form: a blank reason marks the reason textarea inline, does not call api.tickets.reject, and clears once fixed', async () => {
-    renderTicketDetailPage();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'ไม่อนุมัติ' }));
-    const reasonField = await screen.findByLabelText('เหตุผลในการตีกลับ *');
-
-    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันไม่อนุมัติ' }));
-
-    const error = await screen.findByText('กรุณาระบุเหตุผลในการตีกลับ');
-    expect(error.getAttribute('role')).toBe('alert');
-    expect(reasonField.getAttribute('aria-invalid')).toBe('true');
-    expect(reasonField.getAttribute('aria-describedby')).toBe(error.id);
-    expect(api.tickets.reject).not.toHaveBeenCalled();
-
-    fireEvent.change(reasonField, { target: { value: 'ราคาสูงเกินไป' } });
-    await waitFor(() => expect(screen.queryByText('กรุณาระบุเหตุผลในการตีกลับ')).toBeNull());
-    expect(reasonField.getAttribute('aria-invalid')).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันไม่อนุมัติ' }));
-    await waitFor(() => expect(api.tickets.reject).toHaveBeenCalledWith(701, { reason: 'ราคาสูงเกินไป' }));
-  });
-
-  it('CEO price override: an invalid price on one item marks only that item\'s input, never the other item\'s', async () => {
-    api.tickets.get.mockResolvedValueOnce({
-      ticket: buildTicket({
-        items: [
-          { id: 70101, brand: 'SCG', model: 'A1', qty: 10, qtyDelivered: 0, qtyFromStock: 0, calcedCost: 100, calcedPrice: 150, approvedPrice: null },
-          { id: 70102, brand: 'Cotto', model: 'B2', qty: 5, qtyDelivered: 0, qtyFromStock: 0, calcedCost: 80, calcedPrice: 120, approvedPrice: null },
-        ],
-      }),
-    });
-    api.tickets.actions.mockResolvedValueOnce({
-      currentState: {
-        lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed',
-      },
-      availableActions: [{ action: 'OVERRIDE_ITEM_PRICE', kind: 'operational', label: 'ตั้งราคาเอง' }],
-    });
-
-    renderTicketDetailPage();
-
-    // showCalcBreakdown (role ceo + some item.calcedCost != null) renders an
-    // "override" trigger per row — open only item 1's editor.
-    const overrideButtons = await screen.findAllByRole('button', { name: 'override' });
-    expect(overrideButtons).toHaveLength(2);
-    fireEvent.click(overrideButtons[0]);
-
-    const priceInput = document.getElementById('override-price-70101');
-    expect(priceInput).not.toBeNull();
-    // Item 2's editor was never opened, so it has no override input at all —
-    // there is nothing for the error to leak onto.
-    expect(document.getElementById('override-price-70102')).toBeNull();
-
-    // The editor opens pre-filled with item.calcedPrice (150, a valid
-    // price) — clear it to an invalid value to actually exercise the guard.
-    fireEvent.change(priceInput, { target: { value: '0' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-
-    const error = await screen.findByText('กรุณากรอกราคา override ที่ถูกต้อง');
-    expect(error.getAttribute('role')).toBe('alert');
-    expect(priceInput.getAttribute('aria-invalid')).toBe('true');
-    expect(priceInput.getAttribute('aria-describedby')).toBe(error.id);
-    expect(api.tickets.overrideItemPrice).not.toHaveBeenCalled();
-
-    // Fixing item 1's price clears its own error and lets the save through
-    // with the exact same payload shape as before this slice.
-    fireEvent.change(priceInput, { target: { value: '135' } });
-    await waitFor(() => expect(screen.queryByText('กรุณากรอกราคา override ที่ถูกต้อง')).toBeNull());
-    expect(priceInput.getAttribute('aria-invalid')).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-    await waitFor(() => expect(api.tickets.overrideItemPrice).toHaveBeenCalledWith(701, 70101, { manualPrice: 135, reason: null }));
-  });
+  // ── UX-03 (slice 5b — final slice): the remaining inline page-body
+  // validations (revise / edit-items qty). Reject-form and CEO-price-override
+  // were retired along with ticket-native pricing (Phase 2 Slice S1/S2). ──
 
   it('edit-items: multiple invalid rows each get their own inline qty error — not one shared message', async () => {
     api.tickets.get.mockResolvedValueOnce({
@@ -875,6 +729,53 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByRole('heading', { level: 2, name: 'การติดตามดีล' })).toBeNull();
       expect(screen.getByText('การติดตามดีล')).not.toBeNull(); // SectionPeek's title span
       expect(api.tickets.listActivities).not.toHaveBeenCalled();
+    });
+  });
+
+  // "ราคาและใบเสนอราคา" (Phase 2 Slice S2 — docs/agent-handoffs/104): the
+  // customer-quotation tail pulled onto the deal page.
+  describe('deal quotation panel', () => {
+    const approvedPr = {
+      id: 501, requestCode: 'PCR-2026-0501', status: 'APPROVED_FOR_QUOTATION',
+      ticketCreatedById: 1, recipientType: 'BUYER', recipientLabel: null,
+      orderConfirmedAt: null,
+    };
+
+    it('renders nothing when no pricing request has reached APPROVED_FOR_QUOTATION', async () => {
+      api.pricingRequests.listForTicket.mockResolvedValue({
+        items: [{ ...approvedPr, status: 'COSTING_IN_PROGRESS' }],
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+
+      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      expect(screen.queryByRole('heading', { level: 2, name: 'ราคาและใบเสนอราคา' })).toBeNull();
+    });
+
+    it('the owning sales rep can create a customer-quotation draft once the PCR is APPROVED_FOR_QUOTATION', async () => {
+      api.pricingRequests.listForTicket.mockResolvedValue({ items: [approvedPr] });
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [] });
+      api.pricingRequests.createCustomerQuotation.mockResolvedValue({
+        quotation: { id: 9101, docStatus: 'DRAFT', quotationRevisionNo: 1 },
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+
+      expect(await screen.findByRole('heading', { level: 2, name: 'ราคาและใบเสนอราคา' })).not.toBeNull();
+      fireEvent.click(await screen.findByRole('button', { name: 'สร้างร่างใบเสนอราคาลูกค้า' }));
+
+      await waitFor(() => expect(api.pricingRequests.createCustomerQuotation).toHaveBeenCalledWith(
+        501, expect.objectContaining({ clientRequestId: expect.any(String) }),
+      ));
+    });
+
+    it('import (no business in the customer quotation) never sees the section', async () => {
+      api.pricingRequests.listForTicket.mockResolvedValue({ items: [approvedPr] });
+
+      renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
+
+      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      expect(screen.queryByRole('heading', { level: 2, name: 'ราคาและใบเสนอราคา' })).toBeNull();
     });
   });
 });
