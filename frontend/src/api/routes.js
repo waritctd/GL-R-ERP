@@ -140,6 +140,9 @@ export const API_ROUTES = {
     approve: (id) => `/api/commissions/${id}/approve`,
     reject: (id) => `/api/commissions/${id}/reject`,
     clawback: (id) => `/api/commissions/${id}/clawback`,
+    // Manual commission entries (feat/commission-manual-adjustments). Mirrors
+    // CommissionController's POST /api/commissions/manual.
+    manual: '/api/commissions/manual',
     simulator: '/api/commissions/simulator',
     payrollReady: '/api/commissions/payroll-ready',
   },
@@ -294,6 +297,12 @@ export const ROLE_PERMISSIONS = {
   // CommissionService.CREATE_FROM_DEAL_ROLES exactly.
   canCreateCommissionFromDeal: ['account'],
   canApproveCommissions: ['sales_manager', 'ceo'],
+  // Manual commission entries (feat/commission-manual-adjustments): a hand-typed ADJUSTMENT/
+  // MANAGER/STOCK_BONUS/INCENTIVE amount, no invoice/tier-calc involved. Mirrors
+  // CommissionController's POST /api/commissions/manual PreAuthorize + CommissionService
+  // .MANUAL_CREATE_ROLES exactly — same role set as canApproveCommissions today, but kept as
+  // its own key since the two gates are defined independently server-side.
+  canCreateManualCommission: ['sales_manager', 'ceo'],
   canViewPayrollCommissions: ['hr'],
   canManagePayroll: ['hr'],
   canManagePriceImport: ['ceo', 'import'],

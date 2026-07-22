@@ -12,7 +12,7 @@ import { SkeletonCard } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { commissionStatusLabel as statusInfo, dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
-import { invoiceCalculation, monthlyTierBase, tierBreakdown } from './commissionCalc.js';
+import { invoiceCalculation, monthlyTierBase, round2, tierBreakdown } from './commissionCalc.js';
 
 const today = new Date().toISOString().slice(0, 10);
 const thisMonth = new Date().toISOString().slice(0, 7);
@@ -44,8 +44,34 @@ const emptyDeductionDraft = {
   reason: '',
 };
 
+// Manual commission entries (feat/commission-manual-adjustments): ALL FOUR kinds are hand-typed
+// for now — owner decision: manual across the UI until the CEO-confirmed auto-config lands to
+// prefill suggestions for specific ones later (not implemented here, no auto-computation exists
+// anywhere in this form). Mirrors backend/.../commission/CommissionKind.java's four constants.
+const MANUAL_KIND_LABELS = {
+  ADJUSTMENT: 'ปรับปรุง/รับช่วงงาน',
+  MANAGER: 'ค่าคอมผู้จัดการ/ทีม',
+  STOCK_BONUS: 'โบนัสขายสต็อก',
+  INCENTIVE: 'Incentive ตามเป้า',
+};
+const MANUAL_KINDS = Object.keys(MANUAL_KIND_LABELS);
+
+function isManualKind(kind) {
+  return Object.prototype.hasOwnProperty.call(MANUAL_KIND_LABELS, kind);
+}
+
+const emptyManualForm = {
+  salesRepId: '',
+  kind: 'ADJUSTMENT',
+  amount: '',
+  payrollMonth: '',
+  reason: '',
+};
+
 function kindLabel(kind) {
-  return kind === 'CLAWBACK' ? 'คืน/ยกเลิก' : 'ขาย';
+  if (kind === 'CLAWBACK') return 'คืน/ยกเลิก';
+  if (isManualKind(kind)) return MANUAL_KIND_LABELS[kind];
+  return 'ขาย';
 }
 
 function numberOrNull(value) {
@@ -61,8 +87,35 @@ function numberOrNull(value) {
  * what CommissionCalculator.calculateInvoice consumed server-side, not re-derived).
  */
 function CommissionCalcBreakdown({ record }) {
-  const invoice = record.invoiceDetails;
   const status = statusInfo(record.status);
+  if (isManualKind(record.kind)) {
+    const amount = Number(record.manualAmount || 0);
+    return (
+      <div className="grid gap-3 text-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+          <StatusBadge tone="info">{MANUAL_KIND_LABELS[record.kind] || record.kind}</StatusBadge>
+        </div>
+        <div className="grid gap-1.5 rounded-md border border-border bg-surface-subtle p-3">
+          <div className="flex items-center justify-between gap-3 font-bold">
+            <span>จำนวนเงิน (พิมพ์เอง — ไม่ผ่านการคำนวณอัตโนมัติ)</span>
+            <code className="font-mono" style={{ color: amount < 0 ? 'var(--color-danger)' : undefined }}>
+              {formatMoney(amount)}
+            </code>
+          </div>
+          <div className="flex items-start justify-between gap-3">
+            <span className="text-text-muted">เหตุผล</span>
+            <span className="text-right">{record.manualReason || '-'}</span>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3 text-xs text-text-muted sm:grid-cols-4">
+          <span>ผู้จัดการ: {record.managerApprovedAt ? `${record.managerApprovedByName || '-'} · ${formatThaiDate(record.managerApprovedAt)}` : '-'}</span>
+          <span>CEO: {record.ceoApprovedAt ? `${record.ceoApprovedByName || '-'} · ${formatThaiDate(record.ceoApprovedAt)}` : '-'}</span>
+        </div>
+      </div>
+    );
+  }
+  const invoice = record.invoiceDetails;
   const lines = [
     { label: 'ยอดใบกำกับ (Gross)', value: invoice.grossAmount, sign: '' },
     { label: 'ค่าธรรมเนียมธนาคาร', value: invoice.bankFees, sign: '-' },
@@ -134,13 +187,15 @@ function CommissionCalcBreakdown({ record }) {
  */
 function CommissionCard({ record, canReview, isCeoReview, saving, expanded, onToggleExpand, onApprove, onReject }) {
   const status = statusInfo(record.status);
+  const manual = isManualKind(record.kind);
   return (
     <>
       <div className="flex min-w-0 items-start justify-between gap-3">
         <strong className="min-w-0 truncate text-sm font-extrabold text-text">
-          {record.invoiceDetails.invoiceNumber}
+          {manual ? (MANUAL_KIND_LABELS[record.kind] || record.kind) : record.invoiceDetails.invoiceNumber}
         </strong>
         <span className="flex items-center gap-1.5">
+          {manual ? <StatusBadge tone="info">Manual</StatusBadge> : null}
           <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
           <button
             type="button"
@@ -159,10 +214,19 @@ function CommissionCard({ record, canReview, isCeoReview, saving, expanded, onTo
         {record.salesRepName || record.salesRepId}
       </span>
 
-      <span className="flex min-w-0 items-baseline gap-2">
-        <strong className="text-md font-extrabold text-text">{formatMoney(record.actualReceived)}</strong>
-        <span className="text-2xs text-text-muted">ฐาน {formatMoney(record.commissionableBase)}</span>
-      </span>
+      {manual ? (
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <strong className="text-md font-extrabold text-text" style={{ color: Number(record.manualAmount || 0) < 0 ? 'var(--color-danger)' : undefined }}>
+            {formatMoney(record.manualAmount)}
+          </strong>
+          <span className="truncate text-2xs text-text-muted">{record.manualReason}</span>
+        </span>
+      ) : (
+        <span className="flex min-w-0 items-baseline gap-2">
+          <strong className="text-md font-extrabold text-text">{formatMoney(record.actualReceived)}</strong>
+          <span className="text-2xs text-text-muted">ฐาน {formatMoney(record.commissionableBase)}</span>
+        </span>
+      )}
 
       <div className="flex flex-wrap gap-1.5">
         {record.weightMultiplier > 1 ? (
@@ -228,12 +292,19 @@ export function CommissionPage({ user, showToast }) {
   const [rejectId, setRejectId] = useState(null);
   const [approveId, setApproveId] = useState(null); // record id pending approve confirmation, or null
 
+  // Manual commission entries (feat/commission-manual-adjustments): sales_manager/ceo only.
+  const [showManualForm, setShowManualForm] = useState(false);
+  const [manualForm, setManualForm] = useState(emptyManualForm);
+  const [manualSaving, setManualSaving] = useState(false);
+  const [repOptions, setRepOptions] = useState([]);
+
   // Sales is read-only (Slice A3, AUTHZ CHANGE): commission creation moved entirely to the
   // accountant's createFromDeal trigger. Mirrors ROLE_PERMISSIONS exactly — see api/routes.js
   // for the "why" comments tying each key back to a CommissionController/Service role gate.
   const canReview = ROLE_PERMISSIONS.canApproveCommissions.includes(user.role); // sales_manager, ceo
   const canListRecords = ROLE_PERMISSIONS.canListCommissionRecords.includes(user.role); // sales, sales_manager, ceo
   const canCreateFromDeal = ROLE_PERMISSIONS.canCreateCommissionFromDeal.includes(user.role); // account
+  const canCreateManual = ROLE_PERMISSIONS.canCreateManualCommission.includes(user.role); // sales_manager, ceo
   const payrollOnly = ROLE_PERMISSIONS.canViewPayrollCommissions.includes(user.role); // hr
   const isSales = user.role === 'sales';
 
@@ -294,6 +365,30 @@ export function CommissionPage({ user, showToast }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount, driven by the URL.
   }, [canCreateFromDeal]);
 
+  // Manual commission entry (feat/commission-manual-adjustments): sales_manager/ceo has no
+  // /api/employees access (that's hr-only, see ROLE_PERMISSIONS.canViewEmployees), so the rep
+  // picker is a best-effort convenience list derived from tickets sales_manager/ceo can already
+  // see (canViewTickets), same pattern as AccountCreateFromDeal's eligibleTickets above. It will
+  // not include every employee (e.g. a manager who owns no deals) — the numeric Employee ID
+  // field in the form below is always the authoritative, primary path.
+  useEffect(() => {
+    if (!canCreateManual) return;
+    let cancelled = false;
+    api.tickets.list({}).then((response) => {
+      if (cancelled) return;
+      const seen = new Map();
+      (response.tickets ?? []).forEach((ticket) => {
+        if (ticket.createdById && !seen.has(ticket.createdById)) {
+          seen.set(ticket.createdById, ticket.createdByName || `#${ticket.createdById}`);
+        }
+      });
+      setRepOptions([...seen.entries()]
+        .map(([id, name]) => ({ id, name }))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name), 'th')));
+    }).catch(() => { if (!cancelled) setRepOptions([]); });
+    return () => { cancelled = true; };
+  }, [canCreateManual]);
+
   const totals = useMemo(() => {
     const base = records.reduce((sum, item) => sum + Number(item.commissionableBase || 0), 0);
     const approved = records.filter((item) => item.status === 'APPROVED').length;
@@ -309,10 +404,18 @@ export function CommissionPage({ user, showToast }) {
   const monthlyTierSummary = useMemo(() => {
     if (!isSales) return null;
     const weighted = records
-      .filter((item) => !['VOID', 'REJECTED'].includes(item.status))
+      .filter((item) => !['VOID', 'REJECTED'].includes(item.status) && !isManualKind(item.kind))
       .reduce((sum, item) => sum + Number(item.actualReceived || 0) * Number(item.weightMultiplier || 1), 0);
     const base = monthlyTierBase(weighted);
-    return { base, ...tierBreakdown(base) };
+    const tierResult = tierBreakdown(base);
+    // Manual entries (feat/commission-manual-adjustments) never feed the tier calc — only an
+    // APPROVED manual amount is added on top of the tier commission for the rep's own final
+    // total, mirroring CommissionService#payrollReadySummary exactly (see the manualTotals map
+    // there). A MANAGER_APPROVED manual entry (still awaiting CEO sign-off) does not count yet.
+    const manualTotal = records
+      .filter((item) => isManualKind(item.kind) && item.status === 'APPROVED')
+      .reduce((sum, item) => sum + Number(item.manualAmount || 0), 0);
+    return { base, ...tierResult, manualTotal, total: round2(tierResult.total + manualTotal) };
   }, [records, isSales]);
 
   function canManagerReview(record) {
@@ -352,17 +455,27 @@ export function CommissionPage({ user, showToast }) {
       },
       {
         key: 'invoiceNumber',
-        header: 'Invoice',
+        header: 'Invoice / รายการ',
         sortable: true,
-        sortAccessor: (record) => record.invoiceDetails.invoiceNumber,
-        searchAccessor: (record) => record.invoiceDetails.invoiceNumber,
-        render: (record) => (
+        sortAccessor: (record) => (isManualKind(record.kind) ? kindLabel(record.kind) : record.invoiceDetails.invoiceNumber),
+        searchAccessor: (record) => (isManualKind(record.kind)
+          ? `${kindLabel(record.kind)} ${record.manualReason || ''}`
+          : record.invoiceDetails.invoiceNumber),
+        render: (record) => (isManualKind(record.kind) ? (
+          <span>
+            <span className="flex items-center gap-1.5">
+              <strong>{MANUAL_KIND_LABELS[record.kind] || record.kind}</strong>
+              <StatusBadge tone="info">Manual</StatusBadge>
+            </span>
+            <small style={{ color: '#64748b', display: 'block' }}>{record.manualReason}</small>
+          </span>
+        ) : (
           <span>
             <strong>{record.invoiceDetails.invoiceNumber}</strong>
             <small style={{ color: '#64748b', display: 'block' }}>{kindLabel(record.kind)} · {formatThaiDate(record.invoiceDetails.invoiceDate)}</small>
             <small style={{ color: '#64748b', display: 'block' }}>ไฟล์: {record.invoiceDetails.invoiceAttachmentFileName || '-'}</small>
           </span>
-        ),
+        )),
       },
       {
         key: 'salesRepName',
@@ -374,35 +487,45 @@ export function CommissionPage({ user, showToast }) {
       },
       {
         key: 'actualReceived',
-        header: 'ยอดรับจริง',
+        header: 'ยอดรับจริง / จำนวนเงิน',
         align: 'right',
         sortable: true,
-        sortAccessor: (record) => Number(record.actualReceived || 0),
-        render: (record) => (
-          <span>
-            <code>{formatMoney(record.actualReceived)}</code>
-            {record.weightMultiplier > 1 && (
-              <span style={{ display: 'block', marginTop: 4 }}>
-                <StatusBadge tone={record.weightMultiplier === 3 ? 'warning' : 'info'}>น้ำหนัก {record.weightMultiplier} เท่า</StatusBadge>
-              </span>
-            )}
-            {record.dealAmountMismatch && (
-              // The whole point of the Step 9 cross-check flag: surfaced right next to the
-              // amount so a reviewer sees it before approving, never buried elsewhere.
-              <span style={{ display: 'block', marginTop: 4 }}>
-                <StatusBadge tone="warning">ยอดต่างจากยอดที่เรียกเก็บ</StatusBadge>
-              </span>
-            )}
-          </span>
-        ),
+        sortAccessor: (record) => (isManualKind(record.kind) ? Number(record.manualAmount || 0) : Number(record.actualReceived || 0)),
+        render: (record) => {
+          if (isManualKind(record.kind)) {
+            const amount = Number(record.manualAmount || 0);
+            return <code style={{ color: amount < 0 ? 'var(--color-danger)' : undefined }}>{formatMoney(amount)}</code>;
+          }
+          return (
+            <span>
+              <code>{formatMoney(record.actualReceived)}</code>
+              {record.weightMultiplier > 1 && (
+                <span style={{ display: 'block', marginTop: 4 }}>
+                  <StatusBadge tone={record.weightMultiplier === 3 ? 'warning' : 'info'}>น้ำหนัก {record.weightMultiplier} เท่า</StatusBadge>
+                </span>
+              )}
+              {record.dealAmountMismatch && (
+                // The whole point of the Step 9 cross-check flag: surfaced right next to the
+                // amount so a reviewer sees it before approving, never buried elsewhere.
+                <span style={{ display: 'block', marginTop: 4 }}>
+                  <StatusBadge tone="warning">ยอดต่างจากยอดที่เรียกเก็บ</StatusBadge>
+                </span>
+              )}
+            </span>
+          );
+        },
       },
       {
         key: 'commissionableBase',
         header: 'ฐานค่าคอม',
         align: 'right',
         sortable: true,
-        sortAccessor: (record) => Number(record.commissionableBase || 0),
-        render: (record) => <code>{formatMoney(record.commissionableBase)}</code>,
+        // Manual entries never touch the tier calc (feat/commission-manual-adjustments) — sorted
+        // last under this column since there is no base to compare.
+        sortAccessor: (record) => (isManualKind(record.kind) ? -1 : Number(record.commissionableBase || 0)),
+        render: (record) => (isManualKind(record.kind)
+          ? <span className="text-xs text-text-muted">ไม่มีฐานคำนวณ</span>
+          : <code>{formatMoney(record.commissionableBase)}</code>),
       },
       {
         key: 'status',
@@ -433,15 +556,20 @@ export function CommissionPage({ user, showToast }) {
       header: '',
       render: (record) => (
         <span style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            className="icon-button"
-            title="แก้ไขค่าหัก"
-            aria-label="แก้ไขค่าหัก"
-            onClick={(event) => { event.stopPropagation(); beginEdit(record); }}
-          >
-            <Icon name="pencil" size={14} />
-          </button>
+          {!isManualKind(record.kind) && (
+            // Deduction editing is an invoice-input concept (grossAmount, bankFees, ...) — a
+            // manual entry has no invoiceDetails at all (feat/commission-manual-adjustments), so
+            // there is nothing here for beginEdit to populate.
+            <button
+              type="button"
+              className="icon-button"
+              title="แก้ไขค่าหัก"
+              aria-label="แก้ไขค่าหัก"
+              onClick={(event) => { event.stopPropagation(); beginEdit(record); }}
+            >
+              <Icon name="pencil" size={14} />
+            </button>
+          )}
           {canReviewRecord(record) && (
             // Success-tinted (not just muted-gray) so approve reads as the
             // positive, serious action — matches DESIGN.md success token.
@@ -585,6 +713,58 @@ export function CommissionPage({ user, showToast }) {
     }
   }
 
+  function updateManualForm(field, value) {
+    setManualForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function openManualForm() {
+    setManualForm({ ...emptyManualForm, payrollMonth: month });
+    setShowManualForm(true);
+  }
+
+  // Manual commission entries (feat/commission-manual-adjustments): NO auto-computation anywhere
+  // here — every amount is hand-typed by sales_manager/ceo, submitted verbatim to
+  // POST /api/commissions/manual. (A future CEO-confirmed auto-config may prefill a suggested
+  // amount for specific kinds, e.g. STOCK_BONUS — not implemented; owner decision is manual
+  // across the UI for now.)
+  async function submitManual(event) {
+    event.preventDefault();
+    if (!manualForm.salesRepId) {
+      showToast('error', 'กรุณาระบุพนักงานขาย');
+      return;
+    }
+    if (manualForm.amount === '' || Number.isNaN(Number(manualForm.amount))) {
+      showToast('error', 'กรุณาระบุจำนวนเงิน');
+      return;
+    }
+    if (manualForm.kind !== 'ADJUSTMENT' && Number(manualForm.amount) < 0) {
+      showToast('error', 'จำนวนเงินสำหรับประเภทนี้ต้องไม่ติดลบ');
+      return;
+    }
+    if (!manualForm.reason.trim()) {
+      showToast('error', 'กรุณาระบุเหตุผล');
+      return;
+    }
+    setManualSaving(true);
+    try {
+      await api.commissions.createManualCommission({
+        salesRepId: Number(manualForm.salesRepId),
+        kind: manualForm.kind,
+        amount: Number(manualForm.amount),
+        reason: manualForm.reason.trim(),
+        payrollMonth: manualForm.payrollMonth ? `${manualForm.payrollMonth}-01` : undefined,
+      });
+      showToast('success', 'เพิ่มค่าคอมด้วยตนเองแล้ว');
+      setManualForm(emptyManualForm);
+      setShowManualForm(false);
+      await load();
+    } catch (error) {
+      showToast('error', error.message || 'เพิ่มค่าคอมไม่สำเร็จ');
+    } finally {
+      setManualSaving(false);
+    }
+  }
+
   function beginEdit(record) {
     setEditingId(record.id);
     setDeductionDraft({
@@ -694,10 +874,18 @@ export function CommissionPage({ user, showToast }) {
         title="ค่าคอมมิชชัน"
         subtitle="Sales & Commission Management"
         actions={!canCreateFromDeal ? (
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700 }}>
-            รอบเดือน
-            <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} style={{ width: 150 }} />
-          </label>
+          <div className="flex flex-wrap items-center gap-3">
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700 }}>
+              รอบเดือน
+              <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} style={{ width: 150 }} />
+            </label>
+            {canCreateManual && (
+              <button type="button" className="secondary-button" onClick={() => (showManualForm ? setShowManualForm(false) : openManualForm())}>
+                <Icon name="plus" size={14} />
+                เพิ่มค่าคอมด้วยตนเอง
+              </button>
+            )}
+          </div>
         ) : undefined}
       />
 
@@ -728,6 +916,17 @@ export function CommissionPage({ user, showToast }) {
             <StatCard icon="clock" label="รอผู้จัดการ" value={totals.submitted} helper="Submitted records" tone="amber" />
             <StatCard icon="clock" label="รอ CEO" value={totals.managerApproved} helper="Manager approved" tone="indigo" />
           </div>
+
+          {canCreateManual && showManualForm && (
+            <ManualCommissionForm
+              form={manualForm}
+              onChange={updateManualForm}
+              repOptions={repOptions}
+              onSubmit={submitManual}
+              onCancel={() => setShowManualForm(false)}
+              saving={manualSaving}
+            />
+          )}
 
           {monthlyTierSummary ? <MonthlyTierPanel summary={monthlyTierSummary} /> : null}
 
@@ -791,6 +990,23 @@ export function CommissionPage({ user, showToast }) {
           const nextStep = canCeoReview(record)
             ? 'สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว" และพร้อมเข้ารอบ Payroll'
             : 'สถานะจะเปลี่ยนเป็น "รอ CEO" เพื่อรออนุมัติขั้นสุดท้าย';
+          if (isManualKind(record.kind)) {
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <p className="confirm-dialog-message" style={{ margin: 0 }}>
+                  ตรวจสอบก่อนอนุมัติค่าคอมแบบ <strong>{MANUAL_KIND_LABELS[record.kind] || record.kind}</strong> ของ <strong>{record.salesRepName || record.salesRepId}</strong>
+                </p>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700, borderTop: '1px solid #e6eaf0', paddingTop: 8 }}>
+                  <span>จำนวนเงิน</span>
+                  <code className="font-mono" style={{ color: Number(record.manualAmount || 0) < 0 ? 'var(--color-danger)' : undefined }}>
+                    {formatMoney(record.manualAmount)}
+                  </code>
+                </div>
+                <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>เหตุผล: {record.manualReason || '-'}</p>
+                <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>{nextStep}</p>
+              </div>
+            );
+          }
           return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <p className="confirm-dialog-message" style={{ margin: 0 }}>
@@ -998,6 +1214,99 @@ function AccountCreateFromDeal({
 }
 
 /**
+ * sales_manager/ceo manual commission entry (feat/commission-manual-adjustments): every amount
+ * here is hand-typed and submitted verbatim — there is NO auto-computation anywhere in this
+ * form. A future CEO-confirmed auto-config may prefill a suggested amount for specific kinds
+ * (e.g. STOCK_BONUS) later; owner decision for now is manual across the UI, so this form stays a
+ * plain number input with no formula behind it.
+ *
+ * Created by sales_manager lands MANAGER_APPROVED (needs CEO sign-off); created by ceo lands
+ * APPROVED immediately — see CommissionService#createManualCommission. Either way it then flows
+ * through the exact same approve/reject controls as a SALE commission (no parallel UI here).
+ */
+function ManualCommissionForm({ form, onChange, repOptions, onSubmit, onCancel, saving }) {
+  const isAdjustment = form.kind === 'ADJUSTMENT';
+  return (
+    <section className="panel" style={{ padding: 0 }}>
+      <div className="panel-header" style={{ padding: '14px 18px' }}>
+        <h2>เพิ่มค่าคอมด้วยตนเอง</h2>
+      </div>
+      <form className="form-grid" style={{ padding: 18 }} onSubmit={onSubmit}>
+        <label>
+          ประเภท *
+          <select value={form.kind} onChange={(event) => onChange('kind', event.target.value)}>
+            {MANUAL_KINDS.map((kind) => (
+              <option key={kind} value={kind}>{MANUAL_KIND_LABELS[kind]}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          รหัสพนักงาน (Employee ID) ของพนักงานขาย *
+          <input
+            type="number"
+            min="1"
+            value={form.salesRepId}
+            onChange={(event) => onChange('salesRepId', event.target.value)}
+            placeholder="เช่น 42"
+            required
+          />
+        </label>
+        {repOptions.length > 0 && (
+          <label className="span-2">
+            หรือเลือกจากรายชื่อ (รายการนี้มาจากดีลที่มีอยู่ อาจไม่ครบทุกคน)
+            <select value="" onChange={(event) => { if (event.target.value) onChange('salesRepId', event.target.value); }}>
+              <option value="">— เลือกพนักงานขาย —</option>
+              {repOptions.map((rep) => (
+                <option key={rep.id} value={rep.id}>{rep.name}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        <label>
+          จำนวนเงิน (บาท) *
+          <input
+            type="number"
+            step="0.01"
+            min={isAdjustment ? undefined : 0}
+            value={form.amount}
+            onChange={(event) => onChange('amount', event.target.value)}
+            required
+          />
+          <small className="text-text-muted">
+            {isAdjustment
+              ? 'ใส่ค่าลบเพื่อหักออกจากค่าคอมของพนักงาน (เช่น -2000)'
+              : 'ต้องไม่ติดลบ'}
+          </small>
+        </label>
+        <label>
+          รอบเดือน
+          <input type="month" value={form.payrollMonth} onChange={(event) => onChange('payrollMonth', event.target.value)} />
+        </label>
+        <label className="span-2">
+          เหตุผล *
+          <textarea
+            rows={2}
+            value={form.reason}
+            onChange={(event) => onChange('reason', event.target.value)}
+            required
+          />
+        </label>
+
+        <div className="span-2 flex flex-wrap justify-end gap-[10px] max-[720px]:flex-col-reverse">
+          <button type="button" className="secondary-button max-[720px]:!min-h-11 max-[720px]:!w-full" disabled={saving} onClick={onCancel}>
+            ยกเลิก
+          </button>
+          <button type="submit" className="primary-button max-[720px]:!min-h-11 max-[720px]:!w-full" disabled={saving}>
+            <Icon name="check" size={14} />
+            บันทึกค่าคอม
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
+/**
  * sales_manager/ceo review-queue edit panel: every input field (not the final amount) is
  * editable, each save requires a reason, and the recomputed actualReceived/commissionableBase
  * previews live as the reviewer types — the final commission itself is never hand-entered.
@@ -1102,6 +1411,17 @@ function MonthlyTierPanel({ summary }) {
           <code className="font-mono text-base font-bold">{formatMoney(summary.total)}</code>
         </span>
       </div>
+      {summary.manualTotal ? (
+        // Manual entries (feat/commission-manual-adjustments) never feed the tier calc above —
+        // this is the rep's own APPROVED manual amount, already folded into "ค่าคอมประมาณการ"
+        // on top of the tier commission, same as CommissionService#payrollReadySummary.
+        <div className="mt-2 flex items-center justify-between gap-3 text-sm">
+          <span className="text-text-muted">ค่าคอมปรับปรุง/โบนัสที่อนุมัติแล้ว (นอกขั้นบันได)</span>
+          <code className="font-mono" style={{ color: summary.manualTotal < 0 ? 'var(--color-danger)' : undefined }}>
+            {formatMoney(summary.manualTotal)}
+          </code>
+        </div>
+      ) : null}
       {summary.belowFloor ? (
         <p className="mt-2">
           <StatusBadge tone="neutral">ฐานเดือนนี้ต่ำกว่า 50,000 บาท — ยังไม่มีค่าคอมตามเกณฑ์นโยบาย</StatusBadge>

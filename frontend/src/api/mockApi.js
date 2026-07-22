@@ -1811,7 +1811,22 @@ function commissionDealMismatch(grossAmount, payable) {
   return Math.abs(gross - payable) / Math.abs(payable) > COMMISSION_MISMATCH_THRESHOLD;
 }
 
+// Manual commission entries (feat/commission-manual-adjustments, V84): a sales_manager/CEO
+// hand-typed amount, never run through invoiceCalculation/progressiveCommission, with no invoice
+// behind it. Mirrors backend/.../commission/CommissionKind.java's four manual kinds exactly —
+// ALL FOUR are hand-typed for now (owner decision: manual across the UI until the CEO-confirmed
+// auto-config lands to prefill suggestions for specific ones later — not implemented here).
+const MANUAL_COMMISSION_KINDS = ['ADJUSTMENT', 'MANAGER', 'STOCK_BONUS', 'INCENTIVE'];
+
+function isManualCommissionKind(kind) {
+  return MANUAL_COMMISSION_KINDS.includes(kind);
+}
+
 function buildCommissionRecord(record) {
+  // A manual-kind record has no invoice_id on the real backend, so RECORD_SELECT's LEFT JOIN
+  // yields a null CommissionRecord.invoiceDetails() — mirror that exactly rather than defaulting
+  // to a stub invoice object, so CommissionPage's manual-vs-SALE branches can key off `null`.
+  const isManual = isManualCommissionKind(record.kind);
   return structuredClone({
     // Commission redesign calc-refine (V82): 1x is the default weight for any record created
     // before this field existed (or omitted in a test fixture) — matches the column's DB default.
@@ -1828,8 +1843,10 @@ function buildCommissionRecord(record) {
     rejectionReason: null,
     dealPayableAmountSnapshot: null,
     dealAmountMismatch: false,
+    manualAmount: null,
+    manualReason: null,
     ...record,
-    invoiceDetails: {
+    invoiceDetails: isManual ? null : {
       invoiceAttachmentId: null,
       invoiceAttachmentFileName: null,
       ...record.invoiceDetails,
@@ -4344,6 +4361,81 @@ export const api = {
       return delay({ commission: buildCommissionRecord(record) });
     },
 
+    /**
+     * Manual commission entries (feat/commission-manual-adjustments): sales_manager/CEO adds a
+     * hand-typed, signed amount for kind ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE against
+     * salesRepId's payrollMonth — no invoice, never touches invoiceCalculation/
+     * progressiveCommission. Mirrors CommissionService#createManualCommission +
+     * CommissionRepository#createManualCommission's two INSERT branches exactly.
+     *
+     * Authz here only APPROXIMATES the Java service (CLAUDE.md "Mock API contract") — the real
+     * boundary (only sales_manager/ceo, zero rows for anyone else) is proven by
+     * ManualCommissionIntegrationTest against real Postgres, not by this check.
+     */
+    async createManualCommission(payload) {
+      const user = hasRole('sales_manager', 'ceo');
+      const salesRepId = Number(payload.salesRepId);
+      if (!payload.salesRepId || !salesRepId) fail('salesRepId is required', 400);
+      if (!isManualCommissionKind(payload.kind)) {
+        fail('kind must be ADJUSTMENT, MANAGER, STOCK_BONUS, or INCENTIVE', 400);
+      }
+      if (payload.amount === null || payload.amount === undefined || payload.amount === '' || Number.isNaN(Number(payload.amount))) {
+        fail('amount is required', 400);
+      }
+      const amount = commissionRound2(Number(payload.amount));
+      if (!payload.reason || !String(payload.reason).trim()) {
+        fail('A reason is required for a manual commission entry', 400);
+      }
+      // A MANAGER-kind entry represents team/manager commission earned, not a correction — never
+      // negative. An ADJUSTMENT may legitimately be negative (a deduction/clawback-style
+      // correction). Mirrors CommissionService's sign check exactly (STOCK_BONUS/INCENTIVE have
+      // no backend sign check either — the form keeps them non-negative client-side only).
+      if (payload.kind === 'MANAGER' && amount < 0) {
+        fail('A MANAGER commission entry cannot be negative', 400);
+      }
+      const month = commissionMonth(payload.payrollMonth || new Date().toISOString());
+      const ceoCreated = user.role === 'ceo';
+      const now = new Date().toISOString();
+      const id = Math.max(0, ...db.commissions.map((item) => item.id)) + 1;
+      const rep = db.users.find((item) => item.id === salesRepId);
+      const record = {
+        id,
+        sourceTicketId: null,
+        salesRepId,
+        salesRepName: rep?.name || null,
+        submittedById: user.id,
+        kind: payload.kind,
+        status: ceoCreated ? 'APPROVED' : 'MANAGER_APPROVED',
+        payrollMonth: `${month}-01`,
+        actualReceived: 0,
+        commissionableBase: 0,
+        weightMultiplier: 1,
+        approvedById: user.id,
+        approvedAt: now,
+        managerApprovedBy: ceoCreated ? null : (user.employeeId || user.id),
+        managerApprovedByName: ceoCreated ? null : user.name,
+        managerApprovedAt: ceoCreated ? null : now,
+        ceoApprovedBy: ceoCreated ? (user.employeeId || user.id) : null,
+        ceoApprovedByName: ceoCreated ? user.name : null,
+        ceoApprovedAt: ceoCreated ? now : null,
+        rejectedById: null,
+        rejectedByName: null,
+        rejectedAt: null,
+        rejectionReason: null,
+        cancellationOfId: null,
+        cancellationReason: null,
+        dealPayableAmountSnapshot: null,
+        dealAmountMismatch: false,
+        manualAmount: amount,
+        manualReason: String(payload.reason).trim(),
+        createdAt: now,
+        updatedAt: now,
+        invoiceDetails: null,
+      };
+      db.commissions.unshift(record);
+      return delay({ commission: buildCommissionRecord(record) });
+    },
+
     async simulate(payload) {
       const user = requireSession();
       if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('Forbidden', 403);
@@ -4392,7 +4484,21 @@ export const api = {
       const month = commissionMonth(params.payrollMonth || new Date().toISOString());
       const approved = db.commissions.filter((item) => item.status === 'APPROVED' && commissionMonth(item.payrollMonth) === month);
       const reps = new Map();
+      // Manual entries (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE, feat/commission-manual-
+      // adjustments) never feed the tier calc — accumulated separately and added to each rep's
+      // FINAL commission total only, on top of the tier commission, exactly mirroring
+      // CommissionService#payrollReadySummary's manualTotals map. Only APPROVED records reach
+      // this point (the `approved` filter above), so a manual entry still sitting at
+      // MANAGER_APPROVED correctly does not count yet.
+      const manualTotals = new Map();
       approved.forEach((item) => {
+        if (isManualCommissionKind(item.kind)) {
+          manualTotals.set(item.salesRepId, {
+            salesRepName: item.salesRepName,
+            amount: (manualTotals.get(item.salesRepId)?.amount || 0) + Number(item.manualAmount || 0),
+          });
+          return;
+        }
         // Commission redesign calc-refine: accumulate the WEIGHTED actual-received (real cash x
         // weight_multiplier), not the already-2dp-rounded commissionableBase column — mirrors
         // CommissionService#payrollReadySummary's RepAccumulator exactly.
@@ -4404,13 +4510,31 @@ export const api = {
         const safeWeighted = Math.max(0, rep.weightedActualReceived);
         // Full precision here (not rounded to 2dp) — only the final commission total rounds.
         const safeBase = calcMonthlyTierBase(safeWeighted);
+        const tierCommission = progressiveCommission(safeBase);
+        const manualAmount = manualTotals.get(rep.salesRepId)?.amount || 0;
+        manualTotals.delete(rep.salesRepId);
         return {
           salesRepId: rep.salesRepId,
           salesRepName: rep.salesRepName,
           commissionableBase: commissionRound2(safeBase),
-          commissionAmount: progressiveCommission(safeBase),
+          commissionAmount: commissionRound2(tierCommission + manualAmount),
+          manualAdjustmentAmount: commissionRound2(manualAmount),
         };
-      }).sort((a, b) => String(a.salesRepName || '').localeCompare(String(b.salesRepName || ''), 'th'));
+      });
+      // A rep whose ONLY approved commission this month is a manual entry (e.g. a MANAGER
+      // commission for someone with no SALE commission yet) still needs a summary row: tier
+      // base/commission are zero, the manual amount is the whole total. Mirrors
+      // CommissionService#payrollReadySummary's second loop exactly.
+      manualTotals.forEach((entry, salesRepId) => {
+        salesReps.push({
+          salesRepId,
+          salesRepName: entry.salesRepName,
+          commissionableBase: 0,
+          commissionAmount: commissionRound2(entry.amount),
+          manualAdjustmentAmount: commissionRound2(entry.amount),
+        });
+      });
+      salesReps.sort((a, b) => String(a.salesRepName || '').localeCompare(String(b.salesRepName || ''), 'th'));
       return delay({
         summary: {
           payrollMonth: `${month}-01`,

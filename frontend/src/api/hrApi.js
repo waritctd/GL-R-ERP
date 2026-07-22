@@ -298,6 +298,10 @@ export const api = {
     // V82) rides along with the existing deduction fields automatically — no new plumbing
     // needed here, only in the caller. Mirrors UpdateCommissionDeductionsRequest verbatim.
     updateDeductions: (id, payload) => apiRequest(API_ROUTES.commissions.deductions(id), { method: 'PATCH', body: payload }),
+    // Manual commission entries (feat/commission-manual-adjustments): sales_manager/ceo submit a
+    // hand-typed { salesRepId, kind, amount, reason, payrollMonth } — no invoice, never touches
+    // the tier calc. Mirrors CommissionController#createManual / ManualCommissionRequest verbatim.
+    createManualCommission: (payload) => apiRequest(API_ROUTES.commissions.manual, { method: 'POST', body: payload }),
     approve: (id) => apiRequest(API_ROUTES.commissions.approve(id), { method: 'POST' }),
     reject: (id, payload = {}) => apiRequest(API_ROUTES.commissions.reject(id), { method: 'POST', body: payload }),
     clawback: (id, payload) => apiRequest(API_ROUTES.commissions.clawback(id), { method: 'POST', body: payload }),

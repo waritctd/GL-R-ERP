@@ -170,6 +170,25 @@ public class CommissionController {
         return new CommissionDetailResponse(commissionService.createClawback(id, request, user));
     }
 
+    /**
+     * Manual commission entries (feat/commission-manual-adjustments): sales_manager/CEO adds a
+     * hand-typed, signed amount (kind ADJUSTMENT or MANAGER) directly to a rep's monthly
+     * commission -- no invoice, no tier calc. See {@link CommissionService#createManualCommission}.
+     */
+    @PostMapping("/manual")
+    @PreAuthorize("hasAnyRole('SALES_MANAGER','CEO')")
+    public CommissionDetailResponse createManual(@Valid @RequestBody ManualCommissionRequest request, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new CommissionDetailResponse(commissionService.createManualCommission(
+            request.salesRepId(),
+            request.kind(),
+            request.amount(),
+            request.reason(),
+            request.payrollMonth(),
+            user
+        ));
+    }
+
     @PostMapping("/simulator")
     @PreAuthorize("hasAnyRole('SALES','SALES_MANAGER','CEO')")
     public CommissionSimulationResponse simulator(

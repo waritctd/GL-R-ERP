@@ -41,6 +41,13 @@ public class CommissionService {
     private static final Set<String> MANAGER_ROLES = Set.of("sales_manager");
     private static final Set<String> CEO_ROLES = Set.of("ceo");
     private static final Set<String> PAYROLL_ROLES = Set.of("hr");
+    // feat/commission-manual-adjustments: ONLY sales_manager/ceo may create a manual commission
+    // entry (ADJUSTMENT/MANAGER). This is the authorization boundary this branch is required to
+    // prove with a real-DB, wrong-way-round integration test per CLAUDE.md -- see
+    // ManualCommissionAuthzIntegrationTest.
+    private static final Set<String> MANUAL_CREATE_ROLES = Set.of("sales_manager", "ceo");
+    private static final Set<String> MANUAL_KINDS = Set.of(
+        CommissionKind.ADJUSTMENT, CommissionKind.MANAGER, CommissionKind.STOCK_BONUS, CommissionKind.INCENTIVE);
     private static final Set<String> COMMISSION_INVOICE_MIME_TYPES = Set.of(
         "application/pdf",
         "image/jpeg",
@@ -317,6 +324,13 @@ public class CommissionService {
         if (CommissionStatus.VOID.equals(existing.status()) || CommissionStatus.REJECTED.equals(existing.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "Cannot edit a void commission record");
         }
+        if (MANUAL_KINDS.contains(existing.kind())) {
+            // Manual entries (ADJUSTMENT/MANAGER) have no invoice_details row to edit -- existing
+            // .invoiceDetails() is null for them (V84). There is nothing here to update; the
+            // manual_amount/manual_reason a manual entry was created with is immutable by design
+            // (create a fresh entry, or use the clawback-style correction pattern, if it was wrong).
+            throw new ApiException(HttpStatus.CONFLICT, "Manual commission entries have no invoice deductions to edit");
+        }
         BigDecimal grossAmount = valueOrExisting(request.grossAmount(), existing.invoiceDetails().grossAmount());
         BigDecimal bankFees = valueOrExisting(request.bankFees(), existing.invoiceDetails().bankFees());
         BigDecimal suspenseVat = valueOrExisting(request.suspenseVat(), existing.invoiceDetails().suspenseVat());
@@ -440,6 +454,65 @@ public class CommissionService {
         return clawback;
     }
 
+    /**
+     * Manual commission entries (feat/commission-manual-adjustments): a sales_manager/CEO adds a
+     * hand-typed, signed {@code amount} for {@code kind} {@link CommissionKind#ADJUSTMENT} or
+     * {@link CommissionKind#MANAGER} against {@code salesRepId}'s {@code payrollMonth}. The amount
+     * is stored VERBATIM in {@code manual_amount} -- it never goes through {@link
+     * CommissionCalculator#calculateInvoice} or any tier/progressive math, and there is no
+     * invoice/{@code sourceTicketId} attached.
+     *
+     * <p>Authz boundary (the thing this branch must prove with a real-DB integration test): only
+     * {@code sales_manager}/{@code ceo} may call this -- {@code sales}, any other rep role,
+     * {@code account}, {@code import}, and {@code hr} all get 403, with zero rows created.
+     *
+     * <p>Created by a {@code sales_manager} lands {@code MANAGER_APPROVED} (the manager vouches
+     * for it, but it still needs CEO sign-off before it counts toward payroll); created by the
+     * {@code ceo} lands {@code APPROVED} directly. From {@code MANAGER_APPROVED}, the existing
+     * {@link #approve(long, UserPrincipal)}/{@link #ceoApprove} chain carries it to {@code
+     * APPROVED} exactly as it does for a SALE commission -- no parallel approval path exists.
+     */
+    @Transactional
+    public CommissionRecord createManualCommission(
+            Long salesRepId, String kind, BigDecimal amount, String reason, LocalDate payrollMonth, UserPrincipal actor) {
+        if (!MANUAL_CREATE_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Only a sales manager or the CEO may create a manual commission entry");
+        }
+        if (salesRepId == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "salesRepId is required");
+        }
+        if (!MANUAL_KINDS.contains(kind)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "kind must be ADJUSTMENT or MANAGER");
+        }
+        if (amount == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "amount is required");
+        }
+        if (reason == null || reason.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "A reason is required for a manual commission entry");
+        }
+        // A MANAGER-kind entry represents team/manager commission earned, not a correction --
+        // never negative. An ADJUSTMENT may legitimately be negative (a deduction/clawback-style
+        // correction), so no sign restriction there.
+        if (CommissionKind.MANAGER.equals(kind) && amount.signum() < 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "A MANAGER commission entry cannot be negative");
+        }
+        LocalDate month = payrollMonth == null ? currentPayrollMonth() : payrollMonth(payrollMonth);
+        boolean ceoCreated = CEO_ROLES.contains(actor.role());
+        long commissionId = commissions.createManualCommission(
+            kind,
+            salesRepId,
+            actor.id(),
+            month,
+            amount.setScale(2, RoundingMode.HALF_UP),
+            reason.trim(),
+            ceoCreated
+        );
+        CommissionRecord created = requireRecord(commissionId);
+        auditService.record(actor, "CREATE_MANUAL_COMMISSION", "commission_record", commissionId, null, created);
+        notifyManualCreated(created);
+        return created;
+    }
+
     public CommissionSimulationDto simulate(CommissionSimulatorRequest request, UserPrincipal actor) {
         long salesRepId = resolveSalesRep(request.salesRepId(), actor);
         if ("sales".equals(actor.role()) && hasDeductionOverride(request)) {
@@ -487,7 +560,20 @@ public class CommissionService {
         LocalDate month = payrollMonth == null ? currentPayrollMonth() : payrollMonth(payrollMonth);
         List<CommissionRecord> records = commissions.findApprovedRecordsByMonth(month);
         Map<Long, RepAccumulator> grouped = new LinkedHashMap<>();
+        // Manual entries (ADJUSTMENT/MANAGER, feat/commission-manual-adjustments) never feed the
+        // tier calc -- accumulated separately here and added to each rep's FINAL commission total
+        // only, on top of the tier commission, never into commissionableBase itself. Only
+        // APPROVED records reach this point at all (findApprovedRecordsByMonth), so a manual
+        // entry still sitting at MANAGER_APPROVED correctly does not count yet.
+        Map<Long, BigDecimal> manualTotals = new LinkedHashMap<>();
+        Map<Long, String> manualOnlyRepNames = new LinkedHashMap<>();
         for (CommissionRecord record : records) {
+            if (MANUAL_KINDS.contains(record.kind())) {
+                BigDecimal amount = record.manualAmount() == null ? BigDecimal.ZERO : record.manualAmount();
+                manualTotals.merge(record.salesRepId(), amount, BigDecimal::add);
+                manualOnlyRepNames.putIfAbsent(record.salesRepId(), record.salesRepName());
+                continue;
+            }
             // Commission redesign calc-refine: accumulate the WEIGHTED actual-received (real cash
             // x weight_multiplier), not the already-2dp-rounded commissionable_base column — see
             // CommissionRepository#sumActiveWeightedActualReceived for the same change at the
@@ -496,19 +582,36 @@ public class CommissionService {
                 .add(record.actualReceived(), record.weightMultiplier());
         }
         List<TierConfig> tiers = tiers();
-        List<SalesRepCommissionSummaryDto> repSummaries = new ArrayList<>();
+        Map<Long, SalesRepCommissionSummaryDto> summaries = new LinkedHashMap<>();
         BigDecimal totalBase = BigDecimal.ZERO;
         BigDecimal totalCommission = BigDecimal.ZERO;
         for (RepAccumulator rep : grouped.values()) {
             BigDecimal safeWeightedActualReceived = rep.weightedActualReceived.max(BigDecimal.ZERO);
             // Full precision here (not rounded to 2dp) — only the final commission total rounds.
             BigDecimal safeBase = calculator.monthlyTierBase(safeWeightedActualReceived);
-            BigDecimal commission = calculator.progressiveCommission(safeBase, tiers);
+            BigDecimal tierCommission = calculator.progressiveCommission(safeBase, tiers);
             BigDecimal displayBase = safeBase.setScale(2, RoundingMode.HALF_UP);
-            repSummaries.add(new SalesRepCommissionSummaryDto(rep.salesRepId, rep.salesRepName, displayBase, commission));
+            BigDecimal manualAmount = manualTotals.getOrDefault(rep.salesRepId, BigDecimal.ZERO);
+            BigDecimal finalCommission = tierCommission.add(manualAmount);
+            summaries.put(rep.salesRepId,
+                new SalesRepCommissionSummaryDto(rep.salesRepId, rep.salesRepName, displayBase, finalCommission, manualAmount));
             totalBase = totalBase.add(displayBase);
-            totalCommission = totalCommission.add(commission);
+            totalCommission = totalCommission.add(finalCommission);
         }
+        // A rep whose ONLY approved commission this month is a manual entry (e.g. a MANAGER
+        // commission for someone with no SALE commission yet) still needs a summary row: tier
+        // base/commission are zero, the manual amount is the whole total.
+        for (Map.Entry<Long, BigDecimal> entry : manualTotals.entrySet()) {
+            Long repId = entry.getKey();
+            if (summaries.containsKey(repId)) {
+                continue;
+            }
+            BigDecimal manualAmount = entry.getValue();
+            summaries.put(repId, new SalesRepCommissionSummaryDto(
+                repId, manualOnlyRepNames.get(repId), BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP), manualAmount, manualAmount));
+            totalCommission = totalCommission.add(manualAmount);
+        }
+        List<SalesRepCommissionSummaryDto> repSummaries = new ArrayList<>(summaries.values());
         repSummaries.sort(Comparator.comparing(SalesRepCommissionSummaryDto::salesRepName, Comparator.nullsLast(String::compareTo)));
         return new PayrollCommissionSummaryDto(month, "PAYROLL_READY", totalBase, totalCommission, repSummaries);
     }
@@ -605,12 +708,27 @@ public class CommissionService {
             : request.reviewerNote().trim();
     }
 
+    /**
+     * Null-safe description of a commission record for notification text. Manual entries (kind
+     * ADJUSTMENT/MANAGER, V84) have no invoice -- {@code record.invoiceDetails()} is {@code null}
+     * for them (see {@code CommissionRepository#mapInvoiceDetails}), so every notify* helper below
+     * must go through this rather than calling {@code invoiceDetails().invoiceNumber()} directly.
+     */
+    private String describeRecord(CommissionRecord record) {
+        if (record.invoiceDetails() != null) {
+            return "ใบกำกับ " + record.invoiceDetails().invoiceNumber();
+        }
+        String kindLabel = CommissionKind.MANAGER.equals(record.kind()) ? "ค่าคอมผู้จัดการ" : "รายการปรับปรุงค่าคอม";
+        return kindLabel + (record.manualReason() == null ? "" : " (" + record.manualReason() + ")");
+    }
+
     private void notifySubmitted(CommissionRecord record) {
+        String description = describeRecord(record);
         notificationService.notify(
             record.salesRepId(),
             "COMMISSION_SUBMITTED",
             "ส่งคำขอค่าคอมแล้ว",
-            "คำขอค่าคอมใบกำกับ " + record.invoiceDetails().invoiceNumber() + " ถูกส่งให้ผู้จัดการฝ่ายขายตรวจสอบแล้ว",
+            "คำขอค่าคอม" + description + " ถูกส่งให้ผู้จัดการฝ่ายขายตรวจสอบแล้ว",
             "/commissions",
             true
         );
@@ -619,7 +737,7 @@ public class CommissionService {
                 managerEmployeeId,
                 "COMMISSION_PENDING_MANAGER",
                 "มีคำขอค่าคอมรออนุมัติ",
-                record.salesRepName() + " ส่งคำขอค่าคอมใบกำกับ " + record.invoiceDetails().invoiceNumber(),
+                record.salesRepName() + " ส่งคำขอค่าคอม" + description,
                 "/commissions",
                 true
             );
@@ -627,11 +745,12 @@ public class CommissionService {
     }
 
     private void notifyManagerApproved(CommissionRecord record) {
+        String description = describeRecord(record);
         notificationService.notify(
             record.salesRepId(),
             "COMMISSION_MANAGER_APPROVED",
             "ผู้จัดการอนุมัติค่าคอมแล้ว",
-            "คำขอค่าคอมใบกำกับ " + record.invoiceDetails().invoiceNumber() + " ผ่านผู้จัดการแล้ว และรอ CEO อนุมัติขั้นสุดท้าย",
+            "คำขอค่าคอม" + description + " ผ่านผู้จัดการแล้ว และรอ CEO อนุมัติขั้นสุดท้าย",
             "/commissions",
             true
         );
@@ -640,7 +759,7 @@ public class CommissionService {
                 ceoEmployeeId,
                 "COMMISSION_PENDING_CEO",
                 "มีคำขอค่าคอมรอ CEO อนุมัติ",
-                record.salesRepName() + " มีคำขอค่าคอมใบกำกับ " + record.invoiceDetails().invoiceNumber() + " ที่ผู้จัดการอนุมัติแล้ว",
+                record.salesRepName() + " มีคำขอค่าคอม" + description + " ที่ผู้จัดการอนุมัติแล้ว",
                 "/commissions",
                 true
             );
@@ -648,11 +767,12 @@ public class CommissionService {
     }
 
     private void notifyCeoApproved(CommissionRecord record) {
+        String description = describeRecord(record);
         notificationService.notify(
             record.salesRepId(),
             "COMMISSION_APPROVED",
             "CEO อนุมัติค่าคอมแล้ว",
-            "คำขอค่าคอมใบกำกับ " + record.invoiceDetails().invoiceNumber() + " อนุมัติครบถ้วนแล้ว",
+            "คำขอค่าคอม" + description + " อนุมัติครบถ้วนแล้ว",
             "/commissions",
             true
         );
@@ -661,7 +781,7 @@ public class CommissionService {
                 record.managerApprovedBy(),
                 "COMMISSION_APPROVED",
                 "CEO อนุมัติค่าคอมแล้ว",
-                record.salesRepName() + " ได้รับการอนุมัติค่าคอมใบกำกับ " + record.invoiceDetails().invoiceNumber(),
+                record.salesRepName() + " ได้รับการอนุมัติค่าคอม" + description,
                 "/commissions",
                 true
             );
@@ -673,11 +793,37 @@ public class CommissionService {
             record.salesRepId(),
             "COMMISSION_REJECTED",
             "คำขอค่าคอมถูกปฏิเสธ",
-            "คำขอค่าคอมใบกำกับ " + record.invoiceDetails().invoiceNumber() + " ถูกปฏิเสธ: "
+            "คำขอค่าคอม" + describeRecord(record) + " ถูกปฏิเสธ: "
                 + (record.rejectionReason() == null ? "กรุณาติดต่อผู้อนุมัติ" : record.rejectionReason()),
             "/commissions",
             true
         );
+    }
+
+    private void notifyManualCreated(CommissionRecord record) {
+        String description = describeRecord(record);
+        boolean fullyApproved = CommissionStatus.APPROVED.equals(record.status());
+        notificationService.notify(
+            record.salesRepId(),
+            fullyApproved ? "COMMISSION_APPROVED" : "COMMISSION_MANAGER_APPROVED",
+            fullyApproved ? "CEO เพิ่มค่าคอมให้" : "มีการเพิ่มค่าคอมให้คุณ",
+            description + " จำนวน " + record.manualAmount() + " บาท ถูกเพิ่มเข้าค่าคอมของคุณแล้ว"
+                + (fullyApproved ? "" : " และรอ CEO อนุมัติขั้นสุดท้าย"),
+            "/commissions",
+            true
+        );
+        if (!fullyApproved) {
+            for (Long ceoEmployeeId : commissions.findCeoApproverEmployeeIds()) {
+                notificationService.notify(
+                    ceoEmployeeId,
+                    "COMMISSION_PENDING_CEO",
+                    "มีรายการค่าคอมแบบ manual รออนุมัติ",
+                    record.salesRepName() + " มี" + description + " ที่ผู้จัดการเพิ่มแล้ว รอ CEO อนุมัติ",
+                    "/commissions",
+                    true
+                );
+            }
+        }
     }
 
     private LocalDate payrollMonth(LocalDate date) {
