@@ -154,7 +154,8 @@ export const API_ROUTES = {
     suggestedInputs: '/api/payroll/suggested-inputs',
     preview: '/api/payroll/preview',
     process: '/api/payroll/process',
-    bankExport: (periodId) => `/api/payroll/${periodId}/bank-export`,
+    export: (periodId, kind, effectiveDate) =>
+      `/api/payroll/${periodId}/export/${kind}${effectiveDate ? `?effectiveDate=${effectiveDate}` : ''}`,
     payslip: (periodId, lineId) => `/api/payroll/${periodId}/lines/${lineId}/payslip.pdf`,
     ownPayslip: (periodId) => `/api/payroll/${periodId}/payslip/me`,
     distribute: (periodId) => `/api/payroll/${periodId}/distribute`,

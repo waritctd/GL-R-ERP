@@ -12,7 +12,7 @@ vi.mock('../../api/index.js', () => ({
       current: vi.fn(),
       preview: vi.fn(),
       process: vi.fn(),
-      bankExport: vi.fn(),
+      exportFile: vi.fn(),
       downloadPayslip: vi.fn(),
       distributePayslips: vi.fn(),
       suggestedInputs: vi.fn(),
@@ -80,6 +80,7 @@ describe('PayrollPage adjustment inputs', () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriod() });
     api.payroll.preview.mockResolvedValue({ period: previewPeriod() });
     api.payroll.downloadPayslip.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }));
+    api.payroll.exportFile.mockResolvedValue(new Blob(['HPCT'], { type: 'application/octet-stream' }));
     api.payroll.distributePayslips.mockResolvedValue({ periodId: 7, totalLines: 1, alreadySent: 0, queued: 1 });
     api.payroll.suggestedInputs.mockResolvedValue({ payrollMonth: '2026-07-01', suggestions: [] });
   });
@@ -247,5 +248,20 @@ describe('PayrollPage adjustment inputs', () => {
       expect(screen.queryByText(/เครดิตวันลาไม่รับค่าจ้างค้างคืน/)).toBeNull();
       expect(screen.queryByText(/คืนเครดิตวันลาไม่รับค่าจ้าง \(/)).toBeNull();
     });
+  });
+
+  it('generates the selected statutory export file with the chosen pay date', async () => {
+    api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
+
+    renderPayrollPage();
+
+    // Pick PND1 from the dropdown, then download.
+    const kindSelect = await screen.findByLabelText('ประเภทไฟล์ที่จะสร้าง');
+    fireEvent.change(kindSelect, { target: { value: 'pnd1' } });
+    fireEvent.click(screen.getByRole('button', { name: /ดาวน์โหลดไฟล์/ }));
+
+    // Pay date defaults to the 26th of the current payroll month (kept month-agnostic here).
+    await waitFor(() => expect(api.payroll.exportFile)
+      .toHaveBeenCalledWith(7, 'pnd1', expect.stringMatching(/^\d{4}-\d{2}-26$/)));
   });
 });

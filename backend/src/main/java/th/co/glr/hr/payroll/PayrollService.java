@@ -20,7 +20,14 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.leave.LeaveRepository;
+import th.co.glr.hr.payroll.export.KBankPctExporter;
+import th.co.glr.hr.payroll.export.PayrollExportFile;
+import th.co.glr.hr.payroll.export.PayrollExportKind;
+import th.co.glr.hr.payroll.export.PayrollExportRow;
+import th.co.glr.hr.payroll.export.Pnd1Exporter;
+import th.co.glr.hr.payroll.export.SsoExporter;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceDto;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.TaxAllowanceBulkUpsertRequest;
@@ -46,6 +53,10 @@ public class PayrollService {
     // hr.leave_payroll_correction rows to auto-apply the cancel-after-close refund -- see
     // #calculateLine and #process below.
     private final LeaveRepository leaveRepository;
+    private final KBankPctExporter kbankExporter;
+    private final Pnd1Exporter pnd1Exporter;
+    private final SsoExporter ssoExporter;
+    private final AppProperties appProperties;
 
     public PayrollService(
         PayrollRepository payrollRepository,
@@ -53,7 +64,11 @@ public class PayrollService {
         CommissionService commissionService,
         AuditService auditService,
         PayslipRenderer payslipRenderer,
-        LeaveRepository leaveRepository
+        LeaveRepository leaveRepository,
+        KBankPctExporter kbankExporter,
+        Pnd1Exporter pnd1Exporter,
+        SsoExporter ssoExporter,
+        AppProperties appProperties
     ) {
         this.payrollRepository = payrollRepository;
         this.payrollCalculator = payrollCalculator;
@@ -61,6 +76,10 @@ public class PayrollService {
         this.auditService = auditService;
         this.payslipRenderer = payslipRenderer;
         this.leaveRepository = leaveRepository;
+        this.kbankExporter = kbankExporter;
+        this.pnd1Exporter = pnd1Exporter;
+        this.ssoExporter = ssoExporter;
+        this.appProperties = appProperties;
     }
 
     public PayrollPeriodDto currentOrPreview(LocalDate payrollMonth, UserPrincipal actor) {
@@ -152,26 +171,51 @@ public class PayrollService {
         return period;
     }
 
-    public String bankExport(long periodId, UserPrincipal actor) {
+    /**
+     * Generate one of the three statutory payroll text files (KBank PCT, PND1, SSO สปส.1-10) for a
+     * processed period. HR/CEO only; reads PDPA-restricted PII for PND1/SSO, so every call is audited
+     * with the specific fields exposed. {@code effectiveDate} is the HR-picked transfer/pay date;
+     * null falls back to the configured default day (the 26th) of the payroll month.
+     */
+    public PayrollExportFile export(PayrollExportKind kind, long periodId, LocalDate effectiveDate, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
-        StringBuilder builder = new StringBuilder();
-        builder.append("GLR_PAYROLL|")
-            .append(period.payrollMonth())
-            .append('|')
-            .append(period.lineCount())
-            .append('|')
-            .append(period.totalNet())
-            .append('\n');
-        for (PayrollLineDto line : period.lines()) {
-            builder.append(nullToBlank(line.bankAccount())).append('|')
-                .append(line.employeeCode()).append('|')
-                .append(line.employeeName()).append('|')
-                .append(line.netPay()).append('\n');
+        LocalDate payrollMonth = period.payrollMonth();
+        LocalDate payDate = resolveEffectiveDate(effectiveDate, payrollMonth);
+        List<PayrollExportRow> rows = payrollRepository.findExportRows(periodId);
+        AppProperties.Employer employer = appProperties.getPayroll().getEmployer();
+
+        byte[] content;
+        String auditFields;
+        switch (kind) {
+            case KBANK -> {
+                content = kbankExporter.export(rows, employer, payDate);
+                auditFields = "bank_account,net_pay";
+            }
+            case PND1 -> {
+                content = pnd1Exporter.export(rows, employer, payrollMonth, payDate);
+                auditFields = "national_id,tax_id,gross_taxable_income,withholding_tax";
+            }
+            case SSO -> {
+                content = ssoExporter.export(rows, employer, payrollMonth, payDate);
+                auditFields = "social_security_no,sso_wage_base,social_security";
+            }
+            default -> throw new ApiException(HttpStatus.BAD_REQUEST, "Unsupported export kind");
         }
-        auditPayrollAccess("EXPORT_PAYROLL_BANK_FILE", actor, period, "bank_account,net_pay");
-        return builder.toString();
+        auditPayrollAccess("EXPORT_PAYROLL_" + kind.name(), actor, period, auditFields);
+        return new PayrollExportFile(kind, kind.fileName(payDate), content);
+    }
+
+    /** HR-picked date, else the configured default transfer day (26th) clamped to the month length. */
+    private LocalDate resolveEffectiveDate(LocalDate effectiveDate, LocalDate payrollMonth) {
+        if (effectiveDate != null) {
+            return effectiveDate;
+        }
+        int day = Math.min(
+            appProperties.getPayroll().getEmployer().getDefaultTransferDay(),
+            payrollMonth.lengthOfMonth());
+        return payrollMonth.withDayOfMonth(Math.max(day, 1));
     }
 
     public byte[] payslipPdf(long periodId, long lineId, UserPrincipal actor) {
@@ -475,10 +519,6 @@ public class PayrollService {
 
     private BigDecimal sum(List<PayrollLineDto> lines, MoneyExtractor extractor) {
         return lines.stream().map(extractor::value).reduce(BigDecimal.ZERO, BigDecimal::add);
-    }
-
-    private String nullToBlank(String value) {
-        return value == null ? "" : value;
     }
 
     private void auditPayrollAccess(String action, UserPrincipal actor, PayrollPeriodDto period, String fields) {

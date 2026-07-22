@@ -7,3 +7,16 @@ spring:
 
 app:
   uploads-dir: ${APP_UPLOADS_DIR:./uploads}
+  # Demo employer constants for the statutory export files, so the demo produces a plausible
+  # KBank/PND1/SSO file. These are GL&R's real registration numbers as they appear in the sample
+  # export files; the SSO employer account is a placeholder pending the real value.
+  payroll:
+    employer:
+      company-name-th: "บริษัท จีแอลแอนด์อาร์ แทปส์แอนด์ไทลส์ จำกัด"
+      company-tax-id: "0105542026329"
+      pnd1-branch: "0000"
+      kbank-debit-account: "6001010598"
+      sso-employer-account: "0000000000"
+      sso-branch: "000000"
+      sso-rate-percent: "5"
+      default-transfer-day: 26

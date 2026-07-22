@@ -22,6 +22,8 @@ import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.payroll.export.PayrollExportFile;
+import th.co.glr.hr.payroll.export.PayrollExportKind;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.TaxAllowanceBulkUpsertRequest;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.TaxAllowanceListResponse;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedBulkUpsertRequest;
@@ -74,18 +76,32 @@ public class PayrollController {
         return new PayrollPeriodResponse(payrollService.process(normalizedRequest(request), user));
     }
 
-    @GetMapping("/{periodId}/bank-export")
+    /**
+     * Download one of the three statutory payroll files for a processed period:
+     * {@code kind} ∈ {@code kbank} | {@code pnd1} | {@code sso}. Optional {@code effectiveDate}
+     * (YYYY-MM-DD) is the KBank transfer / PND1 / SSO pay date; omitted falls back to the configured
+     * default day (the 26th) of the payroll month. Returned as raw CP874 bytes (octet-stream) so the
+     * legacy Thai encoding survives the download intact.
+     */
+    @GetMapping("/{periodId}/export/{kind}")
     @PreAuthorize("hasAnyRole('HR','CEO')")
-    public ResponseEntity<String> bankExport(@PathVariable long periodId, HttpSession session) {
+    public ResponseEntity<byte[]> export(
+        @PathVariable long periodId,
+        @PathVariable String kind,
+        @RequestParam(required = false) String effectiveDate,
+        HttpSession session
+    ) {
         UserPrincipal user = sessions.requireUser(session);
-        String body = payrollService.bankExport(periodId, user);
+        PayrollExportKind exportKind = parseKind(kind);
+        LocalDate effective = parseEffectiveDate(effectiveDate);
+        PayrollExportFile file = payrollService.export(exportKind, periodId, effective, user);
         return ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
-                .filename("glr-payroll-" + periodId + ".txt")
+                .filename(file.fileName())
                 .build()
                 .toString())
-            .contentType(MediaType.TEXT_PLAIN)
-            .body(body);
+            .contentType(MediaType.APPLICATION_OCTET_STREAM)
+            .body(file.content());
     }
 
     @GetMapping("/{periodId}/lines/{lineId}/payslip.pdf")
@@ -159,6 +175,25 @@ public class PayrollController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         return payrollService.upsertYtdSeed(year, request, user);
+    }
+
+    private PayrollExportKind parseKind(String kind) {
+        try {
+            return PayrollExportKind.fromSlug(kind);
+        } catch (IllegalArgumentException e) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown export kind: " + kind);
+        }
+    }
+
+    private LocalDate parseEffectiveDate(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(value.trim());
+        } catch (DateTimeParseException e) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid effectiveDate (expected YYYY-MM-DD)");
+        }
     }
 
     private ProcessPayrollRequest normalizedRequest(ProcessPayrollRequest request) {

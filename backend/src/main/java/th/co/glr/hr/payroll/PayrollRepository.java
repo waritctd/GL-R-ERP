@@ -16,6 +16,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.payroll.export.PayrollExportRow;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceDto;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedDto;
@@ -429,6 +430,57 @@ public class PayrollRepository {
             """,
             Map.of("periodId", periodId),
             (rs, rowNum) -> mapLine(rs));
+    }
+
+    /**
+     * Rows for the statutory export files (KBank/PND1/SSO): the already-computed {@code payroll_line}
+     * amounts joined with the identity, bank and current-address fields the file formats need. Reads
+     * the PDPA-restricted {@code hr_restricted.employee_pii} (national id / tax id / SSN) — the caller
+     * (PayrollService) gates this to HR/CEO, and every access is audited.
+     */
+    public List<PayrollExportRow> findExportRows(long periodId) {
+        return jdbc.query("""
+            SELECT pl.employee_id, e.employee_code,
+                   t.name_th AS title_th,
+                   e.first_name_th, e.last_name_th, e.first_name_en,
+                   pii.national_id, pii.tax_id, pii.social_security_no,
+                   ba.account_no AS bank_account,
+                   addr.house_no,
+                   NULLIF(TRIM(CONCAT_WS(' ', addr.building, addr.soi, addr.road,
+                       addr.subdistrict, addr.district, addr.province)), '') AS address_rest,
+                   addr.postal_code,
+                   pl.net_amount, pl.gross_taxable_income, pl.withholding_tax,
+                   pl.sso_wage_base, pl.social_security
+              FROM hr.payroll_line pl
+              JOIN hr.employee e ON e.employee_id = pl.employee_id
+              LEFT JOIN hr.title t ON t.title_id = e.title_id
+              LEFT JOIN hr_restricted.employee_pii pii ON pii.employee_id = e.employee_id
+              LEFT JOIN hr.employee_bank_account ba ON ba.employee_id = e.employee_id
+              LEFT JOIN hr.employee_address addr
+                     ON addr.employee_id = e.employee_id AND addr.address_type = 'CURRENT'
+             WHERE pl.period_id = :periodId
+             ORDER BY e.employee_code
+            """,
+            Map.of("periodId", periodId),
+            (rs, rowNum) -> new PayrollExportRow(
+                rs.getLong("employee_id"),
+                rs.getString("employee_code"),
+                rs.getString("title_th"),
+                rs.getString("first_name_th"),
+                rs.getString("last_name_th"),
+                rs.getString("first_name_en"),
+                rs.getString("national_id"),
+                rs.getString("tax_id"),
+                rs.getString("social_security_no"),
+                rs.getString("bank_account"),
+                rs.getString("house_no"),
+                rs.getString("address_rest"),
+                rs.getString("postal_code"),
+                rs.getBigDecimal("net_amount"),
+                rs.getBigDecimal("gross_taxable_income"),
+                rs.getBigDecimal("withholding_tax"),
+                rs.getBigDecimal("sso_wage_base"),
+                rs.getBigDecimal("social_security")));
     }
 
     public Map<Long, String> findEmployeeEmailsByIds(Collection<Long> employeeIds) {

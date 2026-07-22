@@ -206,6 +206,39 @@ class SecurityAuthorizationIntegrationTest {
         assertThat(countYtdSeedRows(employeeId)).isEqualTo(1);
     }
 
+    // ------------------------------------------------------------------------------------------
+    // Statutory export files (KBank/PND1/SSO). These read PDPA-restricted PII (national id, SSN, tax
+    // id), so the HR/CEO gate must hold on the real filter chain. Written wrong-way-round: assert the
+    // callers who must NOT reach the file get 403 on every kind, and that HR/CEO pass authorization
+    // (a missing period then 404s from the service — proving authz let them through, not that a file
+    // was produced).
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void plainEmployeeAndSalesCannotDownloadAnyStatutoryExportFile() throws Exception {
+        for (String kind : new String[] {"kbank", "pnd1", "sso"}) {
+            mvc.perform(get("/api/payroll/1/export/" + kind).session(sessionFor("employee")))
+                .andExpect(status().isForbidden());
+            mvc.perform(get("/api/payroll/1/export/" + kind).session(sessionFor("sales")))
+                .andExpect(status().isForbidden());
+        }
+    }
+
+    @Test
+    void unauthenticatedStatutoryExportIsRejectedWith401() throws Exception {
+        mvc.perform(get("/api/payroll/1/export/kbank")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void hrAndCeoPassAuthorizationOnStatutoryExport() throws Exception {
+        // A non-existent period id → the service 404s; the point is that neither HR nor CEO is 403'd,
+        // i.e. the HR/CEO authorization gate let them through.
+        mvc.perform(get("/api/payroll/999999/export/kbank").session(sessionFor("hr")))
+            .andExpect(status().isNotFound());
+        mvc.perform(get("/api/payroll/999999/export/pnd1").session(sessionFor("ceo")))
+            .andExpect(status().isNotFound());
+    }
+
     private long seedEmployeeForReconciliationAuthz(String code) {
         return jdbc.queryForObject(
             "INSERT INTO hr.employee (employee_code, is_active) VALUES (:code, TRUE) RETURNING employee_id",
