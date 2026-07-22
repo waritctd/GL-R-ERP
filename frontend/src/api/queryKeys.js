@@ -26,6 +26,10 @@ export const queryKeys = {
   // ticketDetail/ticketAttachments are for slice B (TicketDetailPage) — defined
   // now so the key module is stable across both slices; only ticketList is used here.
   ticketList: (status) => ['tickets', 'list', status ?? ''],
+  // Account role-scoped views: the CLOSED_PAID picker AccountOverview/
+  // AccountFinancePage/CommissionPage's createFromDeal flow all use — same
+  // `salesStage` query param, distinct key from the plain ticketList above.
+  ticketListBySalesStage: (salesStage) => ['tickets', 'list', 'salesStage', salesStage ?? ''],
   ticketDetail: (id) => ['tickets', 'detail', id],
   ticketActions: (id) => ['tickets', 'actions', id],
   ticketPayments: (id) => ['tickets', 'payments', id],

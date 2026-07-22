@@ -31,10 +31,11 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       helper: 'Deal pipeline',
       icon: 'briefcase',
       group: 'sales',
-      // Role-scoped views (Import build): the pipeline BROWSER is narrower
-      // than ticket-detail read — gated on canViewDealPipeline, which drops
-      // import (its job is procurement→delivery, not browsing the full deal
-      // list; see ImportOverview.jsx). canViewTickets stays detail-read only.
+      // Role-scoped views: the pipeline BROWSER is canViewDealPipeline (sales/
+      // sales_manager/ceo) — narrower than canViewTickets (detail-read, kept
+      // for import/account). Import gets its own จัดซื้อ & นำเข้า worklist and
+      // Account gets its own งานการเงิน worklist below instead of this item.
+      // See docs/role-scoped-views.md.
       show: hasPermission(user.role, 'canViewDealPipeline') && SALES_ENABLED,
       match: ['/tickets', '/ticket-overview'],
     },
@@ -61,7 +62,15 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       show: hasPermission(user.role, 'canManageProcurement') && SALES_ENABLED,
       match: ['/procurement', '/factory-purchase-orders'],
     },
-    { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', group: 'sales', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED },
+    // Account's only commission action (create-from-deal at close) is folded
+    // into งานการเงิน below instead of a separate commission console — it has
+    // no list access anyway (canListCommissionRecords excludes it). Route
+    // access to /commissions stays (canViewCommissions is unchanged) so the
+    // งานการเงิน worklist can still deep-link the create-from-deal flow.
+    { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', group: 'sales', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED && user.role !== 'account' },
+    // Account's money-lifecycle worklist (Account role-scoped views): deposit
+    // -> final payment -> close-ready -> record-invoice/commission, one page.
+    { path: '/finance', label: 'งานการเงิน', helper: 'Finance worklist', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canConfirmPayments') && SALES_ENABLED },
     { path: '/hr', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
     { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
     // ข้อมูลของฉัน / คำขอของฉัน are deliberately absent: personal admin lives in

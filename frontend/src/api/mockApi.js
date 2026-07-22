@@ -2740,6 +2740,21 @@ export const api = {
         depositPolicy: t.depositPolicy ?? 'REQUIRED',
         depositPolicyReason: t.depositPolicyReason ?? null,
         entryChannel: t.entryChannel ?? 'DESIGNER_LED',
+        // Mock-parity fix (role-views-account + role-views-ceo, same underlying
+        // gap, landed independently on both branches — collapsed here into one):
+        // the real TicketSummaryDto (see TicketService.java / TicketRepository.java)
+        // already carries these three fields on the LIST projection, not just the
+        // single-ticket detail one — this mock's list() was dropping them, which is
+        // exactly the "mock is MORE limited than prod" direction that hides real
+        // capability rather than fabricating fake permissiveness. AccountOverview's
+        // nextAccountAction() needs closeConfirmedAt/invoiceOnFile to compute the
+        // close-ready bucket from list rows alone; CeoOverview needs
+        // closeConfirmedAt/closeConfirmedByName at list-scale (which tickets are
+        // already confirmed by ฝ่ายบัญชี and awaiting CEO verifyClose) — both
+        // without an N+1 detail fetch per ticket.
+        closeConfirmedAt: t.closeConfirmedAt ?? null,
+        closeConfirmedByName: t.closeConfirmedByName ?? null,
+        invoiceOnFile: hasInvoiceAttachment(t),
         // Deal tracking fields (V83, Slice B1/B2 — handoff 103) — same fields as
         // buildTicketDetail's summary, so the manager pipeline view (TicketListPage)
         // has win%/stale without a per-row detail fetch.
@@ -2748,18 +2763,6 @@ export const api = {
         ownerName: t.ownerName ?? null,
         buyerName: t.buyerName ?? null,
         stale: dealComputeStale(t.lifecycle ?? 'ACTIVE', dealActivitiesForTicket(t.id)),
-        // Mock-parity fix (role-views-ceo): the real TicketSummaryDto (see
-        // TicketService.java / TicketRepository.java) already carries these three
-        // fields on the LIST projection, not just the single-ticket detail one —
-        // this mock's list() was dropping them, which is exactly the "mock is
-        // MORE limited than prod" direction that hides real capability rather
-        // than fabricating fake permissiveness. CeoOverview needs
-        // closeConfirmedAt at list-scale (which tickets are already confirmed by
-        // ฝ่ายบัญชี and awaiting CEO verifyClose) without an N+1 detail fetch per
-        // ticket.
-        closeConfirmedAt: t.closeConfirmedAt ?? null,
-        closeConfirmedByName: t.closeConfirmedByName ?? null,
-        invoiceOnFile: hasInvoiceAttachment(t),
         ...derivePaymentFields(t),
       }));
       return delay({ tickets });

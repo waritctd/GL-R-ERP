@@ -21,10 +21,13 @@ export function allowedRoute(route, user) {
   if (route === 'detail' && !hasPermission(user.role, 'canViewEmployees')) return fallback;
   if (route === 'requests' && !hasPermission(user.role, 'canReviewProfileRequests')) return fallback;
   if (route === 'myrequests' && !hasPermission(user.role, 'canSubmitProfileRequests')) return fallback;
-  // Split (role-scoped views, Import build): 'tickets' is the pipeline-browser
-  // list, gated to canViewDealPipeline; 'ticket-detail' stays canViewTickets.
+  // Role-scoped views: 'tickets'/'ticket-dashboard' are the pipeline BROWSER
+  // (canViewDealPipeline — sales/sales_manager/ceo only), 'ticket-detail'
+  // stays the broader ticket-DETAIL read (canViewTickets — keeps
+  // import/account).
   if (route === 'tickets' && !hasPermission(user.role, 'canViewDealPipeline')) return fallback;
   if (route === 'ticket-detail' && !hasPermission(user.role, 'canViewTickets')) return fallback;
+  if (route === 'finance' && !hasPermission(user.role, 'canConfirmPayments')) return fallback;
   if (route === 'commissions' && !hasPermission(user.role, 'canViewCommissions')) return fallback;
   if (route === 'payroll' && !hasPermission(user.role, 'canManagePayroll')) return fallback;
   if (route === 'overtime' && !user.employeeId && !hasPermission(user.role, 'canViewAllOvertime')) return fallback;
@@ -40,9 +43,11 @@ export function allowedRoute(route, user) {
 // route table / `*` fallback handles those.
 const PATH_GUARDS = [
   { test: (p) => p === '/hr', can: (u) => hasPermission(u.role, 'canViewEmployees') },
-  // Role-scoped views (Import build): /ticket-overview is the pipeline's own
-  // ภาพรวม tab, gated with the pipeline browser (canViewDealPipeline) — not
-  // plain ticket-detail read (canViewTickets, which import/account keep).
+  // Role-scoped views: `/ticket-overview` and the bare `/tickets` list are the
+  // deal-PIPELINE BROWSER (canViewDealPipeline — sales/sales_manager/ceo
+  // only); `/tickets/:id` detail stays on the broader canViewTickets (keeps
+  // import/account, whose Overview/worklist rows deep-link straight to a
+  // single deal). See docs/role-scoped-views.md.
   { test: (p) => p === '/ticket-overview', can: (u) => hasPermission(u.role, 'canViewDealPipeline') },
   { test: (p) => p === '/employees' || p.startsWith('/employees/'), can: (u) => hasPermission(u.role, 'canViewEmployees') },
   { test: (p) => p === '/requests', can: (u) => hasPermission(u.role, 'canReviewProfileRequests') },
@@ -58,6 +63,11 @@ const PATH_GUARDS = [
   { test: (p) => p.startsWith('/tickets/'), can: (u) => hasPermission(u.role, 'canViewTickets') },
   { test: (p) => p === '/catalog', can: (u) => hasPermission(u.role, 'canViewCatalog') },
   { test: (p) => p === '/commissions', can: (u) => hasPermission(u.role, 'canViewCommissions') },
+  // Account's money-lifecycle worklist (งานการเงิน) — mirrors ROLE_PERMISSIONS
+  // .canConfirmPayments exactly (account/ceo), same audience as the ticket
+  // confirmDepositPaid/confirmFinalPayment/confirmCloseReady actions this
+  // page's rows drive.
+  { test: (p) => p === '/finance', can: (u) => hasPermission(u.role, 'canConfirmPayments') },
   { test: (p) => p === '/payroll', can: (u) => hasPermission(u.role, 'canManagePayroll') },
   // /employee-requests hosts both the overtime and welfare/special-money tabs
   // (RequestsPage.jsx), so it is visible to anyone either sub-page would be

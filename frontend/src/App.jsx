@@ -37,6 +37,9 @@ const LeavePage = lazy(() => import('./features/leave/LeavePage.jsx').then(toDef
 const TicketListPage = lazy(() => import('./features/tickets/TicketListPage.jsx').then(toDefault('TicketListPage')));
 const TicketDetailPage = lazy(() => import('./features/tickets/TicketDetailPage.jsx').then(toDefault('TicketDetailPage')));
 const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.jsx').then(toDefault('CommissionPage')));
+// Role-scoped views: Account's money Overview (landing) + งานการเงิน worklist.
+const AccountOverview = lazy(() => import('./features/dashboard/AccountOverview.jsx').then(toDefault('AccountOverview')));
+const AccountFinancePage = lazy(() => import('./features/finance/AccountFinancePage.jsx').then(toDefault('AccountFinancePage')));
 const PayrollPage = lazy(() => import('./features/payroll/PayrollPage.jsx').then(toDefault('PayrollPage')));
 const DepositNoticePage = lazy(() => import('./features/deposits/DepositNoticePage.jsx').then(toDefault('DepositNoticePage')));
 const CeoSettingsPage = lazy(() => import('./features/ceoSettings/CeoSettingsPage.jsx').then(toDefault('CeoSettingsPage')));
@@ -235,6 +238,8 @@ export function App() {
                 />
               ) : user.role === 'import' && SALES_ENABLED ? (
                 <ImportOverview user={user} employee={currentEmployee} />
+              ) : user.role === 'account' && SALES_ENABLED ? (
+                <AccountOverview user={user} employee={currentEmployee} showToast={showToast} />
               ) : (
                 <EmployeeDashboard
                   user={user}
@@ -339,6 +344,11 @@ export function App() {
                 <Route
                   path="/commissions"
                   element={<CommissionPage user={user} showToast={showToast} />}
+                />
+                {/* Account's money-lifecycle worklist (Account role-scoped views). */}
+                <Route
+                  path="/finance"
+                  element={<AccountFinancePage user={user} showToast={showToast} />}
                 />
                 <Route
                   path="/price-import"

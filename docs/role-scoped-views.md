@@ -362,9 +362,127 @@ Account shipped its own `AccountOverview` landing in the same batch, so `account
 `canViewDealPipeline` — the reconciled final list is `['sales', 'sales_manager', 'ceo']` (see the
 Account section below and §1).
 
-### Account
+### Account — money *(shipped, branch: `feat/role-views-account`)*
 
-Not documented in this file yet — see its own section below once it ships in this integration.
+**Job:** confirm deposits received, collect final payment, confirm
+close-ready, chase overdue balances, and at close record the tax invoice
+which auto-creates the rep's commission. Account is **not** a commission
+console — it has no `GET /api/commissions` list route
+(`canListCommissionRecords` excludes it; mirrors
+`CommissionController`'s `PreAuthorize`), cannot approve/edit/manually create
+commissions. Its only commission action is the single create-from-deal step
+at close (`canCreateCommissionFromDeal: ['account']`, mirrors
+`CommissionService.CREATE_FROM_DEAL_ROLES`).
+
+### Nav
+
+- `แดชบอร์ด` → `AccountOverview` (money Overview, landing).
+- `งานการเงิน` → `/finance` → `AccountFinancePage` (full money-lifecycle
+  worklist). Gated `canConfirmPayments && SALES_ENABLED` (account/ceo — mirrors
+  `TicketService.ACCOUNT_ROLES`).
+- `รายการดีล` (deal-pipeline browser) — **removed** for account. `routes.js`'s
+  `canViewDealPipeline` is `['sales', 'sales_manager', 'ceo']`; account is
+  deliberately excluded (this is the branch that removes it — earlier
+  role-views branches, if merged first, may have shipped
+  `canViewDealPipeline` including `account` as a temporary hold so account
+  wasn't stranded before its own branch landed; this branch's version, which
+  excludes account, is the one to keep at integration).
+- `ค่าคอมมิชชัน` — **hidden from account's nav** (its one action folds into
+  งานการเงิน as the final close step), but the **route stays reachable**
+  (`canViewCommissions` still includes account) so งานการเงิน's commission row
+  can deep-link `/commissions?ticketId=NN` (the existing
+  `CommissionPage.jsx` create-from-deal flow, unchanged).
+- `แคตตาล็อก`, self-service — unchanged (`canViewCatalog` already includes
+  account).
+
+### Route guards (`app/permissions.js` `PATH_GUARDS`)
+
+- `/tickets` (exact), `/ticket-overview` → `canViewDealPipeline` (account
+  blocked).
+- `/tickets/:id` (`startsWith('/tickets/')`) → `canViewTickets` (account
+  allowed — worklist rows deep-link here).
+- `/finance` → `canConfirmPayments` (account/ceo).
+- Legacy `allowedRoute()` twins kept in sync: `route === 'tickets'` /
+  `'ticket-dashboard'` → `canViewDealPipeline`; `route === 'ticket-detail'` →
+  `canViewTickets`; `route === 'finance'` → `canConfirmPayments`.
+
+### `nextAccountAction(ticket)` — single source of truth
+
+`frontend/src/features/tickets/accountActions.js`. Factored out of the
+account-only gates already in `DealDepositPanel.jsx` (step 3, "รับชำระมัดจำ")
+and `TicketDetailPage.jsx` (`can.confirmFinalPayment` / `can.confirmClose`),
+so `AccountOverview` and `AccountFinancePage` never invent a second copy of
+"what does account do next on this deal." Priority order (overdue-first):
+
+| Condition (mirrors the backend gate)                                                    | Action key                | Label                        | Target                          |
+|-------------------------------------------------------------------------------------------|----------------------------|-------------------------------|----------------------------------|
+| Overdue balance (`overdue && amountOutstanding > 0`)                                       | `chaseOverdue`             | ติดตามชำระ                    | `/tickets/:id`                   |
+| `status=quotation_issued && paymentStatus=DEPOSIT_NOTICE_ISSUED`                           | `confirmDeposit`           | ยืนยันรับมัดจำ                | `/tickets/:id`                   |
+| Final payment due (`canConfirmFinalPaymentNow`: `AWAITING_FINAL_PAYMENT` / `DEPOSIT_PAID` / deposit-bypassed) | `confirmFinalPayment`      | รับชำระส่วนที่เหลือ            | `/tickets/:id`                   |
+| Close-ready (`canConfirmClose`/`requireClosePrerequisites`: fully paid + fully delivered [+ invoice on file] + not yet confirmed) | `confirmCloseReady`        | ยืนยันพร้อมปิดงาน              | `/tickets/:id`                   |
+| `salesStage=CLOSED_PAID`                                                                    | `recordInvoiceCommission`  | บันทึกใบกำกับ + ออกค่าคอม       | `/commissions?ticketId=NN`       |
+
+Also exports `accountMoneyBucket(ticket)` for the Overview's five money-pulse
+buckets (same priority order, one bucket key per row above plus a bare
+`overdue`/`depositPending`/`finalPaymentPending`/`closeReady`/
+`commissionPending` naming).
+
+### KNOWN DATA GAP — close-ready / CLOSED_PAID buckets read empty today
+
+Account's server-side ticket-list scope
+(`TicketRepository.appendRoleScope` / mock's `accountListScopeIncludes`) only
+ever returns deals with a payment action pending
+(`DEPOSIT_NOTICE_ISSUED`/`AWAITING_FINAL_PAYMENT`) or an overdue balance —
+**never** a close-ready or `CLOSED_PAID` deal, since both have
+`amountOutstanding = 0` by definition and neither condition can be true. That
+scope was a deliberate, reviewed authz decision
+(`docs/agent-handoffs/100_feat-sales-role-scoped-views.md`), not a bug this
+branch introduces, and per CLAUDE.md this branch must never loosen it.
+
+Consequence: the "รอปิดงาน" (close-ready) and "ออกค่าคอม" (`CLOSED_PAID`)
+buckets/worklist rows will read empty under the current backend scope even
+when such deals exist. `AccountOverview`/`AccountFinancePage` additionally
+query `api.tickets.list({ salesStage: 'CLOSED_PAID' })` (mirrors
+`CommissionPage.jsx`'s own pre-existing `eligibleTickets` picker) so the
+commission bucket becomes correct for free if that scope is ever widened —
+but under the scope as it stands today, that query also returns nothing for
+account. **Follow-up decision needed from the plan owner**: either widen
+account's list scope to include close-ready/`CLOSED_PAID` deals (an authz
+change requiring the full evidence pipeline — unit + real-DB integration test
++ wrong-way-round cases + mutation-check, per CLAUDE.md), or accept that these
+two buckets are visually present but structurally empty until a deal is
+looked up by ticket ID directly (single-ticket detail read is **not** scoped
+this way — `get(id)` has no such restriction for account).
+
+### Files
+
+- `frontend/src/features/tickets/accountActions.js` (new) — `nextAccountAction`,
+  `accountMoneyBucket`.
+- `frontend/src/features/tickets/accountActions.test.js` (new).
+- `frontend/src/features/dashboard/AccountOverview.jsx` (new) — landing.
+- `frontend/src/features/dashboard/AccountOverview.test.jsx` (new).
+- `frontend/src/features/finance/AccountFinancePage.jsx` (new) — `/finance`.
+- `frontend/src/features/finance/AccountFinancePage.test.jsx` (new).
+- `frontend/src/api/routes.js` — added `canViewDealPipeline`.
+- `frontend/src/app/permissions.js` — split `/tickets` vs `/tickets/:id`
+  guards, added `/finance` guard, synced `allowedRoute()`.
+- `frontend/src/components/layout/AppShell.jsx` — `รายการดีล` gated on
+  `canViewDealPipeline`; `ค่าคอมมิชชัน` hidden for `role === 'account'`; new
+  `งานการเงิน` nav item.
+- `frontend/src/components/layout/AppShell.test.jsx` (new).
+- `frontend/src/App.jsx` — lazy-loads `AccountOverview`/`AccountFinancePage`;
+  `/` route branches `role === 'account' && SALES_ENABLED` to
+  `AccountOverview`; new `/finance` route.
+- `frontend/src/features/sales/SalesTabs.jsx` — pipeline tabs
+  (`ดีลทั้งหมด`/`ภาพรวม`) gated on `canViewDealPipeline` (defensive; account is
+  already route-guarded off both pages, so this never actually renders for
+  it, but the gate is there too).
+- `frontend/src/api/mockApi.js` — `tickets.list()` row projection gained
+  `closeConfirmedAt`/`invoiceOnFile` (present on the real
+  `TicketSummaryDto` for `list()` same as `get()`, but missing from the mock's
+  list row before this branch — a pre-existing DTO-parity gap, fixed here
+  because `nextAccountAction` needs both fields from list rows).
+- `frontend/src/api/queryKeys.js` — added `ticketListBySalesStage`.
 
 ## 4. Change log
 
@@ -375,3 +493,4 @@ Not documented in this file yet — see its own section below once it ships in t
 | 2026-07-23 | Sales Manager | `feat/role-views-sales-manager` | New `ManagerOverview.jsx` team-cockpit landing at `/` for `role==='sales_manager'` (commission-approval worklist as centerpiece, team pipeline pulse, leaderboard). No nav, route guard, or permission changes. |
 | 2026-07-23 | CEO | `feat/role-views-ceo` | New `CeoOverview.jsx` cross-domain exec-cockpit landing at `/` for `role==='ceo'` (guarded by `SALES_ENABLED`, degrades to `EmployeeDashboard` when off); `tickets.list()` mock-parity fix (`closeConfirmedAt`/`closeConfirmedByName`/`invoiceOnFile`). No nav, route guard, or permission changes. |
 | 2026-07-23 | Import | `feat/role-views-import` | New `ImportOverview.jsx` landing + `/procurement` (`ProcurementFulfilmentPage.jsx`); `รายการดีล` removed from Import's nav. Introduced the `canViewDealPipeline` vs `canViewTickets` split (pipeline browser vs ticket-detail read). No backend change. |
+| 2026-07-23 | Account | `feat/role-views-account` | New `AccountOverview.jsx` landing + `/finance` (`AccountFinancePage.jsx`); `รายการดีล` and `ค่าคอมมิชชัน` removed from Account's nav (commission action folds into งานการเงิน). Reconciled `canViewDealPipeline` to exclude `account` (Import's temporary hold dropped). No backend change. |

@@ -18,13 +18,14 @@ export function SalesTabs({ role }) {
   // ROLE_PERMISSIONS.canViewPricingRequestQueue / app/permissions.js
   // PATH_GUARDS for '/pricing-requests'.
   //
-  // Role-scoped views (Import build): the deal-pipeline tabs (ดีลทั้งหมด/
-  // ภาพรวม) are gated on canViewDealPipeline — the pipeline BROWSER, not
-  // plain ticket-detail read — so this bar never offers a tab the router
-  // (permissions.js PATH_GUARDS) would immediately bounce back from. This
-  // drops import from those two tabs (defensive: import no longer reaches
-  // /tickets or /ticket-overview, but PricingRequestQueuePage still renders
-  // this bar), leaving it with just its pricing queue tab below.
+  // Role-scoped views: the deal-pipeline tabs (ดีลทั้งหมด/ภาพรวม) are gated
+  // on canViewDealPipeline — the pipeline BROWSER, not plain ticket-detail
+  // read — so this bar never offers a tab the router (permissions.js
+  // PATH_GUARDS) would immediately bounce back from. This drops both import
+  // and account from those two tabs (defensive: neither role reaches
+  // /tickets or /ticket-overview any more, but PricingRequestQueuePage still
+  // renders this bar for import), leaving import with just its pricing
+  // queue tab below and account with no tabs from this bar at all.
   const canViewPipeline = hasPermission(role, 'canViewDealPipeline');
   const pipelineTabs = canViewPipeline ? BASE_TABS : [];
   // Phase A: import's day starts at the pricing queue, not the deal list, so

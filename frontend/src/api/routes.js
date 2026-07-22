@@ -281,6 +281,8 @@ export const ROLE_PERMISSIONS = {
   // Account are deliberately excluded — their jobs are procurement→delivery
   // and money-confirmation respectively, not browsing the whole deal list
   // (see features/dashboard/ImportOverview.jsx / AccountOverview.jsx).
+  // Frontend-only presentation split; never narrows what
+  // TicketService.VIEWER_ROLES actually allows a read of.
   canViewDealPipeline: ['sales', 'sales_manager', 'ceo'],
   // Sales/CRM tool — catalog browsing scoped to the same audience as
   // canViewTickets. Frontend-only gate: GET /api/catalog has no backend
