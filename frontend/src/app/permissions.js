@@ -10,6 +10,20 @@ export function defaultRouteFor() {
   return 'dashboard';
 }
 
+/**
+ * A "division manager" is role `employee` with the manager flag set — the
+ * non-sales manager of their own division (DivisionAccessPolicy.isManager:
+ * position contains "ผู้จัดการ", assistant managers included). This is the
+ * exact `user?.manager` predicate EmployeeDashboard.dashboardMode's 'manager'
+ * branch uses, narrowed to `role === 'employee'` so sales_manager/hr/ceo
+ * (who have their own dedicated landings/company mode) aren't swept in.
+ * Single source of truth for App.jsx's `/` route branch, AppShell.jsx's nav
+ * grouping, and DivisionManagerOverview's own detection.
+ */
+export function isDivisionManager(user) {
+  return user?.role === 'employee' && !!user?.manager;
+}
+
 export function allowedRoute(route, user) {
   if (!user) return 'dashboard';
   const fallback = defaultRouteFor(user);

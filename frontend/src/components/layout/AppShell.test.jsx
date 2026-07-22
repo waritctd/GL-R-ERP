@@ -89,3 +89,23 @@ describe('AppShell nav — Account role-scoped views', () => {
     expect(screen.getByText('งานการเงิน')).not.toBeNull();
   });
 });
+
+// Division Manager (non-sales) role-scoped views: a role==='employee' user with
+// the manager flag gains the "ทีมของฉัน" nav group (isDivisionManager, see
+// permissions.js) — a plain employee (no manager flag) never sees it.
+describe('AppShell nav — Division Manager (non-sales) role-scoped views', () => {
+  it('shows the ทีมของฉัน group for a division manager (role employee + manager flag)', async () => {
+    renderShell({ role: 'employee', manager: true, name: 'ผู้จัดการ ทดสอบ', email: 'manager@glr.co.th', employeeId: 30 });
+    expect(await screen.findByText('การอนุมัติ OT')).not.toBeNull();
+    expect(screen.getByText('การอนุมัติวันลา')).not.toBeNull();
+    expect(screen.getByText('ทีมในฝ่าย')).not.toBeNull();
+  });
+
+  it('hides the ทีมของฉัน group for a plain employee (no manager flag)', async () => {
+    renderShell({ role: 'employee', manager: false, name: 'พนักงาน ทดสอบ', email: 'employee@glr.co.th', employeeId: 31 });
+    await screen.findByText('เนื้อหา');
+    expect(screen.queryByText('การอนุมัติ OT')).toBeNull();
+    expect(screen.queryByText('การอนุมัติวันลา')).toBeNull();
+    expect(screen.queryByText('ทีมในฝ่าย')).toBeNull();
+  });
+});

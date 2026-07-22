@@ -19,6 +19,9 @@ export const queryKeys = {
   // unfiltered fetch shares one cache entry with anything else that reads
   // "every commission record" for the current payroll month.
   commissionsList: (payrollMonth) => ['commissions', 'list', payrollMonth ?? ''],
+  // Self-service landing (EmployeeSelfService): own attendance.daily() reads. `to` defaults to
+  // "today" server-side when omitted, same as AttendancePage's self view.
+  attendanceDaily: (from, to) => ['attendance', 'daily', from ?? '', to ?? ''],
   specialMoneyRequests: (filters = {}) => ['specialMoney', 'list', filters.from, filters.to, filters.status, filters.employeeId, filters.type],
   specialMoneyEmployees: () => ['specialMoney', 'employees'],
   specialMoneyTypes: () => ['specialMoney', 'types'],

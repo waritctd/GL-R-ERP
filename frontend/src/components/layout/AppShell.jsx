@@ -1,7 +1,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { SALES_ENABLED } from '../../app/features.js';
-import { hasPermission } from '../../app/permissions.js';
+import { hasPermission, isDivisionManager } from '../../app/permissions.js';
 import { roleLabel } from '../../utils/format.js';
 import { Button } from '../common/Button.jsx';
 import { ErrorBoundary } from '../common/ErrorBoundary.jsx';
@@ -18,8 +18,29 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const location = useLocation();
   const navigate = useNavigate();
   const drawerId = 'mobile-navigation-drawer';
+  const isTeamManager = isDivisionManager(user);
   const navItems = [
     { path: '/', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
+    // Division-manager (non-sales) "ทีมของฉัน" group — reuses the same
+    // /employee-requests, /leave, /attendance routes every role already has
+    // (they are dual submit+approve pages for anyone with reports; a division
+    // manager is no exception), framed here as the team-facing entry points.
+    // The unchanged 'self' entries below stay the manager's own personal
+    // self-service, same as every other role. No roster/`/employees` link:
+    // canViewEmployees is hr-only (ROLE_PERMISSIONS) and this task does not
+    // grant it — `/attendance` already gives a division manager a per-employee
+    // view of their team, so it stands in for "ทีมในฝ่าย" too.
+    {
+      path: '/employee-requests',
+      label: 'การอนุมัติ OT',
+      helper: 'Approve team overtime',
+      icon: 'clock',
+      group: 'team',
+      show: isTeamManager,
+      match: ['/employee-requests', '/overtime'],
+    },
+    { path: '/leave', label: 'การอนุมัติวันลา', helper: 'Approve team leave', icon: 'clipboard', group: 'team', show: isTeamManager },
+    { path: '/attendance', label: 'ทีมในฝ่าย', helper: 'Team roster & attendance', icon: 'users', group: 'team', show: isTeamManager },
     // งานขาย is one workspace: the deal pipeline (/tickets — one ticket = one deal,
     // ใบขอราคา and โครงการ merged into one page) plus the ภาพรวม dashboard as a tab
     // (SalesTabs). `match` keeps this item highlighted across both and detail pages.

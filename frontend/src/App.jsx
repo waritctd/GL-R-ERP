@@ -8,7 +8,7 @@ import { LoginPage } from './features/auth/LoginPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
 import { SALES_ENABLED } from './app/features.js';
-import { hasPermission } from './app/permissions.js';
+import { hasPermission, isDivisionManager } from './app/permissions.js';
 import { RequireAccess } from './app/RequireAccess.jsx';
 
 // Route pages are code-split: each import() becomes its own chunk, loaded on
@@ -24,6 +24,8 @@ const SalesOverview = lazy(() => import('./features/dashboard/SalesOverview.jsx'
 // Role-scoped views program (docs/role-scoped-views.md) — CEO's exec-cockpit landing.
 const CeoOverview = lazy(() => import('./features/dashboard/CeoOverview.jsx').then(toDefault('CeoOverview')));
 const ImportOverview = lazy(() => import('./features/dashboard/ImportOverview.jsx').then(toDefault('ImportOverview')));
+const EmployeeSelfService = lazy(() => import('./features/dashboard/EmployeeSelfService.jsx').then(toDefault('EmployeeSelfService')));
+const DivisionManagerOverview = lazy(() => import('./features/dashboard/DivisionManagerOverview.jsx').then(toDefault('DivisionManagerOverview')));
 const TicketDashboard = lazy(() => import('./features/dashboard/TicketDashboard.jsx').then(toDefault('TicketDashboard')));
 // Role-scoped views: Sales Manager's team-cockpit Overview (landing).
 const ManagerOverview = lazy(() => import('./features/dashboard/ManagerOverview.jsx').then(toDefault('ManagerOverview')));
@@ -111,6 +113,15 @@ export function App() {
   const isEmployeeExperience = hasPermission(user?.role, 'canUseEmployeeExperience');
   const pendingCount = (isEmployeeExperience ? ownRequests : profileRequests).filter((request) => request.status === 'pending').length;
   const dashboardRequests = isEmployeeExperience && !user?.manager ? ownRequests : profileRequests;
+  // A plain, non-managing employee (role==='employee', not a division manager)
+  // lands on the self-service view instead of the shared EmployeeDashboard.
+  // 'warehouse'/'qc' keep EmployeeDashboard for now — they get the same
+  // canUseEmployeeExperience data wiring but this branch is scoped to
+  // role==='employee' only, per this task. `!isDivisionManager(user)` reuses
+  // the single source of truth for "is this a division manager" (permissions.js)
+  // instead of re-deriving `!user?.manager` inline — a manager-flagged
+  // employee lands on DivisionManagerOverview above, never here.
+  const isPlainEmployee = user?.role === 'employee' && !isDivisionManager(user);
 
   useEffect(() => {
     let alive = true;
@@ -220,7 +231,11 @@ export function App() {
               // EmployeeDashboard whenever SALES_ENABLED is off (SALES_ENABLED is
               // the off-switch — see app/features.js), same as every other
               // sales-gated surface in this file; hr is people-ops and is NOT gated
-              // on SALES_ENABLED.
+              // on SALES_ENABLED. The base `employee` role further splits by
+              // manager flag: a division manager lands on DivisionManagerOverview,
+              // a plain employee on EmployeeSelfService; any other/unknown role
+              // (or a manager-flagged non-employee role, which shouldn't happen)
+              // falls through to the generic EmployeeDashboard as a safety net.
               user.role === 'hr' ? (
                 <HrOverview
                   employees={employees}
@@ -240,6 +255,21 @@ export function App() {
                 <ImportOverview user={user} employee={currentEmployee} />
               ) : user.role === 'account' && SALES_ENABLED ? (
                 <AccountOverview user={user} employee={currentEmployee} showToast={showToast} />
+              ) : isDivisionManager(user) ? (
+                <DivisionManagerOverview
+                  user={user}
+                  employee={currentEmployee}
+                  dashboardSummary={dashboardSummary}
+                  showToast={showToast}
+                />
+              ) : isPlainEmployee ? (
+                <EmployeeSelfService
+                  user={user}
+                  employee={currentEmployee}
+                  profileRequests={dashboardRequests}
+                  dashboardSummary={dashboardSummary}
+                  showToast={showToast}
+                />
               ) : (
                 <EmployeeDashboard
                   user={user}

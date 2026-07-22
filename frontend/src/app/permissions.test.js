@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hasPermission, allowedRoute, canAccessPath } from './permissions.js';
+import { hasPermission, allowedRoute, canAccessPath, isDivisionManager } from './permissions.js';
 
 describe('hasPermission', () => {
   it('grants a permission listed for the role', () => {
@@ -256,5 +256,30 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/ticket-overview', sales)).toBe(true);
     expect(canAccessPath('/tickets', ceo)).toBe(true);
     expect(canAccessPath('/tickets', { role: 'sales_manager', employeeId: 4 })).toBe(true);
+  });
+});
+
+describe('isDivisionManager', () => {
+  it('is true for role employee with the manager flag set', () => {
+    expect(isDivisionManager({ role: 'employee', manager: true, employeeId: 10 })).toBe(true);
+  });
+
+  it('is false for a plain employee (no manager flag)', () => {
+    expect(isDivisionManager({ role: 'employee', manager: false, employeeId: 10 })).toBe(false);
+    expect(isDivisionManager({ role: 'employee', employeeId: 10 })).toBe(false);
+  });
+
+  // Narrowed to role 'employee' on purpose: sales_manager/hr/ceo have their own
+  // dedicated landings (company mode / a future sales-manager Overview), so a
+  // manager flag on those roles must not also route them here.
+  it('is false for other roles even when the manager flag is set', () => {
+    expect(isDivisionManager({ role: 'sales_manager', manager: true, employeeId: 11 })).toBe(false);
+    expect(isDivisionManager({ role: 'hr', manager: true, employeeId: 12 })).toBe(false);
+    expect(isDivisionManager({ role: 'ceo', manager: true, employeeId: 13 })).toBe(false);
+  });
+
+  it('is false for no user', () => {
+    expect(isDivisionManager(null)).toBe(false);
+    expect(isDivisionManager(undefined)).toBe(false);
   });
 });

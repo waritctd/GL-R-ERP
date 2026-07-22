@@ -43,6 +43,19 @@ vi.mock('./api/index.js', () => ({
     commissions: {
       list: vi.fn().mockResolvedValue({ commissions: [] }),
     },
+    // DivisionManagerOverview's queries, needed for the '/' route-branch test
+    // below (a division manager lands there instead of EmployeeDashboard).
+    // EmployeeSelfService (plain-employee landing) also reads attendance.daily.
+    overtime: {
+      list: vi.fn().mockResolvedValue({ requests: [] }),
+    },
+    leave: {
+      list: vi.fn().mockResolvedValue({ requests: [] }),
+      balances: vi.fn().mockResolvedValue({ balances: [] }),
+    },
+    attendance: {
+      daily: vi.fn().mockResolvedValue({ days: [] }),
+    },
   },
   ROLE_PERMISSIONS: {
     canUseEmployeeExperience: ['employee'],
@@ -200,5 +213,48 @@ describe('App route guard for /pricing-requests (commit 6)', () => {
     // it used to land on), whose PageHeader greets the logged-in user by name.
     expect(await screen.findByRole('heading', { name: `สวัสดี คุณ${salesUser.name}` })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'คิวขอราคา' })).toBeNull();
+  });
+});
+
+// isDivisionManager (app/permissions.js) branches the '/' route to
+// DivisionManagerOverview instead of the generic EmployeeDashboard for role
+// `employee` + the manager flag. Confirms the actual App.jsx wiring, not just
+// the isDivisionManager predicate (unit-tested separately in permissions.test.js)
+// or DivisionManagerOverview's own rendering (DivisionManagerOverview.test.jsx).
+describe('App / route branches division managers to DivisionManagerOverview', () => {
+  const managerUser = { employeeId: 30, name: 'ผู้จัดการ ทดสอบ', role: 'employee', manager: true, email: 'manager@glr.co' };
+  const plainEmployeeUser = { employeeId: 31, name: 'พนักงาน ทดสอบ', role: 'employee', manager: false, email: 'employee@glr.co' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.notifications.list.mockResolvedValue({ notifications: [] });
+    api.overtime.list.mockResolvedValue({ requests: [] });
+    api.leave.list.mockResolvedValue({ requests: [] });
+    api.attendance.daily.mockResolvedValue({ days: [] });
+  });
+
+  function renderAppAt(path, user) {
+    api.auth.me.mockResolvedValue({ user });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[path]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it('lands a division manager (role employee + manager flag) on DivisionManagerOverview at /', async () => {
+    renderAppAt('/', managerUser);
+    expect(await screen.findByText(/ภาพรวมทีม/)).toBeTruthy();
+  });
+
+  it('lands a plain employee (no manager flag) on EmployeeSelfService at / (not EmployeeDashboard, not DivisionManagerOverview)', async () => {
+    renderAppAt('/', plainEmployeeUser);
+    expect(await screen.findByRole('heading', { name: `สวัสดี คุณ${plainEmployeeUser.name}` })).toBeTruthy();
+    expect(screen.queryByText(/ภาพรวมทีม/)).toBeNull();
   });
 });
