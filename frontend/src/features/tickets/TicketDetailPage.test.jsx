@@ -34,6 +34,16 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         listActivities: vi.fn(),
         addActivity: vi.fn(),
         updateTracking: vi.fn(),
+        // Deposit (Phase 3 Slice S3 — handoff 105): DealDepositPanel's own
+        // mutations, self-contained like DealQuotationPanel's.
+        setDepositPolicy: vi.fn(),
+        confirmDepositPaid: vi.fn(),
+        // Fulfilment (Phase 3 Slice S4 — handoff 105): DealFulfilmentPanel's
+        // own mutations, same self-contained pattern.
+        issueImportRequest: vi.fn(),
+        markIrSent: vi.fn(),
+        markShipping: vi.fn(),
+        markGoodsReceived: vi.fn(),
       },
       attachments: {
         list: vi.fn(),
@@ -55,6 +65,21 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         createDepositNoticeFromQuotation: vi.fn(),
         downloadCustomerQuotationPdf: vi.fn(),
         downloadCustomerQuotationXlsx: vi.fn(),
+      },
+      // Deposit (Phase 3 Slice S3 — handoff 105): DealDepositPanel reads/writes
+      // this namespace directly, same pattern as pricingRequests above.
+      depositNotices: {
+        listByTicket: vi.fn(),
+        issue: vi.fn(),
+        preview: vi.fn(),
+        downloadXlsx: vi.fn(),
+        downloadPdf: vi.fn(),
+      },
+      // Fulfilment (Phase 3 Slice S4 — handoff 105): DealFulfilmentPanel's
+      // optional per-factory PO detail — import/CEO only, see its own tests
+      // below.
+      procurement: {
+        listForPricingRequest: vi.fn(),
       },
     },
   };
@@ -120,7 +145,6 @@ function renderTicketDetailPage(user = ceoUser, showToast = vi.fn()) {
           user={user}
           ticketId={701}
           onBack={vi.fn()}
-          onOpenDocument={vi.fn()}
           showToast={showToast}
         />
       </MemoryRouter>
@@ -165,6 +189,16 @@ describe('TicketDetailPage', () => {
       createdById: 1, createdByName: 'สมชาย ใจดี', createdAt: '2026-07-10T09:00:00.000Z',
     });
     api.tickets.updateTracking.mockResolvedValue({ ticket: buildTicket() });
+    // Deposit (Phase 3 Slice S3 — handoff 105): DealDepositPanel mounts for
+    // every role that isn't 'import' (sections.depositNotice), so its list
+    // query needs a default resolve or every existing test above would hit
+    // "api.depositNotices.listByTicket is not a function"-shaped rejections.
+    api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [] });
+    // Fulfilment (Phase 3 Slice S4 — handoff 105): DealFulfilmentPanel mounts
+    // for every role that isn't 'hr' (sections.delivery — import/account/
+    // sales/sales_manager/ceo all see it now), so a default resolve is
+    // needed the same way api.depositNotices.listByTicket needed one above.
+    api.procurement.listForPricingRequest.mockResolvedValue({ factoryPurchaseOrders: [] });
   });
 
   it('renders a ticket from a mocked api.tickets.get', async () => {
@@ -546,7 +580,15 @@ describe('TicketDetailPage', () => {
     expect(amountInput.getAttribute('aria-invalid')).toBeNull();
   });
 
-  it('delivery modal: submitting with no line quantities shows the group-level error and does not call recordDelivery', async () => {
+  // The delivery modal (and its "at least 1 line qty > 0" group-level guard)
+  // moved into DealFulfilmentPanel (Phase 3 Slice S4 — see
+  // docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md), which
+  // does not carry TicketDetailPage's aria-invalid/fieldErrors apparatus —
+  // it reports the same guard via a toast, matching DealDepositPanel/
+  // DealQuotationPanel's simpler mutation-level error convention. Full
+  // coverage of this modal lives in the 'deal fulfilment panel' describe
+  // block below; this is now just the "shows a toast, not a crash" case.
+  it('delivery modal: submitting with no line quantities shows a toast and does not call recordDelivery', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
         summary: { status: 'quotation_issued', salesStage: 'PROCUREMENT', fulfillmentStatus: null },
@@ -560,7 +602,8 @@ describe('TicketDetailPage', () => {
       availableActions: [{ action: 'RECORD_PARTIAL_DELIVERY', kind: 'fulfillment', label: 'บันทึกการส่งสินค้า' }],
     });
 
-    renderTicketDetailPage();
+    const showToast = vi.fn();
+    renderTicketDetailPage(ceoUser, showToast);
 
     fireEvent.click(await screen.findByRole('button', { name: 'บันทึกการส่งสินค้า' }));
     const dialog = await screen.findByRole('dialog', { name: 'บันทึกการส่งสินค้า' });
@@ -572,17 +615,15 @@ describe('TicketDetailPage', () => {
     fireEvent.change(qtyInput, { target: { value: '0' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
 
-    const error = await within(dialog).findByText('กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ');
-    expect(error.getAttribute('role')).toBe('alert');
-    const panel = document.getElementById('delivery-lines-panel');
-    expect(panel.getAttribute('aria-invalid')).toBe('true');
-    expect(panel.getAttribute('aria-describedby')).toBe(error.id);
+    expect(showToast).toHaveBeenCalledWith('error', 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ');
     expect(api.tickets.recordDelivery).not.toHaveBeenCalled();
 
-    // Fixing one line (qty > 0) clears the group-level error.
+    // Fixing the line (qty > 0) lets the save through.
     fireEvent.change(qtyInput, { target: { value: '3' } });
-    await waitFor(() => expect(within(dialog).queryByText('กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ')).toBeNull());
-    expect(panel.getAttribute('aria-invalid')).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledWith(
+      701, { source: 'WAREHOUSE', note: null, lines: [{ itemId: 70101, qty: 3 }] },
+    ));
   });
 
   // ── UX-03 (slice 5b — final slice): the remaining inline page-body
@@ -776,6 +817,181 @@ describe('TicketDetailPage', () => {
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
       expect(screen.queryByRole('heading', { level: 2, name: 'ราคาและใบเสนอราคา' })).toBeNull();
+    });
+  });
+
+  // "มัดจำ" (Phase 3 Slice S3 — docs/agent-handoffs/105): the unified
+  // policy → notice → payment section, replacing the deposit-policy control
+  // that used to live in DealStagePanel and the deposit doc/payment bits
+  // that used to live directly on this page.
+  describe('deal deposit panel', () => {
+    async function depositSection() {
+      const heading = await screen.findByRole('heading', { level: 2, name: 'มัดจำ' });
+      return within(heading.closest('section'));
+    }
+
+    it('renders the มัดจำ section with the current policy for the default REQUIRED policy', async () => {
+      renderTicketDetailPage(accountUser);
+
+      const section = await depositSection();
+      expect(section.getByText('นโยบายมัดจำ')).not.toBeNull();
+      expect(section.getByText('ต้องเก็บมัดจำ')).not.toBeNull();
+      expect(section.getByText('ใบแจ้งยอดมัดจำ')).not.toBeNull();
+      expect(section.getByText('รับชำระมัดจำ')).not.toBeNull();
+    });
+
+    it('account can change the deposit policy via api.tickets.setDepositPolicy', async () => {
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+        availableActions: [{ action: 'WAIVE_DEPOSIT', kind: 'policy', label: 'นโยบายมัดจำ' }],
+      });
+      api.tickets.setDepositPolicy.mockResolvedValue({ ticket: buildTicket({ summary: { depositPolicy: 'WAIVED', depositPolicyReason: 'ลูกค้าประจำ' } }) });
+
+      renderTicketDetailPage(accountUser);
+      const section = await depositSection();
+      fireEvent.click(await section.findByRole('button', { name: 'เปลี่ยนนโยบายมัดจำ…' }));
+
+      fireEvent.change(screen.getByLabelText('เหตุผล *'), { target: { value: 'ลูกค้าประจำ' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+      await waitFor(() => expect(api.tickets.setDepositPolicy).toHaveBeenCalledWith(
+        701, { policy: 'WAIVED', reason: 'ลูกค้าประจำ' },
+      ));
+    });
+
+    it('a waived deposit policy renders the notice/payment steps as skipped, with the reason', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { depositPolicy: 'WAIVED', depositPolicyReason: 'ลูกค้าประจำตามข้อตกลง' } }),
+      });
+
+      renderTicketDetailPage(accountUser);
+      const section = await depositSection();
+      await section.findByText('ยกเว้นมัดจำ');
+
+      expect(section.getAllByText(/ข้ามขั้นตอนนี้/).length).toBe(2);
+      expect(section.getAllByText(/ลูกค้าประจำตามข้อตกลง/).length).toBeGreaterThan(0);
+      expect(section.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+      expect(section.queryByRole('button', { name: 'ยืนยันรับมัดจำ' })).toBeNull();
+    });
+
+    it('account confirms deposit paid via api.tickets.confirmDepositPaid once the notice is issued', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', paymentStatus: 'DEPOSIT_NOTICE_ISSUED' } }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null, status: 'quotation_issued' },
+        availableActions: [{ action: 'DEPOSIT_PAID', kind: 'payment', label: 'รับมัดจำ' }],
+      });
+      api.tickets.confirmDepositPaid.mockResolvedValue({ ticket: buildTicket({ summary: { status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID' } }) });
+
+      renderTicketDetailPage(accountUser);
+      const section = await depositSection();
+      fireEvent.click(await section.findByRole('button', { name: 'ยืนยันรับมัดจำ' }));
+
+      await waitFor(() => expect(api.tickets.confirmDepositPaid).toHaveBeenCalledWith(701));
+    });
+
+    it('import (no business in the deposit section) never sees it, only a one-line peek', async () => {
+      renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
+
+      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      expect(screen.queryByRole('heading', { level: 2, name: 'มัดจำ' })).toBeNull();
+      expect(screen.getByText('มัดจำ')).not.toBeNull(); // SectionPeek's title span
+      expect(api.depositNotices.listByTicket).not.toHaveBeenCalled();
+    });
+  });
+
+  // "การส่งมอบ / นำเข้า" (Phase 3 Slice S4 — docs/agent-handoffs/105): the
+  // deal-level IR/shipping/goods-received/delivery chain + optional
+  // per-factory PO detail, replacing the "การส่งมอบสินค้า" panel and the
+  // docActions IR button/delivery/stock modals that used to live directly
+  // on this page.
+  describe('deal fulfilment panel', () => {
+    const importUser = { id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' };
+
+    async function fulfilmentSection() {
+      const heading = await screen.findByRole('heading', { level: 2, name: 'การส่งมอบ / นำเข้า' });
+      return within(heading.closest('section'));
+    }
+
+    it('import issues an Import Request via api.tickets.issueImportRequest', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID' } }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued' },
+        availableActions: [{ action: 'ISSUE_IMPORT_REQUEST', kind: 'fulfillment', label: 'ออก IR' }],
+      });
+      api.tickets.issueImportRequest.mockResolvedValue({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus: 'IR_ISSUED' } }),
+      });
+
+      renderTicketDetailPage(importUser);
+      const section = await fulfilmentSection();
+      fireEvent.click(await section.findByRole('button', { name: 'ออก Import Request (IR)' }));
+
+      await waitFor(() => expect(api.tickets.issueImportRequest).toHaveBeenCalledWith(701));
+    });
+
+    it('account sees the section read-only — no fulfilment action buttons, no factory-PO detail', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus: 'SHIPPING' } }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'SHIPPING', status: 'quotation_issued' },
+        // A deliberately unrealistic payload (mirrors the "retired verbs" test
+        // above) proving the role gate, not just the absence of the action.
+        availableActions: [
+          { action: 'ISSUE_IMPORT_REQUEST', kind: 'fulfillment', label: 'ออก IR' },
+          { action: 'SHIPPING', kind: 'fulfillment', label: 'สินค้าเดินทาง' },
+          { action: 'RESERVE_STOCK', kind: 'fulfillment', label: 'จองสต็อก' },
+          { action: 'RECORD_PARTIAL_DELIVERY', kind: 'fulfillment', label: 'บันทึกส่งมอบ' },
+          { action: 'COMPLETE_DELIVERY', kind: 'fulfillment', label: 'ส่งมอบครบ' },
+        ],
+      });
+
+      renderTicketDetailPage(accountUser);
+      const section = await fulfilmentSection();
+
+      expect(section.queryByRole('button', { name: 'สินค้าออกเดินทาง (Shipping)' })).toBeNull();
+      expect(section.queryByRole('button', { name: 'จองสินค้าจากสต็อก' })).toBeNull();
+      expect(section.queryByRole('button', { name: 'บันทึกการส่งสินค้า' })).toBeNull();
+      expect(section.queryByRole('button', { name: 'ส่งมอบครบ' })).toBeNull();
+      expect(section.queryByText('ใบสั่งซื้อโรงงาน (Factory PO)')).toBeNull();
+      expect(api.procurement.listForPricingRequest).not.toHaveBeenCalled();
+    });
+
+    it('import sees an empty factory-PO state (production has none yet) once the deal has an order-confirmed pricing request', async () => {
+      api.pricingRequests.listForTicket.mockResolvedValue({
+        items: [{ id: 601, requestCode: 'PCR-2026-0601', status: 'QUOTATION_ACCEPTED', recipientType: 'OWNER' }],
+      });
+
+      renderTicketDetailPage(importUser);
+      const section = await fulfilmentSection();
+
+      expect(await section.findByText('ใบสั่งซื้อโรงงาน (Factory PO)')).not.toBeNull();
+      expect(await section.findByText('ยังไม่มีใบสั่งซื้อโรงงาน')).not.toBeNull();
+      await waitFor(() => expect(api.procurement.listForPricingRequest).toHaveBeenCalledWith(601));
+    });
+
+    it('import sees each factory PO once created, with a link to its detail page', async () => {
+      api.pricingRequests.listForTicket.mockResolvedValue({
+        items: [{ id: 601, requestCode: 'PCR-2026-0601', status: 'QUOTATION_ACCEPTED', recipientType: 'OWNER' }],
+      });
+      api.procurement.listForPricingRequest.mockResolvedValue({
+        factoryPurchaseOrders: [{
+          id: 3001, poNumber: 'FPO-2026-0001', factoryName: 'SCG Ceramics', status: 'OPEN',
+          totalAmount: 50000, currency: 'THB', supplierProformaRef: null,
+          containerRef: null, etd: null, eta: null, actualLandedCostThb: null,
+        }],
+      });
+
+      renderTicketDetailPage(importUser);
+      const section = await fulfilmentSection();
+
+      expect(await section.findByText('FPO-2026-0001')).not.toBeNull();
+      const link = section.getByRole('link', { name: /รายละเอียด/ });
+      expect(link.getAttribute('href')).toBe('/factory-purchase-orders/3001');
     });
   });
 });

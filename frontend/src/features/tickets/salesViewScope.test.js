@@ -37,10 +37,18 @@ describe('visibleSections', () => {
     expect(sections.delivery).toBe(true);
   });
 
-  it('account does NOT see the pricing-request panel or procurement/fulfilment detail', () => {
+  it('account does NOT see the pricing-request panel', () => {
     const sections = visibleSections('account');
     expect(sections.pricingRequest).toBe(false);
-    expect(sections.delivery).toBe(false);
+  });
+
+  // Phase 3 Slice S4 (handoff 105): account now sees DealFulfilmentPanel too
+  // (read-only — no `can.*` action inside it ever resolves true for
+  // account's role), since the deal's fulfilment progress is exactly what
+  // gates the final-payment confirmation account is waiting to make.
+  it('account DOES see the fulfilment/delivery section', () => {
+    const sections = visibleSections('account');
+    expect(sections.delivery).toBe(true);
   });
 
   it('account DOES see the payment section, legacy quotations (for the total), and the deal-quotation section', () => {

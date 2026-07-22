@@ -99,15 +99,12 @@ function PricingRequestSummaryStrip({ summary }) {
 export function DealStagePanel({
   user, summary, availableActions = [], pricingRequests = [], docActions, primaryAction, guidance, actionLoading,
   deliveryProgress = null,
-  onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement, onSetDepositPolicy,
+  onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement,
 }) {
   const [editOpen, setEditOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
   const [noteAction, setNoteAction] = useState(null);
   const [note, setNote] = useState('');
-  const [depositOpen, setDepositOpen] = useState(false);
-  const [depositPolicy, setDepositPolicy] = useState('WAIVED');
-  const [depositReason, setDepositReason] = useState('');
   const [showSteps, setShowSteps] = useState(false);
 
   const hasAction = (action, targetStage = null) => availableActions.some((item) =>
@@ -126,7 +123,6 @@ export function DealStagePanel({
   const canDormant = hasAction('MARK_DORMANT');
   const canResume = hasAction('RESUME');
   const canTender = hasAction('SET_TENDER_REQUIREMENT') && summary.salesStage === 'AWAITING_BUYER';
-  const canDepositPolicy = hasAction('WAIVE_DEPOSIT');
   const isDone = !lost && summary.salesStage === 'CLOSED_PAID';
 
   // When the next stage isn't one this user can one-click into, explain who or
@@ -170,12 +166,6 @@ export function DealStagePanel({
     if (noteAction === 'resume') await onResume(payload);
     setNoteAction(null);
     setNote('');
-  }
-
-  async function submitDepositPolicy() {
-    await onSetDepositPolicy({ policy: depositPolicy, reason: depositReason.trim() });
-    setDepositOpen(false);
-    setDepositReason('');
   }
 
   return (
@@ -386,27 +376,20 @@ export function DealStagePanel({
               </div>
             )}
 
-            {(canTender || canDepositPolicy) ? (
+            {canTender ? (
               <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-                {canTender ? (
-                  <label className="flex items-center gap-2 text-xs font-bold text-text-muted">
-                    ประมูล
-                    <select
-                      value={summary.tenderRequirement ?? 'UNKNOWN'}
-                      disabled={actionLoading}
-                      onChange={(event) => onSetTenderRequirement({ value: event.target.value })}
-                    >
-                      {['UNKNOWN', 'REQUIRED', 'NOT_REQUIRED'].map((value) => (
-                        <option key={value} value={value}>{tenderRequirementLabel(value).label}</option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-                {canDepositPolicy ? (
-                  <button type="button" className="secondary-button" disabled={actionLoading} onClick={() => setDepositOpen(true)}>
-                    นโยบายมัดจำ…
-                  </button>
-                ) : null}
+                <label className="flex items-center gap-2 text-xs font-bold text-text-muted">
+                  ประมูล
+                  <select
+                    value={summary.tenderRequirement ?? 'UNKNOWN'}
+                    disabled={actionLoading}
+                    onChange={(event) => onSetTenderRequirement({ value: event.target.value })}
+                  >
+                    {['UNKNOWN', 'REQUIRED', 'NOT_REQUIRED'].map((value) => (
+                      <option key={value} value={value}>{tenderRequirementLabel(value).label}</option>
+                    ))}
+                  </select>
+                </label>
               </div>
             ) : null}
 
@@ -456,33 +439,6 @@ export function DealStagePanel({
             หมายเหตุ (ถ้ามี)
             <textarea className="min-h-20" value={note} onChange={(event) => setNote(event.target.value)} />
           </label>
-        </Modal>
-      ) : null}
-      {depositOpen ? (
-        <Modal
-          title="นโยบายมัดจำ"
-          onClose={() => setDepositOpen(false)}
-          footer={(
-            <>
-              <button type="button" className="secondary-button" onClick={() => setDepositOpen(false)}>ยกเลิก</button>
-              <button type="button" className="primary-button" disabled={actionLoading || !depositReason.trim()} onClick={submitDepositPolicy}>บันทึก</button>
-            </>
-          )}
-        >
-          <div className="flex flex-col gap-3">
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              นโยบาย
-              <select value={depositPolicy} onChange={(event) => setDepositPolicy(event.target.value)}>
-                {['WAIVED', 'NOT_REQUIRED', 'CREDIT_CUSTOMER'].map((value) => (
-                  <option key={value} value={value}>{depositPolicyLabel(value).label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              เหตุผล *
-              <textarea className="min-h-20" value={depositReason} onChange={(event) => setDepositReason(event.target.value)} />
-            </label>
-          </div>
         </Modal>
       ) : null}
     </section>

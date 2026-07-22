@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -8,7 +8,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import {
-  canConfirmOrder, canCreateCustomerQuotation, canCreateDepositNoticeFromQuotation,
+  canConfirmOrder, canCreateCustomerQuotation,
   canManageCustomerQuotation, canRecordCustomerQuotationOutcome, canViewCustomerQuotation,
   isCustomerQuotationEditable, pricingRequestRecipientLabel,
 } from '../pricingRequests/pricingRequestMeta.js';
@@ -47,13 +47,19 @@ function pickRelevantPricingRequest(pricingRequests = []) {
  * APPROVED_FOR_QUOTATION yet (there is nothing customer-facing to show) —
  * the caller should keep showing PricingRequestPanel above this for the
  * earlier-stage view.
+ *
+ * Terminal action is confirm-order only (Phase 3 Slice S4 de-duplication —
+ * see docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md): the
+ * create-deposit-notice-from-quotation control that used to live here too
+ * (a real, documented overlap flagged in Slice S3's handoff) now lives
+ * solely in DealDepositPanel's own "ใบแจ้งยอดมัดจำ" step — see this
+ * component's git history for the removed `createDepositNotice`
+ * mutation/`depositPercentInput` state if that overlap ever needs undoing.
  */
 export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showToast }) {
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
   const [outcomeNote, setOutcomeNote] = useState('');
   const [downloadingFormat, setDownloadingFormat] = useState(null);
-  const [depositPercentInput, setDepositPercentInput] = useState('0.5');
 
   const pr = useMemo(() => pickRelevantPricingRequest(pricingRequests), [pricingRequests]);
   const canView = pr != null && canViewCustomerQuotation(user, pr);
@@ -99,18 +105,6 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
   const confirmOrder = useMutation({
     mutationFn: () => api.pricingRequests.confirmOrder(pr.id, { clientRequestId: generateClientRequestId() }),
     onSuccess: () => { showToast?.('success', 'ยืนยันคำสั่งซื้อแล้ว'); invalidate(); },
-    onError: (err) => showToast?.('error', err.message || 'ดำเนินการไม่สำเร็จ'),
-  });
-  const createDepositNotice = useMutation({
-    mutationFn: () => api.pricingRequests.createDepositNoticeFromQuotation(pr.id, {
-      depositPercent: depositPercentInput === '' ? null : Number(depositPercentInput),
-    }),
-    onSuccess: () => {
-      showToast?.('success', 'สร้างร่างใบแจ้งยอดเงินรับมัดจำแล้ว');
-      // Reuse the existing deposit-notice page — it already loads/edits/issues the
-      // DRAFT this just created by ticketId.
-      navigate(`/tickets/${ticketId}/deposit`);
-    },
     onError: (err) => showToast?.('error', err.message || 'ดำเนินการไม่สำเร็จ'),
   });
 
@@ -241,7 +235,7 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
 
         {pr.status === 'QUOTATION_ACCEPTED' ? (
           <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
-            <strong className="text-sm">ยืนยันคำสั่งซื้อและออกใบแจ้งยอดเงินรับมัดจำ</strong>
+            <strong className="text-sm">ยืนยันคำสั่งซื้อ</strong>
             {canConfirmOrder(user, pr) ? (
               <>
                 <p className="text-sm text-text-muted">ลูกค้ายอมรับใบเสนอราคาแล้ว — ยืนยันคำสั่งซื้อเพื่อเริ่มขั้นตอนรับมัดจำและนำเข้าสินค้า</p>
@@ -250,23 +244,14 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
                   ยืนยันคำสั่งซื้อ
                 </button>
               </>
-            ) : canCreateDepositNoticeFromQuotation(user, pr) ? (
-              <>
-                <p className="text-sm text-text-muted">ยืนยันคำสั่งซื้อแล้ว — สร้างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคาที่ลูกค้ายอมรับ</p>
-                <label className="flex items-center gap-2 text-sm">
-                  % มัดจำ
-                  <input type="number" min="0" max="1" step="0.05" className="w-24 rounded border border-border p-1 text-sm"
-                    value={depositPercentInput} onChange={(e) => setDepositPercentInput(e.target.value)} />
-                </label>
-                <button type="button" className="primary-button self-start" disabled={createDepositNotice.isPending}
-                  onClick={() => createDepositNotice.mutate()}>
-                  สร้างใบแจ้งยอดเงินรับมัดจำ
-                </button>
-              </>
             ) : (
               <p className="text-sm text-text-muted">
                 {pr.orderConfirmedAt
-                  ? `ยืนยันคำสั่งซื้อแล้วเมื่อ ${formatThaiDate(pr.orderConfirmedAt)}`
+                  // Deposit-notice creation moved to DealDepositPanel's own
+                  // "ใบแจ้งยอดมัดจำ" step (Phase 3 Slice S4 de-duplication —
+                  // see docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md)
+                  // — pointed at here rather than duplicated.
+                  ? `ยืนยันคำสั่งซื้อแล้วเมื่อ ${formatThaiDate(pr.orderConfirmedAt)} — ออกใบแจ้งยอดเงินรับมัดจำได้ที่ส่วน "มัดจำ" ด้านล่าง`
                   : 'ยืนยันคำสั่งซื้อได้เฉพาะเจ้าของดีล (sales)'}
               </p>
             )}

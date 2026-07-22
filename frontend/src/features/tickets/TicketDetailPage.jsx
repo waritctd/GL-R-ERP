@@ -14,7 +14,6 @@ import {
   dealStageLabel,
   formatMoney,
   formatThaiDate,
-  fulfilmentStatusLabel,
   overdueBadgeLabel,
   paymentStageLabel,
   quotationRecipientLabel,
@@ -24,6 +23,8 @@ import {
 import { downloadBlob } from '../../utils/download.js';
 import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
 import { CancelDealModal } from './CancelDealModal.jsx';
+import { DealDepositPanel } from './DealDepositPanel.jsx';
+import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
@@ -141,7 +142,7 @@ function SectionPeek({ title, summary }) {
   );
 }
 
-export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showToast }) {
+export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const queryClient = useQueryClient();
 
   // Edit-items mode
@@ -157,12 +158,14 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // UX-03 (slice 5a + 5b): inline field-level validation for the payment /
   // delivery modals, plus (5b) the revise inline form and the edit-items
   // quantities. One shared dict, keyed per-form/per-row so a stale error can
-  // never bleed into another: 'payment.amount' | 'delivery.lines' (a
-  // group-level rule with no single owning field — same convention
-  // DepositNoticePage.jsx uses for its 'items' key) | 'revise.reason' |
+  // never bleed into another: 'payment.amount' | 'revise.reason' |
   // 'editItems.qty.<rowIndex>' (per-row — see the edit-items save handler).
   // ('quotation.*'/'reject.reason'/'override.<itemId>' were retired along
-  // with ticket-native pricing/quotation — Phase 2 Slice S1/S2.)
+  // with ticket-native pricing/quotation — Phase 2 Slice S1/S2; 'delivery.lines'
+  // moved out along with the delivery/stock modals themselves — Phase 3 Slice
+  // S4, see docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md —
+  // DealFulfilmentPanel owns its own, simpler mutation-level error toasts
+  // instead, matching DealDepositPanel/DealQuotationPanel's convention.)
   // fieldRefs holds the DOM node for each key so a failed submit can
   // scroll/focus the first invalid control. Same shape as the fieldErrors/
   // fieldRefs/clearFieldError pattern already used in TicketCreateModal.jsx,
@@ -220,10 +223,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     lastFollowUpAt: '',
     nextFollowUpAt: '',
   });
-  const [deliveryModal, setDeliveryModal] = useState(false);
-  const [deliveryDraft, setDeliveryDraft] = useState({ source: 'WAREHOUSE', note: '', lines: {} });
-  const [stockModal, setStockModal] = useState(false);
-  const [stockDraft, setStockDraft] = useState({ note: '', lines: {} });
+  // Delivery/stock-reservation modal state moved into DealFulfilmentPanel
+  // (Phase 3 Slice S4 — see docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md).
 
   // Comment
   const [commentText, setCommentText] = useState('');
@@ -270,12 +271,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   });
   const paymentReceipts = paymentsQuery.data ?? [];
 
-  const deliveriesQuery = useQuery({
-    queryKey: queryKeys.ticketDeliveries(ticketId),
-    queryFn: () => api.tickets.listDeliveries(ticketId).then((r) => r.items ?? []),
-    enabled: !!ticketId && !!ticket,
-  });
-  const deliveryRecords = deliveriesQuery.data ?? [];
+  // Delivery history (ticketDeliveries) moved into DealFulfilmentPanel's own
+  // query (Phase 3 Slice S4) — this page no longer reads it directly.
 
   // Commit 6: the deal's own pricing requests — read here (not inside
   // PricingRequestPanel) so DealStagePanel's substep strip can also key off
@@ -335,9 +332,10 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
 
   // Same UI-draft reset the old doAction ran on every successful action.
   function resetActionDrafts() {
-    // UX-03: a successful action closes every modal below (payment/delivery
-    // among them) — clear every field error along with them so a stale one
-    // can never greet the user on the next open.
+    // UX-03: a successful action closes every modal below (payment among
+    // them; delivery/stock moved to DealFulfilmentPanel, Phase 3 Slice S4) —
+    // clear every field error along with them so a stale one can never greet
+    // the user on the next open.
     setFieldErrors({});
     setEditMode(false);
     setEditDraft([]);
@@ -346,8 +344,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     setReviseReason('');
     setPaymentModal(false);
     setBillingModal(false);
-    setDeliveryModal(false);
-    setStockModal(false);
     setCommentText('');
   }
 
@@ -505,19 +501,20 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   const ps = summary.paymentStatus;
   const fs = summary.fulfillmentStatus;
   const isSales   = ROLE_PERMISSIONS.canCreateTickets.includes(role);
-  const isImport  = ROLE_PERMISSIONS.canPickupTickets.includes(role);
-  const isFulfilment = isImport || role === 'ceo';
   const isAccount = ROLE_PERMISSIONS.canConfirmPayments.includes(role);
   // (deliveryDone / dualTrackDone removed with the single-step close: the close
   // gate is now the server's three-party sequence, surfaced via availableActions.)
+  // Still needed for DealStagePanel's own read-only deliveryProgress prop
+  // below — the percentage/per-item breakdown display itself moved into
+  // DealFulfilmentPanel (Phase 3 Slice S4), which computes its own copy from
+  // the same `items`.
   const totalOrdered = items.reduce((sum, item) => sum + Number(item.qty || 0), 0);
   const totalDelivered = items.reduce((sum, item) => sum + Number(item.qtyDelivered || 0), 0);
-  const deliveryProgress = totalOrdered > 0 ? Math.min(100, Math.round((totalDelivered / totalOrdered) * 100)) : 0;
 
   // Documents that already exist stay reachable from the deal-stage panel
-  // through the later stages: the latest quotation file, and the issued
-  // ใบแจ้งยอดมัดจำ (payment track past CUSTOMER_CONFIRMED means
-  // DepositNoticeService.issue has run — the deposit page then shows/downloads it).
+  // through the later stages: the latest quotation file. The deposit-notice
+  // view/issue affordance moved into DealDepositPanel (Phase 3 Slice S3 — see
+  // docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md).
   const sortedQuotations = [...(quotations ?? [])].sort((a, b) => new Date(b.issuedAt ?? 0) - new Date(a.issuedAt ?? 0));
   const activeQuotations = sortedQuotations.filter((q) => !['SUPERSEDED', 'CANCELLED', 'REJECTED'].includes(q.docStatus));
   const stageRecipientPriority = summary.salesStage === 'QUOTE_BUYER'
@@ -533,7 +530,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       quotations: sortedQuotations.filter((q) => (q.recipientType ?? 'UNSPECIFIED') === recipientType),
     }))
     .filter((group) => group.quotations.length > 0);
-  const depositNoticeIssued = ps != null && ps !== 'CUSTOMER_CONFIRMED';
 
   // 'draft' included since V50: a lightweight lead-stage deal gets its product
   // items here, then submits into the price-request flow when it reaches the
@@ -544,11 +540,16 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     // reject/generate-quotation are retired (Phase 2 Slice S1/S2 "engine collapse" — see
     // docs/agent-handoffs/104_feat-deal-workspace-unification.md). Pricing now runs entirely on
     // the PricingRequest chain (PricingRequestPanel below the items table + DealQuotationPanel
-    // for the customer-facing quotation tail + order-confirm).
-    // Issuing the deposit-notice DOCUMENT is the payment-track step (mirrors
-    // DepositNoticeService.issue): customer must have confirmed first, and the
-    // former no-document "ออกใบแจ้งมัดจำ" action is gone.
-    generateDocument:  hasAction('ISSUE_DEPOSIT_NOTICE') && st === 'quotation_issued' && ps === 'CUSTOMER_CONFIRMED' && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
+    // for the customer-facing quotation tail + order-confirm). The deposit-notice
+    // create/issue/view affordance (formerly generateDocument here) and the
+    // deposit-payment confirmation (formerly confirmDepositPaid here) both moved
+    // into DealDepositPanel (Phase 3 Slice S3), and the fulfilment chain
+    // (issueImportRequest/markIrSent/markShipping/markGoodsReceived/
+    // reserveStock/recordDelivery/completeDelivery, formerly defined here)
+    // moved into DealFulfilmentPanel (Phase 3 Slice S4 — see
+    // docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md), which
+    // owns its own mutations against the same hrApi methods rather than
+    // routing through this page's shared actionMutation.
     revise:            (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     // Three-party close (V55): ฝ่ายบัญชี confirms, then the CEO verifies. Sales is
     // no longer part of the sequence, so there is no owner/canCreateTickets gate
@@ -561,21 +562,9 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     editItems: hasAction('EDIT_ITEMS') && EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     // Dual-track (ข้อ 13)
     confirmCustomer:    hasAction('CONFIRM_CUSTOMER') && st === 'quotation_issued' && (ps == null || ps === 'CUSTOMER_CONFIRMED') && isSales,
-    // Money receipts are confirmed by ฝ่ายบัญชี (account role, CEO fallback) —
-    // mirrors TicketService.ACCOUNT_ROLES.
-    confirmDepositPaid: hasAction('DEPOSIT_PAID') && st === 'quotation_issued' && ps === 'DEPOSIT_NOTICE_ISSUED' && isAccount,
-    // DEPOSIT_PAID also qualifies: accounting may confirm the deposit before
-    // import gets to the IR (mirrors TicketService.issueImportRequest).
-    issueImportRequest: hasAction('ISSUE_IMPORT_REQUEST') && st === 'quotation_issued' && fs == null && isFulfilment,
-    markIrSent:         hasAction('IR_SENT') && st === 'quotation_issued' && fs === 'IR_ISSUED' && isFulfilment,
-    markShipping:       hasAction('SHIPPING') && st === 'quotation_issued' && fs === 'IR_SENT' && isFulfilment,
-    markGoodsReceived:  hasAction('GOODS_RECEIVED') && st === 'quotation_issued' && fs === 'SHIPPING' && isFulfilment,
     confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && isAccount,
     recordPayment:      hasAction('RECORD_PAYMENT') && isAccount,
     setBilling:         hasAction('SET_BILLING') && isAccount,
-    reserveStock:       hasAction('RESERVE_STOCK') && isFulfilment,
-    recordDelivery:     hasAction('RECORD_PARTIAL_DELIVERY') && isFulfilment,
-    completeDelivery:   hasAction('COMPLETE_DELIVERY') && isFulfilment,
     downloadRemainingInvoice: st === 'quotation_issued' && fs === 'GOODS_RECEIVED' && isSales,
   };
 
@@ -596,15 +585,12 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
   // Never invents an owner or action the data can't support.
   const NEXT_ACTION_STEPS = [
     // Dual-track steps: re-issuing/working the customer quotation lives in
-    // DealQuotationPanel now, so this list only covers the operational chain
-    // this page's own primaryAction button drives.
+    // DealQuotationPanel, the deposit-notice/deposit-payment steps live in
+    // DealDepositPanel (Phase 3 Slice S3), and the fulfilment chain
+    // (issueImportRequest/markIrSent/markShipping/markGoodsReceived) lives in
+    // DealFulfilmentPanel (Phase 3 Slice S4) — so this list only covers the
+    // operational chain this page's own primaryAction button still drives.
     ['confirmCustomer',  'ยืนยันว่าลูกค้าตกลงคำสั่งซื้อแล้ว'],
-    ['generateDocument', 'ออกใบแจ้งยอดมัดจำให้ลูกค้า (เริ่มขั้นตอนชำระเงิน)'],
-    ['confirmDepositPaid','ยืนยันว่าลูกค้าชำระมัดจำแล้ว'],
-    ['issueImportRequest','ออก Import Request (IR) ให้โรงงาน'],
-    ['markIrSent',        'บันทึกว่าส่ง IR ให้โรงงานแล้ว'],
-    ['markShipping',      'บันทึกว่าสินค้าออกเดินทางแล้ว'],
-    ['markGoodsReceived', 'บันทึกว่ารับสินค้าแล้ว'],
     ['confirmFinalPayment','ยืนยันว่าลูกค้าชำระส่วนที่เหลือครบแล้ว'],
     ['revise',            'ขอแก้ไขรายละเอียดใบขอราคานี้ได้หากจำเป็น'],
     ['confirmClose',      'ส่งมอบและรับเงินครบแล้ว — ยืนยันเพื่อส่งให้ CEO ตรวจสอบปิดงาน'],
@@ -628,35 +614,19 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
       : null;
 
   // The cockpit's primary action: the ONE workflow button for this viewer's
-  // current sub-step (moved verbatim out of การดำเนินการอื่น ๆ). Doc-shaped next
-  // steps (ออกใบแจ้งยอดมัดจำ, IR) are NOT repeated here — they already sit in the
-  // stage panel's docs row and the guidance line points at them. The
+  // current sub-step (moved verbatim out of การดำเนินการอื่น ๆ). The
   // customer-quotation issue/outcome/confirm-order actions live in
-  // DealQuotationPanel, which has its own primary buttons.
+  // DealQuotationPanel, the deposit-notice/deposit-payment actions live in
+  // DealDepositPanel (Phase 3 Slice S3), and the fulfilment chain
+  // (issue IR/mark sent/shipping/goods received) lives in
+  // DealFulfilmentPanel (Phase 3 Slice S4 — see
+  // docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md) — all
+  // three have their own primary buttons, so this page's own primaryAction
+  // no longer drives that chain.
   const primaryAction = can.confirmCustomer ? (
     <button type="button" className="primary-button" disabled={actionLoading}
       onClick={() => doAction(() => api.tickets.confirmCustomer(ticketId), 'ลูกค้ายืนยันแล้ว')}>
       ลูกค้ายืนยัน
-    </button>
-  ) : can.confirmDepositPaid ? (
-    <button type="button" className="primary-button" disabled={actionLoading}
-      onClick={() => doAction(() => api.tickets.confirmDepositPaid(ticketId), 'ยืนยันรับมัดจำแล้ว')}>
-      ยืนยันรับมัดจำ
-    </button>
-  ) : can.markIrSent ? (
-    <button type="button" className="primary-button" disabled={actionLoading}
-      onClick={() => doAction(() => api.tickets.markIrSent(ticketId), 'ส่ง IR แล้ว')}>
-      ส่ง IR แล้ว
-    </button>
-  ) : can.markShipping ? (
-    <button type="button" className="primary-button" disabled={actionLoading}
-      onClick={() => doAction(() => api.tickets.markShipping(ticketId), 'สินค้าอยู่ระหว่างขนส่ง')}>
-      สินค้าออกเดินทาง (Shipping)
-    </button>
-  ) : can.markGoodsReceived ? (
-    <button type="button" className="primary-button" disabled={actionLoading}
-      onClick={() => doAction(() => api.tickets.markGoodsReceived(ticketId), 'รับสินค้าแล้ว')}>
-      รับสินค้าแล้ว (Goods Received)
     </button>
   ) : can.confirmFinalPayment ? (
     <button type="button" className="primary-button" disabled={actionLoading}
@@ -778,32 +748,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     await doAction(() => api.tickets.setBilling(ticketId, payload), 'บันทึกข้อมูลวางบิลแล้ว');
   }
 
-  async function handleRecordDelivery() {
-    const lines = items
-      .map((item) => ({ itemId: item.id, qty: Number(deliveryDraft.lines[item.id] || 0) }))
-      .filter((line) => line.qty > 0);
-    if (lines.length === 0) {
-      setFieldErrorsForPrefix('delivery.', { 'delivery.lines': 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ' });
-      focusFirstInvalid('delivery.lines');
-      return;
-    }
-    setFieldErrorsForPrefix('delivery.', {});
-    await doAction(() => api.tickets.recordDelivery(ticketId, {
-      source: deliveryDraft.source,
-      note: deliveryDraft.note.trim() || null,
-      lines,
-    }), 'บันทึกการส่งสินค้าแล้ว');
-  }
-
-  async function handleReserveStock() {
-    const lines = items.map((item) => ({
-      itemId: item.id,
-      qtyFromStock: Number(stockDraft.lines[item.id] || 0),
-      note: stockDraft.note.trim() || null,
-    }));
-    await doAction(() => api.tickets.reserveStock(ticketId, { lines }), 'บันทึกสินค้าจากสต็อกแล้ว');
-  }
-
   function openBillingModal() {
     setBillingDraft({
       billingDate: summary.billingDate ?? '',
@@ -836,30 +780,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
     setFieldErrorsForPrefix('payment.', {});
   }
 
-  function openDeliveryModal() {
-    const source = fs === 'FROM_STOCK' ? 'STOCK' : 'WAREHOUSE';
-    const lines = {};
-    items.forEach((item) => {
-      lines[item.id] = String(Math.max(0, Number(item.qty || 0) - Number(item.qtyDelivered || 0)));
-    });
-    setDeliveryDraft({ source, note: '', lines });
-    setDeliveryModal(true);
-    // UX-03: reset on open so a stale error from a previous attempt never
-    // greets the user on reopen.
-    setFieldErrorsForPrefix('delivery.', {});
-  }
-
-  function closeDeliveryModal() {
-    setDeliveryModal(false);
-    setFieldErrorsForPrefix('delivery.', {});
-  }
-
-  function openStockModal() {
-    const lines = {};
-    items.forEach((item) => { lines[item.id] = String(item.qtyFromStock ?? 0); });
-    setStockDraft({ note: '', lines });
-    setStockModal(true);
-  }
+  // openDeliveryModal/closeDeliveryModal/openStockModal moved into
+  // DealFulfilmentPanel (Phase 3 Slice S4).
 
   return (
     <div className="page-stack">
@@ -913,16 +835,15 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         onDormant={(payload) => doAction(() => api.tickets.dormant(ticketId, payload), 'พัก dormant แล้ว')}
         onResume={(payload) => doAction(() => api.tickets.resume(ticketId, payload), 'ดำเนินการต่อแล้ว')}
         onSetTenderRequirement={(payload) => doAction(() => api.tickets.setTenderRequirement(ticketId, payload), 'บันทึกสถานะประมูลแล้ว')}
-        onSetDepositPolicy={(payload) => doAction(() => api.tickets.setDepositPolicy(ticketId, payload), 'บันทึกนโยบายมัดจำแล้ว')}
-        docActions={(can.generateDocument || can.issueImportRequest
-          || can.downloadRemainingInvoice || (sections.quotation && latestQuotation)
-          || (sections.depositNotice && depositNoticeIssued)) ? (
+        docActions={(can.downloadRemainingInvoice || (sections.quotation && latestQuotation)) ? (
           <>
             {/* Import/account (role-scoped views, Phase A): the view-only
-                quotation/deposit-notice download links aren't role-gated by
-                `can.*` (unlike generate/issue, which already require
-                isOwner) — sections.quotation/depositNotice hide them for the
-                role that has no business in that document. */}
+                quotation download link isn't role-gated by `can.*` —
+                sections.quotation hides it for the role that has no business
+                in that document. The deposit-notice create/issue/view
+                affordance moved to DealDepositPanel (Phase 3 Slice S3); the
+                Import Request button moved to DealFulfilmentPanel (Phase 3
+                Slice S4). */}
             {sections.quotation && latestQuotation && (
               <button type="button" className="secondary-button"
                 disabled={downloadingQuotationKey === `${latestQuotation.id}-pdf`}
@@ -931,26 +852,6 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
                 {downloadingQuotationKey === `${latestQuotation.id}-pdf`
                   ? 'กำลังดาวน์โหลด...'
                   : `ใบเสนอราคา ${latestQuotation.number} (PDF)`}
-              </button>
-            )}
-            {can.generateDocument && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => onOpenDocument && onOpenDocument(ticketId)}>
-                <Icon name="fileText" size={14} />
-                ออกใบแจ้งยอดมัดจำ
-              </button>
-            )}
-            {sections.depositNotice && depositNoticeIssued && (
-              <button type="button" className="secondary-button"
-                onClick={() => onOpenDocument && onOpenDocument(ticketId)}>
-                <Icon name="fileText" size={14} />
-                ดูใบแจ้งยอดมัดจำ
-              </button>
-            )}
-            {can.issueImportRequest && (
-              <button type="button" className="primary-button" disabled={actionLoading}
-                onClick={() => doAction(() => api.tickets.issueImportRequest(ticketId), 'ออก IR แล้ว')}>
-                ออก Import Request (IR)
               </button>
             )}
             {can.downloadRemainingInvoice && (
@@ -1055,90 +956,12 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         <SectionPeek title="การชำระเงิน" summary={summary} />
       )}
 
-      {sections.delivery ? (
-      <section className="panel">
-        <div className="panel-header" style={{ alignItems: 'center' }}>
-          <h2>การส่งมอบสินค้า</h2>
-          <StatusBadge tone={fulfilmentStatusLabel(fs).tone}>
-            {fulfilmentStatusLabel(fs).label}
-          </StatusBadge>
-        </div>
-        <div style={{ padding: '0 18px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 12, alignItems: 'center' }}>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
-                <strong>{totalDelivered.toLocaleString('en-US')} / {totalOrdered.toLocaleString('en-US')}</strong>
-                <span style={{ color: 'var(--color-text-muted)' }}>{deliveryProgress}%</span>
-              </div>
-              <div style={{ height: 8, borderRadius: 999, background: 'var(--color-surface-subtle)', overflow: 'hidden' }}>
-                <div style={{ width: `${deliveryProgress}%`, height: '100%', background: 'var(--color-success)' }} />
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              {can.reserveStock && (
-                <button type="button" className="secondary-button" disabled={actionLoading} onClick={openStockModal}>
-                  จองสินค้าจากสต็อก
-                </button>
-              )}
-              {can.recordDelivery && (
-                <button type="button" className="primary-button" disabled={actionLoading} onClick={openDeliveryModal}>
-                  บันทึกการส่งสินค้า
-                </button>
-              )}
-              {can.completeDelivery && (
-                <button type="button" className="secondary-button" disabled={actionLoading}
-                  onClick={() => doAction(() => api.tickets.completeDelivery(ticketId, { note: 'ส่งมอบครบจากหน้าดีล' }), 'ส่งมอบครบแล้ว')}>
-                  ส่งมอบครบ
-                </button>
-              )}
-            </div>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {items.map((item) => {
-              const ordered = Number(item.qty || 0);
-              const delivered = Number(item.qtyDelivered || 0);
-              const remaining = Math.max(0, ordered - delivered);
-              return (
-                <div key={item.id} style={{ border: '1px solid var(--color-border-subtle)', borderRadius: 8, padding: '10px 12px', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 10 }}>
-                  <div>
-                    <strong>{item.brand} {item.model || ''}</strong>
-                    <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
-                      จากสต็อก {Number(item.qtyFromStock || 0).toLocaleString('en-US')} · คงเหลือ {remaining.toLocaleString('en-US')}
-                    </small>
-                  </div>
-                  <strong>{delivered.toLocaleString('en-US')} / {ordered.toLocaleString('en-US')}</strong>
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 10 }}>
-            <h3 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700 }}>ประวัติส่งมอบ</h3>
-            {deliveriesQuery.isLoading ? (
-              <SkeletonText lines={2} />
-            ) : deliveryRecords.length === 0 ? (
-              <p style={{ margin: 0, fontSize: 13, color: 'var(--color-text-muted)' }}>ยังไม่มีรายการส่งมอบ</p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {deliveryRecords.map((record) => (
-                  <div key={record.deliveryId} style={{ display: 'grid', gridTemplateColumns: '110px 90px 1fr', gap: 10, alignItems: 'start', fontSize: 13 }}>
-                    <span style={{ color: 'var(--color-text-muted)' }}>{formatThaiDate(record.deliveredAt)}</span>
-                    <strong>{record.source}</strong>
-                    <span>
-                      {(record.items ?? []).map((line) => `${line.itemId}: ${Number(line.qty).toLocaleString('en-US')}`).join(', ')}
-                      <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
-                        {record.deliveredByName || '-'}{record.note ? ` · ${record.note}` : ''}
-                      </small>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </section>
-      ) : (
-        <SectionPeek title="การส่งมอบสินค้า" summary={summary} />
-      )}
+      {/* "การส่งมอบ / นำเข้า" (Phase 3 Slice S4 — see
+          docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md): the
+          deal-level IR → shipping → goods-received → delivery chain, plus an
+          optional per-factory PO detail, now live in DealFulfilmentPanel
+          alongside DealQuotationPanel/DealDepositPanel below rather than as
+          a standalone top-level panel here. */}
 
       {/* The CEO price-approval decision panel (approve/reject a Import-proposed
           price) is gone along with ticket-native pricing (Phase 2 Slice S1/S2 —
@@ -1577,6 +1400,47 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
             <DealQuotationPanel ticketId={ticketId} pricingRequests={pricingRequests} user={user} showToast={showToast} />
           ) : null}
 
+          {/* "มัดจำ" (Phase 3 Slice S3 — see
+              docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md):
+              the one deposit section — policy (account/CEO) → notice (sales)
+              → payment confirmation (account) — replacing the deposit-policy
+              control that used to live in DealStagePanel and the deposit
+              doc/payment bits that used to live directly on this page. */}
+          {sections.depositNotice ? (
+            <DealDepositPanel
+              ticketId={ticketId}
+              user={user}
+              summary={summary}
+              availableActions={availableActions}
+              pricingRequests={pricingRequests}
+              showToast={showToast}
+            />
+          ) : (
+            <SectionPeek title="มัดจำ" summary={summary} />
+          )}
+
+          {/* "การส่งมอบ / นำเข้า" (Phase 3 Slice S4 — see
+              docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md):
+              the deal-level IR → shipping → goods-received → delivery chain
+              (import/CEO act, sales/account/ceo see progress), plus an
+              optional per-factory PO detail — replacing the "การส่งมอบสินค้า"
+              panel and the IR button/delivery/stock modals that used to live
+              directly on this page. Reuses the existing `delivery` section
+              id (salesViewScope.js) rather than adding a parallel one. */}
+          {sections.delivery ? (
+            <DealFulfilmentPanel
+              ticketId={ticketId}
+              user={user}
+              summary={summary}
+              items={items}
+              availableActions={availableActions}
+              pricingRequests={pricingRequests}
+              showToast={showToast}
+            />
+          ) : (
+            <SectionPeek title="การส่งมอบ / นำเข้า" summary={summary} />
+          )}
+
           {/* R5: Attachments */}
           <section className="panel">
             <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1914,127 +1778,8 @@ export function TicketDetailPage({ user, ticketId, onBack, onOpenDocument, showT
         </Modal>
       )}
 
-      {deliveryModal && (
-        <Modal
-          title="บันทึกการส่งสินค้า"
-          onClose={closeDeliveryModal}
-          footer={(
-            <>
-              <button type="button" className="secondary-button" onClick={closeDeliveryModal}>ยกเลิก</button>
-              <button type="button" className="primary-button" disabled={actionLoading} onClick={handleRecordDelivery}>
-                บันทึก
-              </button>
-            </>
-          )}
-        >
-          <div style={{ display: 'grid', gap: 12 }}>
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
-              แหล่งสินค้า
-              <select value={deliveryDraft.source}
-                onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, source: e.target.value }))}>
-                <option value="WAREHOUSE">WAREHOUSE</option>
-                <option value="STOCK">STOCK</option>
-              </select>
-            </label>
-            {/*
-              UX-03: "at least 1 line item with qty > 0" is a group-level rule
-              with no single owning field — like DepositNoticePage's
-              doc-items-panel, the wrapper itself is the scroll/focus target,
-              carrying aria-invalid/aria-describedby and a tabIndex so a plain
-              div is focusable.
-            */}
-            <div
-              id="delivery-lines-panel"
-              ref={(el) => { fieldRefs.current['delivery.lines'] = el; }}
-              tabIndex={-1}
-              aria-invalid={fieldErrors['delivery.lines'] ? true : undefined}
-              aria-describedby={fieldErrors['delivery.lines'] ? fieldErrorId('delivery-lines-panel') : undefined}
-              style={{ display: 'grid', gap: 8 }}
-            >
-              {items.map((item) => {
-                const remaining = Math.max(0, Number(item.qty || 0) - Number(item.qtyDelivered || 0));
-                return (
-	                  <label key={item.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px', gap: 10, alignItems: 'center', fontSize: 13 }}>
-	                    <span>
-                        <span className="sr-only">จำนวนส่งมอบ</span>
-	                      <strong>{item.brand} {item.model || ''}</strong>
-                      <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
-                        คงเหลือ {remaining.toLocaleString('en-US')} · ส่งแล้ว {Number(item.qtyDelivered || 0).toLocaleString('en-US')}
-                      </small>
-                    </span>
-	                    <input type="number" min="0" max={remaining} step="0.01"
-                        aria-label={`จำนวนส่งมอบ ${item.brand} ${item.model || ''}`}
-	                      value={deliveryDraft.lines[item.id] ?? ''}
-                      onChange={(e) => {
-                        const { value } = e.target;
-                        setDeliveryDraft((draft) => ({
-                          ...draft,
-                          lines: { ...draft.lines, [item.id]: value },
-                        }));
-                        // The group rule is "at least one line qty > 0" — the
-                        // instant THIS line goes positive that rule is
-                        // satisfied regardless of the other lines' values
-                        // (they were all <=0 for the error to have fired).
-                        if (Number(value) > 0) clearFieldError('delivery.lines');
-                      }} />
-                  </label>
-                );
-              })}
-              {fieldErrors['delivery.lines'] ? (
-                <p id={fieldErrorId('delivery-lines-panel')} role="alert" style={{ margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--color-danger)' }}>
-                  {fieldErrors['delivery.lines']}
-                </p>
-              ) : null}
-            </div>
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
-              หมายเหตุ
-              <textarea rows={3} value={deliveryDraft.note}
-                onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, note: e.target.value }))} />
-            </label>
-          </div>
-        </Modal>
-      )}
-
-      {stockModal && (
-        <Modal
-          title="จองสินค้าจากสต็อก"
-          onClose={() => setStockModal(false)}
-          footer={(
-            <>
-              <button type="button" className="secondary-button" onClick={() => setStockModal(false)}>ยกเลิก</button>
-              <button type="button" className="primary-button" disabled={actionLoading} onClick={handleReserveStock}>
-                บันทึก
-              </button>
-            </>
-          )}
-        >
-          <div style={{ display: 'grid', gap: 12 }}>
-            {items.map((item) => (
-	              <label key={item.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px', gap: 10, alignItems: 'center', fontSize: 13 }}>
-	                <span>
-                    <span className="sr-only">จำนวนจากสต็อก</span>
-	                  <strong>{item.brand} {item.model || ''}</strong>
-                  <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
-                    สั่ง {Number(item.qty || 0).toLocaleString('en-US')} · จากสต็อกเดิม {Number(item.qtyFromStock || 0).toLocaleString('en-US')}
-                  </small>
-                </span>
-	                <input type="number" min="0" max={Number(item.qty || 0)} step="0.01"
-                    aria-label={`จำนวนจากสต็อก ${item.brand} ${item.model || ''}`}
-	                  value={stockDraft.lines[item.id] ?? ''}
-                  onChange={(e) => setStockDraft((draft) => ({
-                    ...draft,
-                    lines: { ...draft.lines, [item.id]: e.target.value },
-                  }))} />
-              </label>
-            ))}
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
-              เหตุผล / หมายเหตุ
-              <textarea rows={3} value={stockDraft.note}
-                onChange={(e) => setStockDraft((draft) => ({ ...draft, note: e.target.value }))} />
-            </label>
-          </div>
-        </Modal>
-      )}
+      {/* Delivery/stock-reservation modals moved into DealFulfilmentPanel
+          (Phase 3 Slice S4). */}
 
       <ConfirmDialog
         open={confirm?.kind === 'deleteAttachment'}

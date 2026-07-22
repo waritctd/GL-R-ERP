@@ -22,9 +22,9 @@ import { phaseOf, stageIndex } from './stageMeta.js';
 const SECTION_IDS = [
   'pricingRequest', // PricingRequestPanel: the designer/owner/buyer pricing-request + factory-quote/costing chain
   'payment',        // "การชำระเงิน": amounts payable/paid/outstanding, receipt history, record-payment
-  'delivery',       // "การส่งมอบสินค้า": procurement/fulfilment substeps + delivery recording
+  'delivery',       // "การส่งมอบ / นำเข้า" (Phase 3 Slice S4, handoff 105): DealFulfilmentPanel — IR/shipping/goods-received/delivery + optional factory-PO detail
   'quotation',      // "ใบเสนอราคา" (legacy): the 3 pre-redesign ticket-native quotation rows, read-only
-  'depositNotice',  // the deposit-notice view/issue affordance inside the stage panel's doc row
+  'depositNotice',  // "มัดจำ" (Phase 3 Slice S3, handoff 105): DealDepositPanel — policy/notice/payment
   // "การอนุมัติราคา" (the CEO approve/reject decision panel) is gone — Phase 2 Slice S2 retired
   // ticket-native price approval along with its routes (see docs/agent-handoffs/104). CEO price
   // decisions now happen on the PricingRequest chain (PricingRequestDetailPage), gated there.
@@ -59,8 +59,14 @@ function allFalse() {
  * ledger.
  *
  * account: leads with the payment section. It has no reason to see the
- * pricing-request/factory-cost chain, the procurement/shipping detail, or
- * (already field-scoped, not re-stated here) item cost columns.
+ * pricing-request/factory-cost chain or (already field-scoped, not
+ * re-stated here) item cost columns — but DOES see the fulfilment/delivery
+ * section (Phase 3 Slice S4): the deal's IR/shipping/goods-received/
+ * delivery progress correlates directly with when a final-payment
+ * confirmation becomes due, so account gets DealFulfilmentPanel's first two
+ * steps read-only (no `can.*` action ever resolves true for its role) — the
+ * optional per-factory PO detail (import/CEO only, gated inside the panel
+ * itself, not here) stays hidden regardless.
  */
 export function visibleSections(role) {
   if (role === 'ceo' || role === 'sales_manager' || role === 'sales') return allTrue();
@@ -80,7 +86,6 @@ export function visibleSections(role) {
     return {
       ...allTrue(),
       pricingRequest: false,
-      delivery: false,
       dealTracking: false,
     };
   }
