@@ -325,7 +325,7 @@ public class CommissionRepository {
 
     /**
      * Manual commission entries (feat/commission-manual-adjustments, V84): a sales_manager/CEO
-     * hand-typed amount for kind ADJUSTMENT or MANAGER -- never computed by {@link
+     * hand-typed amount for kind ADJUSTMENT / MANAGER / STOCK_BONUS / INCENTIVE -- never computed by {@link
      * CommissionCalculator}, no {@code invoice_id} (nullable since V84), no {@code
      * source_ticket_id}. {@code actual_received}/{@code commissionable_base} are stored as ZERO,
      * deliberately: those are the tier-calc columns, and manual entries must never bleed into
