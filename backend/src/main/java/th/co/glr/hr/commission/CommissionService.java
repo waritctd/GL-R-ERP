@@ -6,6 +6,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -144,7 +145,7 @@ public class CommissionService {
                 safeRequest.sourceTicketId(),
                 salesRepId,
                 actor.id(),
-                payrollMonth(safeRequest.invoiceDate()),
+                saleCommissionPayrollMonth(safeRequest.invoiceDate()),
                 calculation,
                 linkage.payableSnapshot(),
                 linkage.mismatch()
@@ -267,7 +268,7 @@ public class CommissionService {
                 ticketId,
                 salesRepId,
                 actor.id(),
-                payrollMonth(request.invoiceDate()),
+                saleCommissionPayrollMonth(request.invoiceDate()),
                 calculation,
                 linkage.payableSnapshot(),
                 linkage.mismatch()
@@ -560,13 +561,42 @@ public class CommissionService {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
         LocalDate month = payrollMonth == null ? currentPayrollMonth() : payrollMonth(payrollMonth);
-        List<CommissionRecord> records = commissions.findApprovedRecordsByMonth(month);
+        List<RepPayrollCommission> reps = computeRepPayrollCommissions(month);
+        List<SalesRepCommissionSummaryDto> repSummaries = new ArrayList<>();
+        BigDecimal totalBase = BigDecimal.ZERO;
+        BigDecimal totalCommission = BigDecimal.ZERO;
+        for (RepPayrollCommission rep : reps) {
+            repSummaries.add(new SalesRepCommissionSummaryDto(
+                rep.salesRepId(), rep.salesRepName(), rep.tierCommissionableBase(), rep.totalCommission(), rep.manualAdjustmentAmount()));
+            totalBase = totalBase.add(rep.tierCommissionableBase());
+            totalCommission = totalCommission.add(rep.totalCommission());
+        }
+        repSummaries.sort(Comparator.comparing(SalesRepCommissionSummaryDto::salesRepName, Comparator.nullsLast(String::compareTo)));
+        return new PayrollCommissionSummaryDto(month, "PAYROLL_READY", totalBase, totalCommission, repSummaries);
+    }
+
+    /**
+     * Commission-payroll weighted-base + manual-entries fix (2026-07-23): single source of truth
+     * for "how much commission does payroll owe this rep for this month" -- {@link
+     * #payrollReadySummary} (what HR sees) and {@code PayrollService#commissionPayByEmployee}
+     * (what payroll actually pays, via {@link #payrollCommissionTotalsByEmployee}) both build on
+     * this exact aggregation so the two paths can never diverge again. Real payroll pays each
+     * rep's FULL commission = weighted tier commission + their approved manual entries
+     * (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE) -- e.g. the owner-reconciled "jennet" case: tier
+     * 67,849.23 + a 15,000 INCENTIVE = 82,849.23 paid.
+     *
+     * @param payrollMonth must already be normalized to the 1st of the month -- this queries
+     *                     {@link CommissionRepository#findApprovedRecordsByMonth} with an exact
+     *                     match, it does not re-normalize.
+     */
+    private List<RepPayrollCommission> computeRepPayrollCommissions(LocalDate payrollMonth) {
+        List<CommissionRecord> records = commissions.findApprovedRecordsByMonth(payrollMonth);
         Map<Long, RepAccumulator> grouped = new LinkedHashMap<>();
-        // Manual entries (ADJUSTMENT/MANAGER, feat/commission-manual-adjustments) never feed the
-        // tier calc -- accumulated separately here and added to each rep's FINAL commission total
-        // only, on top of the tier commission, never into commissionableBase itself. Only
-        // APPROVED records reach this point at all (findApprovedRecordsByMonth), so a manual
-        // entry still sitting at MANAGER_APPROVED correctly does not count yet.
+        // Manual entries (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE, feat/commission-manual-adjustments)
+        // never feed the tier calc -- accumulated separately here and added to each rep's FINAL
+        // commission total only, on top of the tier commission, never into commissionableBase
+        // itself. Only APPROVED records reach this point at all (findApprovedRecordsByMonth), so a
+        // manual entry still sitting at MANAGER_APPROVED correctly does not count yet.
         Map<Long, BigDecimal> manualTotals = new LinkedHashMap<>();
         Map<Long, String> manualOnlyRepNames = new LinkedHashMap<>();
         for (CommissionRecord record : records) {
@@ -584,9 +614,8 @@ public class CommissionService {
                 .add(record.actualReceived(), record.weightMultiplier());
         }
         List<TierConfig> tiers = tiers();
-        Map<Long, SalesRepCommissionSummaryDto> summaries = new LinkedHashMap<>();
-        BigDecimal totalBase = BigDecimal.ZERO;
-        BigDecimal totalCommission = BigDecimal.ZERO;
+        List<RepPayrollCommission> results = new ArrayList<>();
+        Set<Long> repIds = new HashSet<>();
         for (RepAccumulator rep : grouped.values()) {
             BigDecimal safeWeightedActualReceived = rep.weightedActualReceived.max(BigDecimal.ZERO);
             // Full precision here (not rounded to 2dp) — only the final commission total rounds.
@@ -595,28 +624,53 @@ public class CommissionService {
             BigDecimal displayBase = safeBase.setScale(2, RoundingMode.HALF_UP);
             BigDecimal manualAmount = manualTotals.getOrDefault(rep.salesRepId, BigDecimal.ZERO);
             BigDecimal finalCommission = tierCommission.add(manualAmount);
-            summaries.put(rep.salesRepId,
-                new SalesRepCommissionSummaryDto(rep.salesRepId, rep.salesRepName, displayBase, finalCommission, manualAmount));
-            totalBase = totalBase.add(displayBase);
-            totalCommission = totalCommission.add(finalCommission);
+            results.add(new RepPayrollCommission(rep.salesRepId, rep.salesRepName, displayBase, manualAmount, finalCommission));
+            repIds.add(rep.salesRepId);
         }
         // A rep whose ONLY approved commission this month is a manual entry (e.g. a MANAGER
-        // commission for someone with no SALE commission yet) still needs a summary row: tier
-        // base/commission are zero, the manual amount is the whole total.
+        // commission for someone with no SALE commission yet) still needs a row: tier base/tier
+        // commission are zero, the manual amount is the whole total.
         for (Map.Entry<Long, BigDecimal> entry : manualTotals.entrySet()) {
-            Long repId = entry.getKey();
-            if (summaries.containsKey(repId)) {
+            if (repIds.contains(entry.getKey())) {
                 continue;
             }
             BigDecimal manualAmount = entry.getValue();
-            summaries.put(repId, new SalesRepCommissionSummaryDto(
-                repId, manualOnlyRepNames.get(repId), BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP), manualAmount, manualAmount));
-            totalCommission = totalCommission.add(manualAmount);
+            results.add(new RepPayrollCommission(
+                entry.getKey(), manualOnlyRepNames.get(entry.getKey()),
+                BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP), manualAmount, manualAmount));
         }
-        List<SalesRepCommissionSummaryDto> repSummaries = new ArrayList<>(summaries.values());
-        repSummaries.sort(Comparator.comparing(SalesRepCommissionSummaryDto::salesRepName, Comparator.nullsLast(String::compareTo)));
-        return new PayrollCommissionSummaryDto(month, "PAYROLL_READY", totalBase, totalCommission, repSummaries);
+        return results;
     }
+
+    /**
+     * Map view of {@link #computeRepPayrollCommissions} for callers -- {@code
+     * PayrollService#commissionPayByEmployee} -- that only need the final payable total per rep,
+     * not the full base/manual breakdown {@link #payrollReadySummary} displays.
+     *
+     * @param payrollMonth must already be normalized to the 1st of the month (payroll always
+     *                     passes an already-normalized month here; see {@code
+     *                     PayrollService#normalizeMonth}).
+     */
+    public Map<Long, BigDecimal> payrollCommissionTotalsByEmployee(LocalDate payrollMonth) {
+        Map<Long, BigDecimal> totals = new LinkedHashMap<>();
+        for (RepPayrollCommission rep : computeRepPayrollCommissions(payrollMonth)) {
+            totals.put(rep.salesRepId(), rep.totalCommission());
+        }
+        return totals;
+    }
+
+    /**
+     * Per-rep breakdown shared between {@link #payrollReadySummary} and {@link
+     * #payrollCommissionTotalsByEmployee} -- {@code totalCommission} is the number payroll must
+     * pay: {@code tierCommissionableBase} run through the tier table, plus {@code
+     * manualAdjustmentAmount}.
+     */
+    public record RepPayrollCommission(
+        long salesRepId,
+        String salesRepName,
+        BigDecimal tierCommissionableBase,
+        BigDecimal manualAdjustmentAmount,
+        BigDecimal totalCommission) {}
 
     private CommissionRecord requireRecord(long id) {
         return commissions.findById(id)
@@ -830,6 +884,20 @@ public class CommissionService {
 
     private LocalDate payrollMonth(LocalDate date) {
         return date.withDayOfMonth(1);
+    }
+
+    /**
+     * FLAG-10 (2026-07-23, owner-confirmed against reconciled real May 2026 accountant data):
+     * commission on money received in month M is paid in payroll month M+1, flat -- {@code
+     * invoiceDate} is the received date. Used ONLY at the two SALE-commission creation sites
+     * ({@link #submit} / {@link #createFromDeal}). Do NOT use this for the HR-picked manual-entry
+     * month ({@link #createManualCommission}) or the {@link #payrollReadySummary} query month --
+     * both of those are already expressed in target-payroll-month terms and must go through the
+     * plain {@link #payrollMonth(LocalDate)} normalizer instead, or a manual entry would be
+     * shifted an extra, wrong month.
+     */
+    private LocalDate saleCommissionPayrollMonth(LocalDate invoiceDate) {
+        return invoiceDate.withDayOfMonth(1).plusMonths(1);
     }
 
     private LocalDate currentPayrollMonth() {

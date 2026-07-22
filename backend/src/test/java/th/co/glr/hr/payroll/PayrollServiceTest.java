@@ -21,8 +21,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.commission.CommissionCalculator;
-import th.co.glr.hr.commission.CommissionRepository;
+import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.common.ApiException;
 
 class PayrollServiceTest {
@@ -32,8 +31,7 @@ class PayrollServiceTest {
     private final PayrollService service = new PayrollService(
         payrollRepository,
         mock(PayrollCalculator.class),
-        mock(CommissionRepository.class),
-        mock(CommissionCalculator.class),
+        mock(CommissionService.class),
         auditService,
         payslipRenderer
     );

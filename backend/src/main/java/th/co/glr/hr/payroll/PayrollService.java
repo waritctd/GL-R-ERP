@@ -16,10 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.commission.CommissionCalculator;
-import th.co.glr.hr.commission.CommissionRecord;
-import th.co.glr.hr.commission.CommissionRepository;
-import th.co.glr.hr.commission.TierConfig;
+import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceDto;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
@@ -37,23 +34,20 @@ public class PayrollService {
 
     private final PayrollRepository payrollRepository;
     private final PayrollCalculator payrollCalculator;
-    private final CommissionRepository commissionRepository;
-    private final CommissionCalculator commissionCalculator;
+    private final CommissionService commissionService;
     private final AuditService auditService;
     private final PayslipRenderer payslipRenderer;
 
     public PayrollService(
         PayrollRepository payrollRepository,
         PayrollCalculator payrollCalculator,
-        CommissionRepository commissionRepository,
-        CommissionCalculator commissionCalculator,
+        CommissionService commissionService,
         AuditService auditService,
         PayslipRenderer payslipRenderer
     ) {
         this.payrollRepository = payrollRepository;
         this.payrollCalculator = payrollCalculator;
-        this.commissionRepository = commissionRepository;
-        this.commissionCalculator = commissionCalculator;
+        this.commissionService = commissionService;
         this.auditService = auditService;
         this.payslipRenderer = payslipRenderer;
     }
@@ -341,18 +335,25 @@ public class PayrollService {
         return items.stream().map(YtdSeedUpsertRequest::employeeId).toList();
     }
 
+    /**
+     * Commission-payroll weighted-base + manual-entries fix (2026-07-23): delegates to {@link
+     * CommissionService#payrollCommissionTotalsByEmployee}, the exact same weighted-tier +
+     * approved-manual-entries aggregation {@link CommissionService#payrollReadySummary} uses for
+     * what HR sees on the payroll-ready screen -- the two paths now share one implementation and
+     * can never diverge again.
+     *
+     * <p>This used to reimplement the tier/VAT math independently here, two bugs deep: (1) it
+     * summed each APPROVED record's already-2dp-rounded {@code commissionableBase} UNWEIGHTED
+     * instead of the weighted, full-precision monthly tier base, underpaying a rep with a
+     * 2x/3x-weighted receipt (owner-reconciled "jennet" case: weighted 67,849.23 vs. the old
+     * unweighted 67,390.34); and (2) it excluded approved manual entries (ADJUSTMENT/MANAGER/
+     * STOCK_BONUS/INCENTIVE, V84) from the payroll figure entirely, even though real payroll pays
+     * tier commission PLUS those manual entries (same "jennet" case with a 15,000 INCENTIVE added:
+     * 82,849.23). See {@code PayrollCommissionWeightedBaseIntegrationTest} for the real-DB
+     * regression coverage of both.
+     */
     private Map<Long, BigDecimal> commissionPayByEmployee(LocalDate payrollMonth) {
-        List<CommissionRecord> records = commissionRepository.findApprovedRecordsByMonth(payrollMonth);
-        List<TierConfig> tiers = commissionRepository.findTiers();
-        List<TierConfig> safeTiers = tiers.isEmpty() ? TierConfig.defaults() : tiers;
-        return records.stream()
-            .collect(Collectors.groupingBy(
-                CommissionRecord::salesRepId,
-                Collectors.mapping(CommissionRecord::commissionableBase, Collectors.reducing(BigDecimal.ZERO, BigDecimal::add))
-            ))
-            .entrySet()
-            .stream()
-            .collect(Collectors.toMap(Map.Entry::getKey, entry -> commissionCalculator.progressiveCommission(entry.getValue(), safeTiers)));
+        return commissionService.payrollCommissionTotalsByEmployee(payrollMonth);
     }
 
     private List<PayrollSpecialPayDto> specialPayDtos(List<BigDecimal> specialPays) {
