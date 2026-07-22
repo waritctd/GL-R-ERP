@@ -111,6 +111,7 @@ class FlywayMigrationTest {
         assertThat(result.success).isTrue();
         assertThat(result.migrationsExecuted).isGreaterThan(0);
         assertUatDealPipelineSeed();
+        assertUatGoldenPcrDeal();
     }
 
     /**
@@ -227,6 +228,107 @@ class FlywayMigrationTest {
             }
         } catch (Exception exception) {
             throw new AssertionError("UAT deal-pipeline seed assertions failed", exception);
+        }
+    }
+
+    /**
+     * V910 seeds one golden deal ({@code UAT-GOLD-01}, deliberately outside the {@code UAT-TKT-%}
+     * pattern {@link #assertUatDealPipelineSeed()} filters on, so it cannot perturb those counts)
+     * driven all the way through the pricing-request (PCR) redesign chain on the direct-factory-import
+     * path: PricingRequest -&gt; FactoryQuote -&gt; PricingCosting -&gt; PricingDecision -&gt; CustomerQuotation
+     * (which extends {@code sales.quotation}, not a separate table — V74) -&gt; OrderConfirmation bridge
+     * -&gt; deposit/balance payment -&gt; FactoryPurchaseOrder -&gt; delivery -&gt; CLOSED_PAID -&gt; commission.
+     * Asserts the terminal state of every link in that chain so a future migration that breaks the
+     * seed (a bad rename, a dropped join) fails this test instead of silently shipping a broken
+     * fixture to hosted UAT.
+     */
+    private void assertUatGoldenPcrDeal() {
+        try (Connection connection = DriverManager.getConnection(
+                PostgresTestSupport.jdbcUrl(),
+                PostgresTestSupport.username(),
+                PostgresTestSupport.password());
+            PreparedStatement statement = connection.prepareStatement("""
+                SELECT
+                    (SELECT COUNT(*)
+                       FROM sales.ticket
+                      WHERE code = 'UAT-GOLD-01'
+                        AND status = 'closed'
+                        AND sales_stage = 'CLOSED_PAID'
+                        AND lifecycle = 'COMPLETED'
+                        AND payment_status = 'FULLY_PAID'
+                        AND fulfillment_status = 'FULLY_DELIVERED'
+                        AND close_confirmed_by IS NOT NULL) AS ticket_closed_paid_count,
+                    (SELECT COUNT(*)
+                       FROM sales.pricing_request pr
+                       JOIN sales.ticket t ON t.ticket_id = pr.ticket_id
+                      WHERE t.code = 'UAT-GOLD-01'
+                        AND pr.request_code = 'PCR-UAT-GOLD-01'
+                        AND pr.status = 'QUOTATION_ACCEPTED'
+                        AND pr.order_confirmed_at IS NOT NULL) AS pricing_request_accepted_count,
+                    (SELECT COUNT(*)
+                       FROM sales.factory_quote fq
+                       JOIN sales.pricing_request pr ON pr.pricing_request_id = fq.pricing_request_id
+                      WHERE pr.request_code = 'PCR-UAT-GOLD-01') AS factory_quote_count,
+                    (SELECT COUNT(*)
+                       FROM sales.pricing_costing pc
+                       JOIN sales.pricing_request pr ON pr.pricing_request_id = pc.pricing_request_id
+                      WHERE pr.request_code = 'PCR-UAT-GOLD-01'
+                        AND pc.status = 'SUBMITTED') AS pricing_costing_submitted_count,
+                    (SELECT COUNT(*)
+                       FROM sales.pricing_decision pd
+                       JOIN sales.pricing_request pr ON pr.pricing_request_id = pd.pricing_request_id
+                      WHERE pr.request_code = 'PCR-UAT-GOLD-01'
+                        AND pd.status = 'APPROVED') AS pricing_decision_approved_count,
+                    (SELECT COUNT(*)
+                       FROM sales.quotation q
+                      WHERE q.number = 'QN-UAT-GOLD-01'
+                        AND q.doc_status = 'ACCEPTED'
+                        AND q.pricing_decision_id IS NOT NULL) AS quotation_accepted_count,
+                    (SELECT COUNT(*)
+                       FROM sales.factory_purchase_order po
+                      WHERE po.po_number = 'PO-UAT-GOLD-01'
+                        AND po.status = 'RECEIVED') AS factory_po_received_count,
+                    (SELECT COUNT(*)
+                       FROM sales.delivery_record dr
+                       JOIN sales.ticket t ON t.ticket_id = dr.ticket_id
+                      WHERE t.code = 'UAT-GOLD-01') AS delivery_record_count,
+                    (SELECT COUNT(*)
+                       FROM (
+                            SELECT t.ticket_id
+                              FROM sales.ticket t
+                              JOIN sales.ticket_item ti ON ti.ticket_id = t.ticket_id
+                             WHERE t.code = 'UAT-GOLD-01'
+                             GROUP BY t.ticket_id
+                            HAVING SUM(ti.qty_delivered) = SUM(ti.qty)
+                       ) fully_delivered) AS fully_delivered_items_count,
+                    (SELECT COALESCE(SUM(pr.amount), 0)
+                       FROM sales.payment_receipt pr
+                       JOIN sales.ticket t ON t.ticket_id = pr.ticket_id
+                      WHERE t.code = 'UAT-GOLD-01') AS payment_receipt_total,
+                    (SELECT COUNT(*)
+                       FROM sales.commission_record cr
+                       JOIN sales.ticket t ON t.ticket_id = cr.source_ticket_id
+                      WHERE t.code = 'UAT-GOLD-01'
+                        AND cr.kind = 'SALE'
+                        AND cr.status = 'APPROVED') AS commission_approved_count
+                """)) {
+            try (ResultSet rows = statement.executeQuery()) {
+                assertThat(rows.next()).isTrue();
+                assertThat(rows.getInt("ticket_closed_paid_count")).isEqualTo(1);
+                assertThat(rows.getInt("pricing_request_accepted_count")).isEqualTo(1);
+                assertThat(rows.getInt("factory_quote_count")).isEqualTo(1);
+                assertThat(rows.getInt("pricing_costing_submitted_count")).isEqualTo(1);
+                assertThat(rows.getInt("pricing_decision_approved_count")).isEqualTo(1);
+                assertThat(rows.getInt("quotation_accepted_count")).isEqualTo(1);
+                assertThat(rows.getInt("factory_po_received_count")).isEqualTo(1);
+                assertThat(rows.getInt("delivery_record_count")).isEqualTo(1);
+                assertThat(rows.getInt("fully_delivered_items_count")).isEqualTo(1);
+                assertThat(rows.getBigDecimal("payment_receipt_total"))
+                    .isEqualByComparingTo("584007.07");
+                assertThat(rows.getInt("commission_approved_count")).isEqualTo(1);
+            }
+        } catch (Exception exception) {
+            throw new AssertionError("UAT golden PCR-deal seed assertions failed", exception);
         }
     }
 }
