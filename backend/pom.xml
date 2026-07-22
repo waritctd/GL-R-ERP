@@ -133,7 +133,7 @@
         <dependency>
             <groupId>org.apache.pdfbox</groupId>
             <artifactId>pdfbox</artifactId>
-            <version>3.0.7</version>
+            <version>3.0.8</version>
         </dependency>
         <!-- springdoc-openapi — generated OpenAPI contract + Swagger UI; not in the Spring Boot BOM
              for Spring Boot 4.x, so the version is pinned explicitly. -->
