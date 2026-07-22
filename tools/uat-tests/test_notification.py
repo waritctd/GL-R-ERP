@@ -16,11 +16,14 @@ from helpers import (
 
 
 @pytest.mark.uat("NOTIF-01", title="Action creates in-app notification row", priority="P0")
-def test_notif01_action_creates_in_app_row(sales):
+def test_notif01_action_creates_in_app_row(sales, account):
     before = sales.get("/api/notifications").json()
     before_ids = {n["id"] for n in before}
     invoice = unique("NOTIF01-INV")
-    submit_commission(sales, invoice, invoiceDate="2026-08-10")
+    # Slice A2 (handoff 98): commission creation is account/sales_manager/ceo only now, not sales
+    # -- submit as `account` on `sales`'s behalf via salesRepId so the notification still lands on
+    # `sales` (CommissionService.notifySubmitted notifies record.salesRepId(), not the submitter).
+    submit_commission(account, invoice, sales_rep_id=sales.user["employeeId"], invoiceDate="2026-08-10")
     r = sales.get("/api/notifications")
     assert_status(r, 200)
     created = [n for n in r.json() if n["id"] not in before_ids]
@@ -33,8 +36,10 @@ def test_notif02_bell_ui_manual():
 
 
 @pytest.mark.uat("NOTIF-03", title="Cross-user mark-read denied", priority="P0")
-def test_notif03_cross_user_mark_read_denied(sales, salesmgr):
-    commission = submit_commission(sales, unique("NOTIF03-INV"), invoiceDate="2026-08-11")
+def test_notif03_cross_user_mark_read_denied(sales, salesmgr, account):
+    commission = submit_commission(
+        account, unique("NOTIF03-INV"), sales_rep_id=sales.user["employeeId"], invoiceDate="2026-08-11"
+    )
     r = salesmgr.get("/api/notifications")
     assert_status(r, 200)
     manager_notifications = [
@@ -59,10 +64,10 @@ def test_notif03_cross_user_mark_read_denied(sales, salesmgr):
 
 
 @pytest.mark.uat("MAIL-01", title="Commission submit emails the sales rep", priority="P0")
-def test_mail01_commission_email(sales):
+def test_mail01_commission_email(sales, account):
     mailpit_clear()
     invoice = unique("MAIL01-INV")
-    submit_commission(sales, invoice, invoiceDate="2026-08-12")
+    submit_commission(account, invoice, sales_rep_id=sales.user["employeeId"], invoiceDate="2026-08-12")
     msg = wait_for_email(to="sales@uat.glr", subject_contains="ส่งคำขอค่าคอมแล้ว")
     assert msg["From"]["Address"] == "job@glr.co.th", msg
     body = mailpit_body(msg["ID"]).get("Text", "")

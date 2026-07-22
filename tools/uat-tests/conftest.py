@@ -12,10 +12,12 @@ import pathlib
 import time
 
 import pytest
+import requests
 
 from glrclient import GlrClient
 
 PASSWORD = os.environ.get("UAT_PASSWORD", "Uat@2026")
+MAILPIT_URL = os.environ.get("MAILPIT_URL", "http://localhost:8025")
 _RESULTS = []
 
 
@@ -56,6 +58,11 @@ def salesmgr(base_url):
 
 
 @pytest.fixture
+def account(base_url):
+    return _persona(base_url, "account@uat.glr")
+
+
+@pytest.fixture
 def import_(base_url):
     return _persona(base_url, "import@uat.glr")
 
@@ -83,6 +90,30 @@ def pytest_configure(config):
         "markers",
         "live_email: fires a real email via Resend (./run.sh --live-email only, excluded by default)",
     )
+
+
+def _mailpit_reachable():
+    """MAIL-* tests assert on real captured email via Mailpit's REST API. Mailpit only exists in the
+    docker-compose.uat.yml stack; running the harness against a bare `java -jar` backend (no Docker)
+    has no Mailpit to poll, so those tests would otherwise fail with a raw ConnectionError instead of
+    a clear skip. Checked once at collection time, not per-test."""
+    try:
+        r = requests.get(f"{MAILPIT_URL}/api/v1/info", timeout=2)
+        return r.ok
+    except requests.RequestException:
+        return False
+
+
+def pytest_collection_modifyitems(config, items):
+    if _mailpit_reachable():
+        return
+    skip_mail = pytest.mark.skip(
+        reason=f"Mailpit unavailable at {MAILPIT_URL} — needs Docker stack (docker-compose.uat.yml)"
+    )
+    for item in items:
+        m = item.get_closest_marker("uat")
+        if m and m.args and str(m.args[0]).startswith("MAIL-"):
+            item.add_marker(skip_mail)
 
 
 @pytest.fixture(autouse=True)

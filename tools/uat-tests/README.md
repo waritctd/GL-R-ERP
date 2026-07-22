@@ -37,7 +37,7 @@ Each case is a function tagged with its UAT ID:
 @pytest.mark.uat("OT-03", title="Manager approves -> MANAGER_APPROVED", priority="P0")
 def test_ot03(...): ...
 ```
-Use the persona fixtures (`employee`, `hr`, `ceo`, `sales`, `salesmgr`, `import_`, `divmgr`,
-`nulldiv`) and the `GlrClient` they yield (handles session + `X-XSRF-TOKEN`). Manual/UI-only cases
+Use the persona fixtures (`employee`, `hr`, `ceo`, `sales`, `salesmgr`, `account`, `import_`,
+`divmgr`, `nulldiv`) and the `GlrClient` they yield (handles session + `X-XSRF-TOKEN`). Manual/UI-only cases
 should still appear in the report via `pytest.skip(reason=...)`. See `PLAN.md` §3 for the matrix and
 §4 for the state/ordering rules.
