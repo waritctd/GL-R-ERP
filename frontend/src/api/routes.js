@@ -274,6 +274,14 @@ export const ROLE_PERMISSIONS = {
   // canCreateTickets/canPickupTickets/canProposePrices/canApproveReject/
   // canGenerateQuotation/canConfirmPayments. Mirrors TicketService.VIEWER_ROLES.
   canViewTickets: ['sales', 'import', 'ceo', 'account', 'sales_manager'],
+  // Role-scoped views (docs/role-scoped-views.md): the deal PIPELINE BROWSER
+  // (list `/tickets`, `/ticket-overview`, the รายการดีล nav item, SalesTabs
+  // pipeline tabs) is narrower than ticket-detail read (canViewTickets above,
+  // unchanged) — only roles whose job IS the pipeline get it. Import and
+  // Account are deliberately excluded — their jobs are procurement→delivery
+  // and money-confirmation respectively, not browsing the whole deal list
+  // (see features/dashboard/ImportOverview.jsx / AccountOverview.jsx).
+  canViewDealPipeline: ['sales', 'sales_manager', 'ceo'],
   // Sales/CRM tool — catalog browsing scoped to the same audience as
   // canViewTickets. Frontend-only gate: GET /api/catalog has no backend
   // role check yet.

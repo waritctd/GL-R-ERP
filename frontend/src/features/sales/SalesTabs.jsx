@@ -18,18 +18,27 @@ export function SalesTabs({ role }) {
   // ROLE_PERMISSIONS.canViewPricingRequestQueue / app/permissions.js
   // PATH_GUARDS for '/pricing-requests'.
   //
-  // Role-scoped views, Phase A: import's day starts at the pricing queue, not
-  // the deal list, so it leads the tab order. ceo/sales_manager also pass
-  // canViewPricingRequestQueue but are oversight roles browsing everything
-  // rather than a role with one obvious first stop — they keep the deal-list-
-  // first order. account has no dedicated tab here: its worklist IS
-  // ดีลทั้งหมด (TicketListPage defaults account to its money-worklist inbox —
-  // see salesViewScope.dealInScope), so no extra tab is needed to "lead"
-  // with it.
+  // Role-scoped views (Import build): the deal-pipeline tabs (ดีลทั้งหมด/
+  // ภาพรวม) are gated on canViewDealPipeline — the pipeline BROWSER, not
+  // plain ticket-detail read — so this bar never offers a tab the router
+  // (permissions.js PATH_GUARDS) would immediately bounce back from. This
+  // drops import from those two tabs (defensive: import no longer reaches
+  // /tickets or /ticket-overview, but PricingRequestQueuePage still renders
+  // this bar), leaving it with just its pricing queue tab below.
+  const canViewPipeline = hasPermission(role, 'canViewDealPipeline');
+  const pipelineTabs = canViewPipeline ? BASE_TABS : [];
+  // Phase A: import's day starts at the pricing queue, not the deal list, so
+  // it leads the tab order when both are present. ceo/sales_manager also
+  // pass canViewPricingRequestQueue but are oversight roles browsing
+  // everything rather than a role with one obvious first stop — they keep
+  // the deal-list-first order. account has no dedicated tab here: its
+  // worklist IS ดีลทั้งหมด (TicketListPage defaults account to its
+  // money-worklist inbox — see salesViewScope.dealInScope), so no extra tab
+  // is needed to "lead" with it.
   const canViewQueue = hasPermission(role, 'canViewPricingRequestQueue');
   const tabs = canViewQueue
-    ? (role === 'import' ? [PRICING_QUEUE_TAB, ...BASE_TABS] : [...BASE_TABS, PRICING_QUEUE_TAB])
-    : BASE_TABS;
+    ? (role === 'import' ? [PRICING_QUEUE_TAB, ...pipelineTabs] : [...pipelineTabs, PRICING_QUEUE_TAB])
+    : pipelineTabs;
 
   return (
     <nav

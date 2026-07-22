@@ -299,11 +299,72 @@ against the real Java service here; **do** verify with the real backend before t
 `todayPresent`/`lateToday` to `0` for `hr`/`ceo` scope (a pre-existing mock stub unrelated to this
 branch, not fixed here — out of scope for a frontend-only landing-page task).
 
-### Import / Account
+### Import — ops *(shipped, branch: `feat/role-views-import`)*
 
-Not documented in this file yet — each ships (and fills in its own section
-here) on its own branch (`feat/role-views-import`, `feat/role-views-account`),
-per the plan's parallel per-role execution model.
+**Nav.** แดชบอร์ด (its own Overview) · คิวใบขอราคา · **จัดซื้อ & นำเข้า** (combined procurement +
+fulfilment, `/procurement`) · แคตตาล็อก · นำเข้าราคา · self-service. `รายการดีล` removed — Import's
+job is procurement → delivery on deals already in its worklist, not browsing the full pipeline
+(`canViewDealPipeline` excludes `import`; `canViewTickets` still includes it for ticket-detail deep
+links).
+
+**Overview (`frontend/src/features/dashboard/ImportOverview.jsx`).**
+- **Conveyor pulse** — six clickable count tiles: `เกินกำหนด` (overdue, cross-cutting — any in-scope
+  deal with `ticket.overdue`) · `ตั้งราคา` (pricing requests still in flight toward a price) ·
+  `จัดซื้อ/IR` · `ขนส่ง` · `รับเข้าคลัง` (teal — DESIGN.md's "live" accent, the actionable-now stage) ·
+  `ส่งมอบ`. Clicking a tile filters the worklist below to that bucket; clicking again (or
+  "ล้างตัวกรอง") clears it.
+- **"สิ่งที่ต้องทำ" worklist** — one row per in-scope deal with a real next action, overdue-first,
+  each row's CTA sourced from `nextImportAction(ticket, pricingRequestsForTicket)`
+  (`frontend/src/features/tickets/importActions.js`) and deep-linking to `/tickets/:id` (or
+  `/pricing-requests` for the pickup step).
+- **"คิวของฉัน"** — two shortcut cards to `/pricing-requests` and `/procurement` with live counts.
+- **"กำลังขนส่ง"** — a small tracker of deals whose `fulfillmentStatus` is `IR_SENT` / `SHIPPING` /
+  `CUSTOMS_CLEARANCE` (physically in transit).
+
+**`nextImportAction` mapping** (shared with `DealFulfilmentPanel`'s `can.*` gates — never a second
+source of truth for "what stage is this deal at"):
+
+| Condition | `code` | Label | Deep-link |
+| --- | --- | --- | --- |
+| Ticket has an unpicked (`SUBMITTED`) pricing request | `pickupPricingRequest` | รับงาน · ขอราคา | `/pricing-requests` |
+| `status=quotation_issued`, `fulfillmentStatus=null` | `issueImportRequest` | ออก IR | `/tickets/:id` |
+| `fulfillmentStatus=IR_ISSUED` | `markIrSent` | ส่ง IR | `/tickets/:id` |
+| `fulfillmentStatus=IR_SENT` | `markShipping` | บันทึกออกเดินทาง | `/tickets/:id` |
+| `fulfillmentStatus=SHIPPING` | `markGoodsReceived` | ยืนยันรับเข้าคลัง | `/tickets/:id` |
+| `fulfillmentStatus` ∈ `{GOODS_RECEIVED, FROM_STOCK, PARTIALLY_DELIVERED}` | `recordDelivery` | บันทึกส่งมอบ | `/tickets/:id` |
+| none of the above | `null` (no worklist row) | — | — |
+
+**`/procurement` (`ProcurementFulfilmentPage.jsx`)** — section 1 is the same fulfilment worklist
+(via `nextFulfilmentActionCode`, the fulfilment-only half of the table above — no pricing pickup,
+that's `/pricing-requests`'s job), section 2 reuses `ProcurementListPage` wholesale (the raw
+per-factory PO list, Import/CEO only). `/factory-purchase-orders/:id` stays registered for detail
+deep-links from section 2's rows.
+
+**Files changed:** `frontend/src/App.jsx`, `frontend/src/api/routes.js`, `frontend/src/app/permissions.js`,
+`frontend/src/components/layout/AppShell.jsx`, `frontend/src/features/sales/SalesTabs.jsx`,
+`frontend/src/features/tickets/DealFulfilmentPanel.jsx`. New:
+`frontend/src/features/tickets/importActions.js`, `frontend/src/features/dashboard/ImportOverview.jsx`,
+`frontend/src/features/procurement/ProcurementFulfilmentPage.jsx`.
+
+**Backend:** none. Every count/row is derived client-side from `api.tickets.list({})` (already
+import-scoped server/mock side — `importListScopeIncludes`) and
+`api.pricingRequests.queue({activeOnly:true})` (already role-scoped —
+`PRICING_REQUEST_VIEWER_ROLES` + the draft-privacy filter). No `DashboardSummaryDto` change.
+
+**Authz evidence:** no authz change — this PR only narrows a frontend presentation surface
+(`canViewDealPipeline` vs the unchanged `canViewTickets`); the backend audience for every endpoint
+Import calls is unmoved. See `TicketScopeIntegrationTest` (backend) for the existing real-DB
+coverage of Import's list/detail scope, which this PR does not touch.
+
+**Integration note:** Import's branch was built off an older base and temporarily included `account`
+in `canViewDealPipeline` (so Account wasn't left without a landing mid-flight). At integration,
+Account shipped its own `AccountOverview` landing in the same batch, so `account` was dropped from
+`canViewDealPipeline` — the reconciled final list is `['sales', 'sales_manager', 'ceo']` (see the
+Account section below and §1).
+
+### Account
+
+Not documented in this file yet — see its own section below once it ships in this integration.
 
 ## 4. Change log
 
@@ -313,3 +374,4 @@ per the plan's parallel per-role execution model.
 | 2026-07-23 | Sales | `feat/role-views-sales` | New `SalesOverview` landing + `salesActions.js` next-action helper; `TicketListPage` LIFECYCLE/FLAGS collapsed behind "ตัวกรองเพิ่มเติม". Frontend-only, no authz change. |
 | 2026-07-23 | Sales Manager | `feat/role-views-sales-manager` | New `ManagerOverview.jsx` team-cockpit landing at `/` for `role==='sales_manager'` (commission-approval worklist as centerpiece, team pipeline pulse, leaderboard). No nav, route guard, or permission changes. |
 | 2026-07-23 | CEO | `feat/role-views-ceo` | New `CeoOverview.jsx` cross-domain exec-cockpit landing at `/` for `role==='ceo'` (guarded by `SALES_ENABLED`, degrades to `EmployeeDashboard` when off); `tickets.list()` mock-parity fix (`closeConfirmedAt`/`closeConfirmedByName`/`invoiceOnFile`). No nav, route guard, or permission changes. |
+| 2026-07-23 | Import | `feat/role-views-import` | New `ImportOverview.jsx` landing + `/procurement` (`ProcurementFulfilmentPage.jsx`); `รายการดีล` removed from Import's nav. Introduced the `canViewDealPipeline` vs `canViewTickets` split (pipeline browser vs ticket-detail read). No backend change. |

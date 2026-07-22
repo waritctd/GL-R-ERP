@@ -23,6 +23,7 @@ const EmployeeDashboard = lazy(() => import('./features/dashboard/EmployeeDashbo
 const SalesOverview = lazy(() => import('./features/dashboard/SalesOverview.jsx').then(toDefault('SalesOverview')));
 // Role-scoped views program (docs/role-scoped-views.md) — CEO's exec-cockpit landing.
 const CeoOverview = lazy(() => import('./features/dashboard/CeoOverview.jsx').then(toDefault('CeoOverview')));
+const ImportOverview = lazy(() => import('./features/dashboard/ImportOverview.jsx').then(toDefault('ImportOverview')));
 const TicketDashboard = lazy(() => import('./features/dashboard/TicketDashboard.jsx').then(toDefault('TicketDashboard')));
 // Role-scoped views: Sales Manager's team-cockpit Overview (landing).
 const ManagerOverview = lazy(() => import('./features/dashboard/ManagerOverview.jsx').then(toDefault('ManagerOverview')));
@@ -45,6 +46,7 @@ const PricingRequestQueuePage = lazy(() => import('./features/pricingRequests/Pr
 const PricingRequestDetailPage = lazy(() => import('./features/pricingRequests/PricingRequestDetailPage.jsx').then(toDefault('PricingRequestDetailPage')));
 const ProcurementListPage = lazy(() => import('./features/procurement/ProcurementListPage.jsx').then(toDefault('ProcurementListPage')));
 const ProcurementDetailPage = lazy(() => import('./features/procurement/ProcurementDetailPage.jsx').then(toDefault('ProcurementDetailPage')));
+const ProcurementFulfilmentPage = lazy(() => import('./features/procurement/ProcurementFulfilmentPage.jsx').then(toDefault('ProcurementFulfilmentPage')));
 
 // Thin wrappers that source the ticket id from the URL for the frozen sales
 // pages (they already fetch by id internally — branch 5 only rewires how the
@@ -231,6 +233,8 @@ export function App() {
                   employee={currentEmployee}
                   dashboardSummary={dashboardSummary}
                 />
+              ) : user.role === 'import' && SALES_ENABLED ? (
+                <ImportOverview user={user} employee={currentEmployee} />
               ) : (
                 <EmployeeDashboard
                   user={user}
@@ -351,6 +355,14 @@ export function App() {
                 <Route
                   path="/factory-purchase-orders/:id"
                   element={<ProcurementDetailPage showToast={showToast} />}
+                />
+                {/* Role-scoped views (Import build): combined "จัดซื้อ & นำเข้า" —
+                    fulfilment worklist (section 1) + the raw factory-PO list
+                    reused wholesale (section 2). /factory-purchase-orders(/:id)
+                    stay registered above for direct PO-detail deep-links. */}
+                <Route
+                  path="/procurement"
+                  element={<ProcurementFulfilmentPage user={user} showToast={showToast} />}
                 />
               </>
             )}

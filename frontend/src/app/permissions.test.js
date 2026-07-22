@@ -38,6 +38,26 @@ describe('hasPermission', () => {
     expect(hasPermission('import', 'canViewSensitiveEmployeeData')).toBe(false);
     expect(hasPermission('account', 'canViewSensitiveEmployeeData')).toBe(false);
   });
+
+  // Role-scoped views (Import build, docs/role-scoped-views.md): the deal
+  // PIPELINE BROWSER (canViewDealPipeline) is narrower than plain
+  // ticket-detail read (canViewTickets) — import keeps detail-read but loses
+  // the pipeline browser; sales/sales_manager/ceo/account keep both.
+  it('scopes the deal pipeline browser narrower than ticket-detail read — import excluded', () => {
+    expect(hasPermission('sales', 'canViewDealPipeline')).toBe(true);
+    expect(hasPermission('sales_manager', 'canViewDealPipeline')).toBe(true);
+    expect(hasPermission('ceo', 'canViewDealPipeline')).toBe(true);
+    expect(hasPermission('account', 'canViewDealPipeline')).toBe(true);
+    expect(hasPermission('import', 'canViewDealPipeline')).toBe(false);
+    expect(hasPermission('employee', 'canViewDealPipeline')).toBe(false);
+
+    // canViewTickets (ticket-detail read) is unchanged — import still has it.
+    expect(hasPermission('import', 'canViewTickets')).toBe(true);
+    expect(hasPermission('sales', 'canViewTickets')).toBe(true);
+    expect(hasPermission('account', 'canViewTickets')).toBe(true);
+    expect(hasPermission('ceo', 'canViewTickets')).toBe(true);
+    expect(hasPermission('sales_manager', 'canViewTickets')).toBe(true);
+  });
 });
 
 describe('allowedRoute', () => {
@@ -193,5 +213,27 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/ceo-settings', importer)).toBe(false);
     expect(canAccessPath('/ceo-settings', { role: 'account', employeeId: 3 })).toBe(false);
     expect(canAccessPath('/ceo-settings', { role: 'sales_manager', employeeId: 4 })).toBe(false);
+  });
+
+  // Role-scoped views (Import build): import is blocked from the pipeline
+  // BROWSER (/tickets exact, /ticket-overview) but keeps ticket-detail read
+  // (/tickets/:id) and gains the combined procurement/fulfilment page.
+  it('blocks import from the deal-pipeline browser but allows ticket detail and /procurement', () => {
+    expect(canAccessPath('/tickets', importer)).toBe(false);
+    expect(canAccessPath('/ticket-overview', importer)).toBe(false);
+    expect(canAccessPath('/tickets/12', importer)).toBe(true);
+    expect(canAccessPath('/tickets/12/deposit', importer)).toBe(true);
+    expect(canAccessPath('/procurement', importer)).toBe(true);
+    expect(canAccessPath('/procurement', ceo)).toBe(true);
+    expect(canAccessPath('/procurement', sales)).toBe(false);
+    expect(canAccessPath('/procurement', { role: 'account', employeeId: 3 })).toBe(false);
+  });
+
+  it('keeps sales/sales_manager/ceo/account on the deal-pipeline browser', () => {
+    expect(canAccessPath('/tickets', sales)).toBe(true);
+    expect(canAccessPath('/ticket-overview', sales)).toBe(true);
+    expect(canAccessPath('/tickets', ceo)).toBe(true);
+    expect(canAccessPath('/tickets', { role: 'account', employeeId: 3 })).toBe(true);
+    expect(canAccessPath('/tickets', { role: 'sales_manager', employeeId: 4 })).toBe(true);
   });
 });

@@ -31,7 +31,11 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       helper: 'Deal pipeline',
       icon: 'briefcase',
       group: 'sales',
-      show: hasPermission(user.role, 'canViewTickets') && SALES_ENABLED,
+      // Role-scoped views (Import build): the pipeline BROWSER is narrower
+      // than ticket-detail read — gated on canViewDealPipeline, which drops
+      // import (its job is procurement→delivery, not browsing the full deal
+      // list; see ImportOverview.jsx). canViewTickets stays detail-read only.
+      show: hasPermission(user.role, 'canViewDealPipeline') && SALES_ENABLED,
       match: ['/tickets', '/ticket-overview'],
     },
     { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', group: 'sales', show: user.role === 'ceo' && SALES_ENABLED },
@@ -43,9 +47,20 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // Import's cross-deal PricingRequest queue — see permissions.js's PATH_GUARDS
     // comment for why this is a narrower audience than a single request's detail page.
     { path: '/pricing-requests', label: 'คิวใบขอราคา', helper: 'Pricing request queue', icon: 'clipboard', group: 'sales', show: hasPermission(user.role, 'canViewPricingRequestQueue') && SALES_ENABLED },
-    // Step 7: Factory Purchase Order and Import Execution — Import/CEO only, mirrors
-    // ProcurementService.RAW_PO_ROLES. Sales never sees raw supplier PO detail.
-    { path: '/factory-purchase-orders', label: 'ใบสั่งซื้อโรงงาน', helper: 'Factory purchase orders', icon: 'fileText', group: 'sales', show: hasPermission(user.role, 'canManageProcurement') && SALES_ENABLED },
+    // Role-scoped views (Import build): the raw factory-PO list and Import's
+    // deal-level fulfilment worklist are combined into one nav item —
+    // Import/CEO only, mirrors ProcurementService.RAW_PO_ROLES. Sales never
+    // sees raw supplier PO detail. `match` keeps this highlighted on both the
+    // combined page and the raw PO detail route it still deep-links to.
+    {
+      path: '/procurement',
+      label: 'จัดซื้อ & นำเข้า',
+      helper: 'Procurement & fulfilment',
+      icon: 'fileText',
+      group: 'sales',
+      show: hasPermission(user.role, 'canManageProcurement') && SALES_ENABLED,
+      match: ['/procurement', '/factory-purchase-orders'],
+    },
     { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', group: 'sales', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED },
     { path: '/hr', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
     { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
