@@ -88,7 +88,11 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             commissionService,
             mock(AuditService.class),
             mock(PayslipRenderer.class),
-            new LeaveRepository(jdbc));
+            new LeaveRepository(jdbc),
+            new th.co.glr.hr.payroll.export.KBankPctExporter(),
+            new th.co.glr.hr.payroll.export.Pnd1Exporter(),
+            new th.co.glr.hr.payroll.export.SsoExporter(),
+            new AppProperties());
 
         division = insertDivision("SLS", "ฝ่ายขาย");
         manager = insertEmployee("M001", null);

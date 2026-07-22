@@ -62,7 +62,11 @@ class PayrollPersistedPayslipIntegrationTest extends AbstractPostgresIntegration
             commissionService,
             mock(AuditService.class),
             new PayslipRenderer(),
-            new LeaveRepository(jdbc));
+            new LeaveRepository(jdbc),
+            new th.co.glr.hr.payroll.export.KBankPctExporter(),
+            new th.co.glr.hr.payroll.export.Pnd1Exporter(),
+            new th.co.glr.hr.payroll.export.SsoExporter(),
+            new th.co.glr.hr.config.AppProperties());
     }
 
     /**

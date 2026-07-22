@@ -74,7 +74,11 @@ class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIn
             mock(CommissionService.class),
             mock(AuditService.class),
             mock(PayslipRenderer.class),
-            leaveRepository);
+            leaveRepository,
+            new th.co.glr.hr.payroll.export.KBankPctExporter(),
+            new th.co.glr.hr.payroll.export.Pnd1Exporter(),
+            new th.co.glr.hr.payroll.export.SsoExporter(),
+            new th.co.glr.hr.config.AppProperties());
     }
 
     @Test

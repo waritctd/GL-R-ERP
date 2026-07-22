@@ -16,6 +16,7 @@ public class AppProperties {
     private final Bot bot = new Bot();
     private final FactoryQuoteDispatch factoryQuoteDispatch = new FactoryQuoteDispatch();
     private final QuotationExpiry quotationExpiry = new QuotationExpiry();
+    private final Payroll payroll = new Payroll();
 
     public Cors getCors() {
         return cors;
@@ -55,6 +56,10 @@ public class AppProperties {
 
     public QuotationExpiry getQuotationExpiry() {
         return quotationExpiry;
+    }
+
+    public Payroll getPayroll() {
+        return payroll;
     }
 
     public static class Bot {
@@ -341,6 +346,132 @@ public class AppProperties {
 
         public void setPayrollCutoffDay(int payrollCutoffDay) {
             this.payrollCutoffDay = payrollCutoffDay;
+        }
+    }
+
+    /** Payroll statutory-file export settings. */
+    public static class Payroll {
+        private final Employer employer = new Employer();
+
+        public Employer getEmployer() {
+            return employer;
+        }
+    }
+
+    /**
+     * Employer-level constants stamped into the KBank PCT, PND1 and SSO สปส.1-10 files that cannot be
+     * derived from per-employee payroll data. Held in config (env-overridable) rather than a table:
+     * these change only when the company's bank/tax/SSO registrations change, i.e. essentially never.
+     * The values are the employer's real registration numbers — set them per environment; the code
+     * ships with blanks (and demo values in application-demo.yml) so nothing bogus reaches a real
+     * filing by accident.
+     */
+    public static class Employer {
+        /** Company legal name (Thai), KBank Header + SSO establishment name fallback. */
+        private String companyNameTh = "";
+        /** 13-digit company tax id (เลขประจำตัวผู้เสียภาษี) — PND1 payer id. */
+        private String companyTaxId = "";
+        /** PND1 payer branch/office code (เลขที่สำนัก), 4 digits. Head office = "0000". */
+        private String pnd1Branch = "0000";
+        /** 10-digit KBank company debit account funds are drawn from. */
+        private String kbankDebitAccount = "";
+        /**
+         * KBank Header batch reference (≤16 chars). Blank → derived as the effective date in
+         * yyyyMMdd, matching the golden GL&R file's "20260629".
+         */
+        private String kbankBatchRef = "";
+        /** SSO employer account number (เลขที่บัญชีนายจ้าง), 10 digits. */
+        private String ssoEmployerAccount = "";
+        /** SSO branch sequence (ลำดับที่สาขา), 6 digits. Head office = "000000". */
+        private String ssoBranch = "000000";
+        /** SSO contribution rate percent (อัตราเงินสมทบ), employee share. Standard §33 = 5. */
+        private String ssoRatePercent = "5";
+        /** SSO establishment name (ชื่อสถานประกอบการ). Blank → falls back to companyNameTh. */
+        private String establishmentName = "";
+        /**
+         * Default day-of-month for the KBank transfer effective date (and PND1/SSO pay date) when HR
+         * does not pick one. GL&R pays on the 26th.
+         */
+        private int defaultTransferDay = 26;
+
+        public String getCompanyNameTh() {
+            return companyNameTh;
+        }
+
+        public void setCompanyNameTh(String companyNameTh) {
+            this.companyNameTh = companyNameTh;
+        }
+
+        public String getCompanyTaxId() {
+            return companyTaxId;
+        }
+
+        public void setCompanyTaxId(String companyTaxId) {
+            this.companyTaxId = companyTaxId;
+        }
+
+        public String getPnd1Branch() {
+            return pnd1Branch;
+        }
+
+        public void setPnd1Branch(String pnd1Branch) {
+            this.pnd1Branch = pnd1Branch;
+        }
+
+        public String getKbankDebitAccount() {
+            return kbankDebitAccount;
+        }
+
+        public void setKbankDebitAccount(String kbankDebitAccount) {
+            this.kbankDebitAccount = kbankDebitAccount;
+        }
+
+        public String getKbankBatchRef() {
+            return kbankBatchRef;
+        }
+
+        public void setKbankBatchRef(String kbankBatchRef) {
+            this.kbankBatchRef = kbankBatchRef;
+        }
+
+        public String getSsoEmployerAccount() {
+            return ssoEmployerAccount;
+        }
+
+        public void setSsoEmployerAccount(String ssoEmployerAccount) {
+            this.ssoEmployerAccount = ssoEmployerAccount;
+        }
+
+        public String getSsoBranch() {
+            return ssoBranch;
+        }
+
+        public void setSsoBranch(String ssoBranch) {
+            this.ssoBranch = ssoBranch;
+        }
+
+        public String getSsoRatePercent() {
+            return ssoRatePercent;
+        }
+
+        public void setSsoRatePercent(String ssoRatePercent) {
+            this.ssoRatePercent = ssoRatePercent;
+        }
+
+        public String getEstablishmentName() {
+            return establishmentName;
+        }
+
+        public void setEstablishmentName(String establishmentName) {
+            this.establishmentName = establishmentName;
+        }
+
+        public int getDefaultTransferDay() {
+            return defaultTransferDay;
+        }
+
+        public void setDefaultTransferDay(int defaultTransferDay) {
+            this.defaultTransferDay = defaultTransferDay;
         }
     }
 

@@ -56,7 +56,11 @@ class PayrollReprocessAndAttendanceDataFlowIntegrationTest extends AbstractPostg
             commissionService,
             mock(AuditService.class),
             mock(PayslipRenderer.class),
-            new LeaveRepository(jdbc));
+            new LeaveRepository(jdbc),
+            new th.co.glr.hr.payroll.export.KBankPctExporter(),
+            new th.co.glr.hr.payroll.export.Pnd1Exporter(),
+            new th.co.glr.hr.payroll.export.SsoExporter(),
+            new th.co.glr.hr.config.AppProperties());
     }
 
     // ---- P9: re-processing a month replaces lines, it does not duplicate the period -------------

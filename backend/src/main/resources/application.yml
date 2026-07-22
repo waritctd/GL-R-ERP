@@ -110,6 +110,21 @@ app:
     max-ip-failures: ${APP_LOGIN_MAX_IP_FAILURES:20}
     window-seconds: ${APP_LOGIN_WINDOW_SECONDS:900}
     lockout-seconds: ${APP_LOGIN_LOCKOUT_SECONDS:900}
+  payroll:
+    # Employer registration constants stamped into the statutory export files (KBank PCT, PND1,
+    # SSO สปส.1-10). Blank by default so nothing bogus reaches a real bank/tax/SSO filing — set the
+    # real values per environment via these env vars. Demo values live in application-demo.yml.
+    employer:
+      company-name-th: ${APP_PAYROLL_COMPANY_NAME_TH:}
+      company-tax-id: ${APP_PAYROLL_COMPANY_TAX_ID:}
+      pnd1-branch: ${APP_PAYROLL_PND1_BRANCH:0000}
+      kbank-debit-account: ${APP_PAYROLL_KBANK_DEBIT_ACCOUNT:}
+      kbank-batch-ref: ${APP_PAYROLL_KBANK_BATCH_REF:}
+      sso-employer-account: ${APP_PAYROLL_SSO_EMPLOYER_ACCOUNT:}
+      sso-branch: ${APP_PAYROLL_SSO_BRANCH:000000}
+      sso-rate-percent: ${APP_PAYROLL_SSO_RATE_PERCENT:5}
+      establishment-name: ${APP_PAYROLL_ESTABLISHMENT_NAME:}
+      default-transfer-day: ${APP_PAYROLL_DEFAULT_TRANSFER_DAY:26}
 
 management:
   endpoints:

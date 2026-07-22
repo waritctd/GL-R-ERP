@@ -4549,7 +4549,7 @@ export const api = {
 
   // No seeded payroll-period data yet — `current` returns an empty period so
   // PayrollPage degrades to its built-in empty state; the mutating actions
-  // (preview/process/bankExport) are explicit user-triggered calculations that
+  // (preview/process/exportFile) are explicit user-triggered calculations that
   // would require reproducing real payroll/tax logic to fake convincingly, so
   // they surface a clear "not supported in mock mode" error instead of
   // fabricating financial figures (real backend implementation is in hrApi.js).
@@ -4577,9 +4577,9 @@ export const api = {
       hasRole('hr');
       throw new Error('ประมวลผลเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
-    async bankExport() {
+    async exportFile() {
       hasRole('hr', 'ceo');
-      throw new Error('ดาวน์โหลดไฟล์โอนเงินไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+      throw new Error('ดาวน์โหลดไฟล์เงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
     async downloadPayslip() {
       hasRole('hr', 'ceo');

@@ -109,7 +109,11 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
             commissionService,
             mock(AuditService.class),
             mock(PayslipRenderer.class),
-            new LeaveRepository(jdbc));
+            new LeaveRepository(jdbc),
+            new th.co.glr.hr.payroll.export.KBankPctExporter(),
+            new th.co.glr.hr.payroll.export.Pnd1Exporter(),
+            new th.co.glr.hr.payroll.export.SsoExporter(),
+            new th.co.glr.hr.config.AppProperties());
 
         managerEmployeeId = createEmployee("ผู้จัดการฝ่ายขาย ทดสอบเพย์โรล", "sm-payroll-calcrefine@glr.co.th", "SA", "แผนกขาย");
         managerActor = new UserPrincipal(managerEmployeeId, managerEmployeeId + "@glr.co.th", "Sales Manager",

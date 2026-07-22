@@ -22,6 +22,14 @@ import { formatMoney, payrollStatusLabel as statusInfo } from '../../utils/forma
 // than wrapping a <section> inside an <aside> or changing the shared primitive.
 const PANEL_CLASS = 'bg-surface border border-border rounded-md shadow-sm p-5';
 
+// The three statutory files HR can generate for a processed period. `value` is the backend export
+// slug (/api/payroll/{id}/export/{value}); `filePrefix` names the downloaded blob.
+const EXPORT_KINDS = [
+  { value: 'kbank', label: 'KBank Payroll', filePrefix: 'PCT' },
+  { value: 'pnd1', label: 'ภ.ง.ด.1', filePrefix: 'Pnd1' },
+  { value: 'sso', label: 'ประกันสังคม (สปส.1-10)', filePrefix: 'SPS1-10' },
+];
+
 const payrollColumns = [
   {
     key: 'employee',
@@ -215,6 +223,8 @@ export function PayrollPage({ showToast }) {
   // unpaidLeaveDays field. Never re-applied to `adjustments` after the initial pre-fill in
   // applyPeriod -- HR's edits always win.
   const [suggestionsByEmployee, setSuggestionsByEmployee] = useState({});
+  const [exportKind, setExportKind] = useState('kbank');
+  const [payDate, setPayDate] = useState(`${thisMonth}-26`);
 
   const selectedLine = useMemo(
     () => (period?.lines || []).find((line) => Number(line.employeeId) === Number(selectedEmployeeId)) || period?.lines?.[0] || null,
@@ -272,6 +282,7 @@ export function PayrollPage({ showToast }) {
 
   useEffect(() => {
     setSelectedEmployeeId(null);
+    setPayDate(`${month}-26`); // default salary pay date is the 26th of the selected month
     load();
   }, [month]);
 
@@ -313,14 +324,16 @@ export function PayrollPage({ showToast }) {
     }
   }
 
-  async function exportBankFile() {
+  async function generateExportFile() {
     if (!period?.id) return;
+    const kind = EXPORT_KINDS.find((item) => item.value === exportKind) || EXPORT_KINDS[0];
     setSaving(true);
     try {
-      const text = await api.payroll.bankExport(period.id);
-      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-      downloadBlob(blob, `glr-payroll-${month}.txt`);
-      showToast('success', 'ดาวน์โหลดไฟล์โอนเงินแล้ว');
+      // The backend returns raw CP874 bytes; exportFile fetches them as a binary blob so the Thai
+      // encoding survives the download intact. payDate is the salary pay/transfer date.
+      const blob = await api.payroll.exportFile(period.id, kind.value, payDate || undefined);
+      downloadBlob(blob, `${kind.filePrefix}-${month}.txt`);
+      showToast('success', `ดาวน์โหลดไฟล์ ${kind.label} แล้ว`);
     } catch (error) {
       showToast('error', error.message || 'ดาวน์โหลดไฟล์ไม่สำเร็จ');
     } finally {
@@ -426,10 +439,31 @@ export function PayrollPage({ showToast }) {
           <Icon name="check" />
           Process Payroll
         </Button>
-        <Button type="button" variant="secondary" onClick={exportBankFile} disabled={!period?.id || saving}>
-          <Icon name="fileText" />
-          Bank file
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={exportKind}
+            onChange={(event) => setExportKind(event.target.value)}
+            disabled={!period?.id || saving}
+            aria-label="ประเภทไฟล์ที่จะสร้าง"
+          >
+            {EXPORT_KINDS.map((kind) => (
+              <option key={kind.value} value={kind.value}>{kind.label}</option>
+            ))}
+          </select>
+          <label className="inline-flex items-center gap-2 m-0 text-sm font-extrabold">
+            วันที่จ่าย
+            <input
+              type="date"
+              value={payDate}
+              onChange={(event) => setPayDate(event.target.value)}
+              disabled={!period?.id || saving}
+            />
+          </label>
+          <Button type="button" variant="secondary" onClick={generateExportFile} disabled={!period?.id || saving}>
+            <Icon name="fileText" />
+            ดาวน์โหลดไฟล์
+          </Button>
+        </div>
         <Button type="button" variant="secondary" onClick={distributePayslips} disabled={!period?.id || saving}>
           <Icon name="mail" />
           Email payslips
