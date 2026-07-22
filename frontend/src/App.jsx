@@ -21,6 +21,8 @@ const HrDashboard = lazy(() => import('./features/dashboard/HrDashboard.jsx').th
 const HrOverview = lazy(() => import('./features/dashboard/HrOverview.jsx').then(toDefault('HrOverview')));
 const EmployeeDashboard = lazy(() => import('./features/dashboard/EmployeeDashboard.jsx').then(toDefault('EmployeeDashboard')));
 const SalesOverview = lazy(() => import('./features/dashboard/SalesOverview.jsx').then(toDefault('SalesOverview')));
+// Role-scoped views program (docs/role-scoped-views.md) — CEO's exec-cockpit landing.
+const CeoOverview = lazy(() => import('./features/dashboard/CeoOverview.jsx').then(toDefault('CeoOverview')));
 const TicketDashboard = lazy(() => import('./features/dashboard/TicketDashboard.jsx').then(toDefault('TicketDashboard')));
 // Role-scoped views: Sales Manager's team-cockpit Overview (landing).
 const ManagerOverview = lazy(() => import('./features/dashboard/ManagerOverview.jsx').then(toDefault('ManagerOverview')));
@@ -223,6 +225,12 @@ export function App() {
                 <ManagerOverview user={user} employee={currentEmployee} showToast={showToast} />
               ) : user.role === 'sales' && SALES_ENABLED ? (
                 <SalesOverview user={user} employee={currentEmployee} />
+              ) : user?.role === 'ceo' && SALES_ENABLED ? (
+                <CeoOverview
+                  user={user}
+                  employee={currentEmployee}
+                  dashboardSummary={dashboardSummary}
+                />
               ) : (
                 <EmployeeDashboard
                   user={user}

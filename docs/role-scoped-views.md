@@ -51,6 +51,12 @@ built around *its* work.
   and needs the same real-DB integration-test evidence as any other
   permission change — reusing an existing, already-guarded page (e.g. linking
   to `/requests`, `/leave`, `/payroll`) is not.
+- **Never duplicate a mutation.** An Overview's worklist rows deep-link to the
+  page that owns the action (`/pricing-requests/:id`, `/tickets/:id`,
+  `/commissions`, …) — an Overview component must never call an
+  approve/verify/decide endpoint itself. If a row's CTA and the destination
+  page's own button ever drift on what action they represent, that is a bug
+  in the Overview, not a second source of truth to reconcile.
 - **Branching note** — each role ships on its own branch
   (`feat/role-views-<role>`), off `origin/main`, so builds run concurrently.
   Shared files (`routes.js`, `permissions.js`, `AppShell.jsx`, `App.jsx`,
@@ -175,12 +181,129 @@ itself.
 - **Verification:** frontend only, mock-driven (`VITE_USE_MOCKS=true`). No
   authorization was changed.
 
-### Import / Account / Sales Manager / CEO
+### Sales Manager — team cockpit *(shipped, branch: `feat/role-views-sales-manager`)*
+
+**Landing:** `frontend/src/features/dashboard/ManagerOverview.jsx`, rendered
+at `/` when `user.role === 'sales_manager'` (gated on `SALES_ENABLED`,
+degrades to `EmployeeDashboard` when off, same as every other sales-gated
+landing in this file). Manager keeps every existing nav item (`รายการดีล` /
+คิวใบขอราคา / ค่าคอมมิชชัน / แคตตาล็อก) — this is only a new landing, nothing
+here removes a route or a permission.
+
+**Team pulse** (4 stat tiles): ยอดทีมเดือนนี้ (Σ `amountPayable` across deals
+won this month) · ค่าคอมรออนุมัติ (commissions at `SUBMITTED`, the manager's
+own review step) · ดีลต้องดูแล (open deals that are stale/overdue/past their
+follow-up date) · pipeline ทีม (Σ `amountPayable` across open team deals).
+
+**Centerpiece — "ค่าคอมรออนุมัติ" worklist:** one row per `SUBMITTED`
+commission record, each with a "ตรวจ · อนุมัติ" CTA that deep-links to
+`/commissions` (`CommissionPage`'s existing manager-approve flow) — the
+Overview never calls the approve endpoint itself, consistent with this
+program's "never duplicate a mutation" rule (§2).
+
+**"ดีลทีมที่ต้องดูแล" worklist:** open deals flagged `stale`, `overdue`, or
+with a `nextFollowUpAt` already in the past, overdue-payment first then
+longest-untouched first, each linking to `/tickets/:id`.
+
+**Right rail:** team leaderboard (top 5 reps by amount closed this month) and
+close-rate (won / (won + lost) this period).
+
+**Data:** `api.tickets.list({})` + `api.commissions.list({ status:
+'SUBMITTED' })`, both filtered/derived client-side (no server-side status
+filter exists on `GET /api/commissions` — mirrors `CommissionController#list`,
+same pattern `CommissionPage`'s own `totals.submitted` already uses).
+**Backend: none.**
+
+**Documented data gap:** `api.tickets.list({})` currently returns every
+ticket for `sales_manager` in the mock (same as `ceo` — `mockApi.js`'s
+`tickets.list` only narrows the response for `sales`/`import`/`account`), so
+this view treats the response as "team" scope per the plan, matching how
+`TicketDashboard` already consumes this same endpoint for this role today. If
+the real `TicketRepository.appendRoleScope` narrows `sales_manager` to their
+own division/team, this component needs no change — only the row count moves.
+No authorization was loosened or tightened by this branch. There is also no
+sales-target/quota field anywhere in the data model (mock or Java DTO), so
+"ยอดทีมเดือนนี้" renders as a plain ฿ total rather than a target-progress bar
+— no target number exists to measure against, and inventing one would be
+fabricating business data.
+
+**Verification:** frontend only, mock-driven (`VITE_USE_MOCKS=true`,
+`ManagerOverview.test.jsx`). No authorization was changed.
+
+### CEO — exec cockpit *(shipped, branch: `feat/role-views-ceo`)*
+
+CEO **keeps every existing nav item, route, and permission unchanged** — full company pipeline, all
+sales surfaces, ceo-settings. The only new surface is the `/` landing: `CeoOverview`
+(`frontend/src/features/dashboard/CeoOverview.jsx`), an exec cockpit that surfaces the cross-domain
+decisions only the CEO can make, in one worklist, instead of the CEO hunting across ใบขอราคา /
+รายการดีล / ค่าคอมมิชชัน / คำขอ / ลา separately.
+
+**Approval model this Overview encodes** (owner-confirmed): the CEO is the *final* approver across
+domains (price, close verification, commission — after the manager step), and the *direct* approver
+for OT/leave when an employee's division has no manager in between (that employee's manager FK
+points straight at the CEO).
+
+**Exec pulse** (5 stat tiles, each deep-links to its queue): อนุมัติราคา · ตรวจปิดงาน · ค่าคอมรออนุมัติ ·
+OT·ลา รออนุมัติ (combined) · ยอดขายเดือนนี้ (฿, informational).
+
+**"รออนุมัติจากคุณ" cross-domain worklist** — one list, each row tagged by domain, entity, and a CTA
+that deep-links (never mutates inline):
+
+| Domain | Source | CEO-actionable when | CTA | Destination |
+|---|---|---|---|---|
+| ราคา | `api.pricingRequests.queue({activeOnly:true})` | `status` is `READY_FOR_CEO_REVIEW` or `CEO_REVIEWING` | ตั้งราคา (override-purple CTA) | `/pricing-requests/:id` |
+| ปิดงาน | `api.tickets.list({})` | `lifecycle==='ACTIVE'`, `status!=='closed'`, `closeConfirmedAt` set (ฝ่ายบัญชี already confirmed) | ตรวจปิดงาน | `/tickets/:id` |
+| ค่าคอม | `api.commissions.list({})` | `status==='MANAGER_APPROVED'` | อนุมัติ | `/commissions` |
+| OT | `api.overtime.list({status})` | `MANAGER_APPROVED`, or `SUBMITTED` with `managerEmployeeId === CEO's own employeeId` | อนุมัติ | `/employee-requests?tab=ot` |
+| ลา | `api.leave.list({status:'SUBMITTED'})` | `managerEmployeeId === CEO's own employeeId` | อนุมัติ | `/leave` |
+
+**Why the OT/leave "manager-less division" derivation is real, not invented:** `OvertimeService`'s
+`managesEmployee()` and `LeaveService`'s `canReviewEmployee()` both grant review rights via the
+employee's stored `reports_to_employee_id` FK (`managerEmployeeId` on the DTO). An employee whose
+division has no manager has that FK pointing straight at the CEO's own `employeeId` — so
+"manager-less division routed to the CEO" and "the CEO is literally this employee's FK manager" are
+the same real, server-enforced condition, not a UI-only guess. `canReviewLeave` has no
+`MANAGER_APPROVED` middle step at all (unlike overtime/commission) — a CEO-reviewable leave request
+*is*, by definition, one whose FK manager is the CEO.
+
+**ผลบริษัทเดือนนี้ (company snapshot, right rail):** `/api/dashboard/summary` has no ฿ fields at all
+(only ticket-status counts) — every ฿ figure here (ยอดขายปิดแล้ว, Pipeline บริษัท,
+ลูกหนี้ค้าง/เกินกำหนด) is derived client-side from the CEO's own `tickets.list({})`, using the same
+`amountPayable`/`amountPaid`/`amountOutstanding`/`overdue` fields `TicketDetailPage`'s money views
+already trust (`derivePaymentFields`). ปิดงานแล้ว prefers the real
+`dashboardSummary.tickets.closedThisMonth` over the client-derived count when the summary provides
+it. กำลังพล / มาสายวันนี้ come straight from `dashboardSummary.headcount`/`.attendance`.
+
+**ยอดตามทีม/ฝ่าย breakdown — stated gap:** grouped by **sales rep** (`createdByName`), not division.
+Tickets carry no `divisionId`, and `GET /api/employees` (the only place a division mapping lives) is
+hr-only — the CEO has no endpoint that returns a division breakdown of deals. Bars are sized
+relative to this month's own top performer; **no % or target/quota is shown**, since no such field
+exists anywhere in the data this component can reach.
+
+**Mock-parity fix landed alongside this Overview (not a business-logic change):**
+`frontend/src/api/mockApi.js`'s `tickets.list()` was missing `closeConfirmedAt`,
+`closeConfirmedByName`, and `invoiceOnFile` — fields the real `TicketSummaryDto`
+(`backend/.../ticket/TicketSummaryDto.java`) already returns on the **list** endpoint, not just the
+single-ticket detail one. Without them, "which tickets are already confirmed by ฝ่ายบัญชี and
+awaiting CEO verification" could only be answered with an N+1 detail fetch per ticket. Added the
+three fields to the list projection so it matches the real DTO — this is CLAUDE.md's "mock shapes
+are a faithful stand-in for the Spring backend" contract, not a scope/authz change (the endpoint's
+authorization and row-scoping are untouched).
+
+**Verification:** `VITE_USE_MOCKS=true` only (`frontend/src/features/dashboard/CeoOverview.test.jsx`,
+9 tests). No authorization change — CEO already had every permission this Overview reads
+(`routes.js`: `canViewTickets`/`canViewCommissions`/`canViewPricingRequestQueue`/
+`canViewAllOvertime`/`canViewAllLeave` all already include `ceo`), so there is nothing to verify
+against the real Java service here; **do** verify with the real backend before treating the
+`dashboardAttendance` company-scope numbers as reliable — the mock hardcodes
+`todayPresent`/`lateToday` to `0` for `hr`/`ceo` scope (a pre-existing mock stub unrelated to this
+branch, not fixed here — out of scope for a frontend-only landing-page task).
+
+### Import / Account
 
 Not documented in this file yet — each ships (and fills in its own section
-here) on its own branch (`feat/role-views-import`, `feat/role-views-account`,
-`feat/role-views-sales-manager`, `feat/role-views-ceo`), per the plan's
-parallel per-role execution model.
+here) on its own branch (`feat/role-views-import`, `feat/role-views-account`),
+per the plan's parallel per-role execution model.
 
 ## 4. Change log
 
@@ -188,3 +311,5 @@ parallel per-role execution model.
 | --- | --- | --- | --- |
 | 2026-07-23 | HR | `feat/role-views-hr` | New `HrOverview.jsx` landing at `/` for `role==='hr'`; reconciled leave/OT to monitoring-only (no HR approve affordance); no authz/backend change. |
 | 2026-07-23 | Sales | `feat/role-views-sales` | New `SalesOverview` landing + `salesActions.js` next-action helper; `TicketListPage` LIFECYCLE/FLAGS collapsed behind "ตัวกรองเพิ่มเติม". Frontend-only, no authz change. |
+| 2026-07-23 | Sales Manager | `feat/role-views-sales-manager` | New `ManagerOverview.jsx` team-cockpit landing at `/` for `role==='sales_manager'` (commission-approval worklist as centerpiece, team pipeline pulse, leaderboard). No nav, route guard, or permission changes. |
+| 2026-07-23 | CEO | `feat/role-views-ceo` | New `CeoOverview.jsx` cross-domain exec-cockpit landing at `/` for `role==='ceo'` (guarded by `SALES_ENABLED`, degrades to `EmployeeDashboard` when off); `tickets.list()` mock-parity fix (`closeConfirmedAt`/`closeConfirmedByName`/`invoiceOnFile`). No nav, route guard, or permission changes. |

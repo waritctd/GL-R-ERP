@@ -14,6 +14,11 @@ export const queryKeys = {
   leaveTypes: () => ['leave', 'types'],
   overtimeRequests: (filters = {}) => ['overtime', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   overtimeEmployees: () => ['overtime', 'employees'],
+  // CommissionController#list only ever takes payrollMonth (no status param —
+  // see CommissionPage.jsx's imperative load()); kept here so CeoOverview's
+  // unfiltered fetch shares one cache entry with anything else that reads
+  // "every commission record" for the current payroll month.
+  commissionsList: (payrollMonth) => ['commissions', 'list', payrollMonth ?? ''],
   specialMoneyRequests: (filters = {}) => ['specialMoney', 'list', filters.from, filters.to, filters.status, filters.employeeId, filters.type],
   specialMoneyEmployees: () => ['specialMoney', 'employees'],
   specialMoneyTypes: () => ['specialMoney', 'types'],
