@@ -172,8 +172,8 @@ public class CommissionController {
 
     /**
      * Manual commission entries (feat/commission-manual-adjustments): sales_manager/CEO adds a
-     * hand-typed, signed amount (kind ADJUSTMENT or MANAGER) directly to a rep's monthly
-     * commission -- no invoice, no tier calc. See {@link CommissionService#createManualCommission}.
+     * hand-typed, signed amount (kind ADJUSTMENT / MANAGER / STOCK_BONUS / INCENTIVE) directly to a
+     * rep's monthly commission -- no invoice, no tier calc. See {@link CommissionService#createManualCommission}.
      */
     @PostMapping("/manual")
     @PreAuthorize("hasAnyRole('SALES_MANAGER','CEO')")

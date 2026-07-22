@@ -42,7 +42,7 @@ public class CommissionService {
     private static final Set<String> CEO_ROLES = Set.of("ceo");
     private static final Set<String> PAYROLL_ROLES = Set.of("hr");
     // feat/commission-manual-adjustments: ONLY sales_manager/ceo may create a manual commission
-    // entry (ADJUSTMENT/MANAGER). This is the authorization boundary this branch is required to
+    // entry (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE). This is the authorization boundary this branch is required to
     // prove with a real-DB, wrong-way-round integration test per CLAUDE.md -- see
     // ManualCommissionAuthzIntegrationTest.
     private static final Set<String> MANUAL_CREATE_ROLES = Set.of("sales_manager", "ceo");
@@ -456,8 +456,9 @@ public class CommissionService {
 
     /**
      * Manual commission entries (feat/commission-manual-adjustments): a sales_manager/CEO adds a
-     * hand-typed, signed {@code amount} for {@code kind} {@link CommissionKind#ADJUSTMENT} or
-     * {@link CommissionKind#MANAGER} against {@code salesRepId}'s {@code payrollMonth}. The amount
+     * hand-typed, signed {@code amount} for a manual {@code kind} ({@link CommissionKind#ADJUSTMENT},
+     * {@link CommissionKind#MANAGER}, {@link CommissionKind#STOCK_BONUS}, or
+     * {@link CommissionKind#INCENTIVE}) against {@code salesRepId}'s {@code payrollMonth}. The amount
      * is stored VERBATIM in {@code manual_amount} -- it never goes through {@link
      * CommissionCalculator#calculateInvoice} or any tier/progressive math, and there is no
      * invoice/{@code sourceTicketId} attached.
@@ -482,7 +483,8 @@ public class CommissionService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "salesRepId is required");
         }
         if (!MANUAL_KINDS.contains(kind)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "kind must be ADJUSTMENT or MANAGER");
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "kind must be one of " + String.join(", ", new java.util.TreeSet<>(MANUAL_KINDS)));
         }
         if (amount == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "amount is required");
