@@ -43,15 +43,18 @@ public class CommissionController {
         return new CommissionListResponse(commissionService.list(parseMonth(payrollMonth), user));
     }
 
+    // Slice A2 (AUTHZ CHANGE): sales removed — commission creation is now the accountant's
+    // auto-create trigger (see createFromDeal below). sales_manager/ceo keep the manual-submission
+    // ability they already had; account replaces sales as the day-to-day creator role here too.
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
-    @PreAuthorize("hasAnyRole('SALES','SALES_MANAGER','CEO')")
+    @PreAuthorize("hasAnyRole('ACCOUNT','SALES_MANAGER','CEO')")
     public CommissionDetailResponse submit(@Valid @RequestBody SubmitCommissionRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new CommissionDetailResponse(commissionService.submit(request, user));
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @PreAuthorize("hasAnyRole('SALES','SALES_MANAGER','CEO')")
+    @PreAuthorize("hasAnyRole('ACCOUNT','SALES_MANAGER','CEO')")
     public CommissionDetailResponse submitMultipart(
         @RequestParam(value = "sourceTicketId", required = false) Long sourceTicketId,
         @RequestParam(value = "salesRepId", required = false) Long salesRepId,
@@ -63,6 +66,8 @@ public class CommissionController {
         @RequestParam(value = "transportFee", required = false) java.math.BigDecimal transportFee,
         @RequestParam(value = "cutFee", required = false) java.math.BigDecimal cutFee,
         @RequestParam(value = "shortfall", required = false) java.math.BigDecimal shortfall,
+        @RequestParam(value = "withholdingTax", required = false) java.math.BigDecimal withholdingTax,
+        @RequestParam(value = "overpayment", required = false) java.math.BigDecimal overpayment,
         @RequestParam("invoiceAttachment") MultipartFile invoiceAttachment,
         HttpSession session
     ) {
@@ -77,9 +82,52 @@ public class CommissionController {
             suspenseVat,
             transportFee,
             cutFee,
-            shortfall
+            shortfall,
+            withholdingTax,
+            overpayment
         );
         return new CommissionDetailResponse(commissionService.submit(request, invoiceAttachment, user));
+    }
+
+    /**
+     * Slice A2 auto-create trigger: the accountant records the tax invoice for a close-eligible
+     * deal and the commission is created for the deal's owner automatically — sales does nothing.
+     * {@code ticketId} identifies the deal; {@code salesRepId} is never accepted here, it is always
+     * resolved server-side from the deal's owner.
+     */
+    @PostMapping(value = "/from-deal", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasRole('ACCOUNT')")
+    public CommissionDetailResponse createFromDeal(
+        @RequestParam("ticketId") long ticketId,
+        @RequestParam("invoiceNumber") String invoiceNumber,
+        @RequestParam("invoiceDate") LocalDate invoiceDate,
+        @RequestParam(value = "grossAmount", required = false) java.math.BigDecimal grossAmount,
+        @RequestParam(value = "bankFees", required = false) java.math.BigDecimal bankFees,
+        @RequestParam(value = "suspenseVat", required = false) java.math.BigDecimal suspenseVat,
+        @RequestParam(value = "transportFee", required = false) java.math.BigDecimal transportFee,
+        @RequestParam(value = "cutFee", required = false) java.math.BigDecimal cutFee,
+        @RequestParam(value = "shortfall", required = false) java.math.BigDecimal shortfall,
+        @RequestParam(value = "withholdingTax", required = false) java.math.BigDecimal withholdingTax,
+        @RequestParam(value = "overpayment", required = false) java.math.BigDecimal overpayment,
+        @RequestParam("invoiceAttachment") MultipartFile invoiceAttachment,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new CommissionDetailResponse(commissionService.createFromDeal(
+            ticketId,
+            invoiceNumber,
+            invoiceDate,
+            grossAmount,
+            bankFees,
+            suspenseVat,
+            transportFee,
+            cutFee,
+            shortfall,
+            withholdingTax,
+            overpayment,
+            invoiceAttachment,
+            user
+        ));
     }
 
     @PatchMapping("/{id}/deductions")

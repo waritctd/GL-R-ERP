@@ -58,8 +58,24 @@ public record TicketSummaryDto(
     boolean invoiceOnFile,
     /** Why the opportunity went away (V57). Distinct from lostReason. */
     String cancelReason,
-    Instant cancelledAt
+    Instant cancelledAt,
+    // Deal tracking fields (V83, Slice B1 "kill the weekly report" — handoff 103).
+    /** Rep-set override, or null to use {@link WinProbabilityDefaults#defaultFor(String)}. */
+    Integer winProbabilityOverride,
+    String designerName,
+    String ownerName,
+    String buyerName,
+    /**
+     * Computed, not stored: true when this ACTIVE deal has no {@code sales.deal_activity} row
+     * logged in the last 7 days (or none ever). See {@code TicketRepository#isStale}.
+     */
+    boolean stale
 ) {
+    /** Override wins when set, else the {@link DealStage}-derived default. Never a blocker. */
+    public int effectiveWinProbability() {
+        return WinProbabilityDefaults.effective(winProbabilityOverride, salesStage);
+    }
+
     public TicketSummaryDto(
         long id, String code, String type, String title, String status, String priority,
         long createdById, String createdByName, Long assignedToId, String assignedToName,
@@ -76,7 +92,8 @@ public record TicketSummaryDto(
             note, createdAt, updatedAt, closedAt, itemCount, hasEdits, paymentStatus, fulfillmentStatus,
             salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle, tenderRequirement, depositPolicy,
             depositPolicyReason, entryChannel, null, null, null, null, null, PaymentStage.NOT_REQUIRED,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false, null, null, false, null, null);
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false, null, null, false, null, null,
+            null, null, null, null, false);
     }
 
     /**
@@ -97,6 +114,6 @@ public record TicketSummaryDto(
             tenderRequirement, depositPolicy, depositPolicyReason, entryChannel, billingDate, dueDate,
             creditTermDays, lastFollowUpAt, nextFollowUpAt, paymentStage, amountPayable, amountPaid,
             amountOutstanding, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
-            cancelReason, cancelledAt);
+            cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale);
     }
 }

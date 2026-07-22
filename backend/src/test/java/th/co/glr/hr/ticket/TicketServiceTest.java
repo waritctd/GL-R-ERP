@@ -52,6 +52,13 @@ class TicketServiceTest {
         // about an abandoned row override this per-test.
         when(pricingRequestService.cancelOpenForTicket(anyLong(), anyString(), any()))
             .thenReturn(new CancelOpenForTicketResult(0, List.of()));
+        // Slice B1 gate default (handoff 103): the manual forward-updateStage gate needs
+        // hasActivitySinceLastStageChange() to be true, or every stubDeal-backed forward
+        // updateStage call in this Mockito-only file 400s on the missing-tracking-fields
+        // message. The gate's real enforcement (including this exact repository call
+        // against real SQL) is covered by DealTrackingAndActivityIntegrationTest — this file
+        // stays focused on role/ownership/backward-move logic, per its own existing header.
+        when(ticketRepo.hasActivitySinceLastStageChange(anyLong())).thenReturn(true);
     }
     private final TicketService service = new TicketService(
         ticketRepo, notifRepo, priceCalcService, new ObjectMapper(), customerRepo, quotationRenderer,
@@ -2256,7 +2263,7 @@ class TicketServiceTest {
             EntryChannel.DESIGNER_LED, null, null, null, null, null,
             PaymentStage.FULLY_PAID, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false,
             closeConfirmedAt, closeConfirmedAt == null ? null : "Account User", invoiceOnFile,
-            null, null);
+            null, null, null, null, null, null, false);
         TicketDto ticket = new TicketDto(summary, List.of(), List.of(), null, List.of());
         when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
         return ticket;
@@ -2323,7 +2330,14 @@ class TicketServiceTest {
             createdById, "Sales User", null, null, "Test Customer", null, null, null, null, null, null,
             Instant.now(), Instant.now(), null, items.size(), false, paymentStatus, fulfillmentStatus,
             salesStage, lostReason, lostReason == null ? null : Instant.now(), Instant.now(),
-            lifecycle, TenderRequirement.UNKNOWN, depositPolicy, null, EntryChannel.DESIGNER_LED);
+            lifecycle, TenderRequirement.UNKNOWN, depositPolicy, null, EntryChannel.DESIGNER_LED,
+            null, null, null, null,
+            // Slice B1 gate default (handoff 103): a non-null nextFollowUpAt so the manual
+            // forward-updateStage gate's other half is satisfied — see the class-level stub
+            // of hasActivitySinceLastStageChange() above for the same reasoning.
+            LocalDate.now(),
+            PaymentStage.NOT_REQUIRED, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false,
+            null, null, false, null, null, null, null, null, null, false);
         TicketDto ticket = new TicketDto(summary, items, List.of(),
             quotations.isEmpty() ? null : quotations.get(0), quotations);
         when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
@@ -2384,7 +2398,8 @@ class TicketServiceTest {
             s.nextFollowUpAt(), s.paymentStage(), s.amountPayable(), s.amountPaid(),
             s.amountOutstanding(), s.overdue(),
             s.closeConfirmedAt(), s.closeConfirmedByName(), s.invoiceOnFile(),
-            s.cancelReason(), s.cancelledAt());
+            s.cancelReason(), s.cancelledAt(),
+            s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale());
         return new TicketDto(summary, items, source.events(), source.quotation(), source.quotations());
     }
 

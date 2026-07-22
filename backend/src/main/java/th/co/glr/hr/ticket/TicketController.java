@@ -342,6 +342,30 @@ public class TicketController {
         return new TicketDetailResponse(ticketService.waiveDeposit(id, request.policy(), request.reason(), user));
     }
 
+    // ── Deal tracking + activity (V83, Slice B1 "kill the weekly report") ───────────────────
+
+    @PostMapping("/{id}/activities")
+    DealActivityDto addActivity(@PathVariable long id,
+                                @Valid @RequestBody DealActivityRequest request,
+                                HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return ticketService.addActivity(id, request, user);
+    }
+
+    @GetMapping("/{id}/activities")
+    Map<String, List<DealActivityDto>> activities(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("items", ticketService.listActivities(id, user));
+    }
+
+    @PutMapping("/{id}/tracking")
+    TicketDetailResponse updateTracking(@PathVariable long id,
+                                        @Valid @RequestBody TrackingUpdateRequest request,
+                                        HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.updateTracking(id, request, user));
+    }
+
     record UpdateStageRequest(@jakarta.validation.constraints.NotBlank String stage,
                               @jakarta.validation.constraints.Size(max = 2000) String note) {}
 

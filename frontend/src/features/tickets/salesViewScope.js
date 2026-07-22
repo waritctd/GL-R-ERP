@@ -26,6 +26,7 @@ const SECTION_IDS = [
   'quotation',      // "ใบเสนอราคา": issued quotation revisions + downloads
   'depositNotice',  // the deposit-notice view/issue affordance inside the stage panel's doc row
   'priceApproval',  // "การอนุมัติราคา": the CEO approve/reject decision panel
+  'dealTracking',   // "การติดตามดีล" (Slice B2, handoff 103): win%, designer/owner/buyer, activity log
 ];
 
 function allTrue() {
@@ -68,6 +69,7 @@ export function visibleSections(role) {
       quotation: false,
       depositNotice: false,
       priceApproval: false,
+      dealTracking: false,
     };
   }
 
@@ -77,6 +79,7 @@ export function visibleSections(role) {
       pricingRequest: false,
       delivery: false,
       priceApproval: false,
+      dealTracking: false,
     };
   }
 

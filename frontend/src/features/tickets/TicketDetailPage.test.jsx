@@ -31,6 +31,10 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         revision: vi.fn(),
         overrideItemPrice: vi.fn(),
         editItems: vi.fn(),
+        // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
+        listActivities: vi.fn(),
+        addActivity: vi.fn(),
+        updateTracking: vi.fn(),
       },
       attachments: {
         list: vi.fn(),
@@ -150,6 +154,12 @@ describe('TicketDetailPage', () => {
     api.tickets.overrideItemPrice.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.editItems.mockResolvedValue({ ticket: buildTicket() });
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
+    api.tickets.listActivities.mockResolvedValue({ items: [] });
+    api.tickets.addActivity.mockResolvedValue({
+      id: 1, ticketId: 701, activityDate: '2026-07-10', kind: 'CALL', note: null,
+      createdById: 1, createdByName: 'สมชาย ใจดี', createdAt: '2026-07-10T09:00:00.000Z',
+    });
+    api.tickets.updateTracking.mockResolvedValue({ ticket: buildTicket() });
   });
 
   it('renders a ticket from a mocked api.tickets.get', async () => {
@@ -811,5 +821,60 @@ describe('TicketDetailPage', () => {
     fireEvent.click(confirmButton);
     await waitFor(() => expect(api.tickets.revision).toHaveBeenCalledWith(701, { scope: 'QTY_OR_NOTE', reason: 'ลูกค้าขอเปลี่ยนจำนวน' }));
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
+  describe('deal tracking panel', () => {
+    it('shows the section, the win% default, and the pre-emptive gate hint when nextFollowUpAt is unset', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { salesStage: 'QUOTE_DESIGN_SIDE' } }),
+      });
+
+      renderTicketDetailPage(ceoUser);
+
+      expect(await screen.findByRole('heading', { level: 2, name: 'การติดตามดีล' })).not.toBeNull();
+      expect(await screen.findByText('ยังไม่พร้อม')).not.toBeNull();
+      // QUOTE_DESIGN_SIDE's stage default (WIN_PROBABILITY_DEFAULTS) — no override set.
+      expect(screen.getByText('40%')).not.toBeNull();
+      expect(screen.getByText(/ต้องระบุวันติดตามครั้งถัดไป และบันทึกกิจกรรมอย่างน้อย 1 รายการก่อนเลื่อนสถานะ/)).not.toBeNull();
+    });
+
+    it('is ready to advance once nextFollowUpAt is set and an activity was logged since the last stage change', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { nextFollowUpAt: '2026-07-15' } }),
+      });
+      api.tickets.listActivities.mockResolvedValue({
+        items: [{
+          id: 1, ticketId: 701, activityDate: '2026-07-03', kind: 'CALL', note: 'โทรติดตาม',
+          createdById: 9, createdByName: 'CEO ทดสอบ', createdAt: '2026-07-03T09:00:00.000Z',
+        }],
+      });
+
+      renderTicketDetailPage(ceoUser);
+
+      expect(await screen.findByText('พร้อมเลื่อนสถานะ')).not.toBeNull();
+      expect(screen.queryByText(/ต้องระบุวันติดตามครั้งถัดไป/)).toBeNull();
+    });
+
+    it('submits a new activity via api.tickets.addActivity', async () => {
+      renderTicketDetailPage(ceoUser);
+      await screen.findByRole('heading', { level: 2, name: 'การติดตามดีล' });
+
+      fireEvent.change(screen.getByLabelText('บันทึก (ถ้ามี)'), { target: { value: 'โทรคุยเรื่องราคา' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกกิจกรรม' }));
+
+      await waitFor(() => expect(api.tickets.addActivity).toHaveBeenCalledTimes(1));
+      expect(api.tickets.addActivity.mock.calls[0][0]).toBe(701);
+      expect(api.tickets.addActivity.mock.calls[0][1]).toMatchObject({ kind: 'CALL', note: 'โทรคุยเรื่องราคา' });
+    });
+
+    it('account does not see the deal-tracking panel, only a one-line peek', async () => {
+      renderTicketDetailPage(accountUser);
+
+      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      expect(screen.queryByRole('heading', { level: 2, name: 'การติดตามดีล' })).toBeNull();
+      expect(screen.getByText('การติดตามดีล')).not.toBeNull(); // SectionPeek's title span
+      expect(api.tickets.listActivities).not.toHaveBeenCalled();
+    });
   });
 });

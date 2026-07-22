@@ -18,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
@@ -94,24 +95,22 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
 /**
- * Step 9 (final payment / closeout / commission gate) — real-DB acceptance coverage.
+ * Commission redesign Slice A2 — real-DB acceptance coverage for the accountant auto-create
+ * trigger (sales does nothing to get commission) and, per CLAUDE.md's "Permission changes must
+ * ship evidence", the AUTHZ change that goes with it: sales can no longer create/submit a
+ * commission at all.
  *
- * <p>Two things had never been proven against real Postgres before this step: (1) that a chain
- * deal (PricingRequest → ... → delivery, Steps 1-8) can actually reach {@link
- * DealStage#CLOSED_PAID} end-to-end — final payment recorded on top of full delivery — and (2)
- * that {@link CommissionService#submit} genuinely gates and cross-checks a commission submission
- * against that deal's real state, not just against a Mockito stub. This class drives the real
- * Steps 1-8 services (same fixture pattern as {@code InventoryDeliveryFulfilmentIntegrationTest})
- * one step further, through real payment, into a real {@link CommissionService} backed by a real
- * {@link CommissionRepository} and {@link TicketRepository}.
+ * <p>Drives a real chain deal (Steps 1-8, same fixture as {@link CommissionDealLinkageIntegrationTest})
+ * to {@link DealStage#CLOSED_PAID}, then through the real {@link CommissionService}, backed by a
+ * real {@link CommissionRepository}, {@link TicketRepository}, and {@link AttachmentRepository}
+ * against real Postgres. {@link AuditService} and {@link NotificationService} are mocked
+ * deliberately — side effects of the decision, not the SQL/authz behavior under test.
  *
- * <p>{@link AuditService} and {@link NotificationService} are mocked deliberately — they are
- * side effects of the gate decision (an already-audited, already-notified business action per
- * {@code NotificationService}'s own class comment), not the SQL behavior under test here. Every
- * other collaborator that participates in either the gate/cross-check decision or its persistence
- * (TicketRepository, CommissionRepository, CommissionCalculator) is real.
+ * <p>Every authz case here is written the wrong way round (CLAUDE.md): "sales cannot reach this"
+ * is the assertion that matters, not "account can reach their own". See {@code
+ * createFromDealAsSales_isForbidden_andCreatesNoCommissionRecord} for the mutation-check record.
  */
-class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTest {
+class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private PricingRequestRepository pricingRequests;
     private PricingRequestService pricingRequestService;
@@ -126,16 +125,17 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
     private CommissionRepository commissions;
     private CommissionService commissionService;
 
-    private long salesRepId;
     private long importUserId;
     private long ceoUserId;
     private long accountUserId;
+    private long salesManagerUserId;
     private UserPrincipal salesActor;
     private UserPrincipal importActor;
     private UserPrincipal ceoActor;
     private UserPrincipal accountActor;
+    private UserPrincipal salesManagerActor;
 
-    private static final String FACTORY = "Factory Commission Linkage";
+    private static final String FACTORY = "Factory Commission AutoCreate";
 
     @BeforeEach
     void wireEveryStepsServiceAndCreateFactory() {
@@ -147,7 +147,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
         ObjectMapper objectMapper = new ObjectMapper();
 
-        FileStorageService fileStorage = new FileStorageService("/tmp/glr-commission-linkage-test-uploads");
+        FileStorageService fileStorage = new FileStorageService("/tmp/glr-commission-autocreate-test-uploads");
         pricingRequestService = new PricingRequestService(
             pricingRequests, tickets, notificationRepository, objectMapper, new ContactRepository(jdbc), fileStorage);
 
@@ -194,17 +194,19 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         AuditService auditService = mock(AuditService.class);
         NotificationService notificationService = mock(NotificationService.class);
         commissionService = new CommissionService(commissions, commissionAttachments, new CommissionCalculator(),
-            new FileStorageService("/tmp/glr-commission-linkage-test-invoices"), auditService, notificationService,
+            new FileStorageService("/tmp/glr-commission-autocreate-test-invoices"), auditService, notificationService,
             tickets, new AttachmentRepository(jdbc));
 
-        salesRepId = createEmployee(employees, "พนักงานขาย เก้า", "sales-step9@glr.co.th", "SALES", "แผนกขาย");
-        importUserId = createEmployee(employees, "ฝ่ายนำเข้า เก้า", "import-step9@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
-        ceoUserId = createEmployee(employees, "ผู้บริหาร เก้า", "ceo-step9@glr.co.th", "MD", "ผู้บริหาร");
-        accountUserId = createEmployee(employees, "บัญชี เก้า", "account-step9@glr.co.th", "ACCT", "ฝ่ายบัญชี");
+        long salesRepId = createEmployee(employees, "พนักงานขาย สิบ", "sales-a2@glr.co.th", "SALES", "แผนกขาย");
+        importUserId = createEmployee(employees, "ฝ่ายนำเข้า สิบ", "import-a2@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
+        ceoUserId = createEmployee(employees, "ผู้บริหาร สิบ", "ceo-a2@glr.co.th", "MD", "ผู้บริหาร");
+        accountUserId = createEmployee(employees, "บัญชี สิบ", "account-a2@glr.co.th", "ACCT", "ฝ่ายบัญชี");
+        salesManagerUserId = createEmployee(employees, "ผู้จัดการขาย สิบ", "salesmgr-a2@glr.co.th", "SA", "ฝ่ายขาย");
         salesActor = actor(salesRepId, "sales");
         importActor = actor(importUserId, "import");
         ceoActor = actor(ceoUserId, "ceo");
         accountActor = actor(accountUserId, "account");
+        salesManagerActor = actor(salesManagerUserId, "sales_manager");
 
         insertFactory(FACTORY);
     }
@@ -219,118 +221,189 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // (1) The pipeline itself: a chain deal genuinely reaches CLOSED_PAID end-to-end. Never
-    // proven by an integration test before Step 9 — see class Javadoc.
+    // Happy chain: account creates → SUBMITTED, owner = deal's rep (not the accountant) →
+    // sales_manager edits + reason recomputes → sales_manager approve → MANAGER_APPROVED →
+    // ceo approve → APPROVED. Also proves the same upload flips the ticket's invoiceOnFile.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void fullChainDeal_reachesClosedPaid_afterFullDeliveryAndFinalPayment() {
+    void createFromDeal_happyChain_thenManagerEditsAndBothApprovalsSucceed() {
         long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
+        long dealOwnerId = ticketService.get(ticketId, ceoActor).summary().createdById();
+        assertThat(dealOwnerId).isNotEqualTo(accountUserId); // sanity: distinct people
 
-        TicketDto after = ticketService.get(ticketId, ceoActor);
-        assertThat(after.summary().salesStage()).isEqualTo(DealStage.CLOSED_PAID);
-        assertThat(after.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
-        assertThat(after.summary().paymentStatus()).isEqualTo("FULLY_PAID");
+        CommissionRecord created = commissionService.createFromDeal(
+            ticketId, "INV-A2-" + UUID.randomUUID().toString().substring(0, 8), LocalDate.of(2026, 6, 15),
+            null, null, null, null, null, null, null, null, invoiceFile(), accountActor);
+
+        assertThat(created.status()).isEqualTo(CommissionStatus.SUBMITTED);
+        // The commission belongs to the deal's OWNER, never to the accountant who created it.
+        assertThat(created.salesRepId()).isEqualTo(dealOwnerId);
+        assertThat(created.salesRepId()).isNotEqualTo(accountUserId);
+
+        // Same upload also satisfies the ticket's three-party close gate.
+        TicketDto afterUpload = ticketService.get(ticketId, ceoActor);
+        assertThat(afterUpload.summary().invoiceOnFile()).isTrue();
+        assertThat(tickets.hasInvoiceAttachment(ticketId)).isTrue();
+
+        UpdateCommissionDeductionsRequest edit = new UpdateCommissionDeductionsRequest(
+            null, new BigDecimal("500.00"), null, null, null, null, null, null, null,
+            "ธนาคารหักค่าธรรมเนียมเพิ่มตามใบแจ้งยอด");
+        CommissionRecord edited = commissionService.updateDeductions(created.id(), edit, salesManagerActor);
+        assertThat(edited.invoiceDetails().bankFees()).isEqualByComparingTo(new BigDecimal("500.00"));
+        // Final amount is always the recomputed one, never a directly-set number.
+        assertThat(edited.commissionableBase()).isNotEqualByComparingTo(created.commissionableBase());
+
+        CommissionRecord managerApproved = commissionService.approve(created.id(), salesManagerActor);
+        assertThat(managerApproved.status()).isEqualTo(CommissionStatus.MANAGER_APPROVED);
+
+        CommissionRecord approved = commissionService.approve(created.id(), ceoActor);
+        assertThat(approved.status()).isEqualTo(CommissionStatus.APPROVED);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // (2) The gate: a commission cannot be submitted against a deal that hasn't reached
-    // CLOSED_PAID yet — rejected outright, no commission_record row created.
+    // Wrong-way-round AUTHZ (the tests that matter): sales cannot create, and cannot approve.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * MUTATION-CHECK RECORD (per CLAUDE.md "Permission changes must ship evidence"):
+     * temporarily changed {@code CommissionService.CREATE_FROM_DEAL_ROLES} from
+     * {@code Set.of("account")} to {@code Set.of("account", "sales")} (reintroducing the
+     * vulnerability this test guards against) — this specific test went red (expected FORBIDDEN,
+     * got a created SUBMITTED commission instead) and no other test in the suite flipped. Reverted
+     * the change; `git diff` against the pre-mutation tree was empty afterwards.
+     */
+    @Test
+    void createFromDealAsSales_isForbidden_andCreatesNoCommissionRecord() {
+        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
+        int before = countCommissionRecords();
+
+        assertThatThrownBy(() -> commissionService.createFromDeal(
+                ticketId, "INV-A2-SALES-" + UUID.randomUUID().toString().substring(0, 8),
+                LocalDate.of(2026, 6, 15), null, null, null, null, null, null, null, null,
+                invoiceFile(), salesActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        assertThat(countCommissionRecords()).isEqualTo(before);
+        assertThat(tickets.hasInvoiceAttachment(ticketId)).isFalse();
+    }
+
+    @Test
+    void submitAsSales_isForbidden_andCreatesNoCommissionRecord() {
+        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
+        int before = countCommissionRecords();
+        SubmitCommissionRequest request = submitRequestLinkedTo(ticketId, new BigDecimal("1000.00"));
+
+        assertThatThrownBy(() -> commissionService.submit(request, invoiceFile(), salesActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        assertThat(countCommissionRecords()).isEqualTo(before);
+    }
+
+    @Test
+    void salesCannotApprove_evenAManagerApprovedCommission() {
+        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
+        CommissionRecord created = commissionService.createFromDeal(
+            ticketId, "INV-A2-" + UUID.randomUUID().toString().substring(0, 8), LocalDate.of(2026, 6, 15),
+            null, null, null, null, null, null, null, null, invoiceFile(), accountActor);
+        commissionService.approve(created.id(), salesManagerActor); // -> MANAGER_APPROVED
+
+        assertThatThrownBy(() -> commissionService.approve(created.id(), salesActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        CommissionRecord stillManagerApproved = commissions.findById(created.id()).orElseThrow();
+        assertThat(stillManagerApproved.status()).isEqualTo(CommissionStatus.MANAGER_APPROVED);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // grossAmount defaulting: omitted → the deal's real payable amount; provided → used as given.
+    // Two separate deals — createFromDeal only allows one live commission per deal.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void submit_rejectsWhenLinkedDealHasNotReachedClosedPaid_andCreatesNoRecord() {
-        long ticketId = driveDealThroughDeliveryOnly(new BigDecimal("10")); // DELIVERED, not yet CLOSED_PAID
+    void createFromDeal_omittedGrossAmount_defaultsFromDealPayable() {
+        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
+        BigDecimal payable = tickets.payableAmount(ticketId);
+        assertThat(payable.signum()).isPositive();
+
+        CommissionRecord created = commissionService.createFromDeal(
+            ticketId, "INV-A2-DEFAULT-" + UUID.randomUUID().toString().substring(0, 8),
+            LocalDate.of(2026, 6, 15), null, null, null, null, null, null, null, null,
+            invoiceFile(), accountActor);
+
+        assertThat(created.invoiceDetails().grossAmount()).isEqualByComparingTo(payable);
+        assertThat(created.dealPayableAmountSnapshot()).isEqualByComparingTo(payable);
+        assertThat(created.dealAmountMismatch()).isFalse();
+    }
+
+    @Test
+    void createFromDeal_providedGrossAmount_isUsedAsGiven_insteadOfDealPayable() {
+        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
+        BigDecimal payable = tickets.payableAmount(ticketId);
+        BigDecimal override = payable.add(new BigDecimal("50000.00")); // deliberately different + beyond threshold
+
+        CommissionRecord created = commissionService.createFromDeal(
+            ticketId, "INV-A2-OVERRIDE-" + UUID.randomUUID().toString().substring(0, 8),
+            LocalDate.of(2026, 6, 15), override, null, null, null, null, null, null, null,
+            invoiceFile(), accountActor);
+
+        assertThat(created.invoiceDetails().grossAmount()).isEqualByComparingTo(override);
+        assertThat(created.invoiceDetails().grossAmount()).isNotEqualByComparingTo(payable);
+        assertThat(created.dealAmountMismatch()).isTrue(); // flagged, not blocked
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Duplicate guard: a second commission for the same deal is rejected outright.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void createFromDeal_secondCallForSameDeal_isRejected_andCreatesNoSecondRecord() {
+        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
+        commissionService.createFromDeal(
+            ticketId, "INV-A2-FIRST-" + UUID.randomUUID().toString().substring(0, 8), LocalDate.of(2026, 6, 15),
+            null, null, null, null, null, null, null, null, invoiceFile(), accountActor);
+        int afterFirst = countCommissionRecords();
+
+        assertThatThrownBy(() -> commissionService.createFromDeal(
+                ticketId, "INV-A2-SECOND-" + UUID.randomUUID().toString().substring(0, 8), LocalDate.of(2026, 6, 15),
+                null, null, null, null, null, null, null, null, invoiceFile(), accountActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(countCommissionRecords()).isEqualTo(afterFirst);
+    }
+
+    @Test
+    void createFromDeal_rejectsWhenDealNotYetClosedPaid_andCreatesNoRecord() {
+        long ticketId = driveDealThroughDeliveryOnly(new BigDecimal("10")); // DELIVERED, not CLOSED_PAID
         int before = countCommissionRecords();
 
-        SubmitCommissionRequest request = submitRequestLinkedTo(ticketId, new BigDecimal("1000.00"));
-
-        assertThatThrownBy(() -> commissionService.submit(request, invoiceFile(), accountActor))
+        assertThatThrownBy(() -> commissionService.createFromDeal(
+                ticketId, "INV-A2-NOTREADY-" + UUID.randomUUID().toString().substring(0, 8), LocalDate.of(2026, 6, 15),
+                null, null, null, null, null, null, null, null, invoiceFile(), accountActor))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+
         assertThat(countCommissionRecords()).isEqualTo(before);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // (3) Cross-check within threshold: succeeds, no mismatch flag, snapshot recorded.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void submit_withGrossAmountWithinThreshold_succeedsWithNoMismatchFlag() {
-        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal payable = tickets.payableAmount(ticketId);
-        assertThat(payable.signum()).isPositive();
-        // 2% above payable — within the 5% cross-check threshold.
-        BigDecimal grossAmount = payable.multiply(new BigDecimal("1.02")).setScale(2, java.math.RoundingMode.HALF_UP);
-
-        SubmitCommissionRequest request = submitRequestLinkedTo(ticketId, grossAmount);
-        CommissionRecord created = commissionService.submit(request, invoiceFile(), accountActor);
-
-        assertThat(created.sourceTicketId()).isEqualTo(ticketId);
-        assertThat(created.dealAmountMismatch()).isFalse();
-        assertThat(created.dealPayableAmountSnapshot()).isEqualByComparingTo(payable);
-
-        CommissionRecord reloaded = commissions.findById(created.id()).orElseThrow();
-        assertThat(reloaded.dealAmountMismatch()).isFalse();
-        assertThat(reloaded.dealPayableAmountSnapshot()).isEqualByComparingTo(payable);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // (4) Cross-check beyond threshold: NOT blocked, but flagged for reviewers.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void submit_withGrossAmountBeyondThreshold_succeedsButFlagsMismatch() {
-        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal payable = tickets.payableAmount(ticketId);
-        assertThat(payable.signum()).isPositive();
-        // 25% above payable — well beyond the 5% threshold.
-        BigDecimal grossAmount = payable.multiply(new BigDecimal("1.25")).setScale(2, java.math.RoundingMode.HALF_UP);
-
-        SubmitCommissionRequest request = submitRequestLinkedTo(ticketId, grossAmount);
-        CommissionRecord created = commissionService.submit(request, invoiceFile(), accountActor);
-
-        assertThat(created.dealAmountMismatch()).isTrue();
-        assertThat(created.dealPayableAmountSnapshot()).isEqualByComparingTo(payable);
-        assertThat(created.status()).isEqualTo(CommissionStatus.SUBMITTED); // not blocked
-
-        CommissionRecord reloaded = commissions.findById(created.id()).orElseThrow();
-        assertThat(reloaded.dealAmountMismatch()).isTrue();
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // (5) Regression guard: an unlinked (sourceTicketId = null) commission keeps working exactly
-    // as it did before Step 9 — this must never start requiring a linked deal.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void submit_withNoLinkedDeal_stillSucceeds_snapshotNullMismatchFalse() {
-        SubmitCommissionRequest request = new SubmitCommissionRequest(
-            null, salesRepId, "INV-STEP9-UNLINKED-" + UUID.randomUUID().toString().substring(0, 8),
-            LocalDate.of(2026, 6, 15), new BigDecimal("1000.00"),
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO);
-
-        CommissionRecord created = commissionService.submit(request, invoiceFile(), accountActor);
-
-        assertThat(created.sourceTicketId()).isNull();
-        assertThat(created.dealPayableAmountSnapshot()).isNull();
-        assertThat(created.dealAmountMismatch()).isFalse();
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Fixture helpers.
+    // Fixture helpers (same pattern as CommissionDealLinkageIntegrationTest).
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     private SubmitCommissionRequest submitRequestLinkedTo(long ticketId, BigDecimal grossAmount) {
+        long dealOwnerId = ticketService.get(ticketId, ceoActor).summary().createdById();
         return new SubmitCommissionRequest(
-            ticketId, salesRepId, "INV-STEP9-" + UUID.randomUUID().toString().substring(0, 8),
+            ticketId, dealOwnerId, "INV-A2-MANUAL-" + UUID.randomUUID().toString().substring(0, 8),
             LocalDate.of(2026, 6, 15), grossAmount,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO);
     }
 
-    private MockMultipartFile invoiceFile() {
+    private MultipartFile invoiceFile() {
         return new MockMultipartFile("invoiceAttachment", "invoice.pdf", "application/pdf", "pdf".getBytes());
     }
 
@@ -340,43 +413,38 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         return count == null ? 0 : count;
     }
 
-    /** Drives a brand-new deal all the way to {@link DealStage#CLOSED_PAID}: full chain
-     * (Steps 1-6) to QUOTATION_ACCEPTED, confirmOrder, deposit paid, reserve+deliver the full
-     * quantity from stock (Step 8), then confirmFinalPayment records the remaining balance and
-     * the CLOSED_PAID auto-advance fires (paymentFullyPaid AND FULLY_DELIVERED). */
+    /** Drives a brand-new deal all the way to {@link DealStage#CLOSED_PAID}. */
     private long driveDealToClosedPaid(BigDecimal quantity) {
         long ticketId = driveDealThroughDeliveryOnly(quantity);
         ticketService.confirmFinalPayment(ticketId, accountActor);
         return ticketId;
     }
 
-    /** Same as {@link #driveDealToClosedPaid} but stops right after delivery completes —
-     * DealStage.DELIVERED / FulfilmentStatus.FULLY_DELIVERED, deposit paid but final balance not
-     * yet collected, so the deal is deliberately NOT YET at CLOSED_PAID. Used by the "gate
-     * rejects a not-yet-closed deal" test. */
+    /** Same as {@link #driveDealToClosedPaid} but stops right after delivery — DELIVERED, not yet
+     * CLOSED_PAID. Used by the "gate rejects a not-yet-closed deal" test. */
     private long driveDealThroughDeliveryOnly(BigDecimal quantity) {
         long catalogProductId = insertCatalogProduct(FACTORY, "TH",
-            "TEST-COMM-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
+            "TEST-COMM-A2-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
 
         CustomerRepository customersRepo = new CustomerRepository(jdbc);
         ProjectRepository projectsRepo = new ProjectRepository(jdbc);
         CustomerDto customer = customersRepo.create(
-            "บริษัท Commission " + UUID.randomUUID() + " จำกัด", "0100000000009", "123 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0009");
-        ProjectDto project = projectsRepo.create(customer.id(), "โครงการ Commission");
+            "บริษัท Commission A2 " + UUID.randomUUID() + " จำกัด", "0100000000010", "123 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0010");
+        ProjectDto project = projectsRepo.create(customer.id(), "โครงการ Commission A2");
         TicketDto created = ticketService.create(
-            new CreateTicketRequest("ดีล Commission", "NORMAL", customer.name(), customer.id(), project.id(), null,
-                null, null, List.of(ticketItem("SCG", "Tile Commission", FACTORY))),
+            new CreateTicketRequest("ดีล Commission A2", "NORMAL", customer.name(), customer.id(), project.id(), null,
+                null, null, List.of(ticketItem("SCG", "Tile Commission A2", FACTORY))),
             salesActor);
         long ticketId = created.summary().id();
         long ticketItemId = created.items().get(0).id();
 
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
-            ticketItemId, catalogProductId, null, "SCG", "Tile Commission", "SCG Tile Commission", null, null,
+            ticketItemId, catalogProductId, null, "SCG", "Tile Commission A2", "SCG Tile Commission A2", null, null,
             "60x60", FACTORY, quantity, quantity, "piece", UnitBasis.PER_PIECE,
             QuantityType.CONFIRMED, null, null, null);
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
-            new BigDecimal("5000.00"), "THB", "step 9 closeout walk", UUID.randomUUID().toString(), List.of(item));
+            new BigDecimal("5000.00"), "THB", "slice a2 closeout walk", UUID.randomUUID().toString(), List.of(item));
         long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
 
         driveDraftPricingRequestToQuotationAccepted(pricingRequestId, FACTORY, quantity);
@@ -426,7 +494,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
 
         PricingCostingDto costingDraft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("step 9 costing", null), importActor);
+            new CreateCostingRequest("slice a2 costing", null), importActor);
         costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 1"), importActor);
         PricingCostingDto calculated = costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 2"), importActor);
         costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
