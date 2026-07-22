@@ -4,8 +4,10 @@ from helpers import assert_status, money, submit_commission, unique
 
 
 @pytest.mark.uat("COM-01", title="Submit commission with invoice upload", priority="P0")
-def test_com01_submit_with_invoice_upload(sales):
-    commission = submit_commission(sales, unique("COM01-INV"))
+def test_com01_submit_with_invoice_upload(sales, account):
+    # Slice A2 (handoff 98, AUTHZ CHANGE): commission creation is account/sales_manager/ceo only
+    # now, not sales -- attribute the commission to `sales` explicitly via salesRepId.
+    commission = submit_commission(account, unique("COM01-INV"), sales_rep_id=sales.user["employeeId"])
     assert commission["status"] == "SUBMITTED", commission
     assert commission["kind"] == "SALE", commission
     assert commission["invoiceDetails"]["invoiceAttachmentId"] is not None, commission
@@ -37,8 +39,10 @@ def test_com02_simulator_no_save(sales):
 
 
 @pytest.mark.uat("COM-03", title="Sales manager approval -> MANAGER_APPROVED", priority="P0")
-def test_com03_manager_approves(sales, salesmgr):
-    commission = submit_commission(sales, unique("COM03-INV"), invoiceDate="2026-08-06")
+def test_com03_manager_approves(sales, salesmgr, account):
+    commission = submit_commission(
+        account, unique("COM03-INV"), sales_rep_id=sales.user["employeeId"], invoiceDate="2026-08-06"
+    )
     r = salesmgr.post(f"/api/commissions/{commission['id']}/approve")
     assert_status(r, 200)
     approved = r.json()["commission"]
@@ -52,13 +56,20 @@ def test_com04_payroll_ready_feed(hr):
     assert_status(r, 200)
     summary = r.json()["summary"]
     assert summary["status"] == "PAYROLL_READY", summary
-    assert money(summary["totalCommissionAmount"]) >= money("600.00"), summary
-    assert any(money(rep["commissionAmount"]) == money("600.00") for rep in summary["salesReps"]), summary
+    # Payroll-ready always recomputes live from the stored fields (CommissionService.java:354).
+    # The seeded commissionable_base is 240000 (V903); the 2026-07-22 calc-refine
+    # (CommissionCalculator.java:11) strips VAT once via VAT_DIVISOR=1.07 before applying the
+    # 0.25% tier: 240000 / 1.07 * 0.25% = 560.75. (600.00 was the pre-refine naive
+    # 240000 * 0.25%, no VAT strip -- now stale.)
+    assert money(summary["totalCommissionAmount"]) >= money("560.75"), summary
+    assert any(money(rep["commissionAmount"]) == money("560.75") for rep in summary["salesReps"]), summary
 
 
 @pytest.mark.uat("COM-05", title="Clawback creates negative record", priority="P1")
-def test_com05_clawback_negative(sales, salesmgr, ceo):
-    commission = submit_commission(sales, unique("COM05-INV"), invoiceDate="2026-08-07")
+def test_com05_clawback_negative(sales, salesmgr, ceo, account):
+    commission = submit_commission(
+        account, unique("COM05-INV"), sales_rep_id=sales.user["employeeId"], invoiceDate="2026-08-07"
+    )
     r = salesmgr.post(f"/api/commissions/{commission['id']}/approve")
     assert_status(r, 200)
     r = ceo.post(f"/api/commissions/{commission['id']}/approve")
@@ -72,8 +83,10 @@ def test_com05_clawback_negative(sales, salesmgr, ceo):
 
 
 @pytest.mark.uat("COM-06", title="CEO second sign-off finalizes commission", priority="P0")
-def test_com06_ceo_second_signoff(sales, salesmgr, ceo):
-    commission = submit_commission(sales, unique("COM06-INV"), invoiceDate="2026-08-08")
+def test_com06_ceo_second_signoff(sales, salesmgr, ceo, account):
+    commission = submit_commission(
+        account, unique("COM06-INV"), sales_rep_id=sales.user["employeeId"], invoiceDate="2026-08-08"
+    )
     r = salesmgr.post(f"/api/commissions/{commission['id']}/approve")
     assert_status(r, 200)
     manager_approved = r.json()["commission"]
@@ -86,8 +99,10 @@ def test_com06_ceo_second_signoff(sales, salesmgr, ceo):
 
 
 @pytest.mark.uat("COM-07", title="Reject commission -> REJECTED", priority="P0")
-def test_com07_reject(sales, salesmgr):
-    commission = submit_commission(sales, unique("COM07-INV"), invoiceDate="2026-08-09")
+def test_com07_reject(sales, salesmgr, account):
+    commission = submit_commission(
+        account, unique("COM07-INV"), sales_rep_id=sales.user["employeeId"], invoiceDate="2026-08-09"
+    )
     r = salesmgr.post(
         f"/api/commissions/{commission['id']}/reject",
         json={"reviewerNote": "UAT commission reject"},

@@ -164,13 +164,31 @@ def ticket_item(**overrides):
     return item
 
 
-def create_ticket(sales, title=None):
+def create_customer_and_project(sales, marker=None):
+    """Create a throwaway customer + project via the API, the way the real app does it (see
+    TicketCreateModal.jsx: customer -> project -> ticket). V50 made `projectId` @NotNull on
+    CreateTicketRequest ("1 deal = 1 ticket under a project"), so every ticket needs one.
+    Both endpoints are `sales`-role-gated."""
+    marker = marker or unique("UAT")
+    r = sales.post("/api/customers", json={"name": f"UAT Harness Customer {marker}"})
+    assert_status(r, 200)
+    customer_id = r.json()["customer"]["id"]
+    r = sales.post(f"/api/customers/{customer_id}/projects", json={"name": f"UAT Harness Project {marker}"})
+    assert_status(r, 200)
+    project_id = r.json()["project"]["id"]
+    return customer_id, project_id
+
+
+def create_ticket(sales, title=None, project_id=None):
+    if project_id is None:
+        _customer_id, project_id = create_customer_and_project(sales)
     r = sales.post(
         "/api/tickets",
         json={
             "title": title or unique("UAT ticket"),
             "priority": "NORMAL",
             "customerName": "UAT Harness Customer",
+            "projectId": project_id,
             "note": "UAT automated harness",
             "items": [ticket_item(proposedPrice=None)],
         },
@@ -209,7 +227,14 @@ def tiny_pdf_bytes():
     )
 
 
-def submit_commission(client, invoice_number=None, **overrides):
+def submit_commission(client, invoice_number=None, sales_rep_id=None, **overrides):
+    """POST /api/commissions (multipart). Slice A2 (handoff 98) gated commission creation to
+    hasAnyRole('ACCOUNT','SALES_MANAGER','CEO') -- sales was removed, so `client` must now be one
+    of those personas (typically `account`). `sales_rep_id` attributes the commission to a specific
+    rep: CommissionService.resolveSalesRep() defaults an unset salesRepId to the *caller's own*
+    employeeId, which is wrong when an accountant is submitting on a rep's behalf -- callers that
+    need the commission (and its notifications/emails) tied to a particular sales rep must pass
+    that rep's employeeId explicitly (e.g. `sales_rep_id=sales.user["employeeId"]`)."""
     data = {
         "invoiceNumber": invoice_number or unique("UAT-INV"),
         "invoiceDate": "2026-08-05",
@@ -220,6 +245,8 @@ def submit_commission(client, invoice_number=None, **overrides):
         "cutFee": "0.00",
         "shortfall": "0.00",
     }
+    if sales_rep_id is not None:
+        data["salesRepId"] = sales_rep_id
     data.update(overrides)
     files = {
         "invoiceAttachment": ("invoice.pdf", tiny_pdf_bytes(), "application/pdf"),

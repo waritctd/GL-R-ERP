@@ -109,22 +109,27 @@ def test_live_overtime_rejected(sales, salesmgr):
 
 
 @pytest.mark.live_email
-def test_live_commission_submitted_and_pending_manager(sales):
-    submit_commission(sales, unique("LIVE-COM-SUB"), invoiceDate="2026-10-07")
+def test_live_commission_submitted_and_pending_manager(sales, account):
+    # Slice A2 (handoff 98): commission creation is account/sales_manager/ceo only now.
+    submit_commission(account, unique("LIVE-COM-SUB"), sales_rep_id=sales.user["employeeId"], invoiceDate="2026-10-07")
     print("\n>> fired: commission SUBMITTED -> sales rep; PENDING_MANAGER -> sales manager")
 
 
 @pytest.mark.live_email
-def test_live_commission_manager_approved_and_pending_ceo(sales, salesmgr):
-    commission = submit_commission(sales, unique("LIVE-COM-MGR"), invoiceDate="2026-10-08")
+def test_live_commission_manager_approved_and_pending_ceo(sales, salesmgr, account):
+    commission = submit_commission(
+        account, unique("LIVE-COM-MGR"), sales_rep_id=sales.user["employeeId"], invoiceDate="2026-10-08"
+    )
     r = salesmgr.post(f"/api/commissions/{commission['id']}/approve")
     assert_status(r, 200)
     print("\n>> fired: commission MANAGER_APPROVED -> sales rep; PENDING_CEO -> CEO")
 
 
 @pytest.mark.live_email
-def test_live_commission_approved(sales, salesmgr, ceo):
-    commission = submit_commission(sales, unique("LIVE-COM-APP"), invoiceDate="2026-10-09")
+def test_live_commission_approved(sales, salesmgr, ceo, account):
+    commission = submit_commission(
+        account, unique("LIVE-COM-APP"), sales_rep_id=sales.user["employeeId"], invoiceDate="2026-10-09"
+    )
     r = salesmgr.post(f"/api/commissions/{commission['id']}/approve")
     assert_status(r, 200)
     r = ceo.post(f"/api/commissions/{commission['id']}/approve")
@@ -133,8 +138,10 @@ def test_live_commission_approved(sales, salesmgr, ceo):
 
 
 @pytest.mark.live_email
-def test_live_commission_rejected(sales, salesmgr):
-    commission = submit_commission(sales, unique("LIVE-COM-REJ"), invoiceDate="2026-10-10")
+def test_live_commission_rejected(sales, salesmgr, account):
+    commission = submit_commission(
+        account, unique("LIVE-COM-REJ"), sales_rep_id=sales.user["employeeId"], invoiceDate="2026-10-10"
+    )
     r = salesmgr.post(f"/api/commissions/{commission['id']}/reject",
                       json={"reviewerNote": "UAT live reject"})
     assert_status(r, 200)
