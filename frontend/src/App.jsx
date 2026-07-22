@@ -18,6 +18,7 @@ import { RequireAccess } from './app/RequireAccess.jsx';
 const toDefault = (name) => (module) => ({ default: module[name] });
 const ChangePasswordModal = lazy(() => import('./features/auth/ChangePasswordModal.jsx').then(toDefault('ChangePasswordModal')));
 const HrDashboard = lazy(() => import('./features/dashboard/HrDashboard.jsx').then(toDefault('HrDashboard')));
+const HrOverview = lazy(() => import('./features/dashboard/HrOverview.jsx').then(toDefault('HrOverview')));
 const EmployeeDashboard = lazy(() => import('./features/dashboard/EmployeeDashboard.jsx').then(toDefault('EmployeeDashboard')));
 const TicketDashboard = lazy(() => import('./features/dashboard/TicketDashboard.jsx').then(toDefault('TicketDashboard')));
 // Role-scoped views: Sales Manager's team-cockpit Overview (landing).
@@ -205,12 +206,18 @@ export function App() {
             path="/"
             element={(
               // Role-scoped views: each role's landing branches off `/` to its own
-              // Overview instead of the generic EmployeeDashboard. Sales Manager
-              // is one entry in what generalizes into a role -> Overview map as
-              // more roles ship their own (see docs/role-scoped-views.md) —
-              // degrades to EmployeeDashboard whenever SALES_ENABLED is off, same
-              // as every other sales-gated surface in this file.
-              user.role === 'sales_manager' && SALES_ENABLED ? (
+              // Overview instead of the generic EmployeeDashboard — this generalizes
+              // into a role -> Overview map as more roles ship their own (see
+              // docs/role-scoped-views.md). Sales-gated roles degrade to
+              // EmployeeDashboard whenever SALES_ENABLED is off, same as every other
+              // sales-gated surface in this file; hr is people-ops and is NOT gated
+              // on SALES_ENABLED.
+              user.role === 'hr' ? (
+                <HrOverview
+                  employees={employees}
+                  dashboardSummary={dashboardSummary}
+                />
+              ) : user.role === 'sales_manager' && SALES_ENABLED ? (
                 <ManagerOverview user={user} employee={currentEmployee} showToast={showToast} />
               ) : (
                 <EmployeeDashboard
