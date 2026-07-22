@@ -34,3 +34,33 @@ spring:
     # DB migrations still apply in numeric order (V1..V39 then V900..V904); only an already-seeded
     # UAT DB takes the out-of-order path.
     out-of-order: true
+
+# Email transport — UAT mirrors prod's SMTP path (staging should behave like production).
+# prod (application-prod.yml + application.yml) sends via Spring's JavaMailSender over
+# spring.mail.* (smtp.gmail.com:587 / STARTTLS by default, creds from MAIL_USERNAME/PASSWORD).
+# UAT uses the app.mail.* Mailer abstraction's `smtp` provider (SmtpMailer) — the SAME underlying
+# SMTP/JavaMailSender transport, just selected via config instead of Spring auto-config. Defaults
+# below mirror prod so the service BOOTS with no crash-loop (SmtpMailer refuses to start on a blank
+# host); every value is env-overridable on the Render dashboard.
+#
+# ⚠️ NOT YET FUNCTIONAL — no real relay/credentials are configured. Until they are, notification
+# sends best-effort-FAIL and are logged (identical to prod running with empty MAIL creds); and
+# attachment emails (e.g. factory-quote sends) will surface an error because that path rethrows.
+# To make it live + testable on gl-r-erp-uat, set on the Render dashboard (sync:false secrets for
+# the credentials):
+#   APP_MAIL_SMTP_HOST=<real relay>   APP_MAIL_SMTP_USERNAME=<user>   APP_MAIL_SMTP_PASSWORD=<secret>
+#   APP_MAIL_FROM=<from address>      APP_MAIL_OVERRIDE_TO=<one test inbox>  # redirect ALL staging
+#                                     mail to a single inbox so staging never emails real people
+# Then come back and verify delivery end-to-end (the MAIL-* tests capture via SMTP→Mailpit in the
+# Docker stack; docker-compose.uat.yml already points SmtpMailer at Mailpit).
+app:
+  mail:
+    provider: ${APP_MAIL_PROVIDER:smtp}
+    from: ${APP_MAIL_FROM:job@glr.co.th}
+    override-to: ${APP_MAIL_OVERRIDE_TO:}
+    smtp:
+      host: ${APP_MAIL_SMTP_HOST:smtp.gmail.com}
+      port: ${APP_MAIL_SMTP_PORT:587}
+      starttls: ${APP_MAIL_SMTP_STARTTLS:true}
+      username: ${APP_MAIL_SMTP_USERNAME:}
+      password: ${APP_MAIL_SMTP_PASSWORD:}
