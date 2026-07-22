@@ -1,6 +1,8 @@
+import uuid
+
 import pytest
 
-from helpers import assert_status, price_proposed_ticket
+from helpers import assert_status, create_ticket, raise_pricing_request, run_factory_quote_and_costing, unique
 
 
 @pytest.mark.uat("SEC-01", title="Employee cannot call HR-only endpoint", priority="P0")
@@ -18,10 +20,33 @@ def test_sec02_cross_user_employee_denied(employee, hr):
     assert r.status_code == 403, r.text
 
 
-@pytest.mark.uat("SEC-03", title="Sales non-manager cannot approve price", priority="P0")
-def test_sec03_sales_approve_price_denied(sales, import_):
-    ticket = price_proposed_ticket(sales, import_)
-    r = sales.post(f"/api/tickets/{ticket['summary']['id']}/approve")
+@pytest.mark.uat("SEC-03", title="Sales non-manager cannot approve a pricing decision", priority="P0")
+def test_sec03_sales_approve_price_denied(sales, import_, ceo):
+    # Slice S1 retired the ticket-native /approve route; the CEO-only role boundary now lives on
+    # PricingDecisionService.approve (PricingDecisionController POST
+    # /api/pricing-decisions/{id}/approve, CEO_ROLES=Set.of("ceo")). Drive a real deal up to a
+    # DRAFT pricing decision (CEO opens it, as only CEO may), then prove sales -- not even the
+    # deal's own owner -- can approve it.
+    ticket = create_ticket(sales, unique("SEC03"), include_item=False)
+    tid = ticket["summary"]["id"]
+    pr_id, pr_item_id, unit = raise_pricing_request(sales, import_, tid, marker=unique("SEC03"))
+    run_factory_quote_and_costing(import_, pr_id, pr_item_id, requested_unit=unit)
+
+    # startReview is CEO-only too -- sales cannot even open the decision.
+    r = sales.post(f"/api/pricing-requests/{pr_id}/pricing-decisions", json={
+        "defaultMarginPct": "0.20", "currency": "THB", "ceoNote": None, "clientRequestId": None,
+    })
+    assert r.status_code == 403, r.text
+
+    r = ceo.post(f"/api/pricing-requests/{pr_id}/pricing-decisions", json={
+        "defaultMarginPct": "0.20", "currency": "THB", "ceoNote": "UAT SEC-03", "clientRequestId": None,
+    })
+    assert_status(r, 200)
+    decision_id = r.json()["decision"]["id"]
+
+    # A DRAFT decision now exists -- sales (the deal's own owner) still cannot approve it.
+    r = sales.post(f"/api/pricing-decisions/{decision_id}/approve",
+                    json={"ceoNote": "UAT sales trying to approve", "clientRequestId": None})
     assert r.status_code == 403, r.text
 
 

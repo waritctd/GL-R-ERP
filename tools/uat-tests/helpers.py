@@ -1,6 +1,7 @@
 import itertools
 import os
 import time
+import uuid
 from decimal import Decimal
 
 import requests
@@ -179,7 +180,13 @@ def create_customer_and_project(sales, marker=None):
     return customer_id, project_id
 
 
-def create_ticket(sales, title=None, project_id=None):
+def create_ticket(sales, title=None, project_id=None, include_item=True):
+    """Create a deal ticket. `include_item=False` leaves it a lightweight, item-less DRAFT (V50:
+    "a deal may start at the lead stage with no product items yet") -- used by the pricing-request
+    (PCR) chain helpers below, whose own OrderConfirmationService.reconcileTicketItems is what
+    creates the ticket's real `sales.ticket_item` row (see raise_pricing_request's docstring for
+    why: a pre-existing item here would leave a second, never-reconciled row that blocks
+    completeDelivery's "every item fully delivered" gate at the end of the chain)."""
     if project_id is None:
         _customer_id, project_id = create_customer_and_project(sales)
     r = sales.post(
@@ -190,7 +197,7 @@ def create_ticket(sales, title=None, project_id=None):
             "customerName": "UAT Harness Customer",
             "projectId": project_id,
             "note": "UAT automated harness",
-            "items": [ticket_item(proposedPrice=None)],
+            "items": [ticket_item(proposedPrice=None)] if include_item else [],
         },
     )
     assert_status(r, 200)
@@ -216,6 +223,359 @@ def approved_ticket(sales, import_, ceo):
     r = ceo.post(f"/api/tickets/{tid}/approve")
     assert_status(r, 200)
     return r.json()["ticket"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────
+# PricingRequest (PCR) chain -- Slice S1 "engine collapse" retired the legacy ticket-native
+# submit/pickup/propose-price/approve/reject/quotation/close(single-step) routes; the real path
+# to price+quote+deliver+close a deal is now: PricingRequest -> FactoryQuote -> PricingCosting ->
+# PricingDecision -> CustomerQuotation -> OrderConfirmationService bridge -> deposit/fulfilment ->
+# three-party close. Blueprint: backend/src/test/java/th/co/glr/hr/pricingchain/
+# PricingChainEndToEndIntegrationTest.java (service layer) + db/migration-uat/
+# V910__uat_golden_pcr_deal.sql (the "golden" journey to CLOSED_PAID + which persona acts where).
+# Roles: sales owns create/submit/quotation/confirm-order (ticket+PCR owner-scoped); import owns
+# pickup/factory-quote/costing/fulfilment; ceo owns the pricing decision + verifies close; account
+# confirms payments + the three-party close + the post-close commission invoice.
+# ─────────────────────────────────────────────────────────────────────────────────────
+
+SEEDED_FACTORY_NAME = "SCG Ceramics"  # sales.factory_config seed (V25), country=Thailand/THB --
+# real, non-all-zero price_calc_config row (V26), so PricingCostingService resolves a real country
+# instead of 404ing on "no price config for country: null".
+
+
+def _find_or_create_catalog_factory(actor, name=SEEDED_FACTORY_NAME, country="TH", currency="THB"):
+    """`price_catalog.factories` is its OWN id-space, entirely separate from `sales.factory_config`
+    (the seed used for factory-quote email dispatch) -- but FactoryQuoteService.groupByFactory
+    resolves a pricing-request item's factory as `firstText(item.resolvedFactoryName(),
+    item.factory())`, i.e. the CATALOG product's own snapshotted factory name wins over the item's
+    free-text `factory` field. So the catalog factory must be named EXACTLY `SEEDED_FACTORY_NAME`
+    too, or generateDrafts groups items under a factory name `sales.factory_config` has never heard
+    of and PricingCostingService 422s with "ไม่พบ factory config สำหรับโรงงาน". `POST
+    /api/price-import/factories` has no ON CONFLICT (unlike CatalogController.addProduct's
+    manual-version path), so look it up first and only create once."""
+    r = actor.get("/api/price-import/factories")
+    assert_status(r, 200)
+    existing = next((f for f in r.json() if f.get("name") == name), None)
+    if existing is not None:
+        return existing["factoryId"]
+    r = actor.post("/api/price-import/factories",
+                    json={"name": name, "country": country, "defaultCurrency": currency})
+    assert_status(r, 200)
+    return r.json()["factoryId"]
+
+
+def create_catalog_product(actor, marker=None):
+    """A pricing-request item's `productId` must resolve to an ACTIVE price_catalog.product_prices
+    row (financial-integrity 'catalog is mandatory' gate on PricingRequestService.submit()).
+    `actor` must be `import` or `ceo` (CatalogController.requireCatalogEditor). Returns the created
+    product's price_id, exactly what PricingRequestItemRequest.productId expects."""
+    marker = marker or unique("CAT")
+    factory_id = _find_or_create_catalog_factory(actor)
+    r = actor.post(
+        "/api/catalog/prices",
+        json={
+            "factoryId": factory_id,
+            "productCode": f"UAT-{marker}",
+            "productName": f"UAT Catalog Product {marker}",
+            "price": "100.00",
+            "currency": "THB",
+            "priceUnit": "per_piece",
+        },
+    )
+    assert_status(r, 200)
+    return r.json()["priceId"]
+
+
+def raise_pricing_request(sales, import_, ticket_id, unit_basis="PER_PIECE", requested_qty="10", marker=None):
+    """Step 1: sales drafts + submits a PricingRequest on `ticket_id` (must be the SAME `sales`
+    client that created the ticket -- createDraft/submit both check ticket.createdById==actor.id).
+    Returns (pricing_request_id, pricing_request_item_id, requested_unit).
+    """
+    marker = marker or unique("PCR")
+    product_id = create_catalog_product(import_, marker)
+    requested_unit = "sqm" if unit_basis == "PER_SQM" else "piece"
+    item = {
+        "sourceTicketItemId": None,
+        "productId": product_id,
+        "variantId": None,
+        "brand": "UAT Brand",
+        "model": f"UAT-{marker}",
+        "productDescription": None,
+        "color": "Ivory",
+        "texture": "Matt",
+        "size": "60x60",
+        "factory": SEEDED_FACTORY_NAME,
+        "requestedQty": requested_qty,
+        "requestedQtySqm": requested_qty,
+        "requestedUnit": requested_unit,
+        "requestedUnitBasis": unit_basis,
+        "quantityType": "CONFIRMED",
+        "targetDeliveryDate": None,
+        "deliveryLocation": None,
+        "specialRequirement": None,
+    }
+    r = sales.post(
+        f"/api/tickets/{ticket_id}/pricing-requests",
+        json={
+            "recipientType": "OWNER",
+            "recipientContactId": None,
+            "recipientLabel": "UAT Owner Contact",
+            "requiredDate": None,
+            "customerTargetPrice": None,
+            "targetCurrency": "THB",
+            "note": "UAT harness pricing request",
+            "clientRequestId": str(uuid.uuid4()),
+            "items": [item],
+        },
+    )
+    assert_status(r, 201)
+    detail = r.json()["pricingRequest"]
+    pr_id = detail["summary"]["id"]
+    pr_item_id = detail["items"][0]["id"]
+
+    r = sales.post(f"/api/pricing-requests/{pr_id}/submit")
+    assert_status(r, 200)
+    submitted = r.json()["pricingRequest"]
+    assert submitted["summary"]["status"] == "SUBMITTED", submitted
+    return pr_id, pr_item_id, requested_unit
+
+
+def run_factory_quote_and_costing(import_, pricing_request_id, pricing_request_item_id,
+                                   unit_basis="PER_PIECE", requested_unit="piece", requested_qty="10"):
+    """Step 1->2 handoff + Step 2: import picks up, drafts+sends the factory email, records the
+    factory's response, marks it ready, then drafts/recalculates/submits costing. Returns the
+    submitted PricingCostingDto."""
+    r = import_.post(f"/api/pricing-requests/{pricing_request_id}/pickup")
+    assert_status(r, 200)
+    assert r.json()["pricingRequest"]["summary"]["status"] == "IMPORT_REVIEWING", r.json()
+
+    r = import_.post(f"/api/pricing-requests/{pricing_request_id}/factory-email-drafts")
+    assert_status(r, 200)
+    drafts = r.json()["items"]
+    assert len(drafts) == 1, drafts  # exactly one factory (SEEDED_FACTORY_NAME) used above
+    quote_id = drafts[0]["id"]
+
+    r = import_.post(
+        f"/api/factory-quotes/{quote_id}/send",
+        json={
+            "emailTo": "sales@scg.co.th",
+            "emailSubject": "UAT RFQ",
+            "emailBody": "UAT harness factory RFQ",
+            "clientRequestId": str(uuid.uuid4()),
+        },
+    )
+    assert_status(r, 200)
+
+    sqm_per_unit = "1.00" if unit_basis == "PER_PIECE" else "0.36"  # 60x60cm piece ~= 0.36 sqm
+    r = import_.post(
+        f"/api/factory-quotes/{quote_id}/receive",
+        json={
+            "supplierQuoteRef": "UAT-REF-01",
+            "defaultCurrency": "THB",
+            "paymentTerms": "30 days",
+            "leadTimeText": "45 days",
+            "revisionReason": None,
+            "negotiationNote": None,
+            "items": [{
+                "pricingRequestItemId": pricing_request_item_id,
+                "supplierProductCode": None,
+                "supplierProductDescription": None,
+                "quotedQuantity": requested_qty,
+                "quotedUnit": requested_unit,
+                "unitBasis": unit_basis,
+                "rawUnitPrice": "10.00",
+                "currency": "THB",
+                "minimumOrderQuantity": None,
+                "sqmPerUnit": sqm_per_unit,
+                "piecesPerBox": None,
+                "linearMPerUnit": None,
+                "leadTimeText": "45 days",
+                "availabilityNote": None,
+                "lineNote": None,
+            }],
+            "clientRequestId": str(uuid.uuid4()),
+        },
+    )
+    assert_status(r, 200)
+
+    r = import_.post(f"/api/factory-quotes/{quote_id}/mark-ready-for-costing")
+    assert_status(r, 200)
+    assert r.json()["factoryQuote"]["status"] == "READY_FOR_COSTING", r.json()
+
+    r = import_.post(f"/api/pricing-requests/{pricing_request_id}/costings",
+                      json={"note": "UAT costing draft", "clientRequestId": None})
+    assert_status(r, 200)
+    costing_id = r.json()["costing"]["id"]
+
+    r = import_.post(f"/api/pricing-costings/{costing_id}/recalculate", json={"note": "pass 1"})
+    assert_status(r, 200)
+    r = import_.post(f"/api/pricing-costings/{costing_id}/recalculate", json={"note": "pass 2"})
+    assert_status(r, 200)
+    assert r.json()["costing"]["status"] == "CALCULATED", r.json()
+
+    r = import_.post(f"/api/pricing-costings/{costing_id}/submit", json={"note": "submit to CEO"})
+    assert_status(r, 200)
+    submitted = r.json()["costing"]
+    assert submitted["status"] == "SUBMITTED", submitted
+    return submitted
+
+
+def ceo_price_decision(ceo, pricing_request_id, margin="0.20"):
+    """Step 3: CEO starts review, sets margin/minimum-selling-price on every item (minimum is
+    required at approval), then approves. Returns the APPROVED PricingDecisionDto."""
+    r = ceo.post(
+        f"/api/pricing-requests/{pricing_request_id}/pricing-decisions",
+        json={"defaultMarginPct": margin, "currency": "THB", "ceoNote": "UAT CEO review",
+              "clientRequestId": str(uuid.uuid4())},
+    )
+    assert_status(r, 200)
+    decision = r.json()["decision"]
+    decision_id = decision["id"]
+
+    item_updates = [
+        {
+            "pricingDecisionItemId": item["id"],
+            "marginPct": margin,
+            "discountCeilingPct": "0.05",
+            "minimumSellingPrice": "1.00",
+            "decisionNote": None,
+        }
+        for item in decision["items"]
+    ]
+    r = ceo.put(
+        f"/api/pricing-decisions/{decision_id}",
+        json={"ceoNote": "UAT set minimum selling price", "items": item_updates},
+    )
+    assert_status(r, 200)
+
+    r = ceo.post(
+        f"/api/pricing-decisions/{decision_id}/approve",
+        json={"ceoNote": "UAT approve", "clientRequestId": str(uuid.uuid4())},
+    )
+    assert_status(r, 200)
+    approved = r.json()["decision"]
+    assert approved["status"] == "APPROVED", approved
+    return approved
+
+
+def issue_and_accept_quotation(sales, pricing_request_id):
+    """Step 4 + 5: sales creates the customer-quotation draft, issues it, then records the
+    customer's ACCEPTED outcome. Returns the ACCEPTED CustomerQuotationDto."""
+    r = sales.post(f"/api/pricing-requests/{pricing_request_id}/quotations", json={
+        "paymentTerms": "30 days", "leadTime": "45 days", "deliveryTerms": "รถขนส่ง",
+        "validityDate": None, "customerNotes": "UAT customer quotation", "clientRequestId": str(uuid.uuid4()),
+    })
+    assert_status(r, 201)
+    quotation_id = r.json()["quotation"]["id"]
+
+    r = sales.post(f"/api/customer-quotations/{quotation_id}/issue",
+                    json={"clientRequestId": str(uuid.uuid4())})
+    assert_status(r, 200)
+    issued = r.json()["quotation"]
+    assert issued["docStatus"] == "ISSUED", issued
+
+    r = sales.post(f"/api/customer-quotations/{quotation_id}/outcome", json={
+        "outcome": "ACCEPTED", "customerNote": "UAT customer accepted", "clientRequestId": str(uuid.uuid4()),
+    })
+    assert_status(r, 200)
+    accepted = r.json()["quotation"]
+    return accepted
+
+
+def confirm_order_and_issue_deposit_notice(sales, pricing_request_id, deposit_percent="0.50"):
+    """Step 6 (OrderConfirmationService bridge): confirms the order (writes ticket.status
+    draft->quotation_issued + paymentStatus=CUSTOMER_CONFIRMED -- the ONE bridge from the PCR chain
+    back into the legacy dual-track ticket machinery), then drafts + issues a deposit notice from
+    the accepted quotation. Returns (ticket_id, deposit_notice_dict)."""
+    r = sales.post(f"/api/pricing-requests/{pricing_request_id}/confirm-order",
+                    json={"clientRequestId": str(uuid.uuid4())})
+    assert_status(r, 200)
+    result = r.json()["result"]
+    ticket_id = result["ticket"]["summary"]["id"]
+    assert result["ticket"]["summary"]["status"] == "quotation_issued", result
+    assert result["ticket"]["summary"]["paymentStatus"] == "CUSTOMER_CONFIRMED", result
+
+    r = sales.post(f"/api/pricing-requests/{pricing_request_id}/deposit-notice",
+                    json={"depositPercent": deposit_percent})
+    assert_status(r, 200)
+    draft = r.json()["depositNotice"]
+
+    r = sales.post(f"/api/deposit-notices/{draft['id']}/issue")
+    assert_status(r, 200)
+    issued = r.json()["depositNotice"]
+    assert issued["status"] == "ISSUED", issued
+    return ticket_id, issued
+
+
+def raise_and_approve_pricing_request(sales, import_, ceo, ticket_id, unit_basis="PER_PIECE",
+                                       requested_qty="10", marker=None):
+    """Composes Steps 1-3 (raise_pricing_request -> run_factory_quote_and_costing ->
+    ceo_price_decision) -- the common prefix every PCR-chain test needs before it can branch into
+    quotation/order/fulfilment assertions of its own. Returns (pricing_request_id,
+    pricing_request_item_id, requested_unit, submitted_costing, approved_decision)."""
+    pr_id, pr_item_id, requested_unit = raise_pricing_request(
+        sales, import_, ticket_id, unit_basis=unit_basis, requested_qty=requested_qty, marker=marker)
+    costing = run_factory_quote_and_costing(
+        import_, pr_id, pr_item_id, unit_basis=unit_basis, requested_unit=requested_unit,
+        requested_qty=requested_qty)
+    decision = ceo_price_decision(ceo, pr_id)
+    return pr_id, pr_item_id, requested_unit, costing, decision
+
+
+def drive_to_closed_paid(sales, import_, ceo, account, marker=None):
+    """The FULL chain (blueprint: V910__uat_golden_pcr_deal.sql's journey), end to end via the real
+    HTTP API, for tests that need a genuinely CLOSED_PAID/CLOSED deal: create ticket -> raise +
+    approve PCR -> issue+accept quotation -> confirm order + deposit notice -> deposit paid ->
+    import request -> ir-sent -> shipping -> goods received -> complete delivery -> final payment
+    (paymentStatus FULLY_PAID + fulfillmentStatus FULLY_DELIVERED auto-advances sales_stage to
+    CLOSED_PAID) -> account records the post-close commission invoice (the ONLY thing that sets
+    ticket.invoiceOnFile, required by the close gate) -> three-party close (account confirms, ceo
+    verifies). Returns the final ticket dict (status=closed, lifecycle=COMPLETED)."""
+    marker = marker or unique("CLOSE")
+    ticket = create_ticket(sales, unique(f"PCR-{marker}"), include_item=False)
+    ticket_id = ticket["summary"]["id"]
+
+    pr_id, _pr_item_id, _unit, _costing, _decision = raise_and_approve_pricing_request(
+        sales, import_, ceo, ticket_id, marker=marker)
+    issue_and_accept_quotation(sales, pr_id)
+    ticket_id, _deposit_notice = confirm_order_and_issue_deposit_notice(sales, pr_id)
+
+    r = import_.post(f"/api/tickets/{ticket_id}/import-request")
+    assert_status(r, 200)
+    r = account.post(f"/api/tickets/{ticket_id}/deposit-paid")
+    assert_status(r, 200)
+    r = import_.post(f"/api/tickets/{ticket_id}/ir-sent")
+    assert_status(r, 200)
+    r = import_.post(f"/api/tickets/{ticket_id}/shipping")
+    assert_status(r, 200)
+    r = import_.post(f"/api/tickets/{ticket_id}/goods-received")
+    assert_status(r, 200)
+    r = import_.post(f"/api/tickets/{ticket_id}/deliveries/complete",
+                      json={"note": "UAT full delivery", "recipientName": "UAT Owner"})
+    assert_status(r, 200)
+    delivered = r.json()["ticket"]
+    assert delivered["summary"]["fulfillmentStatus"] == "FULLY_DELIVERED", delivered
+
+    r = account.post(f"/api/tickets/{ticket_id}/final-payment")
+    assert_status(r, 200)
+    paid = r.json()["ticket"]
+    assert paid["summary"]["paymentStatus"] == "FULLY_PAID", paid
+
+    r = account.post(
+        "/api/commissions/from-deal",
+        data={"ticketId": ticket_id, "invoiceNumber": unique("UAT-CLOSE-INV"), "invoiceDate": "2026-08-05"},
+        files={"invoiceAttachment": ("invoice.pdf", tiny_pdf_bytes(), "application/pdf")},
+    )
+    assert_status(r, 200)
+
+    r = account.post(f"/api/tickets/{ticket_id}/close/confirm")
+    assert_status(r, 200)
+    r = ceo.post(f"/api/tickets/{ticket_id}/close/verify")
+    assert_status(r, 200)
+    closed = r.json()["ticket"]
+    assert closed["summary"]["status"] == "closed", closed
+    assert closed["summary"]["lifecycle"] == "COMPLETED", closed
+    return closed
 
 
 def tiny_pdf_bytes():
