@@ -34,13 +34,18 @@ public class CommissionRepository {
                cr.rejection_reason,
                cr.created_at AS record_created_at, cr.updated_at AS record_updated_at,
                cr.deal_payable_amount_snapshot, cr.deal_amount_mismatch,
+               cr.manual_amount, cr.manual_reason,
                inv.invoice_id, inv.invoice_number, inv.invoice_date, inv.gross_amount,
                inv.bank_fees, inv.suspense_vat, inv.transport_fee, inv.cut_fee, inv.shortfall,
                inv.withholding_tax, inv.overpayment,
                inv.invoice_attachment_id, fa.file_name AS invoice_attachment_file_name,
                inv.created_at AS invoice_created_at, inv.updated_at AS invoice_updated_at
           FROM sales.commission_record cr
-          JOIN sales.invoice_details inv ON inv.invoice_id = cr.invoice_id
+          -- LEFT JOIN (not JOIN): manual entries (kind ADJUSTMENT/MANAGER, V84) have invoice_id
+          -- NULL -- an inner join here would silently exclude every manual commission row from
+          -- findRecords/findById/findApprovedRecordsByMonth. mapRecord() below returns a null
+          -- InvoiceDetails for these rows.
+          LEFT JOIN sales.invoice_details inv ON inv.invoice_id = cr.invoice_id
           JOIN hr.employee sr ON sr.employee_id = cr.sales_rep_id
           LEFT JOIN hr.employee manager_approver ON manager_approver.employee_id = cr.manager_approved_by
           LEFT JOIN hr.employee ceo_approver ON ceo_approver.employee_id = cr.ceo_approved_by
@@ -319,6 +324,65 @@ public class CommissionRepository {
     }
 
     /**
+     * Manual commission entries (feat/commission-manual-adjustments, V84): a sales_manager/CEO
+     * hand-typed amount for kind ADJUSTMENT or MANAGER -- never computed by {@link
+     * CommissionCalculator}, no {@code invoice_id} (nullable since V84), no {@code
+     * source_ticket_id}. {@code actual_received}/{@code commissionable_base} are stored as ZERO,
+     * deliberately: those are the tier-calc columns, and manual entries must never bleed into
+     * {@link #sumActiveWeightedActualReceived} or the monthly tier base -- {@code manual_amount}
+     * is the sole source of truth, added on top of the tier commission only in {@link
+     * CommissionService#payrollReadySummary}.
+     *
+     * <p>Created by a sales_manager lands {@code MANAGER_APPROVED} (still needs CEO sign-off,
+     * reusing the existing {@code approve()}/{@code ceoApprove()} chain verbatim -- no separate
+     * approval path is added). Created by the CEO lands {@code APPROVED} directly, mirroring how
+     * {@link #managerApprove} and {@link #ceoApprove} each stamp their own approval columns.
+     */
+    public long createManualCommission(
+        String kind,
+        long salesRepId,
+        long submittedById,
+        LocalDate payrollMonth,
+        BigDecimal manualAmount,
+        String manualReason,
+        boolean ceoCreated
+    ) {
+        GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
+        String sql = ceoCreated
+            ? """
+                INSERT INTO sales.commission_record
+                    (invoice_id, source_ticket_id, sales_rep_id, submitted_by_id, kind, status,
+                     payroll_month, actual_received, commissionable_base, manual_amount, manual_reason,
+                     ceo_approved_by, ceo_approved_at, approved_by_id, approved_at)
+                VALUES
+                    (NULL, NULL, :salesRepId, :submittedById, :kind, 'APPROVED',
+                     :payrollMonth, 0, 0, :manualAmount, :manualReason,
+                     :submittedById, now(), :submittedById, now())
+                """
+            : """
+                INSERT INTO sales.commission_record
+                    (invoice_id, source_ticket_id, sales_rep_id, submitted_by_id, kind, status,
+                     payroll_month, actual_received, commissionable_base, manual_amount, manual_reason,
+                     manager_approved_by, manager_approved_at, approved_by_id, approved_at)
+                VALUES
+                    (NULL, NULL, :salesRepId, :submittedById, :kind, 'MANAGER_APPROVED',
+                     :payrollMonth, 0, 0, :manualAmount, :manualReason,
+                     :submittedById, now(), :submittedById, now())
+                """;
+        jdbc.update(sql,
+            new MapSqlParameterSource()
+                .addValue("salesRepId", salesRepId)
+                .addValue("submittedById", submittedById)
+                .addValue("kind", kind)
+                .addValue("payrollMonth", payrollMonth)
+                .addValue("manualAmount", manualAmount)
+                .addValue("manualReason", manualReason),
+            keyHolder,
+            new String[]{"commission_id"});
+        return keyHolder.getKey().longValue();
+    }
+
+    /**
      * Slice A2: the sales-manager review step can now rewrite any invoice input, not just the
      * three original deduction fields — {@code grossAmount}/{@code bankFees}/{@code suspenseVat}
      * joined {@code transportFee}/{@code cutFee}/{@code shortfall}/{@code withholdingTax}/
@@ -481,23 +545,7 @@ public class CommissionRepository {
     }
 
     private CommissionRecord mapRecord(ResultSet rs) throws SQLException {
-        InvoiceDetails invoice = new InvoiceDetails(
-            rs.getLong("invoice_id"),
-            rs.getString("invoice_number"),
-            rs.getObject("invoice_date", LocalDate.class),
-            rs.getBigDecimal("gross_amount"),
-            rs.getBigDecimal("bank_fees"),
-            rs.getBigDecimal("suspense_vat"),
-            rs.getBigDecimal("transport_fee"),
-            rs.getBigDecimal("cut_fee"),
-            rs.getBigDecimal("shortfall"),
-            rs.getBigDecimal("withholding_tax"),
-            rs.getBigDecimal("overpayment"),
-            nullableLong(rs, "invoice_attachment_id"),
-            rs.getString("invoice_attachment_file_name"),
-            rs.getTimestamp("invoice_created_at").toInstant(),
-            rs.getTimestamp("invoice_updated_at").toInstant()
-        );
+        InvoiceDetails invoice = mapInvoiceDetails(rs);
         long sourceTicketRaw = rs.getLong("source_ticket_id");
         Long sourceTicketId = rs.wasNull() ? null : sourceTicketRaw;
         long approvedByRaw = rs.getLong("approved_by_id");
@@ -538,7 +586,39 @@ public class CommissionRepository {
             rs.getTimestamp("record_created_at").toInstant(),
             rs.getTimestamp("record_updated_at").toInstant(),
             rs.getBigDecimal("deal_payable_amount_snapshot"),
-            rs.getBoolean("deal_amount_mismatch")
+            rs.getBoolean("deal_amount_mismatch"),
+            rs.getBigDecimal("manual_amount"),
+            rs.getString("manual_reason")
+        );
+    }
+
+    /**
+     * Manual entries (kind ADJUSTMENT/MANAGER, V84) have no invoice -- the LEFT JOIN in {@code
+     * RECORD_SELECT} yields NULLs across every {@code inv.*} column for those rows. Returns {@code
+     * null} in that case rather than an {@link InvoiceDetails} full of nulls (which would NPE on
+     * {@code invoice_created_at.toInstant()} regardless).
+     */
+    private InvoiceDetails mapInvoiceDetails(ResultSet rs) throws SQLException {
+        long invoiceIdRaw = rs.getLong("invoice_id");
+        if (rs.wasNull()) {
+            return null;
+        }
+        return new InvoiceDetails(
+            invoiceIdRaw,
+            rs.getString("invoice_number"),
+            rs.getObject("invoice_date", LocalDate.class),
+            rs.getBigDecimal("gross_amount"),
+            rs.getBigDecimal("bank_fees"),
+            rs.getBigDecimal("suspense_vat"),
+            rs.getBigDecimal("transport_fee"),
+            rs.getBigDecimal("cut_fee"),
+            rs.getBigDecimal("shortfall"),
+            rs.getBigDecimal("withholding_tax"),
+            rs.getBigDecimal("overpayment"),
+            nullableLong(rs, "invoice_attachment_id"),
+            rs.getString("invoice_attachment_file_name"),
+            rs.getTimestamp("invoice_created_at").toInstant(),
+            rs.getTimestamp("invoice_updated_at").toInstant()
         );
     }
 

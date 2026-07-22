@@ -42,5 +42,11 @@ public record CommissionRecord(
     // diverged from it by more than the 5% cross-check threshold. Both stay null/false for
     // unlinked (sourceTicketId = null) commissions — unchanged from pre-Step-9 behavior.
     BigDecimal dealPayableAmountSnapshot,
-    boolean dealAmountMismatch
+    boolean dealAmountMismatch,
+    // Manual commission entries (feat/commission-manual-adjustments, V84): the signed, hand-typed
+    // amount for kind ADJUSTMENT/MANAGER (can be negative for a deduction) and its required
+    // reason. Both null for SALE/CLAWBACK -- those keep going through actualReceived/
+    // commissionableBase/the tier calc exactly as before. See CommissionService#createManualCommission.
+    BigDecimal manualAmount,
+    String manualReason
 ) {}
