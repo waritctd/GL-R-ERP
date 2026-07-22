@@ -1296,10 +1296,6 @@ function dealActivitiesForTicket(ticketId) {
     .map((a) => structuredClone(a));
 }
 
-function verifyStatus(ticket, expected) {
-  if (ticket.status !== expected) fail(`Expected status '${expected}' but ticket is '${ticket.status}'`, 409);
-}
-
 function requireActive(ticket) {
   if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
     fail(`ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงแก้ไขขั้นตอนนี้ไม่ได้`, 409);
@@ -1739,29 +1735,6 @@ function autoAdvanceStage(ticket, targetStage, user) {
   ticket.salesStage = targetStage;
   ticket.stageUpdatedAt = new Date().toISOString();
   pushEvent(ticket, user, 'STAGE_CHANGED', fromStage, targetStage, 'อัตโนมัติจากขั้นตอนของดีล');
-}
-
-function markQuotationStatus(id, quotationId, targetStatus, eventKind, payload = {}) {
-  const user = requireSession();
-  const ticket = findTicketRaw(Number(id));
-  requireActive(ticket);
-  const owner = user.role === 'sales' && ticket.createdById === user.id;
-  if (!owner && user.role !== 'ceo') fail('Forbidden', 403);
-  const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
-  if (!quotation) fail('Quotation not found', 404);
-  const legal = targetStatus === 'SENT'
-    ? ['ISSUED', 'SENT'].includes(quotation.docStatus)
-    : ['ISSUED', 'SENT'].includes(quotation.docStatus);
-  if (!legal) fail(`Cannot mark quotation ${targetStatus} from ${quotation.docStatus}`, 409);
-  quotation.docStatus = targetStatus;
-  const now = new Date().toISOString();
-  if (targetStatus === 'SENT') quotation.sentAt = now;
-  if (targetStatus === 'ACCEPTED') quotation.acceptedAt = now;
-  if (targetStatus === 'REJECTED') quotation.rejectedAt = now;
-  ticket.updatedAt = now.slice(0, 10);
-  pushEvent(ticket, user, eventKind, ticket.status, ticket.status,
-    `${quotation.number} (${quotation.recipientType})${(payload.note || '').trim() ? ` — ${payload.note.trim()}` : ''}`);
-  return delay({ ticket: buildTicketDetail(ticket) });
 }
 
 function buildTicketDetail(ticket) {
@@ -2859,27 +2832,12 @@ export const api = {
           || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')));
 
       if (active) {
-        // Ticket-level SUBMIT is retired (commit 5/6, superseded by the
-        // PricingRequest aggregate) — never advertised, so the UI never shows
-        // a button that would 409 on click.
-        if (user.role === 'import' && ticket.status === 'submitted') add('PICKUP', 'operational', 'รับเรื่อง');
-        if (user.role === 'import' && ['in_review', 'price_proposed', 'approved'].includes(ticket.status)) add('PROPOSE_PRICE', 'operational', 'เสนอราคา', { requiredFields: ['items'] });
-        if (user.role === 'ceo' && ticket.status === 'price_proposed') {
-          add('CALCULATE_PRICES', 'operational', 'คำนวณราคา');
-          add('OVERRIDE_ITEM_PRICE', 'operational', 'แก้ไขราคาด้วยตนเอง', { requiredFields: ['itemId', 'manualPrice'] });
-          add('APPROVE', 'operational', 'อนุมัติราคา');
-          add('REJECT', 'operational', 'ตีกลับราคา', { requiredFields: ['reason'] });
-        }
-        if (owner && ['approved', 'quotation_issued'].includes(ticket.status)) add('GENERATE_QUOTATION', 'doc', 'ออกใบเสนอราคา', { requiredFields: ['recipientType'] });
-        const quotationManager = owner || user.role === 'ceo';
-        const legalHeads = (ticket.quotations ?? []).filter((q) => ['ISSUED', 'SENT'].includes(q.docStatus));
-        if (quotationManager && legalHeads.some((q) => q.docStatus === 'ISSUED')) {
-          add('MARK_QUOTATION_SENT', 'doc', 'บันทึกว่าส่งใบเสนอราคาแล้ว', { requiredFields: ['quotationId'] });
-        }
-        if (quotationManager && legalHeads.length > 0) {
-          add('MARK_QUOTATION_ACCEPTED', 'doc', 'บันทึกลูกค้ารับใบเสนอราคา', { requiredFields: ['quotationId'] });
-          add('MARK_QUOTATION_REJECTED', 'doc', 'บันทึกลูกค้าปฏิเสธใบเสนอราคา', { requiredFields: ['quotationId'] });
-        }
+        // Ticket-level SUBMIT/PICKUP/PROPOSE_PRICE/CALCULATE_PRICES/OVERRIDE_ITEM_PRICE/
+        // APPROVE/REJECT/GENERATE_QUOTATION/MARK_QUOTATION_SENT/ACCEPTED/REJECTED are retired
+        // (Phase 2 Slice S1/S2 "engine collapse" — mirrors TicketController/TicketService's own
+        // pruning of these verbs from actions(), see docs/agent-handoffs/104): never advertised,
+        // so the UI never shows a button that would now 404 on click. Pricing/quotation runs
+        // through the PricingRequest chain instead (api.pricingRequests.*).
         if (owner && ticket.status === 'quotation_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')) add('CONFIRM_CUSTOMER', 'payment', 'ลูกค้ายืนยัน');
         if (owner && ticket.status === 'quotation_issued' && ticket.paymentStatus === 'CUSTOMER_CONFIRMED' && !depositBypassesNotice(ticket)) add('ISSUE_DEPOSIT_NOTICE', 'doc', 'ออกใบแจ้งมัดจำ');
         if (['account', 'ceo'].includes(user.role) && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') add('DEPOSIT_PAID', 'payment', 'รับมัดจำ');
@@ -2993,52 +2951,13 @@ export const api = {
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
-    /**
-     * Deprecated: ticket-level price-request submission has been replaced by
-     * the PricingRequest aggregate (commit 5/6). 409s unconditionally, same as
-     * TicketService.submit — create a pricing request via
-     * api.pricingRequests.create + .submit instead.
-     */
-    async submit() {
-      // Mirrors TicketService.submit exactly: 409s unconditionally, regardless
-      // of status, role, or ownership — there is no more role-specific denial.
-      requireSession();
-      fail('การส่งขอราคาย้ายไปอยู่ที่ใบขอราคา (PCR) แล้ว — กรุณาสร้างใบขอราคาจากหน้าดีลแทน', 409);
-    },
-
-    async pickup(id) {
-      const user = hasRole('import');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      verifyStatus(ticket, 'submitted');
-      ticket.status = 'in_review';
-      ticket.assignedToId = user.id;
-      ticket.assignedToName = user.name;
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'PICKED_UP', 'submitted', 'in_review', null);
-      return delay({ ticket: buildTicketDetail(ticket) });
-    },
-
-    async proposePrice(id, payload) {
-      const user = hasRole('import');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      verifyStatus(ticket, 'in_review');
-      ticket.items = (payload.items || []).map((item, i) => ({
-        ...ticket.items[i], ...item,
-        id: ticket.items[i]?.id ?? ticket.id * 100 + i,
-        ticketId: ticket.id, sortOrder: i,
-      }));
-      ticket.status = 'price_proposed';
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      const snap = JSON.stringify((payload.items || []).map((it) => ({
-        brand: it.brand, model: it.model, qty: it.qty,
-        rawPrice: it.rawPrice, rawCurrency: it.rawCurrency, rawUnit: it.rawUnit,
-      })));
-      pushEvent(ticket, user, 'PRICE_PROPOSED', 'in_review', 'price_proposed', payload.note || null, snap);
-      addNotification(8, ticket.id, ticket.code, 'PRICE_PROPOSED', `Ticket ${ticket.code} มีราคาเสนอรอการอนุมัติ`);
-      return delay({ ticket: buildTicketDetail(ticket) });
-    },
+    // Ticket-native submit/pickup/propose-price/calculate-prices/approve/reject/quotation/
+    // mark-quotation-*/price-override are retired (Phase 2 Slice S1/S2 "engine collapse" —
+    // docs/agent-handoffs/104_feat-deal-workspace-unification.md): TicketController no longer
+    // routes any of them, so hrApi.js has no method calling them either. Pricing/quotation now
+    // runs through the PricingRequest chain (api.pricingRequests.* below). Quotation
+    // READ/download (downloadQuotationXlsx/Pdf) and every operational handler below are
+    // untouched, so the 3 legacy pre-redesign tickets/quotations stay readable.
 
     async editItems(id, payload) {
       const user = requireSession();
@@ -3077,225 +2996,10 @@ export const api = {
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
-    async calculatePrices(id) {
-      hasRole('ceo');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      verifyStatus(ticket, 'price_proposed');
-
-      const fcMap = {};
-      mockFactoryConfigs.forEach((fc) => { fcMap[fc.factoryName] = fc; });
-      const fxMap = {};
-      mockFxRates.forEach((fx) => { fxMap[fx.currency] = fx.rateToThb; });
-      const cfgMap = {};
-      mockPriceCalcConfigs.filter((c) => c.isCurrent).forEach((c) => { cfgMap[c.country] = c; });
-
-      ticket.items = ticket.items.map((item) => {
-        if (item.rawPrice == null) return item;
-        const fc = fcMap[item.factory] ?? { country: 'Thailand' };
-        const cfg = cfgMap[fc.country] ?? cfgMap['Thailand'] ?? { freightPerSqm: 0, insurancePerSqm: 0, inlandFactoryToPortPerSqm: 0, inlandPortToWarehousePerSqm: 50, importDutyPct: 0, marginPct: 0.2, version: 1 };
-        // Mirrors PriceCalcService.resolveFxRate: THB never needs a lookup; any other
-        // currency with no fx_rates row must fail loudly, not silently cost at 1:1 THB
-        // (2026-07-16 pricing-integrity audit, finding #1).
-        const rawCurrency = item.rawCurrency ?? 'THB';
-        let fxRate;
-        if (rawCurrency === 'THB') {
-          fxRate = 1;
-        } else if (fxMap[rawCurrency] != null) {
-          fxRate = fxMap[rawCurrency];
-        } else {
-          fail(`ไม่พบอัตราแลกเปลี่ยนสำหรับสกุลเงิน ${rawCurrency} — กรุณาตั้งค่าใน CEO Settings`, 422);
-        }
-
-        const sqmPerPiece = (item.qtySqm && item.qty && item.qty > 0) ? item.qtySqm / item.qty : 1;
-
-        let goodsCostPerSqm;
-        if (item.rawUnit === 'sqm') {
-          goodsCostPerSqm = item.rawPrice * fxRate;
-        } else {
-          goodsCostPerSqm = sqmPerPiece > 0 ? (item.rawPrice * fxRate / sqmPerPiece) : item.rawPrice * fxRate;
-        }
-
-        const cifPerSqm = goodsCostPerSqm + cfg.freightPerSqm + cfg.insurancePerSqm;
-        const dutyPerSqm = cifPerSqm * cfg.importDutyPct;
-        const landedPerSqm = cifPerSqm + dutyPerSqm + cfg.inlandFactoryToPortPerSqm + cfg.inlandPortToWarehousePerSqm;
-        const sellPerSqm = landedPerSqm * (1 + cfg.marginPct);
-
-        const calcedCost  = Math.round(landedPerSqm * sqmPerPiece * 10000) / 10000;
-        const calcedPrice = Math.round(sellPerSqm  * sqmPerPiece * 100)   / 100;
-
-        item._breakdown = {
-          itemId: item.id,
-          brand: item.brand, model: item.model, factory: item.factory,
-          rawCurrency: item.rawCurrency, fxRate, sqmPerPiece,
-          goodsCostPerSqm: Math.round(goodsCostPerSqm * 10000) / 10000,
-          freightPerSqm: cfg.freightPerSqm, insurancePerSqm: cfg.insurancePerSqm,
-          cifPerSqm: Math.round(cifPerSqm * 10000) / 10000,
-          importDutyPerSqm: Math.round(dutyPerSqm * 10000) / 10000,
-          inlandPerSqm: Math.round((cfg.inlandFactoryToPortPerSqm + cfg.inlandPortToWarehousePerSqm) * 10000) / 10000,
-          landedCostPerSqm: Math.round(landedPerSqm * 10000) / 10000,
-          marginPct: cfg.marginPct,
-          sellPricePerSqm: Math.round(sellPerSqm * 10000) / 10000,
-          calcedCostPerPiece: calcedCost,
-          calcedPricePerPiece: calcedPrice,
-          configVersion: cfg.version,
-        };
-        // Mirrors PriceCalcService.calculateForTicket: a CEO manual price override must
-        // survive recalculation — calcedCost/calcedPrice always reflect the fresh
-        // calculation, but proposedPrice stays pinned to the override (2026-07-16
-        // pricing-integrity audit, finding #2).
-        const proposedPrice = item.manualPrice != null ? item.manualPrice : calcedPrice;
-        return { ...item, calcedCost, calcedPrice, calcConfigVersion: cfg.version, proposedPrice };
-      });
-
-      const breakdown = ticket.items.filter((it) => it._breakdown).map((it) => {
-        const b = it._breakdown;
-        delete it._breakdown;
-        return b;
-      });
-
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      return delay({ ticket: buildTicketDetail(ticket), breakdown });
-    },
-
-    async overrideItemPrice(ticketId, itemId, payload) {
-      const user = hasRole('ceo');
-      const ticket = findTicketRaw(Number(ticketId));
-      requireActive(ticket);
-      verifyStatus(ticket, 'price_proposed');
-      const item = ticket.items.find((it) => it.id === Number(itemId));
-      if (!item) throw new Error('Item not found');
-      item.manualPrice = payload.manualPrice;
-      item.manualOverrideReason = payload.reason ?? null;
-      item.proposedPrice = payload.manualPrice;
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      // Mirrors TicketService.overrideItemPrice: audit trail for CEO manual price
-      // overrides (2026-07-16 pricing-integrity audit, finding #3 — previously logged
-      // no ticket event at all).
-      const note = `Item #${itemId}: ราคา manual override = ${payload.manualPrice}`
-        + (payload.reason ? ` — เหตุผล: ${payload.reason}` : '');
-      pushEvent(ticket, user, 'PRICE_OVERRIDDEN', ticket.status, ticket.status, note);
-      return delay({ ticket: buildTicketDetail(ticket) });
-    },
-
-    async approve(id) {
-      const user = hasRole('ceo');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      verifyStatus(ticket, 'price_proposed');
-      ticket.items = ticket.items.map((item) => ({ ...item, approvedPrice: item.proposedPrice }));
-      ticket.hasEdits = false;
-      ticket.status = 'approved';
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'APPROVED', 'price_proposed', 'approved', null);
-      addNotification(ticket.createdById, ticket.id, ticket.code, 'APPROVED', `Ticket ${ticket.code} ได้รับการอนุมัติราคาแล้ว — กด Generate ใบเสนอราคาได้เลย`);
-      return delay({ ticket: buildTicketDetail(ticket) });
-    },
-
-    async reject(id, payload) {
-      const user = hasRole('ceo');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      verifyStatus(ticket, 'price_proposed');
-      ticket.status = 'in_review';
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'REJECTED', 'price_proposed', 'in_review', payload.reason);
-      addNotification(ticket.assignedToId || 7, ticket.id, ticket.code, 'REJECTED', `Ticket ${ticket.code} ถูกตีกลับ — กรุณาแก้ไขราคาเสนอ`);
-      return delay({ ticket: buildTicketDetail(ticket) });
-    },
-
-    async quotation(id, payload = {}) {
-      const user = hasRole('sales');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      if (ticket.status !== 'approved' && ticket.status !== 'quotation_issued') {
-        fail(`Expected status 'approved' or 'quotation_issued' but ticket is '${ticket.status}'`, 409);
-      }
-      const fromStatus = ticket.status;
-      if (ticket.createdById !== user.id) fail('Forbidden', 403);
-      const recipientType = (payload.recipientType || '').trim();
-      if (!['DESIGNER', 'OWNER', 'BUYER'].includes(recipientType)) fail(`Unknown quotation recipient '${recipientType}'`, 400);
-      if (!ticket.quotations) ticket.quotations = ticket.quotation ? [normalizeQuotation(ticket.quotation, ticket, 0)] : [];
-      const chain = ticket.quotations.filter((q) => q.recipientType === recipientType);
-      const acceptedInChain = chain.some((q) => q.docStatus === 'ACCEPTED');
-      if ((acceptedInChain || ticket.paymentStatus != null) && !(payload.amendmentReason || '').trim()) {
-        fail('ต้องระบุเหตุผลการแก้ไขใบเสนอราคาหลังลูกค้ายืนยันหรือมีใบที่ accepted แล้ว', 400);
-      }
-      const total = ticket.items.reduce((sum, item) => sum + (item.approvedPrice || 0) * item.qty, 0);
-
-      // Supersede only the selected recipient chain; accepted/rejected/cancelled rows stay as history.
-      ticket.quotations.forEach((q) => {
-        if (q.recipientType === recipientType && !['SUPERSEDED', 'ACCEPTED', 'REJECTED', 'CANCELLED'].includes(q.docStatus)) {
-          q.docStatus = 'SUPERSEDED';
-        }
-      });
-
-      const nextVersion = Math.max(0, ...chain.map((q) => q.quotationVersion || 0)) + 1;
-      const allQuotationIds = db.tickets.flatMap((t) => t.quotations ?? (t.quotation ? [t.quotation] : [])).map((q) => q.id || 0);
-      const nextQNum = Math.max(0, ...allQuotationIds) + 1;
-      const parent = chain.slice().sort((a, b) => (b.quotationVersion || 0) - (a.quotationVersion || 0))[0] ?? null;
-
-      // Freeze this quotation at issue time (mirrors TicketService.generateQuotation +
-      // V49's quotation_item/customer-header columns): deep-copy the priced items and the
-      // customer/project header NOW, so a later ticket edit or customer-record change can
-      // never alter this quotation's downloaded content. customerName/address/taxId/phone
-      // come from the linked customer record (mockCustomers), not the ticket's own
-      // (possibly stale) customerName field — same source-of-truth choice as the backend.
-      const customer = ticket.customerId ? mockCustomers.find((c) => c.id === ticket.customerId) : null;
-      const project = ticket.projectId ? mockProjects.find((p) => p.id === ticket.projectId) : null;
-      const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
-      const newQuotation = {
-        id: nextQNum, ticketId: ticket.id,
-        number: `QT-2026-${String(nextQNum).padStart(4, '0')}`,
-        issuedById: user.id, issuedByName: user.name,
-        issuedAt: new Date().toISOString(), pdfPath: null,
-        totalAmount: total, currency: 'THB',
-        quotationVersion: nextVersion, docStatus: 'ISSUED',
-        recipientType,
-        recipientLabel: payload.recipientLabel || null,
-        paymentTerms: payload.paymentTerms || null,
-        leadTime: payload.leadTime || null,
-        deliveryTerms: payload.deliveryTerms || null,
-        validityDate: payload.validityDate || null,
-        sentAt: null,
-        acceptedAt: null,
-        rejectedAt: null,
-        parentQuotationId: parent ? parent.id : null,
-        // Snapshot (V49) — undefined/empty on any quotation object built before this change.
-        items: priceItems.map((it) => ({ ...it })),
-        // Fidelity rule (mirrors TicketService.generateQuotation): freeze the TICKET's
-        // display name — that's what the renderer prints — master name only as fallback.
-        customerName: ticket.customerName ?? (customer ? customer.name : null),
-        customerAddress: customer ? customer.address : null,
-        customerTaxId: customer ? customer.taxId : null,
-        customerPhone: customer ? customer.phone : null,
-        projectName: project ? project.name : null,
-      };
-      ticket.quotations.unshift(newQuotation); // newest first
-      ticket.quotation = newQuotation; // backward compat
-
-      ticket.status = 'quotation_issued';
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      const message = `recipient_type=${recipientType}, version=${nextVersion}`
-        + ((payload.amendmentReason || '').trim() ? ` — amendment: ${payload.amendmentReason.trim()}` : '');
-      pushEvent(ticket, user, 'QUOTATION_ISSUED', fromStatus, 'quotation_issued', message);
-      if (['DESIGNER', 'OWNER'].includes(recipientType)) autoAdvanceStage(ticket, 'QUOTE_DESIGN_SIDE', user);
-      if (recipientType === 'BUYER') autoAdvanceStage(ticket, 'QUOTE_BUYER', user);
-      return delay({ ticket: buildTicketDetail(ticket) });
-    },
-
-    async markQuotationSent(id, quotationId, payload = {}) {
-      return markQuotationStatus(id, quotationId, 'SENT', 'QUOTATION_SENT', payload);
-    },
-
-    async markQuotationAccepted(id, quotationId, payload = {}) {
-      return markQuotationStatus(id, quotationId, 'ACCEPTED', 'QUOTATION_ACCEPTED', payload);
-    },
-
-    async markQuotationRejected(id, quotationId, payload = {}) {
-      return markQuotationStatus(id, quotationId, 'REJECTED', 'QUOTATION_REJECTED', payload);
-    },
-
+    // calculatePrices/overrideItemPrice/approve/reject/quotation (generate)/markQuotationSent/
+    // markQuotationAccepted/markQuotationRejected are retired along with their routes — see the
+    // comment above editItems(). Download stays; both legacy and PCR-issued quotations render
+    // from the same TicketService.loadQuotationContext path.
     async downloadQuotationXlsx(ticketId, quotationId) {
       // Phase B: mirrors TicketService.loadQuotationContext's explicit import denial —
       // a permission question, not a lookup miss, so it must not silently 404 instead.
