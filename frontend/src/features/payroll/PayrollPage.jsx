@@ -503,10 +503,15 @@ export function PayrollPage({ showToast }) {
                     วันลาไม่รับค่าจ้าง
                     <InfoTip label="วันลาไม่รับค่าจ้าง" text="ตัวเลขนี้ถูกกรอกล่วงหน้าจากวันลาที่อนุมัติเกินโควตาในเดือนนี้ (ระบบวันลา) สามารถแก้ไขได้ก่อนคำนวณ/ประมวลผล" />
                     <input id="payroll-unpaid-leave-days" type="number" min="0" step="0.25" placeholder="0" value={selectedAdjustment.unpaidLeaveDays} onChange={(event) => updateAdjustment('unpaidLeaveDays', event.target.value)} />
-                    {pendingUnpaidLeaveCorrectionDays > 0 && (
+                    {Number(selectedLine.leaveRefundDays || 0) > 0 ? (
+                      <small className="block text-warning">
+                        ระบบคืนเครดิตวันลาไม่รับค่าจ้างค้างคืน {selectedLine.leaveRefundDays} วัน ({formatMoney(selectedLine.leaveDeductionRefund)}) ให้อัตโนมัติในงวดนี้แล้ว
+                        จากการยกเลิกคำขอลาหลังปิดงวดเงินเดือนก่อนหน้า — ไม่ต้องกรอกตัวเลขด้านบนเพิ่ม
+                      </small>
+                    ) : pendingUnpaidLeaveCorrectionDays > 0 && (
                       <small className="block text-warning">
                         มีเครดิตวันลาไม่รับค่าจ้างค้างคืน {pendingUnpaidLeaveCorrectionDays} วัน จากการยกเลิกคำขอลาหลังปิดงวดเงินเดือน
-                        กรุณาปรับตัวเลขด้านบนด้วยตนเอง (ระบบยังไม่หักเครดิตนี้ให้อัตโนมัติ)
+                        ระบบจะคืนเครดิตนี้ให้อัตโนมัติในงวดเงินเดือนถัดไปที่ประมวลผลสำหรับพนักงานคนนี้
                       </small>
                     )}
                   </label>
@@ -556,6 +561,12 @@ export function PayrollPage({ showToast }) {
                 <span><b>รายได้ไม่คิดภาษี</b>{formatMoney(selectedLine.nonTaxableIncome)}</span>
                 {Number(selectedLine.directorRemuneration || 0) > 0 && (
                   <span><b>ค่าตอบแทนกรรมการ</b>{formatMoney(selectedLine.directorRemuneration)}</span>
+                )}
+                {Number(selectedLine.leaveRefundDays || 0) > 0 && (
+                  <span>
+                    <b>คืนเครดิตวันลาไม่รับค่าจ้าง ({selectedLine.leaveRefundDays} วัน)</b>
+                    {formatMoney(selectedLine.leaveDeductionRefund)}
+                  </span>
                 )}
               </div>
             </>

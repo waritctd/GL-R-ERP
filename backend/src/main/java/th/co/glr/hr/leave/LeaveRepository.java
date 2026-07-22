@@ -209,9 +209,13 @@ public class LeaveRepository {
 
     /**
      * Cancel-after-close reversal (2026-07-23): unresolved (not yet {@code resolved_at}) correction
-     * totals per employee, across all months -- surfaced by {@code PayrollService#suggestedInputs} so
-     * HR can see and manually net them into the next run. Never auto-applied; see the V85 migration
-     * comment for why automatic resolution is a deferred follow-up.
+     * totals per employee, across all months -- surfaced by {@code PayrollService#suggestedInputs}
+     * as an early "heads up, something is outstanding" figure for HR, independent of any specific
+     * payroll run. This is deliberately UNSCOPED (no give-back-on-re-run logic) and never mutates
+     * anything -- the actual auto-refund + resolve now lives in {@link
+     * #findRefundableUnpaidDaysByEmployee} / {@link #resolvePendingCorrections}, used by {@code
+     * PayrollService#preview}/{@code #process} directly. Keep this one as-is; it is a separate,
+     * lighter-weight signal, not the source of truth for what a given run will actually refund.
      */
     public Map<Long, BigDecimal> findPendingPayrollCorrectionsByEmployee() {
         return jdbc.query("""
@@ -223,6 +227,57 @@ public class LeaveRepository {
             (rs, rowNum) -> Map.entry(rs.getLong("employee_id"), rs.getBigDecimal("total_days")))
             .stream()
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    /**
+     * Cancel-after-close reversal, AUTO-REFUND (2026-07-23): total unpaid days to refund per
+     * employee that THIS payroll calculation should credit back -- pending corrections
+     * ({@code resolved_at IS NULL}) PLUS, if {@code givingBackPeriodId} is non-null, any correction
+     * already resolved BY THAT SAME period. The give-back half is what makes re-processing a month
+     * idempotent without double-refunding or losing the credit: a re-run recomputes the whole
+     * period from scratch, so corrections that period previously resolved must come back into the
+     * pool for this recomputation, while corrections resolved by any OTHER (earlier or later)
+     * period stay excluded. Pass {@code null} when the period does not exist yet (nothing to give
+     * back -- equivalent to a plain "pending only" read). Called once per {@code
+     * PayrollService#preview}/{@code #process} invocation, in the same transaction as the paired
+     * {@link #resolvePendingCorrections} call on process -- see that method for how the two stay
+     * consistent with each other.
+     */
+    public Map<Long, BigDecimal> findRefundableUnpaidDaysByEmployee(Long givingBackPeriodId) {
+        return jdbc.query("""
+            SELECT employee_id, SUM(unpaid_days_to_refund)::numeric(5,2) AS total_days
+              FROM hr.leave_payroll_correction
+             WHERE resolved_at IS NULL
+                OR resolved_payroll_period_id = :givingBackPeriodId::bigint
+             GROUP BY employee_id
+            """,
+            new MapSqlParameterSource("givingBackPeriodId", givingBackPeriodId),
+            (rs, rowNum) -> Map.entry(rs.getLong("employee_id"), rs.getBigDecimal("total_days")))
+            .stream()
+            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    /**
+     * Cancel-after-close reversal, AUTO-REFUND (2026-07-23): marks every correction consumed by
+     * {@code periodId}'s just-computed calculation as resolved. The WHERE clause is deliberately
+     * the exact same shape as {@link #findRefundableUnpaidDaysByEmployee}'s read for this same
+     * {@code periodId} -- run in the same DB transaction (see {@code PayrollService#process},
+     * {@code @Transactional}), so this UPDATE only ever touches rows the preceding read already
+     * included. Idempotent by construction: a correction with {@code resolved_payroll_period_id =
+     * periodId} already (from a prior run of this same month) just gets {@code resolved_at}
+     * refreshed -- no double-refund, because {@code findRefundableUnpaidDaysByEmployee} would have
+     * included that exact row in the SUM whether or not this method had ever run before. A
+     * correction resolved by a DIFFERENT period is excluded by both the read and this write, so it
+     * is never touched, never re-summed, and never double-counted.
+     */
+    public void resolvePendingCorrections(long periodId) {
+        jdbc.update("""
+            UPDATE hr.leave_payroll_correction
+               SET resolved_at = now(),
+                   resolved_payroll_period_id = :periodId
+             WHERE resolved_at IS NULL
+                OR resolved_payroll_period_id = :periodId
+            """, new MapSqlParameterSource("periodId", periodId));
     }
 
     private record UnpaidLeaveSpan(long employeeId, LocalDate startDate, LocalDate endDate, BigDecimal paidDays) {

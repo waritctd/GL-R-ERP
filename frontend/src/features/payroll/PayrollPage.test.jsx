@@ -212,5 +212,40 @@ describe('PayrollPage adjustment inputs', () => {
       // set up in this project's vitest config, so there's nothing to chain here.
       await screen.findByText(/เครดิตวันลาไม่รับค่าจ้างค้างคืน/);
     });
+
+    // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): the backend now applies the correction
+    // itself (PayrollService#preview/#process) rather than only surfacing a "please adjust manually"
+    // suggestion -- these two fields (leaveRefundDays/leaveDeductionRefund) live on the CALCULATED
+    // line the API returns, not on the suggestion or the HR-editable adjustment form.
+    it('shows the auto-applied refund on a line that already includes one, and drops the stale manual-entry hint', async () => {
+      api.payroll.current.mockResolvedValue({
+        period: previewPeriod({
+          lines: [{ ...payrollLine, leaveRefundDays: 1, leaveDeductionRefund: 1000 }],
+        }),
+      });
+      api.payroll.suggestedInputs.mockResolvedValue({
+        payrollMonth: '2026-07-01',
+        suggestions: [{ employeeId: 1, unpaidLeaveDays: 0, pendingUnpaidLeaveCorrectionDays: 1 }],
+      });
+
+      renderPayrollPage();
+      await expandUnpaidLeaveSection();
+
+      // The new auto-applied hint appears...
+      await screen.findByText(/ระบบคืนเครดิตวันลาไม่รับค่าจ้างค้างคืน 1 วัน/);
+      // ...and the old "please adjust manually, not automatic yet" wording is gone -- that claim is no
+      // longer true and would risk HR double-entering the credit into unpaidLeaveDays by hand.
+      expect(screen.queryByText(/กรุณาปรับตัวเลขด้านบนด้วยตนเอง/)).toBeNull();
+      // The breakdown panel also shows the refund amount as its own line.
+      await screen.findByText(/คืนเครดิตวันลาไม่รับค่าจ้าง \(1 วัน\)/);
+    });
+
+    it('does not show any refund hint when there is no refund on the line and no pending correction', async () => {
+      renderPayrollPage();
+      await expandUnpaidLeaveSection();
+
+      expect(screen.queryByText(/เครดิตวันลาไม่รับค่าจ้างค้างคืน/)).toBeNull();
+      expect(screen.queryByText(/คืนเครดิตวันลาไม่รับค่าจ้าง \(/)).toBeNull();
+    });
   });
 });

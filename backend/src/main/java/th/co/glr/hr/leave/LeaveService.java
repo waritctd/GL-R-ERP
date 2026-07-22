@@ -268,22 +268,25 @@ public class LeaveService {
     }
 
     /**
-     * Cancel-after-close reversal (2026-07-23, v1/minimal design -- flagged for review, see the branch
-     * handoff). Cancelling a leave request is allowed unconditionally regardless of whether it overlaps
-     * an already-PROCESSED payroll month (nothing above this method blocks that). Once a leave's month
-     * has been processed, though, its unpaid-day deduction already landed in the employee's net pay for
-     * a closed period -- undoing that in place is out of scope here. Instead, this records an auditable
-     * "credit owed" row per affected processed month in {@code hr.leave_payroll_correction}, and {@code
-     * PayrollService#suggestedInputs} surfaces the unresolved total per employee so HR can manually
-     * factor it into a future run's unpaidLeaveDays input.
+     * Cancel-after-close reversal (2026-07-23; AUTO-REFUND added 2026-07-23 same day, owner
+     * decision -- the original record-and-surface-only v1 was not enough). Cancelling a leave
+     * request is allowed unconditionally regardless of whether it overlaps an already-PROCESSED
+     * payroll month (nothing above this method blocks that). Once a leave's month has been
+     * processed, though, its unpaid-day deduction already landed in the employee's net pay for a
+     * closed period -- undoing that in place is out of scope here. Instead, this records an
+     * auditable "credit owed" row per affected processed month in {@code
+     * hr.leave_payroll_correction}.
      *
-     * <p><b>What this does NOT do</b> (documented follow-up, not silently dropped): it never marks a
-     * correction "resolved" automatically. Detecting that HR actually applied the credit -- as opposed
-     * to merely having seen the surfaced number -- needs either an explicit "apply correction" action or
-     * a way to trace a specific correction into a specific processed payroll_line, neither of which this
-     * PR builds. Until that follow-up lands, a correction keeps appearing in every suggestedInputs call
-     * for that employee; see {@code hr.leave_payroll_correction.resolved_at} /
-     * {@code resolved_payroll_period_id}, which exist for that future step but are never set here.
+     * <p>This method only ever WRITES a pending correction (never resolves one) -- resolution is
+     * entirely {@code PayrollService}'s concern, on the read side: {@code
+     * PayrollService#suggestedInputs} surfaces the unresolved total as an early heads-up (unscoped,
+     * independent of any specific run), while {@code PayrollService#preview}/{@code #process}
+     * auto-apply it as a real pre-tax credit the NEXT time payroll runs for this employee, and
+     * {@code #process} marks the consumed correction(s) resolved (sets {@code resolved_at} /
+     * {@code resolved_payroll_period_id}) in the same transaction. See {@code
+     * LeaveRepository#findRefundableUnpaidDaysByEmployee}/{@code #resolvePendingCorrections} and
+     * {@code PayrollCalculator}'s {@code leaveRefundDays}/{@code leaveDeductionRefund} handling for
+     * the full mechanism.
      */
     private void recordPayrollCorrectionIfNeeded(LeaveRequestDto cancelled) {
         if (!"APPROVED".equals(cancelled.status())) {

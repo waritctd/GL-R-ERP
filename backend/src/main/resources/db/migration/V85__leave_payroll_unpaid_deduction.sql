@@ -46,17 +46,15 @@ INSERT INTO hr.leave_type (leave_type_code, name_th, name_en, annual_quota_days,
 VALUES ('LEAVE_WITHOUT_PAY', 'ลาไม่รับค่าจ้าง', 'Leave without pay', 0.00, FALSE)
 ON CONFLICT (leave_type_code) DO NOTHING;
 
--- 3) Cancel-after-close reversal (minimal v1 -- flagged for review, see the branch handoff for the
---    fuller design discussion). When an APPROVED leave with unpaid_days > 0 is cancelled AFTER
+-- 3) Cancel-after-close reversal. When an APPROVED leave with unpaid_days > 0 is cancelled AFTER
 --    payroll for an overlapping month has already been PROCESSED, that unpaid-day deduction already
 --    landed in the employee's net pay for a closed period and cannot be undone in place. This table
---    is the auditable record of the credit still owed. LeaveService#cancel populates it;
---    PayrollService#suggestedInputs surfaces the unresolved total per employee so HR can manually
---    factor it into the next run's unpaidLeaveDays input.
---
---    `resolved_at` / `resolved_payroll_period_id` are provided for a future explicit "this credit was
---    applied" step. Nothing in this PR sets them -- automatically detecting that HR actually applied
---    the credit (vs. merely saw the number) is a follow-up, not built here. See the branch handoff.
+--    is the auditable record of the credit still owed. LeaveService#cancel populates it (write-only,
+--    never resolves anything itself); PayrollService#suggestedInputs surfaces the unresolved total
+--    as an early heads-up (independent of any run); PayrollService#preview/#process (V86,
+--    AUTO-REFUND, 2026-07-23 -- see that migration) auto-apply the credit as a real pre-tax refund
+--    the next time payroll runs for this employee, and #process sets `resolved_at` /
+--    `resolved_payroll_period_id` in the same transaction it applies the refund in.
 CREATE TABLE hr.leave_payroll_correction (
     correction_id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     leave_request_id           BIGINT NOT NULL REFERENCES hr.leave_request(leave_request_id) ON DELETE CASCADE,

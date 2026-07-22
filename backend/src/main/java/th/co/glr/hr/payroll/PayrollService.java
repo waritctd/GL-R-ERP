@@ -40,9 +40,11 @@ public class PayrollService {
     private final CommissionService commissionService;
     private final AuditService auditService;
     private final PayslipRenderer payslipRenderer;
-    // Leave -> payroll unpaid-day deduction (2026-07-23): read-only dependency on the leave package,
-    // used only by #suggestedInputs below to overlay leave-derived unpaidLeaveDays /
-    // pendingUnpaidLeaveCorrectionDays. Never touches preview()/process().
+    // Leave -> payroll dependency on the leave package. #suggestedInputs (2026-07-23) uses it
+    // read-only to overlay leave-derived unpaidLeaveDays/pendingUnpaidLeaveCorrectionDays.
+    // #preview/#process (2026-07-23, AUTO-REFUND) additionally read + (on process only) resolve
+    // hr.leave_payroll_correction rows to auto-apply the cancel-after-close refund -- see
+    // #calculateLine and #process below.
     private final LeaveRepository leaveRepository;
 
     public PayrollService(
@@ -136,6 +138,12 @@ public class PayrollService {
         LocalDate month = normalizeMonth(request.payrollMonth());
         PayrollPeriodDto preview = preview(month, safeInputs(request.inputs()), actor);
         long periodId = payrollRepository.saveProcessedPeriod(month, actor.employeeId(), preview.lines());
+        // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): the lines just saved already have
+        // the refund baked in (computed by #preview above, in this same transaction). Now mark the
+        // hr.leave_payroll_correction rows that refund came from as resolved by THIS period -- see
+        // LeaveRepository#resolvePendingCorrections for exactly how that stays consistent with the
+        // read (same WHERE-shape, same transaction) and idempotent across re-processing this month.
+        leaveRepository.resolvePendingCorrections(periodId);
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Payroll period was not saved"));
         auditPayrollAccess("PROCESS_PAYROLL", actor, period,
@@ -210,6 +218,17 @@ public class PayrollService {
         // over the stored value -- stored = standing declaration, body = this-run override.
         Map<Long, PayrollTaxAllowanceInput> storedAllowancesByEmployee =
             payrollRepository.findTaxAllowancesByEmployee(payrollMonth.getYear());
+        // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): existingPeriodId is null the first
+        // time this month is previewed/processed, and non-null on a re-preview/re-process of a month
+        // that already has a period row (PREVIEW-only rows from currentOrPreview's persistence path
+        // do not exist -- only saveProcessedPeriod creates one -- so in practice this is non-null
+        // exactly when this month has been PROCESSED before). Passing it into
+        // findRefundableUnpaidDaysByEmployee gives back any correction that same period previously
+        // resolved, so a re-run recomputes the correct total instead of losing or double-counting it
+        // -- see that method's doc for the full idempotency argument, and PayrollService#process for
+        // the paired resolve call.
+        Long existingPeriodId = payrollRepository.findPeriodByMonth(payrollMonth).map(PayrollPeriodDto::id).orElse(null);
+        Map<Long, BigDecimal> leaveRefundDaysByEmployee = leaveRepository.findRefundableUnpaidDaysByEmployee(existingPeriodId);
 
         List<PayrollLineDto> lines = employees.stream()
             .map(employee -> calculateLine(
@@ -219,6 +238,7 @@ public class PayrollService {
                 commissionByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
                 yearToDateByEmployee.getOrDefault(employee.employeeId(), PayrollYearToDate.empty()),
                 storedAllowancesByEmployee.get(employee.employeeId()),
+                leaveRefundDaysByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
                 payrollMonth
             ))
             .sorted(Comparator.comparing(PayrollLineDto::employeeCode))
@@ -252,6 +272,7 @@ public class PayrollService {
         BigDecimal commissionPay,
         PayrollYearToDate yearToDate,
         PayrollTaxAllowanceInput storedAllowances,
+        BigDecimal leaveRefundDays,
         LocalDate payrollMonth
     ) {
         PayrollCalculation calculation = payrollCalculator.calculate(new PayrollCalculationInput(
@@ -270,7 +291,10 @@ public class PayrollService {
             employee.directorRemuneration(),
             input == null ? BigDecimal.ZERO : input.warningLetterDeduction(),
             input == null ? BigDecimal.ZERO : input.customerReturnDeduction(),
-            input == null ? BigDecimal.ZERO : input.otherPretaxDeduction()
+            input == null ? BigDecimal.ZERO : input.otherPretaxDeduction(),
+            // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): system-derived, never HR-typed --
+            // there is no corresponding field on PayrollEmployeeInputRequest.
+            leaveRefundDays == null ? BigDecimal.ZERO : leaveRefundDays
         ));
         return new PayrollLineDto(
             null,
@@ -309,7 +333,9 @@ public class PayrollService {
             calculation.directorRemuneration(),
             calculation.warningLetterDeduction(),
             calculation.customerReturnDeduction(),
-            calculation.otherPretaxDeduction()
+            calculation.otherPretaxDeduction(),
+            calculation.leaveRefundDays(),
+            calculation.leaveDeductionRefund()
         );
     }
 
