@@ -14,10 +14,10 @@ function renderTabs(role) {
   );
 }
 
-// Role-scoped views (Import build, docs/role-scoped-views.md): the pipeline
-// tabs (ดีลทั้งหมด/ภาพรวม) are gated on canViewDealPipeline, not
-// canViewTickets — import loses them and is left with only its pricing-queue
-// tab, so this bar never offers a tab the router would immediately bounce.
+// Role-scoped views (docs/role-scoped-views.md): the pipeline tabs
+// (ดีลทั้งหมด/ภาพรวม) are gated on canViewDealPipeline, not canViewTickets —
+// import and account both lose them, so this bar never offers a tab the
+// router would immediately bounce.
 describe('SalesTabs (role-scoped views)', () => {
   it('drops the deal-pipeline tabs for import, keeping only the pricing queue tab', () => {
     renderTabs('import');
@@ -45,10 +45,14 @@ describe('SalesTabs (role-scoped views)', () => {
     expect(tabs).toEqual(['ดีลทั้งหมด', 'ภาพรวม', 'คิวขอราคา']);
   });
 
-  it('gives account no dedicated tab (its worklist IS ดีลทั้งหมด) but keeps the pipeline tabs', () => {
+  // Account role-scoped views: account has no canViewDealPipeline and no
+  // canViewPricingRequestQueue, so this bar renders no tabs at all for it —
+  // its worklist is its own งานการเงิน page (/finance), not this component.
+  it('gives account no tabs at all (its worklist is งานการเงิน, not this bar)', () => {
     renderTabs('account');
-    expect(screen.getByText('ดีลทั้งหมด')).toBeTruthy();
-    expect(screen.getByText('ภาพรวม')).toBeTruthy();
+    expect(screen.queryByText('ดีลทั้งหมด')).toBeNull();
+    expect(screen.queryByText('ภาพรวม')).toBeNull();
     expect(screen.queryByText('คิวขอราคา')).toBeNull();
+    expect(screen.queryAllByRole('link')).toHaveLength(0);
   });
 });
