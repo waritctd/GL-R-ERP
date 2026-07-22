@@ -15,7 +15,9 @@ leave-derived unpaid-day figure into the existing payroll `suggested-inputs` pre
 `20a568385b1a293d1447a480ecd9e0a33e3cb836` (origin/main tip, PR #281 merged)
 
 ## Current Commit
-Uncommitted at handoff time — see "Things Not Finished" for the exact commit step still pending.
+`9a3787051f30c6d01e56c0c1a809f257e639b1ac` — committed on the branch, NOT pushed/merged (per the
+task brief). The final full `mvn clean verify` referenced below completed with BUILD SUCCESS
+before this commit was made.
 
 ## Agent / Model Used
 Claude Sonnet 5 (implementation)
@@ -115,21 +117,19 @@ cd frontend && npm run lint && npm test -- --run && npm run build
 
 ## Test / Build Results
 - **Backend compile + test-compile**: PASS.
-- **Backend `clean verify` (real Postgres, throwaway DB)**: see the live run at handoff time —
-  two earlier full runs each surfaced one real bug (both fixed, see "Decisions Made" /
-  "Known Risks"): (1) `chk_leave_paid_unpaid_sum` was too strict for SUBMITTED/REJECTED demo-seed
-  rows — fixed by scoping the constraint to `status IN ('APPROVED','CANCELLED')`; (2) my own new
-  integration test NPE'd/FK-violated on a mocked attachment path — fixed by stubbing a real
-  `hr.file_attachment` row instead of a fabricated id. After both fixes, the 4 new/changed test
-  classes pass in isolation (29/29, `LeaveDayMathTest` 6, `LeaveUnpaidDeductionIntegrationTest` 7,
-  `LeaveServiceTest` 13, `PayrollLeaveUnpaidDeductionSeamIntegrationTest` 3). **A final full
-  `clean verify` was in flight at handoff time — see below for how to confirm/complete it if this
-  session's process didn't finish.**
-- **Backend total (prior full run, before the 2nd bug's test-only fix)**: 1153 run, 1 error (the
-  test bug described above), 2 skipped, 0 failures — i.e. every production-code assertion in the
-  whole suite passed; only my own new test had a bug.
+- **Backend `clean verify` (real Postgres, throwaway DB)**: **BUILD SUCCESS.** Final confirmed run:
+  `Tests run: 1153, Failures: 0, Errors: 0, Skipped: 2` (7m04s). Jacoco coverage checks also passed.
+  Two real bugs were found and fixed by earlier runs in this same session before this final green
+  one (see "Decisions Made" / "Known Risks" for the first; both are already reflected in the
+  committed diff, not left as follow-ups): (1) `chk_leave_paid_unpaid_sum` was too strict for
+  SUBMITTED/REJECTED demo-seed rows — fixed by scoping the constraint to
+  `status IN ('APPROVED','CANCELLED')`; (2) my own new integration test NPE'd/FK-violated on a
+  mocked attachment path — fixed by stubbing a real `hr.file_attachment` row instead of a
+  fabricated id. The 2 skipped tests are `IntegrationResetInvariantTest`'s Testcontainers-only
+  checks, which don't apply on the external-`TEST_DB_URL` path used here — expected, unrelated to
+  this change.
 - **`@SpringBootTest`-context race note**: not observed this session — no context-load errors seen
-  in any of the three full runs.
+  across any of the four full/partial runs.
 - **Frontend**: `npm run lint` — 0 errors, 1 pre-existing unrelated warning
   (`react-hooks/exhaustive-deps` on `PayrollPage`'s `load()` effect, present before this branch).
   `npm test -- --run` — 439/439 pass (all files, incl. the 4 new PayrollPage tests + existing
@@ -199,13 +199,8 @@ HR/CEO-gated payroll endpoint (`suggestedInputs`, unchanged `PAYROLL_VIEW_ROLES`
   own branch's brief, so a conflict should be mechanical, not semantic.
 
 ## Things Not Finished
-- **Not committed yet.** A final full `mvn clean verify` was kicked off at the end of this session
-  to confirm the whole suite (not just the 4 changed classes) passes with both fixes in place —
-  confirm it finished green (see the live monitor output/log at handoff, or re-run per "Commands
-  Run" above) before committing. If it's green, commit with message
-  `feat(payroll): leave-derived unpaid-day deduction (Thai labour law, HR/legal sign-off pending)`
-  and the `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` trailer, per the task brief. Do
-  NOT push/merge — that's explicitly out of scope for this branch per the task brief.
+- **Committed, not pushed/merged** (`9a37870`) — pushing/merging is explicitly out of scope for
+  this branch per the task brief; the next step is Opus review, not a push.
 - **HR/legal sign-off** on the deduction rule itself (quota-exceeded = unpaid, chronological
   consumption) is a real open item, not a code task — flagged in the V85 migration comment,
   `LeaveDayMath`'s class doc, and `LeaveService#submit`'s inline comment.
@@ -219,13 +214,14 @@ Claude Opus review (per the Sonnet-implements/Opus-reviews loop this repo uses).
 
 ## Exact Next Prompt
 ```
-Review branch feat/leave-payroll-unpaid-deduction (worktree at .claude/worktrees/leave-payroll)
-against docs/agent-handoffs/108_feat-leave-payroll-unpaid-deduction.md. Specifically verify:
-(1) the chk_leave_paid_unpaid_sum scoping fix (APPROVED/CANCELLED only) is correct and doesn't
-mask a real bug elsewhere; (2) the cancel-after-close correction design (recorded but never
-auto-resolved) is an acceptable v1 given the "flag, don't drop" instruction, or should be reduced
-further / built out more before merge; (3) confirm the final `mvn clean verify` this session
-started actually finished green (rerun if needed, log at /tmp/leavepayroll_verify.log may still
-exist); (4) confirm frontend lint/test/build are still green after any changes. Then decide:
-merge-ready, or send back with specific findings.
+Review branch feat/leave-payroll-unpaid-deduction (worktree at .claude/worktrees/leave-payroll,
+commit 9a37870) against docs/agent-handoffs/108_feat-leave-payroll-unpaid-deduction.md. Backend
+`clean verify` and frontend lint/test/build are confirmed green as of that commit -- re-run only
+if you've made changes. Specifically verify: (1) the chk_leave_paid_unpaid_sum scoping fix
+(APPROVED/CANCELLED only) is correct and doesn't mask a real bug elsewhere; (2) the
+cancel-after-close correction design (recorded but never auto-resolved) is an acceptable v1 given
+the "flag, don't drop" instruction, or should be reduced further / built out more before merge;
+(3) the paid-quota-consumed-chronologically assumption and the "no holiday calendar" scope cut are
+reasonable interim calls, not silent scope creep. Then decide: merge-ready, or send back with
+specific findings.
 ```
