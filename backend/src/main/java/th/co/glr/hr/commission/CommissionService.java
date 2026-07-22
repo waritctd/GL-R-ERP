@@ -15,19 +15,29 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.notification.NotificationService;
+import th.co.glr.hr.ticket.AttachType;
 import th.co.glr.hr.ticket.DealStage;
+import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketRepository;
 
 @Service
 public class CommissionService {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
     private static final Set<String> SALES_ROLES = Set.of("sales");
-    private static final Set<String> SUBMIT_ROLES = Set.of("sales", "sales_manager", "ceo");
+    // Slice A2 (AUTHZ CHANGE — see docs/agent-handoffs/102_feat-sales-commission-auto-approval.md):
+    // sales can no longer submit/create commissions at all — commission creation moved to the
+    // accountant's auto-create trigger (createFromDeal) at deal close. sales_manager/ceo keep the
+    // ability they already had (e.g. manual/unlinked corrections); account replaces sales as the
+    // day-to-day creator role for the JSON/multipart submit() path too, in addition to owning
+    // createFromDeal exclusively.
+    private static final Set<String> SUBMIT_ROLES = Set.of("account", "sales_manager", "ceo");
+    private static final Set<String> CREATE_FROM_DEAL_ROLES = Set.of("account");
     private static final Set<String> MANAGER_ROLES = Set.of("sales_manager");
     private static final Set<String> CEO_ROLES = Set.of("ceo");
     private static final Set<String> PAYROLL_ROLES = Set.of("hr");
@@ -48,6 +58,7 @@ public class CommissionService {
     private final AuditService auditService;
     private final NotificationService notificationService;
     private final TicketRepository tickets;
+    private final AttachmentRepository attachments;
 
     public CommissionService(
             CommissionRepository commissions,
@@ -56,7 +67,8 @@ public class CommissionService {
             FileStorageService fileStorage,
             AuditService auditService,
             NotificationService notificationService,
-            TicketRepository tickets) {
+            TicketRepository tickets,
+            AttachmentRepository attachments) {
         this.commissions = commissions;
         this.commissionAttachments = commissionAttachments;
         this.calculator = calculator;
@@ -64,6 +76,7 @@ public class CommissionService {
         this.auditService = auditService;
         this.notificationService = notificationService;
         this.tickets = tickets;
+        this.attachments = attachments;
     }
 
     public List<CommissionRecord> list(LocalDate payrollMonth, UserPrincipal actor) {
@@ -96,7 +109,9 @@ public class CommissionService {
             safeRequest.suspenseVat(),
             safeRequest.transportFee(),
             safeRequest.cutFee(),
-            safeRequest.shortfall()
+            safeRequest.shortfall(),
+            safeRequest.withholdingTax(),
+            safeRequest.overpayment()
         );
         DealLinkage linkage = resolveDealLinkage(safeRequest);
 
@@ -129,6 +144,129 @@ public class CommissionService {
             );
             CommissionRecord created = requireRecord(commissionId);
             auditService.record(actor, "SUBMIT_COMMISSION", "commission_record", commissionId, null, created);
+            notifySubmitted(created);
+            return created;
+        } catch (DuplicateKeyException e) {
+            throw new ApiException(HttpStatus.CONFLICT, "Invoice number already exists");
+        }
+    }
+
+    /**
+     * Slice A2 — commission auto-create trigger. Sales does nothing to get commission: when the
+     * accountant records the tax invoice at deal close, this creates the commission for the
+     * deal's owner directly, in {@code SUBMITTED} status, ready for sales-manager review.
+     *
+     * <p>{@code salesRepId} is <b>always</b> the deal's {@code createdById} — never taken from the
+     * request — so a commission can never be attributed to anyone other than the rep who owns the
+     * ticket. {@code grossAmount} defaults from the deal's payable amount when omitted; every other
+     * amount defaults to zero, exactly like {@link #submit}. The close-eligibility gate is the
+     * exact same one {@link #submit} has always used ({@link #resolveDealLinkage} — CLOSED_PAID or
+     * reject) — reused verbatim, not reimplemented, so this trigger can never be looser than the
+     * old sales-facing submission was.
+     *
+     * <p>Uploading the invoice here also satisfies the ticket's three-party close gate: the same
+     * physical file is additionally recorded as an {@link AttachType#INVOICE} attachment on the
+     * ticket itself, so {@code TicketRepository#hasInvoiceAttachment} — and therefore {@code
+     * invoiceOnFile} — becomes true from this one upload.
+     */
+    @Transactional
+    public CommissionRecord createFromDeal(
+            long ticketId,
+            String invoiceNumber,
+            LocalDate invoiceDate,
+            BigDecimal grossAmount,
+            BigDecimal bankFees,
+            BigDecimal suspenseVat,
+            BigDecimal transportFee,
+            BigDecimal cutFee,
+            BigDecimal shortfall,
+            BigDecimal withholdingTax,
+            BigDecimal overpayment,
+            MultipartFile invoiceAttachment,
+            UserPrincipal actor) {
+        if (!CREATE_FROM_DEAL_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        if (invoiceAttachment == null || invoiceAttachment.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Tax invoice file is required");
+        }
+        TicketDto ticket = tickets.findById(ticketId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+        long salesRepId = ticket.summary().createdById();
+        if (commissions.hasActiveCommissionForTicket(ticketId)) {
+            throw new ApiException(HttpStatus.CONFLICT, "A commission already exists for this deal");
+        }
+        BigDecimal effectiveGrossAmount = grossAmount != null ? grossAmount : tickets.payableAmount(ticketId);
+
+        SubmitCommissionRequest request = new SubmitCommissionRequest(
+            ticketId,
+            salesRepId,
+            invoiceNumber,
+            invoiceDate,
+            effectiveGrossAmount,
+            money(bankFees),
+            money(suspenseVat),
+            money(transportFee),
+            money(cutFee),
+            money(shortfall),
+            money(withholdingTax),
+            money(overpayment)
+        );
+        InvoiceCalculation calculation = calculator.calculateInvoice(
+            request.grossAmount(),
+            request.bankFees(),
+            request.suspenseVat(),
+            request.transportFee(),
+            request.cutFee(),
+            request.shortfall(),
+            request.withholdingTax(),
+            request.overpayment()
+        );
+        // Re-checks CLOSED_PAID and computes the payable-amount cross-check snapshot — the exact
+        // same gate submit() has always enforced. Never loosened for this trigger.
+        DealLinkage linkage = resolveDealLinkage(request);
+
+        try {
+            long invoiceId = commissions.createInvoice(request);
+            FileStorageService.StoredFile storedFile = fileStorage.store(
+                "commission-invoice",
+                invoiceId,
+                invoiceAttachment,
+                COMMISSION_INVOICE_MIME_TYPES
+            );
+            long attachmentId = commissionAttachments.save(
+                invoiceId,
+                storedFile.fileName(),
+                storedFile.filePath(),
+                storedFile.mimeType(),
+                storedFile.fileSize(),
+                actor.id()
+            );
+            commissions.attachInvoiceFile(invoiceId, attachmentId);
+            // Reuses the existing ticket-attachment path so the same upload also satisfies the
+            // close gate's invoiceOnFile check — no separate upload flow for the accountant.
+            attachments.save(
+                ticketId,
+                null,
+                storedFile.fileName(),
+                storedFile.filePath(),
+                storedFile.mimeType(),
+                storedFile.fileSize(),
+                AttachType.INVOICE,
+                actor.id()
+            );
+            long commissionId = commissions.createCommissionRecord(
+                invoiceId,
+                ticketId,
+                salesRepId,
+                actor.id(),
+                payrollMonth(request.invoiceDate()),
+                calculation,
+                linkage.payableSnapshot(),
+                linkage.mismatch()
+            );
+            CommissionRecord created = requireRecord(commissionId);
+            auditService.record(actor, "CREATE_COMMISSION_FROM_DEAL", "commission_record", commissionId, null, created);
             notifySubmitted(created);
             return created;
         } catch (DuplicateKeyException e) {
@@ -179,24 +317,45 @@ public class CommissionService {
         if (CommissionStatus.VOID.equals(existing.status()) || CommissionStatus.REJECTED.equals(existing.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "Cannot edit a void commission record");
         }
+        BigDecimal grossAmount = valueOrExisting(request.grossAmount(), existing.invoiceDetails().grossAmount());
+        BigDecimal bankFees = valueOrExisting(request.bankFees(), existing.invoiceDetails().bankFees());
+        BigDecimal suspenseVat = valueOrExisting(request.suspenseVat(), existing.invoiceDetails().suspenseVat());
         BigDecimal transportFee = valueOrExisting(request.transportFee(), existing.invoiceDetails().transportFee());
         BigDecimal cutFee = valueOrExisting(request.cutFee(), existing.invoiceDetails().cutFee());
         BigDecimal shortfall = valueOrExisting(request.shortfall(), existing.invoiceDetails().shortfall());
-        commissions.updateDeductions(existing.invoiceDetails().id(), transportFee, cutFee, shortfall);
+        BigDecimal withholdingTax = valueOrExisting(request.withholdingTax(), existing.invoiceDetails().withholdingTax());
+        BigDecimal overpayment = valueOrExisting(request.overpayment(), existing.invoiceDetails().overpayment());
+        commissions.updateDeductions(existing.invoiceDetails().id(), grossAmount, bankFees, suspenseVat,
+            transportFee, cutFee, shortfall, withholdingTax, overpayment);
+
+        // Commission redesign calc-refine: the tier-base weight multiplier (1/2/3, see
+        // CommissionCalculator) is set here as part of the same manager/CEO review step — sales
+        // has no route to this endpoint at all (requireManagerOrCeo above), so no separate check
+        // is needed to keep sales from setting it.
+        int weightMultiplier = valueOrExisting(request.weightMultiplier(), existing.weightMultiplier());
+        commissions.updateWeightMultiplier(id, weightMultiplier);
 
         CommissionRecord refreshed = requireRecord(id);
         InvoiceDetails invoice = refreshed.invoiceDetails();
+        // Final commission is ALWAYS recomputed from the stored fields — there is no path that
+        // lets a reviewer set the final amount directly.
         InvoiceCalculation calculation = calculator.calculateInvoice(
             invoice.grossAmount(),
             invoice.bankFees(),
             invoice.suspenseVat(),
             invoice.transportFee(),
             invoice.cutFee(),
-            invoice.shortfall()
+            invoice.shortfall(),
+            invoice.withholdingTax(),
+            invoice.overpayment()
         );
         commissions.updateCommissionAmountsForInvoice(invoice.id(), calculation);
         CommissionRecord after = requireRecord(id);
         auditService.record(actor, "UPDATE_COMMISSION_DEDUCTIONS", "commission_record", id, existing, after);
+        // The reason is recorded as its own audit entry (not a field on commission_record) —
+        // required on every call per Slice A2 (CLAUDE.md "permission changes must ship evidence").
+        auditService.record(actor, "UPDATE_COMMISSION_DEDUCTIONS_REASON", "commission_record", id, null,
+            Map.of("reason", request.reason()));
         return after;
     }
 
@@ -293,10 +452,20 @@ public class CommissionService {
             request.suspenseVat(),
             request.transportFee(),
             request.cutFee(),
-            request.shortfall()
+            request.shortfall(),
+            request.withholdingTax(),
+            request.overpayment()
         );
-        BigDecimal existingBase = commissions.sumActiveMonthlyBase(salesRepId, month);
-        BigDecimal projectedBase = existingBase.add(invoice.commissionableBase());
+        // Commission redesign calc-refine: the monthly TIER BASE is now the full-precision
+        // SUM(actual_received x weight_multiplier) / 1.07, not a sum of already-2dp-rounded
+        // commissionable_base rows. The invoice being simulated hasn't been persisted (no
+        // weight_multiplier choice yet — that only happens later, in the manager-review step), so
+        // it is folded into the weighted sum at its default weight of 1 before dividing, rather
+        // than adding an already-rounded 2dp commissionableBase onto a full-precision base.
+        BigDecimal existingWeightedActualReceived = commissions.sumActiveWeightedActualReceived(salesRepId, month);
+        BigDecimal projectedWeightedActualReceived = existingWeightedActualReceived.add(invoice.actualReceived());
+        BigDecimal existingBase = calculator.monthlyTierBase(existingWeightedActualReceived);
+        BigDecimal projectedBase = calculator.monthlyTierBase(projectedWeightedActualReceived);
         List<TierConfig> tiers = tiers();
         BigDecimal priorCommission = calculator.progressiveCommission(existingBase, tiers);
         BigDecimal projectedCommission = calculator.progressiveCommission(projectedBase, tiers);
@@ -304,8 +473,8 @@ public class CommissionService {
             month,
             invoice.actualReceived(),
             invoice.commissionableBase(),
-            existingBase,
-            projectedBase,
+            existingBase.setScale(2, RoundingMode.HALF_UP),
+            projectedBase.setScale(2, RoundingMode.HALF_UP),
             projectedCommission,
             projectedCommission.subtract(priorCommission)
         );
@@ -319,18 +488,25 @@ public class CommissionService {
         List<CommissionRecord> records = commissions.findApprovedRecordsByMonth(month);
         Map<Long, RepAccumulator> grouped = new LinkedHashMap<>();
         for (CommissionRecord record : records) {
+            // Commission redesign calc-refine: accumulate the WEIGHTED actual-received (real cash
+            // x weight_multiplier), not the already-2dp-rounded commissionable_base column — see
+            // CommissionRepository#sumActiveWeightedActualReceived for the same change at the
+            // single-rep query path (simulate()).
             grouped.computeIfAbsent(record.salesRepId(), id -> new RepAccumulator(record.salesRepId(), record.salesRepName()))
-                .add(record.commissionableBase());
+                .add(record.actualReceived(), record.weightMultiplier());
         }
         List<TierConfig> tiers = tiers();
         List<SalesRepCommissionSummaryDto> repSummaries = new ArrayList<>();
         BigDecimal totalBase = BigDecimal.ZERO;
         BigDecimal totalCommission = BigDecimal.ZERO;
         for (RepAccumulator rep : grouped.values()) {
-            BigDecimal safeBase = rep.base.max(BigDecimal.ZERO);
+            BigDecimal safeWeightedActualReceived = rep.weightedActualReceived.max(BigDecimal.ZERO);
+            // Full precision here (not rounded to 2dp) — only the final commission total rounds.
+            BigDecimal safeBase = calculator.monthlyTierBase(safeWeightedActualReceived);
             BigDecimal commission = calculator.progressiveCommission(safeBase, tiers);
-            repSummaries.add(new SalesRepCommissionSummaryDto(rep.salesRepId, rep.salesRepName, safeBase, commission));
-            totalBase = totalBase.add(safeBase);
+            BigDecimal displayBase = safeBase.setScale(2, RoundingMode.HALF_UP);
+            repSummaries.add(new SalesRepCommissionSummaryDto(rep.salesRepId, rep.salesRepName, displayBase, commission));
+            totalBase = totalBase.add(displayBase);
             totalCommission = totalCommission.add(commission);
         }
         repSummaries.sort(Comparator.comparing(SalesRepCommissionSummaryDto::salesRepName, Comparator.nullsLast(String::compareTo)));
@@ -349,6 +525,12 @@ public class CommissionService {
 
     private SubmitCommissionRequest normalizedRequest(SubmitCommissionRequest request, long salesRepId, UserPrincipal actor) {
         boolean salesCannotEditDeductions = "sales".equals(actor.role());
+        // withholdingTax/overpayment (Slice A1) are treated like bankFees/suspenseVat, not like
+        // transportFee/cutFee/shortfall: they come off the invoice/payment document itself
+        // (WHT certificate, overpayment received) rather than being a managerial deduction, so
+        // whoever submits the invoice may enter them. ASSUMPTION flagged for owner confirmation
+        // in the handoff — if WHT should instead be manager-gated like the three deduction
+        // fields, move it into the salesCannotEditDeductions branch.
         return new SubmitCommissionRequest(
             request.sourceTicketId(),
             salesRepId,
@@ -359,7 +541,9 @@ public class CommissionService {
             money(request.suspenseVat()),
             salesCannotEditDeductions ? BigDecimal.ZERO : money(request.transportFee()),
             salesCannotEditDeductions ? BigDecimal.ZERO : money(request.cutFee()),
-            salesCannotEditDeductions ? BigDecimal.ZERO : money(request.shortfall())
+            salesCannotEditDeductions ? BigDecimal.ZERO : money(request.shortfall()),
+            money(request.withholdingTax()),
+            money(request.overpayment())
         );
     }
 
@@ -404,6 +588,10 @@ public class CommissionService {
     }
 
     private BigDecimal valueOrExisting(BigDecimal value, BigDecimal existing) {
+        return value == null ? existing : value;
+    }
+
+    private int valueOrExisting(Integer value, int existing) {
         return value == null ? existing : value;
     }
 
@@ -503,15 +691,24 @@ public class CommissionService {
     private static final class RepAccumulator {
         private final long salesRepId;
         private final String salesRepName;
-        private BigDecimal base = BigDecimal.ZERO;
+        // Commission redesign calc-refine: the tier-base aggregate, at full precision (real cash
+        // x weight_multiplier per record, summed — VAT division happens once, later).
+        private BigDecimal weightedActualReceived = BigDecimal.ZERO;
+        // Real cash received, unweighted — kept separate from weightedActualReceived so "real
+        // cash received" and "weighted tier base" never get conflated. Not currently surfaced in
+        // PayrollCommissionSummaryDto (no consumer yet); tracked here for a future team-commission
+        // slice, same rationale as CommissionRepository#sumActiveActualReceived.
+        private BigDecimal unweightedActualReceived = BigDecimal.ZERO;
 
         private RepAccumulator(long salesRepId, String salesRepName) {
             this.salesRepId = salesRepId;
             this.salesRepName = salesRepName;
         }
 
-        private void add(BigDecimal value) {
-            base = base.add(value == null ? BigDecimal.ZERO : value);
+        private void add(BigDecimal actualReceived, int weightMultiplier) {
+            BigDecimal received = actualReceived == null ? BigDecimal.ZERO : actualReceived;
+            unweightedActualReceived = unweightedActualReceived.add(received);
+            weightedActualReceived = weightedActualReceived.add(received.multiply(BigDecimal.valueOf(weightMultiplier)));
         }
     }
 }

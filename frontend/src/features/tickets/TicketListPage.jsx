@@ -20,8 +20,9 @@ import {
 } from '../../utils/format.js';
 import { StageProgressBar } from './DealStageStepper.jsx';
 import { dealInScope } from './salesViewScope.js';
-import { SALES_PHASES, stageMeta } from './stageMeta.js';
+import { SALES_PHASES, stageIndex, stageMeta } from './stageMeta.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
+import { effectiveWinProbability } from './dealTrackingMeta.js';
 
 // Role-scoped views, Phase A: roles whose list page distinguishes "my
 // worklist" from "every deal I may read" — everyone else (sales already only
@@ -93,6 +94,103 @@ function DaysBadge({ stageUpdatedAt }) {
   );
 }
 
+// ── Manager live pipeline (V83, Slice B1/B2 "kill the weekly report" — handoff
+// 103): the weekly-report replacement for sales_manager/ceo. `deal.stale` (no
+// deal_activity logged in 7 days — computed server/mock-side, see
+// dealTrackingMeta.js's computeStale) is unrelated to the DaysBadge/STALE_DAYS
+// above (days since the STAGE last changed) — this is "has anyone followed up
+// recently", not "how long has this deal sat in its stage".
+const MANAGER_PIPELINE_ROLES = new Set(['sales_manager', 'ceo']);
+const ORDER_RECEIVED_IDX = stageIndex('ORDER_RECEIVED');
+
+/** Win% + no-recent-activity badges, shown per-deal for the manager pipeline view. */
+function TrackingBadges({ deal }) {
+  const win = effectiveWinProbability(deal.winProbabilityOverride, deal.salesStage);
+  return (
+    <span className="flex flex-wrap items-center gap-1">
+      <StatusBadge tone="neutral">{win}%</StatusBadge>
+      {deal.stale ? (
+        <StatusBadge tone="warning">
+          <Icon name="clock" size={11} /> เงียบ
+        </StatusBadge>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * Groups every deal the viewer may see into the three buckets that replace a
+ * rep's weekly Excel report: won (stage ≥ ORDER_RECEIVED, still ACTIVE),
+ * expected (ACTIVE, pre-order — the win-weighted forecast), and lost
+ * (CLOSED_LOST). Paused (ON_HOLD/DORMANT) and terminal-but-not-lost
+ * (CANCELLED/COMPLETED) deals are deliberately excluded from all three: they
+ * are neither a live forecast nor a definitive loss, so folding them into
+ * either bucket would misstate it.
+ */
+function groupDealsForPipeline(deals) {
+  const won = [];
+  const expected = [];
+  const lost = [];
+  for (const deal of deals) {
+    if (deal.lifecycle === 'CLOSED_LOST') { lost.push(deal); continue; }
+    if (deal.lifecycle !== 'ACTIVE') continue;
+    const idx = stageIndex(deal.salesStage);
+    (idx >= ORDER_RECEIVED_IDX ? won : expected).push(deal);
+  }
+  const sumValue = (list) => list.reduce((sum, deal) => sum + (Number(deal.amountPayable) || 0), 0);
+  const forecast = expected.reduce((sum, deal) => {
+    const win = effectiveWinProbability(deal.winProbabilityOverride, deal.salesStage);
+    return sum + (Number(deal.amountPayable) || 0) * (win / 100);
+  }, 0);
+  return {
+    won: { deals: won, count: won.length, total: sumValue(won) },
+    expected: { deals: expected, count: expected.length, total: sumValue(expected), forecast },
+    lost: { deals: lost, count: lost.length, total: sumValue(lost) },
+    staleActiveCount: [...won, ...expected].filter((deal) => deal.stale).length,
+  };
+}
+
+/**
+ * "ภาพรวมทีม" — the live-pipeline replacement for the weekly report: what
+ * used to require every rep to email an Excel sheet is now this panel,
+ * computed straight off the same deal list the table below renders.
+ */
+function TeamPipelineSummary({ groups }) {
+  const cards = [
+    { key: 'won', label: 'ยอดที่สั่งซื้อแล้ว', tone: 'success', group: groups.won },
+    { key: 'expected', label: 'ยอดคาดหวัง', tone: 'info', group: groups.expected },
+    { key: 'lost', label: 'ขายไม่ได้', tone: 'danger', group: groups.lost },
+  ];
+  return (
+    <section className="panel">
+      <div className="panel-header" style={{ alignItems: 'center' }}>
+        <h2>ภาพรวมทีม (แทนที่รายงานประจำสัปดาห์)</h2>
+        {groups.staleActiveCount > 0 ? (
+          <StatusBadge tone="warning">
+            <Icon name="clock" size={12} /> {groups.staleActiveCount} ดีลเงียบ (ไม่มีการติดตาม 7 วัน)
+          </StatusBadge>
+        ) : null}
+      </div>
+      <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-3 sm:px-5">
+        {cards.map((card) => (
+          <div key={card.key} className="flex flex-col gap-1.5 rounded-xl border border-border bg-surface-subtle px-4 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-bold text-text-muted">{card.label}</span>
+              <StatusBadge tone={card.tone}>{card.group.count} ดีล</StatusBadge>
+            </div>
+            <strong className="text-xl font-extrabold text-text">{formatMoney(card.group.total)}</strong>
+            {card.key === 'expected' ? (
+              <span className="text-2xs text-text-muted">
+                คาดการณ์ถ่วงน้ำหนัก (Σ มูลค่า × win%): <strong className="text-text-secondary">{formatMoney(card.group.forecast)}</strong>
+              </span>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 // NOTE: 'lost' keys on lifecycle, never on lostReason. Since V57 the reason
 // SURVIVES a reopen, so a live reopened deal still carries one — testing the
 // reason would render it as เสียงาน and drop it out of the phase counts.
@@ -135,9 +233,11 @@ function DealStageCell({ deal }) {
  * `reason`, when given, is a one-line worklist chip ("why this deal is in
  * your queue right now") shown right under the customer name — used by
  * import's card to lead with the pricing/procurement queue instead of
- * making the viewer read the full 14-stage label first.
+ * making the viewer read the full 14-stage label first. `showTracking`
+ * (sales_manager/ceo only) adds the win%/stale badges below the stage —
+ * the mobile equivalent of the manager-only DataTable column.
  */
-function DealCard({ deal, reason = null }) {
+function DealCard({ deal, reason = null, showTracking = false }) {
   return (
     <>
       <div className="flex min-w-0 items-start justify-between gap-3">
@@ -155,6 +255,7 @@ function DealCard({ deal, reason = null }) {
 
       <DealStageCell deal={deal} />
       <StageProgressBar salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST'} />
+      {showTracking ? <TrackingBadges deal={deal} /> : null}
 
       <span className="min-w-0 truncate text-xs text-text-muted">
         {[deal.createdByName, formatThaiDate(deal.createdAt)].filter(Boolean).join(' · ')}
@@ -222,6 +323,9 @@ export function TicketListPage({ user, showToast }) {
   const hasWorklistDistinction = WORKLIST_ROLES.has(user.role);
   const inboxOnly = hasWorklistDistinction && searchParams.get('inbox') !== '0';
   const searchText = searchParams.get('q') ?? '';
+  // Manager live pipeline (V83, Slice B1/B2 — handoff 103): the weekly-report
+  // replacement, sales_manager/ceo only.
+  const isManagerView = MANAGER_PIPELINE_ROLES.has(user.role);
   const [creating, setCreating] = useState(false);
 
   const canCreate = ROLE_PERMISSIONS.canCreateTickets.includes(user.role);
@@ -271,6 +375,15 @@ export function TicketListPage({ user, showToast }) {
     overdue: allDeals.filter((deal) => deal.overdue).length,
     partial_delivery: allDeals.filter((deal) => deal.fulfillmentStatus === 'PARTIALLY_DELIVERED').length,
   }), [allDeals]);
+
+  // Manager live pipeline: computed off the FULL unfiltered list (independent of
+  // the phase/lifecycle/flag chips below), same "counts-from-allDeals" convention
+  // as flagCounts/lifecycleCounts above — a stable overview regardless of
+  // whatever the viewer happens to be filtering the table to right now.
+  const pipelineGroups = useMemo(
+    () => (isManagerView ? groupDealsForPipeline(allDeals) : null),
+    [allDeals, isManagerView],
+  );
 
   // Role-scoped views, Phase A: how many of allDeals are actually in this
   // role's worklist right now — same counts-from-allDeals convention as
@@ -357,6 +470,8 @@ export function TicketListPage({ user, showToast }) {
           </>
         )}
       />
+
+      {isManagerView && pipelineGroups ? <TeamPipelineSummary groups={pipelineGroups} /> : null}
 
       {/* Phase summary cards double as filters — no 14-stage tab bar. */}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
@@ -457,7 +572,7 @@ export function TicketListPage({ user, showToast }) {
       </div>
 
       <DataTable
-        columns={DEAL_COLUMNS}
+        columns={isManagerView ? MANAGER_DEAL_COLUMNS : DEAL_COLUMNS}
         rows={deals}
         getRowKey={(deal) => deal.id}
         gridClassName="ticket-table"
@@ -465,7 +580,7 @@ export function TicketListPage({ user, showToast }) {
         mobileCard={(deal) => (
           user.role === 'account'
             ? <MoneyWorklistCard deal={deal} />
-            : <DealCard deal={deal} reason={worklistReason(user.role, deal)} />
+            : <DealCard deal={deal} reason={worklistReason(user.role, deal)} showTracking={isManagerView} />
         )}
         searchable
         searchValue={searchText}
@@ -525,5 +640,20 @@ const DEAL_COLUMNS = [
     sortable: true,
     sortAccessor: (deal) => new Date(deal.stageUpdatedAt ?? deal.updatedAt),
     render: (deal) => <DaysBadge stageUpdatedAt={deal.stageUpdatedAt ?? deal.updatedAt} />,
+  },
+];
+
+// Manager live pipeline (V83, Slice B1/B2 — handoff 103): DEAL_COLUMNS plus one
+// column surfacing win% + the no-recent-activity flag per deal — sales_manager/ceo
+// only (see isManagerView in TicketListPage). Never shown to sales/import/account,
+// who have no reason to see another rep's win-probability estimate.
+const MANAGER_DEAL_COLUMNS = [
+  ...DEAL_COLUMNS,
+  {
+    key: 'tracking',
+    header: 'การติดตาม',
+    sortable: true,
+    sortAccessor: (deal) => effectiveWinProbability(deal.winProbabilityOverride, deal.salesStage),
+    render: (deal) => <TrackingBadges deal={deal} />,
   },
 ];

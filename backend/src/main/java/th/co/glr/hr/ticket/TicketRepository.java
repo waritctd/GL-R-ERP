@@ -42,7 +42,8 @@ public class TicketRepository {
                t.last_follow_up_at, t.next_follow_up_at,
                t.close_confirmed_at,
                NULLIF(TRIM(CONCAT_WS(' ', ecc.first_name_th, ecc.last_name_th)), '') AS close_confirmed_by_name,
-               t.cancel_reason, t.cancelled_at
+               t.cancel_reason, t.cancelled_at,
+               t.win_probability, t.designer_name, t.owner_name, t.buyer_name
           FROM sales.ticket t
           JOIN hr.employee ec ON ec.employee_id = t.created_by
           LEFT JOIN hr.employee ea ON ea.employee_id = t.assigned_to
@@ -901,7 +902,12 @@ public class TicketRepository {
             rs.getString("close_confirmed_by_name"),
             false,
             rs.getString("cancel_reason"),
-            rs.getTimestamp("cancelled_at") != null ? rs.getTimestamp("cancelled_at").toInstant() : null
+            rs.getTimestamp("cancelled_at") != null ? rs.getTimestamp("cancelled_at").toInstant() : null,
+            (Integer) rs.getObject("win_probability"),
+            rs.getString("designer_name"),
+            rs.getString("owner_name"),
+            rs.getString("buyer_name"),
+            false // stale — recomputed by enrichSummary, which alone knows deal_activity
         );
     }
 
@@ -915,6 +921,9 @@ public class TicketRepository {
         boolean balanceReceipt = hasBalanceReceipt(s.id());
         String stage = derivePaymentStage(s, payable, paid, outstanding, balanceReceipt);
         boolean overdue = s.dueDate() != null && s.dueDate().isBefore(LocalDate.now()) && outstanding.signum() > 0;
+        // Staleness only means anything for a deal actively being worked — a DRAFT that hasn't
+        // started or a CLOSED_LOST/CANCELLED/COMPLETED deal is never flagged (Slice B1, handoff 103).
+        boolean stale = DealLifecycle.ACTIVE.equals(s.lifecycle()) && isStale(s.id());
         return new TicketSummaryDto(
             s.id(), s.code(), s.type(), s.title(), s.status(), s.priority(),
             s.createdById(), s.createdByName(), s.assignedToId(), s.assignedToName(),
@@ -927,7 +936,8 @@ public class TicketRepository {
             s.creditTermDays(), s.lastFollowUpAt(), s.nextFollowUpAt(),
             stage, payable, paid, outstanding, overdue,
             s.closeConfirmedAt(), s.closeConfirmedByName(), hasInvoiceAttachment(s.id()),
-            s.cancelReason(), s.cancelledAt());
+            s.cancelReason(), s.cancelledAt(),
+            s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), stale);
     }
 
     /**
@@ -1590,5 +1600,111 @@ public class TicketRepository {
                 .addValue("qtySqm", qtySqm)
                 .addValue("unitBasis", unitBasis),
             Long.class);
+    }
+
+    // ── Deal tracking + activity (V83, Slice B1 "kill the weekly report" — handoff 103) ──────
+
+    public void updateTracking(long ticketId, Integer winProbabilityOverride, String designerName,
+                               String ownerName, String buyerName, LocalDate nextFollowUpAt) {
+        jdbc.update("""
+            UPDATE sales.ticket
+               SET win_probability  = :winProbability,
+                   designer_name    = :designerName,
+                   owner_name       = :ownerName,
+                   buyer_name       = :buyerName,
+                   next_follow_up_at = :nextFollowUpAt,
+                   updated_at       = now()
+             WHERE ticket_id = :ticketId
+            """,
+            new MapSqlParameterSource()
+                .addValue("winProbability", winProbabilityOverride)
+                .addValue("designerName", designerName)
+                .addValue("ownerName", ownerName)
+                .addValue("buyerName", buyerName)
+                .addValue("nextFollowUpAt", nextFollowUpAt)
+                .addValue("ticketId", ticketId));
+    }
+
+    public long insertDealActivity(long ticketId, LocalDate activityDate, String kind, String note,
+                                   long createdById) {
+        GeneratedKeyHolder keys = new GeneratedKeyHolder();
+        jdbc.update("""
+            INSERT INTO sales.deal_activity (ticket_id, activity_date, kind, note, created_by_id)
+            VALUES (:ticketId, :activityDate, :kind, :note, :createdById)
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("activityDate", activityDate)
+                .addValue("kind", kind)
+                .addValue("note", note)
+                .addValue("createdById", createdById),
+            keys, new String[]{"id"});
+        return keys.getKey().longValue();
+    }
+
+    public List<DealActivityDto> findActivitiesByTicket(long ticketId) {
+        return jdbc.query("""
+            SELECT da.id, da.ticket_id, da.activity_date, da.kind, da.note, da.created_by_id,
+                   NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS created_by_name,
+                   da.created_at
+              FROM sales.deal_activity da
+              JOIN hr.employee e ON e.employee_id = da.created_by_id
+             WHERE da.ticket_id = :ticketId
+             ORDER BY da.activity_date DESC, da.id DESC
+            """,
+            Map.of("ticketId", ticketId),
+            (rs, rowNum) -> new DealActivityDto(
+                rs.getLong("id"),
+                rs.getLong("ticket_id"),
+                rs.getObject("activity_date", LocalDate.class),
+                rs.getString("kind"),
+                rs.getString("note"),
+                rs.getLong("created_by_id"),
+                rs.getString("created_by_name"),
+                rs.getTimestamp("created_at").toInstant()
+            ));
+    }
+
+    /**
+     * The stage-advance gate's second half (the first is {@code next_follow_up_at IS NOT NULL},
+     * checked in {@code TicketService.updateStage} directly off the summary already in hand):
+     * at least one {@code deal_activity} row logged (by {@code created_at}, not the possibly
+     * backdated {@code activity_date}) at/after the ticket's most recent {@code STAGE_CHANGED}
+     * event. A ticket that has never had a stage change yet (e.g. its very first manual advance)
+     * falls back to the ticket's own {@code created_at} as the baseline, so a brand-new deal isn't
+     * exempted just because no STAGE_CHANGED row exists.
+     */
+    public boolean hasActivitySinceLastStageChange(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM sales.deal_activity da
+                 WHERE da.ticket_id = :ticketId
+                   AND da.created_at >= COALESCE(
+                       (SELECT MAX(te.created_at)
+                          FROM sales.ticket_event te
+                         WHERE te.ticket_id = :ticketId AND te.kind = 'STAGE_CHANGED'),
+                       (SELECT t.created_at FROM sales.ticket t WHERE t.ticket_id = :ticketId)
+                   )
+            )
+            """, Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
+    }
+
+    /**
+     * True when no {@code deal_activity} row was logged (by {@code created_at}) in the last 7
+     * days — including a deal that has never had one at all. The caller ({@link #enrichSummary})
+     * additionally gates this on {@code lifecycle == ACTIVE}, so only a live deal is ever flagged.
+     */
+    public boolean isStale(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT NOT EXISTS (
+                SELECT 1
+                  FROM sales.deal_activity da
+                 WHERE da.ticket_id = :ticketId
+                   AND da.created_at >= now() - interval '7 days'
+            )
+            """, Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
     }
 }

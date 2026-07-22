@@ -33,7 +33,6 @@ const noopHandlers = {
   onDormant: vi.fn(),
   onResume: vi.fn(),
   onSetTenderRequirement: vi.fn(),
-  onSetDepositPolicy: vi.fn(),
 };
 
 function renderPanel(props = {}) {

@@ -16,6 +16,11 @@ public record CommissionRecord(
     LocalDate payrollMonth,
     BigDecimal actualReceived,
     BigDecimal commissionableBase,
+    // Commission redesign calc-refine (2026-07-22, V82): how many times this receipt's actual
+    // cash counts toward the monthly TIER BASE (1, 2, or 3 -- see CommissionCalculator). Never
+    // affects actualReceived/commissionableBase themselves, which stay the literal per-record
+    // amounts; only the aggregation across a rep's month is weighted by this.
+    int weightMultiplier,
     Long approvedById,
     Instant approvedAt,
     Long managerApprovedBy,
