@@ -64,15 +64,16 @@ describe('AppShell navigation (role-scoped views)', () => {
   });
 });
 
-// Account role-scoped views: nav must drop รายการดีล (pipeline browser) and
-// ค่าคอมมิชชัน (its create-from-deal action folds into งานการเงิน), and gain
-// งานการเงิน. sales is the control — unaffected by the split.
+// Account role-scoped views: nav drops รายการดีล (pipeline browser) and gains
+// งานการเงิน, but KEEPS ค่าคอมมิชชัน (pre-redesign parity — the standalone
+// console stays a discoverable entry point alongside the งานการเงิน worklist
+// path). sales is the control — unaffected by the split.
 describe('AppShell nav — Account role-scoped views', () => {
-  it('account nav has no รายการดีล, no ค่าคอมมิชชัน, and has งานการเงิน', async () => {
+  it('account nav has no รายการดีล, keeps ค่าคอมมิชชัน, and has งานการเงิน', async () => {
     renderShell({ role: 'account', name: 'บัญชี ทดสอบ', email: 'account@glr.co.th', employeeId: 3 });
     expect(await screen.findByText('งานการเงิน')).not.toBeNull();
     expect(screen.queryByText('รายการดีล')).toBeNull();
-    expect(screen.queryByText('ค่าคอมมิชชัน')).toBeNull();
+    expect(screen.getByText('ค่าคอมมิชชัน')).not.toBeNull();
   });
 
   it('sales nav still has รายการดีล and ค่าคอมมิชชัน, but no งานการเงิน', async () => {

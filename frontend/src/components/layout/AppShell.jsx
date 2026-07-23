@@ -83,12 +83,14 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       show: hasPermission(user.role, 'canManageProcurement') && SALES_ENABLED,
       match: ['/procurement', '/factory-purchase-orders'],
     },
-    // Account's only commission action (create-from-deal at close) is folded
-    // into งานการเงิน below instead of a separate commission console — it has
-    // no list access anyway (canListCommissionRecords excludes it). Route
-    // access to /commissions stays (canViewCommissions is unchanged) so the
-    // งานการเงิน worklist can still deep-link the create-from-deal flow.
-    { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', group: 'sales', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED && user.role !== 'account' },
+    // Account keeps its ค่าคอมมิชชัน nav item (pre-redesign parity): account's
+    // create-from-deal action is the งานการเงิน worklist's primary path (it
+    // deep-links /commissions?ticketId=NN), but the standalone console stays
+    // reachable from the nav as it was before, so account never loses a
+    // discoverable entry point. canViewCommissions is unchanged; account has
+    // no commission *list* access (canListCommissionRecords excludes it), so
+    // the console opens on the create-from-deal flow.
+    { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', group: 'sales', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED },
     // Account's money-lifecycle worklist (Account role-scoped views): deposit
     // -> final payment -> close-ready -> record-invoice/commission, one page.
     { path: '/finance', label: 'งานการเงิน', helper: 'Finance worklist', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canConfirmPayments') && SALES_ENABLED },
