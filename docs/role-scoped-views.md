@@ -387,14 +387,16 @@ at close (`canCreateCommissionFromDeal: ['account']`, mirrors
   `canViewDealPipeline` including `account` as a temporary hold so account
   wasn't stranded before its own branch landed; this branch's version, which
   excludes account, is the one to keep at integration).
-- `ค่าคอมมิชชัน` — **kept in account's nav** (pre-redesign parity, restored
-  2026-07-23 so account never loses a discoverable entry point). Account's one
-  commission action also folds into งานการเงิน as the final close step —
-  งานการเงิน's commission row deep-links `/commissions?ticketId=NN` (the
-  existing `CommissionPage.jsx` create-from-deal flow, unchanged) — but the
-  standalone console stays reachable from the nav as it was before.
-  `canViewCommissions` still includes account (route unchanged); account has no
-  commission *list* access, so the console opens on the create-from-deal flow.
+- `ค่าคอมมิชชัน` — **dropped from account's nav** (finalized Account design,
+  owner-confirmed 2026-07-24). The invoice+commission step (`บันทึกใบกำกับ +
+  ออกค่าคอม`) is the **last stage of the `งานการเงิน` money lifecycle** + the
+  Overview worklist — `รับมัดจำ → รับชำระส่วนที่เหลือ → ยืนยันพร้อมปิดงาน →
+  บันทึกใบกำกับ + ออกค่าคอม` — not a standalone menu item. The `งานการเงิน`
+  commission row deep-links `/commissions?ticketId=NN` (the `CommissionPage.jsx`
+  create-from-deal flow). The `/commissions` **route** stays reachable
+  (`canViewCommissions` still includes account, for that deep-link); account has
+  no commission *list* access — `GET /api/commissions` is `canListCommissionRecords`
+  = sales/sales_manager/ceo only (enforced backend-side, CommissionService.list).
 - `แคตตาล็อก`, self-service — unchanged (`canViewCatalog` already includes
   account).
 
@@ -470,7 +472,7 @@ this way — `get(id)` has no such restriction for account).
 - `frontend/src/app/permissions.js` — split `/tickets` vs `/tickets/:id`
   guards, added `/finance` guard, synced `allowedRoute()`.
 - `frontend/src/components/layout/AppShell.jsx` — `รายการดีล` gated on
-  `canViewDealPipeline`; `ค่าคอมมิชชัน` kept for account (pre-redesign parity);
+  `canViewDealPipeline`; `ค่าคอมมิชชัน` hidden for account (folded into `งานการเงิน`);
   new `งานการเงิน` nav item.
 - `frontend/src/components/layout/AppShell.test.jsx` (new).
 - `frontend/src/App.jsx` — lazy-loads `AccountOverview`/`AccountFinancePage`;
@@ -662,6 +664,6 @@ component renders the already-correct data and which nav items appear.
 | 2026-07-23 | CEO | `feat/role-views-ceo` | New `CeoOverview.jsx` cross-domain exec-cockpit landing at `/` for `role==='ceo'` (guarded by `SALES_ENABLED`, degrades to `EmployeeDashboard` when off); `tickets.list()` mock-parity fix (`closeConfirmedAt`/`closeConfirmedByName`/`invoiceOnFile`). No nav, route guard, or permission changes. |
 | 2026-07-23 | Import | `feat/role-views-import` | New `ImportOverview.jsx` landing + `/procurement` (`ProcurementFulfilmentPage.jsx`); `รายการดีล` removed from Import's nav. Introduced the `canViewDealPipeline` vs `canViewTickets` split (pipeline browser vs ticket-detail read). No backend change. |
 | 2026-07-23 | Account | `feat/role-views-account` | New `AccountOverview.jsx` landing + `/finance` (`AccountFinancePage.jsx`); `รายการดีล` removed from Account's nav (commission action folds into งานการเงิน). Reconciled `canViewDealPipeline` to exclude `account` (Import's temporary hold dropped). No backend change. |
-| 2026-07-23 | Account | `feat/role-views-all` (integration) | Restored `ค่าคอมมิชชัน` in Account's nav for pre-redesign parity (it had been removed) so account keeps a discoverable commission entry point alongside the งานการเงิน worklist path. Frontend-only; `canViewCommissions` unchanged. Reviewer note: the account WAIVE_DEPOSIT / SET_BILLING / create-from-deal finance buckets read empty under the current backend `appendRoleScope` — a pre-existing scope limit, not a regression; a self-populating account finance worklist is a tracked backend follow-up. |
+| 2026-07-24 | Account | `fix/account-nav-drop-commissions` | **Finalized Account design (owner-confirmed):** `ค่าคอมมิชชัน` is NOT a nav item — the invoice+commission step (`บันทึกใบกำกับ + ออกค่าคอม`) is the last stage of the `งานการเงิน` money lifecycle + Overview worklist (`รับมัดจำ → รับชำระส่วนที่เหลือ → ยืนยันพร้อมปิดงาน → บันทึกใบกำกับ + ออกค่าคอม`). Reverts a 2026-07-23 integration change that had restored the nav item on a mistaken "parity" read. `/commissions` route stays reachable (`canViewCommissions` incl. account) for the worklist's create-from-deal deep-link; the list API is `canListCommissionRecords` = sales/sales_manager/ceo only (now enforced backend-side, PR #292). Frontend-only. |
 | 2026-07-23 | Employee (base) | `feat/role-views-employee` | New `EmployeeSelfService.jsx` landing for a plain, non-managing employee; clock card + 3 tiles + own-requests panel with approval chain; no nav/permission/backend change. |
 | 2026-07-23 | Division Manager (non-sales) | `feat/role-views-division-manager` | New `DivisionManagerOverview.jsx` landing for `role==='employee' && manager`; division OT/leave approval worklist + team attendance + self-service; new `isDivisionManager` helper (`permissions.js`) + `team` nav group ("ทีมของฉัน"). No nav/permission/backend change beyond the new client-side helper. |
