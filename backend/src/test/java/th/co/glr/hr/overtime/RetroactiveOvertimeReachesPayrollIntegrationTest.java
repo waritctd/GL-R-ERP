@@ -14,13 +14,18 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
+import th.co.glr.hr.attachment.AttachmentRepository;
+import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.commission.CommissionAttachmentRepository;
 import th.co.glr.hr.commission.CommissionCalculator;
 import th.co.glr.hr.commission.CommissionRepository;
+import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollCalculator;
 import th.co.glr.hr.payroll.PayrollLineDto;
@@ -30,6 +35,7 @@ import th.co.glr.hr.payroll.PayrollService;
 import th.co.glr.hr.payroll.PayslipRenderer;
 import th.co.glr.hr.payroll.ProcessPayrollRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.ticket.TicketRepository;
 
 /**
  * Proves that overtime filed under the new retroactive rules actually reaches payroll.
@@ -63,13 +69,30 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             mock(NotificationService.class),
             new AppProperties(),
             mock(AttendanceDailyService.class));
+        CommissionService commissionService = new CommissionService(
+            new CommissionRepository(jdbc),
+            mock(CommissionAttachmentRepository.class),
+            new CommissionCalculator(),
+            mock(FileStorageService.class),
+            mock(AuditService.class),
+            mock(NotificationService.class),
+            mock(TicketRepository.class),
+            mock(AttachmentRepository.class));
+        // Leave -> payroll unpaid-day deduction (2026-07-23): mechanical constructor-arity fix only --
+        // PayrollService gained a LeaveRepository dependency for #suggestedInputs (see
+        // PayrollService.java), unrelated to what this test exercises (overtime -> preview). A real
+        // repo against the same `jdbc` matches this test's existing style for its other collaborators.
         payrollService = new PayrollService(
             new PayrollRepository(jdbc),
             new PayrollCalculator(),
-            new CommissionRepository(jdbc),
-            new CommissionCalculator(),
+            commissionService,
             mock(AuditService.class),
-            mock(PayslipRenderer.class));
+            mock(PayslipRenderer.class),
+            new LeaveRepository(jdbc),
+            new th.co.glr.hr.payroll.export.KBankPctExporter(),
+            new th.co.glr.hr.payroll.export.Pnd1Exporter(),
+            new th.co.glr.hr.payroll.export.SsoExporter(),
+            new AppProperties());
 
         division = insertDivision("SLS", "ฝ่ายขาย");
         manager = insertEmployee("M001", null);

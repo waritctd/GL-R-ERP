@@ -22,6 +22,14 @@ import { formatMoney, payrollStatusLabel as statusInfo } from '../../utils/forma
 // than wrapping a <section> inside an <aside> or changing the shared primitive.
 const PANEL_CLASS = 'bg-surface border border-border rounded-md shadow-sm p-5';
 
+// The three statutory files HR can generate for a processed period. `value` is the backend export
+// slug (/api/payroll/{id}/export/{value}); `filePrefix` names the downloaded blob.
+const EXPORT_KINDS = [
+  { value: 'kbank', label: 'KBank Payroll', filePrefix: 'PCT' },
+  { value: 'pnd1', label: 'ภ.ง.ด.1', filePrefix: 'Pnd1' },
+  { value: 'sso', label: 'ประกันสังคม (สปส.1-10)', filePrefix: 'SPS1-10' },
+];
+
 const payrollColumns = [
   {
     key: 'employee',
@@ -110,6 +118,29 @@ function draftValue(value, fallback = '') {
   return amount > 0 ? String(amount) : fallback;
 }
 
+// Special-pay carry-forward (2026-07-23): the recurring fields pre-filled from the employee's most
+// recent prior processed payroll_line (via GET /api/payroll/suggested-inputs) when HR starts a
+// brand-new run. Deliberately excludes specialPay6 (commission — already fed by the commission
+// engine), specialPay7/8 (KPI/bonus — one-off) and every event-driven field. This is a client-side
+// pre-fill convenience only: whatever value sits in the field when HR hits Preview/Process — carried,
+// edited, or explicitly cleared to 0 — is submitted as-is via `payload()` below, same as today.
+function indexSuggestionsByEmployee(rows) {
+  const map = {};
+  (rows || []).forEach((row) => {
+    if (row && row.employeeId != null) map[row.employeeId] = row;
+  });
+  return map;
+}
+
+// A real carried figure from last month beats the hardcoded UAT demo default (500) below — the
+// carried value is an actual prior figure, the hardcoded one is only a guess for when nothing else
+// is known. Returns a numeric string, or null when there is nothing to carry for this key.
+function suggestedFallback(suggestion, key) {
+  if (!suggestion) return null;
+  const amount = Number(suggestion[key] || 0);
+  return amount > 0 ? String(amount) : null;
+}
+
 function parsePayrollNumber(value) {
   if (value === '' || value === null || value === undefined) return 0;
   const amount = Number(value);
@@ -131,16 +162,25 @@ function blankAdjustment(employeeId, { applyDefaults = false } = {}) {
   };
 }
 
-function adjustmentFromLine(line, { applyDefaults = false } = {}) {
+function adjustmentFromLine(line, { applyDefaults = false, suggestion = null } = {}) {
   const adjustment = blankAdjustment(line.employeeId, { applyDefaults });
   (line.specialPays || []).forEach((item, index) => {
     const key = `specialPay${index + 1}`;
-    adjustment[key] = draftValue(item.amount, defaultSpecialPayValue(key, applyDefaults));
+    // Priority: the line's own real value (already-submitted/persisted) > a carried figure from
+    // last month > the hardcoded UAT demo default. A suggestion only ever fills in for a genuinely
+    // blank/zero field on a fresh run.
+    const fallback = suggestedFallback(suggestion, key) ?? defaultSpecialPayValue(key, applyDefaults);
+    adjustment[key] = draftValue(item.amount, fallback);
   });
-  adjustment.nonTaxableIncome = draftValue(line.nonTaxableIncome);
-  adjustment.unpaidLeaveDays = draftValue(line.unpaidLeaveDays);
-  adjustment.studentLoanDeduction = draftValue(line.studentLoanDeduction);
-  adjustment.legalExecutionDeduction = draftValue(line.legalExecutionDeduction);
+  adjustment.nonTaxableIncome = draftValue(line.nonTaxableIncome, suggestedFallback(suggestion, 'nonTaxableIncome') ?? '');
+  // Leave -> payroll unpaid-day deduction (2026-07-23): unpaidLeaveDays is event-driven (this
+  // month's approved-beyond-quota leave, from GET /api/payroll/suggested-inputs), unlike the other
+  // carried fields above which are prior-month recurring amounts -- but it pre-fills the same way:
+  // a real line value (already-submitted/persisted) wins, otherwise fall back to the suggestion.
+  // HR can still edit/clear it before Preview/Process, same as every other field here.
+  adjustment.unpaidLeaveDays = draftValue(line.unpaidLeaveDays, suggestedFallback(suggestion, 'unpaidLeaveDays') ?? '');
+  adjustment.studentLoanDeduction = draftValue(line.studentLoanDeduction, suggestedFallback(suggestion, 'studentLoanDeduction') ?? '');
+  adjustment.legalExecutionDeduction = draftValue(line.legalExecutionDeduction, suggestedFallback(suggestion, 'legalExecutionDeduction') ?? '');
   adjustment.otherPostTaxDeductions = draftValue(line.otherPostTaxDeductions);
   adjustment.warningLetterDeduction = draftValue(line.warningLetterDeduction);
   adjustment.customerReturnDeduction = draftValue(line.customerReturnDeduction);
@@ -178,6 +218,13 @@ export function PayrollPage({ showToast }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [confirmProcess, setConfirmProcess] = useState(false);
+  // Leave -> payroll unpaid-day deduction (2026-07-23): the raw suggestions response, kept only so
+  // the pending cancel-after-close correction credit (if any) can be shown as a hint next to the
+  // unpaidLeaveDays field. Never re-applied to `adjustments` after the initial pre-fill in
+  // applyPeriod -- HR's edits always win.
+  const [suggestionsByEmployee, setSuggestionsByEmployee] = useState({});
+  const [exportKind, setExportKind] = useState('kbank');
+  const [payDate, setPayDate] = useState(`${thisMonth}-26`);
 
   const selectedLine = useMemo(
     () => (period?.lines || []).find((line) => Number(line.employeeId) === Number(selectedEmployeeId)) || period?.lines?.[0] || null,
@@ -186,13 +233,32 @@ export function PayrollPage({ showToast }) {
   const selectedAdjustment = selectedLine
     ? adjustments[selectedLine.employeeId] || adjustmentFromLine(selectedLine)
     : null;
+  const selectedSuggestion = selectedLine ? suggestionsByEmployee[selectedLine.employeeId] : null;
+  const pendingUnpaidLeaveCorrectionDays = Number(selectedSuggestion?.pendingUnpaidLeaveCorrectionDays || 0);
   const status = statusInfo(period?.status);
 
   async function load() {
     setLoading(true);
     try {
       const response = await api.payroll.current({ payrollMonth: month });
-      applyPeriod(response.period, { applyUatDefaults: true });
+      const nextPeriod = response.period;
+      // Special-pay carry-forward: only fetch suggestions when starting a fresh run for this month
+      // (PREVIEW with no processed period yet) — a PROCESSED period already reflects real, submitted
+      // values and must never be overwritten by a stale suggestion.
+      let suggestionsByEmployee = {};
+      if (nextPeriod?.status === 'PREVIEW' && !nextPeriod?.id) {
+        try {
+          // Optional chaining keeps this resilient if a caller's api.payroll mock predates this
+          // method (e.g. an older test double) — suggestions are a convenience pre-fill only and
+          // must never block payroll from loading.
+          const suggestionResponse = await api.payroll.suggestedInputs?.({ payrollMonth: month });
+          suggestionsByEmployee = indexSuggestionsByEmployee(suggestionResponse?.suggestions);
+        } catch {
+          suggestionsByEmployee = {};
+        }
+      }
+      setSuggestionsByEmployee(suggestionsByEmployee);
+      applyPeriod(nextPeriod, { applyUatDefaults: true, suggestionsByEmployee });
     } catch (error) {
       showToast('error', error.message || 'โหลดเงินเดือนไม่สำเร็จ');
     } finally {
@@ -200,12 +266,15 @@ export function PayrollPage({ showToast }) {
     }
   }
 
-  function applyPeriod(nextPeriod, { applyUatDefaults = false } = {}) {
+  function applyPeriod(nextPeriod, { applyUatDefaults = false, suggestionsByEmployee = {} } = {}) {
     setPeriod(nextPeriod);
     const nextAdjustments = {};
     const applyDefaults = applyUatDefaults && nextPeriod?.status === 'PREVIEW';
     (nextPeriod?.lines || []).forEach((line) => {
-      nextAdjustments[line.employeeId] = adjustmentFromLine(line, { applyDefaults });
+      nextAdjustments[line.employeeId] = adjustmentFromLine(line, {
+        applyDefaults,
+        suggestion: suggestionsByEmployee[line.employeeId],
+      });
     });
     setAdjustments(nextAdjustments);
     setSelectedEmployeeId((current) => current || nextPeriod?.lines?.[0]?.employeeId || null);
@@ -213,6 +282,7 @@ export function PayrollPage({ showToast }) {
 
   useEffect(() => {
     setSelectedEmployeeId(null);
+    setPayDate(`${month}-26`); // default salary pay date is the 26th of the selected month
     load();
   }, [month]);
 
@@ -254,14 +324,16 @@ export function PayrollPage({ showToast }) {
     }
   }
 
-  async function exportBankFile() {
+  async function generateExportFile() {
     if (!period?.id) return;
+    const kind = EXPORT_KINDS.find((item) => item.value === exportKind) || EXPORT_KINDS[0];
     setSaving(true);
     try {
-      const text = await api.payroll.bankExport(period.id);
-      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-      downloadBlob(blob, `glr-payroll-${month}.txt`);
-      showToast('success', 'ดาวน์โหลดไฟล์โอนเงินแล้ว');
+      // The backend returns raw CP874 bytes; exportFile fetches them as a binary blob so the Thai
+      // encoding survives the download intact. payDate is the salary pay/transfer date.
+      const blob = await api.payroll.exportFile(period.id, kind.value, payDate || undefined);
+      downloadBlob(blob, `${kind.filePrefix}-${month}.txt`);
+      showToast('success', `ดาวน์โหลดไฟล์ ${kind.label} แล้ว`);
     } catch (error) {
       showToast('error', error.message || 'ดาวน์โหลดไฟล์ไม่สำเร็จ');
     } finally {
@@ -367,10 +439,31 @@ export function PayrollPage({ showToast }) {
           <Icon name="check" />
           Process Payroll
         </Button>
-        <Button type="button" variant="secondary" onClick={exportBankFile} disabled={!period?.id || saving}>
-          <Icon name="fileText" />
-          Bank file
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={exportKind}
+            onChange={(event) => setExportKind(event.target.value)}
+            disabled={!period?.id || saving}
+            aria-label="ประเภทไฟล์ที่จะสร้าง"
+          >
+            {EXPORT_KINDS.map((kind) => (
+              <option key={kind.value} value={kind.value}>{kind.label}</option>
+            ))}
+          </select>
+          <label className="inline-flex items-center gap-2 m-0 text-sm font-extrabold">
+            วันที่จ่าย
+            <input
+              type="date"
+              value={payDate}
+              onChange={(event) => setPayDate(event.target.value)}
+              disabled={!period?.id || saving}
+            />
+          </label>
+          <Button type="button" variant="secondary" onClick={generateExportFile} disabled={!period?.id || saving}>
+            <Icon name="fileText" />
+            ดาวน์โหลดไฟล์
+          </Button>
+        </div>
         <Button type="button" variant="secondary" onClick={distributePayslips} disabled={!period?.id || saving}>
           <Icon name="mail" />
           Email payslips
@@ -442,7 +535,19 @@ export function PayrollPage({ showToast }) {
                 <FormGrid>
                   <label htmlFor="payroll-unpaid-leave-days">
                     วันลาไม่รับค่าจ้าง
+                    <InfoTip label="วันลาไม่รับค่าจ้าง" text="ตัวเลขนี้ถูกกรอกล่วงหน้าจากวันลาที่อนุมัติเกินโควตาในเดือนนี้ (ระบบวันลา) สามารถแก้ไขได้ก่อนคำนวณ/ประมวลผล" />
                     <input id="payroll-unpaid-leave-days" type="number" min="0" step="0.25" placeholder="0" value={selectedAdjustment.unpaidLeaveDays} onChange={(event) => updateAdjustment('unpaidLeaveDays', event.target.value)} />
+                    {Number(selectedLine.leaveRefundDays || 0) > 0 ? (
+                      <small className="block text-warning">
+                        ระบบคืนเครดิตวันลาไม่รับค่าจ้างค้างคืน {selectedLine.leaveRefundDays} วัน ({formatMoney(selectedLine.leaveDeductionRefund)}) ให้อัตโนมัติในงวดนี้แล้ว
+                        จากการยกเลิกคำขอลาหลังปิดงวดเงินเดือนก่อนหน้า — ไม่ต้องกรอกตัวเลขด้านบนเพิ่ม
+                      </small>
+                    ) : pendingUnpaidLeaveCorrectionDays > 0 && (
+                      <small className="block text-warning">
+                        มีเครดิตวันลาไม่รับค่าจ้างค้างคืน {pendingUnpaidLeaveCorrectionDays} วัน จากการยกเลิกคำขอลาหลังปิดงวดเงินเดือน
+                        ระบบจะคืนเครดิตนี้ให้อัตโนมัติในงวดเงินเดือนถัดไปที่ประมวลผลสำหรับพนักงานคนนี้
+                      </small>
+                    )}
                   </label>
                   <label htmlFor="payroll-student-loan-deduction">
                     หัก กยศ.
@@ -490,6 +595,12 @@ export function PayrollPage({ showToast }) {
                 <span><b>รายได้ไม่คิดภาษี</b>{formatMoney(selectedLine.nonTaxableIncome)}</span>
                 {Number(selectedLine.directorRemuneration || 0) > 0 && (
                   <span><b>ค่าตอบแทนกรรมการ</b>{formatMoney(selectedLine.directorRemuneration)}</span>
+                )}
+                {Number(selectedLine.leaveRefundDays || 0) > 0 && (
+                  <span>
+                    <b>คืนเครดิตวันลาไม่รับค่าจ้าง ({selectedLine.leaveRefundDays} วัน)</b>
+                    {formatMoney(selectedLine.leaveDeductionRefund)}
+                  </span>
                 )}
               </div>
             </>

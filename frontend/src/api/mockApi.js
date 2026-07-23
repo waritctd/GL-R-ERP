@@ -4549,7 +4549,7 @@ export const api = {
 
   // No seeded payroll-period data yet — `current` returns an empty period so
   // PayrollPage degrades to its built-in empty state; the mutating actions
-  // (preview/process/bankExport) are explicit user-triggered calculations that
+  // (preview/process/exportFile) are explicit user-triggered calculations that
   // would require reproducing real payroll/tax logic to fake convincingly, so
   // they surface a clear "not supported in mock mode" error instead of
   // fabricating financial figures (real backend implementation is in hrApi.js).
@@ -4562,6 +4562,13 @@ export const api = {
       hasRole('hr', 'ceo');
       return delay({ period: null });
     },
+    // Special-pay carry-forward (2026-07-23): no seeded prior payroll_line data in mock mode, so
+    // there is nothing to carry forward — return an empty suggestions list rather than fabricating
+    // figures, same spirit as `current` returning a null period above.
+    async suggestedInputs(params = {}) {
+      hasRole('hr', 'ceo');
+      return delay({ payrollMonth: params.payrollMonth ? `${params.payrollMonth}-01` : null, suggestions: [] });
+    },
     async preview() {
       hasRole('hr', 'ceo');
       throw new Error('คำนวณเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
@@ -4570,9 +4577,9 @@ export const api = {
       hasRole('hr');
       throw new Error('ประมวลผลเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
-    async bankExport() {
+    async exportFile() {
       hasRole('hr', 'ceo');
-      throw new Error('ดาวน์โหลดไฟล์โอนเงินไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+      throw new Error('ดาวน์โหลดไฟล์เงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
     async downloadPayslip() {
       hasRole('hr', 'ceo');

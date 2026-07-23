@@ -310,9 +310,19 @@ export const api = {
   },
   payroll: {
     current: (params) => apiRequest(withQuery(API_ROUTES.payroll.current, params)),
+    // Special-pay carry-forward (2026-07-23): pre-fill suggestions only — read-only, never feeds
+    // preview/process directly. Mirrors PayrollController#suggestedInputs / PayrollService#suggestedInputs.
+    suggestedInputs: (params) => apiRequest(withQuery(API_ROUTES.payroll.suggestedInputs, params)),
     preview: (payload) => apiRequest(API_ROUTES.payroll.preview, { method: 'POST', body: payload }),
     process: (payload) => apiRequest(API_ROUTES.payroll.process, { method: 'POST', body: payload }),
-    bankExport: (periodId) => apiRequest(API_ROUTES.payroll.bankExport(periodId)),
+    // Statutory export files (KBank PCT / PND1 / SSO). Fetched as a binary blob so the file's legacy
+    // CP874/TIS-620 Thai bytes survive intact — the old text path wrapped the body in a UTF-8 blob,
+    // which would have corrupted every fixed-width offset after a Thai name.
+    exportFile: async (periodId, kind, effectiveDate) => {
+      const res = await fetch(API_ROUTES.payroll.export(periodId, kind, effectiveDate), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
     downloadPayslip: async (periodId, lineId) => {
       const res = await fetch(API_ROUTES.payroll.payslip(periodId, lineId), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');

@@ -143,20 +143,38 @@ class PayrollControllerTest {
     }
 
     @Test
-    void bankExportSetsAttachmentDispositionAndPlainText() throws Exception {
-        when(payrollService.bankExport(org.mockito.ArgumentMatchers.eq(7L), any(UserPrincipal.class)))
-            .thenReturn("GLR_PAYROLL|2026-07-01|0|0\n");
+    void exportSetsAttachmentDispositionAndOctetStreamAndPassesEffectiveDate() throws Exception {
+        byte[] body = "HPCT...".getBytes(java.nio.charset.Charset.forName("x-windows-874"));
+        when(payrollService.export(
+                org.mockito.ArgumentMatchers.eq(th.co.glr.hr.payroll.export.PayrollExportKind.KBANK),
+                org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq(LocalDate.of(2026, 7, 26)),
+                any(UserPrincipal.class)))
+            .thenReturn(new th.co.glr.hr.payroll.export.PayrollExportFile(
+                th.co.glr.hr.payroll.export.PayrollExportKind.KBANK, "PCT260726.txt", body));
 
-        mvc.perform(get("/api/payroll/7/bank-export").session(sessionFor("hr")))
+        mvc.perform(get("/api/payroll/7/export/kbank?effectiveDate=2026-07-26").session(sessionFor("hr")))
             .andExpect(status().isOk())
-            .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_PLAIN))
+            .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_OCTET_STREAM))
             .andExpect(header().string("Content-Disposition",
                 org.hamcrest.Matchers.allOf(
                     org.hamcrest.Matchers.containsString("attachment"),
-                    org.hamcrest.Matchers.containsString("glr-payroll-7.txt"))))
-            .andExpect(content().string("GLR_PAYROLL|2026-07-01|0|0\n"));
+                    org.hamcrest.Matchers.containsString("PCT260726.txt"))))
+            .andExpect(content().bytes(body));
 
-        verify(payrollService).bankExport(org.mockito.ArgumentMatchers.eq(7L), any(UserPrincipal.class));
+        verify(payrollService).export(
+            org.mockito.ArgumentMatchers.eq(th.co.glr.hr.payroll.export.PayrollExportKind.KBANK),
+            org.mockito.ArgumentMatchers.eq(7L),
+            org.mockito.ArgumentMatchers.eq(LocalDate.of(2026, 7, 26)),
+            any(UserPrincipal.class));
+    }
+
+    @Test
+    void exportRejectsUnknownKindWith400() throws Exception {
+        mvc.perform(get("/api/payroll/7/export/bogus").session(sessionFor("hr")))
+            .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(payrollService);
     }
 
     @Test
