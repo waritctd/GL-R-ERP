@@ -83,14 +83,15 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       show: hasPermission(user.role, 'canManageProcurement') && SALES_ENABLED,
       match: ['/procurement', '/factory-purchase-orders'],
     },
-    // Account keeps its ค่าคอมมิชชัน nav item (pre-redesign parity): account's
-    // create-from-deal action is the งานการเงิน worklist's primary path (it
-    // deep-links /commissions?ticketId=NN), but the standalone console stays
-    // reachable from the nav as it was before, so account never loses a
-    // discoverable entry point. canViewCommissions is unchanged; account has
-    // no commission *list* access (canListCommissionRecords excludes it), so
-    // the console opens on the create-from-deal flow.
-    { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', group: 'sales', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED },
+    // Account has NO ค่าคอมมิชชัน nav item (finalized Account design, owner-confirmed
+    // 2026-07-24): the invoice+commission step (บันทึกใบกำกับ + ออกค่าคอม / create-from-deal
+    // at close) is the LAST STAGE of the งานการเงิน money lifecycle + the Overview worklist
+    // (รับมัดจำ → รับชำระส่วนที่เหลือ → ยืนยันพร้อมปิดงาน → บันทึกใบกำกับ + ออกค่าคอม), not a
+    // standalone menu. The /commissions ROUTE stays reachable (canViewCommissions still
+    // includes account) so the งานการเงิน worklist row can deep-link /commissions?ticketId=NN
+    // into the create-from-deal flow; account has no list access (canListCommissionRecords
+    // excludes it — GET /api/commissions is sales/sales_manager/ceo only).
+    { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', group: 'sales', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED && user.role !== 'account' },
     // Account's money-lifecycle worklist (Account role-scoped views): deposit
     // -> final payment -> close-ready -> record-invoice/commission, one page.
     { path: '/finance', label: 'งานการเงิน', helper: 'Finance worklist', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canConfirmPayments') && SALES_ENABLED },
