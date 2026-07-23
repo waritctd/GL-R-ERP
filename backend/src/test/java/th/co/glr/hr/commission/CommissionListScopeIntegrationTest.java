@@ -1,6 +1,7 @@
 package th.co.glr.hr.commission;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 import java.math.BigDecimal;
@@ -9,10 +10,12 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -23,13 +26,20 @@ import th.co.glr.hr.ticket.TicketRepository;
 
 /**
  * Stage L (release runbook) — L1, top priority. {@link CommissionService#list} (called by the
- * {@code GET /commissions} endpoint) has <b>no {@code requireRole} at all</b> — the sole
- * authorization for who sees whose commission rows is the SQL predicate in {@link
- * CommissionRepository#findRecords}: {@code WHERE (:salesRepId::bigint IS NULL OR
- * cr.sales_rep_id = :salesRepId)}, where {@code CommissionService.list} only ever binds
- * {@code salesRepId} when {@code actor.role().equals("sales")}. That is a real money surface
- * (commission amounts) with zero prior test coverage — no existing test file calls {@code
- * commissionService.list}.
+ * {@code GET /commissions} endpoint) has TWO layers of authorization, both proved here:
+ * <ol>
+ *   <li><b>Role gate</b> ({@code LIST_VIEWER_ROLES} = sales/sales_manager/ceo/hr/account) — added
+ *       2026-07-24 after this test surfaced that {@code list()} previously had <em>no</em>
+ *       {@code requireRole} at all, so any authenticated user (incl. a plain employee/warehouse/qc)
+ *       could read every rep's commission amounts. Owner decision: gate it to match the frontend's
+ *       {@code canViewCommissions}.</li>
+ *   <li><b>Row-scope</b> — the SQL predicate in {@link CommissionRepository#findRecords}:
+ *       {@code WHERE (:salesRepId::bigint IS NULL OR cr.sales_rep_id = :salesRepId)}, where
+ *       {@code list()} binds {@code salesRepId} only when {@code actor.role().equals("sales")}, so
+ *       a sales rep sees only their own rows while the other four viewer roles see the full feed.</li>
+ * </ol>
+ * A real money surface (commission amounts) that had zero prior test coverage — no existing test
+ * called {@code commissionService.list}.
  *
  * <p>Per CLAUDE.md's "Permission changes must ship evidence": Mockito cannot prove this — a
  * mocked repository happily "passes" while the real {@code WHERE} clause does something else.
@@ -58,6 +68,10 @@ class CommissionListScopeIntegrationTest extends AbstractPostgresIntegrationTest
     private UserPrincipal accountActor;
     private UserPrincipal hrActor;
     private UserPrincipal managerActor;
+    private UserPrincipal importActor;
+    private UserPrincipal employeeActor;
+    private UserPrincipal warehouseActor;
+    private UserPrincipal qcActor;
 
     @BeforeEach
     void wireRealCollaborators() {
@@ -83,6 +97,11 @@ class CommissionListScopeIntegrationTest extends AbstractPostgresIntegrationTest
         accountActor = principal(accountId, "account");
         hrActor = principal(999_888L, "hr");
         managerActor = principal(managerId, "sales_manager");
+        // Denied viewer roles — rejected at the role gate before any DB lookup, so synthetic ids.
+        importActor = principal(999_777L, "import");
+        employeeActor = principal(999_666L, "employee");
+        warehouseActor = principal(999_555L, "warehouse");
+        qcActor = principal(999_444L, "qc");
     }
 
     // ── L1: sales_rep_id row-scope (the load-bearing wrong-way-round case) ──────────────────
@@ -122,12 +141,11 @@ class CommissionListScopeIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     /**
-     * Documents (does not fix — see the handoff design flag) that {@code CommissionService.list}
-     * has no role gate at all: the {@code salesRepId} filter is bound only for {@code "sales"}.
-     * Every other role — account, hr, sales_manager, ceo, import — gets the null filter and sees
-     * every rep's rows. Confirmed as the deliberately unscoped direction (account/HR/manager/CEO
-     * genuinely need the full feed to review and pay commissions), but flagged for owner
-     * sign-off since it was previously untested and undocumented.
+     * The four allowed non-sales viewer roles — account, hr, sales_manager, ceo — get the null
+     * {@code salesRepId} filter and see EVERY rep's rows (they review, approve, and pay the
+     * commission feed, so full visibility is intended). This is the "positive control" half of the
+     * role gate: it must stay reachable. The denied half (import/plain-employee/warehouse/qc → 403)
+     * is {@link #listAsUnprivilegedRole_isForbidden}.
      */
     @Test
     void listAsNonSalesRole_seesBothReps_becauseFilterIsSalesOnly() {
@@ -153,6 +171,26 @@ class CommissionListScopeIntegrationTest extends AbstractPostgresIntegrationTest
 
         assertThat(idsSeenByRepA).contains(recordThisMonth);
         assertThat(idsSeenByRepA).doesNotContain(recordOtherMonth);
+    }
+
+    /**
+     * The role gate ({@code LIST_VIEWER_ROLES}) added 2026-07-24. Roles with no business reason to
+     * see commission amounts — import, plain employee, warehouse, qc — are rejected with 403 before
+     * any DB lookup, so they can never read another rep's money data via {@code GET /commissions}.
+     *
+     * <p>MUTATION-CHECK RECORD (to be run + verified by the reviewer): remove the {@code
+     * LIST_VIEWER_ROLES.contains(...)} guard at the top of {@link CommissionService#list} → this
+     * test goes red (each denied role now returns rows instead of throwing FORBIDDEN) while every
+     * other test in this class stays green; then revert to an empty product-code diff.
+     */
+    @Test
+    void listAsUnprivilegedRole_isForbidden() {
+        seedManualCommission(repAId, PAYROLL_MONTH);
+        for (UserPrincipal denied : List.of(importActor, employeeActor, warehouseActor, qcActor)) {
+            assertThatThrownBy(() -> commissionService.list(PAYROLL_MONTH, denied))
+                .isInstanceOfSatisfying(ApiException.class,
+                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        }
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────

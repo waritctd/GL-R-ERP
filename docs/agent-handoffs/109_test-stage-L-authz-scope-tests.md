@@ -164,16 +164,22 @@ product-code change survives in the branch diff.
   rule; every guard tested is exactly the one the spec pointed at, with role sets/predicates read
   directly from the current source.
 
-## Known Risks / Design Flags Surfaced (not fixed — for owner sign-off)
-- **`CommissionService.list` has NO role gate at all.** The `sales_rep_id` filter (the row-scope
-  L1 tests) is bound only when `actor.role().equals("sales")`; every other role — `account`, `hr`,
-  `sales_manager`, `ceo`, `import`, or anything else — gets the null filter and sees **every** rep's
-  commission rows, amounts included. This is very likely intentional (account/HR/manager/CEO
-  genuinely need the full feed to review and pay commissions), and `listAsNonSalesRole_...` now
-  documents it explicitly, but it was previously **untested and undocumented** — flagging for an
-  explicit owner "yes, that's intended" rather than leaving it implicit.
-- No authz bug was found where a guard failed to hold — every mutation-check produced exactly the
-  expected red test(s) and nothing else, so all four guards verified as real and load-bearing.
+## Design Flag — RESOLVED (owner decision 2026-07-24): commission-list role gate ADDED
+- **`CommissionService.list` had NO role gate at all** — the `sales_rep_id` filter was bound only
+  for `actor.role().equals("sales")`, so ANY authenticated user (incl. a plain `employee`,
+  `warehouse`, `qc`, `import`) could read **every** rep's commission amounts via `GET /commissions`.
+  L1 surfaced this. **Owner decision: gate it.**
+- **FIX (this PR, product-code authz change — stated per CLAUDE.md):** added
+  `LIST_VIEWER_ROLES = {sales, sales_manager, ceo, hr, account}` (matches the frontend's
+  `canViewCommissions`) + `requireRole`-style gate at the top of `CommissionService.list`. Sales stays
+  row-scoped to its own rows; the other four roles keep the full feed (they review/approve/pay it);
+  `import`/`employee`/`warehouse`/`qc` now get **403**.
+- **Evidence:** `CommissionListScopeIntegrationTest` gained `listAsUnprivilegedRole_isForbidden`
+  (import/employee/warehouse/qc → FORBIDDEN); the class now proves BOTH layers (role gate + row-scope),
+  5 tests green. **Mutation-check (run + verified by Opus):** neutralizing the gate (`if (false)`) →
+  exactly `listAsUnprivilegedRole_isForbidden` reddens, the other 4 stay green; reverted.
+- No other authz bug was found — every mutation-check (L1 row-scope, L2 ticket, L3/L4 role gates, and
+  this new list gate) produced exactly the expected red test(s) and nothing else.
 
 ## Things Not Finished
 - L5 (optional Mockito-to-real-DB promotions: `TicketService.setBilling`/`waiveDeposit`/
@@ -189,10 +195,11 @@ product-code change survives in the branch diff.
   `stage-l-dbname.txt`).
 
 ## Recommended Next Agent
-Claude Opus review, then owner say-so to merge. If the owner confirms the commission `list`
-no-role-gate design flag is intentional, no further action needed there; if not, that would be a
-**product-code change** (a genuine role gate to add) and belongs on its own branch, not folded into
-this tests-only PR.
+Claude Opus review (done — Opus independently re-ran the L1 row-scope AND the new commission-list
+gate mutation-checks), then owner say-so to merge. The commission-list no-role-gate flag is
+**RESOLVED**: the owner chose to add the gate, so this PR now carries one intended product-code
+authz change (`CommissionService.list` role gate) alongside the tests — stated here per CLAUDE.md,
+with a real-DB wrong-way-round test + mutation-check as its evidence.
 
 ## Exact Next Prompt
 ```
