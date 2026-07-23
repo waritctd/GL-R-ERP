@@ -1,7 +1,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { SALES_ENABLED } from '../../app/features.js';
-import { hasPermission } from '../../app/permissions.js';
+import { hasPermission, isDivisionManager } from '../../app/permissions.js';
 import { roleLabel } from '../../utils/format.js';
 import { Button } from '../common/Button.jsx';
 import { ErrorBoundary } from '../common/ErrorBoundary.jsx';
@@ -18,8 +18,29 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const location = useLocation();
   const navigate = useNavigate();
   const drawerId = 'mobile-navigation-drawer';
+  const isTeamManager = isDivisionManager(user);
   const navItems = [
     { path: '/', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
+    // Division-manager (non-sales) "ทีมของฉัน" group — reuses the same
+    // /employee-requests, /leave, /attendance routes every role already has
+    // (they are dual submit+approve pages for anyone with reports; a division
+    // manager is no exception), framed here as the team-facing entry points.
+    // The unchanged 'self' entries below stay the manager's own personal
+    // self-service, same as every other role. No roster/`/employees` link:
+    // canViewEmployees is hr-only (ROLE_PERMISSIONS) and this task does not
+    // grant it — `/attendance` already gives a division manager a per-employee
+    // view of their team, so it stands in for "ทีมในฝ่าย" too.
+    {
+      path: '/employee-requests',
+      label: 'การอนุมัติ OT',
+      helper: 'Approve team overtime',
+      icon: 'clock',
+      group: 'team',
+      show: isTeamManager,
+      match: ['/employee-requests', '/overtime'],
+    },
+    { path: '/leave', label: 'การอนุมัติวันลา', helper: 'Approve team leave', icon: 'clipboard', group: 'team', show: isTeamManager },
+    { path: '/attendance', label: 'ทีมในฝ่าย', helper: 'Team roster & attendance', icon: 'users', group: 'team', show: isTeamManager },
     // งานขาย is one workspace: the deal pipeline (/tickets — one ticket = one deal,
     // ใบขอราคา and โครงการ merged into one page) plus the ภาพรวม dashboard as a tab
     // (SalesTabs). `match` keeps this item highlighted across both and detail pages.
@@ -31,7 +52,12 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       helper: 'Deal pipeline',
       icon: 'briefcase',
       group: 'sales',
-      show: hasPermission(user.role, 'canViewTickets') && SALES_ENABLED,
+      // Role-scoped views: the pipeline BROWSER is canViewDealPipeline (sales/
+      // sales_manager/ceo) — narrower than canViewTickets (detail-read, kept
+      // for import/account). Import gets its own จัดซื้อ & นำเข้า worklist and
+      // Account gets its own งานการเงิน worklist below instead of this item.
+      // See docs/role-scoped-views.md.
+      show: hasPermission(user.role, 'canViewDealPipeline') && SALES_ENABLED,
       match: ['/tickets', '/ticket-overview'],
     },
     { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', group: 'sales', show: user.role === 'ceo' && SALES_ENABLED },
@@ -43,10 +69,31 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // Import's cross-deal PricingRequest queue — see permissions.js's PATH_GUARDS
     // comment for why this is a narrower audience than a single request's detail page.
     { path: '/pricing-requests', label: 'คิวใบขอราคา', helper: 'Pricing request queue', icon: 'clipboard', group: 'sales', show: hasPermission(user.role, 'canViewPricingRequestQueue') && SALES_ENABLED },
-    // Step 7: Factory Purchase Order and Import Execution — Import/CEO only, mirrors
-    // ProcurementService.RAW_PO_ROLES. Sales never sees raw supplier PO detail.
-    { path: '/factory-purchase-orders', label: 'ใบสั่งซื้อโรงงาน', helper: 'Factory purchase orders', icon: 'fileText', group: 'sales', show: hasPermission(user.role, 'canManageProcurement') && SALES_ENABLED },
+    // Role-scoped views (Import build): the raw factory-PO list and Import's
+    // deal-level fulfilment worklist are combined into one nav item —
+    // Import/CEO only, mirrors ProcurementService.RAW_PO_ROLES. Sales never
+    // sees raw supplier PO detail. `match` keeps this highlighted on both the
+    // combined page and the raw PO detail route it still deep-links to.
+    {
+      path: '/procurement',
+      label: 'จัดซื้อ & นำเข้า',
+      helper: 'Procurement & fulfilment',
+      icon: 'fileText',
+      group: 'sales',
+      show: hasPermission(user.role, 'canManageProcurement') && SALES_ENABLED,
+      match: ['/procurement', '/factory-purchase-orders'],
+    },
+    // Account keeps its ค่าคอมมิชชัน nav item (pre-redesign parity): account's
+    // create-from-deal action is the งานการเงิน worklist's primary path (it
+    // deep-links /commissions?ticketId=NN), but the standalone console stays
+    // reachable from the nav as it was before, so account never loses a
+    // discoverable entry point. canViewCommissions is unchanged; account has
+    // no commission *list* access (canListCommissionRecords excludes it), so
+    // the console opens on the create-from-deal flow.
     { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', group: 'sales', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED },
+    // Account's money-lifecycle worklist (Account role-scoped views): deposit
+    // -> final payment -> close-ready -> record-invoice/commission, one page.
+    { path: '/finance', label: 'งานการเงิน', helper: 'Finance worklist', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canConfirmPayments') && SALES_ENABLED },
     { path: '/hr', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
     { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
     // ข้อมูลของฉัน / คำขอของฉัน are deliberately absent: personal admin lives in
