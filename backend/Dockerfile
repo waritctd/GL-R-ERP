@@ -54,6 +54,16 @@ COPY --from=build /app/target/glr-hr-backend-0.1.0.jar app.jar
 
 # Drop root: run as an unprivileged user (least privilege / container hardening, issue #27).
 RUN useradd -r -u 10001 appuser
+
+# Make the default attachment upload dir writable by the non-root runtime user. app.uploads-dir
+# defaults to ./uploads -> /app/uploads (WORKDIR is /app, which is root-owned), so without this the
+# JVM running as UID 10001 hits AccessDeniedException on Files.createDirectories the first time any
+# file is uploaded (commission invoice, deposit notice, ticket attachment) -> generic 500. Creating
+# and chowning it here makes the default work under least-privilege regardless of APP_UPLOADS_DIR.
+# NOTE: this dir is on the container's EPHEMERAL filesystem — for durable retention in production,
+# also set APP_UPLOADS_DIR to a mounted persistent disk path (no Render disk is defined today).
+RUN mkdir -p /app/uploads && chown 10001:10001 /app/uploads
+
 USER 10001
 
 # Render injects PORT; application.yml binds server.port to ${PORT:...}.
