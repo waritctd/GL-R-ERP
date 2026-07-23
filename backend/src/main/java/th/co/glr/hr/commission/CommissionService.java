@@ -42,12 +42,13 @@ public class CommissionService {
     private static final Set<String> MANAGER_ROLES = Set.of("sales_manager");
     private static final Set<String> CEO_ROLES = Set.of("ceo");
     private static final Set<String> PAYROLL_ROLES = Set.of("hr");
-    // Who may read the commission list (GET /commissions). Matches the frontend's
-    // canViewCommissions; excludes import, plain employee, warehouse, qc — none of whom have a
-    // business reason to see other reps' commission amounts. Sales is additionally row-scoped to
-    // their own rows below; the other four roles see the full feed (they review/approve/pay it).
+    // Who may read the commission list (GET /api/commissions). Matches the frontend's
+    // canListCommissionRecords exactly — SALES, SALES_MANAGER, CEO only. NOT hr (reads via the
+    // payroll-ready feed, PAYROLL_ROLES) and NOT account (only does createFromDeal, never lists);
+    // import/plain-employee/warehouse/qc have no business reason to see commission amounts. Sales
+    // is additionally row-scoped to its own rows below; sales_manager/ceo see the full feed.
     private static final Set<String> LIST_VIEWER_ROLES =
-        Set.of("sales", "sales_manager", "ceo", "hr", "account");
+        Set.of("sales", "sales_manager", "ceo");
     // feat/commission-manual-adjustments: ONLY sales_manager/ceo may create a manual commission
     // entry (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE). This is the authorization boundary this branch is required to
     // prove with a real-DB, wrong-way-round integration test per CLAUDE.md -- see

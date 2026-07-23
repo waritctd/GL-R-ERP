@@ -170,14 +170,20 @@ product-code change survives in the branch diff.
   `warehouse`, `qc`, `import`) could read **every** rep's commission amounts via `GET /commissions`.
   L1 surfaced this. **Owner decision: gate it.**
 - **FIX (this PR, product-code authz change — stated per CLAUDE.md):** added
-  `LIST_VIEWER_ROLES = {sales, sales_manager, ceo, hr, account}` (matches the frontend's
-  `canViewCommissions`) + `requireRole`-style gate at the top of `CommissionService.list`. Sales stays
-  row-scoped to its own rows; the other four roles keep the full feed (they review/approve/pay it);
-  `import`/`employee`/`warehouse`/`qc` now get **403**.
+  `LIST_VIEWER_ROLES = {sales, sales_manager, ceo}` — matching the frontend's
+  `canListCommissionRecords` **exactly** (owner-confirmed 2026-07-24: the GET /api/commissions list is
+  sales/sales_manager/ceo only — **NOT hr**, which reads via the payroll-ready feed, and **NOT account**,
+  which only does createFromDeal) + a `requireRole`-style gate at the top of `CommissionService.list`.
+  Sales stays row-scoped to its own rows; sales_manager/ceo see the full feed; everyone else — `hr`,
+  `account`, `import`, `employee`, `warehouse`, `qc` — gets **403**. (An earlier revision of this PR
+  gated to the broader `canViewCommissions` set; corrected after the owner validated the RBAC matrix —
+  `/commissions` *route* access ≠ the list *API*.)
 - **Evidence:** `CommissionListScopeIntegrationTest` gained `listAsUnprivilegedRole_isForbidden`
-  (import/employee/warehouse/qc → FORBIDDEN); the class now proves BOTH layers (role gate + row-scope),
-  5 tests green. **Mutation-check (run + verified by Opus):** neutralizing the gate (`if (false)`) →
-  exactly `listAsUnprivilegedRole_isForbidden` reddens, the other 4 stay green; reverted.
+  (import/employee/warehouse/qc/**hr/account** → FORBIDDEN) + `listAsAllowedNonSalesRole_seesBothReps`
+  (sales_manager/ceo see all); the class now proves BOTH layers (role gate + row-scope), 5 tests green.
+  **Mutation-check (run + verified by Opus):** neutralizing the gate (`if (false)`) → exactly
+  `listAsUnprivilegedRole_isForbidden` reddens, the other 4 stay green; reverted (forced a fresh recompile
+  — a stale `.class` from the mutation run initially masked the revert).
 - No other authz bug was found — every mutation-check (L1 row-scope, L2 ticket, L3/L4 role gates, and
   this new list gate) produced exactly the expected red test(s) and nothing else.
 

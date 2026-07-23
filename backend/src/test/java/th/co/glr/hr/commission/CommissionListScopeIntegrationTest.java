@@ -28,15 +28,16 @@ import th.co.glr.hr.ticket.TicketRepository;
  * Stage L (release runbook) — L1, top priority. {@link CommissionService#list} (called by the
  * {@code GET /commissions} endpoint) has TWO layers of authorization, both proved here:
  * <ol>
- *   <li><b>Role gate</b> ({@code LIST_VIEWER_ROLES} = sales/sales_manager/ceo/hr/account) — added
- *       2026-07-24 after this test surfaced that {@code list()} previously had <em>no</em>
- *       {@code requireRole} at all, so any authenticated user (incl. a plain employee/warehouse/qc)
- *       could read every rep's commission amounts. Owner decision: gate it to match the frontend's
- *       {@code canViewCommissions}.</li>
+ *   <li><b>Role gate</b> ({@code LIST_VIEWER_ROLES} = sales/sales_manager/ceo) — added 2026-07-24
+ *       after this test surfaced that {@code list()} previously had <em>no</em> {@code requireRole}
+ *       at all, so any authenticated user (incl. a plain employee/warehouse/qc) could read every
+ *       rep's commission amounts. Owner decision: gate it to match the frontend's
+ *       {@code canListCommissionRecords} exactly — NOT hr (payroll-ready feed) and NOT account
+ *       (createFromDeal only).</li>
  *   <li><b>Row-scope</b> — the SQL predicate in {@link CommissionRepository#findRecords}:
  *       {@code WHERE (:salesRepId::bigint IS NULL OR cr.sales_rep_id = :salesRepId)}, where
  *       {@code list()} binds {@code salesRepId} only when {@code actor.role().equals("sales")}, so
- *       a sales rep sees only their own rows while the other four viewer roles see the full feed.</li>
+ *       a sales rep sees only their own rows while sales_manager/ceo see the full feed.</li>
  * </ol>
  * A real money surface (commission amounts) that had zero prior test coverage — no existing test
  * called {@code commissionService.list}.
@@ -68,6 +69,7 @@ class CommissionListScopeIntegrationTest extends AbstractPostgresIntegrationTest
     private UserPrincipal accountActor;
     private UserPrincipal hrActor;
     private UserPrincipal managerActor;
+    private UserPrincipal ceoActor;
     private UserPrincipal importActor;
     private UserPrincipal employeeActor;
     private UserPrincipal warehouseActor;
@@ -97,7 +99,10 @@ class CommissionListScopeIntegrationTest extends AbstractPostgresIntegrationTest
         accountActor = principal(accountId, "account");
         hrActor = principal(999_888L, "hr");
         managerActor = principal(managerId, "sales_manager");
+        ceoActor = principal(999_333L, "ceo");
         // Denied viewer roles — rejected at the role gate before any DB lookup, so synthetic ids.
+        // hr reads commissions via the payroll-ready feed (PAYROLL_ROLES), account only does
+        // createFromDeal — neither may call the list, per canListCommissionRecords.
         importActor = principal(999_777L, "import");
         employeeActor = principal(999_666L, "employee");
         warehouseActor = principal(999_555L, "warehouse");
@@ -113,7 +118,7 @@ class CommissionListScopeIntegrationTest extends AbstractPostgresIntegrationTest
      * only authz this class exists to prove) and ran this class. Exactly two tests went red —
      * {@code listAsRepA_excludesRepBsRow} and {@code listAsRepB_excludesRepAsRow_symmetric} (both
      * failed with "expected not to contain [otherRep's id], but found it") — while {@code
-     * listAsNonSalesRole_seesBothReps_becauseFilterIsSalesOnly} and {@code
+     * listAsAllowedNonSalesRole_seesBothReps} and {@code
      * listAsRepA_differentPayrollMonth_isExcluded} stayed green (they do not depend on the
      * sales_rep_id predicate). Reverted the repository change; {@code git diff} against the
      * pre-mutation tree was empty afterwards.
@@ -141,25 +146,23 @@ class CommissionListScopeIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     /**
-     * The four allowed non-sales viewer roles — account, hr, sales_manager, ceo — get the null
-     * {@code salesRepId} filter and see EVERY rep's rows (they review, approve, and pay the
+     * The two allowed non-sales viewer roles — sales_manager and ceo — get the null
+     * {@code salesRepId} filter and see EVERY rep's rows (they review/approve/oversee the whole
      * commission feed, so full visibility is intended). This is the "positive control" half of the
-     * role gate: it must stay reachable. The denied half (import/plain-employee/warehouse/qc → 403)
-     * is {@link #listAsUnprivilegedRole_isForbidden}.
+     * role gate: it must stay reachable. The denied half — import/plain-employee/warehouse/qc AND
+     * hr/account (per {@code canListCommissionRecords}) → 403 — is
+     * {@link #listAsUnprivilegedRole_isForbidden}.
      */
     @Test
-    void listAsNonSalesRole_seesBothReps_becauseFilterIsSalesOnly() {
+    void listAsAllowedNonSalesRole_seesBothReps() {
         long recordA = seedManualCommission(repAId, PAYROLL_MONTH);
         long recordB = seedManualCommission(repBId, PAYROLL_MONTH);
 
-        List<Long> idsSeenByAccount = idsIn(commissionService.list(PAYROLL_MONTH, accountActor));
-        assertThat(idsSeenByAccount).contains(recordA, recordB);
-
-        List<Long> idsSeenByHr = idsIn(commissionService.list(PAYROLL_MONTH, hrActor));
-        assertThat(idsSeenByHr).contains(recordA, recordB);
-
         List<Long> idsSeenByManager = idsIn(commissionService.list(PAYROLL_MONTH, managerActor));
         assertThat(idsSeenByManager).contains(recordA, recordB);
+
+        List<Long> idsSeenByCeo = idsIn(commissionService.list(PAYROLL_MONTH, ceoActor));
+        assertThat(idsSeenByCeo).contains(recordA, recordB);
     }
 
     @Test
@@ -174,20 +177,24 @@ class CommissionListScopeIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     /**
-     * The role gate ({@code LIST_VIEWER_ROLES}) added 2026-07-24. Roles with no business reason to
-     * see commission amounts — import, plain employee, warehouse, qc — are rejected with 403 before
-     * any DB lookup, so they can never read another rep's money data via {@code GET /commissions}.
+     * The role gate ({@code LIST_VIEWER_ROLES} = sales/sales_manager/ceo) added 2026-07-24. Every
+     * other role is rejected with 403 before any DB lookup and can never read a rep's money data
+     * via {@code GET /api/commissions}: import/plain-employee/warehouse/qc have no business reason,
+     * and — matching the frontend's {@code canListCommissionRecords} exactly — hr (reads via the
+     * payroll-ready feed) and account (only does createFromDeal) are excluded from the list too.
      *
-     * <p>MUTATION-CHECK RECORD (to be run + verified by the reviewer): remove the {@code
+     * <p>MUTATION-CHECK RECORD (run + verified by Opus): remove the {@code
      * LIST_VIEWER_ROLES.contains(...)} guard at the top of {@link CommissionService#list} → this
-     * test goes red (each denied role now returns rows instead of throwing FORBIDDEN) while every
-     * other test in this class stays green; then revert to an empty product-code diff.
+     * test goes red (each denied role returns rows instead of throwing FORBIDDEN) while every other
+     * test in this class stays green; then revert to an empty product-code diff.
      */
     @Test
     void listAsUnprivilegedRole_isForbidden() {
         seedManualCommission(repAId, PAYROLL_MONTH);
-        for (UserPrincipal denied : List.of(importActor, employeeActor, warehouseActor, qcActor)) {
-            assertThatThrownBy(() -> commissionService.list(PAYROLL_MONTH, denied))
+        List<UserPrincipal> denied =
+            List.of(importActor, employeeActor, warehouseActor, qcActor, hrActor, accountActor);
+        for (UserPrincipal actor : denied) {
+            assertThatThrownBy(() -> commissionService.list(PAYROLL_MONTH, actor))
                 .isInstanceOfSatisfying(ApiException.class,
                     e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         }
