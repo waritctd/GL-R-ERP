@@ -23,7 +23,12 @@ def test_pay02_ot_commission_on_line(hr):
     period = payroll_preview(hr, "2026-06-01")
     line = payroll_line(period, "GLR-0005")
     assert money(line["overtimePay"]) == money("350.00"), line
-    assert money(line["commissionPay"]) == money("600.00"), line
+    # FLAG-1 (weighted, VAT-excluded commission): the payroll line pays the weighted
+    # commissionableBase x tier, not the raw VAT-inclusive amount. GLR-0005's June deal:
+    # 240,000 received / 1.07 = 224,299.07 base, in the 50k-250k band = 0.25% -> 560.75.
+    # (Pre-FLAG-1 this test expected 600.00 = 240,000 x 0.25%, i.e. VAT NOT excluded.)
+    # Verified on live UAT: payroll line commissionPay == /commissions/payroll-ready total.
+    assert money(line["commissionPay"]) == money("560.75"), line
 
 
 @pytest.mark.order(3)
@@ -74,20 +79,28 @@ def test_pay05_process_period(hr):
 
 
 @pytest.mark.order(6)
-@pytest.mark.uat("PAY-06", title="Bank export downloads text file", priority="P0")
-def test_pay06_bank_export(hr):
+@pytest.mark.uat("PAY-06", title="Statutory KBank PCT export downloads", priority="P0")
+def test_pay06_kbank_export(hr):
+    # The old GLR_PAYROLL pipe-delimited /bank-export endpoint was replaced by the real
+    # statutory export files (KBank PCT / PND1 / SSO) at /export/{kind} (statutory-export work).
     global PROCESSED_PERIOD_ID
     if PROCESSED_PERIOD_ID is None:
         r = hr.post("/api/payroll/process", json={"payrollMonth": "2026-09-01", "inputs": []})
         assert_status(r, 200)
         PROCESSED_PERIOD_ID = r.json()["period"]["id"]
-    r = hr.get(f"/api/payroll/{PROCESSED_PERIOD_ID}/bank-export")
+    r = hr.get(f"/api/payroll/{PROCESSED_PERIOD_ID}/export/kbank")
     assert_status(r, 200)
-    assert r.headers["Content-Type"].startswith("text/plain"), r.headers
-    assert f'glr-payroll-{PROCESSED_PERIOD_ID}.txt' in r.headers["Content-Disposition"], r.headers
-    body = r.text
-    assert body.startswith("GLR_PAYROLL|2026-09-01|"), body[:200]
-    assert "GLR-0005" in body, body[:500]
+    assert r.headers["Content-Type"] == "application/octet-stream", r.headers
+    disposition = r.headers["Content-Disposition"]
+    filename = disposition.split("filename=")[1].strip().strip('"')
+    assert filename.startswith("PCT") and filename.endswith(".txt"), disposition
+    # KBank PCT fixed-width file begins with the "H" header record tagged PCT.
+    assert r.content.startswith(b"HPCT"), r.content[:80]
+    # The other two statutory files are also downloadable for the same period.
+    for kind, prefix in (("pnd1", "Pnd1"), ("sso", "SPS1-10")):
+        e = hr.get(f"/api/payroll/{PROCESSED_PERIOD_ID}/export/{kind}")
+        assert_status(e, 200)
+        assert prefix in e.headers["Content-Disposition"], (kind, e.headers)
 
 
 @pytest.mark.order(7)
