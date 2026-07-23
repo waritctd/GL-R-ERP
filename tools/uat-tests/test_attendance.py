@@ -1,3 +1,6 @@
+import time
+from datetime import datetime, timedelta
+
 import pytest
 
 from helpers import assert_status
@@ -29,13 +32,23 @@ def test_att03_division_manager_scope(divmgr):
 
 @pytest.mark.uat("ATT-04", title="HR imports valid DAT file", priority="P0")
 def test_att04_dat_import(hr):
-    content = "GLR-0011\t2026-08-03 08:55:00\t1\t0\t0\t0\nGLR-0011\t2026-08-03 18:05:00\t1\t1\t0\t0\n"
+    # Imports dedup by SHA-256 of the content, so a fixed file returns "duplicate_file" on any
+    # re-run against the persistent hosted DB. Derive unique-per-run punch timestamps (wide window,
+    # nanosecond entropy) so the content — and its hash — is fresh every run, keeping this a true
+    # "valid import" assertion (2 punches: one IN, one OUT) rather than a duplicate check.
+    base = datetime(2026, 1, 1) + timedelta(seconds=time.time_ns() % (300 * 24 * 3600))
+    in_ts = base.strftime("%Y-%m-%d %H:%M:%S")
+    out_ts = (base + timedelta(hours=9)).strftime("%Y-%m-%d %H:%M:%S")
+    content = (
+        f"GLR-0011\t{in_ts}\t1\t0\t0\t0\n"
+        f"GLR-0011\t{out_ts}\t1\t1\t0\t0\n"
+    )
     r = hr.post(
         "/api/attendance/imports/dat",
         json={
             "site_code": "SHOWROOM",
             "device_code": "SHOWROOM_SC700",
-            "file_name": "uat-valid.dat",
+            "file_name": f"uat-valid-{base.strftime('%Y%m%d%H%M%S')}.dat",
             "content": content,
         },
     )
