@@ -24,6 +24,10 @@ import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedUpsertRequest;
 
 @Repository
 public class PayrollRepository {
+    // Advisory-lock namespace ("PAYR" as int4) keeps this lock from colliding with any other
+    // pg_advisory lock added elsewhere in the app.
+    private static final int PAYROLL_PROCESS_LOCK_NAMESPACE = 0x50415952;
+
     private final NamedParameterJdbcTemplate jdbc;
 
     public PayrollRepository(NamedParameterJdbcTemplate jdbc) {
@@ -374,6 +378,7 @@ public class PayrollRepository {
     }
 
     public long saveProcessedPeriod(LocalDate payrollMonth, Long processedById, List<PayrollLineDto> lines) {
+        acquirePayrollMonthLock(payrollMonth);
         long periodId = findPeriodId(payrollMonth).orElseGet(() -> insertPeriod(payrollMonth));
         jdbc.update("DELETE FROM hr.payroll_line WHERE period_id = :periodId", Map.of("periodId", periodId));
         jdbc.update("""
@@ -396,6 +401,25 @@ public class PayrollRepository {
             insertLine(periodId, line);
         }
         return periodId;
+    }
+
+    /**
+     * Serializes concurrent {@code saveProcessedPeriod} calls for the same month behind a
+     * transaction-scoped Postgres advisory lock (auto-released on commit/rollback). Without this,
+     * two concurrent "process payroll" requests for the same month race the get-or-create period
+     * lookup and the DELETE+INSERT of {@code hr.payroll_line}: the unique constraints on
+     * {@code payroll_period.payroll_month} and {@code payroll_line (period_id, employee_id)}
+     * prevent silent data corruption, but the losing request fails with a raw
+     * {@code DataIntegrityViolationException} (HTTP 500) instead of the two requests serializing
+     * cleanly, which matters since reprocessing the same month is otherwise a supported, idempotent
+     * operation (see {@code reprocessingTheSameMonthReplacesLinesInsteadOfDuplicating}).
+     */
+    private void acquirePayrollMonthLock(LocalDate payrollMonth) {
+        jdbc.queryForList(
+            "SELECT pg_advisory_xact_lock(:namespace, hashtext(:monthKey))",
+            new MapSqlParameterSource()
+                .addValue("namespace", PAYROLL_PROCESS_LOCK_NAMESPACE)
+                .addValue("monthKey", payrollMonth.toString()));
     }
 
     public List<PayrollLineDto> findLines(long periodId) {
