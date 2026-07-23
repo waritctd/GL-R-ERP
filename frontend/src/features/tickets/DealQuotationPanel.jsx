@@ -127,7 +127,7 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
   const status = pricingRequestStatusLabel(pr.status);
 
   return (
-    <section className="table-panel">
+    <section className="table-panel" data-testid="deal-quotation-panel">
       <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <h2>ราคาและใบเสนอราคา</h2>
         <div className="flex items-center gap-2">
@@ -152,7 +152,7 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
             <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
               <p className="text-sm text-text-muted">CEO อนุมัติราคาขายแล้ว — สร้างร่างใบเสนอราคาให้ลูกค้าได้เลย</p>
               <button type="button" className="primary-button self-start" disabled={createQuotation.isPending}
-                onClick={() => createQuotation.mutate()}>
+                onClick={() => createQuotation.mutate()} data-testid="deal-quotation-create">
                 <Icon name="fileText" size={14} />
                 สร้างร่างใบเสนอราคาลูกค้า
               </button>
@@ -190,7 +190,7 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
                     แก้ไขรายละเอียด/ส่วนลด →
                   </Link>
                   <button type="button" className="primary-button" disabled={issueQuotation.isPending}
-                    onClick={() => issueQuotation.mutate()}>
+                    onClick={() => issueQuotation.mutate()} data-testid="deal-quotation-issue">
                     ออกใบเสนอราคา
                   </button>
                 </>
@@ -209,15 +209,15 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
                 />
                 <div className="flex flex-wrap gap-2">
                   <button type="button" className="primary-button" disabled={recordOutcome.isPending}
-                    onClick={() => recordOutcome.mutate('ACCEPTED')}>
+                    onClick={() => recordOutcome.mutate('ACCEPTED')} data-testid="deal-quotation-accept">
                     ลูกค้ายอมรับ
                   </button>
                   <button type="button" className="secondary-button" style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}
-                    disabled={recordOutcome.isPending} onClick={() => recordOutcome.mutate('REJECTED')}>
+                    disabled={recordOutcome.isPending} onClick={() => recordOutcome.mutate('REJECTED')} data-testid="deal-quotation-reject">
                     ลูกค้าปฏิเสธ
                   </button>
                   <button type="button" className="secondary-button" disabled={recordOutcome.isPending}
-                    onClick={() => recordOutcome.mutate('REVISION_REQUESTED')}>
+                    onClick={() => recordOutcome.mutate('REVISION_REQUESTED')} data-testid="deal-quotation-revision">
                     ลูกค้าขอแก้ไข
                   </button>
                 </div>
@@ -240,7 +240,7 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
               <>
                 <p className="text-sm text-text-muted">ลูกค้ายอมรับใบเสนอราคาแล้ว — ยืนยันคำสั่งซื้อเพื่อเริ่มขั้นตอนรับมัดจำและนำเข้าสินค้า</p>
                 <button type="button" className="primary-button self-start" disabled={confirmOrder.isPending}
-                  onClick={() => confirmOrder.mutate()}>
+                  onClick={() => confirmOrder.mutate()} data-testid="deal-quotation-confirm-order">
                   ยืนยันคำสั่งซื้อ
                 </button>
               </>

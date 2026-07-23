@@ -624,24 +624,24 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // three have their own primary buttons, so this page's own primaryAction
   // no longer drives that chain.
   const primaryAction = can.confirmCustomer ? (
-    <button type="button" className="primary-button" disabled={actionLoading}
+    <button type="button" className="primary-button" disabled={actionLoading} data-testid="ticket-detail-confirm-customer"
       onClick={() => doAction(() => api.tickets.confirmCustomer(ticketId), 'ลูกค้ายืนยันแล้ว')}>
       ลูกค้ายืนยัน
     </button>
   ) : can.confirmFinalPayment ? (
-    <button type="button" className="primary-button" disabled={actionLoading}
+    <button type="button" className="primary-button" disabled={actionLoading} data-testid="ticket-detail-confirm-final"
       onClick={() => setConfirm({ kind: 'finalPayment' })}>
       ยืนยันชำระครบ (Final Payment)
     </button>
   ) : can.confirmClose ? (
-    <button type="button" className="primary-button" disabled={actionLoading}
+    <button type="button" className="primary-button" disabled={actionLoading} data-testid="ticket-detail-confirm-close"
       onClick={() => doAction(() => api.tickets.confirmCloseReady(ticketId),
         'ยืนยันพร้อมปิดงานแล้ว — รอ CEO ตรวจสอบ')}>
       <Icon name="check" size={14} />
       ยืนยันพร้อมปิดงาน
     </button>
   ) : can.verifyClose ? (
-    <button type="button" className="primary-button" disabled={actionLoading}
+    <button type="button" className="primary-button" disabled={actionLoading} data-testid="ticket-detail-verify-close"
       onClick={() => doAction(() => api.tickets.verifyClose(ticketId), 'ตรวจสอบและปิดงานแล้ว')}>
       <Icon name="check" size={14} />
       ตรวจสอบและปิดงาน

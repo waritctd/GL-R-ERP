@@ -1431,7 +1431,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         <>
           <button type="button" className="secondary-button" onClick={onClose} disabled={loading}>ยกเลิก</button>
           <button type="button" className="secondary-button" onClick={handleSaveDraft} disabled={loading}>บันทึกร่าง</button>
-          <button type="submit" form="ticket-create-form" className="primary-button" disabled={loading || !canCreateNow}>
+          <button type="submit" form="ticket-create-form" className="primary-button" disabled={loading || !canCreateNow} data-testid="ticket-create-submit">
             <Icon name="fileText" />
             {loading ? 'กำลังสร้าง...' : 'สร้างดีล'}
           </button>
@@ -1461,6 +1461,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       subtitle="จัดทีละหัวข้อได้ตามสะดวก — บันทึกร่างได้ทุกเมื่อ ไม่บังคับกรอกให้ครบในครั้งเดียว"
       onClose={onClose}
       footer={renderFooter()}
+      testId="ticket-create-modal"
     >
       {/*
         noValidate: several inputs below still carry the native `required`
