@@ -1,0 +1,112 @@
+import React from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { AppShell } from './AppShell.jsx';
+
+globalThis.React = React;
+
+vi.mock('../../api/index.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    api: {
+      notifications: {
+        list: vi.fn().mockResolvedValue({ notifications: [] }),
+        markRead: vi.fn(),
+      },
+    },
+  };
+});
+
+function renderShell(user) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route element={<AppShell user={user} employee={null} onLogout={vi.fn()} pendingRequestCount={0} />}>
+            <Route index element={<div>เนื้อหา</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+// Role-scoped views (Import build, docs/role-scoped-views.md): the sidebar's
+// รายการดีล item is gated on canViewDealPipeline, not canViewTickets — import
+// loses it, and the raw factory-PO nav item is replaced by the combined
+// "จัดซื้อ & นำเข้า" item pointing at /procurement.
+describe('AppShell navigation (role-scoped views)', () => {
+  it('hides รายการดีล for import and shows the combined จัดซื้อ & นำเข้า item instead', async () => {
+    renderShell({ role: 'import', employeeId: 2, name: 'นำเข้า ทดสอบ', email: 'import@test.local' });
+
+    await screen.findByText('เนื้อหา');
+    expect(screen.queryByText('รายการดีล')).toBeNull();
+    expect(screen.getByText('จัดซื้อ & นำเข้า')).toBeTruthy();
+  });
+
+  it('keeps รายการดีล for sales', async () => {
+    renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
+
+    await screen.findByText('เนื้อหา');
+    expect(screen.getByText('รายการดีล')).toBeTruthy();
+  });
+
+  it('keeps รายการดีล for ceo/sales_manager (still on canViewDealPipeline)', async () => {
+    renderShell({ role: 'ceo', employeeId: 1, name: 'CEO ทดสอบ', email: 'ceo@test.local' });
+    await screen.findByText('เนื้อหา');
+    expect(screen.getByText('รายการดีล')).toBeTruthy();
+  });
+});
+
+// Account role-scoped views: nav drops รายการดีล (pipeline browser) and gains
+// งานการเงิน, but KEEPS ค่าคอมมิชชัน (pre-redesign parity — the standalone
+// console stays a discoverable entry point alongside the งานการเงิน worklist
+// path). sales is the control — unaffected by the split.
+describe('AppShell nav — Account role-scoped views', () => {
+  it('account nav has no รายการดีล, keeps ค่าคอมมิชชัน, and has งานการเงิน', async () => {
+    renderShell({ role: 'account', name: 'บัญชี ทดสอบ', email: 'account@glr.co.th', employeeId: 3 });
+    expect(await screen.findByText('งานการเงิน')).not.toBeNull();
+    expect(screen.queryByText('รายการดีล')).toBeNull();
+    expect(screen.getByText('ค่าคอมมิชชัน')).not.toBeNull();
+  });
+
+  it('sales nav still has รายการดีล and ค่าคอมมิชชัน, but no งานการเงิน', async () => {
+    renderShell({ role: 'sales', name: 'ขาย ทดสอบ', email: 'sales@glr.co.th', employeeId: 4 });
+    expect(await screen.findByText('รายการดีล')).not.toBeNull();
+    expect(screen.getByText('ค่าคอมมิชชัน')).not.toBeNull();
+    expect(screen.queryByText('งานการเงิน')).toBeNull();
+  });
+
+  it('ceo nav keeps รายการดีล and ค่าคอมมิชชัน, and also gains งานการเงิน (canConfirmPayments fallback)', async () => {
+    renderShell({ role: 'ceo', name: 'ผู้บริหาร ทดสอบ', email: 'ceo@glr.co.th', employeeId: 5 });
+    expect(await screen.findByText('รายการดีล')).not.toBeNull();
+    expect(screen.getByText('ค่าคอมมิชชัน')).not.toBeNull();
+    expect(screen.getByText('งานการเงิน')).not.toBeNull();
+  });
+});
+
+// Division Manager (non-sales) role-scoped views: a role==='employee' user with
+// the manager flag gains the "ทีมของฉัน" nav group (isDivisionManager, see
+// permissions.js) — a plain employee (no manager flag) never sees it.
+describe('AppShell nav — Division Manager (non-sales) role-scoped views', () => {
+  it('shows the ทีมของฉัน group for a division manager (role employee + manager flag)', async () => {
+    renderShell({ role: 'employee', manager: true, name: 'ผู้จัดการ ทดสอบ', email: 'manager@glr.co.th', employeeId: 30 });
+    expect(await screen.findByText('การอนุมัติ OT')).not.toBeNull();
+    expect(screen.getByText('การอนุมัติวันลา')).not.toBeNull();
+    expect(screen.getByText('ทีมในฝ่าย')).not.toBeNull();
+  });
+
+  it('hides the ทีมของฉัน group for a plain employee (no manager flag)', async () => {
+    renderShell({ role: 'employee', manager: false, name: 'พนักงาน ทดสอบ', email: 'employee@glr.co.th', employeeId: 31 });
+    await screen.findByText('เนื้อหา');
+    expect(screen.queryByText('การอนุมัติ OT')).toBeNull();
+    expect(screen.queryByText('การอนุมัติวันลา')).toBeNull();
+    expect(screen.queryByText('ทีมในฝ่าย')).toBeNull();
+  });
+});

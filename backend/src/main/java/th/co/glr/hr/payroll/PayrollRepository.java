@@ -16,6 +16,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.payroll.export.PayrollExportRow;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceDto;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedDto;
@@ -121,6 +122,48 @@ public class PayrollRepository {
             )))
             .stream()
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    /**
+     * Special-pay carry-forward (2026-07-23): per active employee, the carried recurring fields
+     * (special_pay_1..5, non_taxable_income, student_loan_deduction, legal_execution_deduction) from
+     * that employee's most-recent PRIOR processed {@code payroll_line} — the latest period strictly
+     * before {@code payrollMonth} with {@code status <> 'VOID'}. {@code DISTINCT ON} picks exactly one
+     * row per employee: the latest {@code payroll_month}. An employee with no qualifying prior line is
+     * simply absent from the result (no fabricated zero row) — the caller treats "no suggestion" as
+     * "nothing to pre-fill." Restricted to currently active employees so a terminated employee's old
+     * figures never leak into a suggestion for a payroll run they are no longer part of.
+     */
+    public List<PayrollCarryForwardDtos.SuggestedInputRow> findCarryForwardSuggestions(LocalDate payrollMonth) {
+        return jdbc.query("""
+            SELECT DISTINCT ON (pl.employee_id)
+                   pl.employee_id,
+                   pl.special_pay_1, pl.special_pay_2, pl.special_pay_3, pl.special_pay_4, pl.special_pay_5,
+                   pl.non_taxable_income, pl.student_loan_deduction, pl.legal_execution_deduction
+              FROM hr.payroll_line pl
+              JOIN hr.payroll_period pp ON pp.period_id = pl.period_id
+              JOIN hr.employee e ON e.employee_id = pl.employee_id AND e.is_active = TRUE
+             WHERE pp.payroll_month < :payrollMonth
+               AND pp.status <> 'VOID'
+             ORDER BY pl.employee_id, pp.payroll_month DESC
+            """,
+            Map.of("payrollMonth", payrollMonth),
+            (rs, rowNum) -> new PayrollCarryForwardDtos.SuggestedInputRow(
+                rs.getLong("employee_id"),
+                money(rs.getBigDecimal("special_pay_1")),
+                money(rs.getBigDecimal("special_pay_2")),
+                money(rs.getBigDecimal("special_pay_3")),
+                money(rs.getBigDecimal("special_pay_4")),
+                money(rs.getBigDecimal("special_pay_5")),
+                money(rs.getBigDecimal("non_taxable_income")),
+                money(rs.getBigDecimal("student_loan_deduction")),
+                money(rs.getBigDecimal("legal_execution_deduction")),
+                // Leave-derived unpaidLeaveDays/pendingUnpaidLeaveCorrectionDays are not this query's
+                // concern (it only knows the prior payroll_line) -- PayrollService#suggestedInputs
+                // overlays the real leave-derived figures onto every row after this method returns.
+                BigDecimal.ZERO,
+                BigDecimal.ZERO
+            ));
     }
 
     /** C1: the standing tax-allowance declaration per employee for a given tax year. */
@@ -399,7 +442,8 @@ public class PayrollRepository {
                    pl.other_post_tax_deductions, pl.deductions, pl.net_amount,
                    pl.calculation_note,
                    pl.director_remuneration, pl.warning_letter_deduction,
-                   pl.customer_return_deduction, pl.other_pretax_deduction
+                   pl.customer_return_deduction, pl.other_pretax_deduction,
+                   pl.leave_refund_days, pl.leave_deduction_refund
               FROM hr.payroll_line pl
               JOIN hr.employee e ON e.employee_id = pl.employee_id
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
@@ -410,6 +454,57 @@ public class PayrollRepository {
             """,
             Map.of("periodId", periodId),
             (rs, rowNum) -> mapLine(rs));
+    }
+
+    /**
+     * Rows for the statutory export files (KBank/PND1/SSO): the already-computed {@code payroll_line}
+     * amounts joined with the identity, bank and current-address fields the file formats need. Reads
+     * the PDPA-restricted {@code hr_restricted.employee_pii} (national id / tax id / SSN) — the caller
+     * (PayrollService) gates this to HR/CEO, and every access is audited.
+     */
+    public List<PayrollExportRow> findExportRows(long periodId) {
+        return jdbc.query("""
+            SELECT pl.employee_id, e.employee_code,
+                   t.name_th AS title_th,
+                   e.first_name_th, e.last_name_th, e.first_name_en,
+                   pii.national_id, pii.tax_id, pii.social_security_no,
+                   ba.account_no AS bank_account,
+                   addr.house_no,
+                   NULLIF(TRIM(CONCAT_WS(' ', addr.building, addr.soi, addr.road,
+                       addr.subdistrict, addr.district, addr.province)), '') AS address_rest,
+                   addr.postal_code,
+                   pl.net_amount, pl.gross_taxable_income, pl.withholding_tax,
+                   pl.sso_wage_base, pl.social_security
+              FROM hr.payroll_line pl
+              JOIN hr.employee e ON e.employee_id = pl.employee_id
+              LEFT JOIN hr.title t ON t.title_id = e.title_id
+              LEFT JOIN hr_restricted.employee_pii pii ON pii.employee_id = e.employee_id
+              LEFT JOIN hr.employee_bank_account ba ON ba.employee_id = e.employee_id
+              LEFT JOIN hr.employee_address addr
+                     ON addr.employee_id = e.employee_id AND addr.address_type = 'CURRENT'
+             WHERE pl.period_id = :periodId
+             ORDER BY e.employee_code
+            """,
+            Map.of("periodId", periodId),
+            (rs, rowNum) -> new PayrollExportRow(
+                rs.getLong("employee_id"),
+                rs.getString("employee_code"),
+                rs.getString("title_th"),
+                rs.getString("first_name_th"),
+                rs.getString("last_name_th"),
+                rs.getString("first_name_en"),
+                rs.getString("national_id"),
+                rs.getString("tax_id"),
+                rs.getString("social_security_no"),
+                rs.getString("bank_account"),
+                rs.getString("house_no"),
+                rs.getString("address_rest"),
+                rs.getString("postal_code"),
+                rs.getBigDecimal("net_amount"),
+                rs.getBigDecimal("gross_taxable_income"),
+                rs.getBigDecimal("withholding_tax"),
+                rs.getBigDecimal("sso_wage_base"),
+                rs.getBigDecimal("social_security")));
     }
 
     public Map<Long, String> findEmployeeEmailsByIds(Collection<Long> employeeIds) {
@@ -582,7 +677,8 @@ public class PayrollRepository {
                 legal_execution_deduction, other_post_tax_deductions, deductions,
                 net_amount, calculation_note,
                 director_remuneration, warning_letter_deduction,
-                customer_return_deduction, other_pretax_deduction
+                customer_return_deduction, other_pretax_deduction,
+                leave_refund_days, leave_deduction_refund
             )
             VALUES (
                 :periodId, :employeeId, :baseSalary, :dailyRate, :hourlyRate,
@@ -597,7 +693,8 @@ public class PayrollRepository {
                 :legalExecutionDeduction, :otherPostTaxDeductions, :deductions,
                 :netAmount, :calculationNote,
                 :directorRemuneration, :warningLetterDeduction,
-                :customerReturnDeduction, :otherPretaxDeduction
+                :customerReturnDeduction, :otherPretaxDeduction,
+                :leaveRefundDays, :leaveDeductionRefund
             )
             """,
             new MapSqlParameterSource()
@@ -639,7 +736,9 @@ public class PayrollRepository {
                 .addValue("directorRemuneration", line.directorRemuneration())
                 .addValue("warningLetterDeduction", line.warningLetterDeduction())
                 .addValue("customerReturnDeduction", line.customerReturnDeduction())
-                .addValue("otherPretaxDeduction", line.otherPretaxDeduction()));
+                .addValue("otherPretaxDeduction", line.otherPretaxDeduction())
+                .addValue("leaveRefundDays", line.leaveRefundDays())
+                .addValue("leaveDeductionRefund", line.leaveDeductionRefund()));
     }
 
     private PayrollPeriodDto toPeriod(PayrollPeriodHeader header, List<PayrollLineDto> lines) {
@@ -700,7 +799,9 @@ public class PayrollRepository {
             money(rs.getBigDecimal("director_remuneration")),
             money(rs.getBigDecimal("warning_letter_deduction")),
             money(rs.getBigDecimal("customer_return_deduction")),
-            money(rs.getBigDecimal("other_pretax_deduction"))
+            money(rs.getBigDecimal("other_pretax_deduction")),
+            money(rs.getBigDecimal("leave_refund_days")),
+            money(rs.getBigDecimal("leave_deduction_refund"))
         );
     }
 

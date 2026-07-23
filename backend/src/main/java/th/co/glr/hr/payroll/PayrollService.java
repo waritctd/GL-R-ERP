@@ -4,6 +4,8 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -16,11 +18,16 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.commission.CommissionCalculator;
-import th.co.glr.hr.commission.CommissionRecord;
-import th.co.glr.hr.commission.CommissionRepository;
-import th.co.glr.hr.commission.TierConfig;
+import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.leave.LeaveRepository;
+import th.co.glr.hr.payroll.export.KBankPctExporter;
+import th.co.glr.hr.payroll.export.PayrollExportFile;
+import th.co.glr.hr.payroll.export.PayrollExportKind;
+import th.co.glr.hr.payroll.export.PayrollExportRow;
+import th.co.glr.hr.payroll.export.Pnd1Exporter;
+import th.co.glr.hr.payroll.export.SsoExporter;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceDto;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.TaxAllowanceBulkUpsertRequest;
@@ -37,25 +44,42 @@ public class PayrollService {
 
     private final PayrollRepository payrollRepository;
     private final PayrollCalculator payrollCalculator;
-    private final CommissionRepository commissionRepository;
-    private final CommissionCalculator commissionCalculator;
+    private final CommissionService commissionService;
     private final AuditService auditService;
     private final PayslipRenderer payslipRenderer;
+    // Leave -> payroll dependency on the leave package. #suggestedInputs (2026-07-23) uses it
+    // read-only to overlay leave-derived unpaidLeaveDays/pendingUnpaidLeaveCorrectionDays.
+    // #preview/#process (2026-07-23, AUTO-REFUND) additionally read + (on process only) resolve
+    // hr.leave_payroll_correction rows to auto-apply the cancel-after-close refund -- see
+    // #calculateLine and #process below.
+    private final LeaveRepository leaveRepository;
+    private final KBankPctExporter kbankExporter;
+    private final Pnd1Exporter pnd1Exporter;
+    private final SsoExporter ssoExporter;
+    private final AppProperties appProperties;
 
     public PayrollService(
         PayrollRepository payrollRepository,
         PayrollCalculator payrollCalculator,
-        CommissionRepository commissionRepository,
-        CommissionCalculator commissionCalculator,
+        CommissionService commissionService,
         AuditService auditService,
-        PayslipRenderer payslipRenderer
+        PayslipRenderer payslipRenderer,
+        LeaveRepository leaveRepository,
+        KBankPctExporter kbankExporter,
+        Pnd1Exporter pnd1Exporter,
+        SsoExporter ssoExporter,
+        AppProperties appProperties
     ) {
         this.payrollRepository = payrollRepository;
         this.payrollCalculator = payrollCalculator;
-        this.commissionRepository = commissionRepository;
-        this.commissionCalculator = commissionCalculator;
+        this.commissionService = commissionService;
         this.auditService = auditService;
         this.payslipRenderer = payslipRenderer;
+        this.leaveRepository = leaveRepository;
+        this.kbankExporter = kbankExporter;
+        this.pnd1Exporter = pnd1Exporter;
+        this.ssoExporter = ssoExporter;
+        this.appProperties = appProperties;
     }
 
     public PayrollPeriodDto currentOrPreview(LocalDate payrollMonth, UserPrincipal actor) {
@@ -70,6 +94,58 @@ public class PayrollService {
             .orElseGet(() -> preview(month, List.of(), actor));
     }
 
+    /**
+     * Special-pay carry-forward (2026-07-23): read-only suggestions to pre-fill a brand-new monthly
+     * payroll run from each employee's most-recent PRIOR processed {@code payroll_line}. Does NOT feed
+     * {@link #preview(ProcessPayrollRequest, UserPrincipal)} or {@link #process}, which keep taking
+     * explicit inputs exactly as before — the frontend reads this endpoint separately and pre-fills
+     * form fields HR can still edit/override. There is no "omitted means carry" ambiguity to resolve
+     * here: the carry-forward step happens entirely client-side, before HR submits, and whatever value
+     * is in the field when HR hits Preview/Process — carried, edited, or explicitly cleared to 0 — is
+     * what goes into {@code inputs} and gets calculated/stored, unchanged from today's behaviour.
+     *
+     * <p>Leave -&gt; payroll unpaid-day deduction (2026-07-23): also overlays, per employee, this
+     * month's leave-derived {@code unpaidLeaveDays} ({@link
+     * LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth}) and any unresolved
+     * cancel-after-close {@code pendingUnpaidLeaveCorrectionDays} ({@link
+     * LeaveRepository#findPendingPayrollCorrectionsByEmployee}). Purely additive to the special-pay
+     * carry-forward rows above: an employee with leave-derived figures but no prior processed
+     * payroll_line still gets a row ({@link PayrollCarryForwardDtos.SuggestedInputRow#empty}). Like
+     * the rest of this method, this NEVER feeds {@code preview()}/{@code process()} directly -- the
+     * frontend pre-fills the unpaidLeaveDays form field from it, and HR can still override.
+     */
+    public PayrollCarryForwardDtos.SuggestedInputsResponse suggestedInputs(LocalDate payrollMonth, UserPrincipal actor) {
+        requireRole(actor, PAYROLL_VIEW_ROLES);
+        LocalDate month = normalizeMonth(payrollMonth);
+
+        Map<Long, PayrollCarryForwardDtos.SuggestedInputRow> byEmployee = new LinkedHashMap<>();
+        payrollRepository.findCarryForwardSuggestions(month)
+            .forEach(row -> byEmployee.put(row.employeeId(), row));
+
+        Map<Long, BigDecimal> unpaidLeaveDaysByEmployee = leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(month);
+        Map<Long, BigDecimal> pendingCorrectionsByEmployee = leaveRepository.findPendingPayrollCorrectionsByEmployee();
+
+        Set<Long> employeeIds = new LinkedHashSet<>(byEmployee.keySet());
+        employeeIds.addAll(unpaidLeaveDaysByEmployee.keySet());
+        employeeIds.addAll(pendingCorrectionsByEmployee.keySet());
+
+        List<PayrollCarryForwardDtos.SuggestedInputRow> merged = employeeIds.stream()
+            .map(employeeId -> {
+                PayrollCarryForwardDtos.SuggestedInputRow base = byEmployee.getOrDefault(
+                    employeeId, PayrollCarryForwardDtos.SuggestedInputRow.empty(employeeId));
+                return new PayrollCarryForwardDtos.SuggestedInputRow(
+                    employeeId,
+                    base.specialPay1(), base.specialPay2(), base.specialPay3(), base.specialPay4(), base.specialPay5(),
+                    base.nonTaxableIncome(), base.studentLoanDeduction(), base.legalExecutionDeduction(),
+                    unpaidLeaveDaysByEmployee.getOrDefault(employeeId, BigDecimal.ZERO),
+                    pendingCorrectionsByEmployee.getOrDefault(employeeId, BigDecimal.ZERO)
+                );
+            })
+            .toList();
+
+        return new PayrollCarryForwardDtos.SuggestedInputsResponse(month, merged);
+    }
+
     public PayrollPeriodDto preview(ProcessPayrollRequest request, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
         return preview(normalizeMonth(request.payrollMonth()), safeInputs(request.inputs()), actor);
@@ -81,6 +157,12 @@ public class PayrollService {
         LocalDate month = normalizeMonth(request.payrollMonth());
         PayrollPeriodDto preview = preview(month, safeInputs(request.inputs()), actor);
         long periodId = payrollRepository.saveProcessedPeriod(month, actor.employeeId(), preview.lines());
+        // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): the lines just saved already have
+        // the refund baked in (computed by #preview above, in this same transaction). Now mark the
+        // hr.leave_payroll_correction rows that refund came from as resolved by THIS period -- see
+        // LeaveRepository#resolvePendingCorrections for exactly how that stays consistent with the
+        // read (same WHERE-shape, same transaction) and idempotent across re-processing this month.
+        leaveRepository.resolvePendingCorrections(periodId);
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Payroll period was not saved"));
         auditPayrollAccess("PROCESS_PAYROLL", actor, period,
@@ -89,26 +171,51 @@ public class PayrollService {
         return period;
     }
 
-    public String bankExport(long periodId, UserPrincipal actor) {
+    /**
+     * Generate one of the three statutory payroll text files (KBank PCT, PND1, SSO สปส.1-10) for a
+     * processed period. HR/CEO only; reads PDPA-restricted PII for PND1/SSO, so every call is audited
+     * with the specific fields exposed. {@code effectiveDate} is the HR-picked transfer/pay date;
+     * null falls back to the configured default day (the 26th) of the payroll month.
+     */
+    public PayrollExportFile export(PayrollExportKind kind, long periodId, LocalDate effectiveDate, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
-        StringBuilder builder = new StringBuilder();
-        builder.append("GLR_PAYROLL|")
-            .append(period.payrollMonth())
-            .append('|')
-            .append(period.lineCount())
-            .append('|')
-            .append(period.totalNet())
-            .append('\n');
-        for (PayrollLineDto line : period.lines()) {
-            builder.append(nullToBlank(line.bankAccount())).append('|')
-                .append(line.employeeCode()).append('|')
-                .append(line.employeeName()).append('|')
-                .append(line.netPay()).append('\n');
+        LocalDate payrollMonth = period.payrollMonth();
+        LocalDate payDate = resolveEffectiveDate(effectiveDate, payrollMonth);
+        List<PayrollExportRow> rows = payrollRepository.findExportRows(periodId);
+        AppProperties.Employer employer = appProperties.getPayroll().getEmployer();
+
+        byte[] content;
+        String auditFields;
+        switch (kind) {
+            case KBANK -> {
+                content = kbankExporter.export(rows, employer, payDate);
+                auditFields = "bank_account,net_pay";
+            }
+            case PND1 -> {
+                content = pnd1Exporter.export(rows, employer, payrollMonth, payDate);
+                auditFields = "national_id,tax_id,gross_taxable_income,withholding_tax";
+            }
+            case SSO -> {
+                content = ssoExporter.export(rows, employer, payrollMonth, payDate);
+                auditFields = "social_security_no,sso_wage_base,social_security";
+            }
+            default -> throw new ApiException(HttpStatus.BAD_REQUEST, "Unsupported export kind");
         }
-        auditPayrollAccess("EXPORT_PAYROLL_BANK_FILE", actor, period, "bank_account,net_pay");
-        return builder.toString();
+        auditPayrollAccess("EXPORT_PAYROLL_" + kind.name(), actor, period, auditFields);
+        return new PayrollExportFile(kind, kind.fileName(payDate), content);
+    }
+
+    /** HR-picked date, else the configured default transfer day (26th) clamped to the month length. */
+    private LocalDate resolveEffectiveDate(LocalDate effectiveDate, LocalDate payrollMonth) {
+        if (effectiveDate != null) {
+            return effectiveDate;
+        }
+        int day = Math.min(
+            appProperties.getPayroll().getEmployer().getDefaultTransferDay(),
+            payrollMonth.lengthOfMonth());
+        return payrollMonth.withDayOfMonth(Math.max(day, 1));
     }
 
     public byte[] payslipPdf(long periodId, long lineId, UserPrincipal actor) {
@@ -155,6 +262,17 @@ public class PayrollService {
         // over the stored value -- stored = standing declaration, body = this-run override.
         Map<Long, PayrollTaxAllowanceInput> storedAllowancesByEmployee =
             payrollRepository.findTaxAllowancesByEmployee(payrollMonth.getYear());
+        // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): existingPeriodId is null the first
+        // time this month is previewed/processed, and non-null on a re-preview/re-process of a month
+        // that already has a period row (PREVIEW-only rows from currentOrPreview's persistence path
+        // do not exist -- only saveProcessedPeriod creates one -- so in practice this is non-null
+        // exactly when this month has been PROCESSED before). Passing it into
+        // findRefundableUnpaidDaysByEmployee gives back any correction that same period previously
+        // resolved, so a re-run recomputes the correct total instead of losing or double-counting it
+        // -- see that method's doc for the full idempotency argument, and PayrollService#process for
+        // the paired resolve call.
+        Long existingPeriodId = payrollRepository.findPeriodByMonth(payrollMonth).map(PayrollPeriodDto::id).orElse(null);
+        Map<Long, BigDecimal> leaveRefundDaysByEmployee = leaveRepository.findRefundableUnpaidDaysByEmployee(existingPeriodId);
 
         List<PayrollLineDto> lines = employees.stream()
             .map(employee -> calculateLine(
@@ -164,6 +282,7 @@ public class PayrollService {
                 commissionByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
                 yearToDateByEmployee.getOrDefault(employee.employeeId(), PayrollYearToDate.empty()),
                 storedAllowancesByEmployee.get(employee.employeeId()),
+                leaveRefundDaysByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
                 payrollMonth
             ))
             .sorted(Comparator.comparing(PayrollLineDto::employeeCode))
@@ -197,6 +316,7 @@ public class PayrollService {
         BigDecimal commissionPay,
         PayrollYearToDate yearToDate,
         PayrollTaxAllowanceInput storedAllowances,
+        BigDecimal leaveRefundDays,
         LocalDate payrollMonth
     ) {
         PayrollCalculation calculation = payrollCalculator.calculate(new PayrollCalculationInput(
@@ -215,7 +335,10 @@ public class PayrollService {
             employee.directorRemuneration(),
             input == null ? BigDecimal.ZERO : input.warningLetterDeduction(),
             input == null ? BigDecimal.ZERO : input.customerReturnDeduction(),
-            input == null ? BigDecimal.ZERO : input.otherPretaxDeduction()
+            input == null ? BigDecimal.ZERO : input.otherPretaxDeduction(),
+            // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): system-derived, never HR-typed --
+            // there is no corresponding field on PayrollEmployeeInputRequest.
+            leaveRefundDays == null ? BigDecimal.ZERO : leaveRefundDays
         ));
         return new PayrollLineDto(
             null,
@@ -254,7 +377,9 @@ public class PayrollService {
             calculation.directorRemuneration(),
             calculation.warningLetterDeduction(),
             calculation.customerReturnDeduction(),
-            calculation.otherPretaxDeduction()
+            calculation.otherPretaxDeduction(),
+            calculation.leaveRefundDays(),
+            calculation.leaveDeductionRefund()
         );
     }
 
@@ -341,18 +466,25 @@ public class PayrollService {
         return items.stream().map(YtdSeedUpsertRequest::employeeId).toList();
     }
 
+    /**
+     * Commission-payroll weighted-base + manual-entries fix (2026-07-23): delegates to {@link
+     * CommissionService#payrollCommissionTotalsByEmployee}, the exact same weighted-tier +
+     * approved-manual-entries aggregation {@link CommissionService#payrollReadySummary} uses for
+     * what HR sees on the payroll-ready screen -- the two paths now share one implementation and
+     * can never diverge again.
+     *
+     * <p>This used to reimplement the tier/VAT math independently here, two bugs deep: (1) it
+     * summed each APPROVED record's already-2dp-rounded {@code commissionableBase} UNWEIGHTED
+     * instead of the weighted, full-precision monthly tier base, underpaying a rep with a
+     * 2x/3x-weighted receipt (owner-reconciled "jennet" case: weighted 67,849.23 vs. the old
+     * unweighted 67,390.34); and (2) it excluded approved manual entries (ADJUSTMENT/MANAGER/
+     * STOCK_BONUS/INCENTIVE, V84) from the payroll figure entirely, even though real payroll pays
+     * tier commission PLUS those manual entries (same "jennet" case with a 15,000 INCENTIVE added:
+     * 82,849.23). See {@code PayrollCommissionWeightedBaseIntegrationTest} for the real-DB
+     * regression coverage of both.
+     */
     private Map<Long, BigDecimal> commissionPayByEmployee(LocalDate payrollMonth) {
-        List<CommissionRecord> records = commissionRepository.findApprovedRecordsByMonth(payrollMonth);
-        List<TierConfig> tiers = commissionRepository.findTiers();
-        List<TierConfig> safeTiers = tiers.isEmpty() ? TierConfig.defaults() : tiers;
-        return records.stream()
-            .collect(Collectors.groupingBy(
-                CommissionRecord::salesRepId,
-                Collectors.mapping(CommissionRecord::commissionableBase, Collectors.reducing(BigDecimal.ZERO, BigDecimal::add))
-            ))
-            .entrySet()
-            .stream()
-            .collect(Collectors.toMap(Map.Entry::getKey, entry -> commissionCalculator.progressiveCommission(entry.getValue(), safeTiers)));
+        return commissionService.payrollCommissionTotalsByEmployee(payrollMonth);
     }
 
     private List<PayrollSpecialPayDto> specialPayDtos(List<BigDecimal> specialPays) {
@@ -387,10 +519,6 @@ public class PayrollService {
 
     private BigDecimal sum(List<PayrollLineDto> lines, MoneyExtractor extractor) {
         return lines.stream().map(extractor::value).reduce(BigDecimal.ZERO, BigDecimal::add);
-    }
-
-    private String nullToBlank(String value) {
-        return value == null ? "" : value;
     }
 
     private void auditPayrollAccess(String action, UserPrincipal actor, PayrollPeriodDto period, String fields) {

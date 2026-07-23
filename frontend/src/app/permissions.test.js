@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hasPermission, allowedRoute, canAccessPath } from './permissions.js';
+import { hasPermission, allowedRoute, canAccessPath, isDivisionManager } from './permissions.js';
 
 describe('hasPermission', () => {
   it('grants a permission listed for the role', () => {
@@ -27,6 +27,26 @@ describe('hasPermission', () => {
     expect(hasPermission('import', 'canManageCatalogProducts')).toBe(true);
     expect(hasPermission('sales', 'canManageCatalogProducts')).toBe(false);
     expect(hasPermission('employee', 'canManageCatalogProducts')).toBe(false);
+  });
+
+  it('scopes the deal-pipeline BROWSER to sales/sales_manager/ceo, excluding account (Account role-scoped views)', () => {
+    expect(hasPermission('sales', 'canViewDealPipeline')).toBe(true);
+    expect(hasPermission('sales_manager', 'canViewDealPipeline')).toBe(true);
+    expect(hasPermission('ceo', 'canViewDealPipeline')).toBe(true);
+    expect(hasPermission('account', 'canViewDealPipeline')).toBe(false);
+    expect(hasPermission('import', 'canViewDealPipeline')).toBe(false);
+  });
+
+  // Role-scoped views (docs/role-scoped-views.md): the deal PIPELINE BROWSER
+  // (canViewDealPipeline) is narrower than plain ticket-detail read
+  // (canViewTickets) — import and account both keep detail-read but lose the
+  // pipeline browser; sales/sales_manager/ceo keep both.
+  it('keeps canViewTickets (detail-read) broader than canViewDealPipeline — import/account keep detail-read only', () => {
+    expect(hasPermission('import', 'canViewTickets')).toBe(true);
+    expect(hasPermission('sales', 'canViewTickets')).toBe(true);
+    expect(hasPermission('account', 'canViewTickets')).toBe(true);
+    expect(hasPermission('ceo', 'canViewTickets')).toBe(true);
+    expect(hasPermission('sales_manager', 'canViewTickets')).toBe(true);
   });
 
   it('scopes sensitive employee data (salary, salary history, PDPA tab) to hr only (UX-09)', () => {
@@ -89,6 +109,7 @@ describe('canAccessPath', () => {
   const sales = { role: 'sales', employeeId: 9 };
   const ceo = { role: 'ceo', employeeId: 1 };
   const importer = { role: 'import', employeeId: 2 };
+  const account = { role: 'account', employeeId: 3 };
 
   it('denies every path when there is no user', () => {
     expect(canAccessPath('/employees', null)).toBe(false);
@@ -117,6 +138,27 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/tickets/12/deposit', sales)).toBe(true);
     expect(canAccessPath('/ticket-overview', sales)).toBe(true);
     expect(canAccessPath('/tickets', employee)).toBe(false);
+  });
+
+  // Account role-scoped views: the pipeline BROWSER (`/tickets` list,
+  // `/ticket-overview`) is narrower than ticket-DETAIL read (`/tickets/:id`)
+  // — account keeps the latter (its worklist deep-links straight to a single
+  // deal) but loses the former (its own งานการเงิน worklist replaces it).
+  it('splits the deal-pipeline browser from ticket-detail read for account', () => {
+    expect(canAccessPath('/tickets', account)).toBe(false);
+    expect(canAccessPath('/ticket-overview', account)).toBe(false);
+    expect(canAccessPath('/tickets/12', account)).toBe(true);
+    expect(canAccessPath('/tickets/12/deposit', account)).toBe(true);
+    // sales/sales_manager/ceo are unaffected by the split — they still see everything.
+    expect(canAccessPath('/tickets', ceo)).toBe(true);
+    expect(canAccessPath('/ticket-overview', ceo)).toBe(true);
+  });
+
+  it('scopes /finance to canConfirmPayments (account/ceo)', () => {
+    expect(canAccessPath('/finance', account)).toBe(true);
+    expect(canAccessPath('/finance', ceo)).toBe(true);
+    expect(canAccessPath('/finance', sales)).toBe(false);
+    expect(canAccessPath('/finance', employee)).toBe(false);
   });
 
   it('allows self-service paths for any user linked to an employee', () => {
@@ -193,5 +235,51 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/ceo-settings', importer)).toBe(false);
     expect(canAccessPath('/ceo-settings', { role: 'account', employeeId: 3 })).toBe(false);
     expect(canAccessPath('/ceo-settings', { role: 'sales_manager', employeeId: 4 })).toBe(false);
+  });
+
+  // Role-scoped views (Import build): import is blocked from the pipeline
+  // BROWSER (/tickets exact, /ticket-overview) but keeps ticket-detail read
+  // (/tickets/:id) and gains the combined procurement/fulfilment page.
+  it('blocks import from the deal-pipeline browser but allows ticket detail and /procurement', () => {
+    expect(canAccessPath('/tickets', importer)).toBe(false);
+    expect(canAccessPath('/ticket-overview', importer)).toBe(false);
+    expect(canAccessPath('/tickets/12', importer)).toBe(true);
+    expect(canAccessPath('/tickets/12/deposit', importer)).toBe(true);
+    expect(canAccessPath('/procurement', importer)).toBe(true);
+    expect(canAccessPath('/procurement', ceo)).toBe(true);
+    expect(canAccessPath('/procurement', sales)).toBe(false);
+    expect(canAccessPath('/procurement', { role: 'account', employeeId: 3 })).toBe(false);
+  });
+
+  it('keeps sales/sales_manager/ceo on the deal-pipeline browser', () => {
+    expect(canAccessPath('/tickets', sales)).toBe(true);
+    expect(canAccessPath('/ticket-overview', sales)).toBe(true);
+    expect(canAccessPath('/tickets', ceo)).toBe(true);
+    expect(canAccessPath('/tickets', { role: 'sales_manager', employeeId: 4 })).toBe(true);
+  });
+});
+
+describe('isDivisionManager', () => {
+  it('is true for role employee with the manager flag set', () => {
+    expect(isDivisionManager({ role: 'employee', manager: true, employeeId: 10 })).toBe(true);
+  });
+
+  it('is false for a plain employee (no manager flag)', () => {
+    expect(isDivisionManager({ role: 'employee', manager: false, employeeId: 10 })).toBe(false);
+    expect(isDivisionManager({ role: 'employee', employeeId: 10 })).toBe(false);
+  });
+
+  // Narrowed to role 'employee' on purpose: sales_manager/hr/ceo have their own
+  // dedicated landings (company mode / a future sales-manager Overview), so a
+  // manager flag on those roles must not also route them here.
+  it('is false for other roles even when the manager flag is set', () => {
+    expect(isDivisionManager({ role: 'sales_manager', manager: true, employeeId: 11 })).toBe(false);
+    expect(isDivisionManager({ role: 'hr', manager: true, employeeId: 12 })).toBe(false);
+    expect(isDivisionManager({ role: 'ceo', manager: true, employeeId: 13 })).toBe(false);
+  });
+
+  it('is false for no user', () => {
+    expect(isDivisionManager(null)).toBe(false);
+    expect(isDivisionManager(undefined)).toBe(false);
   });
 });

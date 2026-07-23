@@ -9,6 +9,10 @@ const NAV_GROUPS = [
   { key: 'sales', label: 'งานขาย', helper: 'Sales' },
   { key: 'hr', label: 'บุคคล', helper: 'HR' },
   { key: 'finance', label: 'การเงิน', helper: 'Finance & Payroll' },
+  // Division-manager (non-sales) landing: approvals/roster/team-attendance for
+  // the manager's own division. Distinct from 'self' below, which stays the
+  // manager's own personal self-service (same as every other role).
+  { key: 'team', label: 'ทีมของฉัน', helper: 'Team' },
   { key: 'self', label: 'บุคคลของฉัน', helper: 'Self-service' },
 ];
 

@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -200,6 +201,87 @@ class PayrollRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
         List<th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedDto> rows = repository.findYtdSeedRows(2026);
         assertThat(rows).hasSize(2);
+    }
+
+    @Test
+    void findExportRowsJoinsPiiBankAndAddressScopedToTheRequestedPeriod() {
+        long alice = seedExportEmployee("EMP-001", "อลิสา", "ทดสอบ", "gullayanee",
+            "นาง", "3100902988046", "1002818495", "3100902988046",
+            "0952555944", "99", "บางนา", "10260");
+        long bob = seedExportEmployee("EMP-002", "บ๊อบ", "ทดสอบ", "bob",
+            "นาย", "1103900192241", null, null,
+            "0952498185", "201", "พัฒนาการ", "10110");
+        long carol = seedExportEmployee("EMP-003", "แครอล", "ทดสอบ", "carol",
+            "นางสาว", "1234567890123", null, "1234567890123",
+            "1111111111", "5", "สาทร", "10120");
+
+        LocalDate july = LocalDate.of(2026, 7, 1);
+        long julyPeriod = repository.saveProcessedPeriod(july, alice, List.of(
+            line(alice, "EMP-001", "อลิสา ทดสอบ", new BigDecimal("30000.00"), new BigDecimal("30000.00"),
+                new BigDecimal("750.00"), new BigDecimal("2929.00"), new BigDecimal("26321.00")),
+            line(bob, "EMP-002", "บ๊อบ ทดสอบ", new BigDecimal("20000.00"), new BigDecimal("20000.00"),
+                new BigDecimal("750.00"), new BigDecimal("750.00"), new BigDecimal("19250.00"))));
+        // A separate June period for Carol — must NOT leak into the July export rows.
+        repository.saveProcessedPeriod(LocalDate.of(2026, 6, 1), carol, List.of(
+            line(carol, "EMP-003", "แครอล ทดสอบ", new BigDecimal("40000.00"), new BigDecimal("40000.00"),
+                new BigDecimal("875.00"), new BigDecimal("1000.00"), new BigDecimal("38125.00"))));
+
+        List<th.co.glr.hr.payroll.export.PayrollExportRow> rows = repository.findExportRows(julyPeriod);
+
+        // Scoped to the July period only, ordered by employee_code.
+        assertThat(rows).extracting(th.co.glr.hr.payroll.export.PayrollExportRow::employeeCode)
+            .containsExactly("EMP-001", "EMP-002");
+
+        var aliceRow = rows.get(0);
+        assertThat(aliceRow.titleTh()).isEqualTo("นาง");
+        assertThat(aliceRow.firstNameTh()).isEqualTo("อลิสา");
+        assertThat(aliceRow.firstNameEn()).isEqualTo("gullayanee");
+        assertThat(aliceRow.nationalId()).isEqualTo("3100902988046");
+        assertThat(aliceRow.taxId()).isEqualTo("1002818495");
+        assertThat(aliceRow.socialSecurityNo()).isEqualTo("3100902988046");
+        assertThat(aliceRow.bankAccount()).isEqualTo("0952555944");
+        assertThat(aliceRow.houseNo()).isEqualTo("99");
+        assertThat(aliceRow.addressRest()).contains("บางนา");
+        assertThat(aliceRow.postalCode()).isEqualTo("10260");
+        assertThat(aliceRow.netAmount()).isEqualByComparingTo("26321.00");
+        assertThat(aliceRow.grossTaxableIncome()).isEqualByComparingTo("30000.00");
+        assertThat(aliceRow.socialSecurity()).isEqualByComparingTo("750.00");
+
+        // A missing tax id comes back null (LEFT JOIN / nullable column), not an empty string.
+        assertThat(rows.get(1).taxId()).isNull();
+    }
+
+    private long seedExportEmployee(String code, String firstTh, String lastTh, String firstEn,
+                                    String titleTh, String nationalId, String taxId, String ssn,
+                                    String bankAccount, String houseNo, String subdistrict, String postal) {
+        Long titleId = jdbc.queryForObject(
+            "INSERT INTO hr.title (name_th) VALUES (:t) ON CONFLICT (name_th) DO UPDATE SET name_th = EXCLUDED.name_th RETURNING title_id",
+            Map.of("t", titleTh), Long.class);
+        Long bankId = jdbc.queryForObject(
+            "INSERT INTO hr.bank (name_th) VALUES ('ธ.กสิกรไทย') ON CONFLICT (name_th) DO UPDATE SET name_th = EXCLUDED.name_th RETURNING bank_id",
+            Map.of(), Long.class);
+        long employeeId = jdbc.queryForObject(
+            """
+            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, first_name_en, title_id, current_salary, is_active)
+            VALUES (:code, :first, :last, :firstEn, :titleId, 30000, TRUE)
+            RETURNING employee_id
+            """,
+            Map.of("code", code, "first", firstTh, "last", lastTh, "firstEn", firstEn, "titleId", titleId),
+            Long.class);
+        jdbc.update(
+            "INSERT INTO hr.employee_bank_account (employee_id, bank_id, account_no) VALUES (:id, :bankId, :acct)",
+            Map.of("id", employeeId, "bankId", bankId, "acct", bankAccount));
+        jdbc.update(
+            "INSERT INTO hr_restricted.employee_pii (employee_id, national_id, tax_id, social_security_no) VALUES (:id, :nid, :tax, :ssn)",
+            new MapSqlParameterSource()
+                .addValue("id", employeeId).addValue("nid", nationalId).addValue("tax", taxId).addValue("ssn", ssn));
+        jdbc.update(
+            """
+            INSERT INTO hr.employee_address (employee_id, address_type, house_no, subdistrict, province, postal_code)
+            VALUES (:id, 'CURRENT', :house, :sub, 'กรุงเทพฯ', :postal)
+            """,
+            Map.of("id", employeeId, "house", houseNo, "sub", subdistrict, "postal", postal));
+        return employeeId;
     }
 
     private long seedEmployee(String code, String firstNameTh, String lastNameTh) {

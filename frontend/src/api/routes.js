@@ -148,9 +148,14 @@ export const API_ROUTES = {
   },
   payroll: {
     current: '/api/payroll',
+    // Special-pay carry-forward (2026-07-23): read-only pre-fill suggestions for a brand-new
+    // monthly run, sourced from each employee's most-recent prior processed payroll_line. Mirrors
+    // PayrollController#suggestedInputs.
+    suggestedInputs: '/api/payroll/suggested-inputs',
     preview: '/api/payroll/preview',
     process: '/api/payroll/process',
-    bankExport: (periodId) => `/api/payroll/${periodId}/bank-export`,
+    export: (periodId, kind, effectiveDate) =>
+      `/api/payroll/${periodId}/export/${kind}${effectiveDate ? `?effectiveDate=${effectiveDate}` : ''}`,
     payslip: (periodId, lineId) => `/api/payroll/${periodId}/lines/${lineId}/payslip.pdf`,
     ownPayslip: (periodId) => `/api/payroll/${periodId}/payslip/me`,
     distribute: (periodId) => `/api/payroll/${periodId}/distribute`,
@@ -269,6 +274,16 @@ export const ROLE_PERMISSIONS = {
   // canCreateTickets/canPickupTickets/canProposePrices/canApproveReject/
   // canGenerateQuotation/canConfirmPayments. Mirrors TicketService.VIEWER_ROLES.
   canViewTickets: ['sales', 'import', 'ceo', 'account', 'sales_manager'],
+  // Role-scoped views (docs/role-scoped-views.md): the deal PIPELINE BROWSER
+  // (list `/tickets`, `/ticket-overview`, the รายการดีล nav item, SalesTabs
+  // pipeline tabs) is narrower than ticket-detail read (canViewTickets above,
+  // unchanged) — only roles whose job IS the pipeline get it. Import and
+  // Account are deliberately excluded — their jobs are procurement→delivery
+  // and money-confirmation respectively, not browsing the whole deal list
+  // (see features/dashboard/ImportOverview.jsx / AccountOverview.jsx).
+  // Frontend-only presentation split; never narrows what
+  // TicketService.VIEWER_ROLES actually allows a read of.
+  canViewDealPipeline: ['sales', 'sales_manager', 'ceo'],
   // Sales/CRM tool — catalog browsing scoped to the same audience as
   // canViewTickets. Frontend-only gate: GET /api/catalog has no backend
   // role check yet.

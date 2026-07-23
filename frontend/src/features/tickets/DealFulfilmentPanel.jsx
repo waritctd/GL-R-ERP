@@ -9,6 +9,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
   factoryPurchaseOrderStatusLabel, formatMoney, formatThaiDate, fulfilmentStatusLabel,
 } from '../../utils/format.js';
+import { nextFulfilmentActionCode } from './importActions.js';
 import { PROCUREMENT_SUBSTEPS } from './stageMeta.js';
 
 const STEP_ROLE_TH = { import: 'ฝ่ายนำเข้า', ceo: 'CEO', sales: 'ฝ่ายขาย', account: 'ฝ่ายบัญชี' };
@@ -199,11 +200,20 @@ export function DealFulfilmentPanel({
   // Moved out of TicketDetailPage byte-for-byte (Phase 3 Slice S4) — same
   // status+role permission checks, just no longer routed through this
   // page's shared actionMutation/doAction.
+  //
+  // Role-scoped views (Import build): the status/fulfillmentStatus matching
+  // for the four linear fulfilment-chain steps is now factored into
+  // importActions.js's nextFulfilmentActionCode, shared with ImportOverview's
+  // worklist CTA and ProcurementFulfilmentPage — so the two surfaces can
+  // never disagree with this panel about which stage a deal is at.
+  // hasAction(...) && isFulfilment still gate whether THIS viewer may act on
+  // it (list rows don't carry availableActions, so that check stays local).
+  const fulfilmentActionCode = nextFulfilmentActionCode({ status: st, fulfillmentStatus: fs });
   const can = {
-    issueImportRequest: hasAction('ISSUE_IMPORT_REQUEST') && st === 'quotation_issued' && fs == null && isFulfilment,
-    markIrSent:         hasAction('IR_SENT') && st === 'quotation_issued' && fs === 'IR_ISSUED' && isFulfilment,
-    markShipping:       hasAction('SHIPPING') && st === 'quotation_issued' && fs === 'IR_SENT' && isFulfilment,
-    markGoodsReceived:  hasAction('GOODS_RECEIVED') && st === 'quotation_issued' && fs === 'SHIPPING' && isFulfilment,
+    issueImportRequest: hasAction('ISSUE_IMPORT_REQUEST') && fulfilmentActionCode === 'issueImportRequest' && isFulfilment,
+    markIrSent:         hasAction('IR_SENT') && fulfilmentActionCode === 'markIrSent' && isFulfilment,
+    markShipping:       hasAction('SHIPPING') && fulfilmentActionCode === 'markShipping' && isFulfilment,
+    markGoodsReceived:  hasAction('GOODS_RECEIVED') && fulfilmentActionCode === 'markGoodsReceived' && isFulfilment,
     reserveStock:       hasAction('RESERVE_STOCK') && isFulfilment,
     recordDelivery:     hasAction('RECORD_PARTIAL_DELIVERY') && isFulfilment,
     completeDelivery:   hasAction('COMPLETE_DELIVERY') && isFulfilment,

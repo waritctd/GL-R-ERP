@@ -221,10 +221,12 @@ describe('TicketListPage', () => {
     expect(screen.getByText('รอรับเรื่องจากฝ่าย Import')).not.toBeNull();
   });
 
-  it('filters by lifecycle, overdue, and partial delivery chips', async () => {
+  it('filters by lifecycle, overdue, and partial delivery chips (after expanding "ตัวกรองเพิ่มเติม")', async () => {
     renderTicketListPage();
 
     expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /ตัวกรองเพิ่มเติม/ }));
+
     fireEvent.click(screen.getByRole('button', { name: /พักไว้ชั่วคราว/ }));
     expect(screen.getByText('บริษัท พักไว้ จำกัด')).not.toBeNull();
     expect(screen.queryByText('บริษัท ทดสอบ จำกัด')).toBeNull();
@@ -238,5 +240,42 @@ describe('TicketListPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /ส่งมอบบางส่วน/ }));
     expect(screen.getByText('บริษัท เกินกำหนด จำกัด')).not.toBeNull();
     expect(screen.queryByText('บริษัท เงียบ จำกัด')).toBeNull();
+  });
+
+  // Owner feedback (role-scoped views, Sales branch): LIFECYCLE/FLAGS used to
+  // sit in the primary view, competing with the deal list. They now live
+  // behind a collapsed "ตัวกรองเพิ่มเติม" expander, closed by default.
+  describe('LIFECYCLE/FLAGS de-emphasis ("ตัวกรองเพิ่มเติม")', () => {
+    it('keeps the lifecycle/flags chips out of the always-visible primary bar by default', async () => {
+      renderTicketListPage();
+      expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
+
+      const toggle = screen.getByRole('button', { name: /ตัวกรองเพิ่มเติม/ });
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(screen.queryByRole('button', { name: /พักไว้ชั่วคราว/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^เกินกำหนด/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: /ส่งมอบบางส่วน/ })).toBeNull();
+    });
+
+    it('reveals lifecycle/flags chips on toggle, and they still filter the table', async () => {
+      renderTicketListPage();
+      expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
+
+      const toggle = screen.getByRole('button', { name: /ตัวกรองเพิ่มเติม/ });
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+
+      const lifecycleChip = screen.getByRole('button', { name: /พักไว้ชั่วคราว/ });
+      expect(lifecycleChip).not.toBeNull();
+      fireEvent.click(lifecycleChip);
+      expect(screen.getByText('บริษัท พักไว้ จำกัด')).not.toBeNull();
+      expect(screen.queryByText('บริษัท ทดสอบ จำกัด')).toBeNull();
+
+      // Collapsing again keeps the now-active filter visible/working rather
+      // than silently hiding an applied filter from the viewer.
+      fireEvent.click(toggle);
+      expect(screen.getByRole('button', { name: /พักไว้ชั่วคราว/ })).not.toBeNull();
+      expect(screen.getByText('บริษัท พักไว้ จำกัด')).not.toBeNull();
+    });
   });
 });

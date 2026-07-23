@@ -2740,6 +2740,21 @@ export const api = {
         depositPolicy: t.depositPolicy ?? 'REQUIRED',
         depositPolicyReason: t.depositPolicyReason ?? null,
         entryChannel: t.entryChannel ?? 'DESIGNER_LED',
+        // Mock-parity fix (role-views-account + role-views-ceo, same underlying
+        // gap, landed independently on both branches — collapsed here into one):
+        // the real TicketSummaryDto (see TicketService.java / TicketRepository.java)
+        // already carries these three fields on the LIST projection, not just the
+        // single-ticket detail one — this mock's list() was dropping them, which is
+        // exactly the "mock is MORE limited than prod" direction that hides real
+        // capability rather than fabricating fake permissiveness. AccountOverview's
+        // nextAccountAction() needs closeConfirmedAt/invoiceOnFile to compute the
+        // close-ready bucket from list rows alone; CeoOverview needs
+        // closeConfirmedAt/closeConfirmedByName at list-scale (which tickets are
+        // already confirmed by ฝ่ายบัญชี and awaiting CEO verifyClose) — both
+        // without an N+1 detail fetch per ticket.
+        closeConfirmedAt: t.closeConfirmedAt ?? null,
+        closeConfirmedByName: t.closeConfirmedByName ?? null,
+        invoiceOnFile: hasInvoiceAttachment(t),
         // Deal tracking fields (V83, Slice B1/B2 — handoff 103) — same fields as
         // buildTicketDetail's summary, so the manager pipeline view (TicketListPage)
         // has win%/stale without a per-row detail fetch.
@@ -4549,7 +4564,7 @@ export const api = {
 
   // No seeded payroll-period data yet — `current` returns an empty period so
   // PayrollPage degrades to its built-in empty state; the mutating actions
-  // (preview/process/bankExport) are explicit user-triggered calculations that
+  // (preview/process/exportFile) are explicit user-triggered calculations that
   // would require reproducing real payroll/tax logic to fake convincingly, so
   // they surface a clear "not supported in mock mode" error instead of
   // fabricating financial figures (real backend implementation is in hrApi.js).
@@ -4562,6 +4577,13 @@ export const api = {
       hasRole('hr', 'ceo');
       return delay({ period: null });
     },
+    // Special-pay carry-forward (2026-07-23): no seeded prior payroll_line data in mock mode, so
+    // there is nothing to carry forward — return an empty suggestions list rather than fabricating
+    // figures, same spirit as `current` returning a null period above.
+    async suggestedInputs(params = {}) {
+      hasRole('hr', 'ceo');
+      return delay({ payrollMonth: params.payrollMonth ? `${params.payrollMonth}-01` : null, suggestions: [] });
+    },
     async preview() {
       hasRole('hr', 'ceo');
       throw new Error('คำนวณเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
@@ -4570,9 +4592,9 @@ export const api = {
       hasRole('hr');
       throw new Error('ประมวลผลเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
-    async bankExport() {
+    async exportFile() {
       hasRole('hr', 'ceo');
-      throw new Error('ดาวน์โหลดไฟล์โอนเงินไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+      throw new Error('ดาวน์โหลดไฟล์เงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
     async downloadPayslip() {
       hasRole('hr', 'ceo');
