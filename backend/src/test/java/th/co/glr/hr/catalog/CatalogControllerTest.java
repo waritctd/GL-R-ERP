@@ -23,8 +23,11 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.importer.PriceImportService;
 import th.co.glr.hr.common.ApiExceptionHandler;
 
-// #205: catalog stays browsable by any logged-in user (search/searchPrices are open), but the
-// three write endpoints (add/update/delete product) are ceo/import only.
+// Catalog browsing (search/searchPrices) is gated to canViewCatalog's exact role set —
+// sales/import/ceo/account/sales_manager, mirroring routes.js (added 2026-07-24, Stage L
+// follow-up; see CatalogViewerScopeIntegrationTest for the real-DB proof this role gate survives
+// into the real repository query, not just this Mockito-mocked decision). The three write
+// endpoints (add/update/delete product) stay ceo/import only, unchanged.
 class CatalogControllerTest {
     private final CatalogRepository catalog = mock(CatalogRepository.class);
     private final PriceImportService priceImport = mock(PriceImportService.class);
@@ -34,19 +37,37 @@ class CatalogControllerTest {
         .build();
 
     @Test
-    void searchIsNotForbiddenForAnyAuthenticatedRole() throws Exception {
+    void searchIsAllowedForCatalogViewerRoles() throws Exception {
         when(catalog.search(any())).thenReturn(List.of());
-        mvc.perform(get("/api/catalog").session(session("employee")))
-            .andExpect(status().is2xxSuccessful());
-        mvc.perform(get("/api/catalog").session(session("sales")))
-            .andExpect(status().is2xxSuccessful());
+        for (String role : List.of("sales", "import", "ceo", "account", "sales_manager")) {
+            mvc.perform(get("/api/catalog").session(session(role)))
+                .andExpect(status().is2xxSuccessful());
+        }
     }
 
     @Test
-    void searchPricesIsNotForbiddenForAnyAuthenticatedRole() throws Exception {
+    void searchIsForbiddenForNonCatalogViewerRoles() throws Exception {
+        for (String role : List.of("employee", "hr", "warehouse", "qc")) {
+            mvc.perform(get("/api/catalog").session(session(role)))
+                .andExpect(status().isForbidden());
+        }
+    }
+
+    @Test
+    void searchPricesIsAllowedForCatalogViewerRoles() throws Exception {
         when(catalog.searchProductPrices(any(), any(), anyInt())).thenReturn(List.of());
-        mvc.perform(get("/api/catalog/prices").session(session("employee")))
-            .andExpect(status().is2xxSuccessful());
+        for (String role : List.of("sales", "import", "ceo", "account", "sales_manager")) {
+            mvc.perform(get("/api/catalog/prices").session(session(role)))
+                .andExpect(status().is2xxSuccessful());
+        }
+    }
+
+    @Test
+    void searchPricesIsForbiddenForNonCatalogViewerRoles() throws Exception {
+        for (String role : List.of("employee", "hr", "warehouse", "qc")) {
+            mvc.perform(get("/api/catalog/prices").session(session(role)))
+                .andExpect(status().isForbidden());
+        }
     }
 
     @Test
