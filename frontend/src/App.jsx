@@ -8,7 +8,7 @@ import { LoginPage } from './features/auth/LoginPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
 import { SALES_ENABLED } from './app/features.js';
-import { hasPermission } from './app/permissions.js';
+import { hasPermission, isDivisionManager } from './app/permissions.js';
 import { RequireAccess } from './app/RequireAccess.jsx';
 
 // Route pages are code-split: each import() becomes its own chunk, loaded on
@@ -18,8 +18,17 @@ import { RequireAccess } from './app/RequireAccess.jsx';
 const toDefault = (name) => (module) => ({ default: module[name] });
 const ChangePasswordModal = lazy(() => import('./features/auth/ChangePasswordModal.jsx').then(toDefault('ChangePasswordModal')));
 const HrDashboard = lazy(() => import('./features/dashboard/HrDashboard.jsx').then(toDefault('HrDashboard')));
+const HrOverview = lazy(() => import('./features/dashboard/HrOverview.jsx').then(toDefault('HrOverview')));
 const EmployeeDashboard = lazy(() => import('./features/dashboard/EmployeeDashboard.jsx').then(toDefault('EmployeeDashboard')));
+const SalesOverview = lazy(() => import('./features/dashboard/SalesOverview.jsx').then(toDefault('SalesOverview')));
+// Role-scoped views program (docs/role-scoped-views.md) — CEO's exec-cockpit landing.
+const CeoOverview = lazy(() => import('./features/dashboard/CeoOverview.jsx').then(toDefault('CeoOverview')));
+const ImportOverview = lazy(() => import('./features/dashboard/ImportOverview.jsx').then(toDefault('ImportOverview')));
+const EmployeeSelfService = lazy(() => import('./features/dashboard/EmployeeSelfService.jsx').then(toDefault('EmployeeSelfService')));
+const DivisionManagerOverview = lazy(() => import('./features/dashboard/DivisionManagerOverview.jsx').then(toDefault('DivisionManagerOverview')));
 const TicketDashboard = lazy(() => import('./features/dashboard/TicketDashboard.jsx').then(toDefault('TicketDashboard')));
+// Role-scoped views: Sales Manager's team-cockpit Overview (landing).
+const ManagerOverview = lazy(() => import('./features/dashboard/ManagerOverview.jsx').then(toDefault('ManagerOverview')));
 const EmployeeListPage = lazy(() => import('./features/employees/EmployeeListPage.jsx').then(toDefault('EmployeeListPage')));
 const EmployeeDetailPage = lazy(() => import('./features/employees/EmployeeDetailPage.jsx').then(toDefault('EmployeeDetailPage')));
 const ProfileRequestsPage = lazy(() => import('./features/profileRequests/ProfileRequestsPage.jsx').then(toDefault('ProfileRequestsPage')));
@@ -30,6 +39,9 @@ const LeavePage = lazy(() => import('./features/leave/LeavePage.jsx').then(toDef
 const TicketListPage = lazy(() => import('./features/tickets/TicketListPage.jsx').then(toDefault('TicketListPage')));
 const TicketDetailPage = lazy(() => import('./features/tickets/TicketDetailPage.jsx').then(toDefault('TicketDetailPage')));
 const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.jsx').then(toDefault('CommissionPage')));
+// Role-scoped views: Account's money Overview (landing) + งานการเงิน worklist.
+const AccountOverview = lazy(() => import('./features/dashboard/AccountOverview.jsx').then(toDefault('AccountOverview')));
+const AccountFinancePage = lazy(() => import('./features/finance/AccountFinancePage.jsx').then(toDefault('AccountFinancePage')));
 const PayrollPage = lazy(() => import('./features/payroll/PayrollPage.jsx').then(toDefault('PayrollPage')));
 const DepositNoticePage = lazy(() => import('./features/deposits/DepositNoticePage.jsx').then(toDefault('DepositNoticePage')));
 const CeoSettingsPage = lazy(() => import('./features/ceoSettings/CeoSettingsPage.jsx').then(toDefault('CeoSettingsPage')));
@@ -39,6 +51,7 @@ const PricingRequestQueuePage = lazy(() => import('./features/pricingRequests/Pr
 const PricingRequestDetailPage = lazy(() => import('./features/pricingRequests/PricingRequestDetailPage.jsx').then(toDefault('PricingRequestDetailPage')));
 const ProcurementListPage = lazy(() => import('./features/procurement/ProcurementListPage.jsx').then(toDefault('ProcurementListPage')));
 const ProcurementDetailPage = lazy(() => import('./features/procurement/ProcurementDetailPage.jsx').then(toDefault('ProcurementDetailPage')));
+const ProcurementFulfilmentPage = lazy(() => import('./features/procurement/ProcurementFulfilmentPage.jsx').then(toDefault('ProcurementFulfilmentPage')));
 
 // Thin wrappers that source the ticket id from the URL for the frozen sales
 // pages (they already fetch by id internally — branch 5 only rewires how the
@@ -100,6 +113,15 @@ export function App() {
   const isEmployeeExperience = hasPermission(user?.role, 'canUseEmployeeExperience');
   const pendingCount = (isEmployeeExperience ? ownRequests : profileRequests).filter((request) => request.status === 'pending').length;
   const dashboardRequests = isEmployeeExperience && !user?.manager ? ownRequests : profileRequests;
+  // A plain, non-managing employee (role==='employee', not a division manager)
+  // lands on the self-service view instead of the shared EmployeeDashboard.
+  // 'warehouse'/'qc' keep EmployeeDashboard for now — they get the same
+  // canUseEmployeeExperience data wiring but this branch is scoped to
+  // role==='employee' only, per this task. `!isDivisionManager(user)` reuses
+  // the single source of truth for "is this a division manager" (permissions.js)
+  // instead of re-deriving `!user?.manager` inline — a manager-flagged
+  // employee lands on DivisionManagerOverview above, never here.
+  const isPlainEmployee = user?.role === 'employee' && !isDivisionManager(user);
 
   useEffect(() => {
     let alive = true;
@@ -202,13 +224,61 @@ export function App() {
           <Route
             path="/"
             element={(
-              <EmployeeDashboard
-                user={user}
-                employee={currentEmployee}
-                profileRequests={dashboardRequests}
-                dashboardSummary={dashboardSummary}
-                showToast={showToast}
-              />
+              // Role-scoped views: each role's landing branches off `/` to its own
+              // Overview instead of the generic EmployeeDashboard — this generalizes
+              // into a role -> Overview map as more roles ship their own (see
+              // docs/role-scoped-views.md). Sales-gated roles degrade to
+              // EmployeeDashboard whenever SALES_ENABLED is off (SALES_ENABLED is
+              // the off-switch — see app/features.js), same as every other
+              // sales-gated surface in this file; hr is people-ops and is NOT gated
+              // on SALES_ENABLED. The base `employee` role further splits by
+              // manager flag: a division manager lands on DivisionManagerOverview,
+              // a plain employee on EmployeeSelfService; any other/unknown role
+              // (or a manager-flagged non-employee role, which shouldn't happen)
+              // falls through to the generic EmployeeDashboard as a safety net.
+              user.role === 'hr' ? (
+                <HrOverview
+                  employees={employees}
+                  dashboardSummary={dashboardSummary}
+                />
+              ) : user.role === 'sales_manager' && SALES_ENABLED ? (
+                <ManagerOverview user={user} employee={currentEmployee} showToast={showToast} />
+              ) : user.role === 'sales' && SALES_ENABLED ? (
+                <SalesOverview user={user} employee={currentEmployee} />
+              ) : user?.role === 'ceo' && SALES_ENABLED ? (
+                <CeoOverview
+                  user={user}
+                  employee={currentEmployee}
+                  dashboardSummary={dashboardSummary}
+                />
+              ) : user.role === 'import' && SALES_ENABLED ? (
+                <ImportOverview user={user} employee={currentEmployee} />
+              ) : user.role === 'account' && SALES_ENABLED ? (
+                <AccountOverview user={user} employee={currentEmployee} showToast={showToast} />
+              ) : isDivisionManager(user) ? (
+                <DivisionManagerOverview
+                  user={user}
+                  employee={currentEmployee}
+                  dashboardSummary={dashboardSummary}
+                  showToast={showToast}
+                />
+              ) : isPlainEmployee ? (
+                <EmployeeSelfService
+                  user={user}
+                  employee={currentEmployee}
+                  profileRequests={dashboardRequests}
+                  dashboardSummary={dashboardSummary}
+                  showToast={showToast}
+                />
+              ) : (
+                <EmployeeDashboard
+                  user={user}
+                  employee={currentEmployee}
+                  profileRequests={dashboardRequests}
+                  dashboardSummary={dashboardSummary}
+                  showToast={showToast}
+                />
+              )
             )}
           />
 
@@ -305,6 +375,11 @@ export function App() {
                   path="/commissions"
                   element={<CommissionPage user={user} showToast={showToast} />}
                 />
+                {/* Account's money-lifecycle worklist (Account role-scoped views). */}
+                <Route
+                  path="/finance"
+                  element={<AccountFinancePage user={user} showToast={showToast} />}
+                />
                 <Route
                   path="/price-import"
                   element={<PriceImportPage showToast={showToast} />}
@@ -320,6 +395,14 @@ export function App() {
                 <Route
                   path="/factory-purchase-orders/:id"
                   element={<ProcurementDetailPage showToast={showToast} />}
+                />
+                {/* Role-scoped views (Import build): combined "จัดซื้อ & นำเข้า" —
+                    fulfilment worklist (section 1) + the raw factory-PO list
+                    reused wholesale (section 2). /factory-purchase-orders(/:id)
+                    stay registered above for direct PO-detail deep-links. */}
+                <Route
+                  path="/procurement"
+                  element={<ProcurementFulfilmentPage user={user} showToast={showToast} />}
                 />
               </>
             )}

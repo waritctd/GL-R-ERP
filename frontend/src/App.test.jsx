@@ -28,10 +28,33 @@ vi.mock('./api/index.js', () => ({
       list: vi.fn().mockResolvedValue({ notifications: [] }),
       markRead: vi.fn().mockResolvedValue({}),
     },
-    // PricingRequestQueuePage's only query, needed for the /pricing-requests
-    // guard test below.
+    // PricingRequestQueuePage's only query, and (unfiltered) SalesOverview's
+    // own worklist source — both the /pricing-requests guard test and the
+    // sales-redirect-lands-on-SalesOverview test below need this.
     pricingRequests: {
       queue: vi.fn().mockResolvedValue({ items: [] }),
+    },
+    // SalesOverview (role-scoped views, Sales branch) is what a sales user
+    // now lands on at '/' — its own two remaining queries, needed by the
+    // redirect test below.
+    tickets: {
+      list: vi.fn().mockResolvedValue({ tickets: [] }),
+    },
+    commissions: {
+      list: vi.fn().mockResolvedValue({ commissions: [] }),
+    },
+    // DivisionManagerOverview's queries, needed for the '/' route-branch test
+    // below (a division manager lands there instead of EmployeeDashboard).
+    // EmployeeSelfService (plain-employee landing) also reads attendance.daily.
+    overtime: {
+      list: vi.fn().mockResolvedValue({ requests: [] }),
+    },
+    leave: {
+      list: vi.fn().mockResolvedValue({ requests: [] }),
+      balances: vi.fn().mockResolvedValue({ balances: [] }),
+    },
+    attendance: {
+      daily: vi.fn().mockResolvedValue({ days: [] }),
     },
   },
   ROLE_PERMISSIONS: {
@@ -157,6 +180,8 @@ describe('App route guard for /pricing-requests (commit 6)', () => {
     vi.clearAllMocks();
     api.notifications.list.mockResolvedValue({ notifications: [] });
     api.pricingRequests.queue.mockResolvedValue({ items: [] });
+    api.tickets.list.mockResolvedValue({ tickets: [] });
+    api.commissions.list.mockResolvedValue({ commissions: [] });
   });
 
   function renderAppAt(path, user) {
@@ -183,8 +208,53 @@ describe('App route guard for /pricing-requests (commit 6)', () => {
     renderAppAt('/pricing-requests', salesUser);
 
     // RequireAccess denies the path and <Navigate to="/" replace /> lands on
-    // EmployeeDashboard, whose PageHeader greets the logged-in user by name.
-    expect(await screen.findByRole('heading', { name: `สวัสดี, คุณ${salesUser.name}` })).toBeTruthy();
+    // SalesOverview (role-scoped views, Sales branch — a sales user's own
+    // '/' landing since this branch, replacing the generic EmployeeDashboard
+    // it used to land on), whose PageHeader greets the logged-in user by name.
+    expect(await screen.findByRole('heading', { name: `สวัสดี คุณ${salesUser.name}` })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'คิวขอราคา' })).toBeNull();
+  });
+});
+
+// isDivisionManager (app/permissions.js) branches the '/' route to
+// DivisionManagerOverview instead of the generic EmployeeDashboard for role
+// `employee` + the manager flag. Confirms the actual App.jsx wiring, not just
+// the isDivisionManager predicate (unit-tested separately in permissions.test.js)
+// or DivisionManagerOverview's own rendering (DivisionManagerOverview.test.jsx).
+describe('App / route branches division managers to DivisionManagerOverview', () => {
+  const managerUser = { employeeId: 30, name: 'ผู้จัดการ ทดสอบ', role: 'employee', manager: true, email: 'manager@glr.co' };
+  const plainEmployeeUser = { employeeId: 31, name: 'พนักงาน ทดสอบ', role: 'employee', manager: false, email: 'employee@glr.co' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.notifications.list.mockResolvedValue({ notifications: [] });
+    api.overtime.list.mockResolvedValue({ requests: [] });
+    api.leave.list.mockResolvedValue({ requests: [] });
+    api.attendance.daily.mockResolvedValue({ days: [] });
+  });
+
+  function renderAppAt(path, user) {
+    api.auth.me.mockResolvedValue({ user });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[path]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it('lands a division manager (role employee + manager flag) on DivisionManagerOverview at /', async () => {
+    renderAppAt('/', managerUser);
+    expect(await screen.findByText(/ภาพรวมทีม/)).toBeTruthy();
+  });
+
+  it('lands a plain employee (no manager flag) on EmployeeSelfService at / (not EmployeeDashboard, not DivisionManagerOverview)', async () => {
+    renderAppAt('/', plainEmployeeUser);
+    expect(await screen.findByRole('heading', { name: `สวัสดี คุณ${plainEmployeeUser.name}` })).toBeTruthy();
+    expect(screen.queryByText(/ภาพรวมทีม/)).toBeNull();
   });
 });
