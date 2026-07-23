@@ -20,6 +20,18 @@ PASSWORD = os.environ.get("UAT_PASSWORD", "Uat@2026")
 MAILPIT_URL = os.environ.get("MAILPIT_URL", "http://localhost:8025")
 _RESULTS = []
 
+# Opt-in per-request throttle (UAT_THROTTLE=<seconds>) to stay under the hosted-UAT
+# rate limiter when running the full suite against live UAT. TEMPORARY / local-only.
+if os.environ.get("UAT_THROTTLE"):
+    _throttle_delay = float(os.environ["UAT_THROTTLE"])
+    _orig_request = requests.sessions.Session.request
+
+    def _throttled_request(self, *args, **kwargs):
+        time.sleep(_throttle_delay)
+        return _orig_request(self, *args, **kwargs)
+
+    requests.sessions.Session.request = _throttled_request
+
 
 @pytest.fixture(scope="session")
 def base_url():

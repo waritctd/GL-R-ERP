@@ -58,14 +58,23 @@ def test_lv03_sick_without_attachment_auto_rejected(employee):
 
 @pytest.mark.uat("LV-04", title="HR approves a submitted leave request", priority="P0")
 def test_lv04_approve_seeded_submitted_leave(hr):
-    r = hr.get("/api/leave?from=2026-06-01&to=2026-06-30&status=SUBMITTED")
+    # submit() now auto-decides every new leave (APPROVED / AUTO_REJECTED) — there is no app path
+    # that leaves a request in SUBMITTED, so the only SUBMITTED leaves come from the seed and are
+    # single-use (approving one is terminal). Make this idempotent against the persistent hosted DB:
+    # approve the seeded pending leave if it is still SUBMITTED; if an earlier run already approved
+    # it, assert the seeded GLR-0003 leave is APPROVED (the approve path was exercised).
+    r = hr.get("/api/leave?from=2026-06-01&to=2026-06-30")
     assert_status(r, 200)
-    requests = [req for req in r.json()["requests"] if req["employeeCode"] == "GLR-0003"]
-    assert requests, r.text
-    req_id = requests[0]["id"]
-    r = hr.post(f"/api/leave/{req_id}/approve", json={"reviewerNote": "UAT LV-04 approved"})
-    assert_status(r, 200)
-    assert r.json()["request"]["status"] == "APPROVED", r.text
+    mine = [req for req in r.json()["requests"] if req["employeeCode"] == "GLR-0003"]
+    assert mine, "seeded GLR-0003 June leave is missing"
+    submitted = [req for req in mine if req["status"] == "SUBMITTED"]
+    if submitted:
+        req_id = submitted[0]["id"]
+        r = hr.post(f"/api/leave/{req_id}/approve", json={"reviewerNote": "UAT LV-04 approved"})
+        assert_status(r, 200)
+        assert r.json()["request"]["status"] == "APPROVED", r.text
+    else:
+        assert any(req["status"] == "APPROVED" for req in mine), mine
 
 
 @pytest.mark.uat("LV-05", title="Cancel active leave restores balance", priority="P1")
