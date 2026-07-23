@@ -5636,8 +5636,21 @@ export const api = {
             factoryQuoteId: quoteId,
             pricingRequestItemId: item.id,
             quotedQuantity: item.requestedQty,
-            quotedUnit: item.requestedUnit,
-            unitBasis: item.requestedUnit,
+            // Bug fix (found while writing Stage K2 Phase 2's pcr-chain.spec.js):
+            // this used to default to item.requestedUnit — a human display LABEL
+            // ("ตร.ม.", "แผ่น") — not item.requestedUnitBasis, the canonical code
+            // ('PER_SQM'/'PER_PIECE'/...) the response form's <select> options and
+            // recalculateCosting's mockPricePerPiece/mockQuantityToPieces both key
+            // on. Any import officer who filled in just the raw price without
+            // re-touching the (seemingly-already-selected) unit-basis dropdown
+            // would submit an unrecognised unitBasis, and recalculateCosting would
+            // 422 with "Unsupported factory quote unit basis '<label>'" — silently
+            // blocking Submit to CEO with no visible cause. quotedUnit and unitBasis
+            // are always written together as the same code by the response form's
+            // own onChange (see the unitBasis <select> below), so both are seeded
+            // from requestedUnitBasis here too.
+            quotedUnit: item.requestedUnitBasis,
+            unitBasis: item.requestedUnitBasis,
             rawUnitPrice: null,
             currency: null,
             sortOrder: i,
@@ -6012,7 +6025,17 @@ export const api = {
             ? frozenPerRequestedUnit * (1 + Number(defaultMarginPct)) : null;
           return {
             id: mockPricingDecisionItemSeq++,
-            pricingDecisionId: decision?.id,
+            // Bug fix (found while writing Stage K2 Phase 2's pcr-chain.spec.js):
+            // this used to read `decision?.id` here — but `decision` is the const
+            // THIS object literal is itself initializing (`items: costing.items.map(...)`
+            // runs synchronously as part of constructing `decision`), so referencing
+            // `decision` from inside its own initializer is a temporal-dead-zone
+            // violation. It threw "Cannot access 'decision' before initialization"
+            // on every single call, 100% reproducible, unconditionally breaking
+            // startPricingDecision (CEO "เริ่มพิจารณาราคาขาย") for every PCR. Left
+            // null here; the forEach right below (already written for exactly this
+            // reason — see its own comment) fixes it up once decision.id is known.
+            pricingDecisionId: null,
             pricingRequestItemId: costingItem.pricingRequestItemId,
             pricingCostingItemId: costingItem.pricingRequestItemId,
             brand: prItem?.brand ?? null,

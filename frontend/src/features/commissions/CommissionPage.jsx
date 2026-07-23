@@ -581,6 +581,7 @@ export function CommissionPage({ user, showToast }) {
               aria-label={canCeoReview(record) ? 'CEO อนุมัติ' : 'ผู้จัดการอนุมัติ'}
               disabled={saving}
               onClick={(event) => { event.stopPropagation(); setApproveId(record.id); }}
+              data-testid="commission-approve"
             >
               <Icon name="check" size={14} />
             </button>

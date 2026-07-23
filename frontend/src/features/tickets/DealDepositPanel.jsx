@@ -205,7 +205,7 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   const alreadyPaid = ['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ps);
 
   return (
-    <section className="table-panel">
+    <section className="table-panel" data-testid="deal-deposit-panel">
       <div className="panel-header">
         <h2>มัดจำ</h2>
       </div>
@@ -279,7 +279,7 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
                   </>
                 ) : canManageThisNotice ? (
                   <button type="button" className="primary-button" disabled={issueMutation.isPending}
-                    onClick={() => issueMutation.mutate()}>
+                    onClick={() => issueMutation.mutate()} data-testid="deal-deposit-issue-notice">
                     ออกเอกสาร
                   </button>
                 ) : null}
@@ -304,7 +304,7 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
                   value={depositPercentInput} onChange={(e) => setDepositPercentInput(e.target.value)} />
               </label>
               <button type="button" className="primary-button self-start" disabled={createNoticeMutation.isPending}
-                onClick={() => createNoticeMutation.mutate()}>
+                onClick={() => createNoticeMutation.mutate()} data-testid="deal-deposit-create-notice">
                 สร้างใบแจ้งยอดเงินรับมัดจำ
               </button>
             </div>
@@ -339,7 +339,7 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
             </p>
           ) : canConfirmPaid ? (
             <button type="button" className="primary-button self-start" disabled={confirmPaidMutation.isPending}
-              onClick={() => confirmPaidMutation.mutate()}>
+              onClick={() => confirmPaidMutation.mutate()} data-testid="deal-deposit-confirm">
               ยืนยันรับมัดจำ
             </button>
           ) : alreadyPaid ? (
