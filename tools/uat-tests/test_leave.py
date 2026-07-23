@@ -16,8 +16,11 @@ def test_lv01_within_quota_auto_approved(employee):
     assert money(req["quotaRemainingAfter"]) == money(req["quotaRemainingBefore"]) - money(req["totalDays"])
 
 
-@pytest.mark.uat("LV-02", title="Over-quota leave auto-rejects", priority="P0")
-def test_lv02_over_quota_auto_rejected(hr):
+@pytest.mark.uat("LV-02", title="Over-quota leave is approved with the excess unpaid", priority="P0")
+def test_lv02_over_quota_approved_with_unpaid(hr):
+    # Thai-labour-law leave feature: over-quota leave is no longer AUTO_REJECTED. It is APPROVED,
+    # with days covered by remaining quota paid and the excess split off as unpaid (base/30
+    # deduction flows to payroll). paid_days = min(quotaRemaining, total); unpaid = total - paid.
     sales = employee_by_code(hr, "GLR-0005")
     req = submit_leave(
         hr,
@@ -27,9 +30,17 @@ def test_lv02_over_quota_auto_rejected(hr):
         startDate="2026-08-25",
         endDate="2026-08-26",
     )
-    assert req["status"] == "AUTO_REJECTED", req
-    assert "quota" in req["systemNote"].lower(), req
-    assert money(req["quotaRemainingAfter"]) == money(req["quotaRemainingBefore"])
+    assert req["status"] == "APPROVED", req
+    total = money(req["totalDays"])
+    paid = money(req["paidDays"])
+    unpaid = money(req["unpaidDays"])
+    remaining_before = money(req["quotaRemainingBefore"])
+    assert paid + unpaid == total, req
+    expected_paid = min(remaining_before, total)
+    assert paid == expected_paid, req
+    assert unpaid == total - expected_paid, req
+    # over-quota by definition: at least one unpaid day
+    assert unpaid > money("0"), req
 
 
 @pytest.mark.uat("LV-03", title="Sick leave without attachment is blocked", priority="P0")
