@@ -285,8 +285,8 @@ export const ROLE_PERMISSIONS = {
   // TicketService.VIEWER_ROLES actually allows a read of.
   canViewDealPipeline: ['sales', 'sales_manager', 'ceo'],
   // Sales/CRM tool — catalog browsing scoped to the same audience as
-  // canViewTickets. Frontend-only gate: GET /api/catalog has no backend
-  // role check yet.
+  // canViewTickets. Mirrored server-side by CatalogController
+  // .requireCatalogViewer (added 2026-07-24, Stage L follow-up).
   canViewCatalog: ['sales', 'import', 'ceo', 'account', 'sales_manager'],
   // Money-receipt confirmations (รับยอดมัดจำ / รับชำระเต็มจำนวน) belong to
   // ฝ่ายบัญชี, with CEO as fallback. Mirrors TicketService.ACCOUNT_ROLES.

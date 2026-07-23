@@ -408,8 +408,9 @@ export function App() {
                     (sales/import/ceo/account/sales_manager) is only enforced if the
                     route is INSIDE RequireAccess. It previously sat outside (dead
                     guard — any logged-in user could reach /catalog); moved in here
-                    (fix/catalog-route-guard). NOTE: GET /api/catalog still has no
-                    backend role check (routes.js) — a separate follow-up. */}
+                    (fix/catalog-route-guard). GET /api/catalog now also enforces
+                    this server-side (CatalogController.requireCatalogViewer,
+                    fix/catalog-backend-role-gate). */}
                 <Route
                   path="/catalog"
                   element={<CatalogSearchPage user={user} showToast={showToast} />}

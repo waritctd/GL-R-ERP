@@ -4758,7 +4758,10 @@ export const api = {
   // PriceImportService.addProductManual()/updateProduct()/deleteProduct().
   catalog: {
     async search(q) {
-      requireSession();
+      // Mirrors CatalogController.requireCatalogViewer — matches the frontend's
+      // canViewCatalog (routes.js) exactly. Added 2026-07-24 (Stage L
+      // follow-up): GET /api/catalog previously had no role check at all.
+      hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
       const lower = (q ?? '').toLowerCase();
       const results = lower
         ? mockCatalog.filter((c) =>
@@ -4770,7 +4773,7 @@ export const api = {
       return delay({ items: results });
     },
     async prices(q, factoryId) {
-      requireSession();
+      hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
       const lower = (q ?? '').toLowerCase();
       const fid = factoryId ? Number(factoryId) : null;
       let results = mockProductPrices.filter((p) => {
@@ -4788,8 +4791,7 @@ export const api = {
       return delay({ items: results.slice(0, 50) });
     },
     // addProduct/updateProduct/deleteProduct are ceo/import only (#205), mirroring
-    // CatalogController.requireCatalogEditor. search/prices above stay requireSession()
-    // only — catalog browsing is open to any logged-in user.
+    // CatalogController.requireCatalogEditor.
     async addProduct(input = {}) {
       hasRole('ceo', 'import');
       if (input.factoryId == null) fail('factoryId จำเป็น', 400);

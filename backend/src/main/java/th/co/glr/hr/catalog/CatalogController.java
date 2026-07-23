@@ -37,9 +37,22 @@ public class CatalogController {
         return user;
     }
 
+    // Catalog *browsing* (search/prices) — matches the frontend's canViewCatalog
+    // (routes.js) exactly: sales/import/ceo/account/sales_manager. Added
+    // 2026-07-24 (Stage L follow-up) — this endpoint previously had no role
+    // check at all (any authenticated user, incl. hr/employee/warehouse/qc,
+    // could read the full price catalog via GET /api/catalog(/prices)); the
+    // frontend route guard (fix/catalog-route-guard, #296) enforced this
+    // client-side only, leaving the API itself open to a direct call.
+    private UserPrincipal requireCatalogViewer(HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, "sales", "import", "ceo", "account", "sales_manager");
+        return user;
+    }
+
     @GetMapping
     Map<String, List<CatalogDto>> search(@RequestParam(required = false) String q, HttpSession session) {
-        sessions.requireUser(session);
+        requireCatalogViewer(session);
         return Map.of("items", catalog.search(q));
     }
 
@@ -50,7 +63,7 @@ public class CatalogController {
         @RequestParam(defaultValue = "50") int limit,
         HttpSession session
     ) {
-        sessions.requireUser(session);
+        requireCatalogViewer(session);
         int safeLimit = Math.min(Math.max(limit, 1), 200);
         return Map.of("items", catalog.searchProductPrices(q, factoryId, safeLimit));
     }
