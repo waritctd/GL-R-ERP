@@ -622,7 +622,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           <div className="panel-header">
             <h2>Factory Quotes</h2>
             {isImport(user) ? (
-              <button type="button" className="primary-button" disabled={generateDrafts.isPending} onClick={() => generateDrafts.mutate()}>
+              <button type="button" className="primary-button" disabled={generateDrafts.isPending} onClick={() => generateDrafts.mutate()} data-testid="pcr-generate-drafts">
                 สร้างร่างอีเมล
               </button>
             ) : null}
@@ -666,7 +666,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         {quote.dispatchStatus === 'FAILED' ? 'ส่งอีกครั้ง' : 'ส่ง'}
                       </button>
                     ) : null}
-                    {isImport(user) && ['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) && quote.current ? <button type="button" className="secondary-button" onClick={() => readyQuote.mutate(quote)}>พร้อม costing</button> : null}
+                    {isImport(user) && ['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) && quote.current ? <button type="button" className="secondary-button" onClick={() => readyQuote.mutate(quote)} data-testid="pcr-quote-ready">พร้อม costing</button> : null}
                     {isImport(user) && quote.status === 'RESPONSE_RECEIVED' && quote.current ? <button type="button" className="secondary-button" onClick={() => negotiateQuote.mutate(quote)}>เจรจา</button> : null}
                   </div>
                   <div className="mt-2 text-xs text-text-muted">{quote.emailTo ?? '-'} · {quote.supplierQuoteRef ?? '-'}</div>
@@ -752,7 +752,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           }} placeholder="sqm/unit" />
                         </div>
                       ))}
-                      <button type="button" className="secondary-button" disabled={receiveQuote.isPending} onClick={() => {
+                      <button type="button" className="secondary-button" disabled={receiveQuote.isPending} data-testid="pcr-quote-save-response" onClick={() => {
                         const clientRequestId = receiveClientRequestIds[quote.id] ?? generateClientRequestId();
                         setReceiveClientRequestIds((cur) => ({ ...cur, [quote.id]: clientRequestId }));
                         receiveQuote.mutate({ quote, draft, clientRequestId });
@@ -773,7 +773,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <section className="table-panel">
           <div className="panel-header">
             <h2>Costing</h2>
-            {isImport(user) ? <button type="button" className="primary-button" onClick={() => createCosting.mutate()}>สร้าง draft</button> : null}
+            {isImport(user) ? <button type="button" className="primary-button" onClick={() => createCosting.mutate()} data-testid="pcr-costing-create">สร้าง draft</button> : null}
           </div>
           <div className="flex flex-col gap-3 p-3">
             {isImport(user) ? <input className="form-input" value={costingNote} onChange={(e) => setCostingNote(e.target.value)} placeholder="Costing note" /> : null}
@@ -786,8 +786,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <span className="text-xs text-text-muted">{costing.totalLandedCostThb != null ? formatCurrency(costing.totalLandedCostThb, 'THB') : '-'}</span>
                   {isImport(user) && costing.id === latestOpenCosting?.id ? (
                     <>
-                      <button type="button" className="secondary-button" onClick={() => recalculateCosting.mutate(costing)}>คำนวณใหม่</button>
-                      <button type="button" className="secondary-button" disabled={costing.status !== 'CALCULATED' || costing.stale} onClick={() => setConfirmAction({ type: 'submitCosting', costing })}>Submit to CEO</button>
+                      <button type="button" className="secondary-button" onClick={() => recalculateCosting.mutate(costing)} data-testid="pcr-costing-recalculate">คำนวณใหม่</button>
+                      <button type="button" className="secondary-button" disabled={costing.status !== 'CALCULATED' || costing.stale} onClick={() => setConfirmAction({ type: 'submitCosting', costing })} data-testid="pcr-costing-submit">Submit to CEO</button>
                     </>
                   ) : null}
                 </div>
@@ -822,7 +822,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     placeholder="0.20"
                   />
                 </label>
-                <button type="button" className="primary-button" disabled={startCeoReview.isPending} onClick={() => startCeoReview.mutate()}>
+                <button type="button" className="primary-button" disabled={startCeoReview.isPending} onClick={() => startCeoReview.mutate()} data-testid="pcr-ceo-start-review">
                   เริ่มพิจารณาราคาขาย
                 </button>
               </div>
@@ -911,6 +911,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         className="secondary-button"
                         disabled={saveDecisionItems.isPending}
                         onClick={() => saveDecisionItems.mutate({ decision, items: decision.items })}
+                        data-testid="pcr-ceo-save-decision-items"
                       >
                         บันทึกการเปลี่ยนแปลง
                       </button>
@@ -919,6 +920,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         className="primary-button"
                         disabled={approveDecision.isPending || missingBeforeApprove.length > 0}
                         onClick={() => setConfirmAction({ type: 'approveDecision', decision })}
+                        data-testid="pcr-ceo-approve"
                       >
                         อนุมัติราคาขาย
                       </button>
