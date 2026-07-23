@@ -62,8 +62,10 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
     private PricingCostingService pricingCostingService;
 
     private long salesRepId;
+    private long salesRepBId;
 
     private UserPrincipal salesRep;
+    private UserPrincipal salesRepB;
     private UserPrincipal importUser;
     private UserPrincipal accountUser;
     private UserPrincipal ceoUser;
@@ -102,11 +104,13 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
         salesRepId = createEmployee(employees, "พนักงานขาย ทดสอบ", "sales@glr.co.th");
+        salesRepBId = createEmployee(employees, "พนักงานขาย บี ทดสอบ", "sales-b@glr.co.th");
         long importId  = createEmployee(employees, "ฝ่ายนำเข้า ทดสอบ", "import@glr.co.th");
         long accountId = createEmployee(employees, "ฝ่ายบัญชี ทดสอบ", "account@glr.co.th");
         long ceoId     = createEmployee(employees, "ซีอีโอ ทดสอบ", "ceo@glr.co.th");
 
         salesRep   = principal(salesRepId, "sales");
+        salesRepB  = principal(salesRepBId, "sales");
         importUser = principal(importId, "import");
         accountUser = principal(accountId, "account");
         ceoUser    = principal(ceoId, "ceo");
@@ -292,10 +296,60 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(404));
     }
 
+    // ── L2 (Stage L): sales own-only created_by row-scope ───────────────────────
+    //
+    // TicketRepository.findSummaries/countSummaries carry
+    // "AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)", bound by TicketService
+    // only when actor.role().equals("sales"). The import/account appendRoleScope slices above are
+    // thoroughly tested; this own-only filter — the one that actually protects a sales rep's deal
+    // data from a colleague — was not. Written wrong-way-round: can rep A see rep B's ticket.
+    //
+    // Note: the "injection guard" case from the Stage L spec (a caller passing another rep's id as
+    // a filter param) does not apply here — TicketService.list/listPage never accept a createdBy
+    // parameter from the caller at all; the filter is derived solely from actor.role()/actor.id()
+    // server-side, so there is no parameter surface to inject through.
+
+    /**
+     * MUTATION-CHECK RECORD (actually run, not simulated): temporarily changed both occurrences
+     * of {@code AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)} in {@link
+     * TicketRepository#findSummaries} and {@link TicketRepository#countSummaries} to {@code AND
+     * (TRUE)} (neutralizing the sales own-only predicate) and ran this class (20 tests). Exactly
+     * two went red — {@code salesListPage_ownOnly_excludesOtherRepsTicket} and {@code
+     * salesList_ownOnly_excludesOtherRepsTicket} (both failed with "expected not to contain [the
+     * other rep's ticket id], but found it") — while all 18 import/account/ceo scoping tests
+     * above stayed green (they exercise {@code appendRoleScope}, a separate predicate). Reverted
+     * both occurrences; {@code git diff} against the pre-mutation tree was empty afterwards.
+     */
+    @Test
+    void salesListPage_ownOnly_excludesOtherRepsTicket() {
+        long ticketA = createTicket(DealStage.LEAD_APPROACH, salesRepId, "พนักงานขาย ทดสอบ");
+        long ticketB = createTicket(DealStage.LEAD_APPROACH, salesRepBId, "พนักงานขาย บี ทดสอบ");
+
+        List<Long> idsSeenByRepA = idsIn(listPage(salesRep));
+
+        assertThat(idsSeenByRepA).contains(ticketA);
+        assertThat(idsSeenByRepA).doesNotContain(ticketB);
+    }
+
+    @Test
+    void salesList_ownOnly_excludesOtherRepsTicket() {
+        long ticketA = createTicket(DealStage.LEAD_APPROACH, salesRepId, "พนักงานขาย ทดสอบ");
+        long ticketB = createTicket(DealStage.LEAD_APPROACH, salesRepBId, "พนักงานขาย บี ทดสอบ");
+
+        List<Long> idsSeenByRepB = ticketService.list(null, salesRepB).stream().map(TicketSummaryDto::id).toList();
+
+        assertThat(idsSeenByRepB).contains(ticketB);
+        assertThat(idsSeenByRepB).doesNotContain(ticketA);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private long createTicket(String salesStage) {
-        long ticketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), salesRepId, "พนักงานขาย ทดสอบ");
+        return createTicket(salesStage, salesRepId, "พนักงานขาย ทดสอบ");
+    }
+
+    private long createTicket(String salesStage, long repId, String repName) {
+        long ticketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), repId, repName);
         tickets.updateSalesStage(ticketId, salesStage);
         return ticketId;
     }

@@ -45,6 +45,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkNotAvailableRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.SendFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.StartNegotiationRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
@@ -394,6 +395,168 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThatThrownBy(() -> factoryQuoteService.list(pricingRequestId, accountActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Stage L3 (release runbook): sales/sales_manager must never reach the RAW cost/margin/quote
+    // endpoints — only the account denial was previously asserted
+    // (accountRole_cannotReachDecisionsCostingsOrFactoryQuotes above). sales/sales_manager is the
+    // more important direction (the whole point of the PCR split is that raw supplier prices,
+    // landed cost, and CEO margin never reach sales), and was untested at the service level.
+    // Written wrong-way-round: can sales/sales_manager reach the raw endpoint.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * MUTATION-CHECK RECORD (actually run, not simulated): temporarily changed {@code
+     * PricingDecisionService.RAW_DECISION_ROLES} from {@code Set.of("import", "ceo")} to {@code
+     * Set.of("import", "ceo", "sales")} (reintroducing the leak this test guards against) and ran
+     * this class. Two tests went red, both expected — both assert the same guard for a
+     * {@code salesActor}: this test ({@code salesAndSalesManager_cannotReachRawPricingDecision})
+     * and the pre-existing {@code acceptanceScenario_submitApproveAndSalesVisibility}, which has
+     * its own {@code decisionService.get}/{@code .list} sales-denial assertion baked in near its
+     * end. No other test in the 17-test class flipped. Reverted {@code RAW_DECISION_ROLES};
+     * {@code git diff} against the pre-mutation tree was empty afterwards.
+     */
+    @Test
+    void salesAndSalesManager_cannotReachRawPricingDecision() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
+
+        assertThatThrownBy(() -> decisionService.get(decision.id(), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> decisionService.list(pricingRequestId, salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> decisionService.get(decision.id(), salesManagerActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> decisionService.list(pricingRequestId, salesManagerActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        // Positive control: import/ceo (RAW_DECISION_ROLES) are unaffected.
+        assertThat(decisionService.get(decision.id(), ceoActor)).isNotNull();
+        assertThat(decisionService.list(pricingRequestId, importActor)).isNotEmpty();
+    }
+
+    @Test
+    void salesAndSalesManager_cannotReachRawPricingCosting() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        long costingId = costingService.list(pricingRequestId, importActor).get(0).id();
+
+        assertThatThrownBy(() -> costingService.get(costingId, salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> costingService.list(pricingRequestId, salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> costingService.get(costingId, salesManagerActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> costingService.list(pricingRequestId, salesManagerActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        // Positive control: import/ceo (RAW_COSTING_ROLES) are unaffected.
+        assertThat(costingService.get(costingId, ceoActor)).isNotNull();
+        assertThat(costingService.list(pricingRequestId, importActor)).isNotEmpty();
+    }
+
+    @Test
+    void salesAndSalesManager_cannotReachRawFactoryQuote() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        long quoteId = factoryQuoteRepository.findCurrentByFactory(pricingRequestId, "Factory A3").orElseThrow().id();
+
+        assertThatThrownBy(() -> factoryQuoteService.get(quoteId, salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> factoryQuoteService.list(pricingRequestId, salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> factoryQuoteService.get(quoteId, salesManagerActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> factoryQuoteService.list(pricingRequestId, salesManagerActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        // Positive control: import/ceo (RAW_QUOTE_ROLES) are unaffected.
+        assertThat(factoryQuoteService.get(quoteId, ceoActor)).isNotNull();
+        assertThat(factoryQuoteService.list(pricingRequestId, importActor)).isNotEmpty();
+    }
+
+    /**
+     * Positive control for the L3 redaction (not a blackout): the owning sales rep, AND the sales
+     * manager, can still reach the approved selling price through {@code salesView} even though
+     * both are locked out of the raw {@code get}/{@code list} endpoints above.
+     */
+    @Test
+    void salesAndSalesManager_canStillReachSalesViewForApprovedDecision() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        approveWithFlatMargin(pricingRequestId, new BigDecimal("0.20"));
+
+        assertThat(decisionService.salesView(pricingRequestId, salesActor).items()).isNotEmpty();
+        assertThat(decisionService.salesView(pricingRequestId, salesManagerActor).items()).isNotEmpty();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Stage L4 (release runbook): ceo is in RAW_DECISION_ROLES/RAW_COSTING_ROLES/RAW_QUOTE_ROLES
+    // for READS, but must stay read-only — factory-quote and costing MUTATIONS are
+    // IMPORT_ROLES-only. Untested until now. Written wrong-way-round: can ceo mutate.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * MUTATION-CHECK RECORD (actually run, not simulated): temporarily changed {@code
+     * FactoryQuoteService.IMPORT_ROLES} from {@code Set.of("import")} to {@code Set.of("import",
+     * "ceo")} (reintroducing the vulnerability this test guards against) and ran this class.
+     * {@code ceo_cannotMutateFactoryQuoteOrCosting_importOnlyRemainsAbleTo} went red at its first
+     * assertion (the {@code send} call): with {@code ceo} added to {@code IMPORT_ROLES}, {@code
+     * requireRole} no longer throws, so the call falls through to the next guard
+     * ({@code requireMutablePricingRequest}, DRAFT_STATUSES) and throws {@code 409 CONFLICT}
+     * instead of the expected {@code 403 FORBIDDEN} — AssertJ halts the test at that first failed
+     * assertion, so {@code receive}/{@code markReadyForCosting} never ran this pass, but the role
+     * gate's removal is unambiguously what the red test is reporting (a 409 instead of a clean
+     * 403 is still proof {@code requireRole} stopped blocking {@code ceoActor} first). No other
+     * test in the 17-test class flipped. Reverted {@code IMPORT_ROLES}; {@code git diff} was
+     * empty afterwards.
+     */
+    @Test
+    void ceo_cannotMutateFactoryQuoteOrCosting_importOnlyRemainsAbleTo() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        FactoryQuoteDto quoteBefore = factoryQuoteRepository.findCurrentByFactory(pricingRequestId, "Factory A3").orElseThrow();
+        long quoteId = quoteBefore.id();
+        long costingId = costingService.list(pricingRequestId, importActor).get(0).id();
+        int costingCountBefore = costingService.list(pricingRequestId, importActor).size();
+
+        // ceo cannot mutate the factory quote — requireRole runs before any state lookup, so this
+        // is provably a role check, not a side effect of the quote's current status (already
+        // READY_FOR_COSTING, with a SUBMITTED costing on top, by the time twoItemSubmittedCosting()
+        // returns).
+        assertThatThrownBy(() -> factoryQuoteService.send(quoteId,
+                new SendFactoryQuoteRequest("ceo-attempt@example.com", null, null, UUID.randomUUID().toString()), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> factoryQuoteService.receive(quoteId,
+                new ReceiveFactoryQuoteRequest("REF-CEO-ATTEMPT", "THB", "30 days", "45 days", "revision", "note",
+                    List.of(new ReceiveFactoryQuoteItemRequest(
+                        1L, null, null, new BigDecimal("1.00"), "piece", "piece",
+                        new BigDecimal("999.00"), "THB", null, new BigDecimal("1.00"), null, null,
+                        "45 days", null, null)),
+                    UUID.randomUUID().toString()),
+                ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> factoryQuoteService.markReadyForCosting(quoteId, ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        // DB re-read: the quote row is untouched by any of the three failed ceo attempts.
+        FactoryQuoteDto quoteAfter = factoryQuoteRepository.findCurrentByFactory(pricingRequestId, "Factory A3").orElseThrow();
+        assertThat(quoteAfter.status()).isEqualTo(quoteBefore.status());
+        assertThat(quoteAfter.updatedAt()).isEqualTo(quoteBefore.updatedAt());
+
+        // ceo cannot mutate costing either.
+        assertThatThrownBy(() -> costingService.createDraft(pricingRequestId,
+                new CreateCostingRequest("ceo-attempt", UUID.randomUUID().toString()), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> costingService.recalculate(costingId, new RecalculateCostingRequest("ceo-attempt"), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> costingService.submit(costingId, new SubmitCostingRequest("ceo-attempt"), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        // DB re-read: no new/changed costing rows from any of the ceo attempts.
+        assertThat(costingService.list(pricingRequestId, importActor)).hasSize(costingCountBefore);
+
+        // Positive control: import (IMPORT_ROLES) still can — proven by twoItemSubmittedCosting()
+        // itself already having driven this exact pricing request's factory quote and costing
+        // through send/receive/markReadyForCosting/createDraft/recalculate/submit as importActor.
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
