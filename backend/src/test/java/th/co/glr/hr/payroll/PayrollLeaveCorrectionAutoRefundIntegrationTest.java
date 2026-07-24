@@ -232,7 +232,8 @@ class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIn
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            null // withholdingTaxOverride (none)
         );
     }
 

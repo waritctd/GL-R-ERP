@@ -109,6 +109,24 @@ public class PayrollCalculator {
         BigDecimal remainingAnnualTax = annualTax.subtract(money(yearToDate.withholdingTax())).max(ZERO);
         BigDecimal withholdingTax = money(remainingAnnualTax.divide(BigDecimal.valueOf(monthsRemaining), MONEY_SCALE, RoundingMode.HALF_UP));
 
+        // Withholding-tax override (2026-07-24, V88). GUARDRAIL: everything above -- progressiveTax,
+        // annualTax, taxableAnnualIncome, projectedAnnualIncome, the projection and allowances -- is
+        // computed and reported UNCHANGED. When an override is present we ONLY substitute the final
+        // withheld amount here; every downstream figure (legal-execution floor, totalDeductions, net)
+        // then flows from the substituted value automatically. A null override (the common case) is a
+        // no-op and reproduces today's behaviour byte-for-byte. Zero is a legitimate override (withhold
+        // nothing) and is honoured -- hence the explicit null check rather than a truthiness/sign test.
+        BigDecimal withholdingTaxOverride = input.withholdingTaxOverride() == null
+            ? null
+            : money(input.withholdingTaxOverride());
+        String calculationNote = "Annual projection tax, SSO 5% cap, and legal execution floor applied.";
+        if (withholdingTaxOverride != null) {
+            withholdingTax = withholdingTaxOverride;
+            calculationNote = calculationNote
+                + " Withholding tax overridden by HR to " + withholdingTaxOverride.toPlainString()
+                + " (computed projection retained for transparency).";
+        }
+
         BigDecimal studentLoanDeduction = money(input.studentLoanDeduction());
         BigDecimal otherPostTaxDeductions = money(input.otherPostTaxDeductions());
         BigDecimal legalExecutionDeduction = legalExecutionDeduction(
@@ -157,13 +175,14 @@ public class PayrollCalculator {
             otherPostTaxDeductions,
             totalDeductions,
             netPay,
-            "Annual projection tax, SSO 5% cap, and legal execution floor applied.",
+            calculationNote,
             directorRemuneration,
             warningLetterDeduction,
             customerReturnDeduction,
             otherPretaxDeduction,
             leaveRefundDays,
-            leaveDeductionRefund
+            leaveDeductionRefund,
+            withholdingTaxOverride
         );
     }
 

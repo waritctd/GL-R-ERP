@@ -44,7 +44,12 @@ public final class PayrollCarryForwardDtos {
         BigDecimal studentLoanDeduction,
         BigDecimal legalExecutionDeduction,
         BigDecimal unpaidLeaveDays,
-        BigDecimal pendingUnpaidLeaveCorrectionDays
+        BigDecimal pendingUnpaidLeaveCorrectionDays,
+        // Withholding-tax override (2026-07-24, V88): the PER-RUN value HR typed on the prior processed
+        // line, surfaced so the payroll page pre-fills it again (like studentLoanDeduction). NULLABLE:
+        // null = none typed last run -> the field starts blank and the employee's STANDING override (if
+        // any) re-applies on its own -- the standing value is deliberately NOT carried here.
+        BigDecimal withholdingTaxOverride
     ) {
         /** A row with only the identity set — used when an employee has leave-derived figures to
          *  surface but no special-pay carry-forward row (e.g. their first-ever processed month). */
@@ -52,7 +57,8 @@ public final class PayrollCarryForwardDtos {
             return new SuggestedInputRow(
                 employeeId,
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                null
             );
         }
     }

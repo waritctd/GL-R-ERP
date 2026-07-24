@@ -609,4 +609,95 @@ class PayrollCalculatorTest {
         assertThat(result.grossTaxableIncome()).isEqualByComparingTo("85333.33");
         assertThat(result.netPay()).isEqualByComparingTo("81512.50");
     }
+
+    // ---- Withholding-tax override (2026-07-24, V88) ----------------------------------------
+    // GUARDRAIL under test: the override SUBSTITUTES only the final withheld amount; the entire
+    // progressive-tax computation (annualTax, taxableAnnualIncome, projectedAnnualIncome) stays
+    // EXACTLY as computed and is still reported, for transparency.
+
+    /**
+     * The substitution guard. With an override present, withheld tax equals the override and net pay
+     * moves by exactly the difference from the computed withholding -- while annualTax /
+     * taxableAnnualIncome / projectedAnnualIncome are byte-identical to the no-override run. This is
+     * the test that goes red if the substitution line in {@link PayrollCalculator} is broken.
+     */
+    @Test
+    void withholdingTaxOverrideSubstitutesTheWithheldAmountButLeavesTheComputationIntact() {
+        PayrollCalculation computed = calculator.calculate(withWithholdingOverride(null));
+        PayrollCalculation overridden = calculator.calculate(withWithholdingOverride(new BigDecimal("1000.00")));
+
+        // The computed withholding for this scenario is a real, non-zero, non-1000 figure -- so a
+        // substitution is genuinely observable rather than coincidentally equal.
+        assertThat(computed.withholdingTax()).isGreaterThan(new BigDecimal("1000.00"));
+        assertThat(computed.withholdingTaxOverride()).isNull();
+
+        // Substituted: withheld tax is now exactly the override.
+        assertThat(overridden.withholdingTax()).isEqualByComparingTo(new BigDecimal("1000.00"));
+        assertThat(overridden.withholdingTaxOverride()).isEqualByComparingTo(new BigDecimal("1000.00"));
+        assertThat(overridden.calculationNote()).contains("overridden by HR");
+
+        // Computation intact: every progressive-tax figure is UNCHANGED from the computed run.
+        assertThat(overridden.projectedAnnualIncome()).isEqualByComparingTo(computed.projectedAnnualIncome());
+        assertThat(overridden.taxableAnnualIncome()).isEqualByComparingTo(computed.taxableAnnualIncome());
+        assertThat(overridden.annualTax()).isEqualByComparingTo(computed.annualTax());
+        assertThat(overridden.taxAllowanceTotal()).isEqualByComparingTo(computed.taxAllowanceTotal());
+        assertThat(overridden.grossTaxableIncome()).isEqualByComparingTo(computed.grossTaxableIncome());
+        assertThat(overridden.socialSecurity()).isEqualByComparingTo(computed.socialSecurity());
+
+        // Net pay reflects the substituted withholding exactly: it rises by (computed - override),
+        // because a smaller withheld tax leaves more take-home, and nothing else moved.
+        BigDecimal expectedNet = computed.netPay().add(computed.withholdingTax()).subtract(new BigDecimal("1000.00"));
+        assertThat(overridden.netPay()).isEqualByComparingTo(expectedNet);
+        assertThat(overridden.totalDeductions())
+            .isEqualByComparingTo(computed.totalDeductions().subtract(computed.withholdingTax()).add(new BigDecimal("1000.00")));
+    }
+
+    /**
+     * Zero is a MEANINGFUL override (withhold nothing), distinct from "no override". A 0 override must
+     * force withheld tax to 0 even though the computed withholding is positive -- proving the guard is
+     * a null check, not a truthiness/sign test.
+     */
+    @Test
+    void withholdingTaxOverrideOfZeroForcesZeroWithheldTax() {
+        PayrollCalculation overridden = calculator.calculate(withWithholdingOverride(BigDecimal.ZERO));
+
+        assertThat(overridden.withholdingTax()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(overridden.withholdingTaxOverride()).isEqualByComparingTo(BigDecimal.ZERO);
+        // The projection is still computed and still positive -- only the withheld amount is zeroed.
+        assertThat(overridden.annualTax()).isGreaterThan(BigDecimal.ZERO);
+    }
+
+    /**
+     * Wrong-way / regression: a NULL override reproduces today's behaviour exactly. Every output field
+     * of the null-override run equals the pre-override (17-arg, no withholding-override) run, and the
+     * override marker is null (no note appended).
+     */
+    @Test
+    void nullWithholdingTaxOverrideIsByteIdenticalToNoOverrideAtAll() {
+        PayrollCalculation viaLegacyNoOverride = calculator.calculate(new PayrollCalculationInput(
+            new BigDecimal("50000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
+        PayrollCalculation viaNullOverride = calculator.calculate(withWithholdingOverride(null));
+
+        assertThat(viaNullOverride.withholdingTax()).isEqualByComparingTo(viaLegacyNoOverride.withholdingTax());
+        assertThat(viaNullOverride.annualTax()).isEqualByComparingTo(viaLegacyNoOverride.annualTax());
+        assertThat(viaNullOverride.projectedAnnualIncome()).isEqualByComparingTo(viaLegacyNoOverride.projectedAnnualIncome());
+        assertThat(viaNullOverride.totalDeductions()).isEqualByComparingTo(viaLegacyNoOverride.totalDeductions());
+        assertThat(viaNullOverride.netPay()).isEqualByComparingTo(viaLegacyNoOverride.netPay());
+        assertThat(viaNullOverride.withholdingTaxOverride()).isNull();
+        assertThat(viaNullOverride.calculationNote()).doesNotContain("overridden by HR");
+    }
+
+    /** Same fixed scenario (base 50,000, month 1, no allowances) with only the override varying. */
+    private PayrollCalculationInput withWithholdingOverride(BigDecimal withholdingTaxOverride) {
+        return new PayrollCalculationInput(
+            new BigDecimal("50000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            withholdingTaxOverride
+        );
+    }
 }
