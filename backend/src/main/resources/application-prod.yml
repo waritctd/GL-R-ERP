@@ -30,10 +30,17 @@ spring:
     # edited historical SQL files. Keep validation enabled elsewhere; this profile is the public
     # showcase DB and needs forward-only recovery migrations to run despite that history drift.
     validate-on-migrate: ${APP_FLYWAY_VALIDATE_ON_MIGRATE:false}
-    # gl-r-erp.onrender.com is a demo/showcase deploy (not real prod), so it additionally
-    # applies db/migration-demo (demo login/seed data + follow-up fixups) on top of the normal
-    # migrations. Kept out of the default location so unit/CI/local runs never seed it.
-    # NOTE: Flyway validates version numbers across BOTH locations combined, so a migration-demo
-    # file must not reuse a version already used in db/migration (and vice versa) - check both
-    # directories before picking the next number, or the prod-profile deploy fails at validate().
-    locations: classpath:db/migration,classpath:db/migration-demo
+    # This profile carries ONLY the real production schema (db/migration) — no demo seed.
+    #
+    # The `prod` profile is activated by BOTH the real GL&R production deploy AND the public
+    # gl-r-erp.onrender.com showcase, so it must be safe for real production. The demo seed
+    # (db/migration-demo: demo logins + sample tickets/leave/OT/commission) therefore lives in
+    # the `demo` profile only (application-demo.yml). The showcase opts back into it explicitly
+    # via SPRING_PROFILES_ACTIVE=prod,demo *plus* SPRING_FLYWAY_LOCATIONS in render.yaml, both of
+    # which override this value; a deploy running `prod` alone gets no demo data.
+    #
+    # History: this line previously appended classpath:db/migration-demo, which meant a bare
+    # `prod` deploy seeded the demo accounts into the real production DB (cleaned out 2026-07-24,
+    # see docs/agent-handoffs/backups/prod-demo-data-snapshot-2026-07-24.json). The seed now runs
+    # only where the `demo` profile / SPRING_FLYWAY_LOCATIONS is present.
+    locations: classpath:db/migration
