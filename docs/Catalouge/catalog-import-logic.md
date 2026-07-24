@@ -242,4 +242,4 @@ CREATE INDEX idx_pp_code ON product_prices(product_code);
 ## ไฟล์ที่ให้มา
 - `factory_profiles.json` — profile 9 โรงงาน (seed ลง `import_profiles`) **แก้ผ่าน GUI ได้ ไม่ต้องแตะโค้ด**
 - `import_engine.py` — engine อ้างอิง (Python) ให้ Claude Code แปลงเป็น Java ตาม logic นี้
-- `catalog_import_result.csv` — ผลลัพธ์จริง 22,662 แถว (ใช้เป็น expected output เทียบงาน Claude Code)
+- `catalog_import_result.csv` — ผลลัพธ์จริง 22,662 แถว (expected output) — ลบออกในการเคลียร์เอกสาร 2026-07-25 (ไฟล์ generated ขนาด 3.6MB); regenerate ได้จาก `import_engine.py` หรือดูใน git history
