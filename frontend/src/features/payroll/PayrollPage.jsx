@@ -306,6 +306,25 @@ export function PayrollPage({ showToast }) {
     }
   }
 
+  // Live refresh (2026-07-24): recompute every system-derived figure — commission, overtime,
+  // leave refund, director remuneration, tax/SSO — from current data and show it WITHOUT
+  // committing. This differs from load()/api.payroll.current, which for an already-PROCESSED month
+  // returns the saved snapshot (e.g. commission frozen from when it was processed) and so never
+  // reflects data that changed afterwards. HR's on-screen inputs are preserved (payload() carries
+  // them through); nothing is locked until "Process Payroll".
+  async function refresh() {
+    setSaving(true);
+    try {
+      const response = await api.payroll.preview(payload());
+      applyPeriod(response.period);
+      showToast('success', 'อัปเดตข้อมูลล่าสุดแล้ว (ยังไม่ได้ประมวลผล)');
+    } catch (error) {
+      showToast('error', error.message || 'รีเฟรชข้อมูลไม่สำเร็จ');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function process() {
     setConfirmProcess(true);
   }
@@ -410,7 +429,7 @@ export function PayrollPage({ showToast }) {
               รอบเดือน
               <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
             </label>
-            <Button type="button" variant="secondary" onClick={load} disabled={loading || saving}>
+            <Button type="button" variant="secondary" onClick={refresh} disabled={loading || saving} title="ดึงข้อมูลล่าสุด (คอมมิชชัน, OT, วันลา, ค่าตอบแทนกรรมการ) เข้ามาคำนวณใหม่ โดยยังไม่ประมวลผล">
               <Icon name="refresh" />
               รีเฟรช
             </Button>

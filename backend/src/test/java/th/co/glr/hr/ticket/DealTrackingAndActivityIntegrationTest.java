@@ -369,7 +369,7 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         return employees.create(new UpsertEmployeeRequest(
             null, null, name, null, null, null, null, null, null, null,
             email, null, "SALES", "Sales Division", "แผนกขาย",
-            null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null));
+            null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
     }
 
     private static UserPrincipal principal(long employeeId, String role) {

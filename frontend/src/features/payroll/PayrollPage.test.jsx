@@ -138,6 +138,23 @@ describe('PayrollPage adjustment inputs', () => {
     await waitFor(() => expect(api.payroll.distributePayslips).toHaveBeenCalledWith(7));
   });
 
+  it('Refresh recomputes a processed month live (Preview), never committing', async () => {
+    // A month that was already Processed loads from its saved snapshot (api.payroll.current) — which
+    // freezes commission/OT/etc. from when it ran. Clicking รีเฟรช must pull the latest via a live
+    // recompute (api.payroll.preview) and must NOT process/commit the month.
+    api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
+
+    renderPayrollPage();
+
+    const refreshButton = await screen.findByRole('button', { name: /รีเฟรช/ });
+    expect(api.payroll.preview).not.toHaveBeenCalled();
+
+    fireEvent.click(refreshButton);
+
+    await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+    expect(api.payroll.process).not.toHaveBeenCalled();
+  });
+
   // Leave -> payroll unpaid-day deduction (2026-07-23). The unpaidLeaveDays field lives inside the
   // "รายการหักรายบุคคล" CollapsibleSection, which defaults to collapsed -- and CollapsibleSection
   // unmounts its body entirely (not CSS-hidden) while collapsed, so every test here must expand it

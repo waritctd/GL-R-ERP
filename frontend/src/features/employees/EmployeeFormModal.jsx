@@ -32,6 +32,7 @@ const employeeFormSchema = z.object({
   positionTh: z.string(),
   level: z.string(),
   salary: z.union([z.string(), z.number()]),
+  directorRemuneration: z.union([z.string(), z.number()]),
   statusId: z.string(),
   hireDate: z.string(),
   locationTh: z.string(),
@@ -71,6 +72,7 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
       positionTh: employee?.positionTh || 'เจ้าหน้าที่',
       level: employee?.level || 'O2',
       salary: employee?.salary || '',
+      directorRemuneration: employee?.directorRemuneration || '',
       statusId: employee?.statusId || 'ACT',
       hireDate: employee?.hireDate || '',
       locationTh: employee?.locationTh || 'สำนักงานใหญ่ กรุงเทพฯ',
@@ -91,7 +93,12 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
 
   function submit(values) {
     const division = divisionOptions.find((item) => item.value === values.divisionId);
-    onSubmit({ ...values, divisionTh: division?.label, salary: Number(values.salary || 0) });
+    onSubmit({
+      ...values,
+      divisionTh: division?.label,
+      salary: Number(values.salary || 0),
+      directorRemuneration: Number(values.directorRemuneration || 0),
+    });
   }
 
   return (
@@ -163,6 +170,9 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
         </FormField>
         <FormField label="เงินเดือน" htmlFor="employee-salary">
           <input id="employee-salary" type="number" {...register('salary')} />
+        </FormField>
+        <FormField label="ค่าตอบแทนกรรมการ" htmlFor="employee-directorRemuneration">
+          <input id="employee-directorRemuneration" type="number" min="0" step="0.01" {...register('directorRemuneration')} />
         </FormField>
         <FormField label="สถานะ" htmlFor="employee-statusId">
           <select id="employee-statusId" {...register('statusId')}>

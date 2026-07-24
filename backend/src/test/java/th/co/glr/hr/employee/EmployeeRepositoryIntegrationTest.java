@@ -7,6 +7,8 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.common.PageRequest;
+import th.co.glr.hr.payroll.PayrollEmployeeSnapshot;
+import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
@@ -78,10 +80,59 @@ class EmployeeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest 
             .doesNotContainAnyElementsOf(secondPage.stream().map(EmployeeDto::id).toList());
     }
 
+    @Test
+    void createPersistsDirectorRemunerationAndReadsItBack() {
+        long id = repository.create(req("กรรมการ ผู้จัดการ", "SALES", "director@glr.co.th",
+            new BigDecimal("30000"), new BigDecimal("50000")));
+
+        EmployeeDto dto = repository.findEmployeeById(id, true).orElseThrow();
+        assertThat(dto.salary()).isEqualByComparingTo("30000");
+        assertThat(dto.directorRemuneration()).isEqualByComparingTo("50000");
+    }
+
+    @Test
+    void updatePersistsDirectorRemuneration() {
+        long id = repository.create(req("สมชาย ใจดี", "SALES", "somchai@glr.co.th",
+            new BigDecimal("25000"), BigDecimal.ZERO));
+
+        // Only the director-remuneration field is provided; everything else stays null (unchanged).
+        repository.update(id, new UpsertEmployeeRequest(
+            null, null, null, null, null, null, null, null, null, null,
+            null, null, null, null, null,
+            null, null, null, null, null, new BigDecimal("45000"), null, null, null, null, null, null));
+
+        EmployeeDto dto = repository.findEmployeeById(id, true).orElseThrow();
+        assertThat(dto.salary()).isEqualByComparingTo("25000");
+        assertThat(dto.directorRemuneration()).isEqualByComparingTo("45000");
+    }
+
+    @Test
+    void payrollAutoPollIncludesDirectorOnlyEmployeeWithZeroSalary() {
+        // A director-only person: base salary 0 but director remuneration > 0. Before this field had
+        // a write path, such a person was invisible to payroll. They must now appear as a payroll line.
+        long id = repository.create(req("ประธาน กรรมการ", "SALES", "chairman@glr.co.th",
+            BigDecimal.ZERO, new BigDecimal("80000")));
+
+        PayrollRepository payroll = new PayrollRepository(jdbc);
+        List<PayrollEmployeeSnapshot> active = payroll.findActiveEmployees();
+
+        PayrollEmployeeSnapshot chairman = active.stream()
+            .filter(snapshot -> snapshot.employeeId() == id)
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("director-only employee was not polled into payroll"));
+        assertThat(chairman.baseSalary()).isEqualByComparingTo("0");
+        assertThat(chairman.directorRemuneration()).isEqualByComparingTo("80000");
+    }
+
     private UpsertEmployeeRequest req(String nameTh, String divisionCode, String email, BigDecimal salary) {
+        return req(nameTh, divisionCode, email, salary, BigDecimal.ZERO);
+    }
+
+    private UpsertEmployeeRequest req(
+            String nameTh, String divisionCode, String email, BigDecimal salary, BigDecimal directorRemuneration) {
         return new UpsertEmployeeRequest(
             null, null, nameTh, null, null, null, null, null, null, null,
             email, null, divisionCode, divisionCode + " Division", "แผนกทดสอบ",
-            null, null, null, "ACT", salary, null, null, null, null, null, null);
+            null, null, null, "ACT", salary, directorRemuneration, null, null, null, null, null, null);
     }
 }
