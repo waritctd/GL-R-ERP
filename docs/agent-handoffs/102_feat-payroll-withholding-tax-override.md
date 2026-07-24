@@ -109,14 +109,46 @@ NON_NULL-serialized and nulled out for non-HR self-service viewers via
   `PayrollAllowanceDirectorNonTaxableIntegrationTest` seam. **Reviewer must confirm the backend ITs pass in CI.**
 
 ## Known risks
-- **Clearing the standing override to NULL via update:** `EmployeeRepository.update` uses `addSet`, which
-  (like `director_remuneration`) skips null — so once set, the standing override cannot be cleared back to
-  NULL through the employee update path; it can only be changed to another value. The **mock** update path
-  (`Object.assign`) DOES clear it to null, so mock is more permissive than the backend on this one behaviour.
-  Low impact (standing override is rarely cleared, and a per-run 0 override achieves "withhold nothing" for a
-  single run), but a follow-up could add explicit clear support if HR needs it. Flagged rather than smuggled.
 - **Backend ITs unverified locally** (Docker down) — see above; must be green in CI.
 - Per the task, **no employee data was set** — the parent will set กัลยาณี = 5000 on UAT/prod via SQL after deploy.
+
+## Follow-up — fix/withholding-tax-override-clearable (2026-07-24)
+The "cannot be cleared" limitation noted above **is fixed** on branch
+`fix/withholding-tax-override-clearable` (off this branch, `origin/feat/payroll-withholding-tax-override`).
+
+- **`EmployeeRepository.update`**: `withholding_tax_override` is now a **full-replace** column — the SET
+  clause and parameter binding are always emitted (`sets.add("withholding_tax_override = :withholdingTaxOverride")`
+  unconditionally, not via `addSet`), so an explicit `null` in the request now clears the standing override
+  back to NULL (auto-compute restored). This is the **one exception** to the rest of `update()`'s "null =
+  don't change" `addSet` pattern — every other field, including `current_salary`/`director_remuneration`
+  (NOT NULL columns, cleared via 0 instead), is unchanged.
+- **Why this is safe**: the only caller of the `PATCH /api/employees/{id}` → `EmployeeService.update` →
+  `EmployeeRepository.update` path is `EmployeeFormModal` (via `useHrData.updateEmployee` →
+  `api.employees.update`), which always submits a full-object payload with `withholdingTaxOverride`
+  explicitly `null` when the input is blank (already implemented pre-fix: `?? ''` pre-fill, blank → `null`
+  on submit — verified, not changed). No other frontend caller or backend endpoint does a partial update
+  of this field, so no other caller is put at risk by the full-replace semantics.
+- **Mock/real now agree**: `mockApi.js`'s `Object.assign`-based `employees.update` already cleared the
+  field to null on an explicit null payload, so the divergence flagged above is resolved by the backend
+  catching up to the mock, not the reverse. No mock or `contract.test.js`/`KNOWN_GAPS` change was needed —
+  there was no code-level divergence comment to update, only this handoff note.
+- **Tests added**: `EmployeeRepositoryIntegrationTest.updateClearsStandingWithholdingOverrideBackToNullButZeroStaysZero`
+  (repository-level: set → clear to NULL → set 0 → clear to NULL again, all asserted against the real DB);
+  `PayrollWithholdingTaxOverrideIntegrationTest.clearingStandingOverrideThroughEmployeeUpdateRestoresComputedWithholdingOnNextPayrollLine`
+  (clear through the real `EmployeeRepository.update` path restores COMPUTED withholding on the next payroll
+  preview line, byte-identical to the pre-override baseline) and
+  `...settingStandingOverrideToZeroThroughEmployeeUpdateStaysZeroNotNull` (0 stays 0, not null).
+  `EmployeeFormModal.test.jsx` gained a case proving a cleared input submits `null`, not `0`.
+- **Mutation-checked**: reverted the fix to the old `addSet` (skip-null) behaviour — exactly the new clear
+  test in each of the two backend test files went red (7/8 and 4/5 respectively), nothing else broke;
+  restored, all green again.
+- **No authz change** — same HR-only gate as before.
+- **Tests/build**: frontend `npm run lint && npm test && npm run build` all green (553/553 tests, +1 new).
+  Backend: ran the two touched integration test classes plus `EmployeeServiceTest`/`EmployeeControllerTest`
+  against a local Postgres via `TEST_DB_URL` (Docker `docker info` hung again in this environment) — all
+  green; full `./mvnw -B clean verify` was kicked off in the background for the complete-suite record — see
+  the run's own report/PR for its final pass/fail (Docker/Testcontainers availability permitting; CI runs
+  Testcontainers regardless).
 
 ## Exact next prompt for the next agent
 > Review branch `feat/payroll-withholding-tax-override` (off `origin/main`, V88). Confirm the backend

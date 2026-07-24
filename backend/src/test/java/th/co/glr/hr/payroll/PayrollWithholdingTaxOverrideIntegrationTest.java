@@ -17,6 +17,10 @@ import th.co.glr.hr.commission.CommissionAttachmentRepository;
 import th.co.glr.hr.commission.CommissionCalculator;
 import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.CommissionService;
+import th.co.glr.hr.employee.EmployeeCodeGenerator;
+import th.co.glr.hr.employee.EmployeeReferenceRepository;
+import th.co.glr.hr.employee.EmployeeRepository;
+import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -156,6 +160,75 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
         assertThat(line.withholdingTaxOverride()).isEqualByComparingTo("0.00");
         // Projection still computed and still positive -- only the withheld amount is zeroed.
         assertThat(line.annualTax()).isEqualByComparingTo("8450.00");
+    }
+
+    /**
+     * The employee-update clear path (bug fix under test, EmployeeRepository.update): setting the
+     * standing override then clearing it back to NULL through the real update() path must restore
+     * COMPUTED withholding on the very next payroll line -- not just leave the stale override value in
+     * place. Proven wrong-way-round: assert the DB column is actually NULL before checking payroll.
+     */
+    @Test
+    void clearingStandingOverrideThroughEmployeeUpdateRestoresComputedWithholdingOnNextPayrollLine() {
+        LocalDate month = LocalDate.of(2026, 1, 1);
+        long employeeId = seedEmployee("WHT-CLEAR", "ล้างค่า", "ทดสอบ", new BigDecimal("40000.00"));
+
+        PayrollLineDto computed = previewLineFor(month, employeeId);
+        assertThat(computed.withholdingTax()).isEqualByComparingTo(COMPUTED_WITHHOLDING);
+
+        // Set a standing override -- substitutes the withheld amount, as in the test above.
+        setStandingOverride(employeeId, new BigDecimal("500.00"));
+        assertThat(previewLineFor(month, employeeId).withholdingTax()).isEqualByComparingTo("500.00");
+
+        // Clear it through EmployeeRepository.update (the actual HR employee-edit code path), not the
+        // direct-SQL helper -- this is what proves the fix, not just the DB state.
+        EmployeeRepository employeeRepository =
+            new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
+        employeeRepository.update(employeeId, clearWithholdingOverrideRequest());
+
+        // The column is genuinely NULL again (wrong-way-round check)...
+        BigDecimal stored = jdbc.queryForObject(
+            "SELECT withholding_tax_override FROM hr.employee WHERE employee_id = :id",
+            Map.of("id", employeeId), BigDecimal.class);
+        assertThat(stored).isNull();
+
+        // ...and the next payroll preview line is back to the COMPUTED tax, byte-identical to baseline.
+        PayrollLineDto restored = previewLineFor(month, employeeId);
+        assertThat(restored.withholdingTax()).isEqualByComparingTo(COMPUTED_WITHHOLDING);
+        assertThat(restored.withholdingTax()).isEqualByComparingTo(computed.withholdingTax());
+    }
+
+    /**
+     * Zero is a meaningful standing override ("withhold nothing") and must survive an update() call
+     * distinctly from NULL -- it must NOT be treated as a clear.
+     */
+    @Test
+    void settingStandingOverrideToZeroThroughEmployeeUpdateStaysZeroNotNull() {
+        long employeeId = seedEmployee("WHT-ZEROSTAND", "ศูนย์คงที่", "ทดสอบ", new BigDecimal("40000.00"));
+        EmployeeRepository employeeRepository =
+            new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
+
+        employeeRepository.update(employeeId, withholdingOverrideRequest(BigDecimal.ZERO));
+
+        BigDecimal stored = jdbc.queryForObject(
+            "SELECT withholding_tax_override FROM hr.employee WHERE employee_id = :id",
+            Map.of("id", employeeId), BigDecimal.class);
+        assertThat(stored).isNotNull();
+        assertThat(stored).isEqualByComparingTo("0.00");
+    }
+
+    /** Every other field left null (unchanged); only withholdingTaxOverride is set on this update call. */
+    private UpsertEmployeeRequest withholdingOverrideRequest(BigDecimal withholdingTaxOverride) {
+        return new UpsertEmployeeRequest(
+            null, null, null, null, null, null, null, null, null, null, // code..maritalStatus
+            null, null, null, null, null,                               // email..departmentTh
+            null, null, null, null, null, null,                         // positionTh..directorRemuneration
+            withholdingTaxOverride,
+            null, null, null, null, null, null);                        // hireDate..emergencyPhone
+    }
+
+    private UpsertEmployeeRequest clearWithholdingOverrideRequest() {
+        return withholdingOverrideRequest(null);
     }
 
     // --- helpers ------------------------------------------------------------
