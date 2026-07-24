@@ -40,7 +40,7 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         actorId = employees.create(new UpsertEmployeeRequest(
             null, null, "พนักงานขาย ทดสอบ", null, null, null, null, null, null, null,
             "sales@glr.co.th", null, "SALES", "Sales Division", "แผนกขาย",
-            null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null));
+            null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
     }
 
     @Test

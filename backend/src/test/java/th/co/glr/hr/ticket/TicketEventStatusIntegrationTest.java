@@ -35,7 +35,7 @@ class TicketEventStatusIntegrationTest extends AbstractPostgresIntegrationTest {
         actorId = employees.create(new UpsertEmployeeRequest(
             null, null, "เทสเตอร์ ขาย", null, null, null, null, null, null, null,
             "seller@glr.co.th", null, "SALES", "SALES Division", "แผนกทดสอบ",
-            null, null, null, "ACT", new BigDecimal("25000"), null, null, null, null, null, null));
+            null, null, null, "ACT", new BigDecimal("25000"), null, null, null, null, null, null, null));
     }
 
     private int seq;
