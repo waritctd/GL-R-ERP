@@ -36,6 +36,10 @@ export const api = {
     employees: () => apiRequest(API_ROUTES.attendance.employees),
     recalculate: (payload) =>
       apiRequest(API_ROUTES.attendance.recalculate, { method: 'POST', body: payload }),
+    // CEO/HR stand-up / WFH roster: marks everyone in employee_ids present with no punches for
+    // work_date. Resubmitting reconciles the roster — leaving someone off un-marks them.
+    markPresent: (payload) =>
+      apiRequest(API_ROUTES.attendance.markPresent, { method: 'POST', body: payload }),
     backfillCards: (payload) =>
       apiRequest(API_ROUTES.attendance.cardsBackfill, { method: 'POST', body: payload }),
     importDat: (payload) => apiRequest(API_ROUTES.attendance.importDat, { method: 'POST', body: payload }),

@@ -200,6 +200,95 @@ class AttendanceControllerTest {
     }
 
     @Test
+    void allowsHrToMarkPresent() throws Exception {
+        when(attendanceService.markPresent(
+                org.mockito.ArgumentMatchers.any(UserPrincipal.class),
+                eq(LocalDate.parse("2026-07-15")),
+                org.mockito.ArgumentMatchers.eq(java.util.List.of(10L)),
+                org.mockito.ArgumentMatchers.eq("stand-up")))
+            .thenReturn(new th.co.glr.hr.attendance.daily.AttendanceWfhRosterResult(1, 0));
+
+        mvc.perform(post("/api/attendance/daily/mark-present")
+                .session(sessionFor("hr"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "work_date": "2026-07-15",
+                      "employee_ids": [10],
+                      "notes": "stand-up"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.marked_count").value(1))
+            .andExpect(jsonPath("$.cleared_count").value(0));
+    }
+
+    @Test
+    void allowsCeoToMarkPresent() throws Exception {
+        when(attendanceService.markPresent(
+                org.mockito.ArgumentMatchers.any(UserPrincipal.class),
+                eq(LocalDate.parse("2026-07-15")),
+                org.mockito.ArgumentMatchers.eq(java.util.List.of(10L)),
+                org.mockito.ArgumentMatchers.eq((String) null)))
+            .thenReturn(new th.co.glr.hr.attendance.daily.AttendanceWfhRosterResult(1, 0));
+
+        mvc.perform(post("/api/attendance/daily/mark-present")
+                .session(sessionFor("ceo"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "work_date": "2026-07-15",
+                      "employee_ids": [10]
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.marked_count").value(1));
+    }
+
+    @Test
+    void forbidsEmployeesFromMarkingPresent() throws Exception {
+        mvc.perform(post("/api/attendance/daily/mark-present")
+                .session(sessionFor("employee"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "work_date": "2026-07-15",
+                      "employee_ids": [10]
+                    }
+                    """))
+            .andExpect(status().isForbidden());
+
+        verifyNoInteractions(attendanceService);
+    }
+
+    @Test
+    void forbidsSalesFromMarkingPresent() throws Exception {
+        mvc.perform(post("/api/attendance/daily/mark-present")
+                .session(sessionFor("sales"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "work_date": "2026-07-15",
+                      "employee_ids": [10]
+                    }
+                    """))
+            .andExpect(status().isForbidden());
+
+        verifyNoInteractions(attendanceService);
+    }
+
+    @Test
+    void rejectsMarkPresentWithoutWorkDate() throws Exception {
+        mvc.perform(post("/api/attendance/daily/mark-present")
+                .session(sessionFor("hr"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"employee_ids\": [10]}"))
+            .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(attendanceService);
+    }
+
+    @Test
     void requiresAuthenticationForPunchHistory() throws Exception {
         mvc.perform(get("/api/attendance/punches"))
             .andExpect(status().isUnauthorized());

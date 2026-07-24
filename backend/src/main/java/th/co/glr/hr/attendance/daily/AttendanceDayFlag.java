@@ -13,6 +13,11 @@ public enum AttendanceDayFlag {
     LATE,
     /** Checked out before work-end. */
     EARLY_LEAVE,
+    /**
+     * Marked present with no punches — a CEO/HR stand-up roster or WFH day. Reporting only, same as
+     * every other status here; carries no pay effect of its own.
+     */
+    WFH,
     /** Only an afternoon punch exists — the arrival scan is missing. */
     MISSING_CHECK_IN,
     /** Only a morning punch exists — the departure scan is missing. */

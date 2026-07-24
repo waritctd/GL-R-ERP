@@ -22,6 +22,7 @@ export const API_ROUTES = {
     unmapped: '/api/attendance/unmapped',
     employees: '/api/attendance/employees',
     recalculate: '/api/attendance/daily/recalculate',
+    markPresent: '/api/attendance/daily/mark-present',
     cardsBackfill: '/api/attendance/cards/backfill',
     importDat: '/api/attendance/imports/dat',
     devices: '/api/attendance/devices',
@@ -262,6 +263,9 @@ export const ROLE_PERMISSIONS = {
   canReviewProfileRequests: ['hr'],
   canViewAllAttendance: ['hr', 'ceo'],
   canImportAttendance: ['hr', 'ceo'],
+  // CEO/HR "mark present" (stand-up / WFH roster). Mirrors AttendanceController's
+  // POST /api/attendance/daily/mark-present requireAnyRole(user, "ceo", "hr") exactly.
+  canMarkAttendance: ['hr', 'ceo'],
   canViewAllOvertime: ['hr', 'ceo'],
   // Mirrors SpecialMoneyService.VIEW_ALL_ROLES — hr/ceo see every welfare/special-money
   // request; everyone else is scoped to self + managed employees, same shape as overtime.

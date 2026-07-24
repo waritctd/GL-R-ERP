@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import th.co.glr.hr.attendance.daily.AttendanceWfhRosterResult;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 
@@ -125,6 +126,24 @@ public class AttendanceController {
         sessions.requireAnyRole(user, "hr", "ceo");
         return new AttendanceRecalculateResponse(attendanceService.recalculateDaily(
             request.fromDate(), request.toDate(), request.employeeId()));
+    }
+
+    /**
+     * The CEO/HR stand-up roster: marks everyone in {@code employee_ids} present for
+     * {@code work_date} with no punches (WFH, §76 reporting only — never touches payroll).
+     * Resubmitting for the same date reconciles the roster: anyone left off is un-marked. HR/CEO
+     * only; the ids are still re-validated against the caller's own scope in the service, never
+     * trusted from the request body outright.
+     */
+    @PostMapping("/daily/mark-present")
+    AttendanceMarkPresentResponse markPresent(
+            @Valid @RequestBody AttendanceMarkPresentRequest request,
+            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, "ceo", "hr");
+        AttendanceWfhRosterResult result =
+            attendanceService.markPresent(user, request.workDate(), request.employeeIds(), request.notes());
+        return new AttendanceMarkPresentResponse(result.markedCount(), result.clearedCount());
     }
 
     @GetMapping("/punches")

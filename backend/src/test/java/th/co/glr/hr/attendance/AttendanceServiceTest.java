@@ -13,6 +13,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -323,5 +324,55 @@ class AttendanceServiceTest {
 
     private UserPrincipal manager(String role, Long employeeId, Long divisionId) {
         return new UserPrincipal(1L, role + "@glr.co.th", role, role, employeeId, true, LocalDate.now(), false, divisionId, true);
+    }
+
+    // --- markPresent (WFH / stand-up roster) -----------------------------------
+    //
+    // The controller already restricts this endpoint to hr/ceo via requireAnyRole; these cases cover
+    // the decision markPresent itself makes — validating the submitted ids against the caller's own
+    // scope rather than trusting them outright. Real-DB enforcement (the authoritative WFH write
+    // that supersedes a punch-derived row, and the role gate end to end) is proven separately by
+    // AttendanceMarkPresentIntegrationTest — Mockito cannot demonstrate either.
+
+    @Test
+    void hrMarkingPresentDelegatesToTheDailyRosterReconciliation() {
+        LocalDate date = LocalDate.parse("2026-07-15");
+        when(dailyService.listEmployeeOptions(10L, null, true)).thenReturn(List.of(
+            new th.co.glr.hr.attendance.daily.AttendanceEmployeeOption(11L, "E011", "Employee Eleven", null, null, null, null)
+        ));
+        when(dailyService.setWfhRoster(date, Set.of(11L), "stand-up"))
+            .thenReturn(new th.co.glr.hr.attendance.daily.AttendanceWfhRosterResult(1, 0));
+
+        var result = attendanceService.markPresent(user("hr", 10L), date, List.of(11L), "stand-up");
+
+        assertThat(result.markedCount()).isEqualTo(1);
+        assertThat(result.clearedCount()).isZero();
+        verify(dailyService).setWfhRoster(date, Set.of(11L), "stand-up");
+    }
+
+    @Test
+    void markPresentRejectsAnEmployeeOutsideTheCallersScope() {
+        LocalDate date = LocalDate.parse("2026-07-15");
+        // hr sees company-wide, but this stubs a narrower scope to exercise the defense-in-depth
+        // check on its own terms, independent of who the controller happens to let through.
+        when(dailyService.listEmployeeOptions(10L, null, true)).thenReturn(List.of(
+            new th.co.glr.hr.attendance.daily.AttendanceEmployeeOption(10L, "E010", "Employee Ten", null, null, null, null)
+        ));
+
+        assertThatThrownBy(() -> attendanceService.markPresent(user("hr", 10L), date, List.of(99L), null))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+
+        verify(dailyService, org.mockito.Mockito.never())
+            .setWfhRoster(any(LocalDate.class), org.mockito.ArgumentMatchers.anySet(), any(String.class));
+    }
+
+    @Test
+    void markPresentRequiresAWorkDate() {
+        assertThatThrownBy(() -> attendanceService.markPresent(user("hr", 10L), null, List.of(11L), null))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
     }
 }
