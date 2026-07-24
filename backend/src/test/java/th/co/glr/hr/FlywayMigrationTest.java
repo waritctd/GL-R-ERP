@@ -45,8 +45,10 @@ class FlywayMigrationTest {
     }
 
     /**
-     * Mirrors {@code application-prod.yml}'s {@code spring.flyway.locations}, which appends
-     * {@code db/migration-demo} on top of the normal migrations for the Render demo deploy. Flyway
+     * Mirrors {@code application-demo.yml}'s {@code spring.flyway.locations} (the {@code demo}
+     * profile, activated as {@code prod,demo} for the Render showcase), which appends
+     * {@code db/migration-demo} on top of the normal migrations. The {@code prod} profile alone no
+     * longer carries the demo seed, so real production never applies it. Flyway
      * validates version numbers across ALL configured locations combined, not per-folder — a
      * {@code db/migration-demo} file numbered against only its own folder's history can collide with
      * an unrelated {@code db/migration} file of the same version and crash-loop the deploy at
