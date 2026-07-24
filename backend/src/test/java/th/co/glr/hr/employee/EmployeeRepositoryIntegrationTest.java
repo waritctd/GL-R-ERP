@@ -124,8 +124,52 @@ class EmployeeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(chairman.directorRemuneration()).isEqualByComparingTo("80000");
     }
 
+    /**
+     * The standing withholding-tax override (V88) is deliberately a FULL-REPLACE column, unlike every
+     * other field {@code update()} touches (which use "null = don't change" via {@code addSet}): the
+     * column is nullable and NULL is itself a meaningful state ("compute automatically"), so a skip-
+     * when-null write would let HR set the override but never clear it back to NULL. Proven
+     * wrong-way-round: after clearing, the column must actually BE NULL, not merely "unchanged".
+     */
+    @Test
+    void updateClearsStandingWithholdingOverrideBackToNullButZeroStaysZero() {
+        long id = repository.create(req("ภาษี ทดสอบ", "SALES", "wht-clear@glr.co.th", new BigDecimal("25000")));
+        assertThat(repository.findEmployeeById(id, true).orElseThrow().withholdingTaxOverride()).isNull();
+
+        // Set a standing override.
+        repository.update(id, withholdingOverrideRequest(new BigDecimal("3000.00")));
+        assertThat(repository.findEmployeeById(id, true).orElseThrow().withholdingTaxOverride())
+            .isEqualByComparingTo("3000.00");
+
+        // Explicit null clears it back to NULL -- this is the bug under test: an addSet-style update
+        // would leave 3000.00 untouched here instead of clearing it.
+        repository.update(id, withholdingOverrideRequest(null));
+        assertThat(repository.findEmployeeById(id, true).orElseThrow().withholdingTaxOverride()).isNull();
+
+        // Zero is a distinct, meaningful override ("withhold nothing") and must NOT be conflated with
+        // clearing -- it must persist as exactly 0.00, not collapse to NULL.
+        repository.update(id, withholdingOverrideRequest(BigDecimal.ZERO));
+        assertThat(repository.findEmployeeById(id, true).orElseThrow().withholdingTaxOverride())
+            .isEqualByComparingTo("0.00");
+
+        // And a subsequent explicit-null update clears it again, even from a stored 0 (0 -> NULL is a
+        // real transition, not a no-op).
+        repository.update(id, withholdingOverrideRequest(null));
+        assertThat(repository.findEmployeeById(id, true).orElseThrow().withholdingTaxOverride()).isNull();
+    }
+
     private UpsertEmployeeRequest req(String nameTh, String divisionCode, String email, BigDecimal salary) {
         return req(nameTh, divisionCode, email, salary, BigDecimal.ZERO);
+    }
+
+    /** Every other field left null (unchanged); only withholdingTaxOverride is set on this update call. */
+    private UpsertEmployeeRequest withholdingOverrideRequest(BigDecimal withholdingTaxOverride) {
+        return new UpsertEmployeeRequest(
+            null, null, null, null, null, null, null, null, null, null, // code..maritalStatus
+            null, null, null, null, null,                               // email..departmentTh
+            null, null, null, null, null, null,                         // positionTh..directorRemuneration
+            withholdingTaxOverride,
+            null, null, null, null, null, null);                        // hireDate..emergencyPhone
     }
 
     private UpsertEmployeeRequest req(

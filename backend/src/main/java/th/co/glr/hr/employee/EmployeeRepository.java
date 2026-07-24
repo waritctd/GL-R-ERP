@@ -262,10 +262,15 @@ public class EmployeeRepository {
         addSet(sets, params, "marital_status", "maritalStatus", request.maritalStatus());
         addSet(sets, params, "current_salary", "salary", request.salary());
         addSet(sets, params, "director_remuneration", "directorRemuneration", request.directorRemuneration());
-        // Standing withholding override. Mirrors director_remuneration/current_salary: addSet only emits
-        // a SET when the value is non-null, so a null request field leaves the stored value untouched
-        // (same "null = don't change" semantics the rest of update() uses).
-        addSet(sets, params, "withholding_tax_override", "withholdingTaxOverride", request.withholdingTaxOverride());
+        // Standing withholding override -- FULL-REPLACE, unlike every other field on this method (and
+        // unlike director_remuneration/current_salary, which are NOT NULL columns cleared via 0). This
+        // column is nullable and NULL is itself a meaningful state ("compute automatically"), so an
+        // addSet-style skip-when-null would make the override settable but never clearable back to
+        // NULL. Always emit the SET and bind the value even when null -- safe only because the employee
+        // edit form (EmployeeFormModal) always submits this field as part of a full-object payload
+        // (null when the input is blank), and it is the only caller of this update path.
+        sets.add("withholding_tax_override = :withholdingTaxOverride");
+        params.addValue("withholdingTaxOverride", request.withholdingTaxOverride());
         addSet(sets, params, "hire_date", "hireDate", request.hireDate());
         addSet(sets, params, "confirm_date", "confirmDate", request.confirmationDate());
 

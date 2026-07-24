@@ -109,6 +109,31 @@ describe('EmployeeFormModal form validation', () => {
     expect(screen.getByLabelText(/ภาษีหัก ณ ที่จ่าย \(กำหนดเอง\)/).value).toBe('0');
   });
 
+  it('clearing a stored withholding-tax override submits null (round-trips back to auto-compute)', async () => {
+    const onSubmit = vi.fn();
+    const employee = {
+      id: 11,
+      code: 'GLR-011',
+      nameTh: 'ทดสอบ ล้างค่า',
+      email: 'clear@example.com',
+      phone: '0800000011',
+      withholdingTaxOverride: 5000,
+    };
+    render(<EmployeeFormModal employee={employee} employees={[]} onClose={vi.fn()} onSubmit={onSubmit} />);
+
+    const input = screen.getByLabelText(/ภาษีหัก ณ ที่จ่าย \(กำหนดเอง\)/);
+    // Pre-fills the existing standing override.
+    expect(input.value).toBe('5000');
+
+    // HR clears the field to restore automatic computation.
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: /บันทึก/ }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    // Blank must submit null, NOT 0 -- 0 is a distinct "withhold nothing" override.
+    expect(onSubmit.mock.calls[0][0].withholdingTaxOverride).toBeNull();
+  });
+
   it('clears the department when the division changes (parity with the old update() reset)', async () => {
     const onSubmit = vi.fn();
     const employee = {
