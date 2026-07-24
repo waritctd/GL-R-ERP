@@ -65,33 +65,6 @@ Set an agent token when posting to the backend:
 $env:ATTENDANCE_AGENT_TOKEN = "replace-with-server-token"
 ```
 
-### Posting to more than one backend (prod + UAT dual-post)
-
-There is one physical device, so to feed **both** prod and UAT live the *same*
-agent reads the device once and posts each punch to every backend. Set
-`ATTENDANCE_API_TARGETS` to a JSON array instead of the single `ATTENDANCE_API_URL`
-/ `ATTENDANCE_AGENT_TOKEN`. Each target uses its **own** agent token (mint one per
-device *per backend* via `POST /api/attendance/devices/{deviceCode}/agent-token`):
-
-```powershell
-$env:ATTENDANCE_API_TARGETS = @'
-[
-  {"name": "prod", "url": "https://gl-r-erp.onrender.com/api/attendance/punch",     "token": "PROD_DEVICE_TOKEN"},
-  {"name": "uat",  "url": "https://gl-r-erp-uat.onrender.com/api/attendance/punch", "token": "UAT_DEVICE_TOKEN"}
-]
-'@
-```
-
-Each target keeps its own delivery watermark and retry queue under the data dir
-(`agent_state.<name>.json` / `agent_queue.<name>.jsonl`), so a punch that reaches
-prod but not UAT is queued for UAT alone and retried independently — neither
-backend blocks or drops the other's punches. When `ATTENDANCE_API_TARGETS` is
-unset the agent stays single-target and unchanged (original env vars + original
-state/queue filenames).
-
-> Note: each backend dedups on its own device+badge+time key, so onboarding UAT
-> after a DB copy is safe — re-posting punches UAT already has is a no-op upsert.
-
 ## Run Checks
 
 Check raw network plus `pyzk` connectivity:
