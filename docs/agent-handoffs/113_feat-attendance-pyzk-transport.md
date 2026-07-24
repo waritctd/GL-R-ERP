@@ -91,11 +91,18 @@ python3 test_dispatch.py     # 5/5 PASS    (transport selection, lazy-import err
   parsing keeps all events while `parse_transaction_row` still drops non-open;
   `pullsdk_user_mappings` drops card=0; `build_transport` dispatch incl. the
   `pyzk`-without-lib RuntimeError and the pull-path Windows-only raise. All pass.
+- **On-device (warehouse mini PC, `ZK_TRANSPORT=pyzk`, 2026-07-24 19:16)** — PASS:
+  - `--check` → `pyzk connection passed attendance_records=7298`.
+  - `--once-catchup --dry-run` → 64 punches in the 3-day window, all normalized
+    correctly (site_code=WAREHOUSE, badge_code=PIN e.g. 10014, event_type 0,
+    verified 4, Bangkok tz), `delivered_count=64`.
+  - `--live --dry-run` → connected, catch-up ran, `Starting live capture` (loop
+    entered and listened; stopped via Ctrl+C). A real tap→`LIVE_CAPTURE` line was
+    not captured because the loop was interrupted before a punch — worth one more
+    tap-through, but connect + live-start on real hardware is confirmed.
 - **Not run**: npm/mvn suites — these are standalone Python agent scripts, not
   covered by frontend/backend CI. There is no automated test harness for them in
   the repo.
-- **Not run locally**: a live device connect (needs the on-LAN warehouse scanner)
-  — see the required on-device verification below.
 
 ## Authz evidence
 **No authorization change.** Transport is purely how the agent talks to the
@@ -103,11 +110,11 @@ device; the backend endpoints, the HR-gated per-device agent-token issuance, and
 punch ingestion are untouched. Nothing role/scope-shaped in this diff.
 
 ## Known risks
-1. **`stream_live` for pyzk is verified only by code review**, not against a live
-   device (can't reach the warehouse LAN from the dev box). The `--check` and
-   catch-up paths use the same `get_attendance()` call already proven in the
-   field; `live_capture()` is the one primitive not yet exercised end-to-end here.
-   → The on-device test below must include a real live tap.
+1. **`stream_live` for pyzk**: connect + catch-up + live-loop *entry* are now
+   confirmed on the real device (see On-device above). The only unproven step is a
+   real tap producing a `LIVE_CAPTURE` payload — the loop was Ctrl+C'd before a
+   punch arrived. Low risk (same code path as the proven catch-up mapping), but
+   one tap-through would close it fully.
 2. **`ZK_TRANSPORT=pyzk` must be added to the warehouse env block.** That env
    block lives in `WAREHOUSE_SCANNER_SETUP.md` on the **separate, unmerged**
    `feat/attendance-warehouse-scanner` branch (not this one). When both land,
