@@ -1955,6 +1955,7 @@ const MOCK_DAY_SHAPES = [
   { kind: 'present', inAt: [8, 12], outAt: [17, 40] },
   { kind: 'workedLate', inAt: [8, 26], outAt: [18, 40] },
   { kind: 'missingIn', inAt: null, outAt: [17, 25] },
+  { kind: 'wfh' },
   { kind: 'none' },
 ];
 
@@ -2007,6 +2008,11 @@ function mockAttendanceDay(employee, date, shape, weekend) {
   if (shape.kind === 'nonWorkday') {
     return { ...base, status: 'NON_WORKDAY', flags: ['NON_WORKDAY'] };
   }
+  // A CEO/HR "marked present" day: no scans, site_code 'WFH', manual override — this is how the
+  // backend's upsertWfhPresent + toDto render, so the source column has a WFH row to show.
+  if (shape.kind === 'wfh') {
+    return { ...base, site_code: 'WFH', is_manual_override: true, status: 'WFH', flags: ['WFH'] };
+  }
 
   const checkIn = shape.inAt ? bangkokStamp(date, shape.inAt[0], shape.inAt[1]) : null;
   const checkOut = shape.outAt ? bangkokStamp(date, shape.outAt[0], shape.outAt[1]) : null;
@@ -2043,7 +2049,8 @@ function mockAttendanceDay(employee, date, shape, weekend) {
     // Counts every scan, not just the two that became check-in/out — that difference is exactly
     // what the day row's "N ครั้ง" affordance surfaces.
     punch_count: (checkIn ? 1 : 0) + (checkOut ? 1 : 0) + (shape.midAt?.length ?? 0),
-    site_code: 'SHOWROOM',
+    // Alternate the scanner site by employee so the source column shows both Showroom and Warehouse.
+    site_code: Number(employee.id) % 2 === 0 ? 'WAREHOUSE' : 'SHOWROOM',
     status,
     flags,
   };
@@ -2059,7 +2066,13 @@ function mockAttendancePunches(employees, params) {
 
   return employees.flatMap((employee) => {
     const shape = mockDayShape(employee, date);
-    if (shape.kind === 'none' || shape.kind === 'nonWorkday') return [];
+    // WFH marks and empty days carry no scans, so the drill-down has nothing to show.
+    if (shape.kind === 'none' || shape.kind === 'nonWorkday' || shape.kind === 'wfh') return [];
+    // Match the daily row's site (see mockAttendanceDay) so the expanded scans agree with the row.
+    const warehouse = Number(employee.id) % 2 === 0;
+    const site = warehouse
+      ? { site_code: 'WAREHOUSE', device_code: 'WAREHOUSE_ZMM220', device_name: 'เครื่องสแกนคลังสินค้า' }
+      : { site_code: 'SHOWROOM', device_code: 'SHOWROOM_SC700', device_name: 'เครื่องสแกนโชว์รูม' };
     // Chronological, so the consumer sees the same first/last the backend derived by MIN/MAX.
     const stamps = [shape.inAt, ...(shape.midAt ?? []), shape.outAt].filter(Boolean);
     return stamps.map((stamp, position) => ({
@@ -2071,9 +2084,7 @@ function mockAttendancePunches(employees, params) {
       position_th: employee.positionTh ?? null,
       punch_time: bangkokStamp(date, stamp[0], stamp[1]),
       work_date: isoDate(date),
-      site_code: 'SHOWROOM',
-      device_code: 'SHOWROOM_SC700',
-      device_name: 'เครื่องสแกนโชว์รูม',
+      ...site,
     }));
   });
 }

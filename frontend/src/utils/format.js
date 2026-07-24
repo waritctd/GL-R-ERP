@@ -446,3 +446,17 @@ export function attendanceFlagLabels(day) {
   }
   return labels;
 }
+
+// Where a day's attendance came from, derived from the daily row's site_code. Punched days carry
+// the check-in punch's site (SHOWROOM / WAREHOUSE); a CEO/HR "marked present" day with no scans is
+// written with site_code 'WFH'. Returns null for days with no record so the caller can render "-".
+export function attendanceSourceLabel(day) {
+  const map = {
+    SHOWROOM: 'Showroom',
+    WAREHOUSE: 'Warehouse',
+    WFH: 'WFH',
+  };
+  const site = day?.site_code;
+  if (!site) return null;
+  return map[site] ?? site;
+}
