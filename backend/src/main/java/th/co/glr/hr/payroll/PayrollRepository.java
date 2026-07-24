@@ -39,7 +39,8 @@ public class PayrollRepository {
                    bank.name_th AS bank_name,
                    ba.account_no AS bank_account,
                    COALESCE(e.current_salary, 0) AS base_salary,
-                   COALESCE(e.director_remuneration, 0) AS director_remuneration
+                   COALESCE(e.director_remuneration, 0) AS director_remuneration,
+                   e.withholding_tax_override AS withholding_tax_override
               FROM hr.employee e
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
               LEFT JOIN hr.employee_bank_account ba ON ba.employee_id = e.employee_id
@@ -55,7 +56,10 @@ public class PayrollRepository {
                 rs.getString("bank_name"),
                 rs.getString("bank_account"),
                 rs.getBigDecimal("base_salary"),
-                rs.getBigDecimal("director_remuneration")
+                rs.getBigDecimal("director_remuneration"),
+                // NULLABLE standing override -- read raw so SQL NULL stays null (no COALESCE):
+                // null = no standing override, distinct from a 0 override.
+                rs.getBigDecimal("withholding_tax_override")
             ));
     }
 
@@ -135,7 +139,8 @@ public class PayrollRepository {
             SELECT DISTINCT ON (pl.employee_id)
                    pl.employee_id,
                    pl.special_pay_1, pl.special_pay_2, pl.special_pay_3, pl.special_pay_4, pl.special_pay_5,
-                   pl.non_taxable_income, pl.student_loan_deduction, pl.legal_execution_deduction
+                   pl.non_taxable_income, pl.student_loan_deduction, pl.legal_execution_deduction,
+                   pl.withholding_tax_override
               FROM hr.payroll_line pl
               JOIN hr.payroll_period pp ON pp.period_id = pl.period_id
               JOIN hr.employee e ON e.employee_id = pl.employee_id AND e.is_active = TRUE
@@ -158,7 +163,11 @@ public class PayrollRepository {
                 // concern (it only knows the prior payroll_line) -- PayrollService#suggestedInputs
                 // overlays the real leave-derived figures onto every row after this method returns.
                 BigDecimal.ZERO,
-                BigDecimal.ZERO
+                BigDecimal.ZERO,
+                // PER-RUN withholding override typed last month, so HR sees it pre-filled again. Read
+                // raw (nullable): null = none typed -> field starts blank and the standing employee
+                // override (if any) re-applies on its own.
+                rs.getBigDecimal("withholding_tax_override")
             ));
     }
 
@@ -419,7 +428,8 @@ public class PayrollRepository {
                    pl.calculation_note,
                    pl.director_remuneration, pl.warning_letter_deduction,
                    pl.customer_return_deduction, pl.other_pretax_deduction,
-                   pl.leave_refund_days, pl.leave_deduction_refund
+                   pl.leave_refund_days, pl.leave_deduction_refund,
+                   pl.withholding_tax_override
               FROM hr.payroll_line pl
               JOIN hr.employee e ON e.employee_id = pl.employee_id
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
@@ -654,7 +664,8 @@ public class PayrollRepository {
                 net_amount, calculation_note,
                 director_remuneration, warning_letter_deduction,
                 customer_return_deduction, other_pretax_deduction,
-                leave_refund_days, leave_deduction_refund
+                leave_refund_days, leave_deduction_refund,
+                withholding_tax_override
             )
             VALUES (
                 :periodId, :employeeId, :baseSalary, :dailyRate, :hourlyRate,
@@ -670,7 +681,8 @@ public class PayrollRepository {
                 :netAmount, :calculationNote,
                 :directorRemuneration, :warningLetterDeduction,
                 :customerReturnDeduction, :otherPretaxDeduction,
-                :leaveRefundDays, :leaveDeductionRefund
+                :leaveRefundDays, :leaveDeductionRefund,
+                :withholdingTaxOverride
             )
             """,
             new MapSqlParameterSource()
@@ -714,7 +726,10 @@ public class PayrollRepository {
                 .addValue("customerReturnDeduction", line.customerReturnDeduction())
                 .addValue("otherPretaxDeduction", line.otherPretaxDeduction())
                 .addValue("leaveRefundDays", line.leaveRefundDays())
-                .addValue("leaveDeductionRefund", line.leaveDeductionRefund()));
+                .addValue("leaveDeductionRefund", line.leaveDeductionRefund())
+                // Nullable per-run typed override -- pass through null (no COALESCE) so "none typed"
+                // persists as SQL NULL, distinct from a 0 override.
+                .addValue("withholdingTaxOverride", line.withholdingTaxOverride()));
     }
 
     private PayrollPeriodDto toPeriod(PayrollPeriodHeader header, List<PayrollLineDto> lines) {
@@ -777,7 +792,10 @@ public class PayrollRepository {
             money(rs.getBigDecimal("customer_return_deduction")),
             money(rs.getBigDecimal("other_pretax_deduction")),
             money(rs.getBigDecimal("leave_refund_days")),
-            money(rs.getBigDecimal("leave_deduction_refund"))
+            money(rs.getBigDecimal("leave_deduction_refund")),
+            // Nullable per-run typed override -- read raw so SQL NULL stays null (money() would coerce
+            // it to 0.00, which is a different, meaningful override value).
+            rs.getBigDecimal("withholding_tax_override")
         );
     }
 
