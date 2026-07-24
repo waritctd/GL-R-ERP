@@ -29,6 +29,7 @@ public record UpsertEmployeeRequest(
     @Size(max = 255) String locationTh,
     @Size(max = 10) String statusId,
     @DecimalMin("0.00") BigDecimal salary,
+    @DecimalMin("0.00") BigDecimal directorRemuneration,
     @PastOrPresent LocalDate hireDate,
     @PastOrPresent LocalDate confirmationDate,
     @Size(max = 500) String address,
