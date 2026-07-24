@@ -98,7 +98,7 @@ class AgentConfig:
             dry_run = dry_run_override
 
         return cls(
-            zk_host=os.getenv("ZK_HOST", "192.168.1.201").strip(),
+            zk_host=os.getenv("ZK_HOST", "192.168.1.202").strip(),
             zk_port=env_int("ZK_PORT", 4370),
             comm_password=os.getenv("ZK_COMM_PASSWORD", "").strip(),
             connect_timeout_ms=env_int("ZK_CONNECT_TIMEOUT_MS", 4000),
