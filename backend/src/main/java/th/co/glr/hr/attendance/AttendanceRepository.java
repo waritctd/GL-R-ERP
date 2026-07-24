@@ -326,9 +326,16 @@ public class AttendanceRepository {
             params.addValue("divisionId", filter.divisionId());
         }
 
+        // Take the most-recent :limit punches for the window (DESC + LIMIT in the inner query so the
+        // recency cap stays meaningful for a wide date range)...
         sql.append(" ORDER BY p.punch_time DESC, p.punch_id DESC LIMIT :limit");
 
-        return jdbc.query(sql.toString(), params, (rs, rowNum) -> new AttendancePunchDto(
+        // ...then hand them back oldest-first. Every consumer treats the first punch as the clock-in
+        // and the last as the clock-out (the drill-down's เข้า/ออก labels, and the daily roll-up's
+        // MIN/MAX derivation), so chronological order is the contract — not newest-first.
+        String ordered = "SELECT * FROM (\n" + sql + "\n) recent ORDER BY recent.punch_time, recent.punch_id";
+
+        return jdbc.query(ordered, params, (rs, rowNum) -> new AttendancePunchDto(
             rs.getLong("punch_id"),
             nullableLong(rs, "employee_id"),
             rs.getString("employee_code"),
