@@ -504,7 +504,7 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         return employees.create(new UpsertEmployeeRequest(
             null, null, nameTh, null, null, null, null, null, null, null,
             email, null, divisionSourceCode, divisionNameTh, divisionNameTh,
-            null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null));
+            null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
     }
 
     private UserPrincipal actor(long employeeId, String role) {

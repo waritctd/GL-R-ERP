@@ -184,6 +184,7 @@ class EmployeeControllerTest {
             true,
             "รายเดือน",
             new BigDecimal("25000.00"),
+            new BigDecimal("0.00"),
             LocalDate.of(2024, 1, 1),
             null,
             "-",

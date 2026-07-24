@@ -2503,6 +2503,7 @@ function createEmployeeRecord(payload) {
     active,
     payType: 'รายเดือน',
     salary: Number(payload.salary || 0),
+    directorRemuneration: Number(payload.directorRemuneration || 0),
     hireDate: payload.hireDate || new Date().toISOString().slice(0, 10),
     confirmationDate: payload.confirmationDate || null,
     reportsTo: payload.reportsTo || '-',
