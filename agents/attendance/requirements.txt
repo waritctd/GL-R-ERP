@@ -1,16 +1,18 @@
-# showroom_agent.py talks to the SC700 via the Pull SDK (plcommpro.dll) using
-# only the Python standard library (ctypes) -- no pyzk.
-#
-# Run it with 32-bit Python on Windows (plcommpro.dll is 32-bit).
+# showroom_agent.py supports two device transports, chosen by ZK_TRANSPORT:
+#   pullsdk (default) - the ZKAccess3.5 Pull SDK (plcommpro.dll) via ctypes only
+#                       (stdlib). Requires 32-bit Python on Windows. Showroom SC700.
+#   pyzk              - pyzk's standalone ZK protocol. Warehouse ZMM220 (which the
+#                       Pull SDK cannot connect to). Any Python bitness; needs pyzk.
 #
 # Dependencies:
 #   requests - posting punches to the ERP.
 #   tzdata   - IANA timezone database. Windows ships no system tz data, so
 #              zoneinfo.ZoneInfo("Asia/Bangkok") fails without this package.
+#   pyzk     - only needed when ZK_TRANSPORT=pyzk (warehouse). Harmless otherwise;
+#              it is imported lazily, so the pullsdk path never touches it.
 requests>=2.31.0
 tzdata>=2024.1
+pyzk>=0.9
 
-# NOTE: the older sc700_*_test.py / sc700_local_test.py scripts use pyzk, which
-# cannot talk to the SC700 (a Pull-protocol device). They are kept only for
-# other ZKTeco (standalone-protocol) hardware. Install pyzk manually if needed:
-#   pip install "pyzk>=0.9"
+# NOTE: the older sc700_*_test.py / sc700_local_test.py scripts also use pyzk and
+# remain useful for standalone-protocol ZKTeco hardware and field debugging.

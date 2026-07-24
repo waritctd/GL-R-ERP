@@ -10,13 +10,16 @@ This is the fast path for a historical backfill: the backend batch-inserts a
 whole file in one request (with the same per-punch dedup as live capture),
 instead of the agent POSTing punches one at a time.
 
-Windows + 32-bit Python only (plcommpro.dll). Run it with ZKAccess closed and
-the attendance service paused -- the SC700 allows only one Pull-SDK session:
+Transport follows ZK_TRANSPORT (--transport): ``pullsdk`` (showroom SC700, needs
+Windows + 32-bit Python + plcommpro.dll) or ``pyzk`` (warehouse ZMM220). On the
+Pull SDK the device allows only one session, so pause the agent first:
 
     .\\pause-for-zkaccess.ps1
     py -3-32 export_transactions_dat.py --days 365
     # ...import each .dat (see printed commands)...
     .\\resume-agent.ps1
+
+For the warehouse (pyzk) just add --transport pyzk (no ZKAccess involved).
 
 Output: <out-prefix>_001.dat, _002.dat, ... each <= --chunk rows (the backend
 caps a single import at 100,000 rows). Each .dat line is 6 tab-separated fields:
@@ -32,33 +35,31 @@ import sys
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-# Reuse the transport, time decode, and field layout from the agent (same package).
-from showroom_agent import (
-    DEFAULT_SDK_DIR,
-    PullSDK,
-    TXN_CARDNO,
-    TXN_EVENT,
-    TXN_INOUT,
-    TXN_PIN,
-    TXN_TIME,
-    TXN_VERIFIED,
-    _int,
-    _short,
-    decode_zk_time,
-)
+# Reuse the transport and field mapping from the agent (same package).
+from showroom_agent import DEFAULT_SDK_DIR, _short, build_transport
 
 DAT_TIME_FMT = "%Y-%m-%d %H:%M:%S"
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    parser.add_argument("--transport", default=os.getenv("ZK_TRANSPORT", "pullsdk"),
+                        choices=["pullsdk", "pyzk"], help="device transport (default from ZK_TRANSPORT)")
     parser.add_argument("--host", default=os.getenv("ZK_HOST", "192.168.1.202"))
     parser.add_argument("--port", type=int, default=int(os.getenv("ZK_PORT", "4370")))
     parser.add_argument("--password", default=os.getenv("ZK_COMM_PASSWORD", ""))
     parser.add_argument("--sdk-dir", default=os.getenv("ZK_SDK_DIR", DEFAULT_SDK_DIR))
     parser.add_argument("--timeout-ms", type=int, default=int(os.getenv("ZK_CONNECT_TIMEOUT_MS", "4000")))
+    parser.add_argument("--force-udp", action="store_true", default=_env_flag("ZK_FORCE_UDP"),
+                        help="pyzk only: force UDP transport")
+    parser.add_argument("--omit-ping", action="store_true", default=_env_flag("ZK_OMIT_PING"),
+                        help="pyzk only: skip the pre-connect ping")
     parser.add_argument("--timezone", default=os.getenv("ATTENDANCE_TIMEZONE", "Asia/Bangkok"))
     parser.add_argument("--days", type=int, default=365,
                         help="only export punches newer than this many days (default 365)")
@@ -76,50 +77,31 @@ def main(argv: list[str] | None = None) -> int:
     zone = ZoneInfo(args.timezone)
     cutoff = datetime.now(zone) - timedelta(days=args.days)
 
-    sdk = PullSDK(args.sdk_dir)
+    transport = build_transport(
+        args.transport,
+        sdk_dir=args.sdk_dir,
+        host=args.host,
+        port=args.port,
+        password=args.password,
+        timeout_ms=args.timeout_ms,
+        force_udp=args.force_udp,
+        omit_ping=args.omit_ping,
+    )
+    transport.connect()
     try:
-        sdk.connect(args.host, args.port, args.password, args.timeout_ms)
-        header, rows = sdk.get_transaction_rows()
+        # read_attendance keeps every identifier-bearing record (all event types);
+        # for a broad backfill we deliberately keep them all, only filtering by age.
+        punches = transport.read_attendance(zone)
     finally:
-        sdk.disconnect()
-    print(f"Read {len(rows)} transaction rows (header: {header})")
+        transport.disconnect()
+    print(f"Read {len(punches)} attendance records carrying an identifier.")
 
-    kept: list[tuple[datetime, str, int, int, int]] = []
-    skipped_no_id = 0
-    skipped_old = 0
-    for row in rows:
-        parts = row.split(",")
-        if len(parts) < 7:
-            continue
-        # "Everything with an ID": keep any row carrying a PIN or a card number.
-        # Rows with neither (door-open / system events) can't be stored -- the
-        # attendance_punch.badge_code column is NOT NULL.
-        badge = next(
-            (x for x in (parts[TXN_PIN].strip(), parts[TXN_CARDNO].strip()) if x and x != "0"),
-            "",
-        )
-        if not badge:
-            skipped_no_id += 1
-            continue
-        try:
-            ts = decode_zk_time(int(parts[TXN_TIME].strip())).replace(tzinfo=zone)
-        except (ValueError, OverflowError):
-            continue
-        if ts < cutoff:
-            skipped_old += 1
-            continue
-        kept.append((
-            ts,
-            badge,
-            _short(_int(parts[TXN_VERIFIED])),   # -> device_status
-            _short(_int(parts[TXN_INOUT])),      # -> punch_state
-            _int(parts[TXN_EVENT]),              # -> reserved_value (audit)
-        ))
-
-    kept.sort(key=lambda item: item[0])
-    print(f"Kept {len(kept)} rows with an identifier newer than {cutoff.date()} "
-          f"(last {args.days} days). Skipped {skipped_no_id} without an id, "
-          f"{skipped_old} older than the window.")
+    kept = sorted(
+        (p for p in punches if p.punch_time >= cutoff),
+        key=lambda p: p.punch_time,
+    )
+    print(f"Kept {len(kept)} records newer than {cutoff.date()} (last {args.days} days); "
+          f"skipped {len(punches) - len(kept)} older than the window.")
     if not kept:
         print("Nothing to export.")
         return 0
@@ -129,9 +111,12 @@ def main(argv: list[str] | None = None) -> int:
         chunk = kept[start:start + args.chunk]
         path = f"{args.out_prefix}_{start // args.chunk + 1:03d}.dat"
         with open(path, "w", encoding="utf-8", newline="\n") as handle:
-            for ts, badge, device_status, punch_state, event in chunk:
+            for punch in chunk:
+                device_status = _short(punch.verified)
+                punch_state = _short(punch.inoutstate)
+                event = punch.eventtype           # reserved_value (audit)
                 handle.write(
-                    f"{badge}\t{ts.strftime(DAT_TIME_FMT)}\t"
+                    f"{punch.badge}\t{punch.punch_time.strftime(DAT_TIME_FMT)}\t"
                     f"{device_status}\t{punch_state}\t0\t{event}\n"
                 )
         files.append(path)
