@@ -1,22 +1,32 @@
 #!/usr/bin/env python3
-"""Showroom ZKTeco SC700 attendance agent (Pull SDK transport).
+"""GL&R ZKTeco attendance agent (multi-site, dual transport).
 
-The SC700 is a Pull-protocol access panel, so this agent talks to ``plcommpro.dll``
-(the ZKAccess3.5 Pull SDK) directly via ctypes. pyzk's standalone protocol cannot
-connect to this device. Windows + 32-bit Python only (the DLL is 32-bit).
+The agent talks to a ZKTeco device over one of two selectable transports, chosen
+by the ``ZK_TRANSPORT`` env var (default ``pullsdk``):
+
+* ``pullsdk`` -- the ZKAccess3.5 Pull SDK (``plcommpro.dll``) via ctypes. This is
+  what the *showroom* SC700 (a Pull-protocol access panel) requires. Windows +
+  32-bit Python only (the DLL is 32-bit). Unchanged, default behaviour.
+* ``pyzk``    -- pyzk's standalone ZK protocol. The *warehouse* unit
+  (ZMM220_TFT, firmware 6.60/2017) accepts this but NOT the Pull SDK, which fails
+  with an opaque ``PullLastError=-2``. Runs on any Python bitness; needs ``pyzk``.
+
+Whichever transport is selected, both normalize device records into the same
+``Punch`` dataclass, so all downstream logic (punch filtering, payload shape,
+delivery/queue/state, backend dedup) is shared and identical.
 
 Ingestion has two paths, both posting normalized punches to the GL&R Spring Boot
 API (which dedups them via an upsert):
 
-* Realtime  -> poll ``GetRTLog`` every ~1.5s while connected (LIVE_CAPTURE).
-* Catch-up  -> read the device ``transaction`` table via ``GetDeviceData`` on
-  startup and after every reconnect (CATCHUP_PULL).
+* Realtime  -> live capture while connected (LIVE_CAPTURE).
+* Catch-up  -> read the device's stored attendance on startup and after every
+  reconnect (CATCHUP_PULL).
 
-Employees on this device authenticate by PIN/fingerprint -- the device stores
-``CardNo = 0`` for everyone and the real employee number in ``Pin`` -- so
-``badge_code`` maps to the transaction ``Pin`` field. Only verified-open events
-(``EventType == 0``) are treated as punches; door/system events (7/8/100/255)
-and unregistered-card denials (27) are ignored.
+Employees authenticate by PIN/fingerprint -- the device stores the employee
+number as the user id -- so ``badge_code`` maps to it directly. On the Pull SDK
+transport only verified-open events (``EventType == 0``) are treated as punches;
+door/system events (7/8/100/255) and unregistered-card denials (27) are ignored.
+pyzk's attendance table already contains only genuine person punches.
 """
 
 from __future__ import annotations
@@ -33,7 +43,7 @@ from ctypes import c_char_p, c_int, c_void_p
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from zoneinfo import ZoneInfo
 
 import requests
@@ -76,6 +86,9 @@ class AgentConfig:
     catchup_overlap_minutes: int
     catchup_max_days: int
     dry_run: bool
+    transport: str
+    force_udp: bool
+    omit_ping: bool
 
     @classmethod
     def from_env(cls, dry_run_override: bool | None = None) -> "AgentConfig":
@@ -104,6 +117,9 @@ class AgentConfig:
             catchup_overlap_minutes=env_int("ATTENDANCE_CATCHUP_OVERLAP_MINUTES", 5),
             catchup_max_days=env_int("ATTENDANCE_CATCHUP_MAX_DAYS", 3),
             dry_run=dry_run,
+            transport=os.getenv("ZK_TRANSPORT", "pullsdk").strip().lower(),
+            force_udp=env_bool("ZK_FORCE_UDP", False),
+            omit_ping=env_bool("ZK_OMIT_PING", False),
         )
 
 
@@ -280,14 +296,152 @@ class PullSDK:
         return lines[0], lines[1:]
 
 
-def open_sdk(config: AgentConfig) -> PullSDK:
-    sdk = PullSDK(config.sdk_dir)
-    sdk.connect(config.zk_host, config.zk_port, config.comm_password, config.connect_timeout_ms)
-    return sdk
+# --------------------------------------------------------------------------- #
+# Transport abstraction
+#
+# Both transports connect to a device and normalize its records into ``Punch``
+# objects, so everything downstream (filtering, payloads, delivery) is shared.
+# ``read_attendance`` returns EVERY identifier-bearing record (all event types)
+# and lets each caller apply its own filter: the agent's catch-up keeps only
+# verified-open punches, while ``export_transactions_dat`` keeps them all.
+# --------------------------------------------------------------------------- #
+class PullSdkTransport:
+    """Pull SDK (plcommpro.dll) transport -- the showroom SC700 path."""
+
+    def __init__(self, *, sdk_dir: str, host: str, port: int, password: str,
+                 timeout_ms: int, poll_seconds: float = 1.5, **_ignored: Any) -> None:
+        self._sdk = PullSDK(sdk_dir)
+        self._host = host
+        self._port = port
+        self._password = password
+        self._timeout_ms = timeout_ms
+        self._poll_seconds = poll_seconds
+
+    def connect(self) -> None:
+        self._sdk.connect(self._host, self._port, self._password, self._timeout_ms)
+
+    def disconnect(self) -> None:
+        self._sdk.disconnect()
+
+    def read_attendance(self, zone: ZoneInfo) -> list[Punch]:
+        _header, rows = self._sdk.get_transaction_rows()
+        return [p for row in rows if (p := txn_row_to_punch(row, zone)) is not None]
+
+    def stream_live(self, zone: ZoneInfo) -> Iterator[Punch | None]:
+        while True:
+            idle = True
+            for row in self._sdk.get_rt_log():
+                punch = parse_rtlog_row(row, zone)
+                if punch is not None:
+                    idle = False
+                    yield punch
+            if idle:
+                yield None  # idle tick: a good time for the caller to flush its queue
+            time.sleep(self._poll_seconds)
+
+    def read_user_mappings(self) -> list[dict[str, str]]:
+        header, rows = self._sdk.get_user_rows()
+        return pullsdk_user_mappings(header, rows)
+
+
+class PyzkTransport:
+    """pyzk standalone-protocol transport -- the warehouse ZMM220 path."""
+
+    def __init__(self, *, host: str, port: int, password: str, timeout_ms: int,
+                 force_udp: bool = False, omit_ping: bool = False, **_ignored: Any) -> None:
+        try:
+            from zk import ZK  # lazy: only the pyzk path needs the library installed
+        except ImportError as exc:  # pragma: no cover - env-dependent
+            raise RuntimeError(
+                "pyzk is not installed but ZK_TRANSPORT=pyzk was requested. "
+                'Run: pip install "pyzk>=0.9"'
+            ) from exc
+        self._ZK = ZK
+        self._host = host
+        self._port = port
+        # pyzk takes an integer comm key; our env value is a string like "1".
+        self._password = _int(password) if isinstance(password, str) else int(password or 0)
+        self._timeout_s = max(1, round((timeout_ms or 4000) / 1000))
+        self._force_udp = force_udp
+        self._omit_ping = omit_ping
+        self._conn: Any = None
+
+    def connect(self) -> None:
+        zk = self._ZK(
+            self._host,
+            port=self._port,
+            timeout=self._timeout_s,
+            password=self._password,
+            force_udp=self._force_udp,
+            ommit_ping=self._omit_ping,  # pyzk spells the kwarg "ommit_ping"
+        )
+        self._conn = zk.connect()
+
+    def disconnect(self) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.disconnect()
+            except Exception:  # pragma: no cover - best-effort cleanup
+                LOGGER.debug("Ignoring pyzk disconnect error", exc_info=True)
+            self._conn = None
+
+    def read_attendance(self, zone: ZoneInfo) -> list[Punch]:
+        punches = []
+        for att in self._conn.get_attendance() or []:
+            punch = attendance_to_punch(att, zone, "TRANSACTION")
+            if punch is not None:
+                punches.append(punch)
+        return punches
+
+    def stream_live(self, zone: ZoneInfo) -> Iterator[Punch | None]:
+        # live_capture yields an Attendance for each punch, or None when the read
+        # times out (~every self._timeout_s) -- which doubles as our idle tick.
+        for att in self._conn.live_capture():
+            if att is None:
+                yield None
+                continue
+            punch = attendance_to_punch(att, zone, "RTLOG")
+            if punch is not None:
+                yield punch
+
+    def read_user_mappings(self) -> list[dict[str, str]]:
+        mappings: list[dict[str, str]] = []
+        for user in self._conn.get_users() or []:
+            code = str(getattr(user, "user_id", "") or "").strip()
+            card = str(getattr(user, "card", "") or "").strip()
+            if code and card and card != "0":
+                mappings.append({"employee_code": code, "card_no": card})
+        return mappings
+
+
+def build_transport(transport: str, **params: Any) -> "PullSdkTransport | PyzkTransport":
+    """Construct (but do not connect) the transport named by ``transport``."""
+    name = (transport or "pullsdk").strip().lower()
+    if name == "pyzk":
+        return PyzkTransport(**params)
+    if name in ("pullsdk", "pull", "dll", ""):
+        return PullSdkTransport(**params)
+    raise RuntimeError(f"Unknown ZK_TRANSPORT={transport!r}; use 'pullsdk' or 'pyzk'.")
+
+
+def open_transport(config: AgentConfig) -> "PullSdkTransport | PyzkTransport":
+    transport = build_transport(
+        config.transport,
+        sdk_dir=config.sdk_dir,
+        host=config.zk_host,
+        port=config.zk_port,
+        password=config.comm_password,
+        timeout_ms=config.connect_timeout_ms,
+        force_udp=config.force_udp,
+        omit_ping=config.omit_ping,
+        poll_seconds=config.rtlog_poll_seconds,
+    )
+    transport.connect()
+    return transport
 
 
 def socket_check(config: AgentConfig) -> bool:
-    LOGGER.info("Testing TCP connection to SC700 at %s:%s", config.zk_host, config.zk_port)
+    LOGGER.info("Testing TCP connection to device at %s:%s", config.zk_host, config.zk_port)
     try:
         with socket.create_connection((config.zk_host, config.zk_port), timeout=config.tcp_timeout_seconds):
             LOGGER.info("TCP port check passed for %s:%s", config.zk_host, config.zk_port)
@@ -298,19 +452,19 @@ def socket_check(config: AgentConfig) -> bool:
 
 
 def sdk_check(config: AgentConfig) -> bool:
-    LOGGER.info("Testing Pull SDK connection to SC700")
-    sdk = None
+    LOGGER.info("Testing %s connection to device", config.transport)
+    transport = None
     try:
-        sdk = open_sdk(config)
-        header, rows = sdk.get_transaction_rows()
-        LOGGER.info("Pull SDK connection passed transaction_rows=%s header=%s", len(rows), header)
+        transport = open_transport(config)
+        records = transport.read_attendance(ZoneInfo(config.timezone))
+        LOGGER.info("%s connection passed attendance_records=%s", config.transport, len(records))
         return True
-    except RuntimeError:
-        LOGGER.exception("Pull SDK connection failed")
+    except Exception:
+        LOGGER.exception("%s connection failed", config.transport)
         return False
     finally:
-        if sdk is not None:
-            sdk.disconnect()
+        if transport is not None:
+            transport.disconnect()
 
 
 # --------------------------------------------------------------------------- #
@@ -352,11 +506,14 @@ def _badge_from(id_a: str, id_b: str) -> str:
     return ""
 
 
-def parse_transaction_row(row: str, zone: ZoneInfo) -> Punch | None:
+def txn_row_to_punch(row: str, zone: ZoneInfo) -> Punch | None:
+    """Parse ANY identifier-bearing transaction row, preserving its event type.
+
+    Unlike ``parse_transaction_row`` this does NOT drop non-verified-open events,
+    so callers that want the full backfill (e.g. export_transactions_dat) can keep
+    them while catch-up filters to ``EventType == 0`` itself."""
     parts = row.split(",")
     if len(parts) < 7:
-        return None
-    if _int(parts[TXN_EVENT], -1) != EVENT_VERIFIED_OPEN:
         return None
     badge = _badge_from(parts[TXN_PIN], parts[TXN_CARDNO])
     if not badge:
@@ -372,10 +529,74 @@ def parse_transaction_row(row: str, zone: ZoneInfo) -> Punch | None:
         pin=parts[TXN_PIN].strip(),
         verified=_int(parts[TXN_VERIFIED]),
         doorid=_int(parts[TXN_DOORID]),
-        eventtype=EVENT_VERIFIED_OPEN,
+        eventtype=_int(parts[TXN_EVENT], -1),
         inoutstate=_int(parts[TXN_INOUT]),
         source="TRANSACTION",
     )
+
+
+def parse_transaction_row(row: str, zone: ZoneInfo) -> Punch | None:
+    """A transaction row, but only if it is a genuine verified-open punch."""
+    punch = txn_row_to_punch(row, zone)
+    if punch is None or punch.eventtype != EVENT_VERIFIED_OPEN:
+        return None
+    return punch
+
+
+def attendance_to_punch(att: Any, zone: ZoneInfo, source: str) -> Punch | None:
+    """Normalize a pyzk ``Attendance`` (user_id/timestamp/status/punch) into a Punch.
+
+    pyzk's attendance table holds only genuine person punches, so these are always
+    treated as verified-open (``eventtype = 0``); the user id is the enrolled PIN
+    (= employee_code), which maps straight to ``badge_code``."""
+    badge = str(getattr(att, "user_id", "") or "").strip()
+    if not badge or badge == "0":
+        return None
+    timestamp = getattr(att, "timestamp", None)
+    if timestamp is None:
+        return None
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=zone)
+    return Punch(
+        badge=badge,
+        punch_time=timestamp,
+        cardno="0",
+        pin=badge,
+        verified=_int(str(getattr(att, "status", 0) or 0)),
+        doorid=0,
+        eventtype=EVENT_VERIFIED_OPEN,
+        inoutstate=_int(str(getattr(att, "punch", 0) or 0)),
+        source=source,
+    )
+
+
+def _user_column_index(fields: list[str], *names: str) -> int:
+    lowered = [f.strip().lower() for f in fields]
+    for name in names:
+        if name.lower() in lowered:
+            return lowered.index(name.lower())
+    raise RuntimeError(f"Could not find any of {names} in the device user header: {fields}")
+
+
+def pullsdk_user_mappings(header: str | None, rows: list[str]) -> list[dict[str, str]]:
+    """Build ``{employee_code=Pin, card_no=CardNo}`` pairs from the device user table."""
+    if not header:
+        raise RuntimeError("Device returned no user table header; nothing to sync.")
+    fields = header.split(",")
+    pin_idx = _user_column_index(fields, "Pin")
+    card_idx = _user_column_index(fields, "CardNo", "Card")
+
+    mappings: list[dict[str, str]] = []
+    for row in rows:
+        parts = row.split(",")
+        if len(parts) <= max(pin_idx, card_idx):
+            continue
+        pin = parts[pin_idx].strip()
+        card = parts[card_idx].strip()
+        if not pin or not card or card == "0":
+            continue
+        mappings.append({"employee_code": pin, "card_no": card})
+    return mappings
 
 
 def parse_rtlog_row(row: str, zone: ZoneInfo) -> Punch | None:
@@ -593,22 +814,22 @@ def catchup_cutoff(config: AgentConfig) -> datetime:
     return max(last - timedelta(minutes=config.catchup_overlap_minutes), floor)
 
 
-def run_catchup(config: AgentConfig, sdk: PullSDK | None = None) -> int:
-    owns_connection = sdk is None
+def run_catchup(config: AgentConfig, transport: "PullSdkTransport | PyzkTransport | None" = None) -> int:
+    owns_connection = transport is None
     if owns_connection:
-        sdk = open_sdk(config)
+        transport = open_transport(config)
     delivered_count = 0
     try:
         zone = ZoneInfo(config.timezone)
         cutoff = catchup_cutoff(config)
-        _header, rows = sdk.get_transaction_rows()
-        LOGGER.info("Catch-up scanning %s transaction rows since %s", len(rows), cutoff.isoformat())
-
+        # read_attendance returns every identifier-bearing record; catch-up keeps
+        # only genuine verified-open punches within the window.
         punches = [
-            punch for row in rows
-            if (punch := parse_transaction_row(row, zone)) is not None and punch.punch_time >= cutoff
+            punch for punch in transport.read_attendance(zone)
+            if punch.eventtype == EVENT_VERIFIED_OPEN and punch.punch_time >= cutoff
         ]
         punches.sort(key=lambda item: item.punch_time)
+        LOGGER.info("Catch-up scanning attendance since %s -> %s punches", cutoff.isoformat(), len(punches))
 
         for punch in punches:
             payload = punch_to_payload(config, punch, "CATCHUP_PULL")
@@ -619,30 +840,25 @@ def run_catchup(config: AgentConfig, sdk: PullSDK | None = None) -> int:
         return delivered_count
     finally:
         if owns_connection:
-            sdk.disconnect()
+            transport.disconnect()
 
 
 def run_live(config: AgentConfig) -> None:
     zone = ZoneInfo(config.timezone)
     while True:
-        sdk = None
+        transport = None
         try:
-            sdk = open_sdk(config)
-            LOGGER.info("Connected to SC700 (Pull SDK). Running catch-up, then live poll.")
-            run_catchup(config, sdk)
+            transport = open_transport(config)
+            LOGGER.info("Connected to %s (%s transport). Running catch-up, then live.",
+                        config.device_code, config.transport)
+            run_catchup(config, transport)
 
-            LOGGER.info("Starting live GetRTLog poll every %ss", config.rtlog_poll_seconds)
-            while True:
-                delivered_any = False
-                for row in sdk.get_rt_log():
-                    punch = parse_rtlog_row(row, zone)
-                    if punch is None:
-                        continue
-                    deliver_payload(config, punch_to_payload(config, punch, "LIVE_CAPTURE"))
-                    delivered_any = True
-                if not delivered_any:
-                    flush_queue(config)
-                time.sleep(config.rtlog_poll_seconds)
+            LOGGER.info("Starting live capture")
+            for item in transport.stream_live(zone):
+                if item is None:
+                    flush_queue(config)  # idle tick
+                    continue
+                deliver_payload(config, punch_to_payload(config, item, "LIVE_CAPTURE"))
         except KeyboardInterrupt:
             LOGGER.info("Stopping agent")
             return
@@ -650,16 +866,16 @@ def run_live(config: AgentConfig) -> None:
             LOGGER.exception("Live loop failed; reconnecting in %s seconds", config.reconnect_seconds)
             time.sleep(config.reconnect_seconds)
         finally:
-            if sdk is not None:
-                sdk.disconnect()
+            if transport is not None:
+                transport.disconnect()
 
 
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="GL&R showroom SC700 attendance agent (Pull SDK)")
-    parser.add_argument("--check", action="store_true", help="test TCP and Pull SDK connectivity to the SC700")
+    parser = argparse.ArgumentParser(description="GL&R ZKTeco attendance agent (pullsdk/pyzk transport)")
+    parser.add_argument("--check", action="store_true", help="test TCP and device (transport) connectivity")
     parser.add_argument("--once-catchup", action="store_true", help="pull the transaction table once and exit")
     parser.add_argument("--live", action="store_true", help="run persistent live capture loop")
     parser.add_argument("--dry-run", action="store_true", help="print payloads without posting to backend")
@@ -672,9 +888,10 @@ def main(argv: list[str] | None = None) -> int:
     config = AgentConfig.from_env(dry_run_override=True if args.dry_run else None)
 
     LOGGER.info(
-        "Agent config site=%s device=%s sc700=%s:%s api=%s dry_run=%s",
+        "Agent config site=%s device=%s transport=%s device_addr=%s:%s api=%s dry_run=%s",
         config.site_code,
         config.device_code,
+        config.transport,
         config.zk_host,
         config.zk_port,
         config.api_url,
