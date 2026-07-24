@@ -28,7 +28,16 @@ public record PayrollCalculationInput(
     // C3/C4 fields, for the same reason those were appended after the original 12: every existing
     // 16-arg call site (this file's own legacy constructor below, PayrollCalculatorTest,
     // PayrollService) keeps compiling via the new 16-arg legacy constructor added below.
-    BigDecimal leaveRefundDays
+    BigDecimal leaveRefundDays,
+    // Withholding-tax override (2026-07-24, V88): the RESOLVED effective override for this run --
+    // per-run HR-typed value if present, else the employee's standing override, else null (resolved
+    // in PayrollService#calculateLine). NULLABLE and meaningful: null = "compute withholding normally"
+    // (today's behaviour, unchanged); a non-null value (including 0) SUBSTITUTES the final withheld
+    // amount only -- it does NOT touch progressiveTax/annualTax/projections (see PayrollCalculator).
+    // Deliberately NOT defaulted to zero: zero is a legitimate override (withhold nothing), so it must
+    // stay distinct from "no override". Appended last so every prior positional call site keeps
+    // compiling via the legacy constructors below.
+    BigDecimal withholdingTaxOverride
 ) {
     /**
      * Legacy 12-arg constructor, kept so every call site written before the reconciliation fields
@@ -55,7 +64,8 @@ public record PayrollCalculationInput(
             baseSalary, specialPays, overtimePay, commissionPay, nonTaxableIncome, unpaidLeaveDays,
             studentLoanDeduction, legalExecutionRequested, otherPostTaxDeductions, taxAllowances,
             yearToDate, payrollMonthValue,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            null
         );
     }
 
@@ -89,7 +99,42 @@ public record PayrollCalculationInput(
             studentLoanDeduction, legalExecutionRequested, otherPostTaxDeductions, taxAllowances,
             yearToDate, payrollMonthValue,
             directorRemuneration, warningLetterDeduction, customerReturnDeduction, otherPretaxDeduction,
-            BigDecimal.ZERO
+            BigDecimal.ZERO, null
+        );
+    }
+
+    /**
+     * Legacy 17-arg constructor: the full signature as it stood right before {@code
+     * withholdingTaxOverride} existed (i.e. through {@code leaveRefundDays}). Keeps every 17-arg
+     * positional call site compiling unchanged; {@code withholdingTaxOverride} defaults to {@code
+     * null}, which means "no override -- compute withholding normally" and therefore reproduces the
+     * pre-override calculation exactly (see {@link PayrollCalculator}).
+     */
+    public PayrollCalculationInput(
+        BigDecimal baseSalary,
+        List<BigDecimal> specialPays,
+        BigDecimal overtimePay,
+        BigDecimal commissionPay,
+        BigDecimal nonTaxableIncome,
+        BigDecimal unpaidLeaveDays,
+        BigDecimal studentLoanDeduction,
+        BigDecimal legalExecutionRequested,
+        BigDecimal otherPostTaxDeductions,
+        PayrollTaxAllowanceInput taxAllowances,
+        PayrollYearToDate yearToDate,
+        int payrollMonthValue,
+        BigDecimal directorRemuneration,
+        BigDecimal warningLetterDeduction,
+        BigDecimal customerReturnDeduction,
+        BigDecimal otherPretaxDeduction,
+        BigDecimal leaveRefundDays
+    ) {
+        this(
+            baseSalary, specialPays, overtimePay, commissionPay, nonTaxableIncome, unpaidLeaveDays,
+            studentLoanDeduction, legalExecutionRequested, otherPostTaxDeductions, taxAllowances,
+            yearToDate, payrollMonthValue,
+            directorRemuneration, warningLetterDeduction, customerReturnDeduction, otherPretaxDeduction,
+            leaveRefundDays, null
         );
     }
 }

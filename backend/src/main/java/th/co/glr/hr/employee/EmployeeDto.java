@@ -41,6 +41,11 @@ public record EmployeeDto(
     BigDecimal salary,
     @JsonInclude(JsonInclude.Include.NON_NULL)
     BigDecimal directorRemuneration,
+    // Standing withholding-tax override (2026-07-24, V88). Sensitive/financial like salary &
+    // directorRemuneration: NON_NULL-serialized and nulled out for non-HR self-service viewers by
+    // withoutSensitiveSelfServiceFields() below. Nullable: null = no standing override.
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    BigDecimal withholdingTaxOverride,
     LocalDate hireDate,
     LocalDate confirmationDate,
     String reportsTo,
@@ -62,7 +67,8 @@ public record EmployeeDto(
             id, code, badge, nameTh, nameEn, nickName, initials, avatarBg, avatarFg,
             titleTh, genderTh, birthDate, age, nationality, maritalStatus, email, phone,
             divisionId, divisionTh, divisionEn, departmentTh, positionTh, positionEn, level,
-            locationTh, statusId, statusTh, statusTone, active, payType, salary, directorRemuneration, hireDate,
+            locationTh, statusId, statusTh, statusTone, active, payType, salary, directorRemuneration,
+            withholdingTaxOverride, hireDate,
             confirmationDate, reportsTo, bank, bankAccount, currentAddress, emergencyContact,
             assignments, salaryHistory, sensitive, count
         );
@@ -73,7 +79,7 @@ public record EmployeeDto(
             id, code, badge, nameTh, nameEn, nickName, initials, avatarBg, avatarFg,
             titleTh, genderTh, birthDate, age, nationality, maritalStatus, email, phone,
             divisionId, divisionTh, divisionEn, departmentTh, positionTh, positionEn, level,
-            locationTh, statusId, statusTh, statusTone, active, null, null, null, hireDate,
+            locationTh, statusId, statusTh, statusTone, active, null, null, null, null, hireDate,
             confirmationDate, reportsTo, null, null, currentAddress, emergencyContact,
             assignments, List.of(), null, pendingRequestCount
         );

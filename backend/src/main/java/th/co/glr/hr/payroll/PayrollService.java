@@ -138,7 +138,10 @@ public class PayrollService {
                     base.specialPay1(), base.specialPay2(), base.specialPay3(), base.specialPay4(), base.specialPay5(),
                     base.nonTaxableIncome(), base.studentLoanDeduction(), base.legalExecutionDeduction(),
                     unpaidLeaveDaysByEmployee.getOrDefault(employeeId, BigDecimal.ZERO),
-                    pendingCorrectionsByEmployee.getOrDefault(employeeId, BigDecimal.ZERO)
+                    pendingCorrectionsByEmployee.getOrDefault(employeeId, BigDecimal.ZERO),
+                    // Carry the per-run withholding override typed last run (nullable; the leave overlay
+                    // above never touches it).
+                    base.withholdingTaxOverride()
                 );
             })
             .toList();
@@ -319,6 +322,16 @@ public class PayrollService {
         BigDecimal leaveRefundDays,
         LocalDate payrollMonth
     ) {
+        // Withholding-tax override precedence (2026-07-24, V88): a per-run HR-typed value wins; else
+        // the employee's standing override; else null (= compute normally). NULL is meaningful at every
+        // level -- a 0 override (withhold nothing) is honoured and must not collapse to "no override",
+        // so this is a plain null check, never a truthiness/sign test. The per-run TYPED value is what
+        // gets persisted on the line (below) so it can carry forward; the standing value is NOT stored
+        // on the line -- it re-applies from the employee record every run.
+        BigDecimal perRunWithholdingOverride = input == null ? null : input.withholdingTaxOverride();
+        BigDecimal effectiveWithholdingOverride = perRunWithholdingOverride != null
+            ? perRunWithholdingOverride
+            : employee.withholdingTaxOverride();
         PayrollCalculation calculation = payrollCalculator.calculate(new PayrollCalculationInput(
             employee.baseSalary(),
             input == null ? List.of() : input.specialPays(),
@@ -338,7 +351,10 @@ public class PayrollService {
             input == null ? BigDecimal.ZERO : input.otherPretaxDeduction(),
             // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): system-derived, never HR-typed --
             // there is no corresponding field on PayrollEmployeeInputRequest.
-            leaveRefundDays == null ? BigDecimal.ZERO : leaveRefundDays
+            leaveRefundDays == null ? BigDecimal.ZERO : leaveRefundDays,
+            // Withholding-tax override (2026-07-24, V88): the RESOLVED effective override (per-run wins
+            // over standing), or null to compute normally.
+            effectiveWithholdingOverride
         ));
         return new PayrollLineDto(
             null,
@@ -379,7 +395,13 @@ public class PayrollService {
             calculation.customerReturnDeduction(),
             calculation.otherPretaxDeduction(),
             calculation.leaveRefundDays(),
-            calculation.leaveDeductionRefund()
+            calculation.leaveDeductionRefund(),
+            // Persist the PER-RUN typed override only (nullable). Deliberately NOT the resolved
+            // effective override: the standing employee value re-applies from the employee record every
+            // run, so storing it on the line and carrying it forward would double-apply it. When HR
+            // relied on the standing value this stays null and next month's carry-forward is empty --
+            // exactly the desired "standing keeps applying, per-run field starts blank" behaviour.
+            perRunWithholdingOverride
         );
     }
 
