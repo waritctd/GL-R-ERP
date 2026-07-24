@@ -75,8 +75,11 @@ class AgentConfig:
     sdk_dir: str
     site_code: str
     device_code: str
+    api_url: str
+    api_token: str | None
     timezone: str
-    targets: tuple["Target", ...]
+    state_file: Path
+    queue_file: Path
     reconnect_seconds: int
     post_timeout_seconds: int
     rtlog_poll_seconds: float
@@ -103,8 +106,11 @@ class AgentConfig:
             sdk_dir=os.getenv("ZK_SDK_DIR", DEFAULT_SDK_DIR).strip(),
             site_code=os.getenv("ATTENDANCE_SITE_CODE", "SHOWROOM").strip().upper(),
             device_code=os.getenv("ATTENDANCE_DEVICE_CODE", "SHOWROOM_SC700").strip().upper(),
+            api_url=os.getenv("ATTENDANCE_API_URL", "http://127.0.0.1:8080/api/attendance/punch").strip(),
+            api_token=blank_to_none(os.getenv("ATTENDANCE_AGENT_TOKEN")),
             timezone=os.getenv("ATTENDANCE_TIMEZONE", "Asia/Bangkok").strip(),
-            targets=build_targets(base_dir),
+            state_file=Path(os.getenv("ATTENDANCE_STATE_FILE", str(base_dir / "showroom_agent_state.json"))),
+            queue_file=Path(os.getenv("ATTENDANCE_QUEUE_FILE", str(base_dir / "showroom_agent_queue.jsonl"))),
             reconnect_seconds=env_int("ATTENDANCE_RECONNECT_SECONDS", 30),
             post_timeout_seconds=env_int("ATTENDANCE_POST_TIMEOUT_SECONDS", 10),
             rtlog_poll_seconds=env_float("ATTENDANCE_RTLOG_POLL_SECONDS", 1.5),
@@ -115,79 +121,6 @@ class AgentConfig:
             force_udp=env_bool("ZK_FORCE_UDP", False),
             omit_ping=env_bool("ZK_OMIT_PING", False),
         )
-
-
-@dataclass(frozen=True)
-class Target:
-    """One backend the agent delivers punches to.
-
-    Each target has its OWN agent token, delivery watermark (state file) and retry
-    queue, so posting to prod and UAT is fully isolated: a punch that reaches prod
-    but fails to reach UAT is queued for UAT alone and retried independently, and
-    each backend's catch-up window is tracked separately."""
-    name: str
-    url: str
-    token: str | None
-    state_file: Path
-    queue_file: Path
-
-
-def _target_slug(name: str) -> str:
-    """Filesystem-safe token derived from a target name (for its state/queue files)."""
-    slug = "".join(ch.lower() if ch.isalnum() else "_" for ch in name).strip("_")
-    return slug or "target"
-
-
-def build_targets(base_dir: Path) -> tuple[Target, ...]:
-    """Resolve the delivery targets.
-
-    ``ATTENDANCE_API_TARGETS`` (JSON array of ``{name,url,token?,state_file?,
-    queue_file?}``) enables fan-out to multiple backends -- the prod + UAT
-    dual-post. Each entry gets its own state/queue file under the data dir
-    (``agent_state.<name>.json`` / ``agent_queue.<name>.jsonl``) unless overridden.
-
-    When it is unset the agent stays single-target and backward compatible: it
-    reads the original ``ATTENDANCE_API_URL`` / ``ATTENDANCE_AGENT_TOKEN`` and
-    keeps the original ``showroom_agent_state.json`` / ``_queue.jsonl`` filenames,
-    so existing deployments neither reset their watermark nor lose a queued punch."""
-    raw = blank_to_none(os.getenv("ATTENDANCE_API_TARGETS"))
-    if raw is None:
-        return (
-            Target(
-                name="default",
-                url=os.getenv("ATTENDANCE_API_URL", "http://127.0.0.1:8080/api/attendance/punch").strip(),
-                token=blank_to_none(os.getenv("ATTENDANCE_AGENT_TOKEN")),
-                state_file=Path(os.getenv("ATTENDANCE_STATE_FILE", str(base_dir / "showroom_agent_state.json"))),
-                queue_file=Path(os.getenv("ATTENDANCE_QUEUE_FILE", str(base_dir / "showroom_agent_queue.jsonl"))),
-            ),
-        )
-
-    try:
-        specs = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"ATTENDANCE_API_TARGETS is not valid JSON: {exc}")
-    if not isinstance(specs, list) or not specs:
-        raise SystemExit("ATTENDANCE_API_TARGETS must be a non-empty JSON array of target objects")
-
-    targets: list[Target] = []
-    seen: set[str] = set()
-    for index, spec in enumerate(specs):
-        if not isinstance(spec, dict):
-            raise SystemExit(f"ATTENDANCE_API_TARGETS[{index}] must be an object")
-        name = str(spec.get("name") or f"target{index + 1}").strip()
-        if name in seen:
-            raise SystemExit(f"ATTENDANCE_API_TARGETS has a duplicate target name {name!r}")
-        seen.add(name)
-        url = str(spec.get("url") or "").strip()
-        if not url:
-            raise SystemExit(f"ATTENDANCE_API_TARGETS[{index}] ({name}) is missing 'url'")
-        token_raw = spec.get("token")
-        token = blank_to_none(str(token_raw)) if token_raw is not None else None
-        slug = _target_slug(name)
-        state_file = Path(spec.get("state_file") or (base_dir / f"agent_state.{slug}.json"))
-        queue_file = Path(spec.get("queue_file") or (base_dir / f"agent_queue.{slug}.jsonl"))
-        targets.append(Target(name=name, url=url, token=token, state_file=state_file, queue_file=queue_file))
-    return tuple(targets)
 
 
 @dataclass(frozen=True)
@@ -727,25 +660,25 @@ def punch_to_payload(config: AgentConfig, punch: Punch, ingest_method: str) -> d
 # --------------------------------------------------------------------------- #
 # State + delivery queue (unchanged behaviour, backend dedups)
 # --------------------------------------------------------------------------- #
-def load_state(target: Target) -> dict[str, Any]:
-    if not target.state_file.exists():
+def load_state(config: AgentConfig) -> dict[str, Any]:
+    if not config.state_file.exists():
         return {}
     try:
-        return json.loads(target.state_file.read_text(encoding="utf-8"))
+        return json.loads(config.state_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        LOGGER.warning("Ignoring unreadable state file %s", target.state_file)
+        LOGGER.warning("Ignoring unreadable state file %s", config.state_file)
         return {}
 
 
-def save_state(target: Target, state: dict[str, Any]) -> None:
-    target.state_file.parent.mkdir(parents=True, exist_ok=True)
-    temp_file = target.state_file.with_suffix(".tmp")
+def save_state(config: AgentConfig, state: dict[str, Any]) -> None:
+    config.state_file.parent.mkdir(parents=True, exist_ok=True)
+    temp_file = config.state_file.with_suffix(".tmp")
     temp_file.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-    temp_file.replace(target.state_file)
+    temp_file.replace(config.state_file)
 
 
-def last_delivered_time(target: Target) -> datetime | None:
-    state = load_state(target)
+def last_delivered_time(config: AgentConfig) -> datetime | None:
+    state = load_state(config)
     value = state.get("last_delivered_punch_time")
     if not value:
         return None
@@ -756,9 +689,8 @@ def last_delivered_time(target: Target) -> datetime | None:
         return None
 
 
-def mark_delivered(config: AgentConfig, target: Target, payload: dict[str, Any]) -> None:
-    state = load_state(target)
-    state["target"] = target.name
+def mark_delivered(config: AgentConfig, payload: dict[str, Any]) -> None:
+    state = load_state(config)
     state["site_code"] = config.site_code
     state["device_code"] = config.device_code
     state["last_delivered_badge_code"] = payload["badge_code"]
@@ -767,28 +699,27 @@ def mark_delivered(config: AgentConfig, target: Target, payload: dict[str, Any])
     if previous is None or payload["punch_time"] > previous:
         state["last_delivered_punch_time"] = payload["punch_time"]
     state["last_delivery_at"] = datetime.now(ZoneInfo(config.timezone)).isoformat(timespec="seconds")
-    save_state(target, state)
+    save_state(config, state)
 
 
-def enqueue_payload(config: AgentConfig, target: Target, payload: dict[str, Any], reason: str) -> None:
-    target.queue_file.parent.mkdir(parents=True, exist_ok=True)
+def enqueue_payload(config: AgentConfig, payload: dict[str, Any], reason: str) -> None:
+    config.queue_file.parent.mkdir(parents=True, exist_ok=True)
     queue_record = {
         "queued_at": datetime.now(ZoneInfo(config.timezone)).isoformat(timespec="seconds"),
         "reason": reason,
         "payload": payload,
     }
-    with target.queue_file.open("a", encoding="utf-8") as handle:
+    with config.queue_file.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(queue_record, sort_keys=True) + "\n")
-    LOGGER.warning("Queued punch target=%s badge=%s time=%s reason=%s",
-                   target.name, payload["badge_code"], payload["punch_time"], reason)
+    LOGGER.warning("Queued punch badge=%s time=%s reason=%s", payload["badge_code"], payload["punch_time"], reason)
 
 
-def flush_queue(config: AgentConfig, target: Target) -> None:
-    if config.dry_run or not target.queue_file.exists():
+def flush_queue(config: AgentConfig) -> None:
+    if config.dry_run or not config.queue_file.exists():
         return
 
     records: list[dict[str, Any]] = []
-    with target.queue_file.open("r", encoding="utf-8") as handle:
+    with config.queue_file.open("r", encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
             if not line:
@@ -799,7 +730,7 @@ def flush_queue(config: AgentConfig, target: Target) -> None:
                 LOGGER.warning("Skipping malformed queue line")
 
     if not records:
-        target.queue_file.unlink(missing_ok=True)
+        config.queue_file.unlink(missing_ok=True)
         return
 
     remaining: list[dict[str, Any]] = []
@@ -807,89 +738,75 @@ def flush_queue(config: AgentConfig, target: Target) -> None:
         payload = record.get("payload")
         if not isinstance(payload, dict):
             continue
-        if post_payload(config, target, payload, enqueue_on_failure=False):
-            mark_delivered(config, target, payload)
+        if post_payload(config, payload, enqueue_on_failure=False):
+            mark_delivered(config, payload)
         else:
             remaining.append(record)
             remaining.extend(records[index + 1:])
             break
 
     if remaining:
-        with target.queue_file.open("w", encoding="utf-8") as handle:
+        with config.queue_file.open("w", encoding="utf-8") as handle:
             for record in remaining:
                 handle.write(json.dumps(record, sort_keys=True) + "\n")
     else:
-        target.queue_file.unlink(missing_ok=True)
+        config.queue_file.unlink(missing_ok=True)
 
 
-def post_payload(config: AgentConfig, target: Target, payload: dict[str, Any],
-                 enqueue_on_failure: bool = True) -> bool:
+def post_payload(config: AgentConfig, payload: dict[str, Any], enqueue_on_failure: bool = True) -> bool:
     if config.dry_run:
-        LOGGER.info("DRY RUN target=%s punch payload=%s", target.name, json.dumps(payload, sort_keys=True))
+        LOGGER.info("DRY RUN punch payload=%s", json.dumps(payload, sort_keys=True))
         return True
 
     headers = {"Content-Type": "application/json"}
-    if target.token:
-        headers["X-GLR-Agent-Token"] = target.token
+    if config.api_token:
+        headers["X-GLR-Agent-Token"] = config.api_token
 
     try:
         response = requests.post(
-            target.url,
+            config.api_url,
             data=json.dumps(payload),
             headers=headers,
             timeout=config.post_timeout_seconds,
         )
         if 200 <= response.status_code < 300:
-            LOGGER.info("Delivered punch target=%s badge=%s time=%s",
-                        target.name, payload["badge_code"], payload["punch_time"])
+            LOGGER.info("Delivered punch badge=%s time=%s", payload["badge_code"], payload["punch_time"])
             return True
 
         reason = f"HTTP {response.status_code}: {response.text[:300]}"
-        LOGGER.error("Backend rejected punch target=%s badge=%s time=%s %s",
-                     target.name, payload["badge_code"], payload["punch_time"], reason)
+        LOGGER.error("Backend rejected punch badge=%s time=%s %s", payload["badge_code"], payload["punch_time"], reason)
     except requests.RequestException as exc:
         reason = str(exc)
-        LOGGER.error("Backend request failed target=%s badge=%s time=%s %s",
-                     target.name, payload["badge_code"], payload["punch_time"], reason)
+        LOGGER.error("Backend request failed badge=%s time=%s %s", payload["badge_code"], payload["punch_time"], reason)
 
     if enqueue_on_failure:
-        enqueue_payload(config, target, payload, reason)
+        enqueue_payload(config, payload, reason)
     return False
 
 
 def deliver_payload(config: AgentConfig, payload: dict[str, Any]) -> bool:
-    """Deliver one punch to every configured target, isolated per target.
-
-    Returns True only if the punch reached ALL targets on this attempt; a target
-    that fails has the punch queued for its own retry, so a single flaky backend
-    never blocks the others and never drops the punch."""
-    all_delivered = True
-    for target in config.targets:
-        flush_queue(config, target)
-        delivered = post_payload(config, target, payload)
-        # Dry runs must be side-effect free: never advance the delivered watermark,
-        # or a later real run would skip everything the dry run "delivered".
-        if delivered and not config.dry_run:
-            mark_delivered(config, target, payload)
-        all_delivered = all_delivered and delivered
-    return all_delivered
+    flush_queue(config)
+    delivered = post_payload(config, payload)
+    # Dry runs must be side-effect free: never advance the delivered watermark,
+    # or a later real run would skip everything the dry run "delivered".
+    if delivered and not config.dry_run:
+        mark_delivered(config, payload)
+    return delivered
 
 
 # --------------------------------------------------------------------------- #
 # Catch-up + live loops
 # --------------------------------------------------------------------------- #
-def catchup_cutoff(config: AgentConfig, target: Target) -> datetime:
-    """Earliest punch_time we will backfill on catch-up, per target.
+def catchup_cutoff(config: AgentConfig) -> datetime:
+    """Earliest punch_time we will backfill on catch-up.
 
     Bounded by ATTENDANCE_CATCHUP_MAX_DAYS so the very first run does NOT replay
-    the device's entire multi-year history; after that we resume from that target's
-    own last delivered punch (minus a small overlap the backend dedups away). Each
-    target has an independent watermark, so onboarding a new backend backfills it
-    without re-flooding the others."""
+    the device's entire multi-year history; after that we resume from the last
+    delivered punch (minus a small overlap the backend dedups away)."""
     zone = ZoneInfo(config.timezone)
     now = datetime.now(zone)
     floor = now - timedelta(days=config.catchup_max_days)
-    last = last_delivered_time(target)
+    last = last_delivered_time(config)
     if last is None:
         return floor
     if last.tzinfo is None:
@@ -904,27 +821,20 @@ def run_catchup(config: AgentConfig, transport: "PullSdkTransport | PyzkTranspor
     delivered_count = 0
     try:
         zone = ZoneInfo(config.timezone)
+        cutoff = catchup_cutoff(config)
         # read_attendance returns every identifier-bearing record; catch-up keeps
-        # only genuine verified-open punches. The device is read ONCE and each
-        # target replays its own window from that single read.
+        # only genuine verified-open punches within the window.
         punches = [
             punch for punch in transport.read_attendance(zone)
-            if punch.eventtype == EVENT_VERIFIED_OPEN
+            if punch.eventtype == EVENT_VERIFIED_OPEN and punch.punch_time >= cutoff
         ]
         punches.sort(key=lambda item: item.punch_time)
+        LOGGER.info("Catch-up scanning attendance since %s -> %s punches", cutoff.isoformat(), len(punches))
 
-        for target in config.targets:
-            flush_queue(config, target)
-            cutoff = catchup_cutoff(config, target)
-            window = [punch for punch in punches if punch.punch_time >= cutoff]
-            LOGGER.info("Catch-up target=%s since %s -> %s punches",
-                        target.name, cutoff.isoformat(), len(window))
-            for punch in window:
-                payload = punch_to_payload(config, punch, "CATCHUP_PULL")
-                if post_payload(config, target, payload):
-                    if not config.dry_run:
-                        mark_delivered(config, target, payload)
-                    delivered_count += 1
+        for punch in punches:
+            payload = punch_to_payload(config, punch, "CATCHUP_PULL")
+            if deliver_payload(config, payload):
+                delivered_count += 1
 
         LOGGER.info("Catch-up finished delivered_count=%s", delivered_count)
         return delivered_count
@@ -946,8 +856,7 @@ def run_live(config: AgentConfig) -> None:
             LOGGER.info("Starting live capture")
             for item in transport.stream_live(zone):
                 if item is None:
-                    for target in config.targets:  # idle tick: retry each target's queue
-                        flush_queue(config, target)
+                    flush_queue(config)  # idle tick
                     continue
                 deliver_payload(config, punch_to_payload(config, item, "LIVE_CAPTURE"))
         except KeyboardInterrupt:
@@ -979,13 +888,13 @@ def main(argv: list[str] | None = None) -> int:
     config = AgentConfig.from_env(dry_run_override=True if args.dry_run else None)
 
     LOGGER.info(
-        "Agent config site=%s device=%s transport=%s device_addr=%s:%s targets=%s dry_run=%s",
+        "Agent config site=%s device=%s transport=%s device_addr=%s:%s api=%s dry_run=%s",
         config.site_code,
         config.device_code,
         config.transport,
         config.zk_host,
         config.zk_port,
-        ", ".join(f"{t.name}->{t.url}" for t in config.targets),
+        config.api_url,
         config.dry_run,
     )
 
