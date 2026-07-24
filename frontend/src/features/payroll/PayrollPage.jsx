@@ -141,6 +141,17 @@ function suggestedFallback(suggestion, key) {
   return amount > 0 ? String(amount) : null;
 }
 
+// Withholding-tax override (V88) is NULLABLE/meaningful, so it cannot ride the generic
+// draftValue/parsePayrollNumber machinery (which collapses ''<->0). A stored/carried 0 is a real
+// override (withhold nothing) and must round-trip as "0"; only null/'' means "no override".
+// Priority: the line's own persisted per-run value > last month's carried per-run value > blank.
+// The standing employee override is deliberately NOT surfaced here — it re-applies server-side.
+function overrideDraft(lineValue, suggestion) {
+  if (lineValue != null) return String(lineValue);
+  if (suggestion && suggestion.withholdingTaxOverride != null) return String(suggestion.withholdingTaxOverride);
+  return '';
+}
+
 function parsePayrollNumber(value) {
   if (value === '' || value === null || value === undefined) return 0;
   const amount = Number(value);
@@ -159,6 +170,8 @@ function blankAdjustment(employeeId, { applyDefaults = false } = {}) {
     warningLetterDeduction: '',
     customerReturnDeduction: '',
     otherPretaxDeduction: '',
+    // Nullable per-run withholding override ('' = compute/standing). Kept out of the numeric keys below.
+    withholdingTaxOverride: '',
   };
 }
 
@@ -185,17 +198,29 @@ function adjustmentFromLine(line, { applyDefaults = false, suggestion = null } =
   adjustment.warningLetterDeduction = draftValue(line.warningLetterDeduction);
   adjustment.customerReturnDeduction = draftValue(line.customerReturnDeduction);
   adjustment.otherPretaxDeduction = draftValue(line.otherPretaxDeduction);
+  adjustment.withholdingTaxOverride = overrideDraft(line.withholdingTaxOverride, suggestion);
   return adjustment;
+}
+
+function withholdingOverrideValue(input) {
+  const raw = input.withholdingTaxOverride;
+  return raw === '' || raw == null ? null : Number(raw);
 }
 
 function normalizedAdjustment(input) {
   return {
     employeeId: input.employeeId,
     ...Object.fromEntries(payrollInputKeys.map((key) => [key, parsePayrollNumber(input[key])])),
+    // Nullable: '' -> null ("compute/standing"), a number (incl. 0) -> that override. Kept separate
+    // from the numeric keys above precisely so a cleared field stays null instead of collapsing to 0.
+    withholdingTaxOverride: withholdingOverrideValue(input),
   };
 }
 
 function hasPayrollInput(input) {
+  // An override-only adjustment must still be submitted -- especially an override of 0 (withhold
+  // nothing), which the numeric-key check below would treat as "no input" and drop.
+  if (withholdingOverrideValue(input) != null) return true;
   return payrollInputKeys.some((key) => parsePayrollNumber(input[key]) > 0);
 }
 
@@ -581,6 +606,17 @@ export function PayrollPage({ showToast }) {
                   <label htmlFor="payroll-other-post-tax-deductions">
                     หักอื่น ๆ หลังภาษี
                     <MoneyInput id="payroll-other-post-tax-deductions" value={selectedAdjustment.otherPostTaxDeductions} onChange={(value) => updateAdjustment('otherPostTaxDeductions', value)} />
+                  </label>
+                  <label htmlFor="payroll-withholding-tax-override">
+                    ภาษีหัก ณ ที่จ่าย (กำหนดเอง)
+                    <InfoTip
+                      label="ภาษีหัก ณ ที่จ่าย (กำหนดเอง)"
+                      text="กรอกจำนวนภาษีที่ต้องการหักจริงสำหรับพนักงานคนนี้ในงวดนี้ จะแทนที่ค่าที่ระบบคำนวณ (และค่ามาตรฐานที่ตั้งไว้ในประวัติพนักงาน) เว้นว่างเพื่อใช้ค่าที่คำนวณอัตโนมัติ การคำนวณภาษีทั้งปียังคงเดิม เปลี่ยนเฉพาะยอดหักจริงงวดนี้"
+                    />
+                    <MoneyInput id="payroll-withholding-tax-override" value={selectedAdjustment.withholdingTaxOverride} onChange={(value) => updateAdjustment('withholdingTaxOverride', value)} />
+                    <small className="block text-muted">
+                      เว้นว่าง = คำนวณอัตโนมัติ · ภาษีงวดนี้ที่ใช้จริง: {formatMoney(selectedLine.withholdingTax)}
+                    </small>
                   </label>
                 </FormGrid>
               </CollapsibleSection>

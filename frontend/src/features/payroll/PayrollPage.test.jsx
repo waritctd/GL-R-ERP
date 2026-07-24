@@ -267,6 +267,66 @@ describe('PayrollPage adjustment inputs', () => {
     });
   });
 
+  describe('per-run withholding-tax override (V88)', () => {
+    async function openOverrideInput() {
+      fireEvent.click(await screen.findByRole('button', { name: /รายการหักรายบุคคล/ }));
+      // The field's InfoTip trigger shares the label's accessible name, so scope to the input.
+      return screen.findByLabelText(/ภาษีหัก ณ ที่จ่าย \(กำหนดเอง\)/, { selector: 'input' });
+    }
+
+    it('submits a typed per-run override amount', async () => {
+      renderPayrollPage();
+      const override = await openOverrideInput();
+
+      fireEvent.change(override, { target: { value: '250' } });
+      fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted.withholdingTaxOverride).toBe(250);
+    });
+
+    it('submits an override of 0 (withhold nothing) rather than dropping the input', async () => {
+      renderPayrollPage();
+      const override = await openOverrideInput();
+
+      fireEvent.change(override, { target: { value: '0' } });
+      fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted).toBeDefined();
+      expect(submitted.withholdingTaxOverride).toBe(0);
+    });
+
+    it('sends a blank override as null (compute/standing applies)', async () => {
+      renderPayrollPage();
+      const override = await openOverrideInput();
+      expect(override.value).toBe('');
+
+      fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      // The line is still submitted (it carries the UAT default special pays), but the untyped
+      // override is null -- never 0 -- so the server computes/uses the standing value.
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted).toBeDefined();
+      expect(submitted.withholdingTaxOverride).toBeNull();
+    });
+
+    it('pre-fills the per-run override carried from suggested-inputs, incl. a carried 0', async () => {
+      api.payroll.suggestedInputs.mockResolvedValue({
+        payrollMonth: '2026-07-01',
+        suggestions: [{ employeeId: 1, withholdingTaxOverride: 0 }],
+      });
+
+      renderPayrollPage();
+      const override = await openOverrideInput();
+      // A carried 0 is a real per-run override and must pre-fill as "0", not blank.
+      expect(override.value).toBe('0');
+    });
+  });
+
   it('generates the selected statutory export file with the chosen pay date', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
 
