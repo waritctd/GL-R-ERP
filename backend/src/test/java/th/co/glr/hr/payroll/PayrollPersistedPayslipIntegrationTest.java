@@ -118,14 +118,26 @@ class PayrollPersistedPayslipIntegrationTest extends AbstractPostgresIntegration
             text = new PDFTextStripper().getText(doc);
         }
 
-        assertThat(text).contains("สลิปเงินเดือน มกราคม 2569");
+        // New two-column employer layout (matches slip.xls). Figures are asserted against the
+        // DB-reread storedLine, and the two printed totals must foot to net pay by construction:
+        // รวมรายได้ (= grossEarnings + nonTaxableIncome) − รวมรายหัก (= totalDeductions) == netPay.
+        assertThat(text).contains("สลิปเงินเดือน");
+        assertThat(text).contains("31/ม.ค./2569");
         assertThat(text).contains(storedLine.employeeName());
-        assertThat(text).contains("รายได้รวม: " + fmt2(storedLine.grossEarnings()) + " บาท");
-        assertThat(text).contains("ประกันสังคม: " + fmt2(storedLine.socialSecurity()) + " บาท");
-        assertThat(text)
-            .contains("ภาษีหัก ณ ที่จ่ายงวดนี้: " + fmt2(storedLine.withholdingTax()) + " บาท");
-        assertThat(text).contains("เงินหักรวม: " + fmt2(storedLine.totalDeductions()) + " บาท");
-        assertThat(text).contains("เงินโอนสุทธิ: " + fmt2(storedLine.netPay()) + " บาท");
+        assertThat(text).contains("รายการได้");
+        assertThat(text).contains("รายการหัก");
+        assertThat(text).contains("รวมรายได้");
+        assertThat(text).contains(
+            fmt2(storedLine.grossEarnings().add(storedLine.nonTaxableIncome())));
+        assertThat(text).contains("ประกันสังคม");
+        assertThat(text).contains(fmt2(storedLine.socialSecurity()));
+        assertThat(text).contains("ภาษี");
+        assertThat(text).contains(fmt2(storedLine.withholdingTax()));
+        assertThat(text).contains("รวมรายหัก");
+        assertThat(text).contains(fmt2(storedLine.totalDeductions()));
+        assertThat(text).contains("เงินรับสุทธิ");
+        assertThat(text).contains(fmt2(storedLine.netPay()));
+        assertThat(text).contains("ผู้รับเงิน");
         assertThat(text).doesNotContain("?????");
     }
 

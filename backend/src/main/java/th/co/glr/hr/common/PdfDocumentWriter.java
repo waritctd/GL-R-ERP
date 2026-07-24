@@ -82,9 +82,28 @@ public final class PdfDocumentWriter implements AutoCloseable {
         drawLine(font, size, xRight - width(font, size, line), line);
     }
 
+    /** Single line centered within the printable area. Advances the cursor and paginates. */
+    public void textCenter(PDFont font, float size, String value) throws IOException {
+        String line = firstLine(value);
+        ensureRoom(size);
+        float x = left() + (right() - left() - width(font, size, line)) / 2f;
+        drawLine(font, size, Math.max(left(), x), line);
+        y -= size * LINE_FACTOR;
+    }
+
+    /** The current text baseline (top-down page coordinate). Read-only. */
+    public float cursorY() {
+        return y;
+    }
+
     /** Advance the cursor by one line of the given size. */
     public void newLine(float size) {
         y -= size * LINE_FACTOR;
+    }
+
+    /** Move the cursor to an explicit baseline (used to reset after multi-column layout). */
+    public void moveTo(float newY) {
+        y = newY;
     }
 
     /** Rendered width of a (sanitized) single line, in points. */
