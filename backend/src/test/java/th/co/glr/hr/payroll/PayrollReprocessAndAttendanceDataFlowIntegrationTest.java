@@ -207,7 +207,8 @@ class PayrollReprocessAndAttendanceDataFlowIntegrationTest extends AbstractPostg
             BigDecimal.ZERO, // politicalDonation
             BigDecimal.ZERO, // warningLetterDeduction
             BigDecimal.ZERO, // customerReturnDeduction
-            BigDecimal.ZERO); // otherPretaxDeduction
+            BigDecimal.ZERO, // otherPretaxDeduction
+            null); // withholdingTaxOverride (none)
     }
 
     private int periodRowCountForMonth(LocalDate payrollMonth) {

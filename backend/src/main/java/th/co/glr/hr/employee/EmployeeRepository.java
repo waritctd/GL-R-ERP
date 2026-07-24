@@ -201,6 +201,9 @@ public class EmployeeRepository {
             .addValue("statusId", statusId)
             .addValue("salary", request.salary() == null ? BigDecimal.ZERO : request.salary())
             .addValue("directorRemuneration", request.directorRemuneration() == null ? BigDecimal.ZERO : request.directorRemuneration())
+            // Nullable standing override -- pass through null (NO coalesce): null = no standing override,
+            // distinct from a 0 override.
+            .addValue("withholdingTaxOverride", request.withholdingTaxOverride())
             .addValue("hireDate", hireDate)
             .addValue("confirmDate", request.confirmationDate())
             .addValue("active", active);
@@ -211,14 +214,14 @@ public class EmployeeRepository {
                 first_name_en, last_name_en, nickname, gender, date_of_birth,
                 nationality, marital_status, email, phone, division_id, department_id,
                 position_id, level_id, location_id, status_id, pay_type, current_salary,
-                director_remuneration, hire_date, confirm_date, is_active
+                director_remuneration, withholding_tax_override, hire_date, confirm_date, is_active
             )
             VALUES (
                 :employeeCode, :badge, :titleId, :firstNameTh, :lastNameTh,
                 :firstNameEn, :lastNameEn, :nickName, :gender, :birthDate,
                 :nationality, :maritalStatus, :email, :phone, :divisionId, :departmentId,
                 :positionId, :levelId, :locationId, :statusId, 'M', :salary,
-                :directorRemuneration, :hireDate, :confirmDate, :active
+                :directorRemuneration, :withholdingTaxOverride, :hireDate, :confirmDate, :active
             )
             RETURNING employee_id
             """, params, Long.class);
@@ -259,6 +262,10 @@ public class EmployeeRepository {
         addSet(sets, params, "marital_status", "maritalStatus", request.maritalStatus());
         addSet(sets, params, "current_salary", "salary", request.salary());
         addSet(sets, params, "director_remuneration", "directorRemuneration", request.directorRemuneration());
+        // Standing withholding override. Mirrors director_remuneration/current_salary: addSet only emits
+        // a SET when the value is non-null, so a null request field leaves the stored value untouched
+        // (same "null = don't change" semantics the rest of update() uses).
+        addSet(sets, params, "withholding_tax_override", "withholdingTaxOverride", request.withholdingTaxOverride());
         addSet(sets, params, "hire_date", "hireDate", request.hireDate());
         addSet(sets, params, "confirm_date", "confirmDate", request.confirmationDate());
 
@@ -384,6 +391,8 @@ public class EmployeeRepository {
             payTypeLabel(rs.getString("pay_type")),
             rs.getBigDecimal("current_salary"),
             rs.getBigDecimal("director_remuneration"),
+            // Nullable standing override -- raw read preserves SQL NULL (no override) vs a 0 override.
+            rs.getBigDecimal("withholding_tax_override"),
             rs.getObject("hire_date", LocalDate.class),
             rs.getObject("confirm_date", LocalDate.class),
             rs.getString("reports_to"),
@@ -417,7 +426,7 @@ public class EmployeeRepository {
             snapshot.phone(), snapshot.divisionId(), snapshot.divisionTh(), snapshot.divisionEn(), snapshot.departmentTh(),
             snapshot.positionTh(), snapshot.positionEn(), snapshot.level(), snapshot.locationTh(), snapshot.statusId(),
             snapshot.statusTh(), snapshot.statusTone(), snapshot.active(), snapshot.payType(), snapshot.salary(),
-            snapshot.directorRemuneration(),
+            snapshot.directorRemuneration(), snapshot.withholdingTaxOverride(),
             snapshot.hireDate(), snapshot.confirmationDate(), snapshot.reportsTo(), snapshot.bank(), snapshot.bankAccount(),
             snapshot.currentAddress(), snapshot.emergencyContact(), assignments, loadSalaryHistory(snapshot.id()), snapshot.sensitive(), 0
         );
@@ -473,6 +482,7 @@ public class EmployeeRepository {
                    e.pay_type,
                    e.current_salary,
                    e.director_remuneration,
+                   e.withholding_tax_override,
                    e.hire_date,
                    e.confirm_date,
                    NULLIF(TRIM(CONCAT_WS(' ', m.first_name_th, m.last_name_th)) || COALESCE(' · ' || mp.name_th, ''), '') AS reports_to,
