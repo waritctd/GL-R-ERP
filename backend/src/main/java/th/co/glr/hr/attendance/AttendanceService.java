@@ -11,6 +11,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +19,7 @@ import th.co.glr.hr.attendance.daily.AttendanceDailyDto;
 import th.co.glr.hr.attendance.daily.AttendanceDailyFilter;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
 import th.co.glr.hr.attendance.daily.AttendanceEmployeeOption;
+import th.co.glr.hr.attendance.daily.AttendanceWfhRosterResult;
 import th.co.glr.hr.attendance.daily.EmployeeDay;
 import th.co.glr.hr.attendance.daily.UnmappedBadge;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -238,6 +240,40 @@ public class AttendanceService {
     /** True when the caller may see company-wide data (and so the unmapped-badge queue). */
     boolean canViewAll(UserPrincipal user) {
         return VIEW_ALL_ROLES.contains(user.role());
+    }
+
+    /**
+     * The CEO/HR stand-up roster: marks everyone in {@code employeeIds} present for {@code workDate}
+     * with no punches, and clears any earlier WFH mark for that date not resubmitted (§76 — reporting
+     * only, never touches payroll). HR/CEO only at the controller.
+     *
+     * <p>The submitted ids are still re-validated here against the caller's own attendance scope —
+     * the same {@link #listEmployeeOptions} the picker and every other attendance read use — rather
+     * than trusted from the request body outright. In practice this endpoint is reachable only by
+     * hr/ceo (both {@link #VIEW_ALL_ROLES}), so {@code allowedIds} is normally every active employee;
+     * the check exists so a future change to the role gate cannot silently widen who an id can
+     * target.
+     */
+    @Transactional
+    public AttendanceWfhRosterResult markPresent(
+            UserPrincipal user, LocalDate workDate, List<Long> employeeIds, String notes) {
+        if (workDate == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "workDate is required");
+        }
+        Set<Long> requestedIds = employeeIds == null ? Set.of() : Set.copyOf(employeeIds);
+
+        boolean includeAll = canViewAll(user);
+        Long managerDivisionId = user.manager() ? user.divisionId() : null;
+        Set<Long> allowedIds = dailyService
+            .listEmployeeOptions(user.employeeId(), managerDivisionId, includeAll)
+            .stream()
+            .map(AttendanceEmployeeOption::employeeId)
+            .collect(Collectors.toSet());
+        if (!allowedIds.containsAll(requestedIds)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "One or more employees are outside your attendance scope");
+        }
+
+        return dailyService.setWfhRoster(workDate, requestedIds, notes);
     }
 
     /**

@@ -8,6 +8,7 @@ import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
   attendanceFlagLabels,
@@ -57,6 +58,10 @@ export function AttendancePage({ user, showToast }) {
   const isSelfView = mode === 'employee';
   const canImport = hasPermission(user.role, 'canImportAttendance');
   const canSeeUnmapped = hasPermission(user.role, 'canViewAllAttendance');
+  // CEO's 08:30 stand-up / WFH roster. Same audience as canViewAllAttendance (hr/ceo), so this is
+  // always reachable in 'company' mode — the roster it needs (employeeOptions) is already loaded
+  // below.
+  const canMarkPresent = hasPermission(user.role, 'canMarkAttendance');
   const { start: monthStart, today } = useMemo(() => monthBounds(), []);
 
   // Employees read their own month at a glance; everyone else answers "who is late today", so
@@ -78,6 +83,8 @@ export function AttendancePage({ user, showToast }) {
   const [importing, setImporting] = useState(false);
   const [recalcOpen, setRecalcOpen] = useState(false);
   const [recalculating, setRecalculating] = useState(false);
+  const [markPresentOpen, setMarkPresentOpen] = useState(false);
+  const [markingPresent, setMarkingPresent] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [lastImport, setLastImport] = useState(null);
   const [devices, setDevices] = useState([]);
@@ -224,6 +231,35 @@ export function AttendancePage({ user, showToast }) {
     }
   }
 
+  /**
+   * The CEO/HR stand-up roster: marks everyone checked present for the chosen date with no punches
+   * (WFH). Resubmitting for the same date reconciles the roster — anyone left off is un-marked —
+   * so this is idempotent and safe to run again if someone was ticked off by mistake.
+   */
+  async function submitMarkPresent({ date, employeeIds, notes }) {
+    setMarkingPresent(true);
+    try {
+      const response = await api.attendance.markPresent({
+        work_date: date,
+        employee_ids: employeeIds,
+        notes,
+      });
+      const marked = response?.marked_count ?? 0;
+      const cleared = response?.cleared_count ?? 0;
+      showToast(
+        'success',
+        `บันทึกเรียบร้อย — เข้างาน ${marked.toLocaleString()} คน`
+          + (cleared ? ` · เอาออก ${cleared.toLocaleString()} คน` : ''),
+      );
+      setMarkPresentOpen(false);
+      await loadDays();
+    } catch (error) {
+      showToast('error', error.message || 'บันทึกไม่สำเร็จ');
+    } finally {
+      setMarkingPresent(false);
+    }
+  }
+
   async function importFile(event) {
     event.preventDefault();
     if (!selectedFile) {
@@ -299,10 +335,22 @@ export function AttendancePage({ user, showToast }) {
             : 'เวลาเข้า-ออกงานรายวัน'
         }
         actions={(
-          <Button variant="secondary" onClick={loadDays} disabled={loading}>
-            <Icon name="refresh" />
-            รีเฟรช
-          </Button>
+          <>
+            {canMarkPresent ? (
+              <Button
+                variant="primary"
+                onClick={() => setMarkPresentOpen(true)}
+                disabled={employeeOptions.length === 0}
+              >
+                <Icon name="plus" />
+                ทำเครื่องหมายเข้างาน
+              </Button>
+            ) : null}
+            <Button variant="secondary" onClick={loadDays} disabled={loading}>
+              <Icon name="refresh" />
+              รีเฟรช
+            </Button>
+          </>
         )}
       />
 
@@ -433,6 +481,18 @@ export function AttendancePage({ user, showToast }) {
         onCancel={() => setRecalcOpen(false)}
       />
 
+      {markPresentOpen ? (
+        <MarkPresentModal
+          employees={employeeOptions}
+          defaultDate={selectedDate}
+          minDate={monthStart}
+          maxDate={today}
+          submitting={markingPresent}
+          onClose={() => setMarkPresentOpen(false)}
+          onSubmit={submitMarkPresent}
+        />
+      ) : null}
+
       {!isSelfView ? (
         <div className={FILTER_BAR_CLASS}>
           <div className="flex items-center gap-2">
@@ -530,6 +590,123 @@ export function AttendancePage({ user, showToast }) {
         }}
       />
     </PageStack>
+  );
+}
+
+/**
+ * The CEO/HR stand-up (WFH) roster picker. Everyone is pre-checked by default — most stand-up days
+ * nobody is absent, so the caller just unchecks the no-shows instead of hunting for who attended —
+ * and resubmitting for a date reconciles the roster server-side (see
+ * `AttendanceDailyService#setWfhRoster`), so unchecking someone here and saving again removes an
+ * earlier mark.
+ */
+function MarkPresentModal({ employees, defaultDate, minDate, maxDate, submitting, onClose, onSubmit }) {
+  const [date, setDate] = useState(defaultDate);
+  const [selected, setSelected] = useState(() => new Set(employees.map((employee) => employee.employee_id)));
+  const [notes, setNotes] = useState('');
+
+  function changeDate(nextDate) {
+    setDate(nextDate);
+    setSelected(new Set(employees.map((employee) => employee.employee_id)));
+  }
+
+  function toggle(employeeId) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(employeeId)) {
+        next.delete(employeeId);
+      } else {
+        next.add(employeeId);
+      }
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setSelected((current) => (
+      current.size === employees.length
+        ? new Set()
+        : new Set(employees.map((employee) => employee.employee_id))
+    ));
+  }
+
+  return (
+    <Modal
+      title="ทำเครื่องหมายเข้างาน"
+      subtitle="สำหรับ WFH / ประชุมยืนตอนเช้า — ทุกคนถูกเลือกไว้แล้ว เอาเครื่องหมายออกเฉพาะคนที่ไม่มา"
+      onClose={submitting ? undefined : onClose}
+      footer={(
+        <>
+          <button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>
+            ยกเลิก
+          </button>
+          <button
+            type="button"
+            className="primary-button"
+            disabled={submitting}
+            onClick={() => onSubmit({ date, employeeIds: [...selected], notes: notes.trim() || undefined })}
+          >
+            {submitting ? 'กำลังบันทึก…' : `บันทึก (${selected.size} คน)`}
+          </button>
+        </>
+      )}
+    >
+      <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+        วันที่
+        <input
+          type="date"
+          value={date}
+          min={minDate}
+          max={maxDate}
+          onChange={(event) => changeDate(event.target.value || defaultDate)}
+        />
+      </label>
+
+      <div className="mt-4 flex items-center justify-between gap-2">
+        <span className="text-sm font-bold text-text-secondary">
+          รายชื่อพนักงาน ({selected.size}/{employees.length} คน)
+        </span>
+        <button type="button" className="text-xs font-bold text-primary" onClick={toggleAll}>
+          {selected.size === employees.length ? 'ไม่เลือกทั้งหมด' : 'เลือกทั้งหมด'}
+        </button>
+      </div>
+
+      <ul className="mt-2 max-h-80 overflow-y-auto rounded-md border border-border">
+        {employees.length === 0 ? (
+          <li className="px-3 py-2 text-xs text-text-muted">ไม่พบรายชื่อพนักงาน</li>
+        ) : employees.map((employee) => {
+          const checked = selected.has(employee.employee_id);
+          return (
+            <li key={employee.employee_id} className="border-b border-border last:border-b-0">
+              <label className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 shrink-0"
+                  checked={checked}
+                  onChange={() => toggle(employee.employee_id)}
+                />
+                <span className="min-w-0 flex-1 truncate">
+                  {employee.employee_name}
+                  <span className="ml-1.5 text-xs text-text-muted">
+                    {[employee.nick_name, employee.employee_code].filter(Boolean).join(' · ')}
+                  </span>
+                </span>
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+
+      <label className="mt-4 flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+        หมายเหตุ (ถ้ามี)
+        <textarea
+          className="min-h-16"
+          value={notes}
+          placeholder="เช่น ประชุมยืน 08:30"
+          onChange={(event) => setNotes(event.target.value)}
+        />
+      </label>
+    </Modal>
   );
 }
 
