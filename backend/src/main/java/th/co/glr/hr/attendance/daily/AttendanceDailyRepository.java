@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
@@ -275,6 +276,101 @@ public class AttendanceDailyRepository {
             .addValue("earlyLeaveMinutes", record.earlyLeaveMinutes())
             .addValue("overtimeMinutes", record.overtimeMinutes())
             .addValue("punchCount", record.punchCount());
+    }
+
+    /**
+     * Marks a roster of employees present for one date with no punches — the CEO/HR stand-up or WFH
+     * case. The manual mark is <strong>authoritative</strong>: it supersedes whatever daily row
+     * existed for that employee/date, <em>including a scanner-derived one</em> (the CEO ticked them
+     * present, so that wins). This only overwrites the derived {@code attendance_daily} roll-up —
+     * the raw {@code attendance_punch} rows are never touched, so un-marking the person (dropping
+     * them from a later roster, then the nightly recalc) restores the punch-derived view. Once
+     * written, the row's {@code is_manual_override = TRUE} keeps the nightly recalc from reverting
+     * it, via {@link #upsertAll}'s {@code WHERE is_manual_override = FALSE} guard.
+     *
+     * @return the number of rows inserted or refreshed — always {@code employeeIds.size()}, since
+     *         the mark now wins unconditionally
+     */
+    public int upsertWfhPresent(LocalDate workDate, Set<Long> employeeIds, String notes) {
+        if (employeeIds.isEmpty()) {
+            return 0;
+        }
+        SqlParameterSource[] batch = employeeIds.stream()
+            .map(employeeId -> wfhPresentParams(employeeId, workDate, notes))
+            .toArray(SqlParameterSource[]::new);
+
+        int[] affected = jdbc.batchUpdate("""
+            INSERT INTO hr.attendance_daily (
+                employee_id, work_date, site_code,
+                check_in_punch_id, check_out_punch_id, check_in, check_out,
+                total_minutes, late_minutes, early_leave_minutes, overtime_minutes,
+                punch_count, is_absent, is_manual_override, notes, calculated_at, updated_at
+            )
+            VALUES (
+                :employeeId, :workDate, 'WFH',
+                NULL, NULL, NULL, NULL,
+                NULL, 0, 0, 0,
+                0, FALSE, TRUE, :notes, now(), now()
+            )
+            ON CONFLICT (employee_id, work_date) DO UPDATE SET
+                site_code           = 'WFH',
+                check_in_punch_id   = NULL,
+                check_out_punch_id  = NULL,
+                check_in            = NULL,
+                check_out           = NULL,
+                total_minutes       = NULL,
+                late_minutes        = 0,
+                early_leave_minutes = 0,
+                overtime_minutes    = 0,
+                punch_count         = 0,
+                is_absent           = FALSE,
+                is_manual_override  = TRUE,
+                notes               = EXCLUDED.notes,
+                calculated_at       = now(),
+                updated_at          = now()
+            """, batch);
+
+        int written = 0;
+        for (int rows : affected) {
+            if (rows > 0) {
+                written++;
+            }
+        }
+        return written;
+    }
+
+    private static SqlParameterSource wfhPresentParams(long employeeId, LocalDate workDate, String notes) {
+        return new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("workDate", workDate)
+            .addValue("notes", notes);
+    }
+
+    /**
+     * Removes previously-marked WFH rows for a date that were not resubmitted — the other half of
+     * {@link #upsertWfhPresent}'s "set the roster" semantics, so unchecking a name on a later
+     * submission removes the earlier mark.
+     *
+     * <p>Scoped tightly to rows this feature itself could have created ({@code is_manual_override =
+     * TRUE AND site_code = 'WFH' AND check_in IS NULL}) so neither a scanner row nor any other kind
+     * of manual correction is ever a delete candidate.
+     */
+    public int clearWfhNotInRoster(LocalDate workDate, Set<Long> keepEmployeeIds) {
+        // An empty IN (...) list is invalid SQL; a sentinel that can never be a real employee_id
+        // (BIGINT IDENTITY starts at 1) makes "keep no one" behave as "clear every WFH mark".
+        List<Long> keep = keepEmployeeIds.isEmpty() ? List.of(-1L) : List.copyOf(keepEmployeeIds);
+        MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("workDate", workDate)
+            .addValue("keepEmployeeIds", keep);
+
+        return jdbc.update("""
+            DELETE FROM hr.attendance_daily
+             WHERE work_date = :workDate
+               AND is_manual_override = TRUE
+               AND site_code = 'WFH'
+               AND check_in IS NULL
+               AND employee_id NOT IN (:keepEmployeeIds)
+            """, params);
     }
 
     /**

@@ -4688,6 +4688,15 @@ export const api = {
       // than pretending work happened. The real endpoint returns the count actually written.
       return delay({ recalculatedDays: 0 });
     },
+    // Mirrors AttendanceController.markPresent — hr/ceo only. Not implemented here because the mock
+    // has no persisted attendance_daily store to write into (days are generated on the fly, see the
+    // block comment above); a fake "marked" count would look verified without proving anything about
+    // the real write path or the real role gate. AUTHZ IS NOT AUTHORITATIVE HERE regardless — see the
+    // block comment above.
+    async markPresent() {
+      hasRole('hr', 'ceo');
+      throw new Error('ทำเครื่องหมายเข้างานไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
     async backfillCards() {
       hasRole('hr', 'ceo');
       throw new Error('แก้ไขการแมปบัตรไม่รองรับในโหมดทดลองใช้งาน (mock mode)');

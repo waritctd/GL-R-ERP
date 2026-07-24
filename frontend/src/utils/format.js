@@ -393,6 +393,10 @@ export function attendanceStatusLabel(status) {
   const map = {
     PRESENT: { label: 'ปกติ', tone: 'success' },
     LATE: { label: 'มาสาย', tone: 'warning' },
+    // Marked present with no punches (CEO/HR stand-up roster or WFH) — distinct tone from both
+    // PRESENT (success/green) and LATE (warning/orange) so it reads as its own category, not a
+    // variant of either.
+    WFH: { label: 'WFH', tone: 'info' },
     MISSING_CHECK_IN: { label: 'ขาดสแกนเข้า', tone: 'warning' },
     MISSING_CHECK_OUT: { label: 'ขาดสแกนออก', tone: 'warning' },
     NON_WORKDAY: { label: 'วันหยุด', tone: 'neutral' },
@@ -417,6 +421,9 @@ export function attendanceFlagLabels(day) {
     });
   }
   const flags = day.flags ?? [];
+  if (flags.includes('WFH')) {
+    labels.push({ key: 'WFH', label: 'WFH', tone: 'info' });
+  }
   if (flags.includes('MISSING_CHECK_IN')) {
     labels.push({ key: 'MISSING_CHECK_IN', label: 'ขาดสแกนเข้า', tone: 'warning' });
   }
