@@ -185,6 +185,7 @@ class EmployeeControllerTest {
             "รายเดือน",
             new BigDecimal("25000.00"),
             new BigDecimal("0.00"),
+            null, // withholdingTaxOverride
             LocalDate.of(2024, 1, 1),
             null,
             "-",

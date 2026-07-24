@@ -226,7 +226,8 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
             BigDecimal.ZERO, // politicalDonation
             BigDecimal.ZERO, // warningLetterDeduction
             BigDecimal.ZERO, // customerReturnDeduction
-            BigDecimal.ZERO); // otherPretaxDeduction
+            BigDecimal.ZERO, // otherPretaxDeduction
+            null); // withholdingTaxOverride (none)
     }
 
     private UserPrincipal hr() {

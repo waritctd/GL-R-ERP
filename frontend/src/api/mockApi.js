@@ -2504,6 +2504,9 @@ function createEmployeeRecord(payload) {
     payType: 'รายเดือน',
     salary: Number(payload.salary || 0),
     directorRemuneration: Number(payload.directorRemuneration || 0),
+    // Standing withholding-tax override (V88). Nullable/meaningful: null = compute normally, a number
+    // (incl. 0) = fixed override. NOT `Number(x || 0)` — that would collapse "no override" into a 0.
+    withholdingTaxOverride: payload.withholdingTaxOverride == null ? null : Number(payload.withholdingTaxOverride),
     hireDate: payload.hireDate || new Date().toISOString().slice(0, 10),
     confirmationDate: payload.confirmationDate || null,
     reportsTo: payload.reportsTo || '-',

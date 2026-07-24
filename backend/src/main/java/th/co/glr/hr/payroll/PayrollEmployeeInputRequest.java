@@ -40,7 +40,13 @@ public record PayrollEmployeeInputRequest(
     // Z/AA/AB). HR types these per run, unlike director remuneration which lives on the employee.
     @PositiveOrZero BigDecimal warningLetterDeduction,
     @PositiveOrZero BigDecimal customerReturnDeduction,
-    @PositiveOrZero BigDecimal otherPretaxDeduction
+    @PositiveOrZero BigDecimal otherPretaxDeduction,
+    // Withholding-tax override (2026-07-24, V88): the PER-RUN value HR types for this employee this
+    // run. NULLABLE and meaningful -- null = "no per-run override" (fall back to the employee standing
+    // override, else compute); a non-null value (including 0) WINS over the standing value. Read RAW
+    // via withholdingTaxOverride() below (NOT through safe()) so null is preserved -- coercing it to
+    // zero would silently force "withhold nothing" on every run. @PositiveOrZero still allows null.
+    @PositiveOrZero BigDecimal withholdingTaxOverride
 ) {
     public List<BigDecimal> specialPays() {
         return List.of(
