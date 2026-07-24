@@ -4,6 +4,26 @@
 @import "./styles.css" layer(legacy);
 @import "tailwindcss/utilities.css" layer(utilities);
 
+/* Phase 3.4 — breakpoint variants (docs/ui-repair/03-design-foundation/TOKENS.md §K).
+   Single source of truth for the app's two responsive bands, so a future change to
+   either value happens in one place instead of the ~121 existing `max-[720px]`
+   call sites. These are NEW, additive variants (`mobile:` / `tablet:`) — no
+   existing call site is migrated onto them in this phase; see
+   LEGACY_STYLE_MIGRATION.md "Breakpoint token" for that follow-up. Plain
+   `--breakpoint-*` theme keys were not used here because Tailwind's `--breakpoint-*`
+   namespace generates min-width variants, which is the wrong direction for this
+   app's max-width "mobile" concept. */
+@custom-variant mobile {
+  @media (max-width: 720px) {
+    @slot;
+  }
+}
+@custom-variant tablet {
+  @media (min-width: 721px) and (max-width: 1040px) {
+    @slot;
+  }
+}
+
 @theme static {
   /* Typography */
   --font-family: 'Sarabun', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -121,4 +141,61 @@
   /* Sidebar / dark surfaces */
   --color-sidebar-bg: #0b1220;
   --color-sidebar-text: #cbd5e1;
+
+  /* ============================================================
+     Phase 3.4 — semantic token infrastructure
+     (docs/ui-repair/03-design-foundation/TOKENS.md "Token gap summary")
+
+     Additive only: nothing below is consumed by any existing selector
+     or component yet, so no rendered page changes. Each entry closes a
+     documented gap from Phase 3; migrating an existing call site onto
+     one of these is a separate, screenshotted change per
+     LEGACY_STYLE_MIGRATION.md, not part of this commit.
+
+     Naming convention: tokens under a Tailwind-recognized namespace
+     (`--color-*`) use it deliberately, to get bg-/text-/border-*
+     utilities for free. Tokens with no natural Tailwind utility
+     surface (motion, layout dimensions) are plain custom properties,
+     consumed via var() in arbitrary values (e.g. duration-[var(--motion-standard)])
+     rather than spawning a new one-off utility class per token.
+     ============================================================ */
+
+  /* Overlay / scrim colors — today these are 5 hardcoded rgba literals
+     in styles.css (:394,481,1465,1551,2036). Values match those exactly;
+     see LEGACY_STYLE_MIGRATION.md for the swap-in-place follow-up. */
+  --color-overlay: rgba(15, 23, 42, 0.52);
+  --color-overlay-drawer: rgba(15, 23, 42, 0.48);
+  --color-veil: rgba(255, 255, 255, 0.55);
+
+  /* Motion — formalizes the durations/easing already in informal use
+     across styles.css (100-180ms, ease). ease-standard is an
+     ease-out-quint curve per the product design guidance (no bounce/elastic). */
+  --motion-fast: 140ms;
+  --motion-standard: 190ms;
+  --motion-slow: 240ms;
+  --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+
+  /* Layout — mirrors the current rendered desktop rail width and the
+     per-breakpoint page gutters already hardcoded per page/breakpoint. */
+  --sidebar-width: 260px;
+  --sidebar-width-icon: 72px;
+  --content-max: 1440px;
+  --page-gutter-mobile: 16px;
+  --page-gutter-tablet: 20px;
+  --page-gutter-desktop: 24px;
+}
+
+/* Phase 3.4 — reduced-motion foundation for the tokens above. Nothing
+   currently reads --motion-*, so this has no effect today; any future
+   component that does `transition-duration: var(--motion-standard)`
+   automatically respects prefers-reduced-motion without adding its own
+   media query. Does not touch the app's 4 existing reduced-motion
+   blocks in styles.css. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-standard: 0ms;
+    --motion-slow: 0ms;
+  }
 }
