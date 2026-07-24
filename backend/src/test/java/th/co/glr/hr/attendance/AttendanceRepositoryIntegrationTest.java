@@ -80,4 +80,37 @@ class AttendanceRepositoryIntegrationTest extends AbstractPostgresIntegrationTes
     void batchInsertOfEmptyListIsNoop() {
         assertThat(repository.batchInsertPunches(List.of())).isZero();
     }
+
+    @Test
+    void findPunchesReturnsAscendingChronologicalOrder() {
+        // The drill-down labels the first returned punch as the clock-in and the last as the
+        // clock-out, so findPunches must hand rows back oldest-first regardless of how they were
+        // inserted. Insert deliberately out of chronological order.
+        Long employeeId = jdbc.queryForObject(
+            "INSERT INTO hr.employee (employee_code, badge_card_no) VALUES ('20044','20044') RETURNING employee_id",
+            Map.of(), Long.class);
+
+        OffsetDateTime lunchOut = OffsetDateTime.parse("2024-03-04T12:03:00+07:00");
+        OffsetDateTime morningIn = OffsetDateTime.parse("2024-03-04T08:20:00+07:00");
+        OffsetDateTime eveningOut = OffsetDateTime.parse("2024-03-04T17:40:00+07:00");
+        OffsetDateTime lunchBack = OffsetDateTime.parse("2024-03-04T13:10:00+07:00");
+        repository.batchInsertPunches(List.of(
+            punch("20044", lunchOut),
+            punch("20044", morningIn),
+            punch("20044", eveningOut),
+            punch("20044", lunchBack)));
+
+        List<AttendancePunchDto> punches = repository.findPunches(new AttendancePunchFilter(
+            employeeId, null, java.time.LocalDate.parse("2024-03-04"),
+            java.time.LocalDate.parse("2024-03-04"), 500));
+
+        // TIMESTAMPTZ round-trips as UTC, so compare by instant rather than offset-sensitive equality.
+        assertThat(punches).extracting(p -> p.punchTime().toInstant())
+            .containsExactly(morningIn.toInstant(), lunchOut.toInstant(),
+                lunchBack.toInstant(), eveningOut.toInstant());
+        // The first row is the earliest scan (clock-in), the last is the latest (clock-out).
+        assertThat(punches.get(0).punchTime().toInstant()).isEqualTo(morningIn.toInstant());
+        assertThat(punches.get(punches.size() - 1).punchTime().toInstant())
+            .isEqualTo(eveningOut.toInstant());
+    }
 }

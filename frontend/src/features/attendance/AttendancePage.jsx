@@ -12,6 +12,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
   attendanceFlagLabels,
+  attendanceSourceLabel,
   attendanceStatusLabel,
   bangkokMonthStartIso,
   bangkokTodayIso,
@@ -187,6 +188,8 @@ export function AttendancePage({ user, showToast }) {
         to: day.work_date,
         employeeId: day.employee_id,
       });
+      // The API returns punches oldest-first, which is the contract PunchDetail relies on to label
+      // index 0 as เข้า and the last index as ออก (see AttendanceRepository.findPunches).
       setPunchesByKey((current) => ({ ...current, [key]: response.punches || [] }));
     } catch (error) {
       showToast('error', error.message || 'โหลดรายการสแกนไม่สำเร็จ');
@@ -718,7 +721,7 @@ function MarkPresentModal({ employees, defaultDate, minDate, maxDate, submitting
  * is marked ระหว่างวัน. Without the labels this is just a list of times that silently repeats the
  * two values already shown on the row.
  */
-function PunchDetail({ punches }) {
+export function PunchDetail({ punches }) {
   if (!punches) {
     return <span className="text-xs text-text-muted">กำลังโหลดรายการสแกน…</span>;
   }
@@ -749,7 +752,7 @@ function PunchDetail({ punches }) {
  * already says which side is missing, and calling a lone punch "เข้า" would assert a direction the
  * data does not carry.
  */
-function punchRole(index, total) {
+export function punchRole(index, total) {
   if (total === 1) return { label: '', muted: true };
   if (index === 0) return { label: 'เข้า', muted: false };
   if (index === total - 1) return { label: 'ออก', muted: false };
@@ -803,6 +806,9 @@ function AttendanceDayCard({ day, isSelfView }) {
         <span className="flex flex-wrap items-center gap-1.5">
           <StatusCell day={day} />
           <MidDayPunchChip day={day} />
+          {attendanceSourceLabel(day) ? (
+            <span className="text-2xs text-text-muted">· {attendanceSourceLabel(day)}</span>
+          ) : null}
         </span>
       )}
     </>
@@ -833,6 +839,21 @@ const statusColumn = {
       <MidDayPunchChip day={day} />
     </span>
   ),
+};
+
+// Where the day's attendance came from: the scanner's site (Showroom / Warehouse) for punched days,
+// or WFH for a CEO/HR "marked present" day with no scans. Days with no record show "-".
+const sourceColumn = {
+  key: 'source',
+  header: 'สถานที่',
+  sortable: true,
+  sortAccessor: (day) => attendanceSourceLabel(day) || '',
+  render: (day) => {
+    const source = attendanceSourceLabel(day);
+    return source
+      ? <span className="text-text-secondary">{source}</span>
+      : <span className="text-text-muted">-</span>;
+  },
 };
 
 const timeColumns = [
@@ -868,6 +889,7 @@ const selfColumns = [
     render: (day) => <strong>{formatShortDate(day.work_date)}</strong>,
   },
   ...timeColumns,
+  sourceColumn,
   statusColumn,
 ];
 
@@ -889,5 +911,6 @@ const teamColumns = [
     ),
   },
   ...timeColumns,
+  sourceColumn,
   statusColumn,
 ];
