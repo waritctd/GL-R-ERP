@@ -145,6 +145,27 @@ public class AttendanceDailyService {
         return repository.findEmployeeOptions(actorEmployeeId, managerDivisionId, includeAll);
     }
 
+    /**
+     * Reconciles the CEO/HR stand-up (WFH) roster for one date: marks everyone in
+     * {@code presentEmployeeIds} present with no punches, then removes any earlier WFH mark for that
+     * date that was not resubmitted. Idempotent — resubmitting the same roster is a no-op past the
+     * first call, and leaving someone off a later submission for the same date un-marks them.
+     *
+     * <p>The mark is authoritative and supersedes an existing scanner-derived row for that day (see
+     * {@link AttendanceDailyRepository#upsertWfhPresent}) — the raw punches survive, so un-marking
+     * plus a recalc restores them. The clear half is scoped to rows this feature created
+     * ({@code is_manual_override = TRUE AND site_code = 'WFH' AND check_in IS NULL}) in
+     * {@link AttendanceDailyRepository#clearWfhNotInRoster}, so it never deletes a scanner row.
+     */
+    @Transactional
+    public AttendanceWfhRosterResult setWfhRoster(
+            LocalDate workDate, Set<Long> presentEmployeeIds, String notes) {
+        Set<Long> ids = presentEmployeeIds == null ? Set.of() : presentEmployeeIds;
+        int marked = repository.upsertWfhPresent(workDate, ids, notes);
+        int cleared = repository.clearWfhNotInRoster(workDate, ids);
+        return new AttendanceWfhRosterResult(marked, cleared);
+    }
+
     private WorkSchedule scheduleFor(EmployeeDay pair) {
         return scheduleResolver.resolve(
             pair.employeeId(), repository.findDivisionId(pair.employeeId()), pair.workDate());
@@ -169,7 +190,13 @@ public class AttendanceDailyService {
                 flags.add(AttendanceDayFlag.NON_WORKDAY);
             }
         } else {
-            if (!workday) {
+            if (row.manualOverride() && row.punchCount() == 0) {
+                // A CEO/HR stand-up or WFH mark: present with no punches, on purpose. Checked before
+                // the workday/checkIn logic below so it reads as WFH even on a non-workday, instead
+                // of NON_WORKDAY or MISSING_CHECK_IN — those describe the absence of data, not this.
+                status = AttendanceDayStatus.WFH;
+                flags.add(AttendanceDayFlag.WFH);
+            } else if (!workday) {
                 flags.add(AttendanceDayFlag.NON_WORKDAY);
                 status = AttendanceDayStatus.NON_WORKDAY;
             } else if (row.checkIn() == null) {
