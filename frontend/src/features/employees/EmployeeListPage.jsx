@@ -58,7 +58,7 @@ function uniqueOptions(rows, valueKey, labelKey) {
   return [...options.values()].sort((a, b) => a.label.localeCompare(b.label, 'th'));
 }
 
-const columns = [
+const baseColumns = [
   {
     key: 'name',
     header: 'พนักงาน',
@@ -122,7 +122,7 @@ const columns = [
  * desktop-only; the page carries its own เรียงตาม control in the filter panel
  * rather than dropping the affordance.
  */
-function EmployeeCard({ employee }) {
+function EmployeeCard({ employee, onOpen }) {
   return (
     <>
       <div className="flex min-w-0 items-start justify-between gap-3">
@@ -149,6 +149,17 @@ function EmployeeCard({ employee }) {
           {formatMoney(employee.salary)}
         </span>
       </span>
+
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        className="mt-1 w-full"
+        onClick={() => onOpen(employee)}
+        aria-label={`เปิดข้อมูลพนักงาน ${employee.nameTh}`}
+      >
+        เปิดข้อมูล
+      </Button>
     </>
   );
 }
@@ -253,6 +264,25 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
     await onCreateEmployee(payload);
     setCreating(false);
   }
+
+  const columns = useMemo(() => [
+    ...baseColumns,
+    {
+      key: 'open',
+      header: 'เปิด',
+      render: (employee) => (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={() => navigate(`/employees/${employee.id}`)}
+          aria-label={`เปิดข้อมูลพนักงาน ${employee.nameTh}`}
+        >
+          เปิด
+        </Button>
+      ),
+    },
+  ], [navigate]);
 
   return (
     <PageStack>
@@ -374,12 +404,11 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
         columns={columns}
         rows={filteredEmployees}
         getRowKey={(employee) => employee.id}
-        gridClassName="grid-cols-[minmax(0,2.2fr)_minmax(0,0.9fr)_minmax(0,1.7fr)_minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,0.9fr)] max-[1040px]:min-w-[900px]"
+        gridClassName="grid-cols-[minmax(0,2.2fr)_minmax(0,0.9fr)_minmax(0,1.7fr)_minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(78px,0.6fr)] max-[1040px]:min-w-[980px]"
         searchable={false}
         sort={{ key: sortKey, dir: sortDir }}
         onSortChange={(next) => updateParams({ sort: next ? `${next.key}.${next.dir}` : '' })}
-        mobileCard={(employee) => <EmployeeCard employee={employee} />}
-        onRowClick={(employee) => navigate(`/employees/${employee.id}`)}
+        mobileCard={(employee) => <EmployeeCard employee={employee} onOpen={() => navigate(`/employees/${employee.id}`)} />}
         pageSize={12}
         loading={loading}
         emptyState={{ icon: 'users', title: 'ไม่พบพนักงาน', description: 'ลองปรับคำค้นหาหรือตัวกรอง' }}

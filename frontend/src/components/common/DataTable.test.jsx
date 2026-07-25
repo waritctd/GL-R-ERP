@@ -1,9 +1,24 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { DataTable } from './DataTable.jsx';
 
 globalThis.React = React;
+
+const realMatchMedia = window.matchMedia;
+
+afterEach(() => {
+  window.matchMedia = realMatchMedia;
+});
+
+function stubMobile(matches = true) {
+  window.matchMedia = (query) => ({
+    matches: query === '(max-width: 720px)' ? matches : false,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  });
+}
 
 function makeRows(count) {
   return Array.from({ length: count }, (_, index) => ({
@@ -38,6 +53,30 @@ describe('DataTable', () => {
     expect(screen.queryByText('Employee 11')).toBeNull();
     expect(screen.getByText('แสดง 1–10 จาก 25 รายการ')).toBeTruthy();
     expect(screen.getByText('หน้า 1 / 3')).toBeTruthy();
+  });
+
+  it('uses native desktop table structure with header and body groups', () => {
+    const { container } = render(
+      <DataTable
+        columns={baseColumns}
+        rows={makeRows(2)}
+        getRowKey={(row) => row.id}
+        gridClassName="employee-table"
+      />,
+    );
+
+    const table = screen.getByRole('table');
+    expect(table.tagName).toBe('TABLE');
+    expect(table.querySelector('thead')).toBeTruthy();
+    expect(table.querySelector('tbody')).toBeTruthy();
+
+    const headers = within(table).getAllByRole('columnheader');
+    expect(headers).toHaveLength(2);
+    expect(headers[0].tagName).toBe('TH');
+    expect(headers[0].getAttribute('scope')).toBe('col');
+    expect(headers[0].getAttribute('aria-sort')).toBe('none');
+    expect(headers[1].getAttribute('aria-sort')).toBe('none');
+    expect(container.querySelectorAll('tbody .data-row')).toHaveLength(2);
   });
 
   it('slices rows per page and prev/next buttons navigate', () => {
@@ -156,28 +195,167 @@ describe('DataTable', () => {
     const busyContainer = container.querySelector('[aria-busy="true"]');
     expect(busyContainer).toBeTruthy();
     expect(busyContainer.querySelectorAll('.skeleton').length).toBeGreaterThan(0);
+    expect(container.querySelector('.data-row[aria-hidden="true"]')).toBeTruthy();
+    expect(screen.getAllByRole('row')).toHaveLength(1);
     expect(screen.queryByText('ไม่พบข้อมูล')).toBeNull();
   });
 
-  it('renders rows as buttons and fires onRowClick when provided', () => {
+  it('renders native table rows and keeps nested action buttons valid', () => {
     const rows = makeRows(3);
-    const onRowClick = (row) => {
-      onRowClick.calledWith = row;
-    };
+    const onAction = vi.fn();
+    const actionColumns = [
+      ...baseColumns,
+      {
+        key: 'action',
+        header: 'Action',
+        render: (row) => (
+          <button type="button" onClick={() => onAction(row.id)}>
+            Open {row.name}
+          </button>
+        ),
+      },
+    ];
     render(
+      <DataTable
+        columns={actionColumns}
+        rows={rows}
+        getRowKey={(row) => row.id}
+        gridClassName="employee-table"
+      />,
+    );
+
+    expect(screen.getByRole('table')).toBeTruthy();
+    const firstRow = screen.getByText('Employee 01').closest('tr');
+    expect(firstRow).toBeTruthy();
+    expect(firstRow.tagName).toBe('TR');
+    expect(firstRow.closest('button')).toBeNull();
+
+    const action = screen.getByRole('button', { name: 'Open Employee 01' });
+    expect(action.closest('tr')).toBe(firstRow);
+    expect(action.closest('button')).toBe(action);
+
+    fireEvent.click(action);
+    expect(onAction).toHaveBeenCalledWith(1);
+  });
+
+  it('keeps explicit open actions separate from nested secondary row actions', () => {
+    const rows = makeRows(1);
+    const onOpen = vi.fn();
+    const onSecondary = vi.fn();
+    const columns = [
+      baseColumns[0],
+      {
+        key: 'actions',
+        header: 'Actions',
+        render: (row) => (
+          <span>
+            <button type="button" onClick={() => onOpen(row.id)}>Open record</button>
+            <button type="button" onClick={() => onSecondary(row.id)}>More actions</button>
+          </span>
+        ),
+      },
+    ];
+
+    render(
+      <DataTable
+        columns={columns}
+        rows={rows}
+        getRowKey={(row) => row.id}
+        gridClassName="employee-table"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    expect(onSecondary).toHaveBeenCalledWith(1);
+    expect(onOpen).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open record' }));
+    expect(onOpen).toHaveBeenCalledWith(1);
+  });
+
+  it('renders mobile cards as a list, not table rows', () => {
+    stubMobile();
+    const rows = makeRows(2);
+    const onOpen = vi.fn();
+    const { container } = render(
       <DataTable
         columns={baseColumns}
         rows={rows}
         getRowKey={(row) => row.id}
         gridClassName="employee-table"
-        onRowClick={onRowClick}
+        mobileCard={(row) => (
+          <>
+            <strong>{row.name}</strong>
+            <button type="button" onClick={() => onOpen(row.id)}>Open {row.name}</button>
+          </>
+        )}
       />,
     );
 
-    const rowButton = screen.getByText('Employee 01').closest('button');
-    expect(rowButton).toBeTruthy();
-    fireEvent.click(rowButton);
-    expect(onRowClick.calledWith.id).toBe(1);
+    expect(screen.queryByRole('table')).toBeNull();
+    expect(screen.getByRole('list')).toBeTruthy();
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+    expect(container.querySelectorAll('[role="row"]')).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Open Employee 01' }).closest('li')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Employee 01' }));
+    expect(onOpen).toHaveBeenCalledWith(1);
+  });
+
+  it('does not emit nested interactive-control warnings with cell and card actions', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { unmount } = render(
+        <DataTable
+          columns={[
+            baseColumns[0],
+            { key: 'action', header: 'Action', render: () => <button type="button">Secondary</button> },
+          ]}
+          rows={makeRows(1)}
+          getRowKey={(row) => row.id}
+          gridClassName="employee-table"
+          mobileCard={(row) => <button type="button">Open {row.name}</button>}
+        />,
+      );
+      unmount();
+
+      stubMobile();
+      render(
+        <DataTable
+          columns={baseColumns}
+          rows={makeRows(1)}
+          getRowKey={(row) => row.id}
+          gridClassName="employee-table"
+          mobileCard={(row) => <button type="button">Open {row.name}</button>}
+        />,
+      );
+
+      const messages = consoleError.mock.calls.flat().map((part) => String(part)).join('\n');
+      expect(messages).not.toMatch(/validateDOMNesting|cannot appear as a descendant/i);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('shows a calm inline error region and retries without raw exception details', () => {
+    const onRetry = vi.fn();
+    render(
+      <DataTable
+        columns={baseColumns}
+        rows={makeRows(1)}
+        getRowKey={(row) => row.id}
+        gridClassName="employee-table"
+        error={new Error('database exploded')}
+        onRetry={onRetry}
+      />,
+    );
+
+    expect(screen.getByRole('alert').textContent).toContain('โหลดข้อมูลไม่สำเร็จ');
+    expect(screen.getByRole('alert').textContent).not.toContain('database exploded');
+    expect(screen.getByText('Employee 01')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /ลองอีกครั้ง/ }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
   it('adds the sticky header class only when stickyHeader is enabled', () => {

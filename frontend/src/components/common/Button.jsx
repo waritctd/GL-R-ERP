@@ -15,6 +15,7 @@ const buttonVariants = cva(
     'items-center',
     'justify-center',
     'gap-[7px]',
+    'relative',
     'rounded-md',
     'border-[1.5px]',
     'border-solid',
@@ -23,6 +24,8 @@ const buttonVariants = cva(
     'min-h-[38px]',
     'max-[720px]:min-h-[44px]',
     'py-0',
+    'disabled:cursor-not-allowed',
+    'disabled:opacity-[0.55]',
   ],
   {
     variants: {
@@ -70,16 +73,45 @@ export const Button = forwardRef(function Button({
   type = 'button',
   className,
   children,
+  loading = false,
+  'aria-label': ariaLabel,
+  'aria-labelledby': ariaLabelledBy,
+  title,
+  disabled,
   ...props
 }, ref) {
+  const fallbackAriaLabel = variant === 'icon' && !ariaLabel && typeof title === 'string'
+    ? title.trim()
+    : ariaLabel;
+  const hasIconName = variant !== 'icon'
+    || Boolean(fallbackAriaLabel)
+    || Boolean(ariaLabelledBy);
+
+  // Loud in development, non-fatal in production: a missing label is an a11y
+  // defect worth failing a dev build over, but throwing from a shared primitive
+  // would take the whole page down for a user over a label typo.
+  if (!hasIconName) {
+    const message = 'Button variant="icon" requires an accessible name via aria-label, aria-labelledby, or title.';
+    if (import.meta.env.DEV) throw new Error(message);
+    console.error(message);
+  }
+
   return (
     <button
       ref={ref}
       type={type}
       className={cn(buttonVariants({ variant, size }), className)}
+      disabled={disabled || loading}
+      aria-busy={loading ? 'true' : undefined}
+      aria-label={fallbackAriaLabel}
+      aria-labelledby={ariaLabelledBy}
+      title={title}
       {...props}
     >
-      {children}
+      <span className={cn('inline-flex items-center justify-center gap-[7px]', loading && 'opacity-0')}>
+        {children}
+      </span>
+      {loading ? <span className="button-loading-spinner" aria-hidden="true" /> : null}
     </button>
   );
 });

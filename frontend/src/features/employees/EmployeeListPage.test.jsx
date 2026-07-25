@@ -70,7 +70,12 @@ const employees = [
 
 function LocationProbe() {
   const location = useLocation();
-  return <span data-testid="search-params">{location.search}</span>;
+  return (
+    <>
+      <span data-testid="search-params">{location.search}</span>
+      <span data-testid="location-path">{location.pathname}</span>
+    </>
+  );
 }
 
 function renderPage(initialEntry = '/employees') {
@@ -225,6 +230,16 @@ describe('EmployeeListPage sorting', () => {
 
     expect(params()).toContain('sort=salary.desc');
     expect(rowNames(container)[0]).toContain('สมชาย');
+  });
+});
+
+describe('EmployeeListPage row actions', () => {
+  it('opens employee detail through the explicit open control', () => {
+    renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'เปิดข้อมูลพนักงาน สมชาย ใจดี' }));
+
+    expect(screen.getByTestId('location-path').textContent).toBe('/employees/1');
   });
 });
 
