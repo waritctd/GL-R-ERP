@@ -1,8 +1,8 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppShell } from './AppShell.jsx';
 
 globalThis.React = React;
@@ -20,16 +20,36 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   };
 });
 
-function renderShell(user) {
+const realMatchMedia = window.matchMedia;
+
+function mockTabletRail(matches) {
+  window.matchMedia = vi.fn((query) => ({
+    matches: query === '(min-width: 721px) and (max-width: 1040px)' ? matches : false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  }));
+}
+
+afterEach(() => {
+  window.matchMedia = realMatchMedia;
+});
+
+function renderShell(user, initialEntries = ['/']) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/']}>
+      <MemoryRouter initialEntries={initialEntries}>
         <Routes>
-          <Route element={<AppShell user={user} employee={null} onLogout={vi.fn()} pendingRequestCount={0} />}>
+          <Route path="/" element={<AppShell user={user} employee={null} onLogout={vi.fn()} pendingRequestCount={0} />}>
             <Route index element={<div>เนื้อหา</div>} />
+            <Route path="*" element={<div>เนื้อหา</div>} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -61,6 +81,49 @@ describe('AppShell navigation (role-scoped views)', () => {
     renderShell({ role: 'ceo', employeeId: 1, name: 'CEO ทดสอบ', email: 'ceo@test.local' });
     await screen.findByText('เนื้อหา');
     expect(screen.getByText('รายการดีล')).toBeTruthy();
+  });
+});
+
+describe('AppShell tablet shell', () => {
+  it('keeps icon-rail destinations accessible with native tooltip names', async () => {
+    mockTabletRail(true);
+    renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
+
+    const dealsLink = await screen.findByRole('link', { name: 'รายการดีล (Deal pipeline)' });
+    expect(dealsLink.getAttribute('title')).toBe('รายการดีล (Deal pipeline)');
+    expect(screen.getByRole('button', { name: 'GL&R home' }).getAttribute('title')).toBe('GL&R home');
+  });
+
+  it('preserves the active route in tablet rail mode', async () => {
+    mockTabletRail(true);
+    renderShell(
+      { role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' },
+      ['/tickets'],
+    );
+
+    const dealsLink = await screen.findByRole('link', { name: 'รายการดีล (Deal pipeline)' });
+    expect(dealsLink.className).toContain('active');
+  });
+
+  it('keeps grouped tablet rail links available even when a group toggle is clicked', async () => {
+    mockTabletRail(true);
+    renderShell({ role: 'ceo', employeeId: 1, name: 'ผู้บริหาร ทดสอบ', email: 'ceo@glr.co.th' });
+
+    fireEvent.click(await screen.findByRole('button', { name: /งานขาย/ }));
+
+    expect(screen.getByRole('link', { name: 'รายการดีล (Deal pipeline)' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'ตั้งค่าราคา (CEO price config)' })).toBeTruthy();
+  });
+
+  it('restores focus to the drawer trigger after mobile navigation closes', async () => {
+    renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
+
+    const trigger = screen.getByRole('button', { name: 'เปิดเมนูนำทาง' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('button', { name: 'ปิดเมนู' }));
+
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 });
 
