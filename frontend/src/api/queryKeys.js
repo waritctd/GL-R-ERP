@@ -12,6 +12,7 @@ export const queryKeys = {
   leaveBalances: (employeeId, year) => ['leave', 'balances', employeeId, year],
   leaveEmployees: () => ['leave', 'employees'],
   leaveTypes: () => ['leave', 'types'],
+  leaveContactDefaults: (employeeId) => ['leave', 'contactDefaults', employeeId],
   overtimeRequests: (filters = {}) => ['overtime', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   overtimeEmployees: () => ['overtime', 'employees'],
   // CommissionController#list only ever takes payrollMonth (no status param —

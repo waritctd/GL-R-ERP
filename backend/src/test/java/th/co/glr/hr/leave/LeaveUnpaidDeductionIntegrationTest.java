@@ -1,6 +1,7 @@
 package th.co.glr.hr.leave;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -15,11 +16,13 @@ import java.time.ZoneId;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.mock.web.MockMultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -132,17 +135,18 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
     void aLeaveSpanningTwoCalendarMonthsSplitsItsUnpaidDaysCorrectly() {
         long employeeId = insertEmployee("SPLIT-001");
 
-        // Thu 2026-07-30 .. Wed 2026-08-05: working days (chronological) are 7/30, 7/31, 8/3, 8/4,
-        // 8/5 -- 5 total. PERSONAL quota is 3 (nothing used yet), so the first 3 (7/30, 7/31, 8/3) are
-        // paid and the last 2 (8/4, 8/5) are unpaid -- both landing in August despite the request
-        // starting in July.
+        // Thu 2026-07-23 .. Tue 2026-08-04: working days (chronological) are 7/23, 7/24, 7/27, 7/28,
+        // 7/29, 7/30, 7/31 (7 in July) then 8/3, 8/4 (2 in August) -- 9 total. PERSONAL quota is 7
+        // (nothing used yet -- V90 raised it from 3 to 7 per company rule §5.2), so the first 7 (all in
+        // July) are paid and the last 2 (8/3, 8/4) are unpaid -- both landing in August despite the
+        // request starting in July.
         LeaveRequestDto result = leaveService.submit(
-            submitRequest(employeeId, "PERSONAL", "2026-07-30", "2026-08-05"),
+            submitRequest(employeeId, "PERSONAL", "2026-07-23", "2026-08-04"),
             employee(employeeId));
 
         assertThat(result.status()).isEqualTo("APPROVED");
-        assertThat(result.totalDays()).isEqualByComparingTo("5.00");
-        assertThat(result.paidDays()).isEqualByComparingTo("3.00");
+        assertThat(result.totalDays()).isEqualByComparingTo("9.00");
+        assertThat(result.paidDays()).isEqualByComparingTo("7.00");
         assertThat(result.unpaidDays()).isEqualByComparingTo("2.00");
 
         assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01")))
@@ -199,6 +203,28 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         // trace that a day was ever deducted for it.
         assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01")))
             .doesNotContainKey(employeeId);
+    }
+
+    /**
+     * Paper-form contact-during-leave autofill (2026-07-25 review fix), authz -- required by
+     * CLAUDE.md's "Permission changes must ship evidence" rule: {@code GET
+     * /api/leave/contact-defaults} exposes another employee's home address + phone, so it needs the
+     * same real-DB, wrong-way-round proof as any other scope/filter change. Two employees with no
+     * manager relationship (plain {@link #insertEmployee} sets no {@code reports_to_employee_id}): a
+     * plain employee asking for a peer's contact defaults -- someone who is neither themself, their
+     * manager, nor a direct report -- must be refused. This asserts the caller CANNOT reach what they
+     * shouldn't (not merely that they can reach their own), matching {@link LeaveService#balances}'s
+     * predicate that {@link LeaveService#contactDefaults} deliberately reuses.
+     */
+    @Test
+    void employeeCannotReadANonReportPeersContactDefaults() {
+        long actorId = insertEmployee("PEER-ACTOR");
+        long peerId = insertEmployee("PEER-OTHER");
+
+        assertThatThrownBy(() -> leaveService.contactDefaults(employee(actorId), peerId))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.FORBIDDEN);
     }
 
     @Test

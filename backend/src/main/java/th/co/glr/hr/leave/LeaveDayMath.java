@@ -1,5 +1,7 @@
 package th.co.glr.hr.leave;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
@@ -19,8 +21,19 @@ import java.util.Map;
  * days first -- {@code hr.leave_request.paid_days}/{@code unpaid_days} are aggregate totals, not a
  * per-day flag, so chronological consumption is the only ordering they can represent, and it matches
  * the natural reading of "day N onward went unpaid".
+ *
+ * <p><b>Sub-day leave (2026-07-25):</b> {@link #unpaidWorkingDaysByMonth} now takes/returns
+ * {@link BigDecimal} instead of {@code int}, so a fractional sub-day request (e.g. a half-day,
+ * {@code 0.50}) can be attributed precisely instead of being floored to a whole day. Sub-day leave is
+ * always single-day (enforced by {@code chk_leave_time_single_day}), so the single-date branch below
+ * handles it directly: the whole {@code totalDays - paidDays} remainder lands in that one day's
+ * month, with no rank/weekday logic needed since there is only one day it could ever land in. The
+ * multi-day branch is unchanged (still whole-day-only), now simply emitting {@code BigDecimal("1.00")}
+ * per unpaid weekday instead of {@code 1}.
  */
 final class LeaveDayMath {
+    private static final BigDecimal ONE_WORKING_DAY = new BigDecimal("1.00");
+
     private LeaveDayMath() {
     }
 
@@ -38,21 +51,41 @@ final class LeaveDayMath {
     }
 
     /**
-     * The working days in [startDate, endDate] beyond the first {@code paidDays} chronological
-     * working days -- i.e. the unpaid ones -- bucketed by calendar month (keyed by the first-of-month
-     * date). A leave spanning two calendar months splits correctly: each unpaid working day is
-     * attributed to the month it actually falls in, not to the month of {@code startDate}.
+     * The unpaid portion of [startDate, endDate] beyond {@code paidDays}, bucketed by calendar month
+     * (keyed by the first-of-month date).
+     *
+     * <p>Single-date range ({@code startDate == endDate}, covers both whole-day and sub-day single-day
+     * leave): the exact remainder {@code totalDays - paidDays} (floored at zero) is attributed to that
+     * day's month -- there is only one day, so no weekday-rank logic is needed, and the result may be
+     * fractional (sub-day leave).
+     *
+     * <p>Multi-day range (always whole-day -- sub-day leave can never span more than one date): the
+     * original weekday-rank logic, each unpaid working day contributing exactly {@code 1.00}, correctly
+     * splitting across a calendar-month boundary.
      */
-    static Map<LocalDate, Integer> unpaidWorkingDaysByMonth(LocalDate startDate, LocalDate endDate, int paidDays) {
-        Map<LocalDate, Integer> byMonth = new LinkedHashMap<>();
+    static Map<LocalDate, BigDecimal> unpaidWorkingDaysByMonth(
+            LocalDate startDate, LocalDate endDate, BigDecimal paidDays, BigDecimal totalDays) {
+        Map<LocalDate, BigDecimal> byMonth = new LinkedHashMap<>();
+        BigDecimal paid = paidDays == null ? BigDecimal.ZERO : paidDays;
+
+        if (startDate.equals(endDate)) {
+            BigDecimal total = totalDays == null ? BigDecimal.ZERO : totalDays;
+            BigDecimal unpaid = total.subtract(paid).setScale(2, RoundingMode.HALF_UP);
+            if (unpaid.signum() > 0) {
+                byMonth.put(startDate.withDayOfMonth(1), unpaid);
+            }
+            return byMonth;
+        }
+
+        int paidWholeDays = paid.setScale(0, RoundingMode.DOWN).intValue();
         int rank = 0;
         LocalDate cursor = startDate;
         while (!cursor.isAfter(endDate)) {
             if (isWorkingDay(cursor)) {
                 rank++;
-                if (rank > paidDays) {
+                if (rank > paidWholeDays) {
                     LocalDate month = cursor.withDayOfMonth(1);
-                    byMonth.merge(month, 1, Integer::sum);
+                    byMonth.merge(month, ONE_WORKING_DAY, BigDecimal::add);
                 }
             }
             cursor = cursor.plusDays(1);
