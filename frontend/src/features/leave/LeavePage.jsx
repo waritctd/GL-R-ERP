@@ -62,10 +62,22 @@ function defaultForm(employeeId = '', leaveTypeCode = 'VACATION') {
     startDate: date,
     endDate: date,
     reason: '',
+    // Sub-day leave (2026-07-25): checkbox forces endDate=startDate and reveals the two time
+    // pickers below. Paper-form (ใบลาหยุด F-HR-020) contact-during-leave block: autofilled from
+    // api.leave.contactDefaults, editable.
+    subDay: false,
+    startTime: '',
+    endTime: '',
+    contactHouseNo: '',
+    contactSubdistrict: '',
+    contactDistrict: '',
+    contactProvince: '',
+    contactPhone: '',
   };
 }
 
 const LEAVE_START_PAST_MESSAGE = 'วันที่เริ่มลาต้องไม่ก่อนวันนี้';
+const LEAVE_TIME_ORDER_MESSAGE = 'เวลาสิ้นสุดต้องหลังเวลาเริ่ม';
 
 function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
   return z.object({
@@ -74,6 +86,14 @@ function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
     startDate: z.string().min(1, 'กรุณาเลือกวันที่เริ่ม'),
     endDate: z.string().min(1, 'กรุณาเลือกวันที่สิ้นสุด'),
     reason: z.string().min(1, 'กรุณาระบุเหตุผลการลา'),
+    subDay: z.boolean().optional(),
+    startTime: z.string().optional(),
+    endTime: z.string().optional(),
+    contactHouseNo: z.string().optional(),
+    contactSubdistrict: z.string().optional(),
+    contactDistrict: z.string().optional(),
+    contactProvince: z.string().optional(),
+    contactPhone: z.string().optional(),
   }).superRefine((data, context) => {
     if (requireEmployeeId && !data.employeeId) {
       context.addIssue({
@@ -88,6 +108,17 @@ function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
         path: ['startDate'],
         message: LEAVE_START_PAST_MESSAGE,
       });
+    }
+    if (data.subDay) {
+      if (!data.startTime) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['startTime'], message: 'กรุณาระบุเวลาเริ่ม' });
+      }
+      if (!data.endTime) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['endTime'], message: 'กรุณาระบุเวลาสิ้นสุด' });
+      }
+      if (data.startTime && data.endTime && data.endTime <= data.startTime) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['endTime'], message: LEAVE_TIME_ORDER_MESSAGE });
+      }
     }
   });
 }
@@ -188,9 +219,9 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     mode: 'onChange',
     reValidateMode: 'onChange',
   });
-  const [formEmployeeId, formStartDate, formLeaveTypeCode] = useWatch({
+  const [formEmployeeId, formStartDate, formLeaveTypeCode, formSubDay] = useWatch({
     control,
-    name: ['employeeId', 'startDate', 'leaveTypeCode'],
+    name: ['employeeId', 'startDate', 'leaveTypeCode', 'subDay'],
   });
   const startDateInPast = Boolean(formStartDate && formStartDate < todayIso());
   const startDateError = startDateInPast ? LEAVE_START_PAST_MESSAGE : errors.startDate?.message;
@@ -210,6 +241,16 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     [balances, formLeaveTypeCode],
   );
 
+  // Paper-form (ใบลาหยุด F-HR-020) contact-during-leave autofill + read-only position/dept/division.
+  const contactDefaultsQuery = useQuery({
+    queryKey: queryKeys.leaveContactDefaults(formEmployeeId),
+    queryFn: () => api.leave.contactDefaults({
+      ...(formEmployeeId ? { employeeId: formEmployeeId } : {}),
+    }).then((response) => response.contactDefaults || null),
+    enabled: !!formEmployeeId,
+  });
+  const contactDefaults = contactDefaultsQuery.data ?? null;
+
   // Preserve the original error-toast behavior of the imperative loaders.
   useEffect(() => {
     if (employeesQuery.error) showToast('error', employeesQuery.error.message || 'โหลดข้อมูลตั้งต้นวันลาไม่สำเร็จ');
@@ -223,6 +264,28 @@ export function LeavePage({ user, currentEmployee, showToast }) {
   useEffect(() => {
     if (balancesQuery.error) showToast('error', balancesQuery.error.message || 'โหลดโควตาวันลาไม่สำเร็จ');
   }, [balancesQuery.error, showToast]);
+  useEffect(() => {
+    if (contactDefaultsQuery.error) showToast('error', contactDefaultsQuery.error.message || 'โหลดข้อมูลติดต่อไม่สำเร็จ');
+  }, [contactDefaultsQuery.error, showToast]);
+
+  // Paper-form contact block: prefill from the autofill defaults. Factored out of the effect below
+  // so createMutation's onSuccess can re-apply it too -- reset() after a successful submit blanks
+  // these fields, but when the acting employee is unchanged, `contactDefaults` is the same query
+  // result reference, so the effect alone would never re-fire and the block would stay blank until
+  // the employee was switched.
+  function applyContactDefaults(defaults) {
+    if (!defaults) return;
+    setValue('contactHouseNo', defaults.contactHouseNo || '');
+    setValue('contactSubdistrict', defaults.contactSubdistrict || '');
+    setValue('contactDistrict', defaults.contactDistrict || '');
+    setValue('contactProvince', defaults.contactProvince || '');
+    setValue('contactPhone', defaults.contactPhone || '');
+  }
+
+  useEffect(() => {
+    applyContactDefaults(contactDefaults);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contactDefaults]);
 
   const canSubmitForTeam = submitEmployeeOptions.some((employee) => employee.directReport) || canReviewAll;
   const hasMultipleEmployeeOptions = employeeOptions.length > 1;
@@ -274,8 +337,21 @@ export function LeavePage({ user, currentEmployee, showToast }) {
 
   function handleStartDateChange(event) {
     const value = event.target.value;
-    if (getValues('endDate') < value) {
+    // Sub-day leave (2026-07-25): endDate always tracks startDate while the sub-day checkbox is on
+    // (a sub-day request is single-date only).
+    if (getValues('subDay') || getValues('endDate') < value) {
       setValue('endDate', value, { shouldDirty: true, shouldValidate: true });
+    }
+  }
+
+  function handleSubDayToggle(event) {
+    // register('subDay', ...) already writes the checkbox value itself; this only handles the
+    // side effects -- forcing endDate=startDate on, clearing the times off.
+    if (event.target.checked) {
+      setValue('endDate', getValues('startDate'), { shouldDirty: true, shouldValidate: true });
+    } else {
+      setValue('startTime', '', { shouldDirty: true, shouldValidate: true });
+      setValue('endTime', '', { shouldDirty: true, shouldValidate: true });
     }
   }
 
@@ -289,6 +365,10 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     onSuccess: (created) => {
       const nextEmployeeId = formEmployeeId || currentEmployee?.id || user.employeeId || '';
       reset(defaultForm(nextEmployeeId, formLeaveTypeCode));
+      // reset() above blanks the contact block; when the acting employee is unchanged the
+      // contactDefaults query result is the same reference, so its own effect won't re-fire --
+      // re-apply it explicitly so the block doesn't sit blank until the employee is switched.
+      applyContactDefaults(contactDefaults);
       setAttachmentFile(null);
       setFileInputKey((key) => key + 1);
       if (created?.status === 'AUTO_REJECTED') {
@@ -361,8 +441,17 @@ export function LeavePage({ user, currentEmployee, showToast }) {
       employeeId: values.employeeId ? Number(values.employeeId) : null,
       leaveTypeCode: values.leaveTypeCode,
       startDate: values.startDate,
-      endDate: values.endDate,
+      // Sub-day leave: endDate always equals startDate while subDay is on (mirrors the checkbox's
+      // own forcing behavior, in case a stale endDate ever slips through).
+      endDate: values.subDay ? values.startDate : values.endDate,
       reason: values.reason.trim(),
+      startTime: values.subDay && values.startTime ? values.startTime : null,
+      endTime: values.subDay && values.endTime ? values.endTime : null,
+      contactHouseNo: values.contactHouseNo?.trim() || null,
+      contactSubdistrict: values.contactSubdistrict?.trim() || null,
+      contactDistrict: values.contactDistrict?.trim() || null,
+      contactProvince: values.contactProvince?.trim() || null,
+      contactPhone: values.contactPhone?.trim() || null,
       attachmentFile: preparedAttachment,
     });
   }
@@ -561,6 +650,75 @@ export function LeavePage({ user, currentEmployee, showToast }) {
               helperText="PDF, JPG หรือ PNG · ลาป่วยต้องแนบใบรับรองแพทย์"
             />
           </FormField>
+
+          {/* Sub-day leave (2026-07-25): Overtime-style start/end time pickers, only for a
+              single-date request. Checked -> forces endDate=startDate (handleSubDayToggle). */}
+          <div className={formGridSpan2}>
+            <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                className="h-4 w-4 shrink-0"
+                {...register('subDay', { onChange: handleSubDayToggle })}
+              />
+              ลาบางส่วนของวัน (ระบุเวลา)
+            </label>
+          </div>
+          {formSubDay ? (
+            <>
+              <FormField label="เวลาเริ่ม" htmlFor="leave-start-time" error={errors.startTime?.message} required>
+                <input
+                  id="leave-start-time"
+                  type="time"
+                  {...register('startTime')}
+                  aria-invalid={Boolean(errors.startTime)}
+                  aria-describedby={errors.startTime ? fieldErrorId('leave-start-time') : undefined}
+                  required
+                />
+              </FormField>
+              <FormField label="เวลาสิ้นสุด" htmlFor="leave-end-time" error={errors.endTime?.message} required>
+                <input
+                  id="leave-end-time"
+                  type="time"
+                  {...register('endTime')}
+                  aria-invalid={Boolean(errors.endTime)}
+                  aria-describedby={errors.endTime ? fieldErrorId('leave-end-time') : undefined}
+                  required
+                />
+              </FormField>
+            </>
+          ) : null}
+
+          {/* Paper-form (ใบลาหยุด F-HR-020): position/department/division read-only, contact
+              block autofilled from api.leave.contactDefaults and editable. */}
+          <FormField label="ตำแหน่ง" htmlFor="leave-position-display">
+            <input id="leave-position-display" value={contactDefaults?.positionTh || '-'} disabled />
+          </FormField>
+          <FormField label="แผนก / ฝ่าย" htmlFor="leave-department-display">
+            <input
+              id="leave-department-display"
+              value={[contactDefaults?.departmentTh, contactDefaults?.divisionTh].filter(Boolean).join(' / ') || '-'}
+              disabled
+            />
+          </FormField>
+          <div className={formGridSpan2}>
+            <p className="m-0 text-sm font-semibold text-text">ที่อยู่ที่ติดต่อได้ระหว่างลา</p>
+          </div>
+          <FormField label="บ้านเลขที่ / ที่อยู่" htmlFor="leave-contact-house-no">
+            <input id="leave-contact-house-no" {...register('contactHouseNo')} />
+          </FormField>
+          <FormField label="ตำบล / แขวง" htmlFor="leave-contact-subdistrict">
+            <input id="leave-contact-subdistrict" {...register('contactSubdistrict')} />
+          </FormField>
+          <FormField label="อำเภอ / เขต" htmlFor="leave-contact-district">
+            <input id="leave-contact-district" {...register('contactDistrict')} />
+          </FormField>
+          <FormField label="จังหวัด" htmlFor="leave-contact-province">
+            <input id="leave-contact-province" {...register('contactProvince')} />
+          </FormField>
+          <FormField label="เบอร์โทรติดต่อ" htmlFor="leave-contact-phone">
+            <input id="leave-contact-phone" {...register('contactPhone')} />
+          </FormField>
+
           <div className={formGridSpan2}>
             <FormField label="เหตุผลการลา" htmlFor="leave-reason" error={errors.reason?.message} required>
               <textarea

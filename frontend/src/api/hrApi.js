@@ -68,6 +68,9 @@ export const api = {
     employees: () => apiRequest(API_ROUTES.leave.employees),
     types: () => apiRequest(API_ROUTES.leave.types),
     balances: (params) => apiRequest(withQuery(API_ROUTES.leave.balances, params)),
+    // Sub-day leave + paper-form contact block (2026-07-25): autofill for the
+    // contact-during-leave block, reusing the /balances access predicate.
+    contactDefaults: (params) => apiRequest(withQuery(API_ROUTES.leave.contactDefaults, params)),
     create: async (payload) => {
       if (!Object.prototype.hasOwnProperty.call(payload, 'attachmentFile')) {
         return apiRequest(API_ROUTES.leave.create, { method: 'POST', body: payload });
@@ -78,6 +81,16 @@ export const api = {
       formData.append('startDate', payload.startDate);
       formData.append('endDate', payload.endDate);
       formData.append('reason', payload.reason);
+      // Sub-day leave: only appended when the requester picked times (guard undefined/null so a
+      // whole-day submit never sends empty startTime/endTime multipart fields).
+      if (payload.startTime) formData.append('startTime', payload.startTime);
+      if (payload.endTime) formData.append('endTime', payload.endTime);
+      // Paper-form contact block: optional overrides of the autofilled default.
+      if (payload.contactHouseNo) formData.append('contactHouseNo', payload.contactHouseNo);
+      if (payload.contactSubdistrict) formData.append('contactSubdistrict', payload.contactSubdistrict);
+      if (payload.contactDistrict) formData.append('contactDistrict', payload.contactDistrict);
+      if (payload.contactProvince) formData.append('contactProvince', payload.contactProvince);
+      if (payload.contactPhone) formData.append('contactPhone', payload.contactPhone);
       if (payload.attachmentFile) formData.append('attachment', payload.attachmentFile);
       const res = await fetch(API_ROUTES.leave.create, {
         method: 'POST',

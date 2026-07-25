@@ -14,6 +14,7 @@ vi.mock('../../api/index.js', () => ({
       types: vi.fn(),
       list: vi.fn(),
       balances: vi.fn(),
+      contactDefaults: vi.fn(),
       create: vi.fn(),
       approve: vi.fn(),
       reject: vi.fn(),
@@ -68,6 +69,22 @@ describe('LeavePage form validation', () => {
     });
     api.leave.list.mockResolvedValue({ requests: [] });
     api.leave.balances.mockResolvedValue({ balances: [] });
+    // Sub-day leave + paper-form contact block (2026-07-25): no address on file for this test
+    // fixture, so autofill leaves every contact field blank -- lets the exact-payload assertion
+    // below stay unchanged (empty -> null) without asserting on autofill itself.
+    api.leave.contactDefaults.mockResolvedValue({
+      contactDefaults: {
+        employeeId: 1,
+        positionTh: null,
+        departmentTh: null,
+        divisionTh: null,
+        contactHouseNo: null,
+        contactSubdistrict: null,
+        contactDistrict: null,
+        contactProvince: null,
+        contactPhone: null,
+      },
+    });
     api.leave.create.mockResolvedValue({ request: { id: 2001, status: 'SUBMITTED' } });
   });
 
@@ -99,13 +116,49 @@ describe('LeavePage form validation', () => {
     fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
 
     await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
+    // Sub-day leave + paper-form contact block (2026-07-25): the payload now always carries the
+    // new keys; a whole-day submit with no address on file (see beforeEach) normalizes every one
+    // of them to null.
     expect(api.leave.create).toHaveBeenCalledWith({
       employeeId: 1,
       leaveTypeCode: 'VACATION',
       startDate: futureDate,
       endDate: futureDate,
       reason: 'ทดสอบระบบ',
+      startTime: null,
+      endTime: null,
+      contactHouseNo: null,
+      contactSubdistrict: null,
+      contactDistrict: null,
+      contactProvince: null,
+      contactPhone: null,
       attachmentFile: null,
     });
+  });
+
+  it('toggling sub-day leave forces endDate to startDate and sends the chosen times', async () => {
+    renderLeavePage();
+
+    const futureDate = '2099-12-31';
+    const startInput = await screen.findByLabelText(/วันที่เริ่ม/);
+    fireEvent.change(startInput, { target: { value: futureDate } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'หาหมอครึ่งวัน' } });
+
+    fireEvent.click(screen.getByLabelText(/ลาบางส่วนของวัน/));
+
+    const endInput = screen.getByLabelText(/วันที่สิ้นสุด/);
+    expect(endInput.value).toBe(futureDate);
+
+    fireEvent.change(screen.getByLabelText(/เวลาเริ่ม/), { target: { value: '08:30' } });
+    fireEvent.change(screen.getByLabelText(/เวลาสิ้นสุด/), { target: { value: '12:30' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
+
+    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
+    const payload = api.leave.create.mock.calls[0][0];
+    expect(payload.startDate).toBe(futureDate);
+    expect(payload.endDate).toBe(futureDate);
+    expect(payload.startTime).toBe('08:30');
+    expect(payload.endTime).toBe('12:30');
   });
 });
