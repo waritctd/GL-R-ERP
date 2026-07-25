@@ -19,8 +19,9 @@ their money math and layout genuinely differ:
 | Type-specific fields | preparer, customer snapshot | signatories block, validity days, offer date, import lead days | tax invoice no., due date |
 
 (Quotation structure confirmed against the sales team's real form
-`GL_R_ใบเสนอราคา_format.xls`, form control `F-SM-002 (03)`; see
-`docs/V2/quotation-format-and-decisions.md`.)
+`GL_R_ใบเสนอราคา_format.xls`, form control `F-SM-002 (03)`. The original format-decisions
+working note lived at `docs/V2/quotation-format-and-decisions.md`, since removed in the
+2026-07-25 docs cleanup — recoverable from git history if needed.)
 
 The VAT-basis difference alone (deposit VAT on the deposit amount vs quotation VAT on the
 full subtotal) means these cannot cleanly share one row shape.

@@ -150,6 +150,7 @@ export function PricingRequestQueuePage({ user, showToast }) {
             className="secondary-button"
             disabled={pickupMutation.isPending}
             onClick={() => pickupMutation.mutate(row.id)}
+            data-testid="pcr-queue-pickup"
           >
             รับเรื่อง
           </button>

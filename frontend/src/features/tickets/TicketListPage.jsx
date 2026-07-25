@@ -1,11 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { FilterBar } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { SalesTabs } from '../sales/SalesTabs.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
@@ -24,11 +28,62 @@ import { SALES_PHASES, stageIndex, stageMeta } from './stageMeta.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
 import { effectiveWinProbability } from './dealTrackingMeta.js';
 
+// Same selector Modal.jsx traps on — kept identical so the two overlay
+// surfaces agree on what "focusable" means.
+const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
+
 // Role-scoped views, Phase A: roles whose list page distinguishes "my
 // worklist" from "every deal I may read" — everyone else (sales already only
 // ever receives its own deals from the API; ceo/sales_manager are oversight
 // and want the full list) has no such distinction, so no toggle is shown.
 const WORKLIST_ROLES = new Set(['import', 'account']);
+
+function scopeCopy(role, inboxOnly) {
+  if (role === 'import') {
+    return {
+      eyebrow: 'ขอบเขตฝ่ายนำเข้า',
+      title: inboxOnly ? 'ต้องดำเนินการ' : 'ทั้งหมด',
+      description: inboxOnly
+        ? 'ดีลที่อยู่ในช่วงขอราคา จัดซื้อ หรือนำเข้า'
+        : 'ทุกดีลที่ฝ่ายนำเข้าอ่านได้',
+    };
+  }
+  if (role === 'account') {
+    return {
+      eyebrow: 'ขอบเขตฝ่ายบัญชี',
+      title: inboxOnly ? 'ต้องดำเนินการ' : 'ทั้งหมด',
+      description: inboxOnly
+        ? 'ดีลที่มีงานรับเงินหรือติดตามชำระ'
+        : 'ทุกดีลที่ฝ่ายบัญชีอ่านได้',
+    };
+  }
+  if (role === 'sales') {
+    return {
+      eyebrow: 'ขอบเขตฝ่ายขาย',
+      title: 'ดีลของฉัน',
+      description: 'ดีลที่อยู่ในความรับผิดชอบของคุณ',
+    };
+  }
+  if (role === 'sales_manager') {
+    return {
+      eyebrow: 'ขอบเขตผู้จัดการฝ่ายขาย',
+      title: 'ภาพรวมทีมขาย',
+      description: 'มุมมองกำกับดูแลของทีมขาย',
+    };
+  }
+  if (role === 'ceo') {
+    return {
+      eyebrow: 'ขอบเขตผู้บริหาร',
+      title: 'ทุกดีลที่มองเห็นได้',
+      description: 'มุมมองติดตามท่อขายและสถานะงาน',
+    };
+  }
+  return {
+    eyebrow: 'ขอบเขต',
+    title: 'รายการที่มองเห็นได้',
+    description: 'ตามสิทธิ์ของบทบาทปัจจุบัน',
+  };
+}
 
 // One-line reason a deal is sitting in `role`'s worklist right now — the
 // per-card emphasis the brief asks for ("account: … the pending money
@@ -52,15 +107,14 @@ function worklistReason(role, deal) {
   return null;
 }
 
-// Per-phase accents (design tokens --color-phase-N, adopted from the user's
-// Claude Design prototype). Static class map — Tailwind's scanner needs the
-// full class names in source, so no `bg-phase-${id}` interpolation.
+// Per-phase dot accents. Static class map — Tailwind's scanner needs the full
+// class names in source, so no `bg-phase-${id}` interpolation.
 const PHASE_STYLES = {
-  1: { dot: 'bg-phase-1', active: 'border-phase-1 bg-phase-1-bg', num: 'text-phase-1' },
-  2: { dot: 'bg-phase-2', active: 'border-phase-2 bg-phase-2-bg', num: 'text-phase-2' },
-  3: { dot: 'bg-phase-3', active: 'border-phase-3 bg-phase-3-bg', num: 'text-phase-3' },
-  4: { dot: 'bg-phase-4', active: 'border-phase-4 bg-phase-4-bg', num: 'text-phase-4' },
-  5: { dot: 'bg-phase-5', active: 'border-phase-5 bg-phase-5-bg', num: 'text-phase-5' },
+  1: { dot: 'bg-phase-1' },
+  2: { dot: 'bg-phase-2' },
+  3: { dot: 'bg-phase-3' },
+  4: { dot: 'bg-phase-4' },
+  5: { dot: 'bg-phase-5' },
 };
 
 const STALE_DAYS = 7;
@@ -92,6 +146,18 @@ function DaysBadge({ stageUpdatedAt }) {
       {stale ? <Icon name="clock" size={12} /> : null} {days === 0 ? 'วันนี้' : `${days} วัน`}
     </span>
   );
+}
+
+function matchesSearch(deal, query) {
+  const value = query.trim().toLowerCase();
+  if (!value) return true;
+  return [
+    deal.code,
+    deal.customerName,
+    deal.projectName,
+    deal.title,
+    deal.createdByName,
+  ].filter(Boolean).join(' ').toLowerCase().includes(value);
 }
 
 // ── Manager live pipeline (V83, Slice B1/B2 "kill the weekly report" — handoff
@@ -156,38 +222,47 @@ function groupDealsForPipeline(deals) {
  * computed straight off the same deal list the table below renders.
  */
 function TeamPipelineSummary({ groups }) {
-  const cards = [
+  const items = [
     { key: 'won', label: 'ยอดที่สั่งซื้อแล้ว', tone: 'success', group: groups.won },
     { key: 'expected', label: 'ยอดคาดหวัง', tone: 'info', group: groups.expected },
     { key: 'lost', label: 'ขายไม่ได้', tone: 'danger', group: groups.lost },
   ];
   return (
-    <section className="panel">
-      <div className="panel-header" style={{ alignItems: 'center' }}>
-        <h2>ภาพรวมทีม (แทนที่รายงานประจำสัปดาห์)</h2>
+    <section className="ticket-pipeline-summary" aria-labelledby="ticket-pipeline-title">
+      <div className="ticket-pipeline-heading">
+        <h2 id="ticket-pipeline-title">ภาพรวมทีม</h2>
         {groups.staleActiveCount > 0 ? (
           <StatusBadge tone="warning">
             <Icon name="clock" size={12} /> {groups.staleActiveCount} ดีลเงียบ (ไม่มีการติดตาม 7 วัน)
           </StatusBadge>
         ) : null}
       </div>
-      <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-3 sm:px-5">
-        {cards.map((card) => (
-          <div key={card.key} className="flex flex-col gap-1.5 rounded-xl border border-border bg-surface-subtle px-4 py-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-bold text-text-muted">{card.label}</span>
-              <StatusBadge tone={card.tone}>{card.group.count} ดีล</StatusBadge>
-            </div>
-            <strong className="text-xl font-extrabold text-text">{formatMoney(card.group.total)}</strong>
-            {card.key === 'expected' ? (
-              <span className="text-2xs text-text-muted">
-                คาดการณ์ถ่วงน้ำหนัก (Σ มูลค่า × win%): <strong className="text-text-secondary">{formatMoney(card.group.forecast)}</strong>
-              </span>
+      <dl className="ticket-pipeline-metrics">
+        {items.map((item) => (
+          <div key={item.key}>
+            <dt>{item.label}</dt>
+            <dd>
+              <strong>{formatMoney(item.group.total)}</strong>
+              <StatusBadge tone={item.tone}>{item.group.count} ดีล</StatusBadge>
+            </dd>
+            {item.key === 'expected' ? (
+              <small>คาดการณ์ถ่วงน้ำหนัก: {formatMoney(item.group.forecast)}</small>
             ) : null}
           </div>
         ))}
-      </div>
+      </dl>
     </section>
+  );
+}
+
+function WorkStageCell({ deal, role, showTracking = false }) {
+  const reason = worklistReason(role, deal);
+  return (
+    <span className="flex min-w-0 flex-col gap-1">
+      {reason ? <StatusBadge tone="info">{reason}</StatusBadge> : null}
+      <DealStageCell deal={deal} />
+      {showTracking ? <TrackingBadges deal={deal} /> : null}
+    </span>
   );
 }
 
@@ -237,29 +312,52 @@ function DealStageCell({ deal }) {
  * (sales_manager/ceo only) adds the win%/stale badges below the stage —
  * the mobile equivalent of the manager-only DataTable column.
  */
-function DealCard({ deal, reason = null, showTracking = false }) {
+function DealOpenButton({ deal, onOpen, compact = false }) {
+  return (
+    <Button
+      variant="secondary"
+      size="sm"
+      type="button"
+      className={compact ? 'ticket-open-button' : 'ticket-card-open-button'}
+      onClick={() => onOpen(deal)}
+      aria-label={`เปิดดีล ${deal.code}`}
+    >
+      เปิด
+      <Icon name="chevronRight" size={14} />
+    </Button>
+  );
+}
+
+function DealCard({ deal, reason = null, showTracking = false, onOpen }) {
+  const stage = dealStageLabel(deal.salesStage);
+  const stageMetaInfo = stageMeta(deal.salesStage);
+  const freshnessText = overdueBadgeLabel(deal.stageUpdatedAt)?.label || formatThaiDate(deal.stageUpdatedAt ?? deal.updatedAt);
   return (
     <>
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <code className="min-w-0 truncate text-xs text-text-muted">{deal.code}</code>
-        <DaysBadge stageUpdatedAt={deal.stageUpdatedAt} />
+      <div className="ticket-card-topline">
+        <code>{deal.code}</code>
+        <span>{freshnessText}</span>
       </div>
 
-      <strong className="min-w-0 text-md leading-snug font-extrabold text-text">
+      <strong className="ticket-card-title">
         {deal.customerName || deal.title}
       </strong>
       {deal.projectName ? (
-        <span className="min-w-0 truncate text-xs text-text-muted">{deal.projectName}</span>
+        <span className="ticket-card-project">{deal.projectName}</span>
       ) : null}
-      {reason ? <StatusBadge tone="info">{reason}</StatusBadge> : null}
 
-      <DealStageCell deal={deal} />
+      <div className="ticket-card-work">
+        <span>ขั้นตอน / เหตุผลงาน</span>
+        <strong>{stageMetaInfo ? `${stageMetaInfo.no}. ` : ''}{stage.label}</strong>
+        {reason ? <small>{reason}</small> : null}
+      </div>
       <StageProgressBar salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST'} />
       {showTracking ? <TrackingBadges deal={deal} /> : null}
 
-      <span className="min-w-0 truncate text-xs text-text-muted">
+      <span className="ticket-card-owner">
         {[deal.createdByName, formatThaiDate(deal.createdAt)].filter(Boolean).join(' · ')}
       </span>
+      <DealOpenButton deal={deal} onOpen={onOpen} />
     </>
   );
 }
@@ -269,16 +367,16 @@ function DealCard({ deal, reason = null, showTracking = false }) {
  * pending money action instead of the pipeline stage (account doesn't act on
  * the pipeline stage directly — it acts on a payment).
  */
-function MoneyWorklistCard({ deal }) {
+function MoneyWorklistCard({ deal, onOpen }) {
   const reason = worklistReason('account', deal);
   return (
     <>
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <code className="min-w-0 truncate text-xs text-text-muted">{deal.code}</code>
+      <div className="ticket-card-topline">
+        <code>{deal.code}</code>
         <DaysBadge stageUpdatedAt={deal.stageUpdatedAt} />
       </div>
 
-      <strong className="min-w-0 text-md leading-snug font-extrabold text-text">
+      <strong className="ticket-card-title">
         {deal.customerName || deal.title}
       </strong>
 
@@ -297,11 +395,61 @@ function MoneyWorklistCard({ deal }) {
         <StatusBadge tone="neutral">ไม่มีรายการรอดำเนินการ</StatusBadge>
       )}
 
-      <span className="min-w-0 truncate text-xs text-text-muted">
+      <span className="ticket-card-owner">
         {[deal.createdByName, formatThaiDate(deal.createdAt)].filter(Boolean).join(' · ')}
       </span>
+      <DealOpenButton deal={deal} onOpen={onOpen} />
     </>
   );
+}
+
+function buildDealColumns({ role, isManagerView, onOpen }) {
+  return [
+    {
+      key: 'customer',
+      header: 'ดีล / ลูกค้า / โครงการ',
+      searchAccessor: (deal) => [deal.code, deal.customerName, deal.projectName, deal.title].filter(Boolean).join(' '),
+      render: (deal) => (
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <strong className="block truncate text-text">{deal.customerName || deal.title}</strong>
+          <span className="block truncate text-2xs text-text-muted">
+            {[deal.projectName, deal.code].filter(Boolean).join(' · ')}
+          </span>
+        </span>
+      ),
+    },
+    {
+      key: 'createdByName',
+      header: 'ผู้ดูแล',
+      searchAccessor: (deal) => deal.createdByName || '',
+      render: (deal) => <span>{deal.createdByName}</span>,
+    },
+    {
+      key: 'stage',
+      header: 'ขั้นตอน / เหตุผลงาน',
+      sortable: true,
+      sortAccessor: (deal) => (deal.lifecycle === 'CLOSED_LOST' ? -1 : stageMeta(deal.salesStage)?.no ?? 0),
+      render: (deal) => <WorkStageCell deal={deal} role={role} showTracking={isManagerView} />,
+    },
+    {
+      key: 'progress',
+      header: 'ความคืบหน้า',
+      render: (deal) => <StageProgressBar salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST'} />,
+    },
+    {
+      key: 'date',
+      header: 'อัปเดตล่าสุด',
+      sortable: true,
+      sortAccessor: (deal) => new Date(deal.stageUpdatedAt ?? deal.updatedAt),
+      render: (deal) => <DaysBadge stageUpdatedAt={deal.stageUpdatedAt ?? deal.updatedAt} />,
+    },
+    {
+      key: 'open',
+      header: 'เปิด',
+      align: 'right',
+      render: (deal) => <DealOpenButton deal={deal} onOpen={onOpen} compact />,
+    },
+  ];
 }
 
 export function TicketListPage({ user, showToast }) {
@@ -327,13 +475,25 @@ export function TicketListPage({ user, showToast }) {
   // replacement, sales_manager/ceo only.
   const isManagerView = MANAGER_PIPELINE_ROLES.has(user.role);
   const [creating, setCreating] = useState(false);
+  const filterToggleRef = useRef(null);
+  const filterSheetRef = useRef(null);
   // Owner feedback (role-scoped views, Sales branch): the LIFECYCLE/FLAGS chip
   // rows were competing with the deal list for attention. They stay fully
   // functional (same URL-param filters as before) but sit behind a collapsed
   // "ตัวกรองเพิ่มเติม" expander now — collapsed by default for every role, and
-  // forced open whenever one of them is already active (e.g. a deep link with
-  // ?life=... or ?flag=...) so an applied filter is never hidden from view.
-  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
+  // opened automatically whenever one of them becomes active (e.g. a deep link
+  // with ?life=... or ?flag=...) so an applied filter is surfaced, not hidden.
+  //
+  // Phase 4A: openness is now genuinely state-driven rather than
+  // `open || hasActiveFilter`. The old derivation made the sheet impossible to
+  // dismiss while a lifecycle/flag filter was applied — the close button, the
+  // scrim and Escape all became no-ops, which is unacceptable for what is a
+  // modal bottom sheet at <=720px. An applied filter is still never hidden:
+  // the always-visible "ตัวกรองที่ใช้" summary row and the count badge on the
+  // toggle keep reporting it after the sheet is closed.
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(
+    () => Boolean(searchParams.get('life') || searchParams.get('flag')),
+  );
 
   const canCreate = ROLE_PERMISSIONS.canCreateTickets.includes(user.role);
 
@@ -342,14 +502,18 @@ export function TicketListPage({ user, showToast }) {
     queryFn: () => api.tickets.list({}).then((response) => response.tickets || []),
   });
   const allDeals = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
-  const loading = ticketsQuery.isLoading || ticketsQuery.isFetching;
+  const loading = ticketsQuery.isLoading;
+  const refreshing = ticketsQuery.isFetching && !ticketsQuery.isLoading;
+  const openDeal = useCallback((deal) => {
+    navigate(`/tickets/${deal.id}`);
+  }, [navigate]);
 
   useEffect(() => {
     if (ticketsQuery.error) showToast('error', ticketsQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
   }, [ticketsQuery.error, showToast]);
 
-  // Phase summary cards double as filters — never a 14-stage tab bar.
-  // Lifecycle buckets live in the chip row below, so phase counts stay active-only.
+  // Phase strip doubles as a compact filter — never a 14-stage tab bar.
+  // Lifecycle buckets live in the additional filters below, so phase counts stay active-only.
   const phaseCounts = useMemo(() => {
     const counts = {};
     for (const phase of SALES_PHASES) counts[phase.id] = 0;
@@ -414,21 +578,76 @@ export function TicketListPage({ user, showToast }) {
         || (flagFilter === 'overdue' && deal.overdue)
         || (flagFilter === 'partial_delivery' && deal.fulfillmentStatus === 'PARTIALLY_DELIVERED');
       const inboxOk = !inboxOnly || dealInScope(user.role, deal);
-      return phaseOk && lifeOk && flagOk && inboxOk;
+      const searchOk = matchesSearch(deal, searchText);
+      return phaseOk && lifeOk && flagOk && inboxOk && searchOk;
     });
-  }, [allDeals, flagFilter, lifecycleFilter, phaseFilter, inboxOnly, user.role]);
+  }, [allDeals, flagFilter, lifecycleFilter, phaseFilter, inboxOnly, user.role, searchText]);
 
   const hasActiveMoreFilters = Boolean(lifecycleFilter || flagFilter);
-  const showMoreFilters = moreFiltersOpen || hasActiveMoreFilters;
+  const showMoreFilters = moreFiltersOpen;
   const activeMoreFiltersCount = (lifecycleFilter ? 1 : 0) + (flagFilter ? 1 : 0);
+  // <=720px the same markup is a fixed bottom sheet over a scrim — a real
+  // modal — while above that breakpoint it is an inline disclosure panel with
+  // the scrim hidden (styles.css: .ticket-filter-backdrop { display: none }
+  // until the mobile media query). Modal semantics are therefore
+  // breakpoint-scoped: Escape closes at any width, but the focus trap, the
+  // initial focus move and inerting the page behind only apply where the sheet
+  // actually covers the page.
+  const isMobile = useIsMobile();
+  const mobileSheetOpen = showMoreFilters && isMobile;
+
+  // A lifecycle/flag filter becoming active reveals the sheet, so a deep link
+  // or an external filter change is never silently applied behind a closed
+  // panel. Toggling a chip from inside the sheet is a no-op here (already
+  // open), and closing the sheet by hand does not re-trigger this — the effect
+  // only fires on the false -> true transition.
+  useEffect(() => {
+    if (hasActiveMoreFilters) setMoreFiltersOpen(true);
+  }, [hasActiveMoreFilters]);
+  const activePipelineCount = useMemo(
+    () => allDeals.filter((deal) => deal.lifecycle === 'ACTIVE' && stageMeta(deal.salesStage)).length,
+    [allDeals],
+  );
+  const scope = scopeCopy(user.role, inboxOnly);
+  const activeFilterCount = [
+    searchText.trim(),
+    phaseFilter,
+    lifecycleFilter,
+    flagFilter,
+    hasWorklistDistinction && searchParams.get('inbox') === '0' ? 'all' : '',
+  ].filter(Boolean).length;
+  const activeFilters = useMemo(() => {
+    const filters = [];
+    if (searchText.trim()) filters.push('ค้นหาในรายการ');
+    if (phaseFilter) {
+      const phase = SALES_PHASES.find((item) => String(item.id) === phaseFilter);
+      if (phase) filters.push(`เฟส ${phase.id}: ${phase.name}`);
+    }
+    if (lifecycleFilter) filters.push(`สถานะงาน: ${dealLifecycleLabel(lifecycleFilter).label}`);
+    if (flagFilter) {
+      const flag = FLAG_FILTERS.find((item) => item.value === flagFilter);
+      if (flag) filters.push(`สัญญาณ: ${flag.label}`);
+    }
+    if (hasWorklistDistinction && searchParams.get('inbox') === '0') filters.push('ขอบเขต: ทั้งหมด');
+    return filters;
+  }, [flagFilter, hasWorklistDistinction, lifecycleFilter, phaseFilter, searchParams, searchText]);
+  const tableColumns = useMemo(
+    () => buildDealColumns({ role: user.role, isManagerView, onOpen: openDeal }),
+    [isManagerView, openDeal, user.role],
+  );
 
   const emptyDescription = useMemo(() => {
+    if (searchText.trim()) return 'ไม่พบดีลที่ตรงกับคำค้นหาและตัวกรองที่เลือก';
+    if (phaseFilter) {
+      const phase = SALES_PHASES.find((item) => String(item.id) === phaseFilter);
+      return phase ? `ไม่มีดีลในเฟส ${phase.id} · ${phase.name}` : 'ไม่มีดีลในเฟสที่เลือก';
+    }
     if (flagFilter === 'overdue') return 'ไม่มีดีลที่เกินกำหนดชำระ';
     if (flagFilter === 'partial_delivery') return 'ไม่มีดีลที่ส่งมอบบางส่วน';
     if (lifecycleFilter) return `ไม่มีดีลในสถานะ${dealLifecycleLabel(lifecycleFilter).label}`;
     if (inboxOnly) return 'ไม่มีดีลที่ต้องดำเนินการตอนนี้ — ลองดูแท็บ "ทั้งหมด"';
     return 'ยังไม่มีดีลในเงื่อนไขที่เลือก';
-  }, [flagFilter, lifecycleFilter, inboxOnly]);
+  }, [flagFilter, lifecycleFilter, inboxOnly, phaseFilter, searchText]);
 
   function invalidateTicketsList() {
     return queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
@@ -441,6 +660,67 @@ export function TicketListPage({ user, showToast }) {
       return next;
     }, { replace: true });
   }
+
+  function clearFilters() {
+    setSearchParams(new URLSearchParams(), { replace: true });
+    setMoreFiltersOpen(false);
+  }
+
+  const closeMoreFilters = useCallback(() => {
+    setMoreFiltersOpen(false);
+    const restoreFocus = typeof window.requestAnimationFrame === 'function'
+      ? window.requestAnimationFrame
+      : (callback) => window.setTimeout(callback, 0);
+    restoreFocus(() => filterToggleRef.current?.focus());
+  }, []);
+
+  // Escape closes the sheet at every width; Tab is only trapped when the sheet
+  // is the mobile modal. Mirrors the keyboard contract of Modal.jsx so the two
+  // overlay surfaces behave identically for a keyboard user.
+  useEffect(() => {
+    if (!showMoreFilters) return undefined;
+
+    function onKeyDown(event) {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        closeMoreFilters();
+        return;
+      }
+      if (event.key !== 'Tab' || !mobileSheetOpen) return;
+      const sheet = filterSheetRef.current;
+      const items = Array.from(sheet?.querySelectorAll(FOCUSABLE) ?? []);
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      // Focus that has escaped the sheet (or never entered it) is pulled back
+      // in. `inert` already does this in browsers that support it; this keeps
+      // the trap correct where it does not.
+      if (!sheet?.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+        return;
+      }
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [showMoreFilters, mobileSheetOpen, closeMoreFilters]);
+
+  // Opening the modal sheet moves focus into it. Focus is restored to the
+  // toggle by closeMoreFilters, which every dismissal path routes through.
+  useEffect(() => {
+    if (!mobileSheetOpen) return;
+    const sheet = filterSheetRef.current;
+    const items = Array.from(sheet?.querySelectorAll(FOCUSABLE) ?? []);
+    (items[0] ?? sheet)?.focus();
+  }, [mobileSheetOpen]);
 
   const createMutation = useMutation({
     mutationFn: (payload) => api.tickets.create(payload),
@@ -461,31 +741,100 @@ export function TicketListPage({ user, showToast }) {
     await createMutation.mutateAsync(payload);
   }
 
+  // The modal sheet is portalled to <body> so the page root itself can be
+  // marked inert while it is open — an ancestor cannot inert its own overlay.
+  // On desktop the sheet must stay in the page's normal flow (it is a
+  // `.page-stack` child), so it renders in place there.
+  function renderFilterSheet(sheet) {
+    return mobileSheetOpen ? createPortal(sheet, document.body) : sheet;
+  }
+
   return (
-    <div className="page-stack">
+    <div
+      className="page-stack ticket-list-page"
+      // `inert` removes the page behind the sheet from focus order, pointer
+      // hit-testing and the accessibility tree in one attribute. React 18 has
+      // no boolean-prop support for it, so the empty string is used to emit the
+      // bare HTML attribute; aria-hidden covers browsers without inert yet.
+      {...(mobileSheetOpen ? { inert: '', 'aria-hidden': 'true' } : {})}
+    >
       <SalesTabs role={user.role} />
       <PageHeader
-        title="งานขาย"
-        subtitle="ดีลทั้งหมด · 1 ดีล = 1 Ticket ภายใต้โครงการ หนึ่งดีลอาจมีได้หลายใบขอราคา"
+        title="รายการดีล"
+        subtitle="ติดตามดีลตามขอบเขตบทบาทและตัวกรองที่เลือก"
         actions={(
           <>
-            <button type="button" className="icon-button" onClick={invalidateTicketsList} title="รีเฟรช" aria-label="รีเฟรช">
+            <Button
+              variant="icon"
+              type="button"
+              onClick={invalidateTicketsList}
+              loading={refreshing}
+              title="รีเฟรชรายการดีล"
+              aria-label="รีเฟรชรายการดีล"
+            >
               <Icon name="refresh" />
-            </button>
+            </Button>
             {canCreate ? (
-              <button type="button" className="primary-button" onClick={() => setCreating(true)}>
+              <Button type="button" onClick={() => setCreating(true)}>
                 <Icon name="plus" />
                 สร้างดีลใหม่
-              </button>
+              </Button>
             ) : null}
           </>
         )}
       />
 
+      <section className="ticket-worklist-summary" aria-labelledby="ticket-scope-title">
+        <div className="ticket-scope-copy">
+          <span>{scope.eyebrow}</span>
+          <h2 id="ticket-scope-title">{scope.title}</h2>
+          <p>{scope.description}</p>
+        </div>
+
+        {hasWorklistDistinction ? (
+          <div className="ticket-scope-toggle" aria-label="เลือกขอบเขตรายการ">
+            {[
+              { value: '', label: 'ต้องดำเนินการ', count: inboxCounts.inbox },
+              { value: '0', label: 'ทั้งหมด', count: inboxCounts.all },
+            ].map((item) => {
+              const active = (searchParams.get('inbox') ?? '') === item.value;
+              return (
+                <button
+                  key={item.value || 'inbox'}
+                  type="button"
+                  aria-pressed={active}
+                  className={`ticket-scope-option${active ? ' is-active' : ''}`}
+                  onClick={() => updateParam('inbox', item.value)}
+                >
+                  <span>{item.label}</span>
+                  <StatusBadge tone={active ? 'info' : 'neutral'}>{item.count}</StatusBadge>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <StatusBadge tone="neutral">{scope.title}</StatusBadge>
+        )}
+
+        <div className="ticket-result-count" aria-live="polite">
+          <span>ตรงเงื่อนไข</span>
+          <strong>{deals.length}</strong>
+          <small>จาก {hasWorklistDistinction && inboxOnly ? inboxCounts.inbox : allDeals.length} รายการ</small>
+        </div>
+      </section>
+
       {isManagerView && pipelineGroups ? <TeamPipelineSummary groups={pipelineGroups} /> : null}
 
-      {/* Phase summary cards double as filters — no 14-stage tab bar. */}
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      <section className="ticket-phase-strip" aria-label="ตัวกรองเฟสของดีล">
+        <button
+          type="button"
+          aria-pressed={!phaseFilter}
+          className={`ticket-phase-chip${!phaseFilter ? ' is-active' : ''}`}
+          onClick={() => updateParam('phase', '')}
+        >
+          <span className="ticket-phase-count">{activePipelineCount}</span>
+          <span className="ticket-phase-label">ทุกเฟส</span>
+        </button>
         {SALES_PHASES.map((phase) => {
           const isActive = phaseFilter === String(phase.id);
           const style = PHASE_STYLES[phase.id];
@@ -494,71 +843,112 @@ export function TicketListPage({ user, showToast }) {
               key={phase.id}
               type="button"
               aria-pressed={isActive}
-              className={`flex flex-col gap-1 rounded-xl border px-3 py-2.5 text-left ${
-                isActive ? style.active : 'border-border bg-surface'
-              }`}
+              className={`ticket-phase-chip${isActive ? ' is-active' : ''}`}
               onClick={() => updateParam('phase', isActive ? '' : String(phase.id))}
             >
-              <span className="flex items-center gap-1.5">
-                <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${style.dot}`} />
-                <span className={`text-xl font-extrabold leading-none ${isActive ? style.num : 'text-text'}`}>
-                  {phaseCounts[phase.id]}
-                </span>
+              <span className="ticket-phase-count">
+                <span aria-hidden="true" className={`ticket-phase-dot ${style.dot}`} />
+                {phaseCounts[phase.id]}
               </span>
-              <span className={`text-2xs font-bold leading-tight ${isActive ? style.num : 'text-text-muted'}`}>
+              <span className="ticket-phase-label">
                 เฟส {phase.id} · {phase.name}
               </span>
             </button>
           );
         })}
-      </div>
+      </section>
 
-      {hasWorklistDistinction ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3">
-          <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">แสดง</span>
-          {[
-            { value: '', label: 'ต้องดำเนินการ', count: inboxCounts.inbox },
-            { value: '0', label: 'ทั้งหมด', count: inboxCounts.all },
-          ].map((item) => {
-            const active = (searchParams.get('inbox') ?? '') === item.value;
-            return (
-              <button
-                key={item.value || 'all'}
-                type="button"
-                aria-pressed={active}
-                className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
-                  active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
-                }`}
-                onClick={() => updateParam('inbox', item.value)}
-              >
-                <span>{item.label}</span>
-                <StatusBadge tone={active ? 'info' : 'neutral'}>{item.count}</StatusBadge>
-              </button>
-            );
-          })}
+      {/* Spacing/reflow live here as utilities, not in styles.css: index.css
+          orders `@layer theme, legacy, utilities`, so a `.ticket-filter-bar`
+          rule in the legacy layer always loses to FilterBar's own utilities.
+          The previous CSS needed `display: grid !important` to win and its
+          gap/padding never applied at all. `mobile:` is the shared <=720px
+          variant from the Phase 3.4 token work. */}
+      <FilterBar
+        className="ticket-filter-bar gap-3 mobile:grid mobile:grid-cols-[minmax(0,1fr)_auto] mobile:items-center mobile:gap-2 mobile:p-2.5"
+        aria-label="ค้นหาและตัวกรองรายการดีล"
+      >
+        <label className="ticket-filter-search search-field">
+          <span className="sr-only">ค้นหาดีล</span>
+          <Icon name="search" />
+          <input
+            type="search"
+            value={searchText}
+            placeholder="ค้นหาเลขที่ / บริษัท / โครงการ / ผู้ดูแล"
+            onChange={(event) => updateParam('q', event.target.value)}
+            aria-label="ค้นหาดีล"
+          />
+        </label>
+        <div className="ticket-filter-meta" aria-live="polite">
+          <strong>{deals.length}</strong>
+          <span>รายการตรงเงื่อนไข</span>
         </div>
-      ) : null}
-
-      <div className="rounded-lg border border-border bg-surface">
-        <button
+        <Button
+          ref={filterToggleRef}
+          variant="secondary"
           type="button"
           aria-expanded={showMoreFilters}
           onClick={() => setMoreFiltersOpen((current) => !current)}
-          className="flex min-h-11 w-full items-center justify-between gap-2 px-3 py-2.5 text-left"
         >
-          <span className="flex items-center gap-2 text-2xs font-extrabold uppercase tracking-wide text-text-muted">
-            <Icon name={showMoreFilters ? 'chevronUp' : 'chevronDown'} size={14} />
-            ตัวกรองเพิ่มเติม
-            <span className="normal-case tracking-normal text-text-faint">(Lifecycle · Flags)</span>
-          </span>
+          <Icon name="setting" size={16} />
+          ตัวกรอง
           {activeMoreFiltersCount > 0 ? (
             <StatusBadge tone="info">{activeMoreFiltersCount}</StatusBadge>
           ) : null}
-        </button>
-        {showMoreFilters ? (
-          <div className="flex flex-col gap-2 border-t border-border p-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">Lifecycle</span>
+        </Button>
+        {activeFilterCount > 0 ? (
+          <Button variant="text" type="button" className="ticket-filter-clear" onClick={clearFilters}>
+            ล้างทั้งหมด
+          </Button>
+        ) : null}
+        <StatusBadge tone={activeFilterCount > 0 ? 'info' : 'neutral'}>
+          {activeFilterCount > 0 ? `${activeFilterCount} ตัวกรอง` : 'ไม่มีตัวกรอง'}
+        </StatusBadge>
+      </FilterBar>
+
+      {activeFilters.length > 0 ? (
+        <div className="ticket-active-filters" aria-label="ตัวกรองที่ใช้">
+          <span>ตัวกรองที่ใช้</span>
+          {activeFilters.map((filter) => (
+            <StatusBadge key={filter} tone="neutral">{filter}</StatusBadge>
+          ))}
+        </div>
+      ) : null}
+
+      {showMoreFilters ? renderFilterSheet(
+        <>
+          <button
+            type="button"
+            className="ticket-filter-backdrop"
+            aria-label="ปิดตัวกรองเพิ่มเติม"
+            onClick={closeMoreFilters}
+          />
+          <section
+            ref={filterSheetRef}
+            className="ticket-filter-sheet"
+            aria-label="ตัวกรองเพิ่มเติม"
+            // Only the mobile bottom sheet is a modal dialog. On desktop the
+            // same node stays an inline labelled region, so announcing it as a
+            // dialog there would be a lie to a screen reader.
+            role={mobileSheetOpen ? 'dialog' : 'region'}
+            aria-modal={mobileSheetOpen ? 'true' : undefined}
+            tabIndex={mobileSheetOpen ? -1 : undefined}
+          >
+            <div className="ticket-filter-sheet-header">
+              <h2>ตัวกรองเพิ่มเติม</h2>
+              <Button
+                variant="icon"
+                size="sm"
+                type="button"
+                title="ปิดตัวกรองเพิ่มเติม"
+                aria-label="ปิดตัวกรองเพิ่มเติม"
+                onClick={closeMoreFilters}
+              >
+                <Icon name="close" size={16} />
+              </Button>
+            </div>
+            <div className="ticket-filter-group">
+              <span>สถานะงาน</span>
               {LIFECYCLE_FILTERS.map((item) => {
                 const active = lifecycleFilter === item.value;
                 return (
@@ -566,9 +956,7 @@ export function TicketListPage({ user, showToast }) {
                     key={item.value || 'all'}
                     type="button"
                     aria-pressed={active}
-                    className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
-                      active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
-                    }`}
+                    className={`ticket-filter-chip${active ? ' is-active' : ''}`}
                     onClick={() => updateParam('life', active ? '' : item.value)}
                   >
                     <span>{item.label}</span>
@@ -577,8 +965,8 @@ export function TicketListPage({ user, showToast }) {
                 );
               })}
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">Flags</span>
+            <div className="ticket-filter-group">
+              <span>สัญญาณงาน</span>
               {FLAG_FILTERS.map((item) => {
                 const active = flagFilter === item.value;
                 return (
@@ -586,9 +974,7 @@ export function TicketListPage({ user, showToast }) {
                     key={item.value}
                     type="button"
                     aria-pressed={active}
-                    className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
-                      active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
-                    }`}
+                    className={`ticket-filter-chip${active ? ' is-active' : ''}`}
                     onClick={() => updateParam('flag', active ? '' : item.value)}
                   >
                     <span>{item.label}</span>
@@ -597,30 +983,27 @@ export function TicketListPage({ user, showToast }) {
                 );
               })}
             </div>
-          </div>
-        ) : null}
-      </div>
+          </section>
+        </>,
+      ) : null}
 
       <DataTable
-        columns={isManagerView ? MANAGER_DEAL_COLUMNS : DEAL_COLUMNS}
+        columns={tableColumns}
         rows={deals}
         getRowKey={(deal) => deal.id}
-        gridClassName="ticket-table"
-        onRowClick={(deal) => navigate(`/tickets/${deal.id}`)}
+        gridClassName="ticket-worklist-table"
         mobileCard={(deal) => (
           user.role === 'account'
-            ? <MoneyWorklistCard deal={deal} />
-            : <DealCard deal={deal} reason={worklistReason(user.role, deal)} showTracking={isManagerView} />
+            ? <MoneyWorklistCard deal={deal} onOpen={openDeal} />
+            : <DealCard deal={deal} reason={worklistReason(user.role, deal)} showTracking={isManagerView} onOpen={openDeal} />
         )}
-        searchable
-        searchValue={searchText}
-        onSearchChange={(value) => updateParam('q', value)}
-        searchPlaceholder="ค้นหาเลขที่ / บริษัท / โครงการ / ผู้ดูแล"
         initialSort={{ key: 'date', dir: 'desc' }}
         loading={loading}
+        error={ticketsQuery.error}
+        onRetry={() => ticketsQuery.refetch()}
         emptyState={{
           icon: 'fileText',
-          title: 'ไม่มีดีล',
+          title: activeFilterCount > 0 ? 'ไม่พบดีลที่ตรงกับตัวกรอง' : 'ไม่มีดีล',
           description: emptyDescription,
         }}
       />
@@ -631,59 +1014,3 @@ export function TicketListPage({ user, showToast }) {
     </div>
   );
 }
-
-const DEAL_COLUMNS = [
-  {
-    key: 'customer',
-    header: 'ดีล / โครงการ',
-    searchAccessor: (deal) => [deal.code, deal.customerName, deal.projectName, deal.title].filter(Boolean).join(' '),
-    render: (deal) => (
-      <span className="flex min-w-0 flex-col gap-0.5">
-        <strong className="block truncate text-text">{deal.customerName || deal.title}</strong>
-        <span className="block truncate text-2xs text-text-muted">
-          {[deal.projectName, deal.code].filter(Boolean).join(' · ')}
-        </span>
-      </span>
-    ),
-  },
-  {
-    key: 'createdByName',
-    header: 'ผู้ดูแล (Sales)',
-    searchAccessor: (deal) => deal.createdByName || '',
-    render: (deal) => <span>{deal.createdByName}</span>,
-  },
-  {
-    key: 'stage',
-    header: 'สถานะดีล',
-    sortable: true,
-    sortAccessor: (deal) => (deal.lifecycle === 'CLOSED_LOST' ? -1 : stageMeta(deal.salesStage)?.no ?? 0),
-    render: (deal) => <DealStageCell deal={deal} />,
-  },
-  {
-    key: 'progress',
-    header: 'ความคืบหน้า',
-    render: (deal) => <StageProgressBar salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST'} />,
-  },
-  {
-    key: 'date',
-    header: 'อัปเดตล่าสุด',
-    sortable: true,
-    sortAccessor: (deal) => new Date(deal.stageUpdatedAt ?? deal.updatedAt),
-    render: (deal) => <DaysBadge stageUpdatedAt={deal.stageUpdatedAt ?? deal.updatedAt} />,
-  },
-];
-
-// Manager live pipeline (V83, Slice B1/B2 — handoff 103): DEAL_COLUMNS plus one
-// column surfacing win% + the no-recent-activity flag per deal — sales_manager/ceo
-// only (see isManagerView in TicketListPage). Never shown to sales/import/account,
-// who have no reason to see another rep's win-probability estimate.
-const MANAGER_DEAL_COLUMNS = [
-  ...DEAL_COLUMNS,
-  {
-    key: 'tracking',
-    header: 'การติดตาม',
-    sortable: true,
-    sortAccessor: (deal) => effectiveWinProbability(deal.winProbabilityOverride, deal.salesStage),
-    render: (deal) => <TrackingBadges deal={deal} />,
-  },
-];

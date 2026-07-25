@@ -257,7 +257,7 @@ export function DealFulfilmentPanel({
   }
 
   return (
-    <section className="table-panel">
+    <section className="table-panel" data-testid="deal-fulfilment-panel">
       <div className="panel-header">
         <h2>การส่งมอบ / นำเข้า</h2>
       </div>
@@ -279,22 +279,22 @@ export function DealFulfilmentPanel({
           <div className="flex flex-wrap gap-2">
             {can.issueImportRequest ? (
               <button type="button" className="primary-button" disabled={issueIrMutation.isPending}
-                onClick={() => issueIrMutation.mutate()}>
+                onClick={() => issueIrMutation.mutate()} data-testid="deal-fulfilment-issue-ir">
                 ออก Import Request (IR)
               </button>
             ) : can.markIrSent ? (
               <button type="button" className="primary-button" disabled={markIrSentMutation.isPending}
-                onClick={() => markIrSentMutation.mutate()}>
+                onClick={() => markIrSentMutation.mutate()} data-testid="deal-fulfilment-mark-ir-sent">
                 ส่ง IR แล้ว
               </button>
             ) : can.markShipping ? (
               <button type="button" className="primary-button" disabled={markShippingMutation.isPending}
-                onClick={() => markShippingMutation.mutate()}>
+                onClick={() => markShippingMutation.mutate()} data-testid="deal-fulfilment-mark-shipping">
                 สินค้าออกเดินทาง (Shipping)
               </button>
             ) : can.markGoodsReceived ? (
               <button type="button" className="primary-button" disabled={markGoodsReceivedMutation.isPending}
-                onClick={() => markGoodsReceivedMutation.mutate()}>
+                onClick={() => markGoodsReceivedMutation.mutate()} data-testid="deal-fulfilment-mark-goods-received">
                 รับสินค้าแล้ว (Goods Received)
               </button>
             ) : fs == null ? (
@@ -302,7 +302,7 @@ export function DealFulfilmentPanel({
             ) : null}
             {can.reserveStock ? (
               <button type="button" className="secondary-button" disabled={reserveStockMutation.isPending}
-                onClick={openStockModal}>
+                onClick={openStockModal} data-testid="deal-fulfilment-reserve-stock">
                 จองสินค้าจากสต็อก
               </button>
             ) : null}
@@ -330,13 +330,13 @@ export function DealFulfilmentPanel({
             <div className="flex flex-wrap gap-2">
               {can.recordDelivery ? (
                 <button type="button" className="primary-button" disabled={recordDeliveryMutation.isPending}
-                  onClick={openDeliveryModal}>
+                  onClick={openDeliveryModal} data-testid="deal-fulfilment-record-delivery">
                   บันทึกการส่งสินค้า
                 </button>
               ) : null}
               {can.completeDelivery ? (
                 <button type="button" className="secondary-button" disabled={completeDeliveryMutation.isPending}
-                  onClick={() => completeDeliveryMutation.mutate()}>
+                  onClick={() => completeDeliveryMutation.mutate()} data-testid="deal-fulfilment-complete">
                   ส่งมอบครบ
                 </button>
               ) : null}
@@ -447,7 +447,7 @@ export function DealFulfilmentPanel({
             <>
               <button type="button" className="secondary-button" onClick={() => setDeliveryOpen(false)}>ยกเลิก</button>
               <button type="button" className="primary-button" disabled={recordDeliveryMutation.isPending}
-                onClick={handleRecordDelivery}>
+                onClick={handleRecordDelivery} data-testid="deal-fulfilment-record-delivery-submit">
                 บันทึก
               </button>
             </>

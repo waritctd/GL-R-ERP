@@ -48,3 +48,9 @@ ERP Documentation/00_ALL_DOCS_BUNDLE.md
 
 # UX audit evidence — kept local only (large binaries; enable LFS before committing)
 docs/ux-ui-audit/screenshots/
+
+# Playwright e2e (Stage K2) run artifacts
+frontend/playwright-report/
+frontend/test-results/
+frontend/blob-report/
+frontend/playwright/.cache/

@@ -169,9 +169,9 @@ export function AttendancePage({ user, showToast }) {
     };
   }, [canImport]);
 
-  const rowKey = (day) => `${day.employee_id}:${day.work_date}`;
+  const rowKey = useCallback((day) => `${day.employee_id}:${day.work_date}`, []);
 
-  async function toggleExpanded(day) {
+  const toggleExpanded = useCallback(async (day) => {
     // A day with no scans has nothing to reveal; opening an empty panel and firing a request for it
     // is worse than not responding to the click.
     if (!day.punch_count) return;
@@ -194,7 +194,7 @@ export function AttendancePage({ user, showToast }) {
     } catch (error) {
       showToast('error', error.message || 'โหลดรายการสแกนไม่สำเร็จ');
     }
-  }
+  }, [expandedKey, punchesByKey, rowKey, showToast]);
 
   function stepDay(deltaDays) {
     const next = new Date(`${selectedDate}T00:00:00+07:00`);
@@ -296,10 +296,37 @@ export function AttendancePage({ user, showToast }) {
     }
   }
 
-  const columns = useMemo(
-    () => (isSelfView ? selfColumns : teamColumns),
-    [isSelfView],
-  );
+  const columns = useMemo(() => {
+    const baseColumns = isSelfView ? selfColumns : teamColumns;
+    return [
+      ...baseColumns,
+      {
+        key: 'scanDetail',
+        header: 'รายการสแกน',
+        render: (day) => {
+          if (!day.punch_count) {
+            return <span className="text-xs text-text-muted">-</span>;
+          }
+          const expanded = expandedKey === rowKey(day);
+          const labelSubject = isSelfView
+            ? formatShortDate(day.work_date)
+            : `${day.employee_name || 'พนักงาน'} ${formatShortDate(day.work_date)}`;
+          return (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => toggleExpanded(day)}
+              aria-expanded={expanded}
+              aria-label={`${expanded ? 'ซ่อน' : 'ดู'}รายการสแกน ${labelSubject}`}
+            >
+              {expanded ? 'ซ่อน' : 'ดู'}
+            </Button>
+          );
+        },
+      },
+    ];
+  }, [expandedKey, isSelfView, rowKey, toggleExpanded]);
 
   // Derived from the employees the caller may already see, so the filter can never offer a ฝ่าย
   // whose people they cannot read. Sorted by name; unnamed divisions are dropped rather than
@@ -570,15 +597,21 @@ export function AttendancePage({ user, showToast }) {
         // which hid every late/early/OT badge on the page.
         gridClassName={
           isSelfView
-            ? 'grid-cols-[0.7fr_0.45fr_0.45fr_0.35fr_2.05fr] reflow-cards'
-            : 'grid-cols-[1.3fr_0.45fr_0.45fr_0.35fr_2.05fr] max-[900px]:min-w-[720px] reflow-cards'
+            ? 'grid-cols-[0.75fr_0.45fr_0.45fr_0.35fr_0.8fr_1.55fr_minmax(78px,0.7fr)] reflow-cards'
+            : 'grid-cols-[1.2fr_0.45fr_0.45fr_0.35fr_0.8fr_1.55fr_minmax(78px,0.7fr)] max-[900px]:min-w-[840px] reflow-cards'
         }
-        mobileCard={(day) => <AttendanceDayCard day={day} isSelfView={isSelfView} />}
+        mobileCard={(day) => (
+          <AttendanceDayCard
+            day={day}
+            isSelfView={isSelfView}
+            expanded={expandedKey === rowKey(day)}
+            onToggle={() => toggleExpanded(day)}
+          />
+        )}
         pageSize={isSelfView ? 31 : 50}
         searchable={!isSelfView}
         searchPlaceholder="ค้นหาพนักงาน / รหัส / ชื่อเล่น"
         loading={loading}
-        onRowClick={toggleExpanded}
         renderExpanded={(day) =>
           expandedKey === rowKey(day) ? (
             <PunchDetail punches={punchesByKey[rowKey(day)]} />
@@ -775,7 +808,7 @@ function StatusCell({ day }) {
   );
 }
 
-function AttendanceDayCard({ day, isSelfView }) {
+function AttendanceDayCard({ day, isSelfView, expanded, onToggle }) {
   // A day with no scans should read as one quiet line, not as a card full of dashes — on a phone
   // every empty day costs a full card, and "รวม - ชม." plus a bare "-" is three ways of saying
   // "nothing happened".
@@ -811,6 +844,21 @@ function AttendanceDayCard({ day, isSelfView }) {
           ) : null}
         </span>
       )}
+      {day.punch_count ? (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="mt-1 w-full"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          aria-label={`${expanded ? 'ซ่อน' : 'ดู'}รายการสแกน ${
+            isSelfView ? formatShortDate(day.work_date) : `${day.employee_name || 'พนักงาน'} ${formatShortDate(day.work_date)}`
+          }`}
+        >
+          {expanded ? 'ซ่อนรายการสแกน' : 'ดูรายการสแกน'}
+        </Button>
+      ) : null}
     </>
   );
 }

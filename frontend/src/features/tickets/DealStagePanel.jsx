@@ -169,7 +169,7 @@ export function DealStagePanel({
   }
 
   return (
-    <section className="panel">
+    <section className="panel" data-testid="deal-stage-panel">
       <div className="panel-header">
         <h2>สถานะดีล (Pipeline)</h2>
         <button
@@ -337,6 +337,7 @@ export function DealStagePanel({
                     className="primary-button"
                     disabled={actionLoading}
                     onClick={() => onUpdateStage({ stage: next.code })}
+                    data-testid="deal-stage-advance"
                   >
                     เลื่อนไป: {dealStageLabel(next.code).label}
                     <Icon name="chevronRight" size={14} />

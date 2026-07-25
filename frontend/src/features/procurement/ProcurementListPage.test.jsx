@@ -70,10 +70,10 @@ describe('ProcurementListPage', () => {
     expect(screen.getByText('FPO-2026-0002')).not.toBeNull();
   });
 
-  it('navigates to the PO detail page when a row is clicked', async () => {
+  it('navigates to the PO detail page through the explicit open control', async () => {
     renderPage();
-    const row = await screen.findByText('Factory A');
-    fireEvent.click(row.closest('[role="row"]'));
+    await screen.findByText('Factory A');
+    fireEvent.click(screen.getByRole('button', { name: 'เปิดใบสั่งซื้อ FPO-2026-0001' }));
     await waitFor(() => expect(screen.getByTestId('location-display').textContent)
       .toBe('/factory-purchase-orders/1'));
   });

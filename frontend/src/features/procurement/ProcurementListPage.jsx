@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -20,7 +21,7 @@ const STATUS_FILTERS = [
   { value: 'CANCELLED', label: 'ยกเลิกแล้ว' },
 ];
 
-function PoCard({ po }) {
+function PoCard({ po, onOpen }) {
   const status = factoryPurchaseOrderStatusLabel(po.status);
   return (
     <>
@@ -33,6 +34,16 @@ function PoCard({ po }) {
         {[po.pricingRequestCode, po.ticketCode].filter(Boolean).join(' · ')}
       </span>
       <span className="text-sm font-bold text-text">{formatMoney(po.totalAmount)} {po.currency}</span>
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        className="mt-1 w-full"
+        onClick={() => onOpen(po)}
+        aria-label={`เปิดใบสั่งซื้อ ${po.poNumber}`}
+      >
+        เปิด
+      </Button>
     </>
   );
 }
@@ -111,7 +122,22 @@ export function ProcurementListPage({ showToast }) {
       sortAccessor: (po) => new Date(po.updatedAt),
       render: (po) => <span className="text-xs text-text-muted">{formatThaiDate(po.updatedAt)}</span>,
     },
-  ], []);
+    {
+      key: 'open',
+      header: 'เปิด',
+      render: (po) => (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={() => navigate(`/factory-purchase-orders/${po.id}`)}
+          aria-label={`เปิดใบสั่งซื้อ ${po.poNumber}`}
+        >
+          เปิด
+        </Button>
+      ),
+    },
+  ], [navigate]);
 
   return (
     <div className="page-stack">
@@ -119,9 +145,9 @@ export function ProcurementListPage({ showToast }) {
         title="ใบสั่งซื้อโรงงาน"
         subtitle="Factory Purchase Orders — ต้นทาง สินค้า/ราคา จาก pricing_costing_item ที่ได้รับอนุมัติแล้วเท่านั้น"
         actions={(
-          <button type="button" className="icon-button" onClick={invalidate} title="รีเฟรช" aria-label="รีเฟรช">
+          <Button type="button" variant="icon" onClick={invalidate} title="รีเฟรช">
             <Icon name="refresh" />
-          </button>
+          </Button>
         )}
       />
 
@@ -150,14 +176,15 @@ export function ProcurementListPage({ showToast }) {
         rows={orders}
         getRowKey={(po) => po.id}
         gridClassName="procurement-table"
-        onRowClick={(po) => navigate(`/factory-purchase-orders/${po.id}`)}
-        mobileCard={(po) => <PoCard po={po} />}
+        mobileCard={(po) => <PoCard po={po} onOpen={() => navigate(`/factory-purchase-orders/${po.id}`)} />}
         searchable
         searchValue={searchText}
         onSearchChange={setSearchText}
         searchPlaceholder="ค้นหาเลขที่ / โรงงาน / ใบขอราคา / ดีล"
         initialSort={{ key: 'updatedAt', dir: 'desc' }}
-        loading={poQuery.isLoading || poQuery.isFetching}
+        loading={poQuery.isLoading}
+        error={poQuery.error}
+        onRetry={() => poQuery.refetch()}
         emptyState={{
           icon: 'fileText',
           title: 'ไม่มีใบสั่งซื้อโรงงาน',

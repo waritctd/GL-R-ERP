@@ -52,6 +52,7 @@ export function LoginPage({ onLogin, loading, error }) {
             <span className="input-with-icon">
               <Icon name="mail" />
               <input
+                data-testid="login-email"
                 value={form.email}
                 onChange={(event) => updateField('email', event.target.value)}
                 type="text"
@@ -67,6 +68,7 @@ export function LoginPage({ onLogin, loading, error }) {
             <span className="input-with-icon">
               <Icon name="lock" />
               <input
+                data-testid="login-password"
                 value={form.password}
                 onChange={(event) => updateField('password', event.target.value)}
                 type="password"
@@ -78,7 +80,7 @@ export function LoginPage({ onLogin, loading, error }) {
 
           {error ? <div className="form-error">{error}</div> : null}
 
-          <Button type="submit" disabled={loading}>
+          <Button type="submit" data-testid="login-submit" disabled={loading}>
             <Icon name="check" />
             เข้าสู่ระบบ
           </Button>
@@ -93,6 +95,7 @@ export function LoginPage({ onLogin, loading, error }) {
                     type="button"
                     variant="secondary"
                     className="justify-start gap-[10px] py-[6px] px-3"
+                    data-testid={`login-role-${account.role}`}
                     disabled={loading}
                     onClick={() => onLogin({ role: account.role })}
                   >

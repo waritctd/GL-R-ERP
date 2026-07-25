@@ -3,7 +3,7 @@ import { Icon } from './Icon.jsx';
 
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
 
-export function Modal({ title, subtitle, children, footer, onClose }) {
+export function Modal({ title, subtitle, children, footer, onClose, testId }) {
   const panelRef = useRef(null);
   const previouslyFocused = useRef(null);
   const onCloseRef = useRef(onClose);
@@ -58,6 +58,7 @@ export function Modal({ title, subtitle, children, footer, onClose }) {
         aria-label={title}
         tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
+        data-testid={testId}
       >
         <header className="modal-header">
           <div>

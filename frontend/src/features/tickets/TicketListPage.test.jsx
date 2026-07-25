@@ -1,12 +1,27 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketListPage } from './TicketListPage.jsx';
 import { api } from '../../api/index.js';
 
 globalThis.React = React;
+
+const realMatchMedia = window.matchMedia;
+
+afterEach(() => {
+  window.matchMedia = realMatchMedia;
+});
+
+function stubMobile() {
+  window.matchMedia = (query) => ({
+    matches: query === '(max-width: 720px)',
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  });
+}
 
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -39,15 +54,27 @@ const salesUser = {
   role: 'sales',
 };
 
+const importUser = {
+  employeeId: 3,
+  name: 'Import ทดสอบ',
+  role: 'import',
+};
+
+const accountUser = {
+  employeeId: 4,
+  name: 'Account ทดสอบ',
+  role: 'account',
+};
+
 // Commit 6: handleCreate now navigates to the new deal's page — MemoryRouter
 // doesn't touch window.location, so surface the current path via useLocation
 // for assertions instead.
 function LocationDisplay() {
   const location = useLocation();
-  return <div data-testid="location-display">{location.pathname}</div>;
+  return <div data-testid="location-display">{location.pathname}{location.search}</div>;
 }
 
-function renderTicketListPage() {
+function renderTicketListPage(user = salesUser, initialEntries = ['/tickets'], children = null) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -57,8 +84,9 @@ function renderTicketListPage() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/tickets']}>
-        <TicketListPage user={salesUser} showToast={vi.fn()} />
+      <MemoryRouter initialEntries={initialEntries}>
+        <TicketListPage user={user} showToast={vi.fn()} />
+        {children}
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -155,9 +183,133 @@ describe('TicketListPage', () => {
   it('renders rows from a mocked api.tickets.list', async () => {
     renderTicketListPage();
 
+    expect(screen.getByRole('heading', { level: 1, name: 'รายการดีล' })).toBeTruthy();
     expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
     expect(screen.getByText('PR-2026-0501')).not.toBeNull();
     expect(api.tickets.list).toHaveBeenCalledWith({});
+  });
+
+  it('opens a deal through the explicit row action, not an implicit row click', async () => {
+    renderTicketListPage(salesUser, ['/tickets'], <LocationDisplay />);
+
+    await screen.findByText('บริษัท ทดสอบ จำกัด');
+    fireEvent.click(screen.getByRole('button', { name: 'เปิดดีล PR-2026-0501' }));
+
+    await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets/501'));
+  });
+
+  it('shows create for Sales and hides it for non-Sales ticket-list roles', async () => {
+    const rolesWithoutCreate = [
+      { employeeId: 2, name: 'Manager ทดสอบ', role: 'sales_manager' },
+      { employeeId: 3, name: 'Import ทดสอบ', role: 'import' },
+      { employeeId: 4, name: 'Account ทดสอบ', role: 'account' },
+      { employeeId: 5, name: 'CEO ทดสอบ', role: 'ceo' },
+    ];
+
+    const { unmount } = renderTicketListPage(salesUser);
+    expect(await screen.findByRole('button', { name: /สร้างดีลใหม่/ })).toBeTruthy();
+    unmount();
+
+    for (const roleUser of rolesWithoutCreate) {
+      const view = renderTicketListPage(roleUser);
+      await screen.findByRole('heading', { name: 'รายการดีล' });
+      expect(screen.queryByRole('button', { name: /สร้างดีลใหม่/ })).toBeNull();
+      view.unmount();
+    }
+  });
+
+  it('keeps search and phase filters URL-backed in the consolidated filter bar', async () => {
+    renderTicketListPage(salesUser, ['/tickets?q=เกินกำหนด&phase=5'], <LocationDisplay />);
+
+    expect(await screen.findByText('บริษัท เกินกำหนด จำกัด')).not.toBeNull();
+    expect(screen.queryByText('บริษัท ทดสอบ จำกัด')).toBeNull();
+    expect(screen.getByRole('searchbox', { name: 'ค้นหาดีล' }).value).toBe('เกินกำหนด');
+    expect(screen.getByText('ค้นหาในรายการ')).toBeTruthy();
+    expect(screen.getByText('เฟส 5: ส่งมอบและปิดงาน')).toBeTruthy();
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'ค้นหาดีล' }), { target: { value: 'พักไว้' } });
+    expect(screen.getByTestId('location-display').textContent).toContain('q=%E0%B8%9E%E0%B8%B1%E0%B8%81%E0%B9%84%E0%B8%A7%E0%B9%89');
+
+    fireEvent.click(screen.getByRole('button', { name: /เฟส 4/ }));
+    expect(screen.getByTestId('location-display').textContent).toContain('phase=4');
+  });
+
+  it('preserves import/account worklist scope and hides create when not permitted', async () => {
+    renderTicketListPage(accountUser, ['/tickets'], <LocationDisplay />);
+
+    expect(await screen.findByText('บริษัท เกินกำหนด จำกัด')).not.toBeNull();
+    expect(screen.queryByText('บริษัท ทดสอบ จำกัด')).toBeNull();
+    expect(screen.queryByRole('button', { name: /สร้างดีลใหม่/ })).toBeNull();
+    const scopeToggle = within(screen.getByLabelText('เลือกขอบเขตรายการ'));
+    expect(scopeToggle.getByRole('button', { name: /ต้องดำเนินการ/ }).getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(scopeToggle.getByRole('button', { name: /ทั้งหมด/ }));
+    await waitFor(() => expect(screen.getByTestId('location-display').textContent).toContain('inbox=0'));
+    await waitFor(() => expect(screen.getByText('บริษัท ทดสอบ จำกัด')).toBeTruthy());
+  });
+
+  it('initializes import/account worklist scope from the URL', async () => {
+    renderTicketListPage(importUser, ['/tickets?inbox=0']);
+
+    expect(await screen.findByText('ขอบเขตฝ่ายนำเข้า')).toBeTruthy();
+    const scopeToggle = within(screen.getByLabelText('เลือกขอบเขตรายการ'));
+    expect(scopeToggle.getByRole('button', { name: /ทั้งหมด/ }).getAttribute('aria-pressed')).toBe('true');
+    expect(scopeToggle.getByRole('button', { name: /ต้องดำเนินการ/ }).getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('shows the import scope labels without changing the existing inbox predicate', async () => {
+    renderTicketListPage(importUser);
+
+    expect(await screen.findByText('ขอบเขตฝ่ายนำเข้า')).toBeTruthy();
+    const scopeToggle = within(screen.getByLabelText('เลือกขอบเขตรายการ'));
+    expect(scopeToggle.getByRole('button', { name: /ต้องดำเนินการ/ }).getAttribute('aria-pressed')).toBe('true');
+    expect(scopeToggle.getByRole('button', { name: /ทั้งหมด/ })).toBeTruthy();
+  });
+
+  it('renders a purpose-built mobile card with long Thai identity, readable work stage, and focus-restoring filters', async () => {
+    stubMobile();
+    const longDeal = {
+      id: 507,
+      code: 'PR-2026-0507',
+      title: 'โครงการทดสอบมือถือ',
+      customerName: 'บริษัท โรงแรมและศูนย์ประชุมมหานครริมแม่น้ำเจ้าพระยาขนาดใหญ่พิเศษ จำกัด',
+      projectName: 'โครงการปรับปรุงพื้นที่ต้อนรับหลักชั้นล่างและโถงทางเดินเชื่อมอาคารสำนักงานฝั่งตะวันออก',
+      status: 'quotation_issued',
+      createdByName: 'คุณสมหมาย ขายดีมากประสบการณ์ประจำภูมิภาคกรุงเทพและปริมณฑล',
+      createdAt: '2026-07-06T09:00:00.000Z',
+      salesStage: 'QUOTE_DESIGN_SIDE',
+      lifecycle: 'ACTIVE',
+      lostReason: null,
+      overdue: false,
+      fulfillmentStatus: null,
+      stageUpdatedAt: '2026-07-06T09:00:00.000Z',
+    };
+    api.tickets.list.mockResolvedValueOnce({ tickets: [longDeal] });
+
+    const { container } = renderTicketListPage();
+
+    const card = await screen.findByRole('listitem');
+    const cardScope = within(card);
+    expect(container.querySelector('.data-table-table')).toBeNull();
+    expect(cardScope.getByText(longDeal.customerName).className).toContain('ticket-card-title');
+    expect(cardScope.getByText(longDeal.customerName).className).not.toContain('truncate');
+    expect(cardScope.getByText(longDeal.projectName).className).toContain('ticket-card-project');
+    expect(cardScope.getByText(longDeal.createdByName, { exact: false }).className).toContain('ticket-card-owner');
+    expect(cardScope.getByText(/เสนอราคาผู้ออกแบบ\/เจ้าของ/)).toBeTruthy();
+    expect(cardScope.getByRole('button', { name: 'เปิดดีล PR-2026-0507' })).toBeTruthy();
+    expect(screen.getByRole('searchbox', { name: 'ค้นหาดีล' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /สร้างดีลใหม่/ })).toBeTruthy();
+
+    const filterToggle = screen.getByRole('button', { name: /^ตัวกรอง/ });
+    filterToggle.focus();
+    fireEvent.click(filterToggle);
+    // This case stubs the mobile viewport, where the sheet is a modal dialog
+    // rather than the desktop inline region (see the modal-contract suite).
+    const filterSheet = screen.getByRole('dialog', { name: 'ตัวกรองเพิ่มเติม' });
+    expect(filterSheet).toBeTruthy();
+
+    fireEvent.click(within(filterSheet).getByRole('button', { name: 'ปิดตัวกรองเพิ่มเติม' }));
+    await waitFor(() => expect(document.activeElement).toBe(filterToggle));
   });
 
   it('invalidates and refetches the ticket list after creating a ticket', async () => {
@@ -182,6 +334,49 @@ describe('TicketListPage', () => {
     await waitFor(() => expect(api.tickets.create).toHaveBeenCalledWith({ title: 'โครงการใหม่' }));
     await waitFor(() => expect(api.tickets.list).toHaveBeenCalledTimes(2));
     expect(showToast).toHaveBeenCalledWith('success', 'สร้างดีลเรียบร้อย');
+  });
+
+  it('distinguishes filtered-empty copy from a truly empty ticket list', async () => {
+    const { unmount } = renderTicketListPage(salesUser, ['/tickets?q=ไม่พบแน่นอน']);
+    expect(await screen.findByText('ไม่พบดีลที่ตรงกับตัวกรอง')).toBeTruthy();
+    expect(screen.getByText('ไม่พบดีลที่ตรงกับคำค้นหาและตัวกรองที่เลือก')).toBeTruthy();
+    unmount();
+
+    api.tickets.list.mockResolvedValueOnce({ tickets: [] });
+    renderTicketListPage(salesUser);
+    expect(await screen.findByText('ไม่มีดีล')).toBeTruthy();
+    expect(screen.getByText('ยังไม่มีดีลในเงื่อนไขที่เลือก')).toBeTruthy();
+  });
+
+  it('does not render role-sensitive financial internals in sales-visible rows or cards', async () => {
+    api.tickets.list.mockResolvedValueOnce({
+      tickets: [{
+        id: 508,
+        code: 'PR-2026-0508',
+        title: 'ดีลมีข้อมูลการเงิน',
+        customerName: 'บริษัท มีต้นทุน จำกัด',
+        projectName: 'โครงการไม่แสดงต้นทุน',
+        status: 'quotation_issued',
+        createdByName: 'สมชาย ใจดี',
+        createdAt: '2026-07-08T09:00:00.000Z',
+        salesStage: 'QUOTE_BUYER',
+        lifecycle: 'ACTIVE',
+        lostReason: null,
+        overdue: false,
+        fulfillmentStatus: null,
+        stageUpdatedAt: '2026-07-08T09:00:00.000Z',
+        costAmount: 'ต้นทุนลับ 999999',
+        marginAmount: 'กำไรขั้นต้นลับ',
+        financeNote: 'หมายเหตุการเงินภายใน',
+      }],
+    });
+
+    renderTicketListPage(salesUser);
+
+    expect(await screen.findByText('บริษัท มีต้นทุน จำกัด')).toBeTruthy();
+    expect(screen.queryByText(/ต้นทุนลับ/)).toBeNull();
+    expect(screen.queryByText(/กำไรขั้นต้นลับ/)).toBeNull();
+    expect(screen.queryByText(/หมายเหตุการเงินภายใน/)).toBeNull();
   });
 
   // Commit 6: a newly created deal starts as an empty DRAFT with no
@@ -225,7 +420,7 @@ describe('TicketListPage', () => {
     renderTicketListPage();
 
     expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /ตัวกรองเพิ่มเติม/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ตัวกรอง/ }));
 
     fireEvent.click(screen.getByRole('button', { name: /พักไว้ชั่วคราว/ }));
     expect(screen.getByText('บริษัท พักไว้ จำกัด')).not.toBeNull();
@@ -250,7 +445,7 @@ describe('TicketListPage', () => {
       renderTicketListPage();
       expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
 
-      const toggle = screen.getByRole('button', { name: /ตัวกรองเพิ่มเติม/ });
+      const toggle = screen.getByRole('button', { name: /ตัวกรอง/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(screen.queryByRole('button', { name: /พักไว้ชั่วคราว/ })).toBeNull();
       expect(screen.queryByRole('button', { name: /^เกินกำหนด/ })).toBeNull();
@@ -261,7 +456,7 @@ describe('TicketListPage', () => {
       renderTicketListPage();
       expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
 
-      const toggle = screen.getByRole('button', { name: /ตัวกรองเพิ่มเติม/ });
+      const toggle = screen.getByRole('button', { name: /ตัวกรอง/ });
       fireEvent.click(toggle);
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
 
@@ -271,11 +466,150 @@ describe('TicketListPage', () => {
       expect(screen.getByText('บริษัท พักไว้ จำกัด')).not.toBeNull();
       expect(screen.queryByText('บริษัท ทดสอบ จำกัด')).toBeNull();
 
-      // Collapsing again keeps the now-active filter visible/working rather
-      // than silently hiding an applied filter from the viewer.
+      // Phase 4A: collapsing now genuinely closes the sheet even with a filter
+      // applied — the old `open || hasActiveFilter` derivation made the sheet
+      // impossible to dismiss, which broke close/scrim/Escape on the mobile
+      // modal. The applied filter is not hidden by closing: it stays reported
+      // in the "ตัวกรองที่ใช้" summary row, in the toggle's count badge, and it
+      // keeps filtering the table.
       fireEvent.click(toggle);
-      expect(screen.getByRole('button', { name: /พักไว้ชั่วคราว/ })).not.toBeNull();
+      expect(screen.queryByRole('button', { name: /พักไว้ชั่วคราว/ })).toBeNull();
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(within(toggle).getByText('1')).not.toBeNull();
+      expect(screen.getByLabelText('ตัวกรองที่ใช้')).not.toBeNull();
+      expect(screen.getByText('สถานะงาน: พักไว้ชั่วคราว')).not.toBeNull();
       expect(screen.getByText('บริษัท พักไว้ จำกัด')).not.toBeNull();
+    });
+
+    it('opens itself when a lifecycle filter arrives by deep link, so an applied filter is never hidden', async () => {
+      renderTicketListPage(salesUser, ['/tickets?life=ON_HOLD']);
+      expect(await screen.findByText('บริษัท พักไว้ จำกัด')).not.toBeNull();
+
+      expect(screen.getByRole('button', { name: /^ตัวกรอง/ }).getAttribute('aria-expanded')).toBe('true');
+      expect(screen.getByRole('button', { name: /พักไว้ชั่วคราว/ })).not.toBeNull();
+    });
+  });
+
+  // Acceptance gate for Phase 4A: at <=720px the filter sheet is a modal
+  // bottom sheet over a scrim, so it owes the viewer the full modal contract.
+  describe('mobile filter sheet modal contract', () => {
+    async function openMobileSheet() {
+      stubMobile();
+      renderTicketListPage();
+      expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
+      const toggle = screen.getByRole('button', { name: /ตัวกรอง/ });
+      toggle.focus();
+      fireEvent.click(toggle);
+      return { toggle, sheet: screen.getByRole('dialog', { name: 'ตัวกรองเพิ่มเติม' }) };
+    }
+
+    it('announces itself as a modal dialog on mobile only', async () => {
+      const { sheet } = await openMobileSheet();
+      expect(sheet.getAttribute('aria-modal')).toBe('true');
+    });
+
+    it('stays an inline region (not a dialog) above the mobile breakpoint', async () => {
+      renderTicketListPage();
+      expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /ตัวกรอง/ }));
+
+      expect(screen.queryByRole('dialog')).toBeNull();
+      const sheet = screen.getByRole('region', { name: 'ตัวกรองเพิ่มเติม' });
+      expect(sheet.getAttribute('aria-modal')).toBeNull();
+    });
+
+    it('closes on Escape and restores focus to the filter toggle', async () => {
+      const { toggle, sheet } = await openMobileSheet();
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(sheet.isConnected).toBe(false);
+      await waitFor(() => expect(document.activeElement).toBe(toggle));
+    });
+
+    it('closes on Escape even while a lifecycle filter is applied', async () => {
+      stubMobile();
+      renderTicketListPage(salesUser, ['/tickets?life=ON_HOLD']);
+      expect(await screen.findByText('บริษัท พักไว้ จำกัด')).not.toBeNull();
+      expect(screen.getByRole('dialog', { name: 'ตัวกรองเพิ่มเติม' })).not.toBeNull();
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      expect(screen.queryByRole('dialog')).toBeNull();
+      // The filter is still applied and still reported after dismissal.
+      expect(screen.getByText('สถานะงาน: พักไว้ชั่วคราว')).not.toBeNull();
+      expect(screen.getByText('บริษัท พักไว้ จำกัด')).not.toBeNull();
+    });
+
+    it('moves initial focus into the sheet and traps Tab inside it', async () => {
+      const { sheet } = await openMobileSheet();
+      const focusables = Array.from(
+        sheet.querySelectorAll('a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])'),
+      );
+      expect(focusables.length).toBeGreaterThan(1);
+
+      // Opening hands focus to the first control inside the sheet.
+      expect(sheet.contains(document.activeElement)).toBe(true);
+      expect(document.activeElement).toBe(focusables[0]);
+
+      // Tab off the last control wraps to the first, and shift+Tab off the
+      // first wraps to the last — focus never lands on the inert page behind.
+      const last = focusables[focusables.length - 1];
+      last.focus();
+      fireEvent.keyDown(document, { key: 'Tab' });
+      expect(document.activeElement).toBe(focusables[0]);
+
+      fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+      expect(document.activeElement).toBe(last);
+    });
+
+    it('pulls focus back in if it escapes to the page behind', async () => {
+      const { toggle, sheet } = await openMobileSheet();
+      const first = sheet.querySelector('button');
+
+      toggle.focus();
+      fireEvent.keyDown(document, { key: 'Tab' });
+
+      expect(document.activeElement).toBe(first);
+    });
+
+    it('marks the page behind the sheet inert and hidden, and clears both on close', async () => {
+      const { sheet } = await openMobileSheet();
+      const pageRoot = document.querySelector('.ticket-list-page');
+
+      // The sheet is portalled out of the page root, so inerting the root
+      // cannot swallow the sheet itself.
+      expect(pageRoot.contains(sheet)).toBe(false);
+      expect(pageRoot.hasAttribute('inert')).toBe(true);
+      expect(pageRoot.getAttribute('aria-hidden')).toBe('true');
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      expect(pageRoot.hasAttribute('inert')).toBe(false);
+      expect(pageRoot.getAttribute('aria-hidden')).toBeNull();
+    });
+
+    it('does not inert the page when the sheet is the desktop inline panel', async () => {
+      renderTicketListPage();
+      expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /ตัวกรอง/ }));
+
+      const pageRoot = document.querySelector('.ticket-list-page');
+      expect(pageRoot.hasAttribute('inert')).toBe(false);
+      expect(pageRoot.getAttribute('aria-hidden')).toBeNull();
+      expect(pageRoot.querySelector('.ticket-filter-sheet')).not.toBeNull();
+    });
+
+    it('closes on scrim click and restores focus', async () => {
+      const { toggle } = await openMobileSheet();
+
+      // The scrim specifically — the header close button carries the same
+      // accessible name, so target the backdrop element itself.
+      fireEvent.click(document.querySelector('.ticket-filter-backdrop'));
+
+      expect(screen.queryByRole('dialog')).toBeNull();
+      await waitFor(() => expect(document.activeElement).toBe(toggle));
     });
   });
 });

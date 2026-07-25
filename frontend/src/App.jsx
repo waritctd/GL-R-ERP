@@ -404,6 +404,16 @@ export function App() {
                   path="/procurement"
                   element={<ProcurementFulfilmentPage user={user} showToast={showToast} />}
                 />
+                {/* Catalog browsing — the `canViewCatalog` guard in PATH_GUARDS
+                    (sales/import/ceo/account/sales_manager) is only enforced if the
+                    route is INSIDE RequireAccess. It previously sat outside (dead
+                    guard — any logged-in user could reach /catalog); moved in here
+                    (fix/catalog-route-guard). NOTE: GET /api/catalog still has no
+                    backend role check (routes.js) — a separate follow-up. */}
+                <Route
+                  path="/catalog"
+                  element={<CatalogSearchPage user={user} showToast={showToast} />}
+                />
               </>
             )}
           </Route>
@@ -412,9 +422,6 @@ export function App() {
             path="/attendance"
             element={<AttendancePage user={user} employees={employees} showToast={showToast} />}
           />
-          {SALES_ENABLED && (
-            <Route path="/catalog" element={<CatalogSearchPage user={user} showToast={showToast} />} />
-          )}
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

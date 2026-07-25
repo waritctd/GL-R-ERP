@@ -69,6 +69,67 @@ describe('Button', () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
+  it('renders a loading state that is busy, disabled, and width-preserving', () => {
+    const onClick = vi.fn();
+    const { container } = render(<Button loading onClick={onClick}>บันทึก</Button>);
+    const button = screen.getByRole('button', { name: 'บันทึก' });
+
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(button.textContent).toContain('บันทึก');
+    expect(container.querySelector('.button-loading-spinner')).toBeTruthy();
+
+    fireEvent.click(button);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it('uses title as the accessible name fallback for icon buttons', () => {
+    render(<Button variant="icon" title="รีเฟรช">i</Button>);
+
+    expect(screen.getByRole('button', { name: 'รีเฟรช' }).getAttribute('aria-label')).toBe('รีเฟรช');
+  });
+
+  it('uses explicit accessible labels correctly for icon buttons', () => {
+    render(
+      <>
+        <Button variant="icon" aria-label="เปิดตัวกรอง">i</Button>
+        <span id="save-label">บันทึกด่วน</span>
+        <Button variant="icon" aria-labelledby="save-label">s</Button>
+      </>,
+    );
+
+    expect(screen.getByRole('button', { name: 'เปิดตัวกรอง' }).getAttribute('aria-label')).toBe('เปิดตัวกรอง');
+    expect(screen.getByRole('button', { name: 'บันทึกด่วน' }).getAttribute('aria-labelledby')).toBe('save-label');
+  });
+
+  it('keeps caller-provided labels stable while loading', () => {
+    render(
+      <Button loading aria-label="บันทึกข้อมูลพนักงาน">
+        กำลังบันทึก
+      </Button>,
+    );
+
+    const button = screen.getByRole('button', { name: 'บันทึกข้อมูลพนักงาน' });
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-busy')).toBe('true');
+  });
+
+  it('rejects icon buttons without an accessible name', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() => render(<Button variant="icon">i</Button>)).toThrow(/accessible name/);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('does not suppress the global focus-visible contract locally', () => {
+    render(<Button>โฟกัส</Button>);
+    const button = screen.getByRole('button', { name: 'โฟกัส' });
+
+    expect(button.className).not.toMatch(/outline-none|focus:outline-none/);
+  });
+
   it('merges caller className last', () => {
     render(<Button className="px-2 min-h-[40px]">กำหนดเอง</Button>);
     const button = screen.getByRole('button', { name: 'กำหนดเอง' });
