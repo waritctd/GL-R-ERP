@@ -3,6 +3,7 @@ package th.co.glr.hr.leave;
 import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,6 +17,7 @@ import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.leave.LeaveResponses.LeaveBalancesResponse;
+import th.co.glr.hr.leave.LeaveResponses.LeaveContactDefaultsResponse;
 import th.co.glr.hr.leave.LeaveResponses.LeaveDetailResponse;
 import th.co.glr.hr.leave.LeaveResponses.LeaveEmployeeOptionsResponse;
 import th.co.glr.hr.leave.LeaveResponses.LeaveListResponse;
@@ -60,10 +62,21 @@ public class LeaveController {
             @RequestParam("startDate") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
             @RequestParam("endDate") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
             @RequestParam("reason") String reason,
+            @RequestParam(value = "startTime", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.TIME) LocalTime startTime,
+            @RequestParam(value = "endTime", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.TIME) LocalTime endTime,
+            @RequestParam(value = "contactHouseNo", required = false) String contactHouseNo,
+            @RequestParam(value = "contactSubdistrict", required = false) String contactSubdistrict,
+            @RequestParam(value = "contactDistrict", required = false) String contactDistrict,
+            @RequestParam(value = "contactProvince", required = false) String contactProvince,
+            @RequestParam(value = "contactPhone", required = false) String contactPhone,
             @RequestParam(value = "attachment", required = false) MultipartFile attachment,
             HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        SubmitLeaveRequest request = new SubmitLeaveRequest(employeeId, leaveTypeCode, startDate, endDate, reason);
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            employeeId, leaveTypeCode, startDate, endDate, reason,
+            startTime, endTime, contactHouseNo, contactSubdistrict, contactDistrict, contactProvince, contactPhone);
         return new LeaveDetailResponse(leaveService.submit(request, attachment, user));
     }
 
@@ -77,6 +90,17 @@ public class LeaveController {
     LeaveTypesResponse leaveTypes(HttpSession session) {
         sessions.requireUser(session);
         return new LeaveTypesResponse(leaveService.leaveTypes());
+    }
+
+    // Paper-form (ใบลาหยุด F-HR-020) autofill for the contact-during-leave block, plus read-only
+    // position/department/division -- reuses the /balances access predicate (own record, or HR/CEO,
+    // or the employee's direct manager). See LeaveService#contactDefaults.
+    @GetMapping("/contact-defaults")
+    LeaveContactDefaultsResponse contactDefaults(
+            @RequestParam(value = "employeeId", required = false) Long employeeId,
+            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new LeaveContactDefaultsResponse(leaveService.contactDefaults(user, employeeId));
     }
 
     @GetMapping("/balances")

@@ -20,4 +20,7 @@ public final class LeaveResponses {
 
     public record LeaveTypesResponse(List<LeaveTypeDto> leaveTypes) {
     }
+
+    public record LeaveContactDefaultsResponse(LeaveContactDefaultsDto contactDefaults) {
+    }
 }

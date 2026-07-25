@@ -1,6 +1,7 @@
 package th.co.glr.hr.leave;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -15,11 +16,13 @@ import java.time.ZoneId;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.mock.web.MockMultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -199,6 +202,28 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         // trace that a day was ever deducted for it.
         assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01")))
             .doesNotContainKey(employeeId);
+    }
+
+    /**
+     * Paper-form contact-during-leave autofill (2026-07-25 review fix), authz -- required by
+     * CLAUDE.md's "Permission changes must ship evidence" rule: {@code GET
+     * /api/leave/contact-defaults} exposes another employee's home address + phone, so it needs the
+     * same real-DB, wrong-way-round proof as any other scope/filter change. Two employees with no
+     * manager relationship (plain {@link #insertEmployee} sets no {@code reports_to_employee_id}): a
+     * plain employee asking for a peer's contact defaults -- someone who is neither themself, their
+     * manager, nor a direct report -- must be refused. This asserts the caller CANNOT reach what they
+     * shouldn't (not merely that they can reach their own), matching {@link LeaveService#balances}'s
+     * predicate that {@link LeaveService#contactDefaults} deliberately reuses.
+     */
+    @Test
+    void employeeCannotReadANonReportPeersContactDefaults() {
+        long actorId = insertEmployee("PEER-ACTOR");
+        long peerId = insertEmployee("PEER-OTHER");
+
+        assertThatThrownBy(() -> leaveService.contactDefaults(employee(actorId), peerId))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.FORBIDDEN);
     }
 
     @Test

@@ -1,10 +1,10 @@
 package th.co.glr.hr.leave;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -47,6 +47,45 @@ public class LeaveRepository {
                 rs.getLong("employee_id"),
                 nullableLong(rs, "reports_to_employee_id"),
                 rs.getBoolean("is_active")
+            ))
+            .stream()
+            .findFirst();
+    }
+
+    /**
+     * Paper-form (ใบลาหยุด F-HR-020) autofill for the contact-during-leave block, plus read-only
+     * position/department/division -- phone from {@code hr.employee.phone}, the rest from the
+     * employee's CURRENT {@code hr.employee_address} row (LEFT JOIN: a missing address just leaves
+     * those fields null, it doesn't fail the lookup). See LeaveService#contactDefaults.
+     */
+    public Optional<LeaveContactDefaultsDto> findContactDefaults(long employeeId) {
+        return jdbc.query("""
+            SELECT e.employee_id,
+                   pos.name_th AS position_name_th,
+                   dep.name_th AS department_name_th,
+                   div.name_th AS division_name_th,
+                   addr.house_no AS contact_house_no,
+                   addr.subdistrict AS contact_subdistrict,
+                   addr.district AS contact_district,
+                   addr.province AS contact_province,
+                   e.phone AS contact_phone
+              FROM hr.employee e
+              LEFT JOIN hr.position pos ON pos.position_id = e.position_id
+              LEFT JOIN hr.department dep ON dep.department_id = e.department_id
+              LEFT JOIN hr.division div ON div.division_id = e.division_id
+              LEFT JOIN hr.employee_address addr
+                     ON addr.employee_id = e.employee_id AND addr.address_type = 'CURRENT'
+             WHERE e.employee_id = :employeeId
+            """, Map.of("employeeId", employeeId), (rs, rowNum) -> new LeaveContactDefaultsDto(
+                rs.getLong("employee_id"),
+                rs.getString("position_name_th"),
+                rs.getString("department_name_th"),
+                rs.getString("division_name_th"),
+                rs.getString("contact_house_no"),
+                rs.getString("contact_subdistrict"),
+                rs.getString("contact_district"),
+                rs.getString("contact_province"),
+                rs.getString("contact_phone")
             ))
             .stream()
             .findFirst();
@@ -135,7 +174,7 @@ public class LeaveRepository {
     public Map<Long, BigDecimal> findUnpaidLeaveDaysByEmployeeForMonth(LocalDate monthStart) {
         LocalDate monthEndInclusive = monthStart.plusMonths(1).minusDays(1);
         List<UnpaidLeaveSpan> spans = jdbc.query("""
-            SELECT employee_id, start_date, end_date, paid_days
+            SELECT employee_id, start_date, end_date, paid_days, total_days
               FROM hr.leave_request
              WHERE status = 'APPROVED'
                AND unpaid_days > 0
@@ -149,20 +188,19 @@ public class LeaveRepository {
                 rs.getLong("employee_id"),
                 rs.getObject("start_date", LocalDate.class),
                 rs.getObject("end_date", LocalDate.class),
-                rs.getObject("paid_days", BigDecimal.class)
+                rs.getObject("paid_days", BigDecimal.class),
+                rs.getObject("total_days", BigDecimal.class)
             ));
 
         Map<Long, BigDecimal> byEmployee = new LinkedHashMap<>();
         for (UnpaidLeaveSpan span : spans) {
-            int paidDays = span.paidDays() == null ? 0 : span.paidDays().setScale(0, RoundingMode.DOWN).intValue();
-            Integer unpaidInMonth = LeaveDayMath
-                .unpaidWorkingDaysByMonth(span.startDate(), span.endDate(), paidDays)
+            // Sub-day leave (2026-07-25): reads the BigDecimal LeaveDayMath computes directly --
+            // no more setScale(0, DOWN) floor, which used to discard a sub-day fraction entirely.
+            BigDecimal unpaidInMonth = LeaveDayMath
+                .unpaidWorkingDaysByMonth(span.startDate(), span.endDate(), span.paidDays(), span.totalDays())
                 .get(monthStart);
-            if (unpaidInMonth != null && unpaidInMonth > 0) {
-                // Scale(2) to match the NUMERIC(5,2) convention every other day/money figure in this
-                // codebase uses -- callers (and their equality-based test assertions) expect it.
-                BigDecimal days = BigDecimal.valueOf(unpaidInMonth).setScale(2);
-                byEmployee.merge(span.employeeId(), days, BigDecimal::add);
+            if (unpaidInMonth != null && unpaidInMonth.signum() > 0) {
+                byEmployee.merge(span.employeeId(), unpaidInMonth, BigDecimal::add);
             }
         }
         return byEmployee;
@@ -280,7 +318,8 @@ public class LeaveRepository {
             """, new MapSqlParameterSource("periodId", periodId));
     }
 
-    private record UnpaidLeaveSpan(long employeeId, LocalDate startDate, LocalDate endDate, BigDecimal paidDays) {
+    private record UnpaidLeaveSpan(
+        long employeeId, LocalDate startDate, LocalDate endDate, BigDecimal paidDays, BigDecimal totalDays) {
     }
 
     public long create(
@@ -294,17 +333,26 @@ public class LeaveRepository {
             LeaveStatus status,
             BigDecimal quotaRemainingBefore,
             BigDecimal quotaRemainingAfter,
-            String systemNote) {
+            String systemNote,
+            String contactHouseNo,
+            String contactSubdistrict,
+            String contactDistrict,
+            String contactProvince,
+            String contactPhone) {
         Long id = jdbc.queryForObject("""
             INSERT INTO hr.leave_request (
-                employee_id, leave_type_code, start_date, end_date, total_days, paid_days, unpaid_days,
+                employee_id, leave_type_code, start_date, end_date, start_time, end_time,
+                total_days, paid_days, unpaid_days,
                 quota_year, reason, status, quota_remaining_before,
-                quota_remaining_after, system_note, requested_by_id
+                quota_remaining_after, system_note, requested_by_id,
+                contact_house_no, contact_subdistrict, contact_district, contact_province, contact_phone
             )
             VALUES (
-                :employeeId, :leaveTypeCode, :startDate, :endDate, :totalDays, :paidDays, :unpaidDays,
+                :employeeId, :leaveTypeCode, :startDate, :endDate, :startTime, :endTime,
+                :totalDays, :paidDays, :unpaidDays,
                 :quotaYear, :reason, :status, :quotaRemainingBefore,
-                :quotaRemainingAfter, :systemNote, :requestedById
+                :quotaRemainingAfter, :systemNote, :requestedById,
+                :contactHouseNo, :contactSubdistrict, :contactDistrict, :contactProvince, :contactPhone
             )
             RETURNING leave_request_id
             """, new MapSqlParameterSource()
@@ -312,6 +360,8 @@ public class LeaveRepository {
             .addValue("leaveTypeCode", request.leaveTypeCode().trim().toUpperCase())
             .addValue("startDate", request.startDate())
             .addValue("endDate", request.endDate())
+            .addValue("startTime", request.startTime())
+            .addValue("endTime", request.endTime())
             .addValue("totalDays", totalDays)
             .addValue("paidDays", paidDays)
             .addValue("unpaidDays", unpaidDays)
@@ -321,7 +371,12 @@ public class LeaveRepository {
             .addValue("quotaRemainingBefore", quotaRemainingBefore)
             .addValue("quotaRemainingAfter", quotaRemainingAfter)
             .addValue("systemNote", systemNote)
-            .addValue("requestedById", requestedById), Long.class);
+            .addValue("requestedById", requestedById)
+            .addValue("contactHouseNo", contactHouseNo)
+            .addValue("contactSubdistrict", contactSubdistrict)
+            .addValue("contactDistrict", contactDistrict)
+            .addValue("contactProvince", contactProvince)
+            .addValue("contactPhone", contactPhone), Long.class);
         return id == null ? 0 : id;
     }
 
@@ -430,6 +485,8 @@ public class LeaveRepository {
                    lt.name_en AS leave_type_name_en,
                    lr.start_date,
                    lr.end_date,
+                   lr.start_time,
+                   lr.end_time,
                    lr.total_days,
                    lr.paid_days,
                    lr.unpaid_days,
@@ -452,7 +509,12 @@ public class LeaveRepository {
                    e.reports_to_employee_id,
                    concat_ws(' ', manager.first_name_th, manager.last_name_th) AS manager_name,
                    lr.created_at,
-                   lr.updated_at
+                   lr.updated_at,
+                   lr.contact_house_no,
+                   lr.contact_subdistrict,
+                   lr.contact_district,
+                   lr.contact_province,
+                   lr.contact_phone
               FROM hr.leave_request lr
               JOIN hr.employee e ON e.employee_id = lr.employee_id
               JOIN hr.leave_type lt ON lt.leave_type_code = lr.leave_type_code
@@ -484,6 +546,8 @@ public class LeaveRepository {
             rs.getString("leave_type_name_en"),
             rs.getObject("start_date", LocalDate.class),
             rs.getObject("end_date", LocalDate.class),
+            rs.getObject("start_time", LocalTime.class),
+            rs.getObject("end_time", LocalTime.class),
             rs.getObject("total_days", BigDecimal.class),
             rs.getObject("paid_days", BigDecimal.class),
             rs.getObject("unpaid_days", BigDecimal.class),
@@ -506,7 +570,12 @@ public class LeaveRepository {
             nullableLong(rs, "reports_to_employee_id"),
             blankToNull(rs.getString("manager_name")),
             rs.getObject("created_at", OffsetDateTime.class),
-            rs.getObject("updated_at", OffsetDateTime.class)
+            rs.getObject("updated_at", OffsetDateTime.class),
+            rs.getString("contact_house_no"),
+            rs.getString("contact_subdistrict"),
+            rs.getString("contact_district"),
+            rs.getString("contact_province"),
+            rs.getString("contact_phone")
         );
     }
 

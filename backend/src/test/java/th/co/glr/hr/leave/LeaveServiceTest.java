@@ -3,6 +3,7 @@ package th.co.glr.hr.leave;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -12,6 +13,7 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.Collection;
@@ -51,7 +53,7 @@ class LeaveServiceTest {
             .thenReturn(new BigDecimal("1.00"));
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null)))
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(55L);
         when(leaveRepository.findById(55L)).thenReturn(Optional.of(
             requestDto(55L, 10L, "APPROVED", request.startDate(), request.endDate(), "2.00", "0.00")));
@@ -65,7 +67,7 @@ class LeaveServiceTest {
         ArgumentCaptor<BigDecimal> unpaidDays = ArgumentCaptor.forClass(BigDecimal.class);
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), totalDays.capture(), paidDays.capture(),
             unpaidDays.capture(), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null));
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(totalDays.getValue()).isEqualByComparingTo("2.00");
         // Fully within quota (1 used, 6 quota -> 5 remaining, 2 requested): entirely paid, nothing
         // unpaid, matching the pre-redesign behaviour for a request quota fully covers.
@@ -89,7 +91,7 @@ class LeaveServiceTest {
             .thenReturn(new BigDecimal("5.00"));
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null)))
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(56L);
         when(leaveRepository.findById(56L)).thenReturn(Optional.of(
             requestDto(56L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "1.00")));
@@ -102,7 +104,7 @@ class LeaveServiceTest {
         ArgumentCaptor<BigDecimal> remainingAfter = ArgumentCaptor.forClass(BigDecimal.class);
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), paidDays.capture(),
             unpaidDays.capture(), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), remainingAfter.capture(), eq(null));
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), remainingAfter.capture(), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(paidDays.getValue()).isEqualByComparingTo("1.00");
         assertThat(unpaidDays.getValue()).isEqualByComparingTo("1.00");
         assertThat(remainingAfter.getValue()).isEqualByComparingTo("0.00");
@@ -124,7 +126,7 @@ class LeaveServiceTest {
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class)))
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(57L);
         when(leaveRepository.findById(57L)).thenReturn(Optional.of(
             requestDto(57L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
@@ -134,7 +136,7 @@ class LeaveServiceTest {
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), org.mockito.ArgumentMatchers.contains("at least 7"));
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), org.mockito.ArgumentMatchers.contains("at least 7"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -152,7 +154,7 @@ class LeaveServiceTest {
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class)))
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(58L);
         when(leaveRepository.findById(58L)).thenReturn(Optional.of(
             requestDto(58L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
@@ -162,7 +164,7 @@ class LeaveServiceTest {
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), org.mockito.ArgumentMatchers.contains("medical certificate"));
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), org.mockito.ArgumentMatchers.contains("medical certificate"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -185,7 +187,7 @@ class LeaveServiceTest {
             .thenReturn(new BigDecimal("30.00"));
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class)))
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(59L);
         when(leaveRepository.findById(59L)).thenReturn(Optional.of(
             requestDto(59L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
@@ -195,7 +197,7 @@ class LeaveServiceTest {
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), org.mockito.ArgumentMatchers.contains("medical certificate"));
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), org.mockito.ArgumentMatchers.contains("medical certificate"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -215,7 +217,7 @@ class LeaveServiceTest {
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null)))
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(60L);
         when(leaveRepository.findById(60L)).thenReturn(Optional.of(
             requestDto(60L, 10L, "APPROVED", request.startDate(), request.endDate(), "0.00", "2.00")));
@@ -227,9 +229,81 @@ class LeaveServiceTest {
         ArgumentCaptor<BigDecimal> unpaidDays = ArgumentCaptor.forClass(BigDecimal.class);
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), paidDays.capture(),
             unpaidDays.capture(), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null));
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(paidDays.getValue()).isEqualByComparingTo("0.00");
         assertThat(unpaidDays.getValue()).isEqualByComparingTo("2.00");
+    }
+
+    @Test
+    void submitAcceptsSubDayLeaveAndComputesFractionalTotalDays() {
+        // Sub-day leave (2026-07-25): 08:30-12:30 = 4 clock-hours / 8 = 0.50 day (no lunch
+        // subtraction). Quota is fully used already (6/6) -> the whole 0.50 request is unpaid.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null,
+            "VACATION",
+            weekdayAfterNotice(),
+            weekdayAfterNotice(),
+            "Doctor visit",
+            LocalTime.of(8, 30),
+            LocalTime.of(12, 30),
+            null,
+            null,
+            null,
+            null,
+            null
+        );
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(new BigDecimal("6.00"));
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(61L);
+        when(leaveRepository.findById(61L)).thenReturn(Optional.of(
+            requestDto(61L, 10L, "APPROVED", request.startDate(), request.endDate(), "0.00", "0.50")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        ArgumentCaptor<BigDecimal> totalDays = ArgumentCaptor.forClass(BigDecimal.class);
+        ArgumentCaptor<BigDecimal> paidDays = ArgumentCaptor.forClass(BigDecimal.class);
+        ArgumentCaptor<BigDecimal> unpaidDays = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), totalDays.capture(), paidDays.capture(),
+            unpaidDays.capture(), eq(request.startDate().getYear()),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(totalDays.getValue()).isEqualByComparingTo("0.50");
+        assertThat(paidDays.getValue()).isEqualByComparingTo("0.00");
+        assertThat(unpaidDays.getValue()).isEqualByComparingTo("0.50");
+    }
+
+    @Test
+    void submitRejectsSubDayLeaveOnAWeekend() {
+        // Sub-day leave, weekend guard (2026-07-25 review fix): Sat 2026-07-18 is a weekend -- a
+        // timed leave on it must be rejected the same way the identical whole-day request would be
+        // by workingDaysBetween, instead of being silently accepted and producing a base/30 x
+        // fraction payroll deduction for a non-working day.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null,
+            "VACATION",
+            LocalDate.parse("2026-07-18"),
+            LocalDate.parse("2026-07-18"),
+            "Weekend errand",
+            LocalTime.of(8, 30),
+            LocalTime.of(12, 30),
+            null,
+            null,
+            null,
+            null,
+            null
+        );
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+
+        assertThatThrownBy(() -> leaveService.submit(request, user("employee", 10L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
     @Test
@@ -331,7 +405,12 @@ class LeaveServiceTest {
 
         leaveService.cancel(80L, null, hr);
 
-        verify(leaveRepository).recordPayrollCorrection(80L, 10L, LocalDate.parse("2026-07-01"), new BigDecimal("1"));
+        // Sub-day leave (2026-07-25): LeaveDayMath.unpaidWorkingDaysByMonth now returns BigDecimal
+        // (multi-day branch emits "1.00", scale 2) instead of the old int-derived "1" (scale 0) --
+        // compareTo, not equals, so the assertion doesn't depend on that internal scale choice.
+        verify(leaveRepository).recordPayrollCorrection(
+            eq(80L), eq(10L), eq(LocalDate.parse("2026-07-01")),
+            argThat(value -> value != null && value.compareTo(new BigDecimal("1")) == 0));
     }
 
     @Test
@@ -394,6 +473,10 @@ class LeaveServiceTest {
             "Vacation leave",
             startDate,
             endDate,
+            // Sub-day leave (2026-07-25): no test in this class needs a sub-day request, so
+            // startTime/endTime stay null (legacy/whole-day) here.
+            null,
+            null,
             new BigDecimal("2.00"),
             new BigDecimal(paidDays),
             new BigDecimal(unpaidDays),
@@ -416,7 +499,14 @@ class LeaveServiceTest {
             99L,
             "Test Manager",
             timestamp,
-            timestamp
+            timestamp,
+            // Paper-form contact block (2026-07-25): no test in this class asserts on these, so they
+            // stay null.
+            null,
+            null,
+            null,
+            null,
+            null
         );
     }
 

@@ -2,6 +2,7 @@ package th.co.glr.hr.leave;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -30,10 +31,10 @@ class LeaveDayMathTest {
     @Test
     void unpaidWorkingDaysByMonthWhollyWithinOneMonthAttributesAllUnpaidDaysToThatMonth() {
         // Mon 2026-07-13 .. Fri 2026-07-17 (5 working days), 2 paid -> 3 unpaid, all in July.
-        Map<LocalDate, Integer> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
-            LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-17"), 2);
+        Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
+            LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-17"), new BigDecimal("2.00"), new BigDecimal("5.00"));
 
-        assertThat(byMonth).containsExactly(Map.entry(LocalDate.parse("2026-07-01"), 3));
+        assertThat(byMonth).containsExactly(Map.entry(LocalDate.parse("2026-07-01"), new BigDecimal("3.00")));
     }
 
     @Test
@@ -43,12 +44,12 @@ class LeaveDayMathTest {
         // rank1=7/30, rank2=7/31, rank3=8/3, rank4=8/4, rank5=8/5.
         // paidDays=2 consumes the first 2 (both in July) -> July has 0 unpaid days, August has 3
         // (ranks 3,4,5 all fall beyond the 2 paid days and all land in August).
-        Map<LocalDate, Integer> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
-            LocalDate.parse("2026-07-30"), LocalDate.parse("2026-08-05"), 2);
+        Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
+            LocalDate.parse("2026-07-30"), LocalDate.parse("2026-08-05"), new BigDecimal("2.00"), new BigDecimal("5.00"));
 
         assertThat(byMonth)
             .doesNotContainKey(LocalDate.parse("2026-07-01"))
-            .containsEntry(LocalDate.parse("2026-08-01"), 3);
+            .containsEntry(LocalDate.parse("2026-08-01"), new BigDecimal("3.00"));
     }
 
     @Test
@@ -56,27 +57,48 @@ class LeaveDayMathTest {
         // Same range as above but paidDays=4: ranks 1-4 (7/30, 7/31, 8/3, 8/4) are paid, only rank 5
         // (8/5) is unpaid -- so July still contributes 0 unpaid days (its 2 working days were both
         // paid) and August contributes exactly 1.
-        Map<LocalDate, Integer> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
-            LocalDate.parse("2026-07-30"), LocalDate.parse("2026-08-05"), 4);
+        Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
+            LocalDate.parse("2026-07-30"), LocalDate.parse("2026-08-05"), new BigDecimal("4.00"), new BigDecimal("5.00"));
 
         assertThat(byMonth)
             .doesNotContainKey(LocalDate.parse("2026-07-01"))
-            .containsEntry(LocalDate.parse("2026-08-01"), 1);
+            .containsEntry(LocalDate.parse("2026-08-01"), new BigDecimal("1.00"));
     }
 
     @Test
     void unpaidWorkingDaysByMonthWithZeroPaidDaysMarksEveryWorkingDayUnpaid() {
         // LEAVE_WITHOUT_PAY case: paidDays=0 -> every working day in range is unpaid.
-        Map<LocalDate, Integer> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
-            LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), 0);
+        Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
+            LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), BigDecimal.ZERO, new BigDecimal("2.00"));
 
-        assertThat(byMonth).containsExactly(Map.entry(LocalDate.parse("2026-07-01"), 2));
+        assertThat(byMonth).containsExactly(Map.entry(LocalDate.parse("2026-07-01"), new BigDecimal("2.00")));
     }
 
     @Test
     void unpaidWorkingDaysByMonthWithFullyPaidRangeProducesNoUnpaidEntries() {
-        Map<LocalDate, Integer> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
-            LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), 5);
+        Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
+            LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), new BigDecimal("5.00"), new BigDecimal("2.00"));
+
+        assertThat(byMonth).isEmpty();
+    }
+
+    // --- Sub-day leave (2026-07-25): single-date range, may be a fractional remainder -----------
+
+    @Test
+    void unpaidWorkingDaysByMonthSubDaySingleDateOverQuotaAttributesFractionalRemainder() {
+        // Half-day (0.50) leave, none of it covered by quota -> the whole 0.50 is unpaid, in that
+        // day's month.
+        Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
+            LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"), new BigDecimal("0.00"), new BigDecimal("0.50"));
+
+        assertThat(byMonth).containsExactly(Map.entry(LocalDate.parse("2026-07-01"), new BigDecimal("0.50")));
+    }
+
+    @Test
+    void unpaidWorkingDaysByMonthSubDaySingleDateWithinQuotaProducesNoUnpaidEntries() {
+        // Half-day (0.50) leave, fully covered by quota -> nothing unpaid.
+        Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
+            LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"), new BigDecimal("0.50"), new BigDecimal("0.50"));
 
         assertThat(byMonth).isEmpty();
     }

@@ -51,6 +51,7 @@ export const API_ROUTES = {
     employees: '/api/leave/employees',
     types: '/api/leave/types',
     balances: '/api/leave/balances',
+    contactDefaults: '/api/leave/contact-defaults',
     approve: (id) => `/api/leave/${id}/approve`,
     reject: (id) => `/api/leave/${id}/reject`,
     cancel: (id) => `/api/leave/${id}/cancel`,

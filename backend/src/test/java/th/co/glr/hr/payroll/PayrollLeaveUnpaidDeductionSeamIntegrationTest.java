@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import java.math.BigDecimal;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.temporal.TemporalAdjusters;
 import java.util.List;
@@ -171,6 +172,43 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
         // unpaidLeaveDays or into preview()/process(); see LeaveService#cancel.
         assertThat(row.unpaidLeaveDays()).isEqualByComparingTo("0.00");
         assertThat(row.pendingUnpaidLeaveCorrectionDays()).isEqualByComparingTo("1.00");
+    }
+
+    @Test
+    void subDayLeaveOverQuotaDeductsProportionalDailyRate() {
+        // Sub-day leave (2026-07-25): LEAVE_WITHOUT_PAY has a 0-day statutory quota, so a half-day
+        // (08:30-12:30 = 4 clock-hours / 8 = 0.50) request is entirely unpaid from day 1 -- proves the
+        // fraction survives the same submit -> per-month attribution -> payroll-preview path the
+        // whole-day cases above exercise, and that PayrollCalculator's dailyRate x unpaidLeaveDays
+        // deduction is proportional, not floored to a whole day.
+        long employeeId = insertEmployee("SEAM-004");
+        LocalDate monday = firstMondayOfMonth(2);
+        LocalDate month = monday.withDayOfMonth(1);
+
+        LeaveRequestDto leave = leaveService.submit(
+            new SubmitLeaveRequest(employeeId, "LEAVE_WITHOUT_PAY", monday, monday, "Half-day errand",
+                LocalTime.of(8, 30), LocalTime.of(12, 30), null, null, null, null, null),
+            employee(employeeId));
+        assertThat(leave.totalDays()).isEqualByComparingTo("0.50");
+        assertThat(leave.unpaidDays()).isEqualByComparingTo("0.50");
+
+        PayrollCarryForwardDtos.SuggestedInputsResponse suggestions = payrollService.suggestedInputs(month, hr());
+        PayrollCarryForwardDtos.SuggestedInputRow row = suggestions.suggestions().stream()
+            .filter(r -> employeeId == r.employeeId())
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("no suggestion row for employee " + employeeId));
+        assertThat(row.unpaidLeaveDays()).isEqualByComparingTo("0.50");
+
+        PayrollPeriodDto period = payrollService.preview(
+            new ProcessPayrollRequest(month, List.of(inputWithUnpaidLeaveDays(employeeId, row.unpaidLeaveDays()))),
+            hr());
+        PayrollLineDto line = lineFor(period, employeeId);
+
+        // dailyRate = 30000/30 = 1000.00; unpaidLeaveDeduction = 1000.00 x 0.50 unpaid day = 500.00.
+        assertThat(line.unpaidLeaveDays()).isEqualByComparingTo("0.50");
+        assertThat(line.unpaidLeaveDeduction()).isEqualByComparingTo("500.00");
+        assertThat(line.grossEarnings()).isEqualByComparingTo("30000.00");
+        assertThat(line.grossTaxableIncome()).isEqualByComparingTo("29500.00");
     }
 
     // --- helpers ------------------------------------------------------------

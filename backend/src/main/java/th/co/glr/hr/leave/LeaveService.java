@@ -3,7 +3,9 @@ package th.co.glr.hr.leave;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +33,13 @@ public class LeaveService {
     private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo");
     private static final Set<String> REVIEW_ALL_ROLES = Set.of("hr");
     private static final Set<LeaveStatus> ACTIVE_QUOTA_STATUSES = Set.of(LeaveStatus.SUBMITTED, LeaveStatus.APPROVED);
+    // Sub-day leave (2026-07-25): day-fraction = clock-hours(start,end) / 8, no lunch subtraction
+    // (decided rule -- see docs/agent-handoffs), rounded HALF_UP to 2dp, capped at 1.00 whole day.
+    // Times must fall within the standard workday, matching the paper form's printed hours.
+    private static final BigDecimal STANDARD_WORKDAY_MINUTES = BigDecimal.valueOf(8 * 60);
+    private static final LocalTime WORKDAY_START = LocalTime.of(8, 30);
+    private static final LocalTime WORKDAY_END = LocalTime.of(17, 30);
+    private static final BigDecimal FULL_DAY = new BigDecimal("1.00");
 
     private final LeaveRepository leaveRepository;
     private final LeaveAttachmentRepository leaveAttachments;
@@ -120,6 +129,22 @@ public class LeaveService {
             .toList();
     }
 
+    /**
+     * Paper-form (ใบลาหยุด F-HR-020) autofill for the contact-during-leave block, plus read-only
+     * position/department/division -- same access predicate as {@link #balances}: own record, HR/CEO,
+     * or the employee's direct manager.
+     */
+    public LeaveContactDefaultsDto contactDefaults(UserPrincipal user, Long requestedEmployeeId) {
+        long actorEmployeeId = requireEmployeeId(user);
+        long employeeId = requestedEmployeeId == null ? actorEmployeeId : requestedEmployeeId;
+        if (!canViewAll(user) && !canAccessEmployee(actorEmployeeId, employeeId)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        validateEmployee(employeeId);
+        return leaveRepository.findContactDefaults(employeeId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Employee not found"));
+    }
+
     @Transactional
     public LeaveRequestDto submit(SubmitLeaveRequest request, UserPrincipal user) {
         return submit(request, null, user);
@@ -133,8 +158,9 @@ public class LeaveService {
         validateEmployee(employeeId);
         LeaveTypeDto leaveType = requireLeaveType(request.leaveTypeCode());
         validateDateRange(request.startDate(), request.endDate());
+        validateSubDayTimes(request);
 
-        BigDecimal totalDays = workingDaysBetween(request.startDate(), request.endDate());
+        BigDecimal totalDays = computeTotalDays(request);
         int quotaYear = request.startDate().getYear();
         BigDecimal remainingBefore = remainingDays(employeeId, leaveType, quotaYear);
         boolean hasAttachment = attachment != null && !attachment.isEmpty();
@@ -163,6 +189,7 @@ public class LeaveService {
             remainingAfter = remainingBefore;
         }
 
+        ResolvedContact contact = resolveContact(employeeId, request);
         long id = leaveRepository.create(
             employeeId,
             actorEmployeeId,
@@ -174,7 +201,12 @@ public class LeaveService {
             status,
             remainingBefore,
             remainingAfter,
-            systemNote
+            systemNote,
+            contact.houseNo(),
+            contact.subdistrict(),
+            contact.district(),
+            contact.province(),
+            contact.phone()
         );
         if (hasAttachment) {
             FileStorageService.StoredFile storedFile = fileStorage.store("leave", id, attachment, LEAVE_ATTACHMENT_MIME_TYPES);
@@ -296,17 +328,18 @@ public class LeaveService {
         if (unpaidDays == null || unpaidDays.signum() <= 0) {
             return;
         }
-        int paidDays = cancelled.paidDays() == null ? 0 : cancelled.paidDays().setScale(0, RoundingMode.DOWN).intValue();
-        Map<LocalDate, Integer> unpaidByMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
-            cancelled.startDate(), cancelled.endDate(), paidDays);
+        BigDecimal paidDays = cancelled.paidDays() == null ? BigDecimal.ZERO : cancelled.paidDays();
+        BigDecimal totalDays = cancelled.totalDays() == null ? BigDecimal.ZERO : cancelled.totalDays();
+        Map<LocalDate, BigDecimal> unpaidByMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
+            cancelled.startDate(), cancelled.endDate(), paidDays, totalDays);
         if (unpaidByMonth.isEmpty()) {
             return;
         }
         Set<LocalDate> processedMonths = leaveRepository.findProcessedPayrollMonths(unpaidByMonth.keySet());
         for (LocalDate month : processedMonths) {
-            Integer days = unpaidByMonth.get(month);
-            if (days != null && days > 0) {
-                leaveRepository.recordPayrollCorrection(cancelled.id(), cancelled.employeeId(), month, BigDecimal.valueOf(days));
+            BigDecimal days = unpaidByMonth.get(month);
+            if (days != null && days.signum() > 0) {
+                leaveRepository.recordPayrollCorrection(cancelled.id(), cancelled.employeeId(), month, days);
             }
         }
     }
@@ -430,6 +463,78 @@ public class LeaveService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Leave range must include at least one weekday");
         }
         return BigDecimal.valueOf(days);
+    }
+
+    /**
+     * Sub-day leave (2026-07-25): no times -> the existing whole-day weekday count. Times set ->
+     * clock-hours(start,end) / 8 (STANDARD_WORKDAY_MINUTES), no lunch subtraction (decided rule),
+     * rounded HALF_UP to 2dp, capped at 1.00 (a sub-day request can never exceed one whole day).
+     * FULL_DAY (not BigDecimal.ONE) keeps the cap at scale 2, matching the NUMERIC(5,2) convention
+     * every other day figure in this codebase uses.
+     */
+    private BigDecimal computeTotalDays(SubmitLeaveRequest request) {
+        if (request.startTime() == null) {
+            return workingDaysBetween(request.startDate(), request.endDate());
+        }
+        long minutes = Duration.between(request.startTime(), request.endTime()).toMinutes();
+        BigDecimal fraction = BigDecimal.valueOf(minutes)
+            .divide(STANDARD_WORKDAY_MINUTES, 2, RoundingMode.HALF_UP);
+        return fraction.min(FULL_DAY);
+    }
+
+    /**
+     * Sub-day leave (2026-07-25): startTime/endTime are optional, but if either is set both must be,
+     * the request must be single-day on a WORKING day, endTime must be after startTime, and both must
+     * fall within the standard workday (08:30-17:30) -- mirrors V90's chk_leave_time_* checks, giving
+     * a clearer 400 before the DB constraint would ever fire. The weekday check matters: without it a
+     * Saturday/Sunday half-day would be accepted (and could produce a payroll deduction for a
+     * non-working day) while the identical whole-day request is rejected by workingDaysBetween.
+     */
+    private void validateSubDayTimes(SubmitLeaveRequest request) {
+        LocalTime startTime = request.startTime();
+        LocalTime endTime = request.endTime();
+        if (startTime == null && endTime == null) {
+            return;
+        }
+        if (startTime == null || endTime == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Both start time and end time are required for sub-day leave");
+        }
+        if (!request.startDate().equals(request.endDate())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Sub-day leave must start and end on the same date");
+        }
+        if (LeaveDayMath.countWorkingDays(request.startDate(), request.startDate()) == 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Leave range must include at least one weekday");
+        }
+        if (!endTime.isAfter(startTime)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Leave end time must be after start time");
+        }
+        if (startTime.isBefore(WORKDAY_START) || startTime.isAfter(WORKDAY_END)
+                || endTime.isBefore(WORKDAY_START) || endTime.isAfter(WORKDAY_END)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Leave times must be within working hours (08:30-17:30)");
+        }
+    }
+
+    /**
+     * Paper-form (ใบลาหยุด F-HR-020) contact-during-leave autofill/override: per field, use what the
+     * requester submitted if non-blank, else fall back to the employee's current address/phone. Missing
+     * defaults (e.g. no address on file) simply leave the field null.
+     */
+    private ResolvedContact resolveContact(long employeeId, SubmitLeaveRequest request) {
+        LeaveContactDefaultsDto defaults = leaveRepository.findContactDefaults(employeeId).orElse(null);
+        return new ResolvedContact(
+            pickContactValue(request.contactHouseNo(), defaults == null ? null : defaults.contactHouseNo()),
+            pickContactValue(request.contactSubdistrict(), defaults == null ? null : defaults.contactSubdistrict()),
+            pickContactValue(request.contactDistrict(), defaults == null ? null : defaults.contactDistrict()),
+            pickContactValue(request.contactProvince(), defaults == null ? null : defaults.contactProvince()),
+            pickContactValue(request.contactPhone(), defaults == null ? null : defaults.contactPhone())
+        );
+    }
+
+    private String pickContactValue(String requestedValue, String defaultValue) {
+        return requestedValue != null && !requestedValue.isBlank() ? requestedValue.trim() : defaultValue;
+    }
+
+    private record ResolvedContact(String houseNo, String subdistrict, String district, String province, String phone) {
     }
 
     private void requireReviewer(long employeeId, long actorEmployeeId, UserPrincipal user) {

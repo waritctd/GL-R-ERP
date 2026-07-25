@@ -174,7 +174,9 @@ if (creditDemoTicket) {
 }
 db.commissions = db.commissions || [];
 db.leaveTypes = db.leaveTypes || [
-  { code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal leave', annualQuotaDays: 3, requiresAttachment: false },
+  // PERSONAL quota fix (2026-07-25): seeded at 3, company rule (§5.2) grants 7 paid personal
+  // days/year -- see V90__leave_subday_and_contact.sql for the backend-side correction.
+  { code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal leave', annualQuotaDays: 7, requiresAttachment: false },
   { code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick leave', annualQuotaDays: 30, requiresAttachment: true },
   { code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation leave', annualQuotaDays: 6, requiresAttachment: false },
 ];
@@ -2272,6 +2274,31 @@ function workingDaysBetween(startDate, endDate) {
   return days;
 }
 
+const LEAVE_WORKDAY_START = '08:30';
+const LEAVE_WORKDAY_END = '17:30';
+
+// Sub-day leave (2026-07-25): mirrors LeaveService#computeTotalDays -- clock-hours(start,end) / 8,
+// no lunch subtraction (decided rule), rounded to 2dp, capped at 1.00 (a sub-day request can never
+// exceed one whole day). Times must fall within the standard workday (08:30-17:30), and the date
+// itself must be a weekday -- mirrors LeaveService#validateSubDayTimes: without this a
+// Saturday/Sunday half-day would slip through while the identical whole-day request is rejected by
+// workingDaysBetween.
+function workingDayFraction(startDate, startTime, endTime) {
+  if (!startTime || !endTime) fail('Both start time and end time are required for sub-day leave', 400);
+  const dayOfWeek = new Date(`${startDate}T00:00:00`).getDay();
+  if (dayOfWeek === 0 || dayOfWeek === 6) fail('Leave range must include at least one weekday', 400);
+  if (startTime < LEAVE_WORKDAY_START || startTime > LEAVE_WORKDAY_END
+    || endTime < LEAVE_WORKDAY_START || endTime > LEAVE_WORKDAY_END) {
+    fail('Leave times must be within working hours (08:30-17:30)', 400);
+  }
+  const [startH, startM] = startTime.split(':').map(Number);
+  const [endH, endM] = endTime.split(':').map(Number);
+  const minutes = (endH * 60 + endM) - (startH * 60 + startM);
+  if (minutes <= 0) fail('Leave end time must be after start time', 400);
+  const fraction = Math.round((minutes / (8 * 60)) * 100) / 100;
+  return Math.min(1, fraction);
+}
+
 function leaveUsedDays(employeeId, leaveTypeCode, quotaYear, statuses) {
   return db.leaveRequests
     .filter((request) => request.employeeId === employeeId
@@ -2293,6 +2320,23 @@ function leaveBalance(employeeId, type, quotaYear) {
     pendingDays,
     remainingDays: Math.max(0, Number(type.annualQuotaDays || 0) - approvedDays - pendingDays),
     requiresAttachment: type.requiresAttachment,
+  };
+}
+
+// Paper-form (ใบลาหยุด F-HR-020) contact-during-leave autofill. Coarser than the real
+// hr.employee_address schema (no house-number/subdistrict split) -- an accepted mock fidelity gap,
+// see LeaveRepository#findContactDefaults for the real (backend) shape.
+function leaveContactDefaults(employee) {
+  return {
+    employeeId: employee.id,
+    positionTh: employee.positionTh || null,
+    departmentTh: employee.departmentTh || null,
+    divisionTh: employee.divisionTh || null,
+    contactHouseNo: employee.currentAddress?.line1 || null,
+    contactSubdistrict: null,
+    contactDistrict: employee.currentAddress?.district || null,
+    contactProvince: employee.currentAddress?.province || null,
+    contactPhone: employee.phone || null,
   };
 }
 
@@ -3549,6 +3593,16 @@ export const api = {
       return delay({ balances: db.leaveTypes.map((type) => leaveBalance(employeeId, type, year)) });
     },
 
+    // Sub-day leave + paper-form contact block (2026-07-25): same access predicate as balances().
+    async contactDefaults(params = {}) {
+      const user = requireSession();
+      const employeeId = params.employeeId ? Number(params.employeeId) : user.employeeId;
+      if (!employeeId) fail('User is not linked to an employee', 400);
+      if (!['hr', 'ceo'].includes(user.role) && employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
+      const employee = findEmployee(employeeId);
+      return delay({ contactDefaults: leaveContactDefaults(employee) });
+    },
+
     async list(params = {}) {
       const user = requireSession();
       let list = db.leaveRequests;
@@ -3568,7 +3622,15 @@ export const api = {
       if (employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
       const employee = findEmployee(employeeId);
       const leaveType = leaveTypeByCode(payload.leaveTypeCode);
-      const totalDays = workingDaysBetween(payload.startDate, payload.endDate);
+      // Sub-day leave (2026-07-25): times present -> fractional day, single-date only (mirrors
+      // LeaveService#computeTotalDays / #validateSubDayTimes). No times -> existing whole-day count.
+      const hasSubDayTimes = Boolean(payload.startTime && payload.endTime);
+      if (hasSubDayTimes && payload.startDate !== payload.endDate) {
+        fail('Sub-day leave must start and end on the same date', 400);
+      }
+      const totalDays = hasSubDayTimes
+        ? workingDayFraction(payload.startDate, payload.startTime, payload.endTime)
+        : workingDaysBetween(payload.startDate, payload.endDate);
       const quotaYear = Number(payload.startDate.slice(0, 4));
       const used = leaveUsedDays(employeeId, leaveType.code, quotaYear, ['SUBMITTED', 'APPROVED']);
       const remainingBefore = Math.max(0, leaveType.annualQuotaDays - used);
@@ -3588,12 +3650,18 @@ export const api = {
       const remainingAfter = status === 'APPROVED' ? remainingBefore - totalDays : remainingBefore;
       const id = Math.max(0, ...db.leaveRequests.map((item) => item.id)) + 1;
       const now = new Date().toISOString();
+      // Paper-form contact-during-leave block: request value if non-blank, else the employee's
+      // profile default (mirrors LeaveService#resolveContact).
+      const contactDefaults = leaveContactDefaults(employee);
+      const pickContact = (value, fallback) => (value && String(value).trim() ? String(value).trim() : fallback);
       const request = {
         id,
         employeeId,
         leaveTypeCode: leaveType.code,
         startDate: payload.startDate,
         endDate: payload.endDate,
+        startTime: hasSubDayTimes ? payload.startTime : null,
+        endTime: hasSubDayTimes ? payload.endTime : null,
         totalDays,
         quotaYear,
         reason: payload.reason,
@@ -3613,6 +3681,11 @@ export const api = {
         cancelledAt: null,
         createdAt: now,
         updatedAt: now,
+        contactHouseNo: pickContact(payload.contactHouseNo, contactDefaults.contactHouseNo),
+        contactSubdistrict: pickContact(payload.contactSubdistrict, contactDefaults.contactSubdistrict),
+        contactDistrict: pickContact(payload.contactDistrict, contactDefaults.contactDistrict),
+        contactProvince: pickContact(payload.contactProvince, contactDefaults.contactProvince),
+        contactPhone: pickContact(payload.contactPhone, contactDefaults.contactPhone),
       };
       request.employeeCode = employee.code;
       request.employeeName = employee.nameTh;
