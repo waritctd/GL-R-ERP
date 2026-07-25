@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
@@ -8,6 +9,7 @@ import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { FilterBar } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { SalesTabs } from '../sales/SalesTabs.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
@@ -25,6 +27,10 @@ import { dealInScope } from './salesViewScope.js';
 import { SALES_PHASES, stageIndex, stageMeta } from './stageMeta.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
 import { effectiveWinProbability } from './dealTrackingMeta.js';
+
+// Same selector Modal.jsx traps on — kept identical so the two overlay
+// surfaces agree on what "focusable" means.
+const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
 
 // Role-scoped views, Phase A: roles whose list page distinguishes "my
 // worklist" from "every deal I may read" — everyone else (sales already only
@@ -470,13 +476,24 @@ export function TicketListPage({ user, showToast }) {
   const isManagerView = MANAGER_PIPELINE_ROLES.has(user.role);
   const [creating, setCreating] = useState(false);
   const filterToggleRef = useRef(null);
+  const filterSheetRef = useRef(null);
   // Owner feedback (role-scoped views, Sales branch): the LIFECYCLE/FLAGS chip
   // rows were competing with the deal list for attention. They stay fully
   // functional (same URL-param filters as before) but sit behind a collapsed
   // "ตัวกรองเพิ่มเติม" expander now — collapsed by default for every role, and
-  // forced open whenever one of them is already active (e.g. a deep link with
-  // ?life=... or ?flag=...) so an applied filter is never hidden from view.
-  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
+  // opened automatically whenever one of them becomes active (e.g. a deep link
+  // with ?life=... or ?flag=...) so an applied filter is surfaced, not hidden.
+  //
+  // Phase 4A: openness is now genuinely state-driven rather than
+  // `open || hasActiveFilter`. The old derivation made the sheet impossible to
+  // dismiss while a lifecycle/flag filter was applied — the close button, the
+  // scrim and Escape all became no-ops, which is unacceptable for what is a
+  // modal bottom sheet at <=720px. An applied filter is still never hidden:
+  // the always-visible "ตัวกรองที่ใช้" summary row and the count badge on the
+  // toggle keep reporting it after the sheet is closed.
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(
+    () => Boolean(searchParams.get('life') || searchParams.get('flag')),
+  );
 
   const canCreate = ROLE_PERMISSIONS.canCreateTickets.includes(user.role);
 
@@ -567,8 +584,26 @@ export function TicketListPage({ user, showToast }) {
   }, [allDeals, flagFilter, lifecycleFilter, phaseFilter, inboxOnly, user.role, searchText]);
 
   const hasActiveMoreFilters = Boolean(lifecycleFilter || flagFilter);
-  const showMoreFilters = moreFiltersOpen || hasActiveMoreFilters;
+  const showMoreFilters = moreFiltersOpen;
   const activeMoreFiltersCount = (lifecycleFilter ? 1 : 0) + (flagFilter ? 1 : 0);
+  // <=720px the same markup is a fixed bottom sheet over a scrim — a real
+  // modal — while above that breakpoint it is an inline disclosure panel with
+  // the scrim hidden (styles.css: .ticket-filter-backdrop { display: none }
+  // until the mobile media query). Modal semantics are therefore
+  // breakpoint-scoped: Escape closes at any width, but the focus trap, the
+  // initial focus move and inerting the page behind only apply where the sheet
+  // actually covers the page.
+  const isMobile = useIsMobile();
+  const mobileSheetOpen = showMoreFilters && isMobile;
+
+  // A lifecycle/flag filter becoming active reveals the sheet, so a deep link
+  // or an external filter change is never silently applied behind a closed
+  // panel. Toggling a chip from inside the sheet is a no-op here (already
+  // open), and closing the sheet by hand does not re-trigger this — the effect
+  // only fires on the false -> true transition.
+  useEffect(() => {
+    if (hasActiveMoreFilters) setMoreFiltersOpen(true);
+  }, [hasActiveMoreFilters]);
   const activePipelineCount = useMemo(
     () => allDeals.filter((deal) => deal.lifecycle === 'ACTIVE' && stageMeta(deal.salesStage)).length,
     [allDeals],
@@ -631,13 +666,61 @@ export function TicketListPage({ user, showToast }) {
     setMoreFiltersOpen(false);
   }
 
-  function closeMoreFilters() {
+  const closeMoreFilters = useCallback(() => {
     setMoreFiltersOpen(false);
     const restoreFocus = typeof window.requestAnimationFrame === 'function'
       ? window.requestAnimationFrame
       : (callback) => window.setTimeout(callback, 0);
     restoreFocus(() => filterToggleRef.current?.focus());
-  }
+  }, []);
+
+  // Escape closes the sheet at every width; Tab is only trapped when the sheet
+  // is the mobile modal. Mirrors the keyboard contract of Modal.jsx so the two
+  // overlay surfaces behave identically for a keyboard user.
+  useEffect(() => {
+    if (!showMoreFilters) return undefined;
+
+    function onKeyDown(event) {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        closeMoreFilters();
+        return;
+      }
+      if (event.key !== 'Tab' || !mobileSheetOpen) return;
+      const sheet = filterSheetRef.current;
+      const items = Array.from(sheet?.querySelectorAll(FOCUSABLE) ?? []);
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      // Focus that has escaped the sheet (or never entered it) is pulled back
+      // in. `inert` already does this in browsers that support it; this keeps
+      // the trap correct where it does not.
+      if (!sheet?.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+        return;
+      }
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [showMoreFilters, mobileSheetOpen, closeMoreFilters]);
+
+  // Opening the modal sheet moves focus into it. Focus is restored to the
+  // toggle by closeMoreFilters, which every dismissal path routes through.
+  useEffect(() => {
+    if (!mobileSheetOpen) return;
+    const sheet = filterSheetRef.current;
+    const items = Array.from(sheet?.querySelectorAll(FOCUSABLE) ?? []);
+    (items[0] ?? sheet)?.focus();
+  }, [mobileSheetOpen]);
 
   const createMutation = useMutation({
     mutationFn: (payload) => api.tickets.create(payload),
@@ -658,8 +741,23 @@ export function TicketListPage({ user, showToast }) {
     await createMutation.mutateAsync(payload);
   }
 
+  // The modal sheet is portalled to <body> so the page root itself can be
+  // marked inert while it is open — an ancestor cannot inert its own overlay.
+  // On desktop the sheet must stay in the page's normal flow (it is a
+  // `.page-stack` child), so it renders in place there.
+  function renderFilterSheet(sheet) {
+    return mobileSheetOpen ? createPortal(sheet, document.body) : sheet;
+  }
+
   return (
-    <div className="page-stack ticket-list-page">
+    <div
+      className="page-stack ticket-list-page"
+      // `inert` removes the page behind the sheet from focus order, pointer
+      // hit-testing and the accessibility tree in one attribute. React 18 has
+      // no boolean-prop support for it, so the empty string is used to emit the
+      // bare HTML attribute; aria-hidden covers browsers without inert yet.
+      {...(mobileSheetOpen ? { inert: '', 'aria-hidden': 'true' } : {})}
+    >
       <SalesTabs role={user.role} />
       <PageHeader
         title="รายการดีล"
@@ -760,7 +858,16 @@ export function TicketListPage({ user, showToast }) {
         })}
       </section>
 
-      <FilterBar className="ticket-filter-bar" aria-label="ค้นหาและตัวกรองรายการดีล">
+      {/* Spacing/reflow live here as utilities, not in styles.css: index.css
+          orders `@layer theme, legacy, utilities`, so a `.ticket-filter-bar`
+          rule in the legacy layer always loses to FilterBar's own utilities.
+          The previous CSS needed `display: grid !important` to win and its
+          gap/padding never applied at all. `mobile:` is the shared <=720px
+          variant from the Phase 3.4 token work. */}
+      <FilterBar
+        className="ticket-filter-bar gap-3 mobile:grid mobile:grid-cols-[minmax(0,1fr)_auto] mobile:items-center mobile:gap-2 mobile:p-2.5"
+        aria-label="ค้นหาและตัวกรองรายการดีล"
+      >
         <label className="ticket-filter-search search-field">
           <span className="sr-only">ค้นหาดีล</span>
           <Icon name="search" />
@@ -790,7 +897,7 @@ export function TicketListPage({ user, showToast }) {
           ) : null}
         </Button>
         {activeFilterCount > 0 ? (
-          <Button variant="text" type="button" onClick={clearFilters}>
+          <Button variant="text" type="button" className="ticket-filter-clear" onClick={clearFilters}>
             ล้างทั้งหมด
           </Button>
         ) : null}
@@ -808,7 +915,7 @@ export function TicketListPage({ user, showToast }) {
         </div>
       ) : null}
 
-      {showMoreFilters ? (
+      {showMoreFilters ? renderFilterSheet(
         <>
           <button
             type="button"
@@ -816,7 +923,17 @@ export function TicketListPage({ user, showToast }) {
             aria-label="ปิดตัวกรองเพิ่มเติม"
             onClick={closeMoreFilters}
           />
-          <section className="ticket-filter-sheet" aria-label="ตัวกรองเพิ่มเติม">
+          <section
+            ref={filterSheetRef}
+            className="ticket-filter-sheet"
+            aria-label="ตัวกรองเพิ่มเติม"
+            // Only the mobile bottom sheet is a modal dialog. On desktop the
+            // same node stays an inline labelled region, so announcing it as a
+            // dialog there would be a lie to a screen reader.
+            role={mobileSheetOpen ? 'dialog' : 'region'}
+            aria-modal={mobileSheetOpen ? 'true' : undefined}
+            tabIndex={mobileSheetOpen ? -1 : undefined}
+          >
             <div className="ticket-filter-sheet-header">
               <h2>ตัวกรองเพิ่มเติม</h2>
               <Button
@@ -867,14 +984,14 @@ export function TicketListPage({ user, showToast }) {
               })}
             </div>
           </section>
-        </>
+        </>,
       ) : null}
 
       <DataTable
         columns={tableColumns}
         rows={deals}
         getRowKey={(deal) => deal.id}
-        gridClassName="ticket-table"
+        gridClassName="ticket-worklist-table"
         mobileCard={(deal) => (
           user.role === 'account'
             ? <MoneyWorklistCard deal={deal} onOpen={openDeal} />

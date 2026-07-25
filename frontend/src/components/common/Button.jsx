@@ -87,8 +87,13 @@ export const Button = forwardRef(function Button({
     || Boolean(fallbackAriaLabel)
     || Boolean(ariaLabelledBy);
 
+  // Loud in development, non-fatal in production: a missing label is an a11y
+  // defect worth failing a dev build over, but throwing from a shared primitive
+  // would take the whole page down for a user over a label typo.
   if (!hasIconName) {
-    throw new Error('Button variant="icon" requires an accessible name via aria-label, aria-labelledby, or title.');
+    const message = 'Button variant="icon" requires an accessible name via aria-label, aria-labelledby, or title.';
+    if (import.meta.env.DEV) throw new Error(message);
+    console.error(message);
   }
 
   return (

@@ -23,7 +23,14 @@ function isItemActive(item, pathname) {
 }
 
 function NavItemLink({ item, pathname }) {
-  const accessibleLabel = item.helper ? `${item.label} (${item.helper})` : item.label;
+  // aria-label REPLACES the accessible name, so the unread badge rendered below
+  // would otherwise stop being announced — a screen-reader user would lose the
+  // count that sighted users can see. Fold it into the label instead.
+  const accessibleLabel = [
+    item.label,
+    item.helper ? `(${item.helper})` : '',
+    item.badge ? `— ${item.badge} รายการใหม่` : '',
+  ].filter(Boolean).join(' ');
 
   return (
     <NavLink
@@ -38,7 +45,7 @@ function NavItemLink({ item, pathname }) {
         {item.label}
         <small>{item.helper}</small>
       </span>
-      {item.badge ? <b>{item.badge}</b> : null}
+      {item.badge ? <b aria-hidden="true">{item.badge}</b> : null}
     </NavLink>
   );
 }

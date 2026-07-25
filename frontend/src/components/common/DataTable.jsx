@@ -313,7 +313,7 @@ export function DataTable({
 
   function renderMobileList() {
     return (
-      <section className="table-panel data-table-list-panel" aria-busy={loading ? 'true' : undefined}>
+      <section className="table-panel" aria-busy={loading ? 'true' : undefined}>
         {loading ? (
           <ul className="record-card-list" aria-label="กำลังโหลดข้อมูล">
             {Array.from({ length: skeletonRowCount }, (_, index) => (

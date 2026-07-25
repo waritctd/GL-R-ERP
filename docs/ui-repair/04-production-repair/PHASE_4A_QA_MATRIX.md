@@ -11,8 +11,17 @@ Sources:
   `npm run test -- Button.test.jsx DataTable.test.jsx TicketListPage.test.jsx AppShell.test.jsx EmployeeListPage.test.jsx ProcurementListPage.test.jsx`
 
 Do not read this matrix as route approval. The portrait tablet visual blocker
-was repaired and recaptured; Import/Account `/tickets` route access remains
-blocked by current permissions.
+was repaired and recaptured.
+
+Import and Account rows read "Blocked for `/tickets`" in the sense that the
+route guard redirected the attempt — that is the **expected and correct**
+outcome, not a defect or an outstanding blocker. `/tickets` is the deal pipeline
+browser, gated on `canViewDealPipeline`
+(`['sales', 'sales_manager', 'ceo']` — `frontend/src/api/routes.js:291`); those
+two roles hold ticket-detail access instead and enter from their own role
+landing. These runs are therefore **not applicable** to the `/tickets` worklist
+checks and owe no follow-up. See `PHASE_4A_QA_RESULTS.md` → "Not Applicable —
+Intentional Route Scope".
 
 ## Command-Level Results
 

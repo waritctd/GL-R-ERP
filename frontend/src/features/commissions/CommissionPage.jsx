@@ -433,11 +433,11 @@ export function CommissionPage({ user, showToast }) {
   const commissionColumns = useMemo(() => {
     const columns = [
       {
-        // A dedicated expand/collapse toggle column, not `onRowClick` — DataTable renders the
-        // whole row as a <button> when `onRowClick` is set, and the actions column below already
-        // renders several <button> icon-buttons, which would nest a button inside a button
-        // (invalid HTML, breaks click semantics). This column stays a plain cell; only its own
-        // button toggles the calc-detail panel.
+        // A dedicated expand/collapse toggle column. DataTable no longer has a
+        // whole-row `onRowClick` (it was removed with the native-table
+        // migration, precisely because a row-as-<button> nested the actions
+        // column's icon-buttons inside a button — invalid HTML that broke click
+        // semantics). Only this column's own button toggles the calc panel.
         key: 'expand',
         header: '',
         render: (record) => (

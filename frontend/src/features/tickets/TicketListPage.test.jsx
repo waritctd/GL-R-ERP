@@ -300,10 +300,12 @@ describe('TicketListPage', () => {
     expect(screen.getByRole('searchbox', { name: 'ค้นหาดีล' })).toBeTruthy();
     expect(screen.getByRole('button', { name: /สร้างดีลใหม่/ })).toBeTruthy();
 
-    const filterToggle = screen.getByRole('button', { name: /ตัวกรอง/ });
+    const filterToggle = screen.getByRole('button', { name: /^ตัวกรอง/ });
     filterToggle.focus();
     fireEvent.click(filterToggle);
-    const filterSheet = screen.getByRole('region', { name: 'ตัวกรองเพิ่มเติม' });
+    // This case stubs the mobile viewport, where the sheet is a modal dialog
+    // rather than the desktop inline region (see the modal-contract suite).
+    const filterSheet = screen.getByRole('dialog', { name: 'ตัวกรองเพิ่มเติม' });
     expect(filterSheet).toBeTruthy();
 
     fireEvent.click(within(filterSheet).getByRole('button', { name: 'ปิดตัวกรองเพิ่มเติม' }));
@@ -464,11 +466,150 @@ describe('TicketListPage', () => {
       expect(screen.getByText('บริษัท พักไว้ จำกัด')).not.toBeNull();
       expect(screen.queryByText('บริษัท ทดสอบ จำกัด')).toBeNull();
 
-      // Collapsing again keeps the now-active filter visible/working rather
-      // than silently hiding an applied filter from the viewer.
+      // Phase 4A: collapsing now genuinely closes the sheet even with a filter
+      // applied — the old `open || hasActiveFilter` derivation made the sheet
+      // impossible to dismiss, which broke close/scrim/Escape on the mobile
+      // modal. The applied filter is not hidden by closing: it stays reported
+      // in the "ตัวกรองที่ใช้" summary row, in the toggle's count badge, and it
+      // keeps filtering the table.
       fireEvent.click(toggle);
-      expect(screen.getByRole('button', { name: /พักไว้ชั่วคราว/ })).not.toBeNull();
+      expect(screen.queryByRole('button', { name: /พักไว้ชั่วคราว/ })).toBeNull();
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(within(toggle).getByText('1')).not.toBeNull();
+      expect(screen.getByLabelText('ตัวกรองที่ใช้')).not.toBeNull();
+      expect(screen.getByText('สถานะงาน: พักไว้ชั่วคราว')).not.toBeNull();
       expect(screen.getByText('บริษัท พักไว้ จำกัด')).not.toBeNull();
+    });
+
+    it('opens itself when a lifecycle filter arrives by deep link, so an applied filter is never hidden', async () => {
+      renderTicketListPage(salesUser, ['/tickets?life=ON_HOLD']);
+      expect(await screen.findByText('บริษัท พักไว้ จำกัด')).not.toBeNull();
+
+      expect(screen.getByRole('button', { name: /^ตัวกรอง/ }).getAttribute('aria-expanded')).toBe('true');
+      expect(screen.getByRole('button', { name: /พักไว้ชั่วคราว/ })).not.toBeNull();
+    });
+  });
+
+  // Acceptance gate for Phase 4A: at <=720px the filter sheet is a modal
+  // bottom sheet over a scrim, so it owes the viewer the full modal contract.
+  describe('mobile filter sheet modal contract', () => {
+    async function openMobileSheet() {
+      stubMobile();
+      renderTicketListPage();
+      expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
+      const toggle = screen.getByRole('button', { name: /ตัวกรอง/ });
+      toggle.focus();
+      fireEvent.click(toggle);
+      return { toggle, sheet: screen.getByRole('dialog', { name: 'ตัวกรองเพิ่มเติม' }) };
+    }
+
+    it('announces itself as a modal dialog on mobile only', async () => {
+      const { sheet } = await openMobileSheet();
+      expect(sheet.getAttribute('aria-modal')).toBe('true');
+    });
+
+    it('stays an inline region (not a dialog) above the mobile breakpoint', async () => {
+      renderTicketListPage();
+      expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /ตัวกรอง/ }));
+
+      expect(screen.queryByRole('dialog')).toBeNull();
+      const sheet = screen.getByRole('region', { name: 'ตัวกรองเพิ่มเติม' });
+      expect(sheet.getAttribute('aria-modal')).toBeNull();
+    });
+
+    it('closes on Escape and restores focus to the filter toggle', async () => {
+      const { toggle, sheet } = await openMobileSheet();
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(sheet.isConnected).toBe(false);
+      await waitFor(() => expect(document.activeElement).toBe(toggle));
+    });
+
+    it('closes on Escape even while a lifecycle filter is applied', async () => {
+      stubMobile();
+      renderTicketListPage(salesUser, ['/tickets?life=ON_HOLD']);
+      expect(await screen.findByText('บริษัท พักไว้ จำกัด')).not.toBeNull();
+      expect(screen.getByRole('dialog', { name: 'ตัวกรองเพิ่มเติม' })).not.toBeNull();
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      expect(screen.queryByRole('dialog')).toBeNull();
+      // The filter is still applied and still reported after dismissal.
+      expect(screen.getByText('สถานะงาน: พักไว้ชั่วคราว')).not.toBeNull();
+      expect(screen.getByText('บริษัท พักไว้ จำกัด')).not.toBeNull();
+    });
+
+    it('moves initial focus into the sheet and traps Tab inside it', async () => {
+      const { sheet } = await openMobileSheet();
+      const focusables = Array.from(
+        sheet.querySelectorAll('a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])'),
+      );
+      expect(focusables.length).toBeGreaterThan(1);
+
+      // Opening hands focus to the first control inside the sheet.
+      expect(sheet.contains(document.activeElement)).toBe(true);
+      expect(document.activeElement).toBe(focusables[0]);
+
+      // Tab off the last control wraps to the first, and shift+Tab off the
+      // first wraps to the last — focus never lands on the inert page behind.
+      const last = focusables[focusables.length - 1];
+      last.focus();
+      fireEvent.keyDown(document, { key: 'Tab' });
+      expect(document.activeElement).toBe(focusables[0]);
+
+      fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+      expect(document.activeElement).toBe(last);
+    });
+
+    it('pulls focus back in if it escapes to the page behind', async () => {
+      const { toggle, sheet } = await openMobileSheet();
+      const first = sheet.querySelector('button');
+
+      toggle.focus();
+      fireEvent.keyDown(document, { key: 'Tab' });
+
+      expect(document.activeElement).toBe(first);
+    });
+
+    it('marks the page behind the sheet inert and hidden, and clears both on close', async () => {
+      const { sheet } = await openMobileSheet();
+      const pageRoot = document.querySelector('.ticket-list-page');
+
+      // The sheet is portalled out of the page root, so inerting the root
+      // cannot swallow the sheet itself.
+      expect(pageRoot.contains(sheet)).toBe(false);
+      expect(pageRoot.hasAttribute('inert')).toBe(true);
+      expect(pageRoot.getAttribute('aria-hidden')).toBe('true');
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      expect(pageRoot.hasAttribute('inert')).toBe(false);
+      expect(pageRoot.getAttribute('aria-hidden')).toBeNull();
+    });
+
+    it('does not inert the page when the sheet is the desktop inline panel', async () => {
+      renderTicketListPage();
+      expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /ตัวกรอง/ }));
+
+      const pageRoot = document.querySelector('.ticket-list-page');
+      expect(pageRoot.hasAttribute('inert')).toBe(false);
+      expect(pageRoot.getAttribute('aria-hidden')).toBeNull();
+      expect(pageRoot.querySelector('.ticket-filter-sheet')).not.toBeNull();
+    });
+
+    it('closes on scrim click and restores focus', async () => {
+      const { toggle } = await openMobileSheet();
+
+      // The scrim specifically — the header close button carries the same
+      // accessible name, so target the backdrop element itself.
+      fireEvent.click(document.querySelector('.ticket-filter-backdrop'));
+
+      expect(screen.queryByRole('dialog')).toBeNull();
+      await waitFor(() => expect(document.activeElement).toBe(toggle));
     });
   });
 });

@@ -16,7 +16,8 @@
 - Runs: 25 role/viewport combinations.
 - Screenshots: 143 PNG files.
 - Failures: 0.
-- Blockers: 10.
+- Blockers: 0.
+- Not applicable (out of role scope by design): 10.
 - Warnings: 3.
 - Console warnings: 0.
 - Console errors: 25.
@@ -49,14 +50,24 @@ warning was recorded.
 - No page-level horizontal overflow, malformed nested interactive controls, or
   unauthorized cost/margin exposure was detected.
 
-## Blockers
+## Not Applicable — Intentional Route Scope
+
+These 10 role/viewport runs were previously filed as "blockers". That was a
+mis-classification and is corrected here: no check is obstructed, the route is
+simply out of scope for those roles by design, so there is nothing to unblock
+and no follow-up is owed.
 
 - `import` is redirected from bare `/tickets` to `/` at every viewport.
 - `account` is redirected from bare `/tickets` to `/` at every viewport.
-- This matches the current route guard: `/tickets` is still gated to
-  `canViewDealPipeline` (`sales`, `sales_manager`, `ceo`), while
-  `import`/`account` retain ticket-detail access and use role-specific
-  overview/worklist entry points.
+- This is the intended route guard, not a defect: `/tickets` is the deal
+  pipeline browser, gated on `canViewDealPipeline`
+  (`['sales', 'sales_manager', 'ceo']` — `frontend/src/api/routes.js:291`),
+  while `import`/`account` retain ticket-detail access (`canViewTickets`) and
+  use role-specific overview/worklist entry points. Asserted in
+  `frontend/src/app/permissions.test.js:36-37`.
+- Consequently the Phase 4A worklist changes are not observable for these two
+  roles, and their captures are landing-surface evidence rather than `/tickets`
+  evidence.
 - Related-record checks from the real role landings passed for both roles:
   Import opened a related ticket/work item, Account opened a money-related
   ticket/work item, and browser back returned to the landing state.
@@ -66,6 +77,13 @@ warning was recorded.
 - At `390x844`, Escape did not close the ticket filter sheet for `sales`,
   `sales_manager`, or `ceo`. Closing through the visible
   `ปิดตัวกรองเพิ่มเติม` button restored focus to the filter trigger.
+  **Resolved** in the acceptance pass — the root cause was the
+  `moreFiltersOpen || hasActiveMoreFilters` openness derivation, which made the
+  sheet undismissable by any means (Escape, scrim, or close button) whenever a
+  lifecycle/flag filter was applied. Escape now closes the sheet at every width
+  and restores focus, with a mobile-only focus trap and an inert background. See
+  `PHASE_4A_IMPLEMENTATION.md` → "Mobile Filter Sheet Modal Contract" for the
+  contract and the test coverage.
 
 ## Not Safely Reproduced
 
@@ -74,3 +92,13 @@ warning was recorded.
 - Ticket-list error/retry: `api.tickets.list` is served by the in-memory mock
   module, not a network request that can be safely failed with Playwright
   routing.
+- Live-page render of the DataTable expansion panel: both `renderExpanded`
+  callers need seeded rows the mock does not produce — commission records require
+  invoices (the list is empty for every month reachable in the mock, including
+  `2026-06`), and the attendance toggle only renders for days with
+  `punch_count > 0`. The shrink-to-fit regression fixed in the acceptance pass is
+  therefore asserted against a synthetic table that reproduces DataTable's exact
+  structure and the real stylesheet
+  (`phase4a-acceptance.spec.js` → "expanded detail panel spans the full row
+  width"), and mutation-checked. The measurement is of the real mechanism; the
+  live page render is **not** claimed as verified.

@@ -1038,7 +1038,20 @@ textarea:focus {
   background: var(--color-surface-hover);
 }
 
+/* `thead`/`tbody` are `display: block` above, and `.table-head`/`.data-row` opt
+   back in with `display: grid`. The expansion row has neither class, so leaving
+   it as `display: table-row` inside a block parent makes the browser generate an
+   anonymous table around it — and an anonymous table is width: auto, i.e.
+   shrink-to-fit. The panel then hugs the left edge at its content width instead
+   of spanning the row (visible on AttendancePage and CommissionPage above
+   720px). Block-level both the row and its cell so the panel fills the width. */
+.data-table-expanded-row {
+  display: block;
+}
+
 .data-table-expanded-row > td {
+  display: block;
+  width: 100%;
   padding: 0;
   border: 0;
 }
@@ -1081,7 +1094,18 @@ textarea:focus {
   grid-template-columns: minmax(0,1.8fr) minmax(0,1.1fr) minmax(0,1.6fr) minmax(0,1.7fr) minmax(0,0.9fr) minmax(0,1.2fr);
 }
 
+/* Shared 4-column deal row. Consumed by TicketDashboard and
+   AccountFinancePage, which each emit exactly 4 cells — do NOT widen this
+   template for the /tickets worklist. The worklist has 6 columns and owns
+   `.ticket-worklist-table` below for that reason. */
 .ticket-table {
+  grid-template-columns: minmax(0,2.6fr) minmax(0,1.3fr) minmax(0,1.3fr) minmax(0,1fr);
+}
+
+/* /tickets worklist only (TicketListPage) — 6 columns including the explicit
+   open action. Separate from `.ticket-table` so widening the worklist can
+   never reflow the 4-cell consumers of the shared class. */
+.ticket-worklist-table {
   grid-template-columns: minmax(0,2.3fr) minmax(0,1fr) minmax(0,1.5fr) minmax(0,1fr) minmax(0,0.85fr) minmax(84px,0.55fr);
 }
 
@@ -1290,10 +1314,6 @@ textarea:focus {
   height: 8px;
   flex: 0 0 auto;
   border-radius: var(--radius-pill);
-}
-
-.ticket-filter-bar {
-  gap: 12px;
 }
 
 .ticket-filter-search {
@@ -2312,7 +2332,14 @@ a.status-badge {
   .brand span:not(.brand-mark),
   .nav-item span,
   .nav-group-header,
-  .sidebar-account span {
+  /* Direct child only: the name/role text block (Sidebar.jsx). As a descendant
+     selector this also matched the <span> wrapper Button.jsx puts around its
+     children — i.e. the logout icon. That is latent rather than live today,
+     because `inline-flex` on the wrapper sits in the `utilities` layer and beats
+     this rule in `legacy` (measured: wrapper stays `flex`, icon 18px). Scoped to
+     the direct child so it states the actual intent and does not depend on layer
+     order to be safe. */
+  .sidebar-account > span {
     display: none;
   }
 
@@ -2367,7 +2394,7 @@ a.status-badge {
     right: 3px;
     min-width: 18px;
     height: 18px;
-    font-size: 0.625rem;
+    font-size: var(--text-2xs);
     box-shadow: 0 0 0 2px var(--color-sidebar-bg);
   }
 
@@ -2378,6 +2405,39 @@ a.status-badge {
     gap: 8px;
     padding-top: 12px;
   }
+
+  /* Ticket list tablet portrait/landscape sits inside the collapsed rail shell,
+   so the generic 900px table minimum clips the explicit open action at
+   768x1024. In the tablet band keep the native table, but drop the optional
+   progress column and preserve the required scan fields: identity, owner,
+   stage/work reason, freshness, and open. */
+  .ticket-list-page .ticket-worklist-table {
+    min-width: 0;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 0.9fr) minmax(0, 1.4fr) minmax(0, 0.75fr) minmax(78px, 0.6fr);
+    gap: 8px;
+  }
+
+  .ticket-list-page .ticket-worklist-table > :nth-child(4) {
+    display: none;
+  }
+
+  .ticket-list-page .ticket-worklist-table.data-row > td:nth-child(3) > span {
+    overflow: visible;
+    white-space: normal;
+  }
+
+  .ticket-list-page .ticket-worklist-table.data-row > td:nth-child(3) .status-badge {
+    justify-content: flex-start;
+    max-width: 100%;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .ticket-list-page .table-head.ticket-worklist-table,
+  .ticket-list-page .data-row.ticket-worklist-table {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
 }
 
 @media (max-width: 1040px) {
@@ -2385,8 +2445,12 @@ a.status-badge {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  /* `.ticket-worklist-table`, not `.ticket-table`: the shared 4-column class is
+     also used by TicketDashboard and AccountFinancePage, both of which render
+     inside `overflow: hidden` panels with no scroller, so a forced 900px
+     minimum would clip their last column instead of scrolling it. */
   .request-table,
-  .ticket-table,
+  .ticket-worklist-table,
   .commission-table,
   .commission-payroll-table,
   .payroll-table,
@@ -2433,41 +2497,6 @@ a.status-badge {
      above. */
   .attendance-import-panel {
     grid-template-columns: 1fr;
-  }
-}
-
-/* Ticket list tablet portrait/landscape sits inside the collapsed rail shell,
-   so the generic 900px table minimum clips the explicit open action at
-   768x1024. In the tablet band keep the native table, but drop the optional
-   progress column and preserve the required scan fields: identity, owner,
-   stage/work reason, freshness, and open. */
-@media (min-width: 721px) and (max-width: 1040px) {
-  .ticket-list-page .ticket-table {
-    min-width: 0;
-    grid-template-columns: minmax(0, 2fr) minmax(0, 0.9fr) minmax(0, 1.4fr) minmax(0, 0.75fr) minmax(78px, 0.6fr);
-    gap: 8px;
-  }
-
-  .ticket-list-page .ticket-table > :nth-child(4) {
-    display: none;
-  }
-
-  .ticket-list-page .ticket-table.data-row > td:nth-child(3) > span {
-    overflow: visible;
-    white-space: normal;
-  }
-
-  .ticket-list-page .ticket-table.data-row > td:nth-child(3) .status-badge {
-    justify-content: flex-start;
-    max-width: 100%;
-    text-align: left;
-    white-space: normal;
-  }
-
-  .ticket-list-page .table-head.ticket-table,
-  .ticket-list-page .data-row.ticket-table {
-    padding-right: 12px;
-    padding-left: 12px;
   }
 }
 
@@ -2656,7 +2685,7 @@ a.status-badge {
   }
 
   .ticket-scope-copy > span {
-    font-size: 10px;
+    font-size: var(--text-2xs);
   }
 
   .ticket-scope-copy h2 {
@@ -2674,7 +2703,7 @@ a.status-badge {
   }
 
   .ticket-result-count span {
-    font-size: 10px;
+    font-size: var(--text-2xs);
   }
 
   .ticket-result-count strong {
@@ -2720,7 +2749,7 @@ a.status-badge {
   }
 
   .ticket-pipeline-metrics dt {
-    font-size: 10px;
+    font-size: var(--text-2xs);
   }
 
   .ticket-pipeline-metrics dd {
@@ -2764,14 +2793,6 @@ a.status-badge {
     line-height: 1.15;
   }
 
-  .ticket-filter-bar {
-    display: grid !important;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 8px;
-    padding: 10px;
-  }
-
   .ticket-filter-bar > * {
     width: auto;
     min-width: 0;
@@ -2790,8 +2811,11 @@ a.status-badge {
     display: none;
   }
 
-  .ticket-filter-bar > .button-variant-text,
-  .ticket-filter-bar > button[class*="text-primary"] {
+  /* Explicit hook on the "ล้างทั้งหมด" control. The previous selector pair was
+     a dead class plus a substring match on a Tailwind utility
+     (`button[class*="text-primary"]`), which would break silently the moment the
+     Button text variant's utilities changed. */
+  .ticket-filter-bar > .ticket-filter-clear {
     grid-column: 1 / -1;
   }
 
@@ -2805,19 +2829,23 @@ a.status-badge {
     font-size: var(--text-xs);
   }
 
+  /* Sits on the existing overlay ladder: above the nav drawer (40) and below
+     the modal layer (.modal-backdrop, 50), so a dialog always wins over the
+     filter sheet. 54/55 put it *above* modals. Scrim reuses the shared drawer
+     overlay token rather than inventing a third opacity. */
   .ticket-filter-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 54;
+    z-index: 44;
     display: block;
     border: 0;
-    background: rgba(15, 23, 42, 0.42);
+    background: var(--color-overlay-drawer);
   }
 
   .ticket-filter-sheet {
     position: fixed;
     inset: auto 0 0 0;
-    z-index: 55;
+    z-index: 45;
     max-height: min(70dvh, 560px);
     overflow-y: auto;
     border-right: 0;
@@ -2848,7 +2876,8 @@ a.status-badge {
     align-items: flex-start;
   }
 
-  .ticket-table {
+  .ticket-table,
+  .ticket-worklist-table {
     min-width: 0;
   }
 

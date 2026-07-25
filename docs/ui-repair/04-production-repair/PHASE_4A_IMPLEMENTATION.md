@@ -154,6 +154,61 @@ Docs and evidence:
   exception text.
 - Added explicit `aria-expanded` for attendance scan-detail controls.
 
+## Mobile Filter Sheet Modal Contract
+
+Added after the first acceptance review, which required Escape handling, a focus
+trap, and an inert background on the mobile filter sheet.
+
+At `<=720px` the "ตัวกรองเพิ่มเติม" sheet is a fixed bottom sheet over a scrim —
+a real modal — while above that breakpoint the same markup is an inline
+disclosure panel with the scrim hidden. Modal semantics are therefore
+breakpoint-scoped rather than applied unconditionally:
+
+- **Escape closes the sheet at every width** and routes through
+  `closeMoreFilters`, so focus returns to the "ตัวกรอง" toggle. Previously
+  Escape did nothing (the Playwright run logged this for `sales`,
+  `sales_manager`, and `ceo` at `390x844`).
+- **Focus trap, on mobile only.** Opening moves focus to the first control in
+  the sheet; Tab off the last control wraps to the first and shift+Tab off the
+  first wraps to the last. Focus that has escaped the sheet is pulled back to
+  the first control, so the trap holds even where `inert` is unsupported. The
+  keyboard contract and the `FOCUSABLE` selector are deliberately identical to
+  `components/common/Modal.jsx` — the two overlay surfaces now behave the same.
+- **Background inert, on mobile only.** The sheet is portalled to `<body>` so
+  the page root can carry `inert` plus `aria-hidden="true"` while it is open (an
+  ancestor cannot inert its own overlay). Both attributes are cleared on close.
+  React 18 has no boolean-prop support for `inert`, so the bare HTML attribute is
+  emitted via `inert=""`, and `aria-hidden` covers browsers without `inert`.
+- **Role reflects the breakpoint**: `role="dialog" aria-modal="true"` on mobile,
+  the original `role="region"` inline panel on desktop. Announcing a dialog on
+  desktop would misdescribe the surface to a screen reader.
+- On desktop the sheet still renders in the page's normal flow (it is a
+  `.page-stack` child); only the mobile modal is portalled.
+
+### Behaviour change: the sheet is now dismissable while a filter is applied
+
+Openness was previously derived as `moreFiltersOpen || hasActiveMoreFilters`.
+That made the sheet **impossible to dismiss** whenever a lifecycle or flag
+filter was applied — the close button, the scrim, and Escape were all no-ops,
+which is not acceptable for a modal that covers the page on mobile. This was the
+root cause of the Escape finding, not merely a missing key handler.
+
+Openness is now genuinely state-driven, and the original intent — never hide an
+applied filter — is preserved by other means:
+
+- The sheet still opens itself when a lifecycle/flag filter becomes active,
+  including on a deep link such as `/tickets?life=ON_HOLD`.
+- After the viewer closes it, the applied filter is still reported by the
+  always-visible "ตัวกรองที่ใช้" summary row and by the count badge on the
+  "ตัวกรอง" toggle, and it still filters the table.
+
+The test that asserted the old un-dismissable behaviour was updated to assert
+this contract instead; it was not deleted. Coverage lives in
+`TicketListPage.test.jsx` under "mobile filter sheet modal contract" (dialog vs
+region per breakpoint, Escape with and without an active filter, initial focus,
+Tab and shift+Tab wrap, focus recapture, inert set and cleared, desktop not
+inerted, scrim click).
+
 ## Legacy CSS Removed
 
 - Removed legacy button classes from the touched `/tickets` page header/actions,
@@ -176,20 +231,26 @@ Docs and evidence:
 
 ## Deferred Work
 
-- Decide in a later authorized phase whether import/account should route to
-  `/tickets`; Phase 4A kept the current route guard unchanged.
-- Fix mobile ticket filter sheet Escape behavior; the close button restores
-  focus, but Escape did not close the sheet in the Playwright run.
 - Consider migrating remaining legacy buttons only in the future slices that
   own those surfaces.
+
+Removed from this list during the acceptance pass:
+
+- ~~Fix mobile ticket filter sheet Escape behavior~~ — **done**, see "Mobile
+  Filter Sheet Modal Contract" above.
+- ~~Decide whether import/account should route to `/tickets`~~ — not deferred
+  work; the current guard is the finalized role-scoped-views design, so there is
+  no open decision. Phase 4A kept it unchanged.
 
 ## Known Limitations
 
 - The previous `shared/tablet-768x1024.png` visual blocker is resolved in the
   recaptured evidence. The tablet ticket table now keeps the explicit open
   action visible and lets long stage labels wrap.
-- Import/account `/tickets` validation is blocked by current route permissions;
-  related-record checks from their actual role landing pages passed.
+- Import/account `/tickets` validation is **not applicable** — `/tickets` is
+  outside those roles' scope by design (`canViewDealPipeline`), so there is
+  nothing to validate rather than something blocked. Related-record checks from
+  their actual role landing pages passed.
 - Step 12 E2E logged RBAC drift between
   `docs/ux-ui-audit/data/shoot-manifest.json` and the live route oracle,
   including import/account `/tickets` entries where the stale manifest allows
@@ -244,9 +305,12 @@ Docs and evidence:
   `npm run test -- DataTable.test.jsx TicketListPage.test.jsx AppShell.test.jsx`
   passed, 3 files / 43 tests.
 - Tablet repair browser QA rerun used `/private/tmp/glr-phase4a-qa/phase4a-qa.mjs`.
-  Result: 25 role/viewport runs, 143 screenshots, 0 failures, 10 expected
-  import/account route blockers, 3 mobile filter Escape warnings, 25 known mock
-  login console/network errors.
+  Result: 25 role/viewport runs, 143 screenshots, 0 failures, 10 import/account
+  runs that are not applicable because `/tickets` is out of those roles' scope by
+  design (previously mis-filed as "blockers"), 3 mobile filter Escape warnings,
+  25 known mock login console/network errors.
+- The 3 mobile filter Escape warnings were subsequently **fixed**, not carried
+  forward — see "Mobile filter sheet modal contract" below.
 - Step 10 visual evidence was recaptured under
   `docs/ui-repair/evidence/proposed/phase-4a-ticket-worklist/`; 21 PNG files are
   present, including repaired `shared/tablet-768x1024.png`.
