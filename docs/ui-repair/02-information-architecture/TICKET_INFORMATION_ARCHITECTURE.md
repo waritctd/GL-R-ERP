@@ -39,12 +39,23 @@ The header answers "which deal, where is it, whose move, what next" without scro
 the four questions the design law demands. It holds:
 
 - **Identity** (1): deal #, customer, project title, owner.
-- **Stage strip** (3): the 14-step pipeline with phase grouping and the current step — the
-  existing pipeline strip, kept; "ดูขั้นตอนทั้งหมด (14 ขั้น)" expands detail.
+- **Compact stage context** (3): current phase, current step, optional previous/next context and
+  progress summary. The complete 14-step pipeline stays behind "ดูขั้นตอนทั้งหมด"; it does not
+  dominate the first viewport.
 - **Work-state banner** (4/6/7): "รอคุณอนุมัติราคา" / "รอฝ่ายนำเข้า" / "CEO ส่งกลับให้แก้ไข"
   — the single most important line, viewer-specific, with the blocker if any.
+- **Compact metadata strip:** inline label/value pairs for supporting axes such as pricing,
+  payment, import and deal value. These are not equal-weight cards.
+- **One next-action slot**: the current viewer's primary action when one exists, plus refresh as
+  an icon action.
 - **Not** a full-width centered "กลับ" back bar (F-14) — the breadcrumb is the single up-nav;
   drop the marketing-ish back bar.
+
+Phase 5A's strict first-viewport rules live in
+`../05-ticket-workspace/PHASE_5A_FIRST_VIEWPORT_CONTRACT.md`; the badge budget lives in
+`../05-ticket-workspace/PHASE_5A_BADGE_AUDIT.md`; the action hierarchy lives in
+`../05-ticket-workspace/PHASE_5A_ACTION_HIERARCHY.md`; loading/error/empty state feedback lives
+in `../05-ticket-workspace/PHASE_5A_STATE_FEEDBACK_CONTRACT.md`.
 
 ## Tabs (the deal's depth)
 
@@ -60,11 +71,26 @@ Tabs are **role-projected** — a viewer only sees tabs they have data/permissio
 | **เอกสาร (Documents)** | generated + uploaded docs (15) | per-doc visibility (deposit notice hidden from import) |
 | **กิจกรรม (Activity)** | activity/tracking (17) + audit history (18) | all viewers (audit read-only) |
 
+Phase 5A tightens the tab responsibilities in
+`../05-ticket-workspace/PHASE_5A_TAB_SIMPLIFICATION_CONTRACT.md`:
+
+- Overview is a concise operational summary, not a stack of every workflow panel.
+- Pricing is a compact pricing-request list with active request ownership and blockers.
+- Quotations are dense document rows with customer outcome separated from document status.
+- Money is a compact financial summary, not metric cards.
+- Fulfilment is two connected tracks: procurement/import and customer delivery.
+- Documents is the canonical grouped file list with one upload path.
+- Activity is one chronological structure for events, comments and follow-up.
+
 Tab visibility follows the frontend `salesViewScope` mirror, which itself mirrors the Java
 projection (import sees pricingRequest+delivery, account sees payment/delivery/quotation/
 depositNotice, both hidden from dealTracking). **This is presentation projection, not the
 security boundary** — the backend still enforces per-endpoint. The UI must not render a tab
 whose data the backend would 403.
+
+State feedback follows `../05-ticket-workspace/PHASE_5A_STATE_FEEDBACK_CONTRACT.md`: omitted tab,
+permission-limited partial content, successful empty content, not-applicable stage content,
+loading content, failed content and completed content are different IA signals.
 
 ## Context / side panel
 
@@ -83,14 +109,20 @@ button. Driven by the same role+state gates as the backend (`salesActions`/`impo
 `accountActions` resolvers, re-checked server-side):
 - **Primary** = the single next action (8) for the work-state (e.g. "ออกใบเสนอราคา",
   "ยืนยันรับมัดจำ", "อนุมัติราคา").
-- **Secondary** = contextual (hold/resume, revise, cancel/mark-lost) behind a clearer
-  affordance.
+- **Secondary** = contextual/manual override actions such as revise or edit stage. The visible
+  bar shows at most two before overflow.
+- **Overflow / other actions** = hold/resume, long-pause, mark-lost and cancellation controls.
+- **Destructive actions** = separated from ordinary actions and confirmed.
 - **Disabled actions explain why** (design law) — e.g. "ออกใบเสนอราคา" disabled until CEO
   approves, with the reason inline (WHY was a Phase-1 gap on the ticket detail).
 - **Two-signature close** renders as two distinct states: account sees "ยืนยันพร้อมปิดงาน";
   CEO sees "ตรวจและปิดงาน" — never one combined "close" button (B-10).
 
 ## Mobile — what stays, what hides
+
+Phase 5A mobile ticket behaviour is governed by
+`../05-ticket-workspace/PHASE_5A_MOBILE_WORKSPACE_CONTRACT.md`. The core rule is that mobile is
+not desktop in one column.
 
 - **Always visible on mobile:** identity (1), stage chip (3), work-state banner (4/6/7),
   the sticky primary next action (8), blocker (7) when present.
@@ -99,6 +131,8 @@ button. Driven by the same role+state gates as the backend (`salesActions`/`impo
 - **Never on mobile:** nothing is *forbidden*, but cost/margin and the full audit table are
   low-priority; the deal must be *actionable* on mobile (approve, confirm, log activity,
   check status) even if deep editing (costing, quotation building) is desktop-leaning.
+- **Forbidden at page level:** horizontal scrolling. Long Thai customer/project names, filenames
+  and document numbers must wrap or truncate inside their owning row.
 
 ## Role-sensitive information (must not leak)
 

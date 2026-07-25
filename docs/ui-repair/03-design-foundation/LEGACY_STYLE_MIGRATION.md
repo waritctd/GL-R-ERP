@@ -57,6 +57,20 @@ The boundary is *one component or one page*, verified by grep, not a global swee
 - The slice has before-screenshots (desktop + mobile, both scripts).
 - The slice maps to existing tokens/primitives (or a proposed token is approved).
 
+### Phase 5A ticket-detail slice
+
+The Phase 5A ticket workspace has its own visual-cleanup gate:
+[`../05-ticket-workspace/PHASE_5A_CSS_VISUAL_CLEANUP.md`](../05-ticket-workspace/PHASE_5A_CSS_VISUAL_CLEANUP.md).
+
+That gate authorises cleanup only inside `/tickets/:id` and directly related ticket panels. It
+does not authorise a full `styles.css` rewrite, a bulk CSS-to-Tailwind conversion, or global
+edits to shared selectors without proving every caller.
+
+Ticket-detail cleanup may remove unnecessary border layers, duplicate backgrounds, excessive
+padding, one-off shadows and repeated inline layout styles, but only while preserving readable
+density, Thai sizing, visible focus, 44px touch targets and meaningful current/waiting/completed/
+historical distinctions.
+
 ## Component-by-component process
 
 For each slice:

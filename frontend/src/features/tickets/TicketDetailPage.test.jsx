@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketDetailPage } from './TicketDetailPage.jsx';
 import { api } from '../../api/index.js';
@@ -128,7 +128,27 @@ function buildTicket(overrides = {}) {
   };
 }
 
-function renderTicketDetailPage(user = ceoUser, showToast = vi.fn()) {
+function LocationDisplay() {
+  const location = useLocation();
+  return <div data-testid="location-display">{`${location.pathname}${location.search}`}</div>;
+}
+
+function HistoryControls() {
+  const navigate = useNavigate();
+  return (
+    <div>
+      <button type="button" aria-label="test history back" onClick={() => navigate(-1)}>back</button>
+      <button type="button" aria-label="test history forward" onClick={() => navigate(1)}>forward</button>
+    </div>
+  );
+}
+
+async function openTicketTab(name) {
+  fireEvent.click(await screen.findByRole('tab', { name }));
+}
+
+function renderTicketDetailPage(user = ceoUser, showToast = vi.fn(), options = {}) {
+  const { initialEntry = '/tickets/701', withHistoryControls = false } = options;
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -140,7 +160,9 @@ function renderTicketDetailPage(user = ceoUser, showToast = vi.fn()) {
     <QueryClientProvider client={queryClient}>
       {/* DealQuotationPanel (Phase 2 Slice S2) links out to
           /pricing-requests/:id and uses useNavigate — needs Router context. */}
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <LocationDisplay />
+        {withHistoryControls ? <HistoryControls /> : null}
         <TicketDetailPage
           user={user}
           ticketId={701}
@@ -245,22 +267,97 @@ describe('TicketDetailPage', () => {
     expect(screen.queryByRole('heading', { level: 2, name: 'การอนุมัติราคา' })).toBeNull();
   });
 
-  // Phase 2 Slice S2: the state header sits above every other section and
-  // names the sales stage, PCR status, payment/fulfilment status, and deal
-  // value at a glance.
-  it('renders the DealStateHeader stat strip', async () => {
+  // Phase 5A Step 4: the persistent header sits above every workspace section
+  // and answers identity, current stage, work state, waiting/blocker, owner and
+  // freshness/deadline without turning each value into a card.
+  it('renders the persistent DealStateHeader summary', async () => {
     api.tickets.get.mockResolvedValueOnce({
-      ticket: buildTicket({ summary: { salesStage: 'QUOTE_DESIGN_SIDE', amountPayable: 50000 } }),
+      ticket: buildTicket({
+        summary: {
+          salesStage: 'QUOTE_DESIGN_SIDE',
+          projectName: 'อาคารสำนักงานใหญ่ภาษาไทยยาวมาก',
+          nextFollowUpAt: '2026-07-15',
+        },
+      }),
     });
 
+    renderTicketDetailPage(salesOwnerUser);
+
+    const header = await screen.findByTestId('deal-state-header');
+    expect(within(header).getByText('PR-2026-0701')).not.toBeNull();
+    expect(within(header).getByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' })).not.toBeNull();
+    expect(within(header).getByText('อาคารสำนักงานใหญ่ภาษาไทยยาวมาก')).not.toBeNull();
+    expect(within(header).getByText('เจ้าของฝ่ายขาย')).not.toBeNull();
+    expect(within(header).getByText('สมชาย ใจดี')).not.toBeNull();
+    expect(within(header).getByText('ขั้นตอน')).not.toBeNull();
+    expect(within(header).getByText('4. เสนอราคาผู้ออกแบบ/เจ้าของ')).not.toBeNull();
+    expect(within(header).getByText('สถานะงาน')).not.toBeNull();
+    expect(within(header).getAllByText('ยังไม่มีใบขอราคา').length).toBeGreaterThan(0);
+    expect(within(header).getByText('ติดตาม')).not.toBeNull();
+  });
+
+  it('does not duplicate breadcrumb navigation with a separate back bar', async () => {
     renderTicketDetailPage();
 
-    expect(await screen.findByText('ขั้นตอนดีล')).not.toBeNull();
-    // DealStagePanel below also names the current stage — assert presence, not uniqueness.
-    expect(screen.getAllByText('เสนอราคาผู้ออกแบบ/เจ้าของ').length).toBeGreaterThan(0);
-    expect(screen.getByText('มูลค่าดีล')).not.toBeNull();
-    // The payment panel below also renders amountPayable — assert presence, not uniqueness.
-    expect(screen.getAllByText('฿50,000').length).toBeGreaterThan(0);
+    expect(await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' })).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'ดีล' })).not.toBeNull();
+    expect(screen.queryByRole('button', { name: /^กลับ$/ })).toBeNull();
+  });
+
+  it('stores the default active workspace tab in the URL without breaking old ticket links', async () => {
+    renderTicketDetailPage();
+
+    expect((await screen.findByRole('tab', { name: 'ภาพรวม' })).getAttribute('aria-selected')).toBe('true');
+    await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets/701?t=overview'));
+  });
+
+  it('loads a directly linked permitted tab from ?t=', async () => {
+    renderTicketDetailPage(ceoUser, vi.fn(), { initialEntry: '/tickets/701?t=money' });
+
+    expect((await screen.findByRole('tab', { name: 'การเงิน' })).getAttribute('aria-selected')).toBe('true');
+    expect(await screen.findByRole('heading', { level: 2, name: 'การชำระเงิน' })).not.toBeNull();
+    expect((await screen.findAllByText('ยังไม่มีรายการรับชำระ')).length).toBeGreaterThan(0);
+    expect(screen.getByTestId('location-display').textContent).toBe('/tickets/701?t=money');
+  });
+
+  it('supports browser back and forward between workspace tabs', async () => {
+    renderTicketDetailPage(ceoUser, vi.fn(), { withHistoryControls: true });
+
+    await openTicketTab('เอกสาร');
+    await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets/701?t=documents'));
+    await openTicketTab('กิจกรรม');
+    await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets/701?t=activity'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'test history back' }));
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'เอกสาร' }).getAttribute('aria-selected')).toBe('true'));
+    expect(screen.getByTestId('location-display').textContent).toBe('/tickets/701?t=documents');
+
+    fireEvent.click(screen.getByRole('button', { name: 'test history forward' }));
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'กิจกรรม' }).getAttribute('aria-selected')).toBe('true'));
+    expect(screen.getByTestId('location-display').textContent).toBe('/tickets/701?t=activity');
+  });
+
+  it('falls back from invalid or unauthorized tab values without revealing hidden tabs', async () => {
+    renderTicketDetailPage(accountUser, vi.fn(), { initialEntry: '/tickets/701?t=pricing' });
+
+    expect((await screen.findByRole('tab', { name: 'ภาพรวม' })).getAttribute('aria-selected')).toBe('true');
+    expect(screen.queryByRole('tab', { name: 'ราคา' })).toBeNull();
+    await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets/701?t=overview'));
+    expect(api.pricingRequests.listForTicket).not.toHaveBeenCalled();
+  });
+
+  it('shows terminal deal state in the persistent header', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: { lifecycle: 'COMPLETED', status: 'closed', salesStage: 'CLOSED_PAID' },
+      }),
+    });
+
+    renderTicketDetailPage(ceoUser);
+
+    const header = await screen.findByTestId('deal-state-header');
+    expect(within(header).getAllByText('ปิดงานแล้ว').length).toBeGreaterThan(0);
+    expect(within(header).getByText('ดีลนี้เสร็จสมบูรณ์และผ่านการตรวจปิดงานแล้ว')).not.toBeNull();
   });
 
   it('renders legacy quotation revisions read-only — no revise/mark-sent/mark-decision buttons', async () => {
@@ -312,6 +409,7 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage();
 
+    await openTicketTab('ใบเสนอราคา');
     expect(await screen.findByText('ผู้ออกแบบ')).not.toBeNull();
     expect(screen.getByText('เจ้าของ')).not.toBeNull();
     expect(screen.getByText('QT-2026-0901')).not.toBeNull();
@@ -363,14 +461,56 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage();
 
+    await openTicketTab('การเงิน');
     expect((await screen.findAllByText('ชำระบางส่วน')).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('เกินกำหนด').length).toBeGreaterThan(0);
-    // DealStateHeader's "มูลค่าดีล" chip also renders amountPayable — assert presence, not uniqueness.
+    expect(screen.getAllByText('ยอดค้างเกินกำหนด').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^เกินกำหนด$/)).toBeNull();
+    // Money summary renders these values as aligned rows — assert presence, not card count.
     expect(screen.getAllByText('฿1,000').length).toBeGreaterThan(0);
-    expect(screen.getByText('฿400')).not.toBeNull();
-    expect(screen.getByText('฿600')).not.toBeNull();
+    expect(screen.getAllByText('฿400').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('฿600').length).toBeGreaterThan(0);
     expect(await screen.findByText('DEPOSIT')).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
+  });
+
+  it('demotes record-payment when the header already owns final payment as the primary next action', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: {
+          status: 'quotation_issued',
+          salesStage: 'SUPPLIER_ORDER_PLACED',
+          paymentStage: 'AWAITING_FINAL_PAYMENT',
+          amountPayable: 240000,
+          amountPaid: 0,
+          amountOutstanding: 240000,
+          dueDate: '2026-07-01',
+          overdue: true,
+        },
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE',
+        salesStage: 'SUPPLIER_ORDER_PLACED',
+        paymentStatus: 'AWAITING_FINAL_PAYMENT',
+        fulfillmentStatus: null,
+        status: 'quotation_issued',
+      },
+      availableActions: [
+        { action: 'FINAL_PAYMENT', kind: 'payment', label: 'ยืนยันชำระครบ' },
+        { action: 'RECORD_PAYMENT', kind: 'payment', label: 'บันทึกรับชำระเงิน' },
+        { action: 'SET_BILLING', kind: 'payment', label: 'ตั้งค่าการวางบิล' },
+      ],
+    });
+
+    renderTicketDetailPage(accountUser, vi.fn(), { initialEntry: '/tickets/701?t=money' });
+
+    const finalPaymentButton = await screen.findByTestId('ticket-detail-confirm-final');
+    expect(finalPaymentButton.className).toContain('primary-button');
+
+    const recordPaymentButton = await screen.findByRole('button', { name: 'บันทึกรับชำระเงิน' });
+    expect(recordPaymentButton.className).toContain('secondary-button');
+    expect(recordPaymentButton.className).not.toContain('primary-button');
   });
 
   it('lets Accounting open Ticket Detail without calling or rendering Pricing Requests', async () => {
@@ -411,6 +551,7 @@ describe('TicketDetailPage', () => {
     renderTicketDetailPage(accountUser);
 
     expect(await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' })).not.toBeNull();
+    await openTicketTab('การเงิน');
     expect(await screen.findByText('DEPOSIT')).not.toBeNull();
     expect(screen.getAllByText('฿400').length).toBeGreaterThan(0);
     expect(api.pricingRequests.listForTicket).not.toHaveBeenCalled();
@@ -462,7 +603,7 @@ describe('TicketDetailPage', () => {
     expect(api.tickets.confirmFinalPayment).not.toHaveBeenCalled();
 
     // The dialog states the real outstanding amount, sourced from the same
-    // summary.amountOutstanding the payment panel's "คงเหลือ" tile renders
+    // summary.amountOutstanding the payment panel's "คงเหลือ" row renders
     // (not a separately-computed figure).
     expect(await screen.findByText('ยืนยันการรับชำระครบถ้วน')).not.toBeNull();
     expect(screen.getAllByText('฿32,500').length).toBeGreaterThan(0);
@@ -512,9 +653,10 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage();
 
+    await openTicketTab('จัดซื้อและส่งมอบ');
     expect((await screen.findAllByText('40 / 100')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('ส่งมอบบางส่วน').length).toBeGreaterThan(0);
-    expect(await screen.findByText('WAREHOUSE')).not.toBeNull();
+    expect(await screen.findByText('โกดัง GL&R')).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกการส่งสินค้า' })).toBeNull();
   });
 
@@ -529,6 +671,7 @@ describe('TicketDetailPage', () => {
     queryClient.setQueryData(queryKeys.notifications(), []);
 
     await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+    await openTicketTab('กิจกรรม');
 
     const textarea = screen.getByPlaceholderText('เพิ่มความคิดเห็น...');
     fireEvent.change(textarea, { target: { value: 'ทดสอบความคิดเห็น' } });
@@ -557,6 +700,7 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage();
 
+    await openTicketTab('การเงิน');
     fireEvent.click(await screen.findByRole('button', { name: 'บันทึกรับชำระเงิน' }));
     const dialog = await screen.findByRole('dialog', { name: 'บันทึกรับชำระเงิน' });
 
@@ -605,6 +749,7 @@ describe('TicketDetailPage', () => {
     const showToast = vi.fn();
     renderTicketDetailPage(ceoUser, showToast);
 
+    await openTicketTab('จัดซื้อและส่งมอบ');
     fireEvent.click(await screen.findByRole('button', { name: 'บันทึกการส่งสินค้า' }));
     const dialog = await screen.findByRole('dialog', { name: 'บันทึกการส่งสินค้า' });
 
@@ -727,6 +872,7 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(ceoUser);
 
+      await openTicketTab('กิจกรรม');
       expect(await screen.findByRole('heading', { level: 2, name: 'การติดตามดีล' })).not.toBeNull();
       expect(await screen.findByText('ยังไม่พร้อม')).not.toBeNull();
       // QUOTE_DESIGN_SIDE's stage default (WIN_PROBABILITY_DEFAULTS) — no override set.
@@ -747,12 +893,14 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(ceoUser);
 
+      await openTicketTab('กิจกรรม');
       expect(await screen.findByText('พร้อมเลื่อนสถานะ')).not.toBeNull();
       expect(screen.queryByText(/ต้องระบุวันติดตามครั้งถัดไป/)).toBeNull();
     });
 
     it('submits a new activity via api.tickets.addActivity', async () => {
       renderTicketDetailPage(ceoUser);
+      await openTicketTab('กิจกรรม');
       await screen.findByRole('heading', { level: 2, name: 'การติดตามดีล' });
 
       fireEvent.change(screen.getByLabelText('บันทึก (ถ้ามี)'), { target: { value: 'โทรคุยเรื่องราคา' } });
@@ -767,6 +915,7 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage(accountUser);
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      await openTicketTab('กิจกรรม');
       expect(screen.queryByRole('heading', { level: 2, name: 'การติดตามดีล' })).toBeNull();
       expect(screen.getByText('การติดตามดีล')).not.toBeNull(); // SectionPeek's title span
       expect(api.tickets.listActivities).not.toHaveBeenCalled();
@@ -789,6 +938,7 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesOwnerUser);
 
+      await openTicketTab('ใบเสนอราคา');
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
       expect(screen.queryByRole('heading', { level: 2, name: 'ราคาและใบเสนอราคา' })).toBeNull();
     });
@@ -802,6 +952,7 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesOwnerUser);
 
+      await openTicketTab('ใบเสนอราคา');
       expect(await screen.findByRole('heading', { level: 2, name: 'ราคาและใบเสนอราคา' })).not.toBeNull();
       fireEvent.click(await screen.findByRole('button', { name: 'สร้างร่างใบเสนอราคาลูกค้า' }));
 
@@ -816,6 +967,7 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      expect(screen.queryByRole('tab', { name: 'ใบเสนอราคา' })).toBeNull();
       expect(screen.queryByRole('heading', { level: 2, name: 'ราคาและใบเสนอราคา' })).toBeNull();
     });
   });
@@ -826,6 +978,7 @@ describe('TicketDetailPage', () => {
   // that used to live directly on this page.
   describe('deal deposit panel', () => {
     async function depositSection() {
+      await openTicketTab('จัดซื้อและส่งมอบ');
       const heading = await screen.findByRole('heading', { level: 2, name: 'มัดจำ' });
       return within(heading.closest('section'));
     }
@@ -895,8 +1048,9 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      await openTicketTab('จัดซื้อและส่งมอบ');
       expect(screen.queryByRole('heading', { level: 2, name: 'มัดจำ' })).toBeNull();
-      expect(screen.getByText('มัดจำ')).not.toBeNull(); // SectionPeek's title span
+      expect(screen.queryByText('มัดจำ')).toBeNull();
       expect(api.depositNotices.listByTicket).not.toHaveBeenCalled();
     });
   });
@@ -910,6 +1064,7 @@ describe('TicketDetailPage', () => {
     const importUser = { id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' };
 
     async function fulfilmentSection() {
+      await openTicketTab('จัดซื้อและส่งมอบ');
       const heading = await screen.findByRole('heading', { level: 2, name: 'การส่งมอบ / นำเข้า' });
       return within(heading.closest('section'));
     }
@@ -953,7 +1108,7 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage(accountUser);
       const section = await fulfilmentSection();
 
-      expect(section.queryByRole('button', { name: 'สินค้าออกเดินทาง (Shipping)' })).toBeNull();
+      expect(section.queryByRole('button', { name: 'บันทึกสินค้าออกเดินทาง' })).toBeNull();
       expect(section.queryByRole('button', { name: 'จองสินค้าจากสต็อก' })).toBeNull();
       expect(section.queryByRole('button', { name: 'บันทึกการส่งสินค้า' })).toBeNull();
       expect(section.queryByRole('button', { name: 'ส่งมอบครบ' })).toBeNull();

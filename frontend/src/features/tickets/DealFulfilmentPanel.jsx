@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
-import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
@@ -13,6 +12,7 @@ import { nextFulfilmentActionCode } from './importActions.js';
 import { PROCUREMENT_SUBSTEPS } from './stageMeta.js';
 
 const STEP_ROLE_TH = { import: 'ฝ่ายนำเข้า', ceo: 'CEO', sales: 'ฝ่ายขาย', account: 'ฝ่ายบัญชี' };
+const DELIVERY_SOURCE_LABEL = { WAREHOUSE: 'โกดัง GL&R', STOCK: 'สต็อกที่จองไว้' };
 
 // Same small presentational helpers DealDepositPanel introduced (Phase 3
 // Slice S3) — duplicated here rather than imported since neither panel
@@ -20,10 +20,8 @@ const STEP_ROLE_TH = { import: 'ฝ่ายนำเข้า', ceo: 'CEO', sal
 function StepRoleTag({ owners, viewerRole }) {
   const mine = owners.includes(viewerRole);
   return (
-    <span className={`rounded-full px-2 py-0.5 text-2xs font-bold ${
-      mine ? 'bg-info-bg text-info' : 'bg-surface-subtle text-text-muted'
-    }`}>
-      {owners.map((o) => STEP_ROLE_TH[o] ?? o).join('/')}
+    <span className={`text-2xs font-bold ${mine ? 'text-info' : 'text-text-muted'}`}>
+      เจ้าของ: {owners.map((o) => STEP_ROLE_TH[o] ?? o).join('/')}
     </span>
   );
 }
@@ -44,24 +42,27 @@ function StepNumber({ no }) {
 // action-bearing version.
 function SubstepChips({ currentCode }) {
   const currentIdx = PROCUREMENT_SUBSTEPS.findIndex((s) => s.code === currentCode);
+  const current = currentIdx >= 0 ? PROCUREMENT_SUBSTEPS[currentIdx] : null;
+  const next = currentIdx >= 0 ? PROCUREMENT_SUBSTEPS[currentIdx + 1] : PROCUREMENT_SUBSTEPS[0];
+  const percent = currentIdx >= 0
+    ? Math.round(((currentIdx + 1) / PROCUREMENT_SUBSTEPS.length) * 100)
+    : 0;
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {PROCUREMENT_SUBSTEPS.map((step, i) => {
-        const done = currentIdx >= 0 && i < currentIdx;
-        const current = i === currentIdx;
-        return (
-          <span
-            key={step.code}
-            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-2xs font-bold ${
-              done ? 'bg-success-bg text-success-dark'
-                : current ? 'bg-info-bg text-info'
-                  : 'bg-surface-subtle text-text-muted'
-            }`}
-          >
-            {step.label}
-          </span>
-        );
-      })}
+    <div className="grid gap-2 rounded-md bg-surface-muted px-3 py-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+        <span className="font-bold text-text-secondary">
+          ความคืบหน้านำเข้า {currentIdx >= 0 ? currentIdx + 1 : 0} / {PROCUREMENT_SUBSTEPS.length}
+        </span>
+        <span className="text-text-muted">
+          ปัจจุบัน: <strong className="text-text-secondary">{current?.label ?? 'ยังไม่เริ่ม'}</strong>
+        </span>
+        <span className="text-text-muted">
+          {next ? <>ถัดไป: <strong className="text-text-secondary">{next.label}</strong></> : 'ครบเส้นทางนำเข้าแล้ว'}
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-surface-subtle" aria-hidden="true">
+        <div className="h-full bg-info" style={{ width: `${percent}%` }} />
+      </div>
     </div>
   );
 }
@@ -257,18 +258,18 @@ export function DealFulfilmentPanel({
   }
 
   return (
-    <section className="table-panel" data-testid="deal-fulfilment-panel">
+    <section className="panel" data-testid="deal-fulfilment-panel">
       <div className="panel-header">
         <h2>การส่งมอบ / นำเข้า</h2>
       </div>
 
-      <div className="flex flex-col gap-3 p-4">
+      <div className="mx-4 mb-4 divide-y divide-border-subtle border-y border-border-subtle sm:mx-5">
         {/* Step 1: นำเข้าสินค้า (Import Request → รับสินค้า, or from-stock) */}
-        <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
+        <div className="flex flex-col gap-3 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <StepNumber no={1} />
-              <strong className="text-sm">นำเข้าสินค้า</strong>
+              <strong className="text-sm">การจัดหา / นำเข้า</strong>
               <StepRoleTag owners={['import', 'ceo']} viewerRole={role} />
             </div>
             {fs ? <StatusBadge tone={fsLabel.tone}>{fsLabel.label}</StatusBadge> : null}
@@ -290,12 +291,12 @@ export function DealFulfilmentPanel({
             ) : can.markShipping ? (
               <button type="button" className="primary-button" disabled={markShippingMutation.isPending}
                 onClick={() => markShippingMutation.mutate()} data-testid="deal-fulfilment-mark-shipping">
-                สินค้าออกเดินทาง (Shipping)
+                บันทึกสินค้าออกเดินทาง
               </button>
             ) : can.markGoodsReceived ? (
               <button type="button" className="primary-button" disabled={markGoodsReceivedMutation.isPending}
                 onClick={() => markGoodsReceivedMutation.mutate()} data-testid="deal-fulfilment-mark-goods-received">
-                รับสินค้าแล้ว (Goods Received)
+                รับสินค้าเข้าคลัง GL&R
               </button>
             ) : fs == null ? (
               <p className="text-xs text-text-muted">ยังไม่ออก Import Request</p>
@@ -310,10 +311,10 @@ export function DealFulfilmentPanel({
         </div>
 
         {/* Step 2: ส่งมอบสินค้า */}
-        <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
+        <div className="flex flex-col gap-3 py-3">
           <div className="flex items-center gap-2">
             <StepNumber no={2} />
-            <strong className="text-sm">ส่งมอบสินค้า</strong>
+            <strong className="text-sm">การส่งมอบลูกค้า</strong>
             <StepRoleTag owners={['import', 'ceo']} viewerRole={role} />
           </div>
 
@@ -343,13 +344,13 @@ export function DealFulfilmentPanel({
             </div>
           </div>
 
-          <div className="flex flex-col gap-1.5">
+          <div className="divide-y divide-border-subtle border-y border-border-subtle">
             {items.map((item) => {
               const ordered = Number(item.qty || 0);
               const delivered = Number(item.qtyDelivered || 0);
               const remaining = Math.max(0, ordered - delivered);
               return (
-                <div key={item.id} className="flex items-center justify-between gap-2 rounded border border-border-subtle px-2.5 py-1.5 text-xs">
+                <div key={item.id} className="flex items-center justify-between gap-2 py-2 text-xs">
                   <div className="min-w-0">
                     <strong className="block truncate">{item.brand} {item.model || ''}</strong>
                     <span className="text-2xs text-text-muted">
@@ -372,7 +373,7 @@ export function DealFulfilmentPanel({
               deliveryRecords.map((record) => (
                 <div key={record.deliveryId} className="flex flex-wrap items-baseline gap-2 text-xs">
                   <span className="text-text-muted">{formatThaiDate(record.deliveredAt)}</span>
-                  <strong>{record.source}</strong>
+                  <strong>{DELIVERY_SOURCE_LABEL[record.source] ?? record.source}</strong>
                   <span className="text-text-muted">
                     {(record.items ?? []).map((line) => `${line.itemId}: ${Number(line.qty).toLocaleString('en-US')}`).join(', ')}
                     {record.deliveredByName ? ` · ${record.deliveredByName}` : ''}
@@ -387,7 +388,7 @@ export function DealFulfilmentPanel({
         {/* Step 3 (optional): per-factory purchase orders — import/CEO only,
             unused in production today (0 POs — see handoff 105's S4 section). */}
         {['import', 'ceo'].includes(role) ? (
-          <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
+          <div className="flex flex-col gap-3 py-3">
             <div className="flex items-center gap-2">
               <StepNumber no={3} />
               <strong className="text-sm">ใบสั่งซื้อโรงงาน (Factory PO)</strong>
@@ -401,17 +402,18 @@ export function DealFulfilmentPanel({
             ) : procurementQuery.isLoading ? (
               <p className="text-xs text-text-muted">กำลังโหลด...</p>
             ) : purchaseOrders.length === 0 ? (
-              <EmptyState
-                icon="fileText"
-                title="ยังไม่มีใบสั่งซื้อโรงงาน"
-                description="ใบสั่งซื้อโรงงาน (แยกตามโรงงาน) จะปรากฏที่นี่เมื่อถูกสร้างขึ้นสำหรับใบขอราคานี้"
-              />
+              <div className="rounded-md bg-surface-subtle px-3 py-3 text-sm">
+                <strong className="block text-text">ยังไม่มีใบสั่งซื้อโรงงาน</strong>
+                <span className="mt-1 block text-xs text-text-muted">
+                  เอกสารแยกตามโรงงานจะปรากฏที่นี่เมื่อถูกสร้างขึ้นสำหรับใบขอราคานี้
+                </span>
+              </div>
             ) : (
               <div className="flex flex-col gap-1.5">
                 {purchaseOrders.map((po) => {
                   const status = factoryPurchaseOrderStatusLabel(po.status);
                   return (
-                    <div key={po.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-border-subtle bg-surface-muted px-2.5 py-2">
+                    <div key={po.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle py-2">
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-mono text-xs font-bold text-text">{po.poNumber}</span>
@@ -458,8 +460,8 @@ export function DealFulfilmentPanel({
               แหล่งสินค้า
               <select value={deliveryDraft.source}
                 onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, source: e.target.value }))}>
-                <option value="WAREHOUSE">WAREHOUSE</option>
-                <option value="STOCK">STOCK</option>
+                <option value="WAREHOUSE">โกดัง GL&R</option>
+                <option value="STOCK">สต็อกที่จองไว้</option>
               </select>
             </label>
             <div className="flex flex-col gap-2">
