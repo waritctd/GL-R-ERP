@@ -16,6 +16,13 @@ Cross-cutting requirements (apply to all):
 - **Tokens only** — no literal hex/px a token covers (see [`TOKENS.md`](TOKENS.md)).
 - **Both scripts** — Thai + English at the same size; ≥44px touch on mobile.
 - **State is text, not colour alone.**
+- **Semantic components only** — new feature components must encode a real job or record type,
+  not a decorative box. Do not introduce a generic `Card` primitive to preserve card-heavy page
+  structures; existing `StatCard` remains KPI-specific and must not be used for ticket workspace
+  metadata strips.
+- **Fewer visual layers, not no structure** — remove duplicate borders/backgrounds/radius only
+  when headings, dividers, rows, alerts or semantic ordering still preserve current/waiting/
+  completed/reference distinctions.
 
 ---
 
@@ -65,15 +72,15 @@ Cross-cutting requirements (apply to all):
 - **States:** static; interactive (button/link) variant grows to 44px.
 - **A11y:** **text is mandatory** (never colour-only); icon additive; interactive badge is a real control with a name.
 - **Tokens:** the `status-*` tone pairs; `radius-pill`.
-- **Anti-patterns:** a unique colour per backend status; badging a non-state (use plain text); an icon-only badge. (Full mapping: [`STATUS_PRESENTATION.md`](STATUS_PRESENTATION.md).)
+- **Anti-patterns:** a unique colour per backend status; badging a non-state (use plain text); long explanations inside pills; a badge for every step in a sequence; an icon-only badge. (Full mapping: [`STATUS_PRESENTATION.md`](STATUS_PRESENTATION.md).)
 - **Outside:** the value→tone mapping (that is `format.js`, the canonical hub — the badge only renders).
 
 ## 7. Inline alert — ➕ propose (only `Toast` + `DesktopOnlyNotice` today)
 - **Purpose:** an in-context, non-transient message tied to a region (a form-level error, an "already approved" notice, an over-quota warning).
-- **Variants:** `info / success / warning / danger` (the semantic tones); optional dismiss.
+- **Variants:** `info / success / warning / danger` (the semantic tones); optional dismiss; optional retry/action slot for recoverable region failures.
 - **States:** static; dismissible variant animates out (reduced-motion: instant).
 - **A11y:** `role="status"`/`role="alert"` by severity; not colour-only; focus moved to it on a submitted error.
-- **Anti-patterns:** a **side-stripe** `border-left` accent (absolute ban — use a full border + tinted bg); using a toast for a persistent condition; a modal where an inline alert fits.
+- **Anti-patterns:** a **side-stripe** `border-left` accent (absolute ban — use a full border + tinted bg); using a toast for a persistent condition; a modal where an inline alert fits; raw server exception text.
 
 ## 8. Toast — ✅ exists (`Toast.jsx`)
 - **Purpose:** a transient, global confirmation/feedback ("บันทึกแล้ว").
@@ -119,7 +126,8 @@ Cross-cutting requirements (apply to all):
 - **Purpose:** a short, blocking, focused interruption. **Last resort** — exhaust inline/progressive first.
 - **States:** open/close; `ConfirmDialog` busy = "กำลังดำเนินการ..." disables both buttons and blocks Escape/backdrop.
 - **A11y:** ✅ focus-trap, Escape, restore, `role="dialog"`, `aria-modal`; **fix A-05:** label by the visible `<h2>` (`aria-labelledby`, not `aria-label`), describe the subtitle (`aria-describedby`), mark background `inert`.
-- **Mobile:** full-screen sheet with fixed footer.
+- **Mobile:** full-screen sheet with fixed footer, safe-area padding, internal scroll for long
+  content, and submit/cancel controls that remain reachable at `390 x 844`.
 - **Consolidate:** `ChangePasswordModal` hand-rolls its own backdrop — move it onto `Modal.jsx` (F-19). `ConfirmDialog` footer uses legacy `.*-button` classes → migrate to `<Button>`.
 - **Anti-patterns:** a modal as the first thought; a multi-step flow trapped in a modal (F-06); a modal that isn't focus-trapped.
 
@@ -127,15 +135,18 @@ Cross-cutting requirements (apply to all):
 - **Purpose:** a side/bottom panel for context or a secondary list without leaving the page.
 - **States:** open/close; overlay scrim (tokenise, TOKENS §overlay).
 - **A11y:** focus-trap + Escape + restore (the nav drawer already models this); labelled; background inert.
-- **Mobile:** full-height; backdrop-dim; swipe/tap-out close.
+- **Mobile:** full-height or bottom sheet as appropriate; backdrop-dim; swipe/tap-out close;
+  safe-area padding; internal scroll when content is long.
 - **Anti-patterns:** a drawer where an inline panel fits; a non-trapped drawer.
 
 ## 15. Sticky action bar — ➕ propose
 - **Purpose:** keep the primary action reachable on a long record/form (bottom bar).
-- **Regions:** the single next allowed action (+ secondary); on mobile, thumb-reachable.
+- **Regions:** one primary next action; up to two visible secondary actions; overflow/other-actions control; destructive actions separated; on mobile, thumb-reachable with safe-area padding.
 - **States:** the primary action reflects the viewer's one allowed transition; **disabled actions explain why** (the WHY gap).
 - **A11y:** real buttons; does not trap scroll; visible focus.
-- **Anti-patterns:** a bar full of equally-weighted actions; hiding the primary action off-screen.
+- **Mobile:** page content reserves enough bottom padding so the bar never covers the last row,
+  form action, empty state or timeline entry.
+- **Anti-patterns:** a bar full of equally-weighted actions; destructive actions competing with the primary; hiding the primary action off-screen.
 
 ## 16. Approval bar / Approval task — ➕ propose (a shared shell)
 - **Purpose:** decide on someone else's submitted work (pricing, commission, OT/SM, leave, close-verify).
@@ -155,16 +166,16 @@ Cross-cutting requirements (apply to all):
 ## 18. Empty state — ✅ exists (`EmptyState.jsx`, ×16)
 - **Purpose:** communicate "nothing here" **and route onward** — never a dead end (F-04).
 - **Regions:** plain-language line · onward CTA · optionally why.
-- **Variants:** truly-empty vs **empty-because-out-of-scope** (must not imply "done" — the account close-ready scope gap) vs filtered-to-empty (offer clear-filter).
+- **Variants:** truly-empty vs **permission-limited** vs **not-applicable in current stage** vs **completed reference** vs filtered-to-empty (offer clear-filter). These must not share one vague message.
 - **A11y:** text (not just an illustration); the CTA is a real control.
-- **Anti-patterns:** "nothing here" with no next step; an over-cute illustration/empty state (product ban).
+- **Anti-patterns:** "nothing here" with no next step; an over-cute illustration/empty state (product ban); using empty state for loading or query error; implying permission-limited content is absent.
 
 ## 19. Skeleton — ✅ exists (`Skeleton.jsx`)
 - **Purpose:** loading placeholder for content (not a spinner mid-content).
 - **Variants:** `Skeleton` / `SkeletonText` / `SkeletonCard`.
 - **A11y:** ✅ `aria-hidden` (decorative); the container carries the loading label; skeleton rows in a table are **not** announced as data.
 - **Motion:** shimmer with a reduced-motion flat fallback (already correct).
-- **Anti-patterns:** a spinner where a skeleton fits; skeletons that misrepresent the final layout.
+- **Anti-patterns:** a spinner where a skeleton fits; skeletons that misrepresent the final layout; replacing previously loaded data with skeletons during background refresh.
 
 ## 20. File upload — ✅ exists (`FileUploadField.jsx`)
 - **Purpose:** attach a file; real `<input type=file>` kept `sr-only`, styled wrapper.

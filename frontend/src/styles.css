@@ -1704,25 +1704,6 @@ textarea:focus {
 .event-dot.created    { background: var(--color-success-soft); }
 .event-dot.success    { background: var(--color-success); }
 
-.ticket-detail-grid {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: 16px;
-  align-items: start;
-  min-width: 0;
-}
-
-.ticket-detail-grid > * {
-  min-width: 0;
-  overflow: hidden;
-}
-
-@media (max-width: 900px) {
-  .ticket-detail-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
 .employee-cell {
   display: flex;
   align-items: center;

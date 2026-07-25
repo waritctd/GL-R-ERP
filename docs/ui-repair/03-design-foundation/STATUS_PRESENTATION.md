@@ -29,6 +29,11 @@ gaps.
    Use **plain text** for a non-state value (a role label "เข้า/ออก", an empty
    "-", a count). Do not badge everything — a wall of pills is as noisy as a wall
    of colour.
+7. **Badge length:** a badge is a short state label. Long waiting, blocker or
+   returned explanations belong in an `InlineAlert` or plain text next to the
+   state, not inside the pill.
+8. **Sequences are not badge walls:** do not badge every step in a process. Use
+   an ordered step list/timeline with one current-step emphasis.
 
 ## The 9 UX work-states (computed, per viewer)
 
@@ -129,6 +134,19 @@ Employee: `ACT` ทำงานปกติ / success · `PRB` ทดลอง�
 - **Plain text:** for non-state values (role labels, "-", counts, field meta). No pill.
 - **Icon usage:** optional and additive (`StatusBadge icon` prop) — an icon never *replaces* the text. Use an icon only where it adds scanning value (e.g. `triangleAlert` on a Blocked/Overdue row); do not decorate every badge.
 - **StatChip / StatCard tones** (`indigo/teal/amber/blue/rose`) are a **separate KPI-tile palette**, not status — do not use them for record state.
+
+### Ticket workspace Phase 5A badge budget
+
+For `/tickets/:id`, see
+[`../05-ticket-workspace/PHASE_5A_BADGE_AUDIT.md`](../05-ticket-workspace/PHASE_5A_BADGE_AUDIT.md).
+The workspace budget is stricter than the generic primitive:
+
+- One primary stage badge in the persistent header.
+- One work-state badge or alert.
+- Local record badges only when the sub-record has its own state.
+- No repeated active lifecycle badge (`กำลังดำเนินการ`) across header and body.
+- No badges for role labels, quantity types, revision numbers, progress counts or activity types.
+- Long waiting/blocker/returned text uses `InlineAlert` or plain text.
 
 ## Where each is actionable / responsible role
 

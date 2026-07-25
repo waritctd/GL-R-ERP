@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
@@ -10,15 +11,14 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { Tabs } from '../../components/common/Tabs.jsx';
 import {
   dealStageLabel,
   formatMoney,
   formatThaiDate,
-  overdueBadgeLabel,
   paymentStageLabel,
   quotationRecipientLabel,
   quotationStatusLabel,
-  ticketStatusLabel,
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
@@ -26,69 +26,16 @@ import { CancelDealModal } from './CancelDealModal.jsx';
 import { DealDepositPanel } from './DealDepositPanel.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
-import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
+import { resolveDealWorkState } from './dealWorkState.js';
 import { visibleSections } from './salesViewScope.js';
-
-const EVENT_KIND_LABEL = {
-  CREATED:            'สร้างดีล',
-  STAGE_CHANGED:      'เปลี่ยนสถานะดีล',
-  MARKED_LOST:        'เสียงาน',
-  REOPENED:           'เปิดดีลอีกครั้ง',
-  ON_HOLD:            'พักดีลไว้',
-  DORMANT:            'พัก dormant',
-  RESUMED:            'ดำเนินการต่อ',
-  POLICY_CHANGED:     'เปลี่ยนนโยบายดีล',
-  PAYMENT_RECORDED:   'บันทึกรับชำระเงิน',
-  BILLING_UPDATED:    'อัปเดตข้อมูลวางบิล',
-  SUBMITTED:          'ส่งเรื่องเข้าระบบ',
-  PICKED_UP:          'รับมอบหมาย',
-  PRICE_PROPOSED:     'เสนอราคาสินค้า',
-  APPROVED:           'อนุมัติ',
-  REJECTED:           'ปฏิเสธ',
-  QUOTATION_ISSUED:   'ออกใบเสนอราคา',
-  QUOTATION_SENT:     'ส่งใบเสนอราคา',
-  QUOTATION_ACCEPTED: 'ลูกค้ารับใบเสนอราคา',
-  QUOTATION_REJECTED: 'ลูกค้าปฏิเสธใบเสนอราคา',
-  DOCUMENT_ISSUED:    'ออกใบแจ้งยอดมัดจำ',
-  PRICE_REVISED:      'แก้ไขราคาที่เสนอ',
-  REVISION_REQUESTED: 'ขอแก้ไข',
-  CLOSED:             'ปิดเรื่อง',
-  CANCELLED:          'ยกเลิก',
-  EDITED:             'แก้ไขรายการสินค้า',
-  COMMENTED:          'ความคิดเห็น',
-  COMMENT:            'ความคิดเห็น',
-  PRICE_OVERRIDDEN:   'แก้ไขราคาด้วยตนเอง (CEO)',
-  // Dual-track post-quotation events (see backend TicketEventKind.java) — payment
-  // and fulfillment labels mirror the DealStagePanel's การชำระเงิน/การนำเข้า
-  // sub-status chips so an event and its chip read
-  // as the same real-world action.
-  CUSTOMER_CONFIRMED:     'ลูกค้ายืนยันคำสั่งซื้อ',
-  DEPOSIT_NOTICE_ISSUED:  'ออกใบแจ้งมัดจำ',
-  DEPOSIT_PAID:           'รับมัดจำแล้ว',
-  IR_ISSUED:              'ออก Import Request (IR)',
-  IR_SENT:                'ส่ง IR แล้ว',
-  SHIPPING:               'สินค้าออกเดินทาง (Shipping)',
-  GOODS_RECEIVED:         'รับสินค้าแล้ว',
-  STOCK_RESERVED:         'จองสินค้าจากสต็อก',
-  DELIVERY_RECORDED:      'บันทึกการส่งสินค้า',
-  DELIVERY_COMPLETED:     'ส่งมอบครบแล้ว',
-  AWAITING_FINAL_PAYMENT: 'รอชำระส่วนที่เหลือ',
-  FULLY_PAID:             'ชำระครบแล้ว',
-};
-
-// Payment-track events get a success-toned dot, fulfillment-track
-// events get an info-toned dot — mirrors the two colour groups used by the
-// sub-status chips in the DealStagePanel.
-const PAYMENT_TRACK_KINDS = new Set([
-  'CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID',
-  'AWAITING_FINAL_PAYMENT', 'FULLY_PAID', 'PAYMENT_RECORDED', 'BILLING_UPDATED',
-]);
-const FULFILLMENT_TRACK_KINDS = new Set([
-  'IR_ISSUED', 'IR_SENT', 'SHIPPING', 'GOODS_RECEIVED',
-  'STOCK_RESERVED', 'DELIVERY_RECORDED', 'DELIVERY_COMPLETED',
-]);
+import { DealActivityTimeline } from './workspace/DealActivityTimeline.jsx';
+import { DealDocumentList } from './workspace/DealDocumentList.jsx';
+import { DealFinancialSummary } from './workspace/DealFinancialSummary.jsx';
+import { DealItemSummary } from './workspace/DealItemSummary.jsx';
+import { DealOverviewPanel } from './workspace/DealOverviewPanel.jsx';
+import { DealPaymentHistory } from './workspace/DealPaymentHistory.jsx';
 
 const TERMINAL = ['closed', 'cancelled'];
 
@@ -106,23 +53,6 @@ function docStatusColors(docStatus) {
   return { background: 'var(--color-info-bg)', color: 'var(--color-info)' };
 }
 
-function eventDotClass(kind) {
-  if (kind === 'CREATED') return 'event-dot created';
-  if (kind === 'COMMENTED' || kind === 'COMMENT') return 'event-dot comment';
-  if (PAYMENT_TRACK_KINDS.has(kind)) return 'event-dot success';
-  if (FULFILLMENT_TRACK_KINDS.has(kind)) return 'event-dot transition';
-  return 'event-dot transition';
-}
-
-function InfoRow({ label, value }) {
-  return (
-    <div style={{ display: 'flex', gap: 8, padding: '6px 0', borderBottom: '1px solid var(--color-surface-subtle)', fontSize: 13 }}>
-      <span style={{ color: 'var(--color-text-muted)', minWidth: 120 }}>{label}</span>
-      <span style={{ fontWeight: 600, color: 'var(--color-text)' }}>{value || '-'}</span>
-    </div>
-  );
-}
-
 /**
  * Role-scoped views, Phase A (frontend only — see salesViewScope.js): what a
  * section collapses to when `visibleSections(role)` says this viewer's role
@@ -133,17 +63,55 @@ function InfoRow({ label, value }) {
 function SectionPeek({ title, summary }) {
   const stage = dealStageLabel(summary.salesStage);
   return (
-    <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-dashed border-border bg-surface-subtle px-4 py-2.5">
+    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-surface-subtle px-3 py-2.5">
       <span className="shrink-0 text-xs font-bold text-text-muted">{title}</span>
-      <span className="min-w-0 truncate text-xs text-text-secondary">
+      <span className="min-w-0 text-xs text-text-secondary">
         {summary.customerName || summary.title} · {stage.label}
       </span>
     </div>
   );
 }
 
+const TICKET_TAB_QUERY_KEY = 't';
+const TICKET_WORKSPACE_TABS = [
+  { id: 'overview', label: 'ภาพรวม', isVisible: () => true },
+  { id: 'pricing', label: 'ราคา', isVisible: ({ sections, canViewPricingRequests }) => sections.pricingRequest && canViewPricingRequests },
+  { id: 'quotations', label: 'ใบเสนอราคา', isVisible: ({ sections, canViewPricingRequests }) => sections.quotation || (sections.dealQuotation && canViewPricingRequests) },
+  { id: 'money', label: 'การเงิน', isVisible: ({ sections }) => sections.payment },
+  { id: 'fulfilment', label: 'จัดซื้อและส่งมอบ', isVisible: ({ sections }) => sections.delivery || sections.depositNotice },
+  { id: 'documents', label: 'เอกสาร', isVisible: () => true },
+  { id: 'activity', label: 'กิจกรรม', isVisible: () => true },
+];
+
+function visibleTicketTabs(sections, canViewPricingRequests) {
+  return TICKET_WORKSPACE_TABS.filter((tab) => tab.isVisible({ sections, canViewPricingRequests }));
+}
+
 export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const role = user?.role;
+  const sections = visibleSections(role);
+  const canViewPricingRequests = ['sales', 'import', 'ceo', 'sales_manager'].includes(role);
+  const ticketTabs = visibleTicketTabs(sections, canViewPricingRequests);
+  const requestedTicketTab = searchParams.get(TICKET_TAB_QUERY_KEY);
+  const activeTicketTab = ticketTabs.some((tab) => tab.id === requestedTicketTab)
+    ? requestedTicketTab
+    : ticketTabs[0]?.id ?? 'overview';
+
+  useEffect(() => {
+    if (requestedTicketTab === activeTicketTab) return;
+    const next = new URLSearchParams(searchParams);
+    next.set(TICKET_TAB_QUERY_KEY, activeTicketTab);
+    setSearchParams(next, { replace: true });
+  }, [activeTicketTab, requestedTicketTab, searchParams, setSearchParams]);
+
+  function selectTicketTab(tabId) {
+    if (tabId === activeTicketTab) return;
+    const next = new URLSearchParams(searchParams);
+    next.set(TICKET_TAB_QUERY_KEY, tabId);
+    setSearchParams(next, { replace: false });
+  }
 
   // Edit-items mode
   const [editMode, setEditMode] = useState(false);
@@ -262,7 +230,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // quiet background refetch (window refocus, another tab's invalidate) —
   // same reasoning as TicketDashboard's loading gate in slice A (handoff 62).
   const loading = ticketQuery.isLoading;
-  const canViewPricingRequests = ['sales', 'import', 'ceo', 'sales_manager'].includes(user?.role);
 
   const paymentsQuery = useQuery({
     queryKey: queryKeys.ticketPayments(ticketId),
@@ -380,7 +347,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       // list has to be re-read — otherwise the button only appears after the user
       // navigates away and back.
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.ticket(ticketId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
       showToast('success', `แนบไฟล์ ${file.name} แล้ว`);
     },
     onError: (err) => showToast('error', err.message || 'อัปโหลดไม่สำเร็จ'),
@@ -393,7 +360,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketAttachments(ticketId) });
       // Deleting the invoice re-locks the close confirmation — same reason as upload.
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.ticket(ticketId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
       showToast('success', 'ลบไฟล์แล้ว');
     },
     onError: (err) => showToast('error', err.message || 'ลบไม่สำเร็จ'),
@@ -481,23 +448,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   const { summary, items, events, quotations } = ticket;
   const st = summary.status;
-  const role = user.role;
-  // Role-scoped views, Phase A: which of the sections below this viewer's
-  // role gets in full vs. as a one-line SectionPeek. See salesViewScope.js —
-  // presentation only, never a security boundary.
-  const sections = visibleSections(role);
   const isOwner = user.id === summary.createdById;
 
   const showProposed = ROLE_PERMISSIONS.canProposePrices.includes(role) || ROLE_PERMISSIONS.canApproveReject.includes(role);
   // ข้อ 10.1: Import sees only rawPrice + proposedPrice — NOT approvedPrice or CEO-set prices
   const showApproved = ROLE_PERMISSIONS.canApproveReject.includes(role) || ROLE_PERMISSIONS.canCreateTickets.includes(role);
   const showCalcBreakdown = ROLE_PERMISSIONS.canApproveReject.includes(role) && items.some((it) => it.calcedCost != null);
-  const itemsGridCols = showCalcBreakdown
-    ? 'minmax(0,1.4fr) minmax(0,1fr) minmax(0,0.5fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.9fr)'
-    : showProposed
-      ? 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr) minmax(0,1.1fr)'
-      : 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr)';
-
   const ps = summary.paymentStatus;
   const fs = summary.fulfillmentStatus;
   const isSales   = ROLE_PERMISSIONS.canCreateTickets.includes(role);
@@ -576,43 +532,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     || can.revokeCloseConfirm
     || (st === 'draft' && isOwner && items.length === 0);
 
-  const status = ticketStatusLabel(st);
-
-  // Next-action summary for the current viewer only — derived strictly from the
-  // `can` flags above (which already encode real status+role permission checks).
-  // Verified against backend/mock transition handlers (see api.tickets.* in
-  // src/api/mockApi.js) so the wording matches what the button actually does.
-  // Never invents an owner or action the data can't support.
-  const NEXT_ACTION_STEPS = [
-    // Dual-track steps: re-issuing/working the customer quotation lives in
-    // DealQuotationPanel, the deposit-notice/deposit-payment steps live in
-    // DealDepositPanel (Phase 3 Slice S3), and the fulfilment chain
-    // (issueImportRequest/markIrSent/markShipping/markGoodsReceived) lives in
-    // DealFulfilmentPanel (Phase 3 Slice S4) — so this list only covers the
-    // operational chain this page's own primaryAction button still drives.
-    ['confirmCustomer',  'ยืนยันว่าลูกค้าตกลงคำสั่งซื้อแล้ว'],
-    ['confirmFinalPayment','ยืนยันว่าลูกค้าชำระส่วนที่เหลือครบแล้ว'],
-    ['revise',            'ขอแก้ไขรายละเอียดใบขอราคานี้ได้หากจำเป็น'],
-    ['confirmClose',      'ส่งมอบและรับเงินครบแล้ว — ยืนยันเพื่อส่งให้ CEO ตรวจสอบปิดงาน'],
-    ['verifyClose',       'ฝ่ายบัญชียืนยันแล้ว — ตรวจสอบและปิดงานได้เลย'],
-  ];
-  const nextAction = NEXT_ACTION_STEPS.find(([key, text]) => can[key] && text)?.[1] ?? null;
-
-  // Passive hint when the payment track waits on ฝ่ายบัญชี — money-receipt
-  // confirmations belong to the account role (CEO fallback), so sales/import
-  // would otherwise see a stalled payment stepper with no explanation. Shown
-  // alongside the personal next-action callout, not instead of it.
-  // Awaiting the CEO's verification outranks the payment hints: it is the last
-  // thing standing between this deal and closed, and it is invisible otherwise.
-  const closeConfirmedAt = summary?.closeConfirmedAt ?? null;
-  const waitingHint = closeConfirmedAt && !can.verifyClose
-    ? `ฝ่ายบัญชียืนยันพร้อมปิดงานแล้ว${summary?.closeConfirmedByName ? ` (${summary.closeConfirmedByName})` : ''} — รอ CEO ตรวจสอบ`
-    : (st === 'quotation_issued' && !isAccount)
-      ? (ps === 'DEPOSIT_NOTICE_ISSUED' ? 'รอฝ่ายบัญชียืนยันรับยอดมัดจำ'
-        : ps === 'AWAITING_FINAL_PAYMENT' ? 'รอฝ่ายบัญชียืนยันรับชำระส่วนที่เหลือ'
-        : null)
-      : null;
-
   // The cockpit's primary action: the ONE workflow button for this viewer's
   // current sub-step (moved verbatim out of การดำเนินการอื่น ๆ). The
   // customer-quotation issue/outcome/confirm-order actions live in
@@ -647,6 +566,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       ตรวจสอบและปิดงาน
     </button>
   ) : null;
+  const hasHeaderPrimaryAction = Boolean(primaryAction);
+
+  const workState = resolveDealWorkState({
+    summary,
+    pricingRequests,
+    availableActions,
+    user,
+  });
 
   async function handleUploadAttachment(e, explicitType = null) {
     const file = e.target.files?.[0];
@@ -786,89 +713,44 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   return (
     <div className="page-stack">
       <Breadcrumbs items={[{ label: 'ดีล', onClick: onBack }, { label: summary.code || summary.customerName || summary.title }]} />
-      <button type="button" className="secondary-button self-start" onClick={onBack}>
-        <Icon name="chevronLeft" size={14} />
-        กลับ
-      </button>
 
-      {/* Deal Workspace state header (Phase 2 Slice S2 — see
-          docs/agent-handoffs/104_feat-deal-workspace-unification.md): deal
-          code/title/customer + lifecycle × stage × PCR × payment × fulfilment
-          at a glance, plus "ถึงคิวคุณ" and the one primary CTA that mirrors
-          it. Subsumes the old bare header (title/code/status/refresh). */}
+      {/* Persistent deal header: compact identity + current stage +
+          presentation work-state, kept visible above the workspace. */}
       <DealStateHeader
         summary={summary}
         pricingRequests={pricingRequests}
         primaryAction={primaryAction}
-        nextAction={nextAction}
-        waitingHint={waitingHint}
+        workState={workState}
         onRefresh={refreshTicket}
       />
-      <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted sm:gap-4">
-        <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-        {summary.hasEdits && <StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge>}
-        <span>สร้างโดย <strong className="text-text-secondary">{summary.createdByName || '-'}</strong> · {formatThaiDate(summary.createdAt)}</span>
-        {summary.assignedToName && (
-          <span>เจ้าหน้าที่นำเข้าที่ดูแล <strong className="text-text-secondary">{summary.assignedToName}</strong></span>
-        )}
-      </div>
 
-      {/* Deal pipeline (V50): the 14-stage journey with stage-gated doc actions.
-          Generation buttons reuse the exact handlers/permissions of the action
-          row; once a document exists (quotation / ใบแจ้งยอดมัดจำ) it stays
-          reachable from here through the later stages too. */}
-      <DealStagePanel
-        user={user}
-        summary={summary}
-        availableActions={availableActions}
-        pricingRequests={pricingRequests}
-        // primaryAction now lives solely in DealStateHeader above (Phase 2 Slice S2's
-        // "one primary CTA" — see its own doc comment) — not passed here too, to avoid
-        // rendering the exact same button twice on one page.
-        guidance={nextAction ?? waitingHint}
-        actionLoading={actionLoading}
-        deliveryProgress={{ delivered: totalDelivered, ordered: totalOrdered }}
-        onUpdateStage={(payload) => doAction(() => api.tickets.updateStage(ticketId, payload), 'อัปเดตสถานะดีลแล้ว')}
-        onMarkLost={(payload) => doAction(() => api.tickets.markLost(ticketId, payload), 'บันทึกเสียงานแล้ว')}
-        onReopen={() => doAction(() => api.tickets.reopen(ticketId, {}), 'เปิดดีลอีกครั้งแล้ว')}
-        onHold={(payload) => doAction(() => api.tickets.hold(ticketId, payload), 'พักดีลไว้แล้ว')}
-        onDormant={(payload) => doAction(() => api.tickets.dormant(ticketId, payload), 'พัก dormant แล้ว')}
-        onResume={(payload) => doAction(() => api.tickets.resume(ticketId, payload), 'ดำเนินการต่อแล้ว')}
-        onSetTenderRequirement={(payload) => doAction(() => api.tickets.setTenderRequirement(ticketId, payload), 'บันทึกสถานะประมูลแล้ว')}
-        docActions={(can.downloadRemainingInvoice || (sections.quotation && latestQuotation)) ? (
+      <Tabs
+        tabs={ticketTabs}
+        activeId={activeTicketTab}
+        onChange={selectTicketTab}
+        ariaLabel="พื้นที่ทำงานดีล"
+      >
+        {() => (
           <>
-            {/* Import/account (role-scoped views, Phase A): the view-only
-                quotation download link isn't role-gated by `can.*` —
-                sections.quotation hides it for the role that has no business
-                in that document. The deposit-notice create/issue/view
-                affordance moved to DealDepositPanel (Phase 3 Slice S3); the
-                Import Request button moved to DealFulfilmentPanel (Phase 3
-                Slice S4). */}
-            {sections.quotation && latestQuotation && (
-              <button type="button" className="secondary-button"
-                disabled={downloadingQuotationKey === `${latestQuotation.id}-pdf`}
-                onClick={() => handleDownloadQuotation(latestQuotation.id, latestQuotation.number, 'pdf')}>
-                <Icon name="fileText" size={14} />
-                {downloadingQuotationKey === `${latestQuotation.id}-pdf`
-                  ? 'กำลังดาวน์โหลด...'
-                  : `ใบเสนอราคา ${latestQuotation.number} (PDF)`}
-              </button>
-            )}
-            {can.downloadRemainingInvoice && (
-              <button type="button" className="secondary-button" disabled={downloadingInvoice}
-                onClick={handleDownloadRemainingInvoice}>
-                {downloadingInvoice ? 'กำลังดาวน์โหลด...' : 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ'}
-              </button>
-            )}
-          </>
-        ) : null}
+      {activeTicketTab === 'overview' ? (
+      <DealOverviewPanel
+        summary={summary}
+        events={events}
+        pricingRequests={pricingRequests}
+        latestQuotation={latestQuotation}
+        deliveryProgress={{ delivered: totalDelivered, ordered: totalOrdered }}
+        workState={workState}
+        visibleTabIds={ticketTabs.map((tab) => tab.id)}
+        onSelectTab={selectTicketTab}
       />
+      ) : null}
 
       {/* Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103): the
           weekly-report replacement. Owner/sales_manager/ceo only — see salesViewScope.js's
           dealTracking section id. Import/account get a one-line SectionPeek like every
           other role-scoped section on this page instead of the full panel. */}
-      {sections.dealTracking ? (
+      {activeTicketTab === 'activity' ? (
+      sections.dealTracking ? (
         <DealTrackingPanel
           summary={summary}
           events={events}
@@ -882,9 +764,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         />
       ) : (
         <SectionPeek title="การติดตามดีล" summary={summary} />
-      )}
+      )
+      ) : null}
 
-      {sections.payment ? (
+      {activeTicketTab === 'money' ? (
+      sections.payment ? (
       <section className="panel">
         <div className="panel-header" style={{ alignItems: 'center' }}>
           <h2>การชำระเงิน</h2>
@@ -892,32 +776,18 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             <StatusBadge tone={paymentStageLabel(summary.paymentStage).tone}>
               {paymentStageLabel(summary.paymentStage).label}
             </StatusBadge>
-            {summary.overdue && (
-              <StatusBadge tone={overdueBadgeLabel(true).tone}>{overdueBadgeLabel(true).label}</StatusBadge>
-            )}
           </div>
         </div>
-        <div style={{ padding: '0 18px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
-            {[
-              ['ยอดที่ต้องชำระ', summary.amountPayable],
-              ['ชำระแล้ว', summary.amountPaid],
-              ['คงเหลือ', summary.amountOutstanding],
-            ].map(([label, value]) => (
-              <div key={label} style={{ border: '1px solid var(--color-border-subtle)', borderRadius: 8, padding: '10px 12px', background: 'var(--color-surface-muted)' }}>
-                <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 4 }}>{label}</div>
-                <strong style={{ fontSize: 18, color: 'var(--color-text)' }}>{formatMoney(value ?? 0)}</strong>
-              </div>
-            ))}
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', fontSize: 13, color: 'var(--color-text-muted)' }}>
-            <span>วันวางบิล <strong style={{ color: 'var(--color-text-secondary)' }}>{formatThaiDate(summary.billingDate)}</strong></span>
-            <span>ครบกำหนด <strong style={{ color: summary.overdue ? 'var(--color-danger)' : 'var(--color-text-secondary)' }}>{formatThaiDate(summary.dueDate)}</strong></span>
-            {summary.nextFollowUpAt && <span>ติดตามครั้งถัดไป <strong style={{ color: 'var(--color-text-secondary)' }}>{formatThaiDate(summary.nextFollowUpAt)}</strong></span>}
-          </div>
+        <div className="flex flex-col gap-4 px-4 pb-4 sm:px-5">
+          <DealFinancialSummary summary={summary} />
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {can.recordPayment && (
-              <button type="button" className="primary-button" disabled={actionLoading} onClick={openPaymentModal}>
+              <button
+                type="button"
+                className={hasHeaderPrimaryAction ? 'secondary-button' : 'primary-button'}
+                disabled={actionLoading}
+                onClick={openPaymentModal}
+              >
                 บันทึกรับชำระเงิน
               </button>
             )}
@@ -927,34 +797,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               </button>
             )}
           </div>
-          <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 10 }}>
-            <h3 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700 }}>ประวัติรับชำระ</h3>
-            {paymentsQuery.isLoading ? (
-              <SkeletonText lines={2} />
-            ) : paymentReceipts.length === 0 ? (
-              <p style={{ margin: 0, fontSize: 13, color: 'var(--color-text-muted)' }}>ยังไม่มีรายการรับชำระ</p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {paymentReceipts.map((receipt) => (
-                  <div key={receipt.receiptId} style={{ display: 'grid', gridTemplateColumns: '110px 90px 1fr', gap: 10, alignItems: 'start', fontSize: 13 }}>
-                    <span style={{ color: 'var(--color-text-muted)' }}>{formatThaiDate(receipt.receivedAt)}</span>
-                    <strong>{receipt.kind}</strong>
-                    <span>
-                      {formatMoney(receipt.amount)}
-                      <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
-                        {receipt.recordedByName || '-'}{receipt.note ? ` · ${receipt.note}` : ''}
-                      </small>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <DealPaymentHistory receipts={paymentReceipts} loading={paymentsQuery.isLoading} />
         </div>
       </section>
       ) : (
         <SectionPeek title="การชำระเงิน" summary={summary} />
-      )}
+      )
+      ) : null}
 
       {/* "การส่งมอบ / นำเข้า" (Phase 3 Slice S4 — see
           docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md): the
@@ -968,7 +817,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           see docs/agent-handoffs/104): CEO price decisions now happen on the
           PricingRequest chain, in PricingRequestDetailPage's Step 3 panel. */}
 
-      {hasActions && (
+      {activeTicketTab === 'overview' && hasActions && (
         <section className="panel" style={{ background: 'var(--color-surface-muted)' }}>
           <div className="panel-header">
             <h2>การดำเนินการอื่น ๆ</h2>
@@ -1080,24 +929,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         </section>
       )}
 
-      <div className="ticket-detail-grid">
+      {activeTicketTab !== 'money' ? (
+      <div className="flex min-w-0 flex-col gap-4">
+        {activeTicketTab !== 'activity' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {activeTicketTab === 'overview' ? (
+          <>
           <section className="panel">
-            <div className="panel-header">
-              <h2>ข้อมูลทั่วไป</h2>
-            </div>
-            <InfoRow label="ลูกค้า" value={summary.customerName} />
-            {summary.projectName && <InfoRow label="โครงการ" value={summary.projectName} />}
-            {summary.contactName && (
-              <InfoRow label="ผู้ติดต่อ" value={summary.contactName} />
-            )}
-            <InfoRow label="สร้างโดย" value={summary.createdByName} />
-            <InfoRow label="วันที่สร้าง" value={formatThaiDate(summary.createdAt)} />
-            <InfoRow label="เจ้าหน้าที่นำเข้า" value={summary.assignedToName} />
-            <InfoRow label="อัปเดตล่าสุด" value={formatThaiDate(summary.updatedAt)} />
-          </section>
-
-          <section className="table-panel">
             <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h2>รายการสินค้า ({editMode ? editDraft.length : items.length} รายการ)</h2>
             </div>
@@ -1311,84 +1149,26 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 </div>
               </div>
             ) : (
-              <>
-                <div className="ticket-items-table table-head" style={{ gridTemplateColumns: itemsGridCols }}>
-                  <span>ยี่ห้อ / รุ่น</span>
-                  <span>สี / เนื้อผิว</span>
-                  <span>จำนวน</span>
-                  {showCalcBreakdown ? (
-                    <>
-                      <span>ราคาโรงงาน</span>
-                      <span>ต้นทุน (THB/ชิ้น)</span>
-                      <span>ราคาขาย (THB/ชิ้น)</span>
-                    </>
-                  ) : showProposed ? (
-                    <>
-                      <span>ราคาที่เสนอ</span>
-                      <span>ราคาที่อนุมัติ</span>
-                    </>
-                  ) : (
-                    <span>ราคาที่อนุมัติ</span>
-                  )}
-                </div>
-                {items.length === 0 ? (
-                  <EmptyState title="ไม่มีรายการสินค้า" />
-                ) : items.map((item, i) => (
-                  <div key={item.id ?? i} className="ticket-items-table data-row" style={{ gridTemplateColumns: itemsGridCols }}>
-                    <span data-label="ยี่ห้อ / รุ่น">
-                      <strong>{item.brand}</strong>
-                      {item.model && <small style={{ color: 'var(--color-text-muted)' }}>{item.model}</small>}
-                      {item.factory && <small style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>{item.factory}</small>}
-                    </span>
-                    <span data-label="สี / เนื้อผิว" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                      {item.color && <span>{item.color}</span>}
-                      {item.texture && <small style={{ color: 'var(--color-text-muted)' }}>{item.texture}</small>}
-                      {item.size && <small style={{ color: 'var(--color-text-muted)' }}>{item.size}</small>}
-                    </span>
-                    <span data-label="จำนวน">
-                      {item.unitBasis === 'SQM'
-                        ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small style={{ display: 'block', color: 'var(--color-text-muted)' }}>{item.qty} แผ่น</small></>
-                        : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
-                      }
-                    </span>
-                    {showCalcBreakdown ? (
-                      <>
-                        <span data-label="ราคาโรงงาน" style={{ fontSize: 12 }}>
-                          {item.rawPrice != null
-                            ? <><strong>{Number(item.rawPrice).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</strong><small style={{ color: 'var(--color-text-muted)' }}> {item.rawCurrency}/{item.rawUnit === 'sqm' ? 'ตร.ม.' : 'แผ่น'}</small></>
-                            : <span style={{ color: 'var(--color-text-muted)' }}>-</span>}
-                          {item.calcConfigVersion && <small style={{ display: 'block', color: 'var(--color-text-muted)', fontSize: 10 }}>config v{item.calcConfigVersion}</small>}
-                        </span>
-                        <code data-label="ต้นทุน (THB/ชิ้น)" style={{ color: 'var(--color-info)' }}>{item.calcedCost != null ? formatMoney(item.calcedCost) : '—'}</code>
-                        <span data-label="ราคาขาย (THB/ชิ้น)">
-                          <code style={{ color: item.manualPrice != null ? 'var(--color-override)' : 'var(--color-success)', fontWeight: 700 }}>
-                            {item.manualPrice != null ? formatMoney(item.manualPrice) : item.calcedPrice != null ? formatMoney(item.calcedPrice) : '—'}
-                          </code>
-                          {/* CEO manual-override entry (D10) was ticket-native and retired along
-                              with calculatePrices/approve — this is now a read-only readout of
-                              whatever the 3 stranded legacy tickets already carry. */}
-                          {item.manualPrice != null && <small style={{ display: 'block', color: 'var(--color-override)', fontSize: 10 }}>override</small>}
-                        </span>
-                      </>
-                    ) : (
-                      <>
-                        {showProposed && <code data-label="ราคาที่เสนอ">{formatMoney(item.proposedPrice)}</code>}
-                        {showApproved && <code data-label="ราคาที่อนุมัติ">{formatMoney(item.approvedPrice)}</code>}
-                      </>
-                    )}
-                  </div>
-                ))}
-              </>
+              <DealItemSummary
+                items={items}
+                showProposed={showProposed}
+                showApproved={showApproved}
+                showCalcBreakdown={showCalcBreakdown}
+              />
             )}
           </section>
+          </>
+          ) : null}
 
-          {sections.pricingRequest ? (
-            canViewPricingRequests ? (
-              <PricingRequestPanel ticketId={ticketId} deal={summary} ticketItems={items} user={user} />
-            ) : null
-          ) : (
-            <SectionPeek title="ใบขอราคา (Pricing Request)" summary={summary} />
-          )}
+          {activeTicketTab === 'pricing' && sections.pricingRequest && canViewPricingRequests ? (
+            <PricingRequestPanel
+              ticketId={ticketId}
+              deal={summary}
+              ticketItems={items}
+              user={user}
+              hasHeaderPrimaryAction={hasHeaderPrimaryAction}
+            />
+          ) : null}
 
           {/* "ราคาและใบเสนอราคา" (Phase 2 Slice S2): the customer-facing tail of
               the PricingRequest chain (issue/outcome + confirm-order), pulled
@@ -1396,7 +1176,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               APPROVED_FOR_QUOTATION — see DealQuotationPanel's own doc
               comment. The factory/costing/CEO-price steps that precede that
               stay on PricingRequestDetailPage, linked from inside the panel. */}
-          {sections.dealQuotation && canViewPricingRequests ? (
+          {activeTicketTab === 'quotations' && sections.dealQuotation && canViewPricingRequests ? (
             <DealQuotationPanel ticketId={ticketId} pricingRequests={pricingRequests} user={user} showToast={showToast} />
           ) : null}
 
@@ -1406,7 +1186,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               → payment confirmation (account) — replacing the deposit-policy
               control that used to live in DealStagePanel and the deposit
               doc/payment bits that used to live directly on this page. */}
-          {sections.depositNotice ? (
+          {activeTicketTab === 'fulfilment' && sections.depositNotice ? (
             <DealDepositPanel
               ticketId={ticketId}
               user={user}
@@ -1415,9 +1195,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               pricingRequests={pricingRequests}
               showToast={showToast}
             />
-          ) : (
-            <SectionPeek title="มัดจำ" summary={summary} />
-          )}
+          ) : null}
 
           {/* "การส่งมอบ / นำเข้า" (Phase 3 Slice S4 — see
               docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md):
@@ -1427,7 +1205,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               panel and the IR button/delivery/stock modals that used to live
               directly on this page. Reuses the existing `delivery` section
               id (salesViewScope.js) rather than adding a parallel one. */}
-          {sections.delivery ? (
+          {activeTicketTab === 'fulfilment' && sections.delivery ? (
             <DealFulfilmentPanel
               ticketId={ticketId}
               user={user}
@@ -1437,101 +1215,77 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               pricingRequests={pricingRequests}
               showToast={showToast}
             />
-          ) : (
-            <SectionPeek title="การส่งมอบ / นำเข้า" summary={summary} />
-          )}
+          ) : null}
 
           {/* R5: Attachments */}
+          {activeTicketTab === 'documents' ? (
           <section className="panel">
-            <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2>ไฟล์แนบ (PO / ใบเซ็น / ใบกำกับภาษี)</h2>
-              {/* ใบกำกับภาษี is issued by an external system and uploaded here; its
-                  presence is a prerequisite for ฝ่ายบัญชี to confirm the close. */}
-              {!TERMINAL.includes(st) && isAccount && (
-                <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-invoice-file">
-                  <input
-                    id="ticket-invoice-file"
-                    type="file"
-                    className="sr-only h-px min-h-0 w-px border-0 p-0"
-                    onChange={(e) => handleUploadAttachment(e, 'INVOICE')}
-                    accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
-                  />
-                  <span
-                    className="secondary-button max-[720px]:min-h-11 max-[720px]:w-full"
-                    style={{ fontSize: 12, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                  >
-                    <Icon name="upload" size={13} />
-                    {uploadingFile ? 'กำลังอัปโหลด...' : 'แนบใบกำกับภาษี'}
-                  </span>
-                </label>
-              )}
-              {!TERMINAL.includes(st) && (
-                <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-attachment-file">
-                  <input
-                    id="ticket-attachment-file"
-                    type="file"
-                    // See FileUploadField: styles.css now loads into @layer legacy
-                    // (before Tailwind's utilities layer), so these utilities win
-                    // over the legacy global `input` rules without `!` overrides.
-                    className="sr-only h-px min-h-0 w-px border-0 p-0"
-                    onChange={handleUploadAttachment}
-                    accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
-                  />
-                  <span
-                    className="secondary-button max-[720px]:min-h-11 max-[720px]:w-full"
-                    style={{ fontSize: 12, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                  >
-                    <Icon name="upload" size={13} />
-                    {uploadingFile ? 'กำลังอัปโหลด...' : 'แนบไฟล์ (PDF/JPG/PNG/Excel)'}
-                  </span>
-                </label>
-              )}
-            </div>
-            {attachLoading ? (
-              <div
-                style={{ padding: '8px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}
-                aria-busy="true"
-                aria-label="กำลังโหลดไฟล์แนบ"
-              >
-                {[0, 1, 2].map((i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'var(--color-surface-muted)', borderRadius: 6, border: '1px solid var(--color-border-subtle)' }}>
-                    <Skeleton width={13} height={13} radius="var(--radius-sm)" />
-                    <Skeleton width="50%" height={13} />
-                    <Skeleton width={40} height={16} radius="var(--radius-pill)" />
-                  </div>
-                ))}
+            <div className="panel-header">
+              <div>
+                <h2>เอกสาร</h2>
+                <p className="mt-1 text-xs text-text-muted">
+                  PO ใบเซ็น ใบกำกับภาษี และเอกสารประกอบของดีล
+                </p>
               </div>
-            ) : attachments.length === 0 ? (
-              <div style={{ padding: '4px 18px 14px' }}>
-                <EmptyState icon="paperclip" title="ยังไม่มีไฟล์แนบ" description="แนบ PO หรือใบเซ็นได้ด้วยปุ่มด้านบน" />
-              </div>
-            ) : (
-              <div style={{ padding: '8px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {attachments.map((att) => (
-                  <div key={att.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'var(--color-surface-muted)', borderRadius: 6, border: '1px solid var(--color-border-subtle)' }}>
-                    <Icon name="paperclip" size={13} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
-                    <span style={{ flex: 1, fontSize: 13, color: 'var(--color-text)', wordBreak: 'break-all' }}>{att.fileName}</span>
-                    <span style={{ fontSize: 11, color: 'var(--color-text-muted)', whiteSpace: 'nowrap', background: 'var(--color-surface-subtle)', padding: '1px 6px', borderRadius: 99 }}>
-                      {att.attachType}
+              <div className="flex flex-wrap justify-end gap-2 max-[720px]:w-full max-[720px]:justify-start">
+                {can.downloadRemainingInvoice ? (
+                  <button
+                    type="button"
+                    className="secondary-button min-h-9 px-3 text-xs max-[720px]:min-h-11 max-[720px]:w-full"
+                    disabled={downloadingInvoice}
+                    onClick={handleDownloadRemainingInvoice}
+                  >
+                    <Icon name="fileText" size={14} />
+                    {downloadingInvoice ? 'กำลังดาวน์โหลด...' : 'ดาวน์โหลดใบวางบิลส่วนที่เหลือ'}
+                  </button>
+                ) : null}
+                {/* ใบกำกับภาษี is issued by an external system and uploaded here; its
+                    presence is a prerequisite for ฝ่ายบัญชี to confirm the close. */}
+                {!TERMINAL.includes(st) && isAccount ? (
+                  <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-invoice-file">
+                    <input
+                      id="ticket-invoice-file"
+                      type="file"
+                      className="sr-only h-px min-h-0 w-px border-0 p-0"
+                      onChange={(e) => handleUploadAttachment(e, 'INVOICE')}
+                      accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
+                    />
+                    <span className="secondary-button min-h-9 px-3 text-xs max-[720px]:min-h-11 max-[720px]:w-full">
+                      <Icon name="upload" size={14} />
+                      {uploadingFile ? 'กำลังอัปโหลด...' : 'แนบใบกำกับภาษี'}
                     </span>
-                    <a href={api.attachments.fileUrl(att.id)} target="_blank" rel="noreferrer"
-                      style={{ fontSize: 12, color: 'var(--color-link)', textDecoration: 'none', whiteSpace: 'nowrap' }}>
-                      ดูไฟล์
-                    </a>
-                    {!TERMINAL.includes(st) && (
-                      <button type="button" className="icon-button"
-                        style={{ color: 'var(--color-danger)', flexShrink: 0 }}
-                        onClick={() => handleDeleteAttachment(att.id, att.fileName)}>
-                        <Icon name="close" size={13} />
-                      </button>
-                    )}
-                  </div>
-                ))}
+                  </label>
+                ) : null}
+                {!TERMINAL.includes(st) ? (
+                  <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-attachment-file">
+                    <input
+                      id="ticket-attachment-file"
+                      type="file"
+                      className="sr-only h-px min-h-0 w-px border-0 p-0"
+                      onChange={handleUploadAttachment}
+                      accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
+                    />
+                    <span className="secondary-button min-h-9 px-3 text-xs max-[720px]:min-h-11 max-[720px]:w-full">
+                      <Icon name="upload" size={14} />
+                      {uploadingFile ? 'กำลังอัปโหลด...' : 'แนบไฟล์'}
+                    </span>
+                  </label>
+                ) : null}
               </div>
-            )}
+            </div>
+            <div className="px-4 pb-4 sm:px-5">
+              <DealDocumentList
+                attachments={attachments}
+                loading={attachLoading}
+                canDelete={!TERMINAL.includes(st)}
+                fileUrl={api.attachments.fileUrl}
+                onDelete={handleDeleteAttachment}
+              />
+            </div>
           </section>
+          ) : null}
 
-          {sections.quotation ? (
+          {activeTicketTab === 'quotations' && sections.quotation ? (
             quotationGroups.length > 0 && (
             <section className="panel">
               <div className="panel-header">
@@ -1594,75 +1348,25 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               ))}
             </section>
             )
-          ) : (
-            <SectionPeek title="ใบเสนอราคา" summary={summary} />
-          )}
+          ) : null}
         </div>
+        ) : null}
 
-        <section className="panel">
-          <div className="panel-header">
-            <h2>ประวัติการดำเนินการ</h2>
-          </div>
-          <div className="ticket-events">
-            {events.length === 0 ? (
-              <EmptyState icon="clock" title="ยังไม่มีประวัติ" description="เหตุการณ์และความคิดเห็นจะปรากฏที่นี่" />
-            ) : [...events].reverse().map((event) => {
-              let snapItems = null;
-              if (event.kind === 'PRICE_PROPOSED' && event.itemSnapshot) {
-                try { snapItems = JSON.parse(event.itemSnapshot); } catch { snapItems = null; }
-              }
-              return (
-                <div key={event.id} className="ticket-event">
-                  <span className={eventDotClass(event.kind)} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <strong style={{ display: 'block', fontSize: 13, color: 'var(--color-text)' }}>
-                      {EVENT_KIND_LABEL[event.kind] ?? event.kind}
-                    </strong>
-                    <span style={{ color: 'var(--color-icon-muted)', fontSize: 12 }}>{event.actorName}</span>
-                    {event.message && (
-                      <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--color-text-muted)', background: 'var(--color-surface-muted)', borderRadius: 4, padding: '4px 8px' }}>
-                        {event.message}
-                      </p>
-                    )}
-                    {snapItems && snapItems.length > 0 && (
-                      <div style={{ margin: '6px 0 0', fontSize: 11, color: 'var(--color-icon-muted)', background: 'var(--color-surface-muted)', borderRadius: 4, padding: '6px 10px' }}>
-                        <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--color-text-muted)' }}>รายการสินค้า ณ เวลาที่เสนอราคา</div>
-                        {snapItems.map((it, i) => (
-                          <div key={i} style={{ paddingBottom: 2 }}>
-                            {it.brand} {it.model} — {it.qty} ชิ้น
-                            {it.rawPrice != null && (
-                              <span style={{ color: 'var(--color-text-muted)', marginLeft: 4 }}>
-                                @ {it.rawPrice} {it.rawCurrency}/{it.rawUnit}
-                              </span>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <small style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>{formatThaiDate(event.createdAt)}</small>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {can.comment && (
-            <div style={{ padding: '12px 18px', borderTop: '1px solid var(--color-border)', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <textarea
-                rows={2}
-                value={commentText}
-                onChange={(e) => setCommentText(e.target.value)}
-                placeholder="เพิ่มความคิดเห็น..."
-                style={{ resize: 'vertical' }}
-              />
-              <button type="button" className="secondary-button" onClick={handleComment} disabled={actionLoading || !commentText.trim()}
-                style={{ alignSelf: 'flex-end' }}>
-                ส่งความคิดเห็น
-              </button>
-            </div>
-          )}
-        </section>
+        {activeTicketTab === 'activity' ? (
+        <DealActivityTimeline
+          events={events}
+          canComment={can.comment}
+          commentText={commentText}
+          onCommentTextChange={setCommentText}
+          onSubmitComment={handleComment}
+          submitting={actionLoading}
+        />
+        ) : null}
       </div>
+      ) : null}
+          </>
+        )}
+      </Tabs>
 
       {paymentModal && (
         <Modal
