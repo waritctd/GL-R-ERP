@@ -23,11 +23,15 @@ function isItemActive(item, pathname) {
 }
 
 function NavItemLink({ item, pathname }) {
+  const accessibleLabel = item.helper ? `${item.label} (${item.helper})` : item.label;
+
   return (
     <NavLink
       to={item.path}
       end={item.path === '/'}
       className={() => `nav-item ${isItemActive(item, pathname) ? 'active' : ''}`}
+      aria-label={accessibleLabel}
+      title={accessibleLabel}
     >
       <Icon name={item.icon} size={19} />
       <span>
@@ -39,9 +43,35 @@ function NavItemLink({ item, pathname }) {
   );
 }
 
+function useTabletRail() {
+  const query = '(min-width: 721px) and (max-width: 1040px)';
+  const [isTabletRail, setIsTabletRail] = useState(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+    return window.matchMedia(query).matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const mediaQuery = window.matchMedia(query);
+    const handleChange = (event) => setIsTabletRail(event.matches);
+
+    setIsTabletRail(mediaQuery.matches);
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+
+    mediaQuery.addListener(handleChange);
+    return () => mediaQuery.removeListener(handleChange);
+  }, []);
+
+  return isTabletRail;
+}
+
 export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, user, employee, onLogout }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const isTabletRail = useTabletRail();
   // Collapsed groups are the exception (default = expanded), so absence from
   // this set means "open" — nothing to persist for the common case.
   const [collapsedGroups, setCollapsedGroups] = useState(() => new Set());
@@ -80,7 +110,7 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, user, empl
       className={`sidebar ${isDrawerOpen ? 'is-mobile-drawer-open' : ''}`}
       tabIndex={-1}
     >
-      <button className="brand" type="button" onClick={() => navigate('/')}>
+      <button className="brand" type="button" onClick={() => navigate('/')} aria-label="GL&R home" title="GL&R home">
         <span className="brand-mark">
           <i />
           <i />
@@ -99,7 +129,7 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, user, empl
         ))}
 
         {grouped.map((group) => {
-          const isCollapsed = collapsedGroups.has(group.key);
+          const isCollapsed = !isTabletRail && collapsedGroups.has(group.key);
           const panelId = `nav-group-panel-${group.key}`;
           return (
             <div key={group.key} className="nav-group">
@@ -109,6 +139,7 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, user, empl
                 aria-expanded={!isCollapsed}
                 aria-controls={panelId}
                 onClick={() => toggleGroup(group.key)}
+                title={`${group.label} (${group.helper})`}
               >
                 {group.label}
                 <span className="nav-group-header-helper">{group.helper}</span>
