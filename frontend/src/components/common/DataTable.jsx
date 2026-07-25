@@ -8,6 +8,7 @@ import {
 } from '@tanstack/react-table';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { cn } from '../../utils/cn.js';
+import { Button } from './Button.jsx';
 import { EmptyState } from './EmptyState.jsx';
 import { Icon } from './Icon.jsx';
 import { Skeleton } from './Skeleton.jsx';
@@ -17,26 +18,20 @@ import { Skeleton } from './Skeleton.jsx';
  * `columnheader` cell for sortable columns. Styled via `.sort-header` /
  * `.is-active` in styles.css (no inline hex).
  */
-function SortHeader({ label, active, dir, onSort, align }) {
+function SortHeader({ label, active, dir, onSort }) {
   return (
-    <span
-      role="columnheader"
-      aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
-      className={align === 'right' ? 'flex justify-end' : undefined}
+    <button
+      type="button"
+      className={`sort-header${active ? ' is-active' : ''}`}
+      onClick={onSort}
     >
-      <button
-        type="button"
-        className={`sort-header${active ? ' is-active' : ''}`}
-        onClick={onSort}
-      >
-        {label}
-        <Icon
-          name={active ? (dir === 'asc' ? 'chevronUp' : 'chevronDown') : 'chevronDown'}
-          size={13}
-          style={{ opacity: active ? 1 : 0.3 }}
-        />
-      </button>
-    </span>
+      {label}
+      <Icon
+        name={active ? (dir === 'asc' ? 'chevronUp' : 'chevronDown') : 'chevronDown'}
+        size={13}
+        style={{ opacity: active ? 1 : 0.3 }}
+      />
+    </button>
   );
 }
 
@@ -109,10 +104,13 @@ export function DataTable({
   searchPlaceholder = 'ค้นหา...',
   searchValue,
   onSearchChange,
-  onRowClick,
   rowClassName,
   rowStyle,
   loading = false,
+  error,
+  errorMessage = 'โหลดข้อมูลไม่สำเร็จ ข้อมูลเดิมจะยังแสดงอยู่ถ้ามีอยู่แล้ว',
+  retryLabel = 'ลองอีกครั้ง',
+  onRetry,
   emptyState,
   initialSort,
   sort,
@@ -123,7 +121,7 @@ export function DataTable({
   onExportCsv,
   mobileCard,
   // Optional per-row detail panel. Return an element to expand that row, null to leave it
-  // collapsed. Pairs with onRowClick for the toggle; the table itself holds no expansion state.
+  // collapsed. Callers should expose their own explicit expand/open control.
   renderExpanded,
 }) {
   // Below 720px a dense grid crushes every column into an unreadable stub
@@ -220,6 +218,7 @@ export function DataTable({
   const sortKey = sorting[0]?.id ?? null;
   const sortDir = sorting[0]?.desc ? 'desc' : 'asc';
   const canExport = exportable || typeof onExportCsv === 'function';
+  const hasError = Boolean(error);
 
   useEffect(() => {
     setPagination((current) => ({ ...current, pageIndex: 0, pageSize }));
@@ -252,8 +251,212 @@ export function DataTable({
     downloadCsv(csv);
   }
 
-  const RowTag = onRowClick ? 'button' : 'div';
   const skeletonRowCount = Math.min(pageSize, 8);
+
+  function renderErrorRegion() {
+    if (!hasError) return null;
+    return (
+      <div className="data-table-error" role="alert">
+        <span className="data-table-error-copy">
+          <Icon name="triangleAlert" size={16} />
+          <span>{errorMessage}</span>
+        </span>
+        {typeof onRetry === 'function' ? (
+          <Button type="button" variant="secondary" size="sm" onClick={onRetry}>
+            <Icon name="refresh" size={15} />
+            {retryLabel}
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderPagination() {
+    if (loading || sortedRows.length === 0) return null;
+    return (
+      <footer className="pagination">
+        <span style={{ fontSize: 13 }}>แสดง {from}–{to} จาก {sortedRows.length} รายการ</span>
+        <div>
+          <Button
+            type="button"
+            variant="icon"
+            size="sm"
+            onClick={() => setPagination((current) => ({
+              ...current,
+              pageIndex: Math.max(0, current.pageIndex - 1),
+            }))}
+            disabled={safePage === 1}
+            title="หน้าก่อนหน้า"
+          >
+            <Icon name="chevronLeft" size={16} />
+          </Button>
+          <span style={{ fontSize: 13, minWidth: 72, textAlign: 'center' }}>
+            หน้า {safePage} / {totalPages}
+          </span>
+          <Button
+            type="button"
+            variant="icon"
+            size="sm"
+            onClick={() => setPagination((current) => ({
+              ...current,
+              pageIndex: Math.min(totalPages - 1, current.pageIndex + 1),
+            }))}
+            disabled={safePage === totalPages}
+            title="หน้าถัดไป"
+          >
+            <Icon name="chevronRight" size={16} />
+          </Button>
+        </div>
+      </footer>
+    );
+  }
+
+  function renderMobileList() {
+    return (
+      <section className="table-panel data-table-list-panel" aria-busy={loading ? 'true' : undefined}>
+        {loading ? (
+          <ul className="record-card-list" aria-label="กำลังโหลดข้อมูล">
+            {Array.from({ length: skeletonRowCount }, (_, index) => (
+              <li
+                className="record-card flex w-full min-w-0 flex-col items-stretch gap-2 rounded-md border border-solid border-border bg-surface p-4 text-left"
+                aria-hidden="true"
+                key={index}
+              >
+                <Skeleton height={14} />
+                <Skeleton height={14} width="70%" />
+                <Skeleton height={14} width="44%" />
+              </li>
+            ))}
+          </ul>
+        ) : sortedRows.length === 0 ? (
+          hasError ? null : (
+            <EmptyState
+              icon={emptyState?.icon}
+              title={emptyState?.title ?? 'ไม่พบข้อมูล'}
+              description={emptyState?.description}
+            />
+          )
+        ) : (
+          <ul className="record-card-list">
+            {pageRows.map((row) => {
+              const key = getRowKey(row);
+              const extraClassName = rowClassName ? rowClassName(row) : '';
+              const expanded = renderExpanded ? renderExpanded(row) : null;
+              return (
+                <li
+                  key={key}
+                  className={cn(
+                    'record-card flex w-full min-w-0 flex-col items-stretch gap-2 rounded-md border border-solid border-border bg-surface p-4 text-left',
+                    extraClassName,
+                  )}
+                >
+                  {mobileCard(row)}
+                  {expanded ? (
+                    <div className="rounded-b-md border border-t-0 border-border bg-surface-subtle px-4 py-3">
+                      {expanded}
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {renderPagination()}
+      </section>
+    );
+  }
+
+  function renderTable() {
+    return (
+      <section className="table-panel" aria-busy={loading ? 'true' : undefined}>
+        {(loading || sortedRows.length > 0) ? (
+          <table className="data-table-table">
+            <thead>
+              <tr className={`${gridClassName} table-head${stickyHeader ? ' is-sticky' : ''}`}>
+                {columns.map((column) => (
+                  <th
+                    key={column.key}
+                    scope="col"
+                    aria-sort={column.sortable
+                      ? (sortKey === column.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none')
+                      : undefined}
+                    className={column.align === 'right' ? 'text-right' : undefined}
+                  >
+                    {column.sortable ? (
+                      <SortHeader
+                        label={column.header}
+                        active={sortKey === column.key}
+                        dir={sortDir}
+                        onSort={() => handleSort(column.key)}
+                      />
+                    ) : (
+                      column.headerNode ?? column.header
+                    )}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                Array.from({ length: skeletonRowCount }, (_, index) => (
+                  <tr className={`${gridClassName} data-row`} aria-hidden="true" key={index}>
+                    {columns.map((column) => (
+                      <td key={column.key}>
+                        <Skeleton height={14} />
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              ) : (
+                pageRows.map((row) => {
+                  const key = getRowKey(row);
+                  const extraClassName = rowClassName ? ` ${rowClassName(row)}` : '';
+                  const style = rowStyle ? rowStyle(row) : undefined;
+                  const expanded = renderExpanded ? renderExpanded(row) : null;
+                  return (
+                    <Fragment key={key}>
+                      <tr
+                        className={`${gridClassName} data-row${extraClassName}`}
+                        style={style}
+                      >
+                        {columns.map((column) => (
+                          <td
+                            key={column.key}
+                            className={column.align === 'right' ? 'text-right' : undefined}
+                            data-label={typeof column.header === 'string' ? column.header : undefined}
+                          >
+                            {column.render(row)}
+                          </td>
+                        ))}
+                      </tr>
+                      {expanded ? (
+                        <tr className="data-table-expanded-row">
+                          <td colSpan={columns.length}>
+                            <div className="border-b border-border bg-surface-subtle px-4 py-3">
+                              {expanded}
+                            </div>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        ) : (
+          hasError ? null : (
+            <EmptyState
+              icon={emptyState?.icon}
+              title={emptyState?.title ?? 'ไม่พบข้อมูล'}
+              description={emptyState?.description}
+            />
+          )
+        )}
+        {renderPagination()}
+      </section>
+    );
+  }
 
   return (
     <div className="data-table">
@@ -273,155 +476,16 @@ export function DataTable({
           ) : null}
           {toolbarExtra}
           {canExport ? (
-            <button type="button" className="secondary-button" onClick={handleExportCsv}>
+            <Button type="button" variant="secondary" onClick={handleExportCsv}>
               <Icon name="fileText" />
               Export CSV
-            </button>
+            </Button>
           ) : null}
         </div>
       ) : null}
 
-      <section className="table-panel" role="table">
-        {asCards ? null : (
-          <div className={`${gridClassName} table-head${stickyHeader ? ' is-sticky' : ''}`} role="row">
-            {columns.map((column) => (
-              column.sortable ? (
-                <SortHeader
-                  key={column.key}
-                  label={column.header}
-                  active={sortKey === column.key}
-                  dir={sortDir}
-                  align={column.align}
-                  onSort={() => handleSort(column.key)}
-                />
-              ) : (
-                <span key={column.key} role="columnheader" className={column.align === 'right' ? 'text-right' : undefined}>
-                  {column.headerNode ?? column.header}
-                </span>
-              )
-            ))}
-          </div>
-        )}
-
-        {loading ? (
-          <div aria-busy="true" aria-label="กำลังโหลดข้อมูล">
-            {Array.from({ length: skeletonRowCount }, (_, index) => (
-              <div className={`${gridClassName} data-row`} role="row" key={index}>
-                {columns.map((column) => (
-                  <span key={column.key} role="cell">
-                    <Skeleton height={14} />
-                  </span>
-                ))}
-              </div>
-            ))}
-          </div>
-        ) : sortedRows.length === 0 ? (
-          <EmptyState
-            icon={emptyState?.icon}
-            title={emptyState?.title ?? 'ไม่พบข้อมูล'}
-            description={emptyState?.description}
-          />
-        ) : pageRows.map((row) => {
-          const key = getRowKey(row);
-          const extraClassName = rowClassName ? ` ${rowClassName(row)}` : '';
-          // Optional detail panel beneath a row. Returning null (the common case) renders
-          // nothing, so tables that don't opt in are unaffected.
-          const expanded = renderExpanded ? renderExpanded(row) : null;
-
-          if (asCards) {
-            return (
-              <Fragment key={key}>
-                <RowTag
-                  type={onRowClick ? 'button' : undefined}
-                  role="row"
-                  className={cn(
-                    'record-card flex w-full min-w-0 flex-col items-stretch gap-2 text-left',
-                    'mt-2.5 first:mt-0 rounded-md border border-solid border-border bg-surface p-4',
-                    onRowClick && 'cursor-pointer hover:bg-surface-hover',
-                    extraClassName,
-                  )}
-                  onClick={onRowClick ? () => onRowClick(row) : undefined}
-                  aria-expanded={renderExpanded ? Boolean(expanded) : undefined}
-                >
-                  {mobileCard(row)}
-                </RowTag>
-                {expanded ? (
-                  <div className="rounded-b-md border border-t-0 border-border bg-surface-subtle px-4 py-3">
-                    {expanded}
-                  </div>
-                ) : null}
-              </Fragment>
-            );
-          }
-
-          const style = rowStyle ? rowStyle(row) : undefined;
-          return (
-            <Fragment key={key}>
-              <RowTag
-                type={onRowClick ? 'button' : undefined}
-                role="row"
-                className={`${gridClassName} data-row${extraClassName}`}
-                style={style}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
-                aria-expanded={renderExpanded ? Boolean(expanded) : undefined}
-              >
-                {columns.map((column) => (
-                  <span
-                    key={column.key}
-                    role="cell"
-                    className={column.align === 'right' ? 'text-right' : undefined}
-                    data-label={typeof column.header === 'string' ? column.header : undefined}
-                  >
-                    {column.render(row)}
-                  </span>
-                ))}
-              </RowTag>
-              {expanded ? (
-                <div className="border-b border-border bg-surface-subtle px-4 py-3">
-                  {expanded}
-                </div>
-              ) : null}
-            </Fragment>
-          );
-        })}
-
-        {!loading && sortedRows.length > 0 && (
-          <footer className="pagination">
-            <span style={{ fontSize: 13 }}>แสดง {from}–{to} จาก {sortedRows.length} รายการ</span>
-            <div>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => setPagination((current) => ({
-                  ...current,
-                  pageIndex: Math.max(0, current.pageIndex - 1),
-                }))}
-                disabled={safePage === 1}
-                title="หน้าก่อนหน้า"
-                aria-label="หน้าก่อนหน้า"
-              >
-                <Icon name="chevronLeft" size={16} />
-              </button>
-              <span style={{ fontSize: 13, minWidth: 72, textAlign: 'center' }}>
-                หน้า {safePage} / {totalPages}
-              </span>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => setPagination((current) => ({
-                  ...current,
-                  pageIndex: Math.min(totalPages - 1, current.pageIndex + 1),
-                }))}
-                disabled={safePage === totalPages}
-                title="หน้าถัดไป"
-                aria-label="หน้าถัดไป"
-              >
-                <Icon name="chevronRight" size={16} />
-              </button>
-            </div>
-          </footer>
-        )}
-      </section>
+      {renderErrorRegion()}
+      {asCards ? renderMobileList() : renderTable()}
     </div>
   );
 }

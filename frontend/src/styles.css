@@ -253,6 +253,58 @@ textarea:focus {
   box-shadow: var(--shadow-focus-ring);
 }
 
+:where(
+  a[href],
+  button,
+  summary,
+  [role="button"],
+  [role="link"],
+  [role="checkbox"],
+  [role="radio"],
+  [role="switch"],
+  [role="tab"],
+  [tabindex]:not([tabindex="-1"])
+):focus {
+  outline: 2px solid var(--color-primary-hover);
+  outline-offset: 2px;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+@supports selector(:focus-visible) {
+  :where(
+    a[href],
+    button,
+    summary,
+    [role="button"],
+    [role="link"],
+    [role="checkbox"],
+    [role="radio"],
+    [role="switch"],
+    [role="tab"],
+    [tabindex]:not([tabindex="-1"])
+  ):focus {
+    outline: none;
+    box-shadow: none;
+  }
+
+  :where(
+    a[href],
+    button,
+    summary,
+    [role="button"],
+    [role="link"],
+    [role="checkbox"],
+    [role="radio"],
+    [role="switch"],
+    [role="tab"],
+    [tabindex]:not([tabindex="-1"])
+  ):focus-visible {
+    outline: 2px solid var(--color-primary-hover);
+    outline-offset: 2px;
+    box-shadow: var(--shadow-focus-ring);
+  }
+}
+
 .input-with-icon {
   position: relative;
   display: block;
@@ -663,6 +715,28 @@ textarea:focus {
   border-color: var(--color-border-input);
 }
 
+.button-loading-spinner {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: var(--radius-pill);
+  animation: button-loading-spin 700ms linear infinite;
+}
+
+@keyframes button-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button-loading-spinner {
+    animation: none;
+  }
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -865,6 +939,17 @@ textarea:focus {
   overflow: hidden;
 }
 
+.data-table-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.data-table-table thead,
+.data-table-table tbody {
+  display: block;
+}
+
 .table-head,
 .data-row {
   display: grid;
@@ -880,14 +965,22 @@ textarea:focus {
 }
 
 .data-row > span,
+.data-row > td,
 .data-row > code {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
+.data-row > td {
+  display: block;
+}
+
 .data-row > span > strong,
 .data-row > span > small,
-.data-row > span > span {
+.data-row > span > span,
+.data-row > td > strong,
+.data-row > td > small,
+.data-row > td > span {
   display: block;
   overflow: hidden;
   white-space: nowrap;
@@ -902,7 +995,8 @@ textarea:focus {
    into a full-width bar instead of staying a compact pill. `width: fit-content`
    (not just `auto`) is required here: as a grid item this element stretches
    to fill its track under the grid's default `justify-items: stretch`. */
-.data-row > span > .status-badge {
+.data-row > span > .status-badge,
+.data-row > td > .status-badge {
   display: flex;
   width: fit-content;
   max-width: 100%;
@@ -917,6 +1011,12 @@ textarea:focus {
   font-weight: 800;
   text-align: left;
   text-transform: uppercase;
+}
+
+.table-head th {
+  display: block;
+  border: 0;
+  padding: 0;
 }
 
 .table-head.is-sticky {
@@ -938,12 +1038,399 @@ textarea:focus {
   background: var(--color-surface-hover);
 }
 
+.data-table-expanded-row > td {
+  padding: 0;
+  border: 0;
+}
+
+.data-table-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-md);
+  background: var(--color-warning-bg);
+  color: var(--color-text);
+}
+
+.data-table-error-copy {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.data-table-error-copy svg {
+  flex: 0 0 auto;
+  color: var(--color-warning);
+}
+
+.record-card-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 .request-table {
   grid-template-columns: minmax(0,1.8fr) minmax(0,1.1fr) minmax(0,1.6fr) minmax(0,1.7fr) minmax(0,0.9fr) minmax(0,1.2fr);
 }
 
 .ticket-table {
-  grid-template-columns: minmax(0,2.6fr) minmax(0,1.3fr) minmax(0,1.3fr) minmax(0,1fr);
+  grid-template-columns: minmax(0,2.3fr) minmax(0,1fr) minmax(0,1.5fr) minmax(0,1fr) minmax(0,0.85fr) minmax(84px,0.55fr);
+}
+
+.procurement-table {
+  grid-template-columns: minmax(0,1.6fr) minmax(0,1.3fr) minmax(0,0.8fr) minmax(0,1fr) minmax(0,0.9fr) minmax(78px,0.55fr);
+}
+
+.ticket-worklist-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.ticket-scope-copy {
+  min-width: 0;
+}
+
+.ticket-scope-copy > span,
+.ticket-result-count > span,
+.ticket-active-filters > span,
+.ticket-filter-group > span {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+}
+
+.ticket-scope-copy h2 {
+  margin: 2px 0 0;
+  font-size: var(--text-lg);
+  line-height: 1.25;
+}
+
+.ticket-scope-copy p,
+.ticket-result-count small {
+  margin: 2px 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.ticket-scope-toggle {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+}
+
+.ticket-scope-option,
+.ticket-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  padding: 0 12px;
+  font-size: var(--text-xs);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.ticket-scope-option.is-active,
+.ticket-filter-chip.is-active {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--color-info-bg-alt);
+}
+
+.ticket-result-count {
+  min-width: 96px;
+  text-align: right;
+}
+
+.ticket-result-count strong {
+  display: block;
+  color: var(--color-text);
+  font-size: var(--text-2xl);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.ticket-pipeline-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.ticket-pipeline-heading {
+  display: grid;
+  gap: 6px;
+}
+
+.ticket-pipeline-heading h2 {
+  margin: 0;
+  font-size: var(--text-md);
+}
+
+.ticket-pipeline-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.ticket-pipeline-metrics > div {
+  min-width: 0;
+  padding-left: 10px;
+  border-left: 1px solid var(--color-border);
+}
+
+.ticket-pipeline-metrics dt {
+  color: var(--color-text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+}
+
+.ticket-pipeline-metrics dd {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 3px 0 0;
+}
+
+.ticket-pipeline-metrics strong {
+  color: var(--color-text);
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+}
+
+.ticket-pipeline-metrics small {
+  display: block;
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: var(--text-2xs);
+}
+
+.ticket-phase-strip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ticket-phase-chip {
+  display: grid;
+  gap: 4px;
+  align-content: center;
+  min-height: 58px;
+  min-width: 0;
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.ticket-phase-chip.is-active {
+  border-color: var(--color-primary);
+  background: var(--color-info-bg-alt);
+}
+
+.ticket-phase-count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text);
+  font-size: var(--text-lg);
+  font-weight: 900;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.ticket-phase-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticket-phase-chip.is-active .ticket-phase-label,
+.ticket-phase-chip.is-active .ticket-phase-count {
+  color: var(--color-primary);
+}
+
+.ticket-phase-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-pill);
+}
+
+.ticket-filter-bar {
+  gap: 12px;
+}
+
+.ticket-filter-search {
+  flex: 1 1 340px;
+}
+
+.ticket-filter-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.ticket-filter-meta strong {
+  color: var(--color-text);
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+}
+
+.ticket-active-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ticket-filter-backdrop {
+  display: none;
+}
+
+.ticket-filter-sheet {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.ticket-filter-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ticket-filter-sheet-header h2 {
+  margin: 0;
+  font-size: var(--text-md);
+}
+
+.ticket-filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ticket-filter-group > span {
+  width: 92px;
+}
+
+.ticket-open-button {
+  white-space: nowrap;
+}
+
+.ticket-card-open-button {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+.ticket-card-topline {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.ticket-card-topline code,
+.ticket-card-topline span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ticket-card-title {
+  min-width: 0;
+  color: var(--color-text);
+  font-size: var(--text-md);
+  font-weight: 900;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.ticket-card-project,
+.ticket-card-owner {
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.ticket-card-work {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+}
+
+.ticket-card-work > span {
+  color: var(--color-text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+}
+
+.ticket-card-work > strong {
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.ticket-card-work > small {
+  color: var(--color-info);
+  font-size: var(--text-xs);
+  font-weight: 800;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 
 /* PricingRequestQueuePage (commit 6): requestCode / deal / recipient / status /
@@ -1815,19 +2302,81 @@ a.status-badge {
    centred, stacked, label-less icons. */
 @media (min-width: 721px) and (max-width: 1040px) {
   .sidebar {
-    width: 86px;
-    flex-basis: 86px;
+    width: 78px;
+    flex-basis: 78px;
+    padding: 16px 10px 12px;
+    align-items: center;
+    overflow-x: hidden;
   }
 
   .brand span:not(.brand-mark),
   .nav-item span,
+  .nav-group-header,
   .sidebar-account span {
     display: none;
   }
 
+  .brand {
+    width: 52px;
+    min-height: 52px;
+    justify-content: center;
+    padding: 4px 0 14px;
+  }
+
+  .brand-mark {
+    flex: none;
+  }
+
+  .nav-list,
+  .nav-group,
+  .nav-group-panel {
+    width: 100%;
+  }
+
+  .nav-list {
+    align-content: start;
+    justify-items: center;
+    gap: 6px;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .nav-group,
+  .nav-group-panel {
+    justify-items: center;
+    gap: 6px;
+  }
+
   .nav-item {
+    width: 52px;
+    min-height: 48px;
+    grid-template-columns: 1fr;
+    place-items: center;
+    gap: 0;
+    padding: 0;
+    position: relative;
+  }
+
+  .nav-item svg {
+    margin: 0;
+  }
+
+  .nav-item b {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    min-width: 18px;
+    height: 18px;
+    font-size: 0.625rem;
+    box-shadow: 0 0 0 2px var(--color-sidebar-bg);
+  }
+
+  .sidebar-account {
+    width: 100%;
     grid-template-columns: 1fr;
     justify-items: center;
+    gap: 8px;
+    padding-top: 12px;
   }
 }
 
@@ -1837,11 +2386,30 @@ a.status-badge {
   }
 
   .request-table,
+  .ticket-table,
   .commission-table,
   .commission-payroll-table,
   .payroll-table,
   .reflow-cards {
     min-width: 900px;
+  }
+
+  .ticket-pipeline-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .ticket-phase-strip {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .ticket-phase-chip {
+    flex: 0 0 136px;
+  }
+
+  .ticket-filter-search {
+    flex-basis: 100%;
   }
 
   .payroll-workspace {
@@ -1865,6 +2433,41 @@ a.status-badge {
      above. */
   .attendance-import-panel {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Ticket list tablet portrait/landscape sits inside the collapsed rail shell,
+   so the generic 900px table minimum clips the explicit open action at
+   768x1024. In the tablet band keep the native table, but drop the optional
+   progress column and preserve the required scan fields: identity, owner,
+   stage/work reason, freshness, and open. */
+@media (min-width: 721px) and (max-width: 1040px) {
+  .ticket-list-page .ticket-table {
+    min-width: 0;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 0.9fr) minmax(0, 1.4fr) minmax(0, 0.75fr) minmax(78px, 0.6fr);
+    gap: 8px;
+  }
+
+  .ticket-list-page .ticket-table > :nth-child(4) {
+    display: none;
+  }
+
+  .ticket-list-page .ticket-table.data-row > td:nth-child(3) > span {
+    overflow: visible;
+    white-space: normal;
+  }
+
+  .ticket-list-page .ticket-table.data-row > td:nth-child(3) .status-badge {
+    justify-content: flex-start;
+    max-width: 100%;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .ticket-list-page .table-head.ticket-table,
+  .ticket-list-page .data-row.ticket-table {
+    padding-right: 12px;
+    padding-left: 12px;
   }
 }
 
@@ -2006,11 +2609,247 @@ a.status-badge {
     padding: 16px 16px 32px;
   }
 
+  .ticket-list-page {
+    max-width: 100%;
+    gap: 10px;
+    overflow-x: clip;
+  }
+
+  .ticket-list-page .page-heading {
+    gap: 10px;
+  }
+
+  .ticket-list-page .page-heading h1 {
+    font-size: var(--text-2xl);
+    line-height: 1.15;
+  }
+
+  .ticket-list-page .page-heading p {
+    margin-top: 2px;
+    font-size: var(--text-sm);
+    line-height: 1.35;
+  }
+
+  .ticket-list-page .page-actions {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    width: 100%;
+    gap: 8px;
+  }
+
+  .ticket-list-page .page-actions > :only-child {
+    grid-column: 1;
+  }
+
   .page-heading,
   .profile-strip,
   .pagination {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .ticket-worklist-summary {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .ticket-scope-copy > span {
+    font-size: 10px;
+  }
+
+  .ticket-scope-copy h2 {
+    font-size: var(--text-md);
+    line-height: 1.2;
+  }
+
+  .ticket-scope-copy p {
+    display: none;
+  }
+
+  .ticket-result-count {
+    min-width: 56px;
+    text-align: right;
+  }
+
+  .ticket-result-count span {
+    font-size: 10px;
+  }
+
+  .ticket-result-count strong {
+    font-size: var(--text-xl);
+  }
+
+  .ticket-result-count small {
+    display: none;
+  }
+
+  .ticket-scope-toggle {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .ticket-scope-option {
+    flex: 1 1 0;
+    min-height: 44px;
+    padding: 0 8px;
+  }
+
+  .ticket-pipeline-summary {
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .ticket-pipeline-heading {
+    gap: 4px;
+  }
+
+  .ticket-pipeline-heading h2 {
+    font-size: var(--text-sm);
+  }
+
+  .ticket-pipeline-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .ticket-pipeline-metrics > div {
+    padding: 0;
+    border: 0;
+  }
+
+  .ticket-pipeline-metrics dt {
+    font-size: 10px;
+  }
+
+  .ticket-pipeline-metrics dd {
+    gap: 4px;
+  }
+
+  .ticket-pipeline-metrics strong {
+    font-size: var(--text-sm);
+  }
+
+  .ticket-pipeline-metrics small {
+    display: none;
+  }
+
+  .ticket-phase-strip {
+    display: flex;
+    gap: 6px;
+    margin-right: -16px;
+    margin-left: -16px;
+    padding: 0 16px 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .ticket-phase-strip::-webkit-scrollbar {
+    display: none;
+  }
+
+  .ticket-phase-chip {
+    flex: 0 0 96px;
+    min-height: 44px;
+    padding: 6px 8px;
+  }
+
+  .ticket-phase-count {
+    font-size: var(--text-md);
+  }
+
+  .ticket-phase-label {
+    white-space: normal;
+    line-height: 1.15;
+  }
+
+  .ticket-filter-bar {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .ticket-filter-bar > * {
+    width: auto;
+    min-width: 0;
+  }
+
+  .ticket-filter-search {
+    flex-basis: auto;
+    min-width: 0;
+  }
+
+  .ticket-filter-search input {
+    min-width: 0;
+  }
+
+  .ticket-filter-bar > .status-badge {
+    display: none;
+  }
+
+  .ticket-filter-bar > .button-variant-text,
+  .ticket-filter-bar > button[class*="text-primary"] {
+    grid-column: 1 / -1;
+  }
+
+  .ticket-filter-meta {
+    display: none;
+  }
+
+  .ticket-active-filters {
+    align-items: flex-start;
+    gap: 6px;
+    font-size: var(--text-xs);
+  }
+
+  .ticket-filter-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 54;
+    display: block;
+    border: 0;
+    background: rgba(15, 23, 42, 0.42);
+  }
+
+  .ticket-filter-sheet {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 55;
+    max-height: min(70dvh, 560px);
+    overflow-y: auto;
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    padding: 14px 16px max(18px, env(safe-area-inset-bottom));
+    box-shadow: var(--shadow-lg-heavy);
+  }
+
+  .ticket-filter-group {
+    align-items: stretch;
+  }
+
+  .ticket-filter-group > span {
+    width: 100%;
+  }
+
+  .ticket-filter-chip {
+    min-height: 44px;
+  }
+
+  .ticket-card-open-button {
+    width: 100%;
+  }
+
+  .ticket-card-topline {
+    align-items: flex-start;
+  }
+
+  .ticket-table {
+    min-width: 0;
   }
 
   .attendance-import-panel {
@@ -2117,8 +2956,11 @@ a.status-badge {
 
   /* Each cell on its own line. */
   .request-table.data-row > span,
+  .request-table.data-row > td,
   .payroll-table.data-row > span,
-  .reflow-cards.data-row > span {
+  .payroll-table.data-row > td,
+  .reflow-cards.data-row > span,
+  .reflow-cards.data-row > td {
     display: block;
     width: 100%;
     min-width: 0;
@@ -2127,8 +2969,11 @@ a.status-badge {
   /* Show the column name as a small muted label above the value.
      Only cells that carry a non-empty data-label get a label. */
   .request-table.data-row > span[data-label]:not([data-label=""])::before,
+  .request-table.data-row > td[data-label]:not([data-label=""])::before,
   .payroll-table.data-row > span[data-label]:not([data-label=""])::before,
-  .reflow-cards.data-row > span[data-label]:not([data-label=""])::before {
+  .payroll-table.data-row > td[data-label]:not([data-label=""])::before,
+  .reflow-cards.data-row > span[data-label]:not([data-label=""])::before,
+  .reflow-cards.data-row > td[data-label]:not([data-label=""])::before {
     content: attr(data-label);
     display: block;
     margin-bottom: 2px;
@@ -2141,8 +2986,11 @@ a.status-badge {
 
   /* Keep the action cell's buttons laid out in a row within its card line. */
   .request-table.data-row > .row-actions,
+  .request-table.data-row > td > .row-actions,
   .payroll-table.data-row > .row-actions,
-  .reflow-cards.data-row > .row-actions {
+  .payroll-table.data-row > td > .row-actions,
+  .reflow-cards.data-row > .row-actions,
+  .reflow-cards.data-row > td > .row-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
