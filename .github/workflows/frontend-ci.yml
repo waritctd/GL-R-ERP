@@ -30,8 +30,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Same threshold and scope as `npm audit --audit-level=moderate`, minus the
+      # advisories reviewed in frontend/audit-allowlist.json. Each exception carries a
+      # reachability argument and a hard reviewBy date, so unfixable-but-unreachable
+      # advisories cannot quietly become permanent. Anything new still fails here.
       - name: Audit dependencies
-        run: npm audit --audit-level=moderate
+        run: npm run audit
 
       - name: Lint (ESLint + jsx-a11y)
         run: npm run lint

@@ -7,7 +7,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: './src/test/setup.js',
-    include: ['src/**/*.test.{js,jsx}'],
+    // scripts/ carries the CI audit gate, whose own pass/fail behaviour is tested.
+    include: ['src/**/*.test.{js,jsx}', 'scripts/**/*.test.js'],
     css: false,
   },
 });
