@@ -1,0 +1,45 @@
+{
+  "$comment": [
+    "Reviewed exceptions to the `npm audit` CI gate. Consumed by scripts/audit-gate.mjs.",
+    "",
+    "This is NOT a way to make CI quiet. The gate still runs at --audit-level=moderate over",
+    "ALL dependencies (prod AND dev). Only the exact advisories listed here are subtracted,",
+    "and each one must carry a reachability argument and a reviewBy date. Anything new fails.",
+    "",
+    "Rules for adding an entry:",
+    "  1. Key on the ROOT advisory (the GHSA that npm audit reports as an object in `via`),",
+    "     not on the packages that merely depend on it. One root entry clears its whole chain.",
+    "  2. `reason` must argue REACHABILITY in THIS app, not severity in the abstract.",
+    "  3. `reviewBy` is a hard deadline. Past it, CI fails until someone re-reviews.",
+    "     Bumping the date is a decision that needs a human, not a rubber stamp.",
+    "  4. An entry only belongs here if there is genuinely no forward fix. Check first:",
+    "     a fix that exists is always preferred over an exception. See LEGACY note in",
+    "     docs/agent-handoffs/114_fix-frontend-audit-advisories.md."
+  ],
+  "allow": [
+    {
+      "id": "GHSA-mh99-v99m-4gvg",
+      "package": "brace-expansion",
+      "severity": "high",
+      "scope": "dev",
+      "url": "https://github.com/advisories/GHSA-mh99-v99m-4gvg",
+      "reason": "DoS (unbounded brace expansion -> OOM) reached only through minimatch@3, which is pulled in exclusively by the ESLint toolchain (eslint, @eslint/config-array, @eslint/eslintrc, eslint-plugin-react, eslint-plugin-jsx-a11y). Nothing in this chain ships to the browser and nothing in it ever sees untrusted input -- the linter globs our own repo paths. Verified dev-only: `npm audit --omit=dev` reports zero of these 7 entries.",
+      "noFixAvailable": "brace-expansion is patched only in 5.0.8; the 1.x/2.x/3.x maintenance lines are all still affected. Overriding to ^5 breaks minimatch@3 at runtime -- 5.0.8's CJS entry exports { expand }, not a callable, so minimatch's `require('brace-expansion')(...)` throws. Overriding minimatch to ^10 fails the same way (object export, not callable). eslint-plugin-react@7.37.5 and eslint-plugin-jsx-a11y@6.10.2 -- both latest -- still declare minimatch@^3.1.2, so no upstream fix exists to upgrade to. Every fix `npm audit fix --force` proposes is a downgrade to a 2020-era plugin.",
+      "clearWhen": "eslint-plugin-react and eslint-plugin-jsx-a11y move to minimatch >=10.0.3, or brace-expansion backports the length guard to 1.x.",
+      "reviewedOn": "2026-07-25",
+      "reviewBy": "2026-10-23"
+    },
+    {
+      "id": "GHSA-qwww-vcr4-c8h2",
+      "package": "react-router",
+      "severity": "high",
+      "scope": "prod",
+      "url": "https://github.com/advisories/GHSA-qwww-vcr4-c8h2",
+      "reason": "CSRF bypass confined to React Router's unstable RSC (React Server Components) code paths -- the advisory itself states it 'only affects your application if you are using the unstable RSC APIs'. This app is a client-side Vite SPA: src/main.jsx mounts <BrowserRouter>, all 54 router imports come from 'react-router-dom', and the tree contains zero RSC entrypoints (no unstable_RSC, routeRSCServerRequest, matchRSCServerRequest, createCallServer, or @vitejs/plugin-rsc). There is no server-rendered action pipeline for the bypass to act on.",
+      "noFixAvailable": "Patched only in react-router 8.3.0. react-router-dom has no 8.x published at all (v8 consolidated the package), and react-router-dom@7.18.1 pins react-router to exactly 7.18.1 -- so react-router cannot be bumped underneath it. 7.18.1 is the last 7.x release and is inside the affected range. Fixing this means a v7 -> v8 migration (54 import sites move from 'react-router-dom' to 'react-router', plus v8 breaking changes), tracked as a separate branch.",
+      "clearWhen": "The react-router v7 -> v8 migration lands, or the v7 line receives a backport.",
+      "reviewedOn": "2026-07-25",
+      "reviewBy": "2026-10-23"
+    }
+  ]
+}
