@@ -205,14 +205,14 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   const alreadyPaid = ['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ps);
 
   return (
-    <section className="table-panel" data-testid="deal-deposit-panel">
+    <section className="panel" data-testid="deal-deposit-panel">
       <div className="panel-header">
         <h2>มัดจำ</h2>
       </div>
 
-      <div className="flex flex-col gap-3 p-4">
+      <div className="mx-4 mb-4 divide-y divide-border-subtle border-y border-border-subtle sm:mx-5">
         {/* Step 1: นโยบายมัดจำ */}
-        <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
+        <div className="flex flex-col gap-2 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <StepNumber no={1} />
@@ -232,7 +232,7 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
         </div>
 
         {/* Step 2: ใบแจ้งยอดมัดจำ */}
-        <div className={`flex flex-col gap-2 rounded-md border border-border bg-surface p-3 ${skipsNotice ? 'opacity-60' : ''}`}>
+        <div className={`flex flex-col gap-2 py-3 ${skipsNotice ? 'opacity-60' : ''}`}>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <StepNumber no={2} />
@@ -327,7 +327,7 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
         </div>
 
         {/* Step 3: รับชำระมัดจำ */}
-        <div className={`flex flex-col gap-2 rounded-md border border-border bg-surface p-3 ${skipsNotice ? 'opacity-60' : ''}`}>
+        <div className={`flex flex-col gap-2 py-3 ${skipsNotice ? 'opacity-60' : ''}`}>
           <div className="flex items-center gap-2">
             <StepNumber no={3} />
             <strong className="text-sm">รับชำระมัดจำ</strong>

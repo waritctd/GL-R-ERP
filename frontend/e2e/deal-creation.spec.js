@@ -78,7 +78,7 @@ test('sales creates a deal through the 6-section TicketCreateModal', async ({ pa
   await expect(page.getByText(/^PR-2026-\d+$/).first()).toBeVisible();
   // A brand-new deal's legacy ticket.status is 'draft' — shown on the
   // detail page's own StatusBadge (ticketStatusLabel('draft') = 'แบบร่าง').
-  await expect(page.getByText('แบบร่าง')).toBeVisible();
+  await expect(page.getByTestId('deal-state-header').getByText('แบบร่าง', { exact: true })).toBeVisible();
 
   // Confirm the DRAFT deal also shows up back on the list (TicketListPage
   // hides the operational 'แบบร่าง' text for draft rows — see

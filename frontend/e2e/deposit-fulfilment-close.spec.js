@@ -63,9 +63,10 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
 
   await dealModal.getByTestId('ticket-create-submit').click();
   await expect(dealModal).toHaveCount(0);
-  await expect(page.getByText('แบบร่าง')).toBeVisible();
+  await expect(page.getByTestId('deal-state-header').getByText('แบบร่าง', { exact: true })).toBeVisible();
   const ticketPath = new URL(page.url()).pathname;
 
+  await page.getByRole('tab', { name: 'ราคา', exact: true }).click();
   await page.getByRole('button', { name: 'สร้างใบขอราคา' }).click();
   const pcrModal = page.getByRole('dialog', { name: 'สร้างใบขอราคา' });
   await expect(pcrModal).toBeVisible();
@@ -124,6 +125,7 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   // ── sales: issue + accept the customer quotation, confirm the order ─
   await switchRole(page, 'sales');
   await spaGoto(page, ticketPath);
+  await page.getByRole('tab', { name: 'ใบเสนอราคา' }).click();
   const quotationPanel = page.getByTestId('deal-quotation-panel');
   await expect(quotationPanel).toBeVisible();
   await quotationPanel.getByTestId('deal-quotation-create').click();
@@ -141,6 +143,7 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   await expect(page.getByText('แบบร่าง')).toHaveCount(0);
 
   // ── sales: create + issue the deposit notice ─────────────────────────
+  await page.getByRole('tab', { name: 'จัดซื้อและส่งมอบ' }).click();
   const depositPanel = page.getByTestId('deal-deposit-panel');
   await expect(depositPanel.getByTestId('deal-deposit-create-notice')).toBeVisible();
   await depositPanel.getByTestId('deal-deposit-create-notice').click();
@@ -152,6 +155,7 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   // via api.depositNotices.listByTicket and now shows the issue action.
   await expect(page.getByRole('heading', { name: 'ใบแจ้งยอดเงินรับมัดจำ' })).toBeVisible();
   await page.getByRole('button', { name: 'กลับ' }).click();
+  await page.getByRole('tab', { name: 'จัดซื้อและส่งมอบ' }).click();
   await expect(depositPanel.getByTestId('deal-deposit-issue-notice')).toBeVisible();
   await depositPanel.getByTestId('deal-deposit-issue-notice').click();
   await expect(depositPanel.getByText('ออกแล้ว')).toBeVisible();
@@ -159,6 +163,7 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   // ── account: confirm the deposit paid ────────────────────────────────
   await switchRole(page, 'account');
   await spaGoto(page, ticketPath);
+  await page.getByRole('tab', { name: 'จัดซื้อและส่งมอบ' }).click();
   const depositPanelAccount = page.getByTestId('deal-deposit-panel');
   await expect(depositPanelAccount.getByTestId('deal-deposit-confirm')).toBeVisible();
   await depositPanelAccount.getByTestId('deal-deposit-confirm').click();
@@ -167,6 +172,7 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   // ── import: IR chain -> partial delivery -> complete delivery ───────
   await switchRole(page, 'import');
   await spaGoto(page, ticketPath);
+  await page.getByRole('tab', { name: 'จัดซื้อและส่งมอบ' }).click();
   const fulfilmentPanel = page.getByTestId('deal-fulfilment-panel');
   await expect(fulfilmentPanel.getByTestId('deal-fulfilment-issue-ir')).toBeVisible();
   await fulfilmentPanel.getByTestId('deal-fulfilment-issue-ir').click();
@@ -204,6 +210,7 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
 
   // แนบใบกำกับภาษี is a hard precondition for CONFIRM_CLOSE
   // (requireClosePrerequisites' hasInvoiceAttachment check).
+  await page.getByRole('tab', { name: 'เอกสาร' }).click();
   await page.locator('#ticket-invoice-file').setInputFiles({
     name: 'invoice.pdf',
     mimeType: 'application/pdf',
@@ -218,5 +225,5 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   await spaGoto(page, ticketPath);
   await expect(page.getByTestId('ticket-detail-verify-close')).toBeVisible();
   await page.getByTestId('ticket-detail-verify-close').click();
-  await expect(page.getByText('ปิดแล้ว').first()).toBeVisible();
+  await expect(page.getByText('ปิดงานแล้ว').first()).toBeVisible();
 });
