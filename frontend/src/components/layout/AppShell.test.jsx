@@ -2,7 +2,7 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AppShell } from './AppShell.jsx';
 
 globalThis.React = React;
@@ -18,25 +18,6 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       },
     },
   };
-});
-
-const realMatchMedia = window.matchMedia;
-
-function mockTabletRail(matches) {
-  window.matchMedia = vi.fn((query) => ({
-    matches: query === '(min-width: 721px) and (max-width: 1040px)' ? matches : false,
-    media: query,
-    onchange: null,
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  }));
-}
-
-afterEach(() => {
-  window.matchMedia = realMatchMedia;
 });
 
 function renderShell(user, initialEntries = ['/']) {
@@ -84,9 +65,15 @@ describe('AppShell navigation (role-scoped views)', () => {
   });
 });
 
-describe('AppShell tablet shell', () => {
-  it('keeps icon-rail destinations accessible with native tooltip names', async () => {
-    mockTabletRail(true);
+// The 721–1040px band no longer has a persistent sidebar/rail at all (it was
+// superseded by the same off-canvas drawer used at ≤720px — see
+// styles.css's ≤1040px drawer block and AppShell's `nav-drawer:` hamburger
+// gate, both driven by the same custom variant so they can't drift apart).
+// Sidebar itself has no width-conditional JS branch — group headers,
+// tooltips, and active-route highlighting are the same regardless of
+// viewport, so these assertions hold at every width, not just "tablet".
+describe('AppShell navigation (drawer content, no persistent tablet rail)', () => {
+  it('keeps nav destinations accessible with native tooltip names', async () => {
     renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
 
     const dealsLink = await screen.findByRole('link', { name: 'รายการดีล (Deal pipeline)' });
@@ -94,8 +81,7 @@ describe('AppShell tablet shell', () => {
     expect(screen.getByRole('button', { name: 'GL&R home' }).getAttribute('title')).toBe('GL&R home');
   });
 
-  it('preserves the active route in tablet rail mode', async () => {
-    mockTabletRail(true);
+  it('preserves the active route highlight', async () => {
     renderShell(
       { role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' },
       ['/tickets'],
@@ -105,12 +91,37 @@ describe('AppShell tablet shell', () => {
     expect(dealsLink.className).toContain('active');
   });
 
-  it('keeps grouped tablet rail links available even when a group toggle is clicked', async () => {
-    mockTabletRail(true);
+  // jsdom never evaluates media queries, so nothing else in this suite can
+  // catch the hamburger's responsive gate reverting to the old ≤720px-only
+  // boundary — this pins the className directly (same technique as
+  // Layout.test.jsx's StatGrid 'max-[1040px]:grid-cols-2' assertion).
+  // Mutation-checked: reverting the className to `max-[720px]:` (undoing the
+  // whole point of this branch) turns this test red and nothing else in the
+  // suite.
+  it('gates the mobile nav trigger on the nav-drawer (≤1040px) breakpoint, not ≤720px', async () => {
+    renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
+
+    const trigger = await screen.findByRole('button', { name: 'เปิดเมนูนำทาง' });
+    expect(trigger.className).toContain('!hidden');
+    expect(trigger.className).toContain('nav-drawer:!inline-flex');
+    expect(trigger.className).toContain('nav-drawer:flex-[0_0_44px]');
+  });
+
+  // A nav group header is a real, clickable control (not hidden behind an
+  // icon-only rail that no longer exists) — a toggle collapses/re-expands
+  // its links, same behavior at every width including inside the drawer.
+  it('lets a nav group toggle collapse and re-expand its links', async () => {
     renderShell({ role: 'ceo', employeeId: 1, name: 'ผู้บริหาร ทดสอบ', email: 'ceo@glr.co.th' });
 
-    fireEvent.click(await screen.findByRole('button', { name: /งานขาย/ }));
+    const groupToggle = await screen.findByRole('button', { name: /งานขาย/ });
+    expect(screen.getByRole('link', { name: 'รายการดีล (Deal pipeline)' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'ตั้งค่าราคา (CEO price config)' })).toBeTruthy();
 
+    fireEvent.click(groupToggle);
+    expect(screen.queryByRole('link', { name: 'รายการดีล (Deal pipeline)' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'ตั้งค่าราคา (CEO price config)' })).toBeNull();
+
+    fireEvent.click(groupToggle);
     expect(screen.getByRole('link', { name: 'รายการดีล (Deal pipeline)' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'ตั้งค่าราคา (CEO price config)' })).toBeTruthy();
   });
