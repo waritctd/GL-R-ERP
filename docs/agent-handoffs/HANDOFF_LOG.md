@@ -161,3 +161,4 @@ hardware. Merged across PRs ~#265–#314.
 | 111 | test-stage-K2-phase2-flows | Playwright e2e flow specs (#295/#296) |
 | 112 | feat-attendance-mark-present-wfh | CEO/HR "mark present" for WFH / stand-up days (#308) |
 | 112 | feat-attendance-warehouse-scanner | Registered warehouse ZKTeco SC700 scanner (V89) + rollout runbook (#307) |
+| 116 | chore-remove-demo-seed-from-migrations | V91 removes the sample/demo seed V16/V23/V24/V25 wrote into db/migration; V91.1 restores it for the demo showcase |
