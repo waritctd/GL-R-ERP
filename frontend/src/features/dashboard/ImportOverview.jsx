@@ -85,7 +85,13 @@ function PulseTile({ label, count, tone, active, onClick }) {
       <span
         className={cn(
           'text-2xl font-extrabold leading-none',
-          tone === 'teal' ? 'text-accent' : tone === 'danger' ? 'text-danger' : 'text-text',
+          // WCAG AA fix (fix/ui-contrast-tokens): --color-accent (#14b8a6)
+          // as text-on-white measures 2.49:1, failing even the 3.0:1 large-
+          // text floor this 26px/800 number qualifies for. --color-accent-
+          // dark (#0f766e, already an existing token) clears 5.47:1; kept
+          // --color-accent itself unchanged since every other consumer
+          // uses it as a background/fill, not text.
+          tone === 'teal' ? 'text-accent-dark' : tone === 'danger' ? 'text-danger' : 'text-text',
         )}
       >
         {count}

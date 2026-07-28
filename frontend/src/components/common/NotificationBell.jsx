@@ -9,7 +9,12 @@ const TYPE_ICON = {
   PICKED_UP:       { name: 'users',    color: '#3b82f6' },
   PRICE_PROPOSED:  { name: 'clock',    color: '#f59e0b' },
   APPROVED:        { name: 'check',    color: '#22c55e' },
-  REJECTED:        { name: 'close',    color: '#ef4444' },
+  // #ef4444 (measures 3.76:1, fails AA) replaced with DESIGN.md's
+  // documented danger red #dc2626 (4.83:1). Kept as a literal hex rather
+  // than var(--color-danger): icon.color is string-concatenated with an
+  // alpha suffix below (`icon.color + '1a'`) to derive the tinted circle
+  // background, which only works with a literal hex, not a CSS var().
+  REJECTED:        { name: 'close',    color: '#dc2626' },
   QUOTATION_ISSUED:{ name: 'fileText', color: '#22c55e' },
   CLOSED:          { name: 'check',    color: '#94a3b8' },
   CANCELLED:       { name: 'close',    color: '#94a3b8' },
@@ -114,7 +119,10 @@ export function NotificationBell({ onNavigate }) {
                 ไม่มีการแจ้งเตือน
               </div>
             ) : items.map((item) => {
-              const icon = TYPE_ICON[item.type] ?? { name: 'bell', color: '#64748b' };
+              // Literal hex (not var(--color-text-muted)): same alpha-concat
+              // constraint as TYPE_ICON above. Kept in sync with the token's
+              // new value (fix/ui-contrast-tokens).
+              const icon = TYPE_ICON[item.type] ?? { name: 'bell', color: '#5c6b80' };
               return (
                 <button
                   key={item.id}

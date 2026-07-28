@@ -85,7 +85,13 @@
   --color-primary-hover: #6366f1;
   --color-accent: #14b8a6;
   --color-accent-dark: #0f766e;
-  --color-success: #059669;
+  /* WCAG AA fix (fix/ui-contrast-tokens): #059669 measured 3.77:1 as white
+     text on this bg (Approve button /requests) and as text-on-white
+     (commission % on /ceo-settings) — both fail the 4.5:1 text floor.
+     #047857 clears 5.48:1 in both directions. --color-success-bg (#dcfce7)
+     is always paired with --color-success-dark (#15803d, unchanged,
+     4.57:1) never with this token, so that pairing is unaffected. */
+  --color-success: #047857;
   --color-success-dark: #15803d;
   --color-success-bg: #dcfce7;
   --color-success-soft: #22c55e;
@@ -142,8 +148,29 @@
   --color-surface-subtle: #f1f5f9;
   --color-text: #0f172a;
   --color-text-secondary: #334155;
-  --color-text-muted: #64748b;
-  --color-muted: #64748b;
+  /* WCAG AA fix (fix/ui-contrast-tokens): #64748b measured 3.93-4.34:1 on
+     the workspace/surface-subtle/#efefef/sidebar-dark surfaces it's
+     actually rendered against in this app (only ~4.6:1 on pure white,
+     which is not most of its call sites) — a straight text-contrast
+     failure. #5c6b80 clears 4.5+ on every LIGHT surface it's used on
+     (white 5.43, surface-muted 5.19, surface-subtle 4.95, workspace 4.79,
+     #efefef 4.72) but still fails on the dark sidebar (3.45) — see
+     --color-text-faint below for that surface instead. --color-muted is
+     a live alias (Tailwind `text-muted`, used on /catalog and
+     /price-import) kept in lockstep so it doesn't silently regress. */
+  --color-text-muted: #5c6b80;
+  --color-muted: #5c6b80;
+  /* Retired for TEXT as of this fix: #94a3b8 measures only ~2.3-2.6:1 on
+     every light surface, a straight AA failure. Its remaining callers are
+     all non-text: decorative/redundant icons (chevrons, search, file, the
+     sidebar logout icon-button, and the `.empty-state svg` icon — the
+     `.empty-state` container itself was moved to --color-text-muted by
+     this same fix so bare text nodes inside it no longer render in Faint,
+     see styles.css) and — deliberately — muted text ON THE DARK SIDEBAR
+     (`.nav-item small`, `.sidebar-account small`, `.nav-group-header`, and
+     now `.brand small`, see styles.css), where this same value clears
+     7.30:1 against --color-sidebar-bg. Do not add a new call site of this
+     token against a light background for text. */
   --color-text-faint: #94a3b8;
   --color-faint: #94a3b8;
   --color-icon-muted: #475569;
