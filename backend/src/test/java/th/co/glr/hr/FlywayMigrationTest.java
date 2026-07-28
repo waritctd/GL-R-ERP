@@ -6,6 +6,8 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.List;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.output.MigrateResult;
@@ -49,6 +51,17 @@ class FlywayMigrationTest {
 
         assertThat(result.success).isTrue();
         assertThat(result.migrationsExecuted).isGreaterThan(0);
+
+        // V91: the sample fixtures V16/V23/V24/V25 seed must NOT survive on a plain production
+        // migrate. This is the assertion that stops a rebuilt production database from coming back
+        // up with four invented customers and a catalog of tiles GL&R does not sell. Whole-table
+        // counts, not filtered ones: nothing else writes these tables during a migrate, so anything
+        // left here is seed that escaped.
+        assertThat(countRows("SELECT count(*) FROM customers.customer")).isZero();
+        assertThat(countRows("SELECT count(*) FROM customers.contact")).isZero();
+        assertThat(countRows("SELECT count(*) FROM customers.project")).isZero();
+        assertThat(countRows("SELECT count(*) FROM sales.catalog")).isZero();
+        assertThat(countRows("SELECT count(*) FROM sales.factory_config")).isZero();
     }
 
     /**
@@ -82,6 +95,29 @@ class FlywayMigrationTest {
 
         assertThat(result.success).isTrue();
         assertThat(result.migrationsExecuted).isGreaterThan(0);
+
+        // The other half of V91: the showcase is the one environment these fixtures were written
+        // for, so db/migration-demo/V91.1 must put back everything V91 removed. If this goes red
+        // while the test above stays green, the demo restore has drifted from the core delete.
+        assertThat(countRows("SELECT count(*) FROM customers.customer")).isEqualTo(4);
+        assertThat(countRows("SELECT count(*) FROM customers.contact")).isEqualTo(5);
+        assertThat(countRows("SELECT count(*) FROM customers.project")).isEqualTo(5);
+        assertThat(countRows("SELECT count(*) FROM sales.catalog")).isEqualTo(14);
+        assertThat(countRows("SELECT count(*) FROM sales.factory_config")).isEqualTo(4);
+    }
+
+    private static int countRows(String sql) {
+        try (Connection connection = DriverManager.getConnection(
+                PostgresTestSupport.jdbcUrl(),
+                PostgresTestSupport.username(),
+                PostgresTestSupport.password());
+             Statement statement = connection.createStatement();
+             ResultSet rows = statement.executeQuery(sql)) {
+            rows.next();
+            return rows.getInt(1);
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not count rows for: " + sql, e);
+        }
     }
 
     /**
