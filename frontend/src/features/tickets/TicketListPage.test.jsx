@@ -66,6 +66,12 @@ const accountUser = {
   role: 'account',
 };
 
+const managerUser = {
+  employeeId: 2,
+  name: 'Manager ทดสอบ',
+  role: 'sales_manager',
+};
+
 // Commit 6: handleCreate now navigates to the new deal's page — MemoryRouter
 // doesn't touch window.location, so surface the current path via useLocation
 // for assertions instead.
@@ -189,12 +195,48 @@ describe('TicketListPage', () => {
     expect(api.tickets.list).toHaveBeenCalledWith({});
   });
 
-  it('opens a deal through the explicit row action, not an implicit row click', async () => {
+  // Task 2d (ui-worklist-pattern): the desktop table used to end every row in
+  // an identical `เปิด ›` button (15x the same word, no information). The row
+  // itself is now a mouse-only open target via DataTable's onRowClick,
+  // matching /finance's "the action varies by row, not a repeated button"
+  // pattern.
+  it('opens a deal by clicking the row itself, with no repeated เปิด button', async () => {
     renderTicketListPage(salesUser, ['/tickets'], <LocationDisplay />);
 
     await screen.findByText('บริษัท ทดสอบ จำกัด');
-    fireEvent.click(screen.getByRole('button', { name: 'เปิดดีล PR-2026-0501' }));
+    // What must stay gone is the literal, identical-on-every-row
+    // `<button>เปิด ›</button>` the old action column rendered.
+    const literalOpenButtons = screen.queryAllByRole('button', { name: /^เปิด/ })
+      .filter((el) => el.tagName === 'BUTTON');
+    expect(literalOpenButtons).toHaveLength(0);
 
+    fireEvent.click(screen.getByText('บริษัท ทดสอบ จำกัด').closest('tr'));
+
+    await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets/501'));
+  });
+
+  // FIX A (review-remediation): `role="button"` on the `<tr>` pruned every
+  // descendant — customer name, ผู้ดูแล, the stage cell (incl. the "เงียบ"
+  // stale badge), and the "ขั้นตอน N/14" progress readout — out of the
+  // accessibility tree, so a screen reader announced only "เปิดดีล
+  // PR-2026-0501, button" and nothing else. The row itself must no longer be
+  // focusable or carry a button role; the identity cell's own <Link> is the
+  // keyboard/assistive-tech affordance (and the visible tappable-row cue for
+  // the 721–1040px tablet band, which has no hover).
+  it('exposes the deal identity as a real link, not a focusable/labelled row (FIX A)', async () => {
+    renderTicketListPage(salesUser, ['/tickets'], <LocationDisplay />);
+
+    await screen.findByText('บริษัท ทดสอบ จำกัด');
+    const row = screen.getByText('บริษัท ทดสอบ จำกัด').closest('tr');
+    expect(row.hasAttribute('role')).toBe(false);
+    expect(row.hasAttribute('tabindex')).toBe(false);
+    expect(row.hasAttribute('aria-label')).toBe(false);
+
+    const identityLink = screen.getByRole('link', { name: 'บริษัท ทดสอบ จำกัด' });
+    expect(identityLink.closest('tr')).toBe(row);
+    expect(identityLink.getAttribute('href')).toBe('/tickets/501');
+
+    fireEvent.click(identityLink);
     await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets/501'));
   });
 
@@ -232,6 +274,30 @@ describe('TicketListPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /เฟส 4/ }));
     expect(screen.getByTestId('location-display').textContent).toContain('phase=4');
+  });
+
+  // FIX G (review-remediation): the removed `.ticket-result-count` band used
+  // to show "ตรงเงื่อนไข N จาก M รายการ" (N matched out of the whole M-deal
+  // population). DataTable's own footer only ever knew N; TicketListPage now
+  // passes the unfiltered `allDeals.length` as `unfilteredTotal` so the
+  // footer can restore the M denominator.
+  it('shows how many deals were filtered out of the whole role-scoped population', async () => {
+    renderTicketListPage(salesUser, ['/tickets?q=เกินกำหนด&phase=5']);
+
+    expect(await screen.findByText('บริษัท เกินกำหนด จำกัด')).not.toBeNull();
+    // FIX F1: DataTable now renders this same summary twice — once in the
+    // always-mounted sr-only aria-live region, once in the aria-hidden
+    // visible footer — so this asserts on the count of matches rather than a
+    // single unique node.
+    expect(screen.getAllByText(/แสดง 1–1 จาก 1 รายการ \(กรองจาก 5\)/)).toHaveLength(2);
+  });
+
+  it('omits the filtered-out clause when nothing narrows the list', async () => {
+    renderTicketListPage(salesUser);
+
+    await screen.findByText('บริษัท ทดสอบ จำกัด');
+    expect(screen.getAllByText(/แสดง 1–5 จาก 5 รายการ/)).toHaveLength(2);
+    expect(screen.queryByText(/กรองจาก/)).toBeNull();
   });
 
   it('preserves import/account worklist scope and hides create when not permitted', async () => {
@@ -338,13 +404,31 @@ describe('TicketListPage', () => {
 
   it('distinguishes filtered-empty copy from a truly empty ticket list', async () => {
     const { unmount } = renderTicketListPage(salesUser, ['/tickets?q=ไม่พบแน่นอน']);
+    // FIX F10: EmptyState's visible `<strong>` title is `aria-hidden` when
+    // `titleAnnouncedElsewhere` is set (which DataTable always passes), so it
+    // stays visible for sighted users but is pruned from the accessibility
+    // tree — it is never itself the thing a screen reader hears.
     expect(await screen.findByText('ไม่พบดีลที่ตรงกับตัวกรอง')).toBeTruthy();
+    // FIX F7: the whole role-scoped population (5 deals) all got filtered out
+    // by the search, so the live-region announcement — unlike the visible
+    // EmptyState heading above — carries the "(กรองจาก 5)" denominator too.
+    // This is the exact case the review flagged as mattering most ("you
+    // filtered N down to nothing"), and it is also what makes the visible
+    // heading and the live-region text two DIFFERENT strings now, not a
+    // literal duplicate of each other.
+    expect(document.querySelector('[aria-live="polite"]').textContent).toBe('ไม่พบดีลที่ตรงกับตัวกรอง (กรองจาก 5)');
     expect(screen.getByText('ไม่พบดีลที่ตรงกับคำค้นหาและตัวกรองที่เลือก')).toBeTruthy();
     unmount();
 
     api.tickets.list.mockResolvedValueOnce({ tickets: [] });
     renderTicketListPage(salesUser);
-    expect(await screen.findByText('ไม่มีดีล')).toBeTruthy();
+    // A truly empty list has no unfiltered population to denominate against
+    // (allDeals.length is 0, equal to the 0 matched), so no clause is
+    // appended and the visible heading and the live-region text are
+    // identical strings here — this is what actually distinguishes "filtered
+    // down to nothing" from "there was nothing to begin with".
+    expect((await screen.findAllByText('ไม่มีดีล')).length).toBe(2);
+    expect(document.querySelector('[aria-live="polite"]').textContent).toBe('ไม่มีดีล');
     expect(screen.getByText('ยังไม่มีดีลในเงื่อนไขที่เลือก')).toBeTruthy();
   });
 
@@ -611,5 +695,224 @@ describe('TicketListPage', () => {
       expect(screen.queryByRole('dialog')).toBeNull();
       await waitFor(() => expect(document.activeElement).toBe(toggle));
     });
+  });
+
+  // FIX 3/4/5 (review-remediation): the progress column used to show
+  // "N% · ขั้นตอน X/14" (a percentage restating the fraction next to it),
+  // and a manager-only win% badge lived in that same column — both gone
+  // now (owner decision: win% belongs to the forecast in TeamPipelineSummary,
+  // not a second progress number). The stale "เงียบ" flag moved to the stage
+  // column so it survives the 721–1040px tablet band, which hides the
+  // progress column outright.
+  describe('progress column and stage-column stale flag', () => {
+    function stageCellOf(container) {
+      return container.querySelector('td[data-label="ขั้นตอน / เหตุผลงาน"]');
+    }
+
+    function progressCellOf(container) {
+      return container.querySelector('td[data-label="ความคืบหน้า"]');
+    }
+
+    it('shows only the stage fraction for a live ACTIVE deal, never a percentage', async () => {
+      const { container } = renderTicketListPage(salesUser);
+      await screen.findByText('บริษัท ทดสอบ จำกัด');
+
+      // Deal 501 is QUOTE_DESIGN_SIDE, stage no. 4 of 14. Scoped to its own
+      // row — the table has several rows, all sharing the same
+      // `data-label`, so a container-wide query would grab whichever row
+      // happens to sort first instead.
+      const rows = Array.from(container.querySelectorAll('tr.data-row'));
+      const targetRow = rows.find((row) => row.textContent.includes('บริษัท ทดสอบ จำกัด'));
+      const progressCell = within(targetRow).getByText(/ขั้นตอน \d+\/14/).closest('td');
+      expect(progressCell.textContent).toContain('ขั้นตอน 4/14');
+      expect(progressCell.textContent).not.toMatch(/%/);
+    });
+
+    it('prefixes the lifecycle onto the fraction for a paused (ON_HOLD) deal instead of asserting bare live progress', async () => {
+      const { container } = renderTicketListPage(salesUser);
+      await screen.findByText('บริษัท พักไว้ จำกัด');
+
+      const rows = Array.from(container.querySelectorAll('tr.data-row'));
+      const pausedRow = rows.find((row) => row.textContent.includes('บริษัท พักไว้ จำกัด'));
+      // Deal 504 is NEGOTIATION, stage no. 8 of 14, lifecycle ON_HOLD.
+      const progressCell = within(pausedRow).getByText(/ขั้นตอน 8\/14/).closest('td');
+      expect(progressCell.textContent).toContain('พักไว้ชั่วคราว');
+      expect(progressCell.textContent).not.toMatch(/%/);
+    });
+
+    // FIX F (review-remediation): the lifecycle prefix used to be decided
+    // AFTER the "no resolvable stage" early return, so a CANCELLED/COMPLETED
+    // deal with a null/unrecognized salesStage displayed nothing anywhere
+    // saying it was cancelled (DealStageCell only badges ON_HOLD/DORMANT,
+    // never CANCELLED/COMPLETED).
+    it('reports the lifecycle even when the deal has no resolvable stage (CANCELLED, null salesStage)', async () => {
+      api.tickets.list.mockResolvedValueOnce({
+        tickets: [
+          {
+            id: 602,
+            code: 'PR-2026-0602',
+            title: 'โครงการยกเลิกไม่ระบุขั้นตอน',
+            customerName: 'บริษัท ยกเลิกไม่ระบุขั้นตอน จำกัด',
+            status: 'draft',
+            createdByName: 'สมชาย ใจดี',
+            createdAt: '2026-07-06T09:00:00.000Z',
+            salesStage: null,
+            lifecycle: 'CANCELLED',
+            lostReason: null,
+            overdue: false,
+            fulfillmentStatus: null,
+            stageUpdatedAt: '2026-07-06T09:00:00.000Z',
+          },
+        ],
+      });
+
+      const { container } = renderTicketListPage(salesUser);
+      await screen.findByText('บริษัท ยกเลิกไม่ระบุขั้นตอน จำกัด');
+
+      const rows = Array.from(container.querySelectorAll('tr.data-row'));
+      const targetRow = rows.find((row) => row.textContent.includes('บริษัท ยกเลิกไม่ระบุขั้นตอน จำกัด'));
+      const progressCell = progressCellOf(targetRow);
+      expect(progressCell.textContent).toContain('ยกเลิก');
+      expect(progressCell.textContent).not.toMatch(/ขั้นตอน \d+\/14/);
+    });
+
+    // FIX F6 (review-remediation): showLifecycleBadge used to badge only
+    // ON_HOLD/DORMANT, so a CANCELLED or COMPLETED deal with a resolvable
+    // salesStage looked indistinguishable from a live ACTIVE one in this
+    // column specifically — which matters because the 721–1040px tablet
+    // band hides the progress column outright, so the stage column is the
+    // only place left that ever mentions CANCELLED/COMPLETED at that width.
+    // Deliberately give both deals a resolvable salesStage (unlike the
+    // "no resolvable stage" case above) so this exercises the stage column's
+    // own badge, not the progress column's null-stage fallback.
+    it('badges a CANCELLED deal with a resolvable stage in the stage column specifically, not just the progress column', async () => {
+      api.tickets.list.mockResolvedValueOnce({
+        tickets: [
+          {
+            id: 610,
+            code: 'PR-2026-0610',
+            title: 'โครงการยกเลิกมีขั้นตอน',
+            customerName: 'บริษัท ยกเลิกมีขั้นตอน จำกัด',
+            status: 'in_review',
+            createdByName: 'สมชาย ใจดี',
+            createdAt: '2026-07-07T09:00:00.000Z',
+            salesStage: 'NEGOTIATION',
+            lifecycle: 'CANCELLED',
+            lostReason: null,
+            overdue: false,
+            fulfillmentStatus: null,
+            stageUpdatedAt: '2026-07-07T09:00:00.000Z',
+          },
+        ],
+      });
+
+      const { container } = renderTicketListPage(salesUser);
+      await screen.findByText('บริษัท ยกเลิกมีขั้นตอน จำกัด');
+
+      const stageCell = stageCellOf(container);
+      expect(stageCell.textContent).toContain('ยกเลิก');
+    });
+
+    it('badges a COMPLETED deal with a resolvable stage in the stage column specifically', async () => {
+      api.tickets.list.mockResolvedValueOnce({
+        tickets: [
+          {
+            id: 611,
+            code: 'PR-2026-0611',
+            title: 'โครงการเสร็จสมบูรณ์มีขั้นตอน',
+            customerName: 'บริษัท เสร็จสมบูรณ์มีขั้นตอน จำกัด',
+            status: 'in_review',
+            createdByName: 'สมชาย ใจดี',
+            createdAt: '2026-07-08T09:00:00.000Z',
+            salesStage: 'DELIVERY_SCHEDULING',
+            lifecycle: 'COMPLETED',
+            lostReason: null,
+            overdue: false,
+            fulfillmentStatus: null,
+            stageUpdatedAt: '2026-07-08T09:00:00.000Z',
+          },
+        ],
+      });
+
+      const { container } = renderTicketListPage(salesUser);
+      await screen.findByText('บริษัท เสร็จสมบูรณ์มีขั้นตอน จำกัด');
+
+      const stageCell = stageCellOf(container);
+      expect(stageCell.textContent).toContain('เสร็จสมบูรณ์');
+    });
+
+    it('drops the win% badge but keeps the เงียบ stale badge in the stage column, for a manager view', async () => {
+      api.tickets.list.mockResolvedValueOnce({
+        tickets: [
+          {
+            id: 601,
+            code: 'PR-2026-0601',
+            title: 'โครงการเงียบ (manager)',
+            customerName: 'บริษัท ผู้จัดการ จำกัด',
+            status: 'in_review',
+            createdByName: 'สมชาย ใจดี',
+            createdAt: '2026-07-06T09:00:00.000Z',
+            salesStage: 'NEGOTIATION',
+            lifecycle: 'ACTIVE',
+            lostReason: null,
+            overdue: false,
+            fulfillmentStatus: null,
+            stageUpdatedAt: '2026-07-06T09:00:00.000Z',
+            stale: true,
+            winProbabilityOverride: null,
+          },
+        ],
+      });
+
+      const { container } = renderTicketListPage(managerUser);
+      await screen.findByText('บริษัท ผู้จัดการ จำกัด');
+
+      const stageCell = stageCellOf(container);
+      const progressCell = progressCellOf(container);
+      expect(stageCell.textContent).toContain('เงียบ');
+      expect(progressCell.textContent).not.toContain('เงียบ');
+      // The win% badge that used to live in the progress column is gone
+      // outright (owner decision) — not moved, not duplicated elsewhere.
+      expect(progressCell.textContent).not.toMatch(/%/);
+      expect(stageCell.textContent).not.toMatch(/%/);
+    });
+  });
+
+  // FIX 5: the "all phases" chip's label used to be `ดีลที่ดำเนินอยู่`
+  // (`activePipelineCount`, ACTIVE-only) over an action that actually lists
+  // every deal including CLOSED_LOST/CANCELLED/COMPLETED — the label
+  // matched its own count but misdescribed the action. Renamed to
+  // `ทั้งหมด` with no count at all (owner decision): the single statement of
+  // the filtered total is DataTable's own footer.
+  it('labels the all-phases chip "ทั้งหมด" with no count', async () => {
+    renderTicketListPage(salesUser);
+    await screen.findByText('บริษัท ทดสอบ จำกัด');
+
+    const phaseGroup = within(screen.getByLabelText('ตัวกรองเฟสของดีล'));
+    const allChip = phaseGroup.getByRole('button', { name: 'ทั้งหมด' });
+    expect(allChip.textContent.trim()).toBe('ทั้งหมด');
+  });
+
+  // Previously this only asserted the phase-chip group existed
+  // (`querySelector('[aria-label="..."]')`), which stays truthy even if every
+  // phase chip's count were deleted — it proves the group renders, not that
+  // per-phase counts do. Assert the actual numbers instead. phaseCounts is
+  // active-only (see TicketListPage.jsx): of the 5 seeded deals, only 501
+  // (QUOTE_DESIGN_SIDE, phase 2, ACTIVE), 506 (LEAD_APPROACH, phase 1,
+  // ACTIVE) and 503 (DELIVERY_SCHEDULING, phase 5, ACTIVE) count; 504/505
+  // (NEGOTIATION, phase 3) are ON_HOLD/DORMANT and are excluded, so phase 3's
+  // honest count is 0.
+  it('gives each per-phase chip its own honest (active-only) count', async () => {
+    renderTicketListPage(salesUser);
+    await screen.findByText('บริษัท ทดสอบ จำกัด');
+
+    const phaseGroup = within(screen.getByLabelText('ตัวกรองเฟสของดีล'));
+    const phase1Chip = phaseGroup.getByRole('button', { name: /เฟส 1 ·/ });
+    const phase3Chip = phaseGroup.getByRole('button', { name: /เฟส 3 ·/ });
+    const phase5Chip = phaseGroup.getByRole('button', { name: /เฟส 5 ·/ });
+
+    expect(within(phase1Chip).getByText('1')).toBeTruthy();
+    expect(within(phase3Chip).getByText('0')).toBeTruthy();
+    expect(within(phase5Chip).getByText('1')).toBeTruthy();
   });
 });
