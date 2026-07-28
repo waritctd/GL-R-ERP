@@ -207,7 +207,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
           <Button
             ref={menuButtonRef}
             variant="icon"
-            className="!hidden max-[720px]:!inline-flex max-[720px]:flex-[0_0_44px]"
+            className="!hidden nav-drawer:!inline-flex nav-drawer:flex-[0_0_44px]"
             type="button"
             onClick={() => setIsDrawerOpen((open) => !open)}
             aria-label="เปิดเมนูนำทาง"
