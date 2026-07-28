@@ -54,6 +54,47 @@ function textFromRendered(value) {
   return String(value);
 }
 
+// Elements a row-level click handler must defer to instead of hijacking — a
+// button, link (e.g. the identity-cell `<Link>` a caller renders per FIX A),
+// or form control nested in a cell should fire its own handler/navigation,
+// not the row's `onRowClick`. FIX F8 (review-remediation): also covers
+// `label`/`summary`/`option`, the ARIA roles a screen-reader user could land
+// on with a click (`link`/`checkbox`/`menuitem`), and an explicitly
+// focusable `[tabindex]` element — but NOT `tabindex="-1"` specifically:
+// that value means "programmatically focusable, not in the tab order" (e.g.
+// a wrapper a caller focuses imperatively after some action), not "this is a
+// real interactive control the row must defer to". Treating it as
+// interactive would silently kill row activation for any row that happens to
+// contain one, so it is carved out of the selector.
+const INTERACTIVE_SELECTOR = [
+  'button',
+  'a[href]',
+  'input',
+  'textarea',
+  'select',
+  'label',
+  'summary',
+  'option',
+  '[role="button"]',
+  '[role="link"]',
+  '[role="checkbox"]',
+  '[role="menuitem"]',
+  '[contenteditable="true"]',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ');
+
+function isInteractiveTarget(target, boundary) {
+  if (typeof target?.closest !== 'function') return false;
+  const match = target.closest(INTERACTIVE_SELECTOR);
+  if (!match) return false;
+  // FIX F8: `closest()` walks all the way up to the document root, not just
+  // to `boundary` (the row) — the old `match !== boundary` check only ever
+  // excluded the row matching itself (which it never does), so a match found
+  // *outside* the row (e.g. some ancestor toolbar button) would incorrectly
+  // suppress row activation. Require the match to actually be inside the row.
+  return match !== boundary && typeof boundary?.contains === 'function' && boundary.contains(match);
+}
+
 function csvEscape(value) {
   const stringValue = value == null ? '' : String(value);
   if (!/[",\r\n]/.test(stringValue)) return stringValue;
@@ -73,6 +114,14 @@ function buildCsv(columns, rows) {
   ];
   return lines.join('\r\n');
 }
+
+// FIX F9: this used to be two different strings — 'ไม่มีข้อมูลที่จะแสดง' for
+// the sr-only zero-row announcement and 'ไม่พบข้อมูล' for the EmptyState
+// fallback title — despite meaning the same thing and being unreachable in
+// practice today (every current caller passes its own `emptyState.title`).
+// One shared constant so a future caller that omits `emptyState.title` gets
+// the same wording in both places instead of a silent mismatch.
+const DEFAULT_EMPTY_MESSAGE = 'ไม่พบข้อมูล';
 
 function downloadCsv(csv, filename = 'data-table-export.csv') {
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
@@ -112,6 +161,14 @@ export function DataTable({
   retryLabel = 'ลองอีกครั้ง',
   onRetry,
   emptyState,
+  // FIX G: the pre-DataTable `.ticket-result-count` band showed "ตรงเงื่อนไข
+  // N จาก M รายการ" (N matched out of M total), so a filter's own effect
+  // (how much it hid) stayed visible. This footer's own N (`sortedRows.length`
+  // below) already states "matched", but folding that band into this footer
+  // dropped M — the caller can pass its unfiltered population size here to
+  // restore it as an appended "(กรองจาก M)" clause. Omit it, or pass a value
+  // equal to the matched count, to render the footer exactly as before.
+  unfilteredTotal,
   initialSort,
   sort,
   onSortChange,
@@ -123,6 +180,24 @@ export function DataTable({
   // Optional per-row detail panel. Return an element to expand that row, null to leave it
   // collapsed. Callers should expose their own explicit expand/open control.
   renderExpanded,
+  // Optional row-level navigation/activation. Purely additive and default-off:
+  // every existing caller that omits this prop renders and behaves exactly as
+  // before. When provided, clicking the desktop `<tr>` (outside of a nested
+  // interactive control) fires `onRowClick` as a *mouse-only convenience* —
+  // it is not a keyboard or assistive-tech affordance. `role="button"` on a
+  // `<tr>` is a "Children Presentational: True" role in ARIA 1.2: it prunes
+  // every descendant (customer name, badges, the stage cell, etc.) from the
+  // accessibility tree and replaces name computation with a single
+  // `aria-label`, so an earlier version of this component that gave the row
+  // that role/tabIndex/keydown made every other cell unreachable to a screen
+  // reader (FIX A). The caller is expected to render a real `<Link>` in its
+  // identity column instead — that is the keyboard and assistive-tech
+  // activation target, and it also gives touch/tablet users (721–1040px,
+  // where there is no hover) a visible affordance that the row opens
+  // something. Scoped to the desktop table only: the mobile card list
+  // (`mobileCard`) already expects callers to give each card its own
+  // explicit open affordance (see e.g. TicketListPage's `DealOpenButton`).
+  onRowClick,
 }) {
   // Below 720px a dense grid crushes every column into an unreadable stub
   // (ids as "PR-…", clipped badges). When a page supplies `mobileCard`, render
@@ -215,10 +290,50 @@ export function DataTable({
   const safePage = Math.min(pagination.pageIndex + 1, totalPages);
   const from = sortedRows.length === 0 ? 0 : (safePage - 1) * pageSize + 1;
   const to = Math.min(safePage * pageSize, sortedRows.length);
+  const hasError = Boolean(error);
+  const isZeroRows = !loading && !hasError && sortedRows.length === 0;
+  // FIX B: this used to hardcode "ไม่พบข้อมูลที่ตรงกับตัวกรองที่เลือก" (no
+  // results matching the selected filter) for every consumer, even pages
+  // with no filters at all — e.g. HR opening `/payroll` for a month with no
+  // run yet. Prefer the caller's own `emptyState.title` (already authored
+  // per page for the EmptyState illustration) and fall back to a neutral
+  // message that doesn't assert a filter exists. FIX F9: this is now the
+  // single default "no data" string, shared with the EmptyState fallbacks
+  // below, instead of a second, differently-worded default living there.
+  const zeroRowsMessage = emptyState?.title ?? DEFAULT_EMPTY_MESSAGE;
+  // FIX G: only append the filtered-out denominator when the caller passed
+  // one and it actually differs from the matched count — a caller that never
+  // filters (or omits the prop) sees the summary unchanged. Hoisted above
+  // both the live region and the visible footer so both stay in sync. FIX
+  // F7: previously only the visible footer carried this clause, so it
+  // disappeared in exactly the case that matters most — a filter matching
+  // zero rows, i.e. "you filtered 15 down to nothing".
+  const filteredNote = unfilteredTotal != null && unfilteredTotal !== sortedRows.length
+    ? ` (กรองจาก ${unfilteredTotal})`
+    : '';
+  const paginationSummary = `แสดง ${from}–${to} จาก ${sortedRows.length} รายการ${filteredNote}`;
+  // FIX F1 (review-remediation): a live region that mounts or unmounts in the
+  // very same render as its own content change is unreliable per the
+  // WAI-ARIA Authoring Practices — a screen reader needs the node present in
+  // the tree *before* the mutation to reliably pick it up. The previous
+  // split design — a conditionally-mounted sr-only `<div>` that only existed
+  // at zero rows, plus `aria-live` on the visible footer `<span>` that only
+  // existed at non-zero rows — meant the two most important transitions
+  // (15 rows -> 0, and 0 -> 15) each unmounted the very node that was
+  // supposed to announce the change, so neither ever fired. Keeping exactly
+  // one always-mounted region sidesteps that: the node persists across every
+  // transition and only its text content changes, which is what `aria-live`
+  // is built to pick up. The visible footer span is no longer a live region
+  // itself (see renderPagination) — it is now purely decorative,
+  // `aria-hidden`, text, so nothing is announced twice in a linear read.
+  const liveRegionText = (loading || hasError)
+    ? ''
+    : isZeroRows
+      ? `${zeroRowsMessage}${filteredNote}`
+      : paginationSummary;
   const sortKey = sorting[0]?.id ?? null;
   const sortDir = sorting[0]?.desc ? 'desc' : 'asc';
   const canExport = exportable || typeof onExportCsv === 'function';
-  const hasError = Boolean(error);
 
   useEffect(() => {
     setPagination((current) => ({ ...current, pageIndex: 0, pageSize }));
@@ -240,6 +355,52 @@ export function DataTable({
       return [{ id: key, desc: false }];
     });
     setPagination((current) => ({ ...current, pageIndex: 0 }));
+  }
+
+  // Mouse-only activation (FIX A/D): there is no row-level keydown handler
+  // any more — the row is not a focusable target, so there is nothing for a
+  // key-repeat guard to protect. Keyboard activation lives on the caller's
+  // own identity `<Link>` instead, which gets native Enter activation (and
+  // no auto-repeat spam, since a browser only fires `click` once per Enter
+  // press on a link) for free.
+  function handleRowActivateClick(event, row) {
+    // FIX F5: `cursor-pointer` advertises the whole row as clickable, so a
+    // cmd/ctrl/shift/alt-click anywhere in the row (not just on the identity
+    // `<Link>`, which already handles this correctly on its own) must bail
+    // out of the row's own same-tab `onRowClick` navigation instead of
+    // hijacking it. This does NOT give the rest of the row the same "open in
+    // a new tab/window" behaviour a real `<a>` would — a modified click that
+    // lands outside the identity `<Link>` simply does nothing at all once it
+    // bails here, which is the correct behaviour (nothing else in the row is
+    // a navigable target) but is not "the same" as the link's own handling.
+    // `event.button !== 0` alongside these modifier checks is dead code in a
+    // `click` handler specifically: a real browser never dispatches `click`
+    // for a middle/right button press (those fire `auxclick`/`contextmenu`
+    // instead), so this branch cannot be reached via genuine user input. It
+    // is left in place only as defense-in-depth against a non-primary click
+    // arriving here some other way (e.g. a synthetic event from a testing
+    // tool or an unusual input device); DataTable.test.jsx's "non-primary
+    // button" case exercises exactly that synthetic scenario, not anything a
+    // browser produces.
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (isInteractiveTarget(event.target, event.currentTarget)) return;
+    // FIX F3: dragging a text selection across a plain-text cell (e.g. the
+    // deal code sub-line) ends in a `click` on mouseup with a non-collapsed
+    // selection still present — letting that fall through to `onRowClick`
+    // would discard the selection and navigate the row away, so there would
+    // be no way to copy any text out of the table. That drag-select case is
+    // what this guard actually protects. Double-clicking to select a word is
+    // NOT protected by it, despite an earlier version of this comment
+    // claiming otherwise: the first click of a double-click fires on mouseup
+    // with the selection still collapsed (word selection only happens after,
+    // on `dblclick`), so it sails through this check and navigates before
+    // the word is ever selected. Bail whenever the click leaves behind a
+    // live (non-collapsed) selection — the case that matters is drag-select.
+    const selectionText = typeof window !== 'undefined' && typeof window.getSelection === 'function'
+      ? window.getSelection()?.toString()
+      : '';
+    if (selectionText) return;
+    onRowClick(row);
   }
 
   function handleExportCsv() {
@@ -275,7 +436,14 @@ export function DataTable({
     if (loading || sortedRows.length === 0) return null;
     return (
       <footer className="pagination">
-        <span style={{ fontSize: 13 }}>แสดง {from}–{to} จาก {sortedRows.length} รายการ</span>
+        {/* FIX F1: no `aria-live` here any more — the single, always-mounted
+            region above the toolbar (see `liveRegionText`) is now the sole
+            spoken status for the table, so this text would otherwise be
+            announced twice in a linear read. `aria-hidden` keeps it a purely
+            visual restatement for sighted users. */}
+        <span aria-hidden="true" style={{ fontSize: 13 }}>
+          {paginationSummary}
+        </span>
         <div>
           <Button
             type="button"
@@ -332,8 +500,9 @@ export function DataTable({
           hasError ? null : (
             <EmptyState
               icon={emptyState?.icon}
-              title={emptyState?.title ?? 'ไม่พบข้อมูล'}
+              title={emptyState?.title ?? DEFAULT_EMPTY_MESSAGE}
               description={emptyState?.description}
+              titleAnnouncedElsewhere
             />
           )
         ) : (
@@ -416,8 +585,20 @@ export function DataTable({
                   return (
                     <Fragment key={key}>
                       <tr
-                        className={`${gridClassName} data-row${extraClassName}`}
+                        className={cn(
+                          `${gridClassName} data-row${extraClassName}`,
+                          // `hover:bg-surface-hover` (#fbfcff on a white surface) reads as
+                          // essentially no hover at all — swap to the stronger, already-defined
+                          // `surface-subtle` tone so the affordance is actually visible.
+                          //
+                          // Mouse-only convenience (FIX A): no role/tabIndex/keydown here —
+                          // see the `onRowClick` doc comment above for why. Keyboard
+                          // activation and the row's accessible name now come from the
+                          // caller's own identity-column `<Link>`.
+                          onRowClick && 'cursor-pointer transition-colors hover:bg-surface-subtle',
+                        )}
                         style={style}
+                        onClick={onRowClick ? (event) => handleRowActivateClick(event, row) : undefined}
                       >
                         {columns.map((column) => (
                           <td
@@ -448,8 +629,9 @@ export function DataTable({
           hasError ? null : (
             <EmptyState
               icon={emptyState?.icon}
-              title={emptyState?.title ?? 'ไม่พบข้อมูล'}
+              title={emptyState?.title ?? DEFAULT_EMPTY_MESSAGE}
               description={emptyState?.description}
+              titleAnnouncedElsewhere
             />
           )
         )}
@@ -460,6 +642,11 @@ export function DataTable({
 
   return (
     <div className="data-table">
+      {/* FIX F1: exactly one always-mounted live region for the whole table
+          — see `liveRegionText` above for why it must never conditionally
+          mount/unmount, and why the visible footer span is `aria-hidden`
+          instead of carrying its own `aria-live`. */}
+      <div aria-live="polite" className="sr-only">{liveRegionText}</div>
       {(searchable || toolbarExtra || canExport) ? (
         <div className="data-table-toolbar">
           {searchable ? (

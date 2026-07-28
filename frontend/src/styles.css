@@ -961,7 +961,28 @@ textarea:focus {
 .table-head > *,
 .data-row > * {
   min-width: 0;
+  /* FIX F4 (review-remediation): `overflow: hidden` clips at the exact
+     border edge, so a focus ring painted on a descendant `<Link>` (the
+     identity column's keyboard/AT activation target, see DataTable.jsx's
+     onRowClick doc comment) gets cut off on whichever sides this ancestor's
+     box ends at. `overflow: clip` behaves identically for layout/truncation
+     purposes (text-overflow: ellipsis still applies — it only requires a
+     non-`visible` overflow value) but `overflow-clip-margin` lets painting
+     — an outline, in this case — escape the clip rect by a few px first.
+     These MUST be two separate declarations, fallback first: `overflow`
+     does not support `@supports`-style graceful degradation on an unknown
+     keyword — a UA that doesn't recognise `clip` drops that whole
+     declaration, and without a preceding `overflow: hidden` the property
+     falls all the way back to its initial value, `visible`. That would
+     silently disable `text-overflow: ellipsis` (it requires a non-`visible`
+     overflow) on every `.data-row` in the app, not just this one. Support
+     note: `overflow-clip-margin` has NO WebKit implementation (not Safari,
+     not iOS Safari, any version, as of this writing) — on those browsers
+     the focus ring on `.data-row` links stays clipped at the row edge.
+     That is a known, accepted limitation, not something this fixes. */
   overflow: hidden;
+  overflow: clip;
+  overflow-clip-margin: 4px;
 }
 
 .data-row > span,
@@ -982,7 +1003,20 @@ textarea:focus {
 .data-row > td > small,
 .data-row > td > span {
   display: block;
+  /* FIX F4 (review-remediation): same reasoning as `.data-row > *` above —
+     this is the direct ancestor wrapping the identity-column `<Link>`
+     (TicketListPage's `customer` column), so its `overflow: hidden` clipped
+     that link's focus ring on the left/right/top. Fallback declaration
+     first, same as above: an unknown `clip` keyword drops the whole
+     declaration in older UAs, leaving no `overflow` at all (initial value
+     `visible`) rather than the intended clip — which would also break
+     `text-overflow: ellipsis` here since it needs a non-`visible` overflow.
+     `overflow-clip-margin` has no WebKit support at all, so on Safari/iOS
+     the focus ring on this link remains clipped at the box edge — accepted,
+     not fixed. */
   overflow: hidden;
+  overflow: clip;
+  overflow-clip-margin: 4px;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -1102,65 +1136,23 @@ textarea:focus {
   grid-template-columns: minmax(0,2.6fr) minmax(0,1.3fr) minmax(0,1.3fr) minmax(0,1fr);
 }
 
-/* /tickets worklist only (TicketListPage) — 6 columns including the explicit
-   open action. Separate from `.ticket-table` so widening the worklist can
-   never reflow the 4-cell consumers of the shared class. */
+/* /tickets worklist only (TicketListPage) — 5 columns; there is no repeated
+   open button or trailing action column, the row itself is the open target
+   (DataTable's onRowClick). A trailing next-action column
+   (dealWorklistActions.js) briefly lived here but was removed: /tickets is
+   gated on canViewDealPipeline (sales/sales_manager/ceo only), and that
+   resolver only ever returned a verb for account/import, who can never
+   reach this page — so it rendered a header plus an empty cell on every
+   row. Separate from `.ticket-table` so widening the worklist can never
+   reflow the 4-cell consumers of the shared class. */
 .ticket-worklist-table {
-  grid-template-columns: minmax(0,2.3fr) minmax(0,1fr) minmax(0,1.5fr) minmax(0,1fr) minmax(0,0.85fr) minmax(84px,0.55fr);
+  grid-template-columns: minmax(0,2.2fr) minmax(0,1fr) minmax(0,1.4fr) minmax(0,1fr) minmax(0,0.8fr);
 }
 
 .procurement-table {
   grid-template-columns: minmax(0,1.6fr) minmax(0,1.3fr) minmax(0,0.8fr) minmax(0,1fr) minmax(0,0.9fr) minmax(78px,0.55fr);
 }
 
-.ticket-worklist-summary {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 14px;
-  align-items: center;
-  padding: 14px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-}
-
-.ticket-scope-copy {
-  min-width: 0;
-}
-
-.ticket-scope-copy > span,
-.ticket-result-count > span,
-.ticket-active-filters > span,
-.ticket-filter-group > span {
-  display: block;
-  color: var(--color-text-muted);
-  font-size: var(--text-2xs);
-  font-weight: 800;
-}
-
-.ticket-scope-copy h2 {
-  margin: 2px 0 0;
-  font-size: var(--text-lg);
-  line-height: 1.25;
-}
-
-.ticket-scope-copy p,
-.ticket-result-count small {
-  margin: 2px 0 0;
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-}
-
-.ticket-scope-toggle {
-  display: inline-flex;
-  gap: 4px;
-  padding: 4px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-muted);
-}
-
-.ticket-scope-option,
 .ticket-filter-chip {
   display: inline-flex;
   align-items: center;
@@ -1177,24 +1169,18 @@ textarea:focus {
   white-space: nowrap;
 }
 
-.ticket-scope-option.is-active,
 .ticket-filter-chip.is-active {
   border-color: var(--color-primary);
   color: var(--color-primary);
   background: var(--color-info-bg-alt);
 }
 
-.ticket-result-count {
-  min-width: 96px;
-  text-align: right;
-}
-
-.ticket-result-count strong {
+.ticket-active-filters > span,
+.ticket-filter-group > span {
   display: block;
-  color: var(--color-text);
-  font-size: var(--text-2xl);
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 800;
 }
 
 .ticket-pipeline-summary {
@@ -1258,82 +1244,8 @@ textarea:focus {
   font-size: var(--text-2xs);
 }
 
-.ticket-phase-strip {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.ticket-phase-chip {
-  display: grid;
-  gap: 4px;
-  align-content: center;
-  min-height: 58px;
-  min-width: 0;
-  border: 1.5px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  padding: 8px 10px;
-  text-align: left;
-}
-
-.ticket-phase-chip.is-active {
-  border-color: var(--color-primary);
-  background: var(--color-info-bg-alt);
-}
-
-.ticket-phase-count {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--color-text);
-  font-size: var(--text-lg);
-  font-weight: 900;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-
-.ticket-phase-label {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--color-text-muted);
-  font-size: var(--text-2xs);
-  font-weight: 800;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ticket-phase-chip.is-active .ticket-phase-label,
-.ticket-phase-chip.is-active .ticket-phase-count {
-  color: var(--color-primary);
-}
-
-.ticket-phase-dot {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 auto;
-  border-radius: var(--radius-pill);
-}
-
 .ticket-filter-search {
   flex: 1 1 340px;
-}
-
-.ticket-filter-meta {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 5px;
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.ticket-filter-meta strong {
-  color: var(--color-text);
-  font-size: var(--text-md);
-  font-variant-numeric: tabular-nums;
 }
 
 .ticket-active-filters {
@@ -1377,10 +1289,6 @@ textarea:focus {
 
 .ticket-filter-group > span {
   width: 92px;
-}
-
-.ticket-open-button {
-  white-space: nowrap;
 }
 
 .ticket-card-open-button {
@@ -2388,13 +2296,16 @@ a.status-badge {
   }
 
   /* Ticket list tablet portrait/landscape sits inside the collapsed rail shell,
-   so the generic 900px table minimum clips the explicit open action at
-   768x1024. In the tablet band keep the native table, but drop the optional
-   progress column and preserve the required scan fields: identity, owner,
-   stage/work reason, freshness, and open. */
+   so the generic 900px table minimum clips the row at 768x1024 (the row
+   itself is the open target — see DataTable's onRowClick). In the tablet
+   band keep the native table, but drop the optional progress column and
+   preserve the required scan fields: identity, owner, stage/work reason
+   (which is also where the manager-only "เงียบ" stale flag lives — see
+   WorkStageCell — precisely so it still shows up here even though the
+   progress column it used to ride along in does not), and freshness. */
   .ticket-list-page .ticket-worklist-table {
     min-width: 0;
-    grid-template-columns: minmax(0, 2fr) minmax(0, 0.9fr) minmax(0, 1.4fr) minmax(0, 0.75fr) minmax(78px, 0.6fr);
+    grid-template-columns: minmax(0, 2fr) minmax(0, 0.9fr) minmax(0, 1.4fr) minmax(0, 0.75fr);
     gap: 8px;
   }
 
@@ -2441,16 +2352,6 @@ a.status-badge {
 
   .ticket-pipeline-summary {
     grid-template-columns: 1fr;
-  }
-
-  .ticket-phase-strip {
-    display: flex;
-    overflow-x: auto;
-    padding-bottom: 2px;
-  }
-
-  .ticket-phase-chip {
-    flex: 0 0 136px;
   }
 
   .ticket-filter-search {
@@ -2658,54 +2559,6 @@ a.status-badge {
     flex-direction: column;
   }
 
-  .ticket-worklist-summary {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 12px;
-  }
-
-  .ticket-scope-copy > span {
-    font-size: var(--text-2xs);
-  }
-
-  .ticket-scope-copy h2 {
-    font-size: var(--text-md);
-    line-height: 1.2;
-  }
-
-  .ticket-scope-copy p {
-    display: none;
-  }
-
-  .ticket-result-count {
-    min-width: 56px;
-    text-align: right;
-  }
-
-  .ticket-result-count span {
-    font-size: var(--text-2xs);
-  }
-
-  .ticket-result-count strong {
-    font-size: var(--text-xl);
-  }
-
-  .ticket-result-count small {
-    display: none;
-  }
-
-  .ticket-scope-toggle {
-    grid-column: 1 / -1;
-    width: 100%;
-  }
-
-  .ticket-scope-option {
-    flex: 1 1 0;
-    min-height: 44px;
-    padding: 0 8px;
-  }
-
   .ticket-pipeline-summary {
     gap: 8px;
     padding: 10px 12px;
@@ -2745,35 +2598,6 @@ a.status-badge {
     display: none;
   }
 
-  .ticket-phase-strip {
-    display: flex;
-    gap: 6px;
-    margin-right: -16px;
-    margin-left: -16px;
-    padding: 0 16px 2px;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .ticket-phase-strip::-webkit-scrollbar {
-    display: none;
-  }
-
-  .ticket-phase-chip {
-    flex: 0 0 96px;
-    min-height: 44px;
-    padding: 6px 8px;
-  }
-
-  .ticket-phase-count {
-    font-size: var(--text-md);
-  }
-
-  .ticket-phase-label {
-    white-space: normal;
-    line-height: 1.15;
-  }
-
   .ticket-filter-bar > * {
     width: auto;
     min-width: 0;
@@ -2798,10 +2622,6 @@ a.status-badge {
      Button text variant's utilities changed. */
   .ticket-filter-bar > .ticket-filter-clear {
     grid-column: 1 / -1;
-  }
-
-  .ticket-filter-meta {
-    display: none;
   }
 
   .ticket-active-filters {

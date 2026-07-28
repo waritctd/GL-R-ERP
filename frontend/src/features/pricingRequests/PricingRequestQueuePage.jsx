@@ -23,8 +23,13 @@ const COLUMNS = [
     header: 'เลขที่ใบขอราคา',
     sortable: true,
     searchAccessor: (row) => row.requestCode,
-    // A Link (not a whole-row onRowClick) so this table can carry a pickup
-    // <button> per row without nesting one interactive element inside another.
+    // A Link (not the whole-row `onRowClick` DataTable optionally offers) so
+    // this table can carry a pickup <button> per row without nesting one
+    // interactive element inside another — `onRowClick`'s own
+    // interactive-target guard would let the button work fine, but this page
+    // still opts out of it: with a per-row link *and* a per-row pickup
+    // button already doing double duty, adding a third, whole-row target
+    // would just be a redundant way to reach the same place.
     render: (row) => <Link to={`/pricing-requests/${row.id}`} className="text-xs text-info underline"><code>{row.requestCode}</code></Link>,
   },
   {
