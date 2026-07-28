@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
@@ -9,6 +9,7 @@ import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { FilterBar } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { WorklistFilters } from '../../components/common/WorklistFilters.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { SalesTabs } from '../sales/SalesTabs.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -24,7 +25,7 @@ import {
 } from '../../utils/format.js';
 import { StageProgressBar } from './DealStageStepper.jsx';
 import { dealInScope } from './salesViewScope.js';
-import { SALES_PHASES, stageIndex, stageMeta } from './stageMeta.js';
+import { SALES_PHASES, SALES_STAGES, stageIndex, stageMeta } from './stageMeta.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
 import { effectiveWinProbability } from './dealTrackingMeta.js';
 
@@ -169,17 +170,21 @@ function matchesSearch(deal, query) {
 const MANAGER_PIPELINE_ROLES = new Set(['sales_manager', 'ceo']);
 const ORDER_RECEIVED_IDX = stageIndex('ORDER_RECEIVED');
 
-/** Win% + no-recent-activity badges, shown per-deal for the manager pipeline view. */
+/**
+ * No-recent-activity badge, shown per-deal for the manager pipeline view.
+ * Used to also carry a win% badge (`effectiveWinProbability`), but that was
+ * a forecasting number masquerading as a progress number — the win-weighted
+ * forecast already appears in `TeamPipelineSummary` below the table, so
+ * dropping it here (owner decision) loses nothing, it just stops repeating
+ * it in the wrong place.
+ */
 function TrackingBadges({ deal }) {
-  const win = effectiveWinProbability(deal.winProbabilityOverride, deal.salesStage);
+  if (!deal.stale) return null;
   return (
     <span className="flex flex-wrap items-center gap-1">
-      <StatusBadge tone="neutral">{win}%</StatusBadge>
-      {deal.stale ? (
-        <StatusBadge tone="warning">
-          <Icon name="clock" size={11} /> เงียบ
-        </StatusBadge>
-      ) : null}
+      <StatusBadge tone="warning">
+        <Icon name="clock" size={11} /> เงียบ
+      </StatusBadge>
     </span>
   );
 }
@@ -255,6 +260,12 @@ function TeamPipelineSummary({ groups }) {
   );
 }
 
+// `showTracking` (sales_manager/ceo only) renders the "เงียบ" stale badge
+// here rather than in `ProgressCell`. It lives in the `stage` column, not
+// `progress`, specifically because the tablet band (721–1040px, see
+// styles.css) hides the `progress` column to fit the row — the stale flag
+// would otherwise silently disappear for a manager at that width even
+// though nothing about it stopped being true.
 function WorkStageCell({ deal, role, showTracking = false }) {
   const reason = worklistReason(role, deal);
   return (
@@ -262,6 +273,61 @@ function WorkStageCell({ deal, role, showTracking = false }) {
       {reason ? <StatusBadge tone="info">{reason}</StatusBadge> : null}
       <DealStageCell deal={deal} />
       {showTracking ? <TrackingBadges deal={deal} /> : null}
+    </span>
+  );
+}
+
+// Lifecycles where the deal is not currently, actively moving through the
+// pipeline — a bare "ขั้นตอน N/14" fraction for one of these would newly
+// assert live progress that the old legend-less bar never claimed. Naming
+// the lifecycle alongside the fraction keeps the readout honest: "where it
+// stood when it stopped", not "where it is heading right now".
+const PAUSED_OR_TERMINAL_LIFECYCLES = new Set(['CANCELLED', 'COMPLETED', 'ON_HOLD', 'DORMANT']);
+
+/**
+ * Textual equivalent for the segmented progress bar's colour-coded fill
+ * (never colour alone). `CLOSED_LOST` keeps its own fixed copy (no stage
+ * fraction reads as progress on a lost deal). A deal with no resolvable
+ * `salesStage` has nothing to report a fraction of. Every other non-ACTIVE
+ * lifecycle gets its label prefixed onto the fraction (see
+ * PAUSED_OR_TERMINAL_LIFECYCLES); a live ACTIVE deal gets the bare fraction.
+ */
+function progressReadout(deal) {
+  if (deal.lifecycle === 'CLOSED_LOST') return 'ไม่คืบหน้า (เสียงาน)';
+  const idx = stageIndex(deal.salesStage);
+  const total = SALES_STAGES.length;
+  // FIX F: the lifecycle prefix must be decided BEFORE the "no resolvable
+  // stage" early return, not after it. A CANCELLED/COMPLETED/ON_HOLD/DORMANT
+  // deal with a null/unrecognized `salesStage` (idx < 0) has no fraction to
+  // show, but it still has a lifecycle to report — testing that ordering the
+  // old way around meant such a deal displayed nothing anywhere saying it
+  // was cancelled. (DealStageCell now also badges CANCELLED/COMPLETED here
+  // — see FIX F6 — but this progress-column readout is the one place a deal
+  // with no resolvable stage still gets a lifecycle mention at all.)
+  const lifecyclePrefixed = PAUSED_OR_TERMINAL_LIFECYCLES.has(deal.lifecycle);
+  if (idx < 0) {
+    return lifecyclePrefixed ? dealLifecycleLabel(deal.lifecycle).label : 'ยังไม่ระบุขั้นตอน';
+  }
+  const fraction = `ขั้นตอน ${idx + 1}/${total}`;
+  return lifecyclePrefixed ? `${dealLifecycleLabel(deal.lifecycle).label} · ${fraction}` : fraction;
+}
+
+/**
+ * The `ความคืบหน้า` (progress) column: the segmented stage bar plus its
+ * textual equivalent. Used to also show a completion percentage alongside
+ * the fraction ("62% · ขั้นตอน 9/14") — with the manager-only win% badge
+ * gone from this column (owner decision, see `TrackingBadges`), the percent
+ * and the fraction were just saying the same thing twice, so only the
+ * fraction remains.
+ */
+function ProgressCell({ deal }) {
+  const lost = deal.lifecycle === 'CLOSED_LOST';
+  return (
+    <span className="flex min-w-0 flex-col gap-1">
+      <StageProgressBar salesStage={deal.salesStage} lost={lost} />
+      <span className="text-2xs font-bold tabular-nums text-text-muted">
+        {progressReadout(deal)}
+      </span>
     </span>
   );
 }
@@ -277,7 +343,15 @@ function DealStageCell({ deal }) {
   const stage = dealStageLabel(deal.salesStage);
   const meta = stageMeta(deal.salesStage);
   const operational = ticketStatusLabel(deal.status);
-  const paused = ['ON_HOLD', 'DORMANT'].includes(deal.lifecycle);
+  // FIX F6 (review-remediation): used to badge only ON_HOLD/DORMANT, so a
+  // CANCELLED or COMPLETED deal looked indistinguishable from a live one in
+  // this column — and specifically in this column, because the 721–1040px
+  // tablet band (see styles.css) hides the `progress` column outright, which
+  // is the only other place CANCELLED/COMPLETED ever got a mention
+  // (progressReadout's lifecycle prefix). Reuse the same
+  // PAUSED_OR_TERMINAL_LIFECYCLES set progressReadout already keys off, so
+  // the two stay in sync.
+  const showLifecycleBadge = PAUSED_OR_TERMINAL_LIFECYCLES.has(deal.lifecycle);
   const lifecycle = dealLifecycleLabel(deal.lifecycle);
   // Since 03b5ba9 stopped ticket-level auto-submit, every newly created deal's
   // legacy `status` is frozen at 'draft' forever — it no longer advances with
@@ -294,7 +368,7 @@ function DealStageCell({ deal }) {
         <StatusBadge tone={stage.tone}>
           {meta ? `${meta.no}. ` : ''}{stage.label}
         </StatusBadge>
-        {paused ? <StatusBadge tone={lifecycle.tone}>{lifecycle.label}</StatusBadge> : null}
+        {showLifecycleBadge ? <StatusBadge tone={lifecycle.tone}>{lifecycle.label}</StatusBadge> : null}
       </span>
       {showOperational ? (
         <span className="pl-0.5 text-2xs text-text-muted">{operational.label}</span>
@@ -312,13 +386,18 @@ function DealStageCell({ deal }) {
  * (sales_manager/ceo only) adds the win%/stale badges below the stage —
  * the mobile equivalent of the manager-only DataTable column.
  */
-function DealOpenButton({ deal, onOpen, compact = false }) {
+// Mobile-only now (Task 2d): the desktop table's own repeated `เปิด ›`
+// column is gone in favor of DataTable's onRowClick — the whole row is the
+// open target there. Mobile cards keep this explicit button since a card
+// isn't a table row DataTable can attach onRowClick to (see DataTable.jsx's
+// onRowClick doc comment).
+function DealOpenButton({ deal, onOpen }) {
   return (
     <Button
       variant="secondary"
       size="sm"
       type="button"
-      className={compact ? 'ticket-open-button' : 'ticket-card-open-button'}
+      className="ticket-card-open-button"
       onClick={() => onOpen(deal)}
       aria-label={`เปิดดีล ${deal.code}`}
     >
@@ -403,15 +482,27 @@ function MoneyWorklistCard({ deal, onOpen }) {
   );
 }
 
-function buildDealColumns({ role, isManagerView, onOpen }) {
+function buildDealColumns({ role, isManagerView }) {
   return [
     {
       key: 'customer',
       header: 'ดีล / ลูกค้า / โครงการ',
       searchAccessor: (deal) => [deal.code, deal.customerName, deal.projectName, deal.title].filter(Boolean).join(' '),
+      // FIX A: this Link (not the row's own `onRowClick`, which DataTable now
+      // treats as a mouse-only convenience) is the row's keyboard and
+      // assistive-tech activation target, following the pattern
+      // PricingRequestQueuePage.jsx already argues for at its `requestCode`
+      // column. It also fixes the 721–1040px tablet band, which renders this
+      // desktop table (`useIsMobile` is <=720px) with no hover and — before
+      // this fix — no visible cue at all that a row was tappable.
       render: (deal) => (
         <span className="flex min-w-0 flex-col gap-0.5">
-          <strong className="block truncate text-text">{deal.customerName || deal.title}</strong>
+          <Link
+            to={`/tickets/${deal.id}`}
+            className="block truncate font-bold text-link underline decoration-1 underline-offset-2 hover:decoration-2"
+          >
+            {deal.customerName || deal.title}
+          </Link>
           <span className="block truncate text-2xs text-text-muted">
             {[deal.projectName, deal.code].filter(Boolean).join(' · ')}
           </span>
@@ -434,7 +525,7 @@ function buildDealColumns({ role, isManagerView, onOpen }) {
     {
       key: 'progress',
       header: 'ความคืบหน้า',
-      render: (deal) => <StageProgressBar salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST'} />,
+      render: (deal) => <ProgressCell deal={deal} />,
     },
     {
       key: 'date',
@@ -443,12 +534,16 @@ function buildDealColumns({ role, isManagerView, onOpen }) {
       sortAccessor: (deal) => new Date(deal.stageUpdatedAt ?? deal.updatedAt),
       render: (deal) => <DaysBadge stageUpdatedAt={deal.stageUpdatedAt ?? deal.updatedAt} />,
     },
-    {
-      key: 'open',
-      header: 'เปิด',
-      align: 'right',
-      render: (deal) => <DealOpenButton deal={deal} onOpen={onOpen} compact />,
-    },
+    // Row-level navigation (onRowClick, wired on the <DataTable> below)
+    // replaced the repeated `เปิด ›` button that used to close every row —
+    // identical on all 15, carrying no information. There used to be a
+    // trailing "ขั้นตอนถัดไป" (next action) column here too
+    // (dealWorklistActions.js), but `/tickets` is gated on
+    // canViewDealPipeline (sales/sales_manager/ceo only — permissions.js),
+    // and that resolver only ever returned a verb for account/import, who
+    // can never reach this page. The column was therefore a header plus an
+    // empty cell on every single row for every real viewer — removed
+    // outright (owner decision) rather than kept as permanent dead weight.
   ];
 }
 
@@ -604,10 +699,6 @@ export function TicketListPage({ user, showToast }) {
   useEffect(() => {
     if (hasActiveMoreFilters) setMoreFiltersOpen(true);
   }, [hasActiveMoreFilters]);
-  const activePipelineCount = useMemo(
-    () => allDeals.filter((deal) => deal.lifecycle === 'ACTIVE' && stageMeta(deal.salesStage)).length,
-    [allDeals],
-  );
   const scope = scopeCopy(user.role, inboxOnly);
   const activeFilterCount = [
     searchText.trim(),
@@ -631,9 +722,46 @@ export function TicketListPage({ user, showToast }) {
     if (hasWorklistDistinction && searchParams.get('inbox') === '0') filters.push('ขอบเขต: ทั้งหมด');
     return filters;
   }, [flagFilter, hasWorklistDistinction, lifecycleFilter, phaseFilter, searchParams, searchText]);
+
+  // Phase chips, WorklistFilters-driven (Task 1b/2). The "all" chip used to
+  // read "ดีลที่ดำเนินอยู่" ("active deals") over a count (`activePipelineCount`)
+  // that was deliberately ACTIVE-only — but the chip's action (`updateParam
+  // ('phase', '')`) clears the phase filter entirely, which lists every
+  // deal including CLOSED_LOST/CANCELLED/COMPLETED. The label matched its
+  // own count but misdescribed what clicking it actually does. Fixed (owner
+  // decision) by naming the chip after its action ("ทั้งหมด" — all) and
+  // dropping the count altogether rather than attaching a second, different
+  // number to it: the single statement of the filtered total is DataTable's
+  // own footer below, and the per-phase chips keep their own (honest, each
+  // matching exactly what selecting it filters to) counts.
+  const phaseChipItems = useMemo(() => [
+    { key: '', label: 'ทั้งหมด' },
+    ...SALES_PHASES.map((phase) => ({
+      key: String(phase.id),
+      label: `เฟส ${phase.id} · ${phase.name}`,
+      count: phaseCounts[phase.id],
+      dotClassName: PHASE_STYLES[phase.id].dot,
+    })),
+  ], [phaseCounts]);
+
+  function selectPhase(key) {
+    // Clicking the already-active chip clears back to "all" — same toggle-off
+    // the old hand-rolled phase strip offered.
+    updateParam('phase', key && key === phaseFilter ? '' : key);
+  }
+
+  // Memoized like phaseChipItems above (not a fresh array literal every
+  // render): WorklistFilters keys its scroll/resize-affordance effect on
+  // `[items]`, so a new array identity on every parent render was tearing
+  // that listener down and re-attaching it just as often, for no reason.
+  const inboxChipItems = useMemo(() => (hasWorklistDistinction ? [
+    { key: '', label: 'ต้องดำเนินการ', count: inboxCounts.inbox },
+    { key: '0', label: 'ทั้งหมด', count: inboxCounts.all },
+  ] : null), [hasWorklistDistinction, inboxCounts]);
+
   const tableColumns = useMemo(
-    () => buildDealColumns({ role: user.role, isManagerView, onOpen: openDeal }),
-    [isManagerView, openDeal, user.role],
+    () => buildDealColumns({ role: user.role, isManagerView }),
+    [isManagerView, user.role],
   );
 
   const emptyDescription = useMemo(() => {
@@ -784,136 +912,93 @@ export function TicketListPage({ user, showToast }) {
         )}
       />
 
-      <section className="ticket-worklist-summary" aria-labelledby="ticket-scope-title">
-        <div className="ticket-scope-copy">
-          <span>{scope.eyebrow}</span>
-          <h2 id="ticket-scope-title">{scope.title}</h2>
-          <p>{scope.description}</p>
-        </div>
-
-        {hasWorklistDistinction ? (
-          <div className="ticket-scope-toggle" aria-label="เลือกขอบเขตรายการ">
-            {[
-              { value: '', label: 'ต้องดำเนินการ', count: inboxCounts.inbox },
-              { value: '0', label: 'ทั้งหมด', count: inboxCounts.all },
-            ].map((item) => {
-              const active = (searchParams.get('inbox') ?? '') === item.value;
-              return (
-                <button
-                  key={item.value || 'inbox'}
-                  type="button"
-                  aria-pressed={active}
-                  className={`ticket-scope-option${active ? ' is-active' : ''}`}
-                  onClick={() => updateParam('inbox', item.value)}
-                >
-                  <span>{item.label}</span>
-                  <StatusBadge tone={active ? 'info' : 'neutral'}>{item.count}</StatusBadge>
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <StatusBadge tone="neutral">{scope.title}</StatusBadge>
-        )}
-
-        <div className="ticket-result-count" aria-live="polite">
-          <span>ตรงเงื่อนไข</span>
-          <strong>{deals.length}</strong>
-          <small>จาก {hasWorklistDistinction && inboxOnly ? inboxCounts.inbox : allDeals.length} รายการ</small>
-        </div>
-      </section>
-
-      {isManagerView && pipelineGroups ? <TeamPipelineSummary groups={pipelineGroups} /> : null}
-
-      <section className="ticket-phase-strip" aria-label="ตัวกรองเฟสของดีล">
-        <button
-          type="button"
-          aria-pressed={!phaseFilter}
-          className={`ticket-phase-chip${!phaseFilter ? ' is-active' : ''}`}
-          onClick={() => updateParam('phase', '')}
-        >
-          <span className="ticket-phase-count">{activePipelineCount}</span>
-          <span className="ticket-phase-label">ทุกเฟส</span>
-        </button>
-        {SALES_PHASES.map((phase) => {
-          const isActive = phaseFilter === String(phase.id);
-          const style = PHASE_STYLES[phase.id];
-          return (
-            <button
-              key={phase.id}
-              type="button"
-              aria-pressed={isActive}
-              className={`ticket-phase-chip${isActive ? ' is-active' : ''}`}
-              onClick={() => updateParam('phase', isActive ? '' : String(phase.id))}
-            >
-              <span className="ticket-phase-count">
-                <span aria-hidden="true" className={`ticket-phase-dot ${style.dot}`} />
-                {phaseCounts[phase.id]}
-              </span>
-              <span className="ticket-phase-label">
-                เฟส {phase.id} · {phase.name}
-              </span>
-            </button>
-          );
-        })}
-      </section>
-
-      {/* Spacing/reflow live here as utilities, not in styles.css: index.css
-          orders `@layer theme, legacy, utilities`, so a `.ticket-filter-bar`
-          rule in the legacy layer always loses to FilterBar's own utilities.
-          The previous CSS needed `display: grid !important` to win and its
-          gap/padding never applied at all. `mobile:` is the shared <=720px
-          variant from the Phase 3.4 token work. */}
-      <FilterBar
-        className="ticket-filter-bar gap-3 mobile:grid mobile:grid-cols-[minmax(0,1fr)_auto] mobile:items-center mobile:gap-2 mobile:p-2.5"
-        aria-label="ค้นหาและตัวกรองรายการดีล"
+      {/* Consolidated filter band (Task 2a): everything that used to be four
+          stacked full-width sections — the scope banner (eyebrow/title/
+          description + inbox toggle + a result-count restatement), and the
+          phase strip — now lives inside this one bordered band, alongside
+          search/more-filters/clear. Scope + phase + search are one filter
+          band, not three; DataTable's own footer stays the single statement
+          of "how many rows matched" (Task 2b) instead of restating it here
+          too. */}
+      <section
+        className="flex flex-col gap-3 rounded-md border border-border bg-surface p-3.5 mobile:gap-2.5 mobile:p-2.5"
+        aria-label="ขอบเขตและตัวกรองรายการดีล"
       >
-        <label className="ticket-filter-search search-field">
-          <span className="sr-only">ค้นหาดีล</span>
-          <Icon name="search" />
-          <input
-            type="search"
-            value={searchText}
-            placeholder="ค้นหาเลขที่ / บริษัท / โครงการ / ผู้ดูแล"
-            onChange={(event) => updateParam('q', event.target.value)}
-            aria-label="ค้นหาดีล"
-          />
-        </label>
-        <div className="ticket-filter-meta" aria-live="polite">
-          <strong>{deals.length}</strong>
-          <span>รายการตรงเงื่อนไข</span>
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="text-2xs font-extrabold text-text-muted">{scope.eyebrow}</span>
+          {!hasWorklistDistinction ? <StatusBadge tone="neutral">{scope.title}</StatusBadge> : null}
+          <span className="text-xs text-text-muted">{scope.description}</span>
         </div>
-        <Button
-          ref={filterToggleRef}
-          variant="secondary"
-          type="button"
-          aria-expanded={showMoreFilters}
-          onClick={() => setMoreFiltersOpen((current) => !current)}
-        >
-          <Icon name="setting" size={16} />
-          ตัวกรอง
-          {activeMoreFiltersCount > 0 ? (
-            <StatusBadge tone="info">{activeMoreFiltersCount}</StatusBadge>
-          ) : null}
-        </Button>
-        {activeFilterCount > 0 ? (
-          <Button variant="text" type="button" className="ticket-filter-clear" onClick={clearFilters}>
-            ล้างทั้งหมด
-          </Button>
-        ) : null}
-        <StatusBadge tone={activeFilterCount > 0 ? 'info' : 'neutral'}>
-          {activeFilterCount > 0 ? `${activeFilterCount} ตัวกรอง` : 'ไม่มีตัวกรอง'}
-        </StatusBadge>
-      </FilterBar>
 
-      {activeFilters.length > 0 ? (
-        <div className="ticket-active-filters" aria-label="ตัวกรองที่ใช้">
-          <span>ตัวกรองที่ใช้</span>
-          {activeFilters.map((filter) => (
-            <StatusBadge key={filter} tone="neutral">{filter}</StatusBadge>
-          ))}
-        </div>
-      ) : null}
+        {inboxChipItems ? (
+          <WorklistFilters
+            ariaLabel="เลือกขอบเขตรายการ"
+            items={inboxChipItems}
+            activeKey={searchParams.get('inbox') ?? ''}
+            onSelect={(key) => updateParam('inbox', key)}
+          />
+        ) : null}
+
+        <WorklistFilters
+          ariaLabel="ตัวกรองเฟสของดีล"
+          items={phaseChipItems}
+          activeKey={phaseFilter}
+          onSelect={selectPhase}
+        />
+
+        {/* Spacing/reflow live here as utilities, not in styles.css: index.css
+            orders `@layer theme, legacy, utilities`, so a `.ticket-filter-bar`
+            rule in the legacy layer always loses to FilterBar's own utilities.
+            The previous CSS needed `display: grid !important` to win and its
+            gap/padding never applied at all. `mobile:` is the shared <=720px
+            variant from the Phase 3.4 token work. */}
+        <FilterBar
+          className="ticket-filter-bar !border-0 !bg-transparent !p-0 gap-3 mobile:grid mobile:grid-cols-[minmax(0,1fr)_auto] mobile:items-center mobile:gap-2"
+          aria-label="ค้นหาและตัวกรองรายการดีล"
+        >
+          <label className="ticket-filter-search search-field">
+            <span className="sr-only">ค้นหาดีล</span>
+            <Icon name="search" />
+            <input
+              type="search"
+              value={searchText}
+              placeholder="ค้นหาเลขที่ / บริษัท / โครงการ / ผู้ดูแล"
+              onChange={(event) => updateParam('q', event.target.value)}
+              aria-label="ค้นหาดีล"
+            />
+          </label>
+          <Button
+            ref={filterToggleRef}
+            variant="secondary"
+            type="button"
+            aria-expanded={showMoreFilters}
+            onClick={() => setMoreFiltersOpen((current) => !current)}
+          >
+            <Icon name="setting" size={16} />
+            ตัวกรอง
+            {activeMoreFiltersCount > 0 ? (
+              <StatusBadge tone="info">{activeMoreFiltersCount}</StatusBadge>
+            ) : null}
+          </Button>
+          {activeFilterCount > 0 ? (
+            <Button variant="text" type="button" className="ticket-filter-clear" onClick={clearFilters}>
+              ล้างทั้งหมด
+            </Button>
+          ) : null}
+          <StatusBadge tone={activeFilterCount > 0 ? 'info' : 'neutral'}>
+            {activeFilterCount > 0 ? `${activeFilterCount} ตัวกรอง` : 'ไม่มีตัวกรอง'}
+          </StatusBadge>
+        </FilterBar>
+
+        {activeFilters.length > 0 ? (
+          <div className="ticket-active-filters" aria-label="ตัวกรองที่ใช้">
+            <span>ตัวกรองที่ใช้</span>
+            {activeFilters.map((filter) => (
+              <StatusBadge key={filter} tone="neutral">{filter}</StatusBadge>
+            ))}
+          </div>
+        ) : null}
+      </section>
 
       {showMoreFilters ? renderFilterSheet(
         <>
@@ -992,6 +1077,24 @@ export function TicketListPage({ user, showToast }) {
         rows={deals}
         getRowKey={(deal) => deal.id}
         gridClassName="ticket-worklist-table"
+        // Task 2d: the repeated `เปิด ›` column (identical on every row) is
+        // gone — the row's onClick is now a mouse-only convenience for
+        // opening the deal (FIX A: the identity cell's own `<Link
+        // to={`/tickets/${deal.id}`}>` above is the keyboard/assistive-tech
+        // affordance, since a `<tr role="button">` would have pruned every
+        // other cell — customer name, ผู้ดูแล, the stage badge, the
+        // "ขั้นตอน N/14" readout — out of the accessibility tree). Same move
+        // `/finance` never needed because its whole action column already
+        // varied by row. Mobile cards are unaffected: they come from
+        // `mobileCard` below, entirely separate from `columns`, and already
+        // carry their own `DealOpenButton` affordance.
+        onRowClick={openDeal}
+        // FIX G: restores the "filtered out of how many" denominator the old
+        // `.ticket-result-count` band used to show. `allDeals` is the whole
+        // role-scoped population before the phase/lifecycle/flag/inbox/search
+        // filters above are applied; DataTable only appends the clause when
+        // this differs from what actually matched.
+        unfilteredTotal={allDeals.length}
         mobileCard={(deal) => (
           user.role === 'account'
             ? <MoneyWorklistCard deal={deal} onOpen={openDeal} />
@@ -1007,6 +1110,11 @@ export function TicketListPage({ user, showToast }) {
           description: emptyDescription,
         }}
       />
+
+      {/* Task 2c: summary metrics belong after the worklist, not before it
+          (design principle #3, "next action before summary metrics") — this
+          used to render above the phase strip. */}
+      {isManagerView && pipelineGroups ? <TeamPipelineSummary groups={pipelineGroups} /> : null}
 
       {creating ? (
         <TicketCreateModal onClose={() => setCreating(false)} onSubmit={handleCreate} />
