@@ -30,8 +30,10 @@ const MOBILE = { width: 390, height: 844 };
 const KNOWN_NOISE = [/\/api\/auth\/login/, /ERR_ABORTED/, /502/, /Failed to load resource/];
 
 // `loginAs` waits for the "ออกจากระบบ" control, which lives inside the collapsed
-// nav drawer below 720px and so is not visible at mobile widths. Always log in
-// at desktop width, then resize — the app is a SPA and the mock session lives in
+// nav drawer below 1040px (the drawer now covers the whole 721–1040px tablet
+// band too, not just ≤720px — see styles.css's `@media (max-width: 1040px)`
+// drawer rules) and so is not visible at those widths. Always log in at
+// desktop width, then resize — the app is a SPA and the mock session lives in
 // module state, so resizing afterwards costs nothing and keeps the helper's
 // contract intact.
 async function loginAtViewport(page, role, viewport) {
@@ -318,24 +320,31 @@ test.describe('Phase 4A — independent-review regressions', () => {
     ).toBeLessThanOrEqual(2);
   });
 
-  // `.sidebar-account span { display: none }` in the tablet rail also matched the
-  // <span> wrapper Button.jsx puts around its children. The review reported this
-  // as a live defect blanking the logout icon; it is NOT — measured with the
-  // descendant selector deliberately restored, the wrapper still computes
-  // `display: flex` and the icon 18px, because `inline-flex` is in the
-  // `utilities` layer and this rule is in `legacy`. The selector was tightened to
-  // `> span` anyway (it states the real intent), and this test is the guard that
-  // the icon stays visible regardless of future layer changes.
-  test('sidebar logout icon stays visible in the tablet rail', async ({ page }) => {
+  // The compact 721–1040px tablet rail this test used to guard is gone — the
+  // persistent icon-only sidebar was removed and that band now uses the same
+  // off-canvas drawer as mobile (styles.css's `@media (max-width: 1040px)`
+  // sets `.sidebar { visibility: hidden; transform: translateX(-100%) }`
+  // until `.is-mobile-drawer-open` is applied). At 900px the sidebar (and
+  // everything inside it, `visibility` being inherited) is therefore off-
+  // screen and hidden by default; only opening the drawer via the hamburger
+  // should reveal the logout control. This test guards that contract instead.
+  test('sidebar is off-canvas at 900px; opening the drawer reveals the logout control', async ({ page }) => {
     await loginAtViewport(page, 'sales', { width: 900, height: 800 });
 
-    const logout = page.locator('.sidebar-account button').first();
+    const trigger = page.getByRole('button', { name: 'เปิดเมนูนำทาง' });
+    await expect(trigger).toBeVisible();
+
+    const logout = page.getByRole('button', { name: 'ออกจากระบบ' });
+    await expect(logout).toBeHidden();
+
+    await trigger.click();
+
     await expect(logout).toBeVisible();
     const iconWidth = await logout.evaluate((el) => {
       const svg = el.querySelector('svg');
       return svg ? svg.getBoundingClientRect().width : 0;
     });
-    expect(iconWidth, 'logout icon is collapsed to zero width in the tablet rail').toBeGreaterThan(0);
+    expect(iconWidth, 'logout icon is collapsed to zero width inside the drawer').toBeGreaterThan(0);
   });
 
 });

@@ -23,6 +23,21 @@
     @slot;
   }
 }
+/* Nav-drawer band (≤1040px): the off-canvas navigation drawer used by
+   AppShell's hamburger button and styles.css's drawer rules (see
+   `@media (max-width: 1040px)` there). A dedicated variant instead of
+   reusing `mobile`/`tablet` because this boundary is a single inclusive
+   ≤1040px cutoff, not the union of two disjoint bands — and instead of
+   Tailwind's built-in `max-[1041px]:` because that compiles to an EXCLUSIVE
+   `(width < 1041px)`, one pixel off from styles.css's inclusive
+   `(max-width: 1040px)`, leaving fractional widths between 1040 and 1041px
+   matched by neither or both. This variant and styles.css's media query are
+   provably identical (both emit `(width<=1040px)` in the built CSS). */
+@custom-variant nav-drawer {
+  @media (max-width: 1040px) {
+    @slot;
+  }
+}
 
 @theme static {
   /* Typography */
