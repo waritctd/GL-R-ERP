@@ -671,7 +671,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               style={{ padding: '0 18px 14px' }}
             >
               {/* Muted Floor fix: was Ink Faint (#94a3b8) on a table header label —
-                  DESIGN.md specifies Ink Muted (#64748b) for `.table-head` overline text. */}
+                  DESIGN.md specifies Ink Muted (#5c6b80) for `.table-head` overline text. */}
               <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) minmax(0,60px) minmax(0,80px) minmax(0,80px) minmax(0,80px)', gap: 6, padding: '8px 0', borderBottom: '1px solid var(--color-border)', fontSize: 11, fontWeight: 700, color: 'var(--color-text-muted)' }}>
                 <span>รายละเอียด</span><span style={{ textAlign: 'right' }}>จำนวน</span>
                 <span style={{ textAlign: 'right' }}>ราคา/หน่วย</span>
