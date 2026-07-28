@@ -50,35 +50,9 @@ function NavItemLink({ item, pathname }) {
   );
 }
 
-function useTabletRail() {
-  const query = '(min-width: 721px) and (max-width: 1040px)';
-  const [isTabletRail, setIsTabletRail] = useState(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
-    return window.matchMedia(query).matches;
-  });
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
-    const mediaQuery = window.matchMedia(query);
-    const handleChange = (event) => setIsTabletRail(event.matches);
-
-    setIsTabletRail(mediaQuery.matches);
-    if (typeof mediaQuery.addEventListener === 'function') {
-      mediaQuery.addEventListener('change', handleChange);
-      return () => mediaQuery.removeEventListener('change', handleChange);
-    }
-
-    mediaQuery.addListener(handleChange);
-    return () => mediaQuery.removeListener(handleChange);
-  }, []);
-
-  return isTabletRail;
-}
-
 export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, user, employee, onLogout }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const isTabletRail = useTabletRail();
   // Collapsed groups are the exception (default = expanded), so absence from
   // this set means "open" — nothing to persist for the common case.
   const [collapsedGroups, setCollapsedGroups] = useState(() => new Set());
@@ -136,7 +110,12 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, user, empl
         ))}
 
         {grouped.map((group) => {
-          const isCollapsed = !isTabletRail && collapsedGroups.has(group.key);
+          // No width-specific special case here: at ≤1040px this component
+          // renders inside the off-canvas drawer (see AppShell/styles.css),
+          // which is a full-width surface with room for a real, clickable
+          // group header — same expand/collapse state as desktop >1040px.
+          // There is no longer a persistent tablet rail to special-case.
+          const isCollapsed = collapsedGroups.has(group.key);
           const panelId = `nav-group-panel-${group.key}`;
           return (
             <div key={group.key} className="nav-group">

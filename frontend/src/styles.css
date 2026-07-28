@@ -2224,104 +2224,29 @@ a.status-badge {
   }
 }
 
-/* Desktop icon rail: between 721px and 1040px the persistent sidebar collapses
-   to icons only. Below 721px the sidebar is the mobile drawer, which has room
-   for full labels — this rule must not reach it, or the drawer renders as
-   centred, stacked, label-less icons. */
+/* Tablet band (721–1040px): the persistent sidebar is GONE — navigation is
+   the same off-canvas drawer used at ≤720px (see the ≤1040px drawer rules
+   further down, next to `.mobile-drawer-backdrop`). This block only holds
+   what is left over for this band: content still renders in *table* mode
+   here (DataTable's card/table switch is driven by useIsMobile.js, which
+   stays at ≤720px — untouched by the nav change), but the ticket worklist
+   table needs its own column adjustments because the full viewport width at
+   this band is still narrower than the desktop 900px minimum. */
 @media (min-width: 721px) and (max-width: 1040px) {
-  .sidebar {
-    width: 78px;
-    flex-basis: 78px;
-    padding: 16px 10px 12px;
-    align-items: center;
-    overflow-x: hidden;
-  }
-
-  .brand span:not(.brand-mark),
-  .nav-item span,
-  .nav-group-header,
-  /* Direct child only: the name/role text block (Sidebar.jsx). As a descendant
-     selector this also matched the <span> wrapper Button.jsx puts around its
-     children — i.e. the logout icon. That is latent rather than live today,
-     because `inline-flex` on the wrapper sits in the `utilities` layer and beats
-     this rule in `legacy` (measured: wrapper stays `flex`, icon 18px). Scoped to
-     the direct child so it states the actual intent and does not depend on layer
-     order to be safe. */
-  .sidebar-account > span {
-    display: none;
-  }
-
-  .brand {
-    width: 52px;
-    min-height: 52px;
-    justify-content: center;
-    padding: 4px 0 14px;
-  }
-
-  .brand-mark {
-    flex: none;
-  }
-
-  .nav-list,
-  .nav-group,
-  .nav-group-panel {
-    width: 100%;
-  }
-
-  .nav-list {
-    align-content: start;
-    justify-items: center;
-    gap: 6px;
-    overflow-x: hidden;
-    overflow-y: auto;
-  }
-
-  .nav-group,
-  .nav-group-panel {
-    justify-items: center;
-    gap: 6px;
-  }
-
-  .nav-item {
-    width: 52px;
-    min-height: 48px;
-    grid-template-columns: 1fr;
-    place-items: center;
-    gap: 0;
-    padding: 0;
-    position: relative;
-  }
-
-  .nav-item svg {
-    margin: 0;
-  }
-
-  .nav-item b {
-    position: absolute;
-    top: 3px;
-    right: 3px;
-    min-width: 18px;
-    height: 18px;
-    font-size: var(--text-2xs);
-    box-shadow: 0 0 0 2px var(--color-sidebar-bg);
-  }
-
-  .sidebar-account {
-    width: 100%;
-    grid-template-columns: 1fr;
-    justify-items: center;
-    gap: 8px;
-    padding-top: 12px;
-  }
-
-  /* Ticket list tablet portrait/landscape sits inside the collapsed rail shell,
-   so the generic 900px table minimum clips the row at 768x1024 (the row
-   itself is the open target — see DataTable's onRowClick). In the tablet
-   band keep the native table, but drop the optional progress column and
-   preserve the required scan fields: identity, owner, stage/work reason
-   (which is also where the manager-only "เงียบ" stale flag lives — see
-   WorkStageCell — precisely so it still shows up here even though the
-   progress column it used to ride along in does not), and freshness. */
+  /* Ticket list tablet portrait/landscape: content here is `viewport - 64`
+     now that no rail eats into it, so the generic 900px table minimum only
+     actually clips the row from 721px up to 964px (900 + 64) — above that,
+     up to this band's 1040px ceiling, the full-width table would already
+     fit unmodified. The progress column is still dropped across the whole
+     band regardless (one column set for the band beats a second internal
+     cutoff for the remaining ~77px of range), so behaviour is unchanged;
+     this comment no longer overstates it as required everywhere in the
+     band. In the tablet band keep the native table, but drop the optional
+     progress column and preserve the required scan fields: identity,
+     owner, stage/work reason (which is also where the manager-only
+     "เงียบ" stale flag lives — see WorkStageCell — precisely so it still
+     shows up here even though the progress column it used to ride along
+     in does not), and freshness. */
   .ticket-list-page .ticket-worklist-table {
     min-width: 0;
     grid-template-columns: minmax(0, 2fr) minmax(0, 0.9fr) minmax(0, 1.4fr) minmax(0, 0.75fr);
@@ -2391,11 +2316,10 @@ a.status-badge {
 
   /* Its 4-column `minmax(180px,1fr) minmax(200px,1fr) minmax(220px,1.2fr)
      auto` template needs ~713px minimum — wider than a 768px tablet's
-     content column (682px) — so it forced the whole page to horizontal-
-     scroll (verified: content-scroll 760 vs 682 at 768px) until the
-     ≤720px rule below collapsed it to 1fr. Applying that here closes the
-     721–1040px gap the same way `.reflow-cards`/`.stat-grid` already do
-     above. */
+     content column (704px, now that no rail eats into it) — so it still
+     forces the whole page to horizontal-scroll until the ≤720px rule below
+     collapses it to 1fr. Applying that here closes the 721–1040px gap the
+     same way `.reflow-cards`/`.stat-grid` already do above. */
   .attendance-import-panel {
     grid-template-columns: 1fr;
   }
@@ -2482,10 +2406,6 @@ a.status-badge {
 
   .span-2 {
     grid-column: span 1;
-  }
-
-  .sidebar {
-    display: none;
   }
 
   /* Thai has no inter-word spaces, so a long breadcrumb label is a single
@@ -2706,7 +2626,15 @@ a.status-badge {
   }
 }
 
-@media (max-width: 720px) {
+/* Navigation drawer (≤1040px): the persistent sidebar is replaced by an
+   off-canvas drawer across the whole mobile + tablet band, triggered by the
+   hamburger button in AppShell (gated there by the `nav-drawer` custom
+   variant — index.css — which compiles to this exact `(max-width: 1040px)`
+   query, so the two sides can never disagree). This used to be scoped to
+   ≤720px only, with a separate compact rail for 721–1040px — the rail is
+   gone (see the 721–1040px block above, now table-content-only) and the
+   drawer takes over its place unchanged, all the way up to 1040px. */
+@media (max-width: 1040px) {
   .app-main {
     width: 100%;
     min-width: 0;
@@ -2737,7 +2665,9 @@ a.status-badge {
     inset: 0 auto 0 0;
     z-index: 40;
     display: flex;
-    /* 280px at a 320px viewport, 300px everywhere above it. */
+    /* 280px at a 320px viewport, 300px everywhere above it (this still holds
+       at 1040px — min(300px, calc(100vw - 40px)) resolves to a flat 300px for
+       every viewport width in the 721–1040px band too). */
     width: min(300px, calc(100vw - 40px));
     max-width: 100%;
     flex-basis: auto;
@@ -2755,7 +2685,14 @@ a.status-badge {
     visibility: visible;
     transition: transform 180ms ease;
   }
+}
 
+/* Phone-only content layout (≤720px, unchanged): the drawer above now spans
+   721–1040px too, but these table→card fallbacks are a *content* layout
+   decision (same family as useIsMobile.js / DataTable's card-vs-table
+   switch), not a navigation one, so they stay at the original ≤720px
+   breakpoint — tablet keeps rendering these as tables. */
+@media (max-width: 720px) {
   /* --- HR-core list card fallback (branch 2) ---
      Below 720px the six HR-core grid tables become stacked label→value cards
      instead of a 900px horizontal-scroll trap. Sales-stack tables
