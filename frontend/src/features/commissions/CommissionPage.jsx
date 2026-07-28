@@ -473,13 +473,13 @@ export function CommissionPage({ user, showToast }) {
               <strong>{MANUAL_KIND_LABELS[record.kind] || record.kind}</strong>
               <StatusBadge tone="info">Manual</StatusBadge>
             </span>
-            <small style={{ color: '#64748b', display: 'block' }}>{record.manualReason}</small>
+            <small style={{ color: 'var(--color-text-muted)', display: 'block' }}>{record.manualReason}</small>
           </span>
         ) : (
           <span>
             <strong>{record.invoiceDetails.invoiceNumber}</strong>
-            <small style={{ color: '#64748b', display: 'block' }}>{kindLabel(record.kind)} · {formatThaiDate(record.invoiceDetails.invoiceDate)}</small>
-            <small style={{ color: '#64748b', display: 'block' }}>ไฟล์: {record.invoiceDetails.invoiceAttachmentFileName || '-'}</small>
+            <small style={{ color: 'var(--color-text-muted)', display: 'block' }}>{kindLabel(record.kind)} · {formatThaiDate(record.invoiceDetails.invoiceDate)}</small>
+            <small style={{ color: 'var(--color-text-muted)', display: 'block' }}>ไฟล์: {record.invoiceDetails.invoiceAttachmentFileName || '-'}</small>
           </span>
         )),
       },
@@ -541,10 +541,10 @@ export function CommissionPage({ user, showToast }) {
           return (
             <span>
               <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-              <small style={{ color: '#64748b', display: 'block', marginTop: 4 }}>
+              <small style={{ color: 'var(--color-text-muted)', display: 'block', marginTop: 4 }}>
                 ผู้จัดการ: {record.managerApprovedAt ? `${record.managerApprovedByName || '-'} · ${formatThaiDate(record.managerApprovedAt)}` : '-'}
               </small>
-              <small style={{ color: '#64748b', display: 'block' }}>
+              <small style={{ color: 'var(--color-text-muted)', display: 'block' }}>
                 CEO: {record.ceoApprovedAt ? `${record.ceoApprovedByName || '-'} · ${formatThaiDate(record.ceoApprovedAt)}` : '-'}
               </small>
             </span>
@@ -1009,8 +1009,8 @@ export function CommissionPage({ user, showToast }) {
                     {formatMoney(record.manualAmount)}
                   </code>
                 </div>
-                <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>เหตุผล: {record.manualReason || '-'}</p>
-                <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>{nextStep}</p>
+                <p style={{ margin: 0, fontSize: 12, color: 'var(--color-text-muted)' }}>เหตุผล: {record.manualReason || '-'}</p>
+                <p style={{ margin: 0, fontSize: 12, color: 'var(--color-text-muted)' }}>{nextStep}</p>
               </div>
             );
           }
@@ -1033,7 +1033,7 @@ export function CommissionPage({ user, showToast }) {
                 <span>ฐานค่าคอม</span>
                 <code className="font-mono">{formatMoney(record.commissionableBase)}</code>
               </div>
-              <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>{nextStep}</p>
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--color-text-muted)' }}>{nextStep}</p>
             </div>
           );
         })()}

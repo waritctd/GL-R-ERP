@@ -42,53 +42,22 @@
   --shadow-focus-ring: 0 0 0 3px rgba(99, 102, 241, 0.13);
   --shadow-inset-active: inset 3px 0 0 #2563eb;
 
-  /* Brand / semantic colors */
-  --color-primary: #4f46e5;
-  --color-primary-hover: #6366f1;
-  --color-accent: #14b8a6;
-  --color-accent-dark: #0f766e;
-  --color-success: #059669;
-  --color-success-dark: #15803d;
-  --color-success-bg: #dcfce7;
-  --color-success-soft: #22c55e;
-  --color-success-text: #ecfdf5;
-  --color-warning: #b45309;
-  --color-warning-bg: #fef3c7;
-  --color-danger: #dc2626;
-  --color-danger-dark: #b91c1c;
-  --color-danger-bg: #fee2e2;
-  --color-danger-border: #fecaca;
-  --color-danger-soft: #f87171;
-  --color-info: #1d4ed8;
-  --color-info-dark: #4338ca;
-  --color-info-bg: #dbeafe;
-  --color-info-bg-alt: #eef2ff;
-  --color-info-row-active: #eff6ff;
-  --color-info-dot: #1e40af;
-  --color-indigo-ring: #2563eb;
-  --color-teal-border: #99f6e4;
-  --color-teal-focus: #34d399;
-
-  /* Neutrals / surfaces */
-  --color-bg: #eef1f6;
-  --color-bg-alt: #101827;
-  --color-surface: #fff;
-  --color-surface-muted: #f8fafc;
-  --color-surface-hover: #fbfcff;
-  --color-surface-subtle: #f1f5f9;
-  --color-text: #0f172a;
-  --color-text-secondary: #334155;
-  --color-text-muted: #64748b;
-  --color-text-faint: #94a3b8;
-  --color-icon-muted: #475569;
-  --color-border: #e6eaf0;
-  --color-border-strong: #d9e0ea;
-  --color-border-input: #dfe5ee;
-  --color-border-subtle: #e2e8f0;
-
-  /* Sidebar / dark surfaces */
-  --color-sidebar-bg: #0b1220;
-  --color-sidebar-text: #cbd5e1;
+  /* Color custom properties used to be re-declared here, duplicating
+     index.css's `@theme static` block. That duplication was a live bug,
+     not just noise: this `:root` block sits in `@layer legacy`, which is
+     declared AFTER `@layer theme` in index.css's `@layer theme, legacy,
+     utilities;`, so for any property both blocks set on `:root`, THIS
+     layer won the cascade — the `@theme` values in index.css were
+     silently dead (verified empirically while fixing WCAG contrast on
+     fix/ui-contrast-tokens: editing a color here changed the rendered
+     page; editing the "same" token in index.css did not, until this
+     block was removed). Single source of truth is now index.css's
+     `@theme static` block — kept there rather than here because it's the
+     Tailwind-recognized `--color-*` namespace that generates the
+     bg-/text-/border-* utilities the app actually uses, and it already
+     had a larger, more complete token set than this copy. Non-color
+     tokens below (font/spacing/radius/shadow) are unaffected and stay
+     here unchanged — out of scope for a colour-only fix. */
 
   font-family: var(--font-family);
   background: var(--color-bg);
@@ -170,9 +139,22 @@ code {
   line-height: 1;
 }
 
-.login-brand small,
-.brand small {
+.login-brand small {
   color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+/* WCAG AA fix (fix/ui-contrast-tokens): `.brand` is the sidebar's dark-rail
+   brand mark ("HR Portal" under the GL&R logo) — it was grouped with
+   `.login-brand small` (a LIGHT surface) and inherited --color-text-muted,
+   which measures only 3.93:1 on --color-sidebar-bg (#0b1220), a straight
+   AA failure. Split out so `.brand small` matches the sidebar's existing,
+   already-verified-safe convention (`.nav-item small`, `.sidebar-account
+   small`, `.nav-group-header` below all use --color-text-faint on this
+   surface, 7.30:1) instead of introducing a new sidebar-scoped token for
+   a value the app already has under another name. */
+.brand small {
+  color: var(--color-text-faint);
   font-size: var(--text-xs);
 }
 
@@ -377,7 +359,7 @@ textarea:focus {
 
 /* Stat card captions ("Headcount", "Approvals", …) are data text, not an
    icon/placeholder, so per DESIGN.md's Muted Floor Rule they must not go
-   below Ink Muted (#64748b) — Ink Faint is reserved for icons/placeholders. */
+   below Ink Muted (#5c6b80) — Ink Faint is reserved for icons/placeholders. */
 .stat-helper {
   display: block;
   color: var(--color-text-muted);
@@ -453,7 +435,14 @@ textarea:focus {
   display: grid;
   place-items: center;
   border-radius: var(--radius-pill);
-  background: var(--color-accent);
+  /* WCAG AA fix (fix/ui-contrast-tokens): white text on --color-accent
+     (#14b8a6) measures 2.49:1 here (12px/700 — not "large text", needs
+     4.5:1). Found by an automated contrast scan, not in the original
+     manual audit. --color-accent-dark (#0f766e) clears 5.47:1 and is
+     already this app's "text-safe teal" — --color-accent itself is left
+     unchanged since its other consumers (progress fills, decorative
+     dots) are backgrounds/fills, not text-bearing. */
+  background: var(--color-accent-dark);
   color: var(--color-surface);
   font-size: var(--text-xs);
 }
@@ -1653,7 +1642,7 @@ textarea:focus {
 .old-value {
   /* Muted Floor fix: this renders real "old value" data (profile-change diffs)
      on a white surface, not an icon/placeholder — Ink Faint (#94a3b8) is
-     ~2.6:1 there. Ink Muted (#64748b) clears 4.5:1. */
+     ~2.6:1 there. Ink Muted (#5c6b80) clears 4.5:1. */
   color: var(--color-text-muted);
   text-decoration: line-through;
 }
@@ -1858,16 +1847,18 @@ a.status-badge {
   place-items: center;
   align-content: center;
   gap: 8px;
-  /* Icon-only faint color at the container level (DESIGN.md: Ink Faint is for
-     icons/placeholders only). Title and description text below are pinned to
-     Ink Muted so they clear the DESIGN.md text-contrast floor. */
-  color: var(--color-text-faint);
+  /* Text color defaults to Ink Muted at the container level so bare text
+     nodes (callers that skip <strong>/<span>, e.g. SalesOverview.jsx,
+     EmployeeSelfService.jsx, EmployeeDashboard.jsx) inherit a contrast-safe
+     color instead of falling through to Ink Faint. Only the icon is pinned
+     to Ink Faint below (DESIGN.md: Ink Faint is for icons/placeholders
+     only, never for text on a light surface). */
+  color: var(--color-text-muted);
   text-align: center;
 }
 
-.empty-state strong,
-.empty-state span {
-  color: var(--color-text-muted);
+.empty-state svg {
+  color: var(--color-text-faint);
 }
 
 .modal-backdrop {
