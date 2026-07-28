@@ -72,6 +72,12 @@ function renderPayrollPage() {
   return render(<PayrollPage showToast={vi.fn()} />);
 }
 
+// Computed the same way PayrollPage.jsx's own module-level `thisMonth` const is (`new
+// Date().toISOString().slice(0, 7)`) -- the page defaults its `month` state to this value, and
+// `payload()` submits `` `${month}-01` ``. Used below to pin down that exact "-01" suffix (a
+// mutation-testing survivor: changing it to "-02" left the suite green).
+const thisMonth = new Date().toISOString().slice(0, 7);
+
 describe('PayrollPage adjustment inputs', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -110,11 +116,38 @@ describe('PayrollPage adjustment inputs', () => {
     expect(costOfLiving.value).toBe('');
     expect(gprs.value).toBe('');
 
-    fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
+    fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
 
     await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
     expect(api.payroll.preview.mock.calls[0][0].inputs).toEqual([]);
+    // Mutation-testing survivor: `payload().payrollMonth: \`${month}-01\`` had no assertion pinning
+    // down the literal "-01" -- changing it to "-02" left the whole suite green. Assert the exact
+    // value, not just a shape match.
+    expect(api.payroll.preview.mock.calls[0][0].payrollMonth).toBe(`${thisMonth}-01`);
     expect(screen.getByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/).value).toBe('');
+  });
+
+  it('includes an input value of exactly 1 -- the boundary of hasPayrollInput\'s `> 0` check', async () => {
+    // Mutation-testing survivor: `parsePayrollNumber(input[key]) > 0` could be weakened to `> 1`
+    // without failing anything, because no existing test isolated a value of exactly 1 -- it would
+    // silently drop a real HR-entered "1" (e.g. 1 special-pay baht, 1 unpaid-leave day) from the
+    // submitted payload. Must clear the two UAT-default fields (specialPay1/5, both 500) first --
+    // otherwise they mask the mutation by satisfying `.some(...)` on their own regardless of what
+    // the field under test is set to.
+    renderPayrollPage();
+
+    const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
+    const gprs = screen.getByLabelText(/พิเศษ 5 \(ค่า GPRS\)/);
+    const allowance = screen.getByLabelText(/พิเศษ 2 \(เบี้ยเลี้ยงประจำ\)/);
+    fireEvent.change(costOfLiving, { target: { value: '' } });
+    fireEvent.change(gprs, { target: { value: '' } });
+    fireEvent.change(allowance, { target: { value: '1' } });
+    fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+
+    await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+    const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+    expect(submitted).toBeDefined();
+    expect(submitted.specialPay2).toBe(1);
   });
 
   it('downloads a saved payslip for the selected payroll line', async () => {
@@ -133,7 +166,7 @@ describe('PayrollPage adjustment inputs', () => {
 
     renderPayrollPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: /Email payslips/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /ส่งอีเมลสลิปเงินเดือน/i }));
 
     await waitFor(() => expect(api.payroll.distributePayslips).toHaveBeenCalledWith(7));
   });
@@ -192,7 +225,7 @@ describe('PayrollPage adjustment inputs', () => {
       expect(unpaidLeaveDays.value).toBe('1.5');
 
       fireEvent.change(unpaidLeaveDays, { target: { value: '2' } });
-      fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
 
       await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
       const submittedInput = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
@@ -279,7 +312,7 @@ describe('PayrollPage adjustment inputs', () => {
       const override = await openOverrideInput();
 
       fireEvent.change(override, { target: { value: '250' } });
-      fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
 
       await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
       const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
@@ -291,7 +324,7 @@ describe('PayrollPage adjustment inputs', () => {
       const override = await openOverrideInput();
 
       fireEvent.change(override, { target: { value: '0' } });
-      fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
 
       await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
       const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
@@ -304,7 +337,7 @@ describe('PayrollPage adjustment inputs', () => {
       const override = await openOverrideInput();
       expect(override.value).toBe('');
 
-      fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
 
       await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
       // The line is still submitted (it carries the UAT default special pays), but the untyped
@@ -340,5 +373,44 @@ describe('PayrollPage adjustment inputs', () => {
     // Pay date defaults to the 26th of the current payroll month (kept month-agnostic here).
     await waitFor(() => expect(api.payroll.exportFile)
       .toHaveBeenCalledWith(7, 'pnd1', expect.stringMatching(/^\d{4}-\d{2}-26$/)));
+  });
+
+  // F1: PayrollService#process (backend) doesn't need a period id -- it recomputes from
+  // findActiveEmployees() and commits regardless. Opening the confirm dialog and processing while
+  // the header reads "พนักงาน 0 คน" would silently zero out every HR-entered value and commit an
+  // irreversible PROCESSED status. See the `emptyPeriod` comment in PayrollPage.jsx.
+  describe('Process Payroll guard against an empty period (F1)', () => {
+    it('disables Process Payroll when the loaded period has zero lines (lineCount: 0)', async () => {
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ lineCount: 0, lines: [] }) });
+
+      renderPayrollPage();
+
+      const processButton = await screen.findByRole('button', { name: /ประมวลผลเงินเดือน/i });
+      await waitFor(() => expect(processButton.disabled).toBe(true));
+    });
+
+    // Regression guard against "simplifying" the check to `!period?.id`: PayrollService#preview
+    // returns id=null for every month that has never been processed, so id===null does NOT imply
+    // an empty period -- it's the normal shape of a fresh, never-run month with real lines to
+    // process. Guarding on id instead of lineCount would make first-time processing impossible.
+    it('enables Process Payroll for a fresh (never-processed) period with lineCount > 0 and id === null', async () => {
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: null, lineCount: 1 }) });
+
+      renderPayrollPage();
+
+      const processButton = await screen.findByRole('button', { name: /ประมวลผลเงินเดือน/i });
+      await waitFor(() => expect(processButton.disabled).toBe(false));
+    });
+
+    it('shows an accessible block reason when disabled for an empty period, not the mobile-only message', async () => {
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ lineCount: 0, lines: [] }) });
+
+      renderPayrollPage();
+
+      const reason = await screen.findByText(/ยังไม่มีพนักงานในรอบเงินเดือนนี้/);
+      expect(reason.getAttribute('role')).toBe('note');
+      const processButton = screen.getByRole('button', { name: /ประมวลผลเงินเดือน/i });
+      expect(processButton.getAttribute('aria-describedby')).toBe(reason.id);
+    });
   });
 });

@@ -14,7 +14,7 @@ import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { cn } from '../../utils/cn.js';
-import { formatMoney, payrollStatusLabel as statusInfo } from '../../utils/format.js';
+import { formatMoney, formatShortDate, formatThaiMonthYearFromMonthInputValue, payrollStatusLabel as statusInfo } from '../../utils/format.js';
 
 // Reproduces `.panel` for the detail sidebar, which must stay a real <aside>
 // element (semantic landmark) — Layout.jsx's Panel always renders a <section>
@@ -261,6 +261,30 @@ export function PayrollPage({ showToast }) {
   const selectedSuggestion = selectedLine ? suggestionsByEmployee[selectedLine.employeeId] : null;
   const pendingUnpaidLeaveCorrectionDays = Number(selectedSuggestion?.pendingUnpaidLeaveCorrectionDays || 0);
   const status = statusInfo(period?.status);
+  // F1: guard the irreversible "Process Payroll" action against an empty period. PayrollService
+  // #process (backend) does NOT need a period id -- it recomputes from
+  // payrollRepository.findActiveEmployees() and calls saveProcessedPeriod regardless. If no period
+  // was ever loaded/previewed for this month, `adjustments` is `{}`, so `payload().inputs` is `[]`
+  // -- the backend still recomputes system-derived figures, but every HR-entered value (8 special
+  // pays, non-taxable income, student loan, legal execution, unpaid-leave days, withholding
+  // override) commits as zero. Worse, `status = 'PROCESSED'` is one-way (PayrollRepository only ever
+  // writes PROCESSED, there is no un-process path) and OvertimeService#requirePayrollMonthOpen then
+  // refuses OT approval for that month.
+  //
+  // MUST guard on `!(period?.lineCount > 0)`, NOT `!period?.id`: PayrollService#preview builds its
+  // DTO with `id: null`, and `currentOrPreview` (backend) falls back to preview for any month with
+  // no saved row -- so `period.id` is null for EVERY month that has never been processed, i.e. the
+  // normal first run. Guarding on id would make first-time processing impossible. That is exactly
+  // why the other action groups below (export/send) can key off `!period?.id` (they require an
+  // already-*saved* period) and this one cannot. See PayrollPage.test.jsx's
+  // "enables Process Payroll for a fresh (never-processed) period ... id === null" test, which pins
+  // this down as the regression guard against "simplifying" it back to `!period?.id`.
+  const emptyPeriod = !period || !(period.lineCount > 0);
+  const processBlockedReason = isMobile
+    ? 'ปิดใช้งานบนหน้าจอมือถือ — การประมวลผลเงินเดือนย้อนกลับไม่ได้ กรุณาใช้เดสก์ท็อป'
+    : emptyPeriod
+      ? 'ยังไม่มีพนักงานในรอบเงินเดือนนี้ — กดคำนวณตัวอย่างหรือเลือกรอบเดือนที่มีข้อมูลก่อนประมวลผล'
+      : null;
 
   async function load() {
     setLoading(true);
@@ -453,6 +477,9 @@ export function PayrollPage({ showToast }) {
             <label>
               รอบเดือน
               <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
+              {/* The native <input type="month"> always renders Gregorian and cannot show Buddhist
+                  era; this is a read-only display of the same value, not a second control. */}
+              <small className="font-normal text-text-muted">({formatThaiMonthYearFromMonthInputValue(month)})</small>
             </label>
             <Button type="button" variant="secondary" onClick={refresh} disabled={loading || saving} title="ดึงข้อมูลล่าสุด (คอมมิชชัน, OT, วันลา, ค่าตอบแทนกรรมการ) เข้ามาคำนวณใหม่ โดยยังไม่ประมวลผล">
               <Icon name="refresh" />
@@ -469,49 +496,90 @@ export function PayrollPage({ showToast }) {
         <StatCard icon="shield" label="ภาษี/ปกส." value={formatMoney(Number(period?.totalWithholdingTax || 0) + Number(period?.totalSocialSecurity || 0))} helper="Tax + SSO" tone="blue" />
       </StatGrid>
 
-      <FilterBar className="payroll-actions">
-        <div>
-          <strong>{period?.lineCount || 0} employees</strong>
-          <span>สถานะรอบเงินเดือน</span>
+      {/* F2: `.payroll-actions`'s own `flex-direction: column; align-items: stretch; gap: 14px;` rule
+          was dead — Tailwind utilities in `layer(utilities)` always beat `styles.css` in
+          `layer(legacy)` (see index.css), and FilterBar hardcodes `flex flex-wrap gap-[10px]
+          items-center`. Only `flex-direction: column` had no competing utility and actually applied;
+          `align-items`/`gap` silently lost, so the status row and action groups shrank to content
+          width and centred 10px apart instead of spanning full-width at 14px. Fixed at the call site
+          (Tailwind-first per CLAUDE.md) — `cn` is `twMerge`, so these override FilterBar's base
+          classes cleanly instead of fighting them. The dead rule was deleted from styles.css. */}
+      <FilterBar className="payroll-actions flex-col items-stretch gap-[14px]">
+        <div className="payroll-actions-status">
+          <div>
+            <strong>พนักงาน {period?.lineCount || 0} คน</strong>
+            <span>สถานะรอบเงินเดือน</span>
+          </div>
+          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
         </div>
-        <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-        <Button type="button" variant="secondary" onClick={preview} disabled={loading || saving}>
-          <Icon name="search" />
-          Preview
-        </Button>
-        <Button type="button" onClick={process} disabled={loading || saving}>
-          <Icon name="check" />
-          Process Payroll
-        </Button>
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={exportKind}
-            onChange={(event) => setExportKind(event.target.value)}
-            disabled={!period?.id || saving}
-            aria-label="ประเภทไฟล์ที่จะสร้าง"
-          >
-            {EXPORT_KINDS.map((kind) => (
-              <option key={kind.value} value={kind.value}>{kind.label}</option>
-            ))}
-          </select>
-          <label className="inline-flex items-center gap-2 m-0 text-sm font-extrabold">
-            วันที่จ่าย
-            <input
-              type="date"
-              value={payDate}
-              onChange={(event) => setPayDate(event.target.value)}
+
+        <div className="payroll-actions-groups">
+          {/* Review — safe, read-only recompute. */}
+          <div className="payroll-actions-group">
+            <Button type="button" variant="secondary" onClick={preview} disabled={loading || saving}>
+              <Icon name="search" />
+              คำนวณตัวอย่าง
+            </Button>
+          </div>
+
+          {/* Run — the irreversible action. Kept visually apart (its own bordered group) and blocked
+              outright below the 720px mobile breakpoint rather than merely advised against, since a
+              mis-tap here commits payroll. Also blocked when the loaded period has no lines (F1) —
+              see the `emptyPeriod` comment above for why. */}
+          <div className="payroll-actions-group payroll-actions-group-run">
+            <Button
+              type="button"
+              onClick={process}
+              disabled={loading || saving || isMobile || emptyPeriod}
+              aria-describedby={processBlockedReason ? 'payroll-process-block-reason' : undefined}
+              title={processBlockedReason || undefined}
+            >
+              <Icon name="check" />
+              ประมวลผลเงินเดือน
+            </Button>
+            {processBlockedReason && (
+              <span id="payroll-process-block-reason" role="note" className="payroll-process-block-reason">
+                {processBlockedReason}
+              </span>
+            )}
+          </div>
+
+          {/* Export — statutory file generation. */}
+          <div className="payroll-actions-group">
+            <select
+              value={exportKind}
+              onChange={(event) => setExportKind(event.target.value)}
               disabled={!period?.id || saving}
-            />
-          </label>
-          <Button type="button" variant="secondary" onClick={generateExportFile} disabled={!period?.id || saving}>
-            <Icon name="fileText" />
-            ดาวน์โหลดไฟล์
-          </Button>
+              aria-label="ประเภทไฟล์ที่จะสร้าง"
+            >
+              {EXPORT_KINDS.map((kind) => (
+                <option key={kind.value} value={kind.value}>{kind.label}</option>
+              ))}
+            </select>
+            <label className="inline-flex items-center gap-2 m-0 text-sm font-extrabold">
+              วันที่จ่าย
+              <input
+                type="date"
+                value={payDate}
+                onChange={(event) => setPayDate(event.target.value)}
+                disabled={!period?.id || saving}
+              />
+              <small className="font-normal text-text-muted">({formatShortDate(payDate)})</small>
+            </label>
+            <Button type="button" variant="secondary" onClick={generateExportFile} disabled={!period?.id || saving}>
+              <Icon name="fileText" />
+              ดาวน์โหลดไฟล์
+            </Button>
+          </div>
+
+          {/* Send — notify employees. */}
+          <div className="payroll-actions-group">
+            <Button type="button" variant="secondary" onClick={distributePayslips} disabled={!period?.id || saving}>
+              <Icon name="mail" />
+              ส่งอีเมลสลิปเงินเดือน
+            </Button>
+          </div>
         </div>
-        <Button type="button" variant="secondary" onClick={distributePayslips} disabled={!period?.id || saving}>
-          <Icon name="mail" />
-          Email payslips
-        </Button>
       </FilterBar>
 
       <section className="payroll-workspace">
@@ -671,7 +739,7 @@ export function PayrollPage({ showToast }) {
         message={(
           <div>
             <p className="confirm-dialog-message">
-              ยืนยันประมวลผลเงินเดือนรอบ {month}? การดำเนินการนี้ไม่สามารถย้อนกลับได้
+              ยืนยันประมวลผลเงินเดือนรอบ {formatThaiMonthYearFromMonthInputValue(month)}? การดำเนินการนี้ไม่สามารถย้อนกลับได้
             </p>
             <p className="confirm-dialog-message">
               รายได้รวม {formatMoney(period?.totalGross)} · เงินหักรวม {formatMoney(period?.totalDeductions)} · ยอดโอนสุทธิ {formatMoney(period?.totalNet)}

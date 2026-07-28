@@ -145,7 +145,7 @@ describe('PayrollPage special-pay carry-forward', () => {
     fireEvent.change(costOfLiving, { target: { value: '950' } });
     expect(costOfLiving.value).toBe('950');
 
-    fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
+    fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
 
     await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
     const submittedInput = api.payroll.preview.mock.calls[0][0].inputs.find((item) => item.employeeId === 1);

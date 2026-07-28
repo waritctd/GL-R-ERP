@@ -7,8 +7,45 @@ export function formatThaiDate(value) {
   return `${date.getDate()} ${thaiMonths[date.getMonth()]} ${date.getFullYear() + 543}`;
 }
 
+// Buddhist-era month/year, for a native `<input type="month">` value ("YYYY-MM") — display only,
+// never a value that gets submitted anywhere. Deliberately parses the "YYYY-MM" string directly
+// instead of going through `new Date(value)`: a bare-month ISO string is parsed as UTC midnight,
+// which can roll to the wrong local month/year near a timezone boundary. Reuses the same
+// thaiMonths table and +543 offset as formatThaiDate above rather than a second lookup.
+//
+// Named `...FromMonthInputValue` (not the shorter `formatThaiMonthYear`) because
+// `features/specialmoney/specialMoneyRules.js` already exports a *different* `formatThaiMonthYear`
+// that takes a `Date` and returns a 2-digit BE year — same name, incompatible signature. Autofilling
+// an import from this file into a specialmoney file would pass a `Date` here, the regex below
+// wouldn't match, and it would silently return '-' with no crash and no test. Do not rename this
+// back to `formatThaiMonthYear` without also resolving that collision (ideally consolidating both
+// into one thaiMonths table — this file, `specialMoneyRules.js`, and `formatThaiDate` above all keep
+// their own copy today).
+export function formatThaiMonthYearFromMonthInputValue(value) {
+  if (!value) return '-';
+  const match = /^(\d{4})-(\d{2})$/.exec(value);
+  if (!match) return '-';
+  const monthIndex = Number(match[2]) - 1;
+  if (monthIndex < 0 || monthIndex > 11) return '-';
+  return `${thaiMonths[monthIndex]} ${Number(match[1]) + 543}`;
+}
+
 export function formatShortDate(value) {
   if (!value) return '-';
+  // A bare "YYYY-MM-DD" (no time component — e.g. a LocalDate field, or an `<input type="date">`
+  // value) is parsed directly rather than via `new Date(value)`: that constructor reads a date-only
+  // ISO string as UTC midnight, so `.getDate()`/`.getMonth()` below then read it back in the local
+  // zone, which rolls to the previous day west of UTC (America/New_York, Pacific/Honolulu, ...).
+  // A full ISO datetime (a real instant, e.g. an attendance punch timestamp with a time/offset) is
+  // NOT matched here and falls through to `new Date()` below, same as before — reading an instant
+  // back in local time is the correct behaviour, not the bug this guards against.
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (dateOnly) {
+    const [, year, month, day] = dateOnly;
+    const monthIndex = Number(month) - 1;
+    if (monthIndex < 0 || monthIndex > 11) return '-';
+    return `${day}/${month}/${Number(year) + 543}`;
+  }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '-';
   return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear() + 543}`;
