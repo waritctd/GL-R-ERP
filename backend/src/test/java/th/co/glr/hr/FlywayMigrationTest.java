@@ -150,6 +150,43 @@ class FlywayMigrationTest {
         assertThat(result.migrationsExecuted).isGreaterThan(0);
         assertUatDealPipelineSeed();
         assertUatGoldenPcrDeal();
+        assertUatCustomerMaster();
+    }
+
+    /**
+     * V911's fixtures must outlive V91. V91 (db/migration) deletes the V16/V23/V24/V25 sample rows,
+     * and on the hosted UAT database those were the only customers there — nothing referenced them,
+     * so every guard passed and UAT was left with an empty customer master: no customer, project or
+     * contact picker, and no tax ID / address for quotation auto-fill. Nothing throws in that state,
+     * which is exactly why it needs asserting rather than trusting the migrate to stay green.
+     *
+     * <p>Counts V911's OWN rows, not whole tables. On a clean database V903/V905/V909/V910 add 11
+     * customers of their own (สยามคอนสตรัคชั่น, โกลเด้นเกท, …) plus the golden deal's contact and
+     * project, so a whole-table count would assert against two seeds at once and break whenever
+     * either moved. Those 11 are absent from the hosted UAT database — which is why it ended up with
+     * nothing at all once V91 took the four V16 samples — but a rebuild does get them, and V911's
+     * 13 are complementary: they mirror the DEAL-UAT-* tickets' customer_name values.
+     */
+    private void assertUatCustomerMaster() {
+        assertThat(countRows(
+            "SELECT count(*) FROM customers.customer WHERE tax_id LIKE '0999%'")).isEqualTo(13);
+        assertThat(countRows(
+            "SELECT count(*) FROM customers.contact WHERE email LIKE '%@uat.glr'")).isEqualTo(4);
+        assertThat(countRows(
+            "SELECT count(*) FROM customers.project WHERE name LIKE 'โครงการทดสอบ UAT%'"))
+            .isEqualTo(4);
+        assertThat(countRows("SELECT count(*) FROM sales.factory_config")).isEqualTo(9);
+        assertThat(countRows(
+            "SELECT count(*) FROM sales.catalog WHERE collection LIKE 'UAT %'")).isEqualTo(6);
+
+        // None of the V16/V23/V24/V25 sample rows may come back under a UAT number.
+        assertThat(countRows(
+            "SELECT count(*) FROM customers.customer WHERE tax_id IN "
+                + "('0105565012345','0105556789012','0105578901234','0105591234567')")).isZero();
+        // Factory-quote dispatch sends to sales.factory_config.email — a real supplier address here
+        // means a UAT test run can email an actual factory.
+        assertThat(countRows(
+            "SELECT count(*) FROM sales.factory_config WHERE email NOT LIKE '%@uat.glr'")).isZero();
     }
 
     /**
