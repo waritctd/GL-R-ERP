@@ -6,7 +6,7 @@ colors:
   primary-hover: "#6366f1"
   accent: "#14b8a6"
   accent-deep: "#0f766e"
-  success: "#059669"
+  success: "#047857"
   warning: "#b45309"
   danger: "#dc2626"
   info: "#1d4ed8"
@@ -18,7 +18,7 @@ colors:
   surface-subtle: "#f1f5f9"
   ink: "#0f172a"
   ink-secondary: "#334155"
-  ink-muted: "#64748b"
+  ink-muted: "#5c6b80"
   ink-faint: "#94a3b8"
   border: "#e6eaf0"
   border-input: "#dfe5ee"
@@ -209,8 +209,8 @@ A small, ordered set of surfaces — depth reads through **tone and border**, no
 A cool, **rationed** palette: neutral workspace and white surfaces carry the work; indigo and teal do the pointing; semantic colours are reserved for state. Colour is spent, not sprinkled.
 
 - **Indigo** (`#4f46e5`, hover `#6366f1`) — the single **action** colour. Primary buttons, active tabs, links, focus-ring hue. Nothing decorative wears it.
-- **Teal** (`#14b8a6`) — the **"live/current"** accent, used in a handful of places app-wide: the active nav item's tint, progress fills, small count badges. Its rarity is the meaning.
-- **Semantic** — success `#059669`, warning `#b45309`, danger `#dc2626`, info `#1d4ed8`, each with a tinted bg + border. One colour, one meaning.
+- **Teal** (`#14b8a6`) — the **"live/current"** accent, used in a handful of places app-wide: the active nav item's tint and progress fills. Its rarity is the meaning. Small count badges use **Teal Deep** (`#0f766e`) instead — plain Teal only clears ~2.5:1 as badge text, a straight AA failure (see fix/ui-contrast-tokens, 2026-07-28).
+- **Semantic** — success `#047857`, warning `#b45309`, danger `#dc2626`, info `#1d4ed8`, each with a tinted bg + border. One colour, one meaning.
 - **Override purple** (`#7c3aed`) — exactly one use: a CEO manual price override on a line item. Purple only ever appears here (indigo is spoken for).
 - **Neutrals** — the workspace/surface/muted/subtle steps plus the ink ramp (§6 text) and the borders.
 
@@ -375,7 +375,7 @@ Thai is primary content. Every rule here is a hard requirement, not a nicety.
 
 Target **WCAG 2.1 AA** (2.2 AA where already met). The shared primitives are the leverage points; fixing them fixes the app.
 
-- **Contrast** — body/data text ≥4.5:1, large text ≥3:1. `--color-text-muted` `#64748b` (~4.6:1 on white) is the **floor** for body/data text; `--color-text-faint` `#94a3b8` (~2.6:1) is reserved for **icons/placeholders** and navy-sidebar text only. Never body text in faint ("light gray for elegance" is banned).
+- **Contrast** — body/data text ≥4.5:1, large text ≥3:1. `--color-text-muted` `#5c6b80` (~4.7-5.4:1 across the app's light surfaces — white, surface-muted, surface-subtle, workspace) is the **floor** for body/data text on light surfaces; it fails on the dark sidebar (~3.5:1), where `--color-text-faint` `#94a3b8` is used instead (~7.3:1 on `--color-sidebar-bg`). `--color-text-faint` on a *light* surface (~2.6:1) is reserved for **icons/placeholders only, never text** — its only two legitimate roles are decorative icons and navy-sidebar text (fixed 2026-07-28, see `fix/ui-contrast-tokens`: it had drifted onto real body text in `TicketCreateModal`/`TicketDetailPage`, and the sidebar's own brand subtitle had drifted the other way, onto `--color-text-muted`).
 - **Focus visible** — a single global `:focus-visible` ring on *every* interactive element (fixes A-03/F-08); the outline is replaced by the ring, never stripped without one.
 - **Status not colour-only** — text (+ optional icon) on every badge and state (§15).
 - **Form errors programmatic** — `aria-invalid` + `aria-describedby` in the shared `FormField` (fixes A-04).
@@ -434,10 +434,10 @@ A cool, rationed palette: neutral workspace and white surfaces carry the work, i
 - **Indigo** (`#4f46e5`): The single action color. Primary buttons, active tabs, links, and the focus ring's hue. Hovers to a lighter **Indigo Bright** (`#6366f1`). This is the color of "you can act here" — nothing decorative wears it.
 
 ### Secondary
-- **Teal** (`#14b8a6`): The "live" accent, used deliberately sparingly (a handful of places across the whole app): the active sidebar item's tint, progress-bar fills, and small count badges. Its rarity is what makes it read as *current*. **Teal Deep** (`#0f766e`) backs the occasional highlight panel.
+- **Teal** (`#14b8a6`): The "live" accent, used deliberately sparingly (a handful of places across the whole app): the active sidebar item's tint and progress-bar fills. Its rarity is what makes it read as *current*. **Teal Deep** (`#0f766e`) backs the occasional highlight panel and — as of 2026-07-28 (`fix/ui-contrast-tokens`) — small count badges: plain Teal only clears ~2.5:1 as badge text (the sidebar unread badge, `styles.css` `.nav-item b`) and the numeral in a Teal "pulse" stat (`ImportOverview.jsx`'s `text-accent-dark`), both AA failures; Teal Deep clears 5.47:1+ in the same spots.
 
 ### Tertiary — Semantic
-- **Success Green** (`#059669`, bg `#dcfce7`, border `#a7f3d0`): approvals, paid status, positive confirmations.
+- **Success Green** (`#047857`, bg `#dcfce7`, border `#a7f3d0`): approvals, paid status, positive confirmations. Was `#059669` until 2026-07-28 (`fix/ui-contrast-tokens`) — that value measured 3.77:1 both as white-on-success (the Approve button) and as success-on-white (commission-rate text), failing the 4.5:1 floor; `#047857` clears 5.48:1 in both directions. `--color-success-bg`/`--color-success-dark` (below) are unaffected — they're a separate pairing, never combined with plain `--color-success` text.
 - **Warning Amber** (`#b45309`, bg `#fef3c7`): pending, needs-attention, caution. The soft warning panel variant (`--color-warning-bg-soft`, `#fffbeb`) pairs with `--color-warning-border` (`#fbbf24`) and `--color-warning-dark` (`#92400e`) text for inline warning callouts (e.g. the ticket "already approved" banner) that need a lighter touch than the amber badge.
 - **Danger Red** (`#dc2626`, bg `#fee2e2`, border `#fecaca`): rejections, destructive actions, errors. Danger buttons are *outlined*, not filled — the weight of the action shouldn't shout until pressed.
 - **Info Blue** (`#1d4ed8`, bg `#dbeafe`): informational status, neutral notices, selected rows. `--color-info-border` (`#bfdbfe`) and `--color-info-border-strong` (`#93c5fd`) are the two info-tinted border weights used on info panels and inline inputs sitting on an info background.
@@ -447,7 +447,7 @@ A cool, rationed palette: neutral workspace and white surfaces carry the work, i
 - **Workspace** (`#eef1f6`): the cool off-blue page background everything sits on.
 - **Sidebar Navy** (`#0b1220`): the one dark surface — the navigation rail. Text on it is **Slate** (`#cbd5e1`, also aliased as `--color-border-muted` where it appears as a form-control border rather than sidebar text).
 - **Surface White** (`#ffffff`): panels, cards, tables, inputs. **Surface Muted** (`#f8fafc`) for table headers and inset zones; **Surface Subtle** (`#f1f5f9`) for tracks and dividers.
-- **Ink** (`#0f172a`): primary text. **Ink Secondary** (`#334155`): body/table text. **Ink Muted** (`#64748b`): captions and secondary labels — the floor for text on white. **Ink Faint** (`#94a3b8`): icons and placeholders only, never body copy.
+- **Ink** (`#0f172a`): primary text. **Ink Secondary** (`#334155`): body/table text. **Ink Muted** (`#5c6b80`, was `#64748b` until 2026-07-28 — see the Muted Floor Rule below): captions and secondary labels — the floor for text on **light** surfaces only; on the dark sidebar rail use Ink Faint instead (below). **Ink Faint** (`#94a3b8`): icons and placeholders only, never body copy — except as sidebar-rail text, where it clears 7.3:1 against Sidebar Navy.
 - **Border** (`#e6eaf0`) for card/panel edges; **Border Input** (`#dfe5ee`) for form controls; **Border Subtle** (`#e2e8f0`) for lighter card/row dividers.
 
 ### Aliases
@@ -456,7 +456,7 @@ A cool, rationed palette: neutral workspace and white surfaces carry the work, i
 ### Named Rules
 **The Rationed Teal Rule.** Teal marks what is *live* and nothing else. If teal appears more than a few times on one screen, it has stopped meaning "current" and become decoration — remove it. Indigo is for action; teal is for state; they are not interchangeable.
 
-**The Muted Floor Rule.** `#64748b` (Ink Muted) is the lightest a text color may go on a white surface — it clears 4.5:1. `#94a3b8` (Ink Faint) is for icons and placeholders only. Never set body or data text in Faint; "light gray for elegance" is a banned anti-reference here.
+**The Muted Floor Rule.** `#5c6b80` (Ink Muted, updated 2026-07-28 from `#64748b`, which measured as low as 3.93:1 on the app's actual light surfaces — workspace, surface-subtle, `#efefef` — despite clearing ~4.6:1 on pure white) is the lightest a text color may go on a **light** surface — it clears 4.5:1+ against every light surface it's used on. On the dark sidebar rail, Ink Muted itself fails (~3.5:1); use `#94a3b8` (Ink Faint) there instead, which clears 7.3:1 on Sidebar Navy. On light surfaces, Ink Faint (~2.6:1) is for icons and placeholders only. Never set body or data text in Faint on a light surface; "light gray for elegance" is a banned anti-reference here.
 
 ## 3. Typography
 
@@ -522,7 +522,7 @@ Controls should feel **sturdy and legible**: solid borders, confident bold label
 
 ### Navigation (Sidebar)
 - **Style:** 260px fixed rail on Sidebar Navy; collapses on mobile. Items are 3-column grids (icon · label · count) at 48px min-height.
-- **Default:** Ink-Faint label on transparent. **Active:** teal-tinted background (`rgba(20,184,166,0.13)`) with white label — the one place teal marks "you are here". Count badges are teal pills.
+- **Default:** Ink-Faint label on transparent. **Active:** teal-tinted background (`rgba(20,184,166,0.13)`) with white label — the one place teal marks "you are here". Count badges are Teal Deep pills — plain Teal fails AA as badge text (see the Teal Deep note under §5/§19).
 
 ### Tables
 - **Header:** `.table-head` — Surface Muted background, Overline type (11px, 800, uppercase), Ink-Muted, bottom border; `.is-sticky` pins it.
@@ -541,7 +541,7 @@ Controls should feel **sturdy and legible**: solid borders, confident bold label
 - **Do** ration color: Indigo (`#4f46e5`) for actions and focus, Teal (`#14b8a6`) for "live"/current only, semantics for state. Each color means one thing.
 - **Do** keep surfaces flat at rest with a 1px border and the Resting shadow; reserve real shadow for modals, menus, and hover lift ("The Flat-Desk Rule").
 - **Do** build hierarchy from Sarabun weight (400 body → 700 label → 800 heading), not from a second typeface.
-- **Do** keep body/data text at Ink-Muted (`#64748b`) or darker — it clears 4.5:1. Verify contrast on tinted surfaces.
+- **Do** keep body/data text at Ink-Muted (`#5c6b80`) or darker on light surfaces — it clears 4.5:1+. On the dark sidebar rail use Ink Faint (`#94a3b8`, 7.3:1 there) instead — Ink Muted itself fails on that surface. Verify contrast on tinted surfaces.
 - **Do** keep inputs at 16px font-size and controls at ≥38–44px touch height; design mobile flows as reflowed cards, not shrunk desktop grids.
 - **Do** test every layout in **both Thai and English** — line-height, truncation, and label widths must survive both scripts.
 - **Do** honor `prefers-reduced-motion`; motion (150–250ms) conveys state only.

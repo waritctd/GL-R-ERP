@@ -10,13 +10,6 @@ const PHASE_FILL = {
   4: 'bg-phase-4',
   5: 'bg-phase-5',
 };
-const PHASE_TEXT = {
-  1: 'text-phase-1',
-  2: 'text-phase-2',
-  3: 'text-phase-3',
-  4: 'text-phase-4',
-  5: 'text-phase-5',
-};
 import { dealStageLabel } from '../../utils/format.js';
 import { GATE_LABEL, SALES_PHASES, SALES_STAGES, stageIndex } from './stageMeta.js';
 
@@ -64,6 +57,18 @@ export function DealStageStepper({ salesStage, lost = false }) {
                 {isDone ? <Icon name="check" size={13} /> : phase.id}
               </span>
               <span className="min-w-0 flex-1">
+                {/* WCAG AA fix (fix/ui-contrast-tokens): a PHASE_TEXT map used to apply
+                    --color-phase-N directly to this label. As text-on-white (11px/800,
+                    not "large text") three of the five phase colors fail the 4.5:1
+                    floor — phase-1 4.47, phase-2 2.77, phase-5 3.77 — only phase-3
+                    (6.29) and phase-4 (5.47) happened to pass. Rather than mint five
+                    new text-safe phase variants for this one call site, the label now
+                    always uses the app's normal text tokens; the fill bar directly
+                    below already carries the full phase hue, so the phase-specific
+                    color isn't lost, just moved off text onto the decorative element
+                    that can safely carry it. Applied uniformly across all 5 phases for
+                    consistency (no phase looks different from its siblings depending
+                    on whether it happened to pass). */}
                 <span className={`block text-sm font-extrabold ${isCurrent && !lost ? 'text-text' : 'text-text-muted'}`}>
                   เฟส {phase.id} · {phase.name}
                 </span>
@@ -138,7 +143,7 @@ export function PhaseTracker({ salesStage, lost = false }) {
         const isCurrent = !lost && currentIdx >= firstIdx && currentIdx <= lastIdx;
         return (
           <div key={phase.id} className="min-w-0 flex flex-col gap-1.5" style={{ flex: steps.length }}>
-            <span className={`text-2xs font-extrabold ${isCurrent ? PHASE_TEXT[phase.id] : 'text-text-muted'}`}>
+            <span className={`text-2xs font-extrabold ${isCurrent ? 'text-text-secondary' : 'text-text-muted'}`}>
               เฟส {phase.id}
             </span>
             <div className="h-2 overflow-hidden rounded-full bg-surface-subtle">

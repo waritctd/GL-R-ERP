@@ -182,7 +182,7 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
       {value ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#f8fafc', fontSize: 13 }}>
           <span style={{ flex: 1 }}>{renderValue(value)}</span>
-          <button type="button" onClick={() => { onSelect(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 0 }}>
+          <button type="button" onClick={() => { onSelect(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-faint)', padding: 0 }}>
             <Icon name="close" size={14} />
           </button>
         </div>
@@ -203,8 +203,8 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
           />
           {open && (
             <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.1)', maxHeight: 220, overflowY: 'auto' }}>
-              {loading && <div style={{ padding: '10px 12px', fontSize: 12, color: '#64748b' }}>กำลังโหลด...</div>}
-              {!loading && options.length === 0 && <div style={{ padding: '10px 12px', fontSize: 12, color: '#64748b' }}>ไม่พบข้อมูล</div>}
+              {loading && <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--color-text-muted)' }}>กำลังโหลด...</div>}
+              {!loading && options.length === 0 && <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--color-text-muted)' }}>ไม่พบข้อมูล</div>}
               {options.map((opt) => (
                 // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- dropdown option row; onMouseDown (not click) preserves input focus for typeahead
                 <div key={opt.id} onMouseDown={() => { onSelect(opt); setOpen(false); }}
@@ -231,7 +231,7 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
         </div>
       )}
       {error ? (
-        <p id={errorId} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{error}</p>
+        <p id={errorId} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{error}</p>
       ) : null}
     </div>
   );
@@ -267,8 +267,15 @@ function HubRow({ title, subtitle, done, required, optional, active, onClick }) 
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-1.5 text-sm font-extrabold text-text">
           {title}
-          {required && !done ? <span className="rounded-full bg-danger-bg px-1.5 text-2xs font-extrabold text-danger">จำเป็น</span> : null}
-          {optional ? <span className="text-2xs font-semibold text-text-faint">(ไม่บังคับ)</span> : null}
+          {/* WCAG AA fix (fix/ui-contrast-tokens): text-danger (#dc2626) on
+              bg-danger-bg (#fee2e2) measures 3.95:1, failing 4.5:1 — found
+              by an automated contrast scan of this modal, not the original
+              manual audit. text-danger-dark (#b91c1c) is the app's
+              established danger-on-danger-bg pairing (already asserted at
+              4.5+ in designTokens.test.js's 'status-danger text on danger
+              bg' case; StatusBadge's own danger tone uses it too). */}
+          {required && !done ? <span className="rounded-full bg-danger-bg px-1.5 text-2xs font-extrabold text-danger-dark">จำเป็น</span> : null}
+          {optional ? <span className="text-2xs font-semibold text-text-muted">(ไม่บังคับ)</span> : null}
         </span>
         <span className="block truncate text-xs text-text-muted">{subtitle}</span>
       </span>
@@ -725,10 +732,10 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           renderOption={(c) => (
             <div>
               <div style={{ fontWeight: 600 }}>{c.name}</div>
-              {c.taxId && <div style={{ fontSize: 11, color: '#64748b' }}>เลขภาษี {c.taxId}</div>}
+              {c.taxId && <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>เลขภาษี {c.taxId}</div>}
             </div>
           )}
-          renderValue={(c) => <span><strong>{c.name}</strong>{c.taxId ? <span style={{ color: '#64748b', fontSize: 12, marginLeft: 6 }}>({c.taxId})</span> : null}</span>}
+          renderValue={(c) => <span><strong>{c.name}</strong>{c.taxId ? <span style={{ color: 'var(--color-text-muted)', fontSize: 12, marginLeft: 6 }}>({c.taxId})</span> : null}</span>}
           createNewLabel="สร้างบริษัท / ลูกค้าใหม่"
           onCreateNew={() => setShowNewCustomer(true)}
           inputRef={(el) => { fieldRefs.current.customer = el; }}
@@ -794,9 +801,9 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>โครงการ *</span>
             {selectedProject ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', fontSize: 13 }}>
-                <Icon name="building" size={13} style={{ color: '#64748b' }} />
+                <Icon name="building" size={13} style={{ color: 'var(--color-text-muted)' }} />
                 <span style={{ flex: 1 }}>{selectedProject.name}</span>
-                <button type="button" onClick={() => setSelectedProject(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 0 }}>
+                <button type="button" onClick={() => setSelectedProject(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-faint)', padding: 0 }}>
                   <Icon name="close" size={14} />
                 </button>
               </div>
@@ -811,7 +818,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                     </button>
                   ))}
                   <button type="button"
-                    style={{ padding: '4px 10px', border: '1px dashed #94a3b8', borderRadius: 20, fontSize: 12, background: 'none', cursor: 'pointer', color: '#64748b' }}
+                    style={{ padding: '4px 10px', border: '1px dashed #94a3b8', borderRadius: 20, fontSize: 12, background: 'none', cursor: 'pointer', color: 'var(--color-text-muted)' }}
                     onClick={() => setShowNewProject((v) => !v)}>
                     <Icon name="plus" size={12} /> สร้างโครงการใหม่
                   </button>
@@ -828,7 +835,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               </div>
             )}
             {fieldErrors.project ? (
-              <p id={fieldErrorId('project-field')} role="alert" style={{ margin: '6px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{fieldErrors.project}</p>
+              <p id={fieldErrorId('project-field')} role="alert" style={{ margin: '6px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{fieldErrors.project}</p>
             ) : null}
           </div>
         )}
@@ -875,7 +882,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   }`}
                 >
                   {option.label}
-                  <small className={`mt-0.5 block font-semibold ${selected ? 'text-primary-hover' : 'text-text-faint'}`}>{option.sub}</small>
+                  <small className={`mt-0.5 block font-semibold ${selected ? 'text-primary-hover' : 'text-text-muted'}`}>{option.sub}</small>
                 </button>
               );
             })}
@@ -894,14 +901,14 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', fontSize: 13 }}>
                 <div style={{ flex: 1 }}>
                   <strong>{selectedContact.firstName} {selectedContact.lastName}</strong>
-                  {selectedContact.position && <span style={{ color: '#64748b', fontSize: 12, marginLeft: 6 }}>{selectedContact.position}</span>}
+                  {selectedContact.position && <span style={{ color: 'var(--color-text-muted)', fontSize: 12, marginLeft: 6 }}>{selectedContact.position}</span>}
                   {(selectedContact.email || selectedContact.phone) && (
-                    <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                    <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 2 }}>
                       {selectedContact.email}{selectedContact.email && selectedContact.phone ? ' · ' : ''}{selectedContact.phone}
                     </div>
                   )}
                 </div>
-                <button type="button" onClick={() => setSelectedContact(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 0 }}>
+                <button type="button" onClick={() => setSelectedContact(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-faint)', padding: 0 }}>
                   <Icon name="close" size={14} />
                 </button>
               </div>
@@ -913,11 +920,11 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                       style={{ padding: '4px 10px', border: '1px solid #cbd5e1', borderRadius: 20, fontSize: 12, background: '#fff', cursor: 'pointer', textAlign: 'left' }}
                       onClick={() => setSelectedContact(c)}>
                       {c.firstName} {c.lastName}
-                      {c.position ? <span style={{ color: '#64748b', marginLeft: 4 }}>({c.position})</span> : null}
+                      {c.position ? <span style={{ color: 'var(--color-text-muted)', marginLeft: 4 }}>({c.position})</span> : null}
                     </button>
                   ))}
                   <button type="button"
-                    style={{ padding: '4px 10px', border: '1px dashed #94a3b8', borderRadius: 20, fontSize: 12, background: 'none', cursor: 'pointer', color: '#64748b' }}
+                    style={{ padding: '4px 10px', border: '1px dashed #94a3b8', borderRadius: 20, fontSize: 12, background: 'none', cursor: 'pointer', color: 'var(--color-text-muted)' }}
                     onClick={() => setShowNewContact((v) => !v)}>
                     <Icon name="plus" size={12} /> เพิ่มผู้ติดต่อ
                   </button>
@@ -995,7 +1002,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               aria-describedby={fieldErrors[`items.${index}.brand`] ? fieldErrorId(`item-${index}-brand`) : undefined}
             />
             {fieldErrors[`items.${index}.brand`] ? (
-              <p id={fieldErrorId(`item-${index}-brand`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{fieldErrors[`items.${index}.brand`]}</p>
+              <p id={fieldErrorId(`item-${index}-brand`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{fieldErrors[`items.${index}.brand`]}</p>
             ) : null}
             {catalogFocus?.index === index && catalogFocus?.field === 'brand' && catalogResults.length > 0 && (
               <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 60, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.12)', maxHeight: 200, overflowY: 'auto' }}>
@@ -1009,7 +1016,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                     <strong>{cat.factoryName || cat.brand}</strong>
                     {' — '}
                     {cat.collection || cat.productName || cat.productCode || '—'}
-                    <span style={{ color: '#64748b', marginLeft: 4 }}>
+                    <span style={{ color: 'var(--color-text-muted)', marginLeft: 4 }}>
                       {[cat.color, cat.sizeRaw || cat.size].filter(Boolean).join(' · ')}
                     </span>
                     {cat.price && (
@@ -1039,7 +1046,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               aria-describedby={fieldErrors[`items.${index}.model`] ? fieldErrorId(`item-${index}-model`) : undefined}
             />
             {fieldErrors[`items.${index}.model`] ? (
-              <p id={fieldErrorId(`item-${index}-model`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{fieldErrors[`items.${index}.model`]}</p>
+              <p id={fieldErrorId(`item-${index}-model`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{fieldErrors[`items.${index}.model`]}</p>
             ) : null}
             {catalogFocus?.index === index && catalogFocus?.field === 'model' && catalogResults.length > 0 && (
               <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 60, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.12)', maxHeight: 200, overflowY: 'auto' }}>
@@ -1053,7 +1060,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                     <strong>{cat.factoryName || cat.brand}</strong>
                     {' — '}
                     {cat.collection || cat.productName || cat.productCode || '—'}
-                    <span style={{ color: '#64748b', marginLeft: 4 }}>
+                    <span style={{ color: 'var(--color-text-muted)', marginLeft: 4 }}>
                       {[cat.color, cat.sizeRaw || cat.size].filter(Boolean).join(' · ')}
                     </span>
                     {cat.price && (
@@ -1080,7 +1087,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               aria-describedby={fieldErrors[`items.${index}.color`] ? fieldErrorId(`item-${index}-color`) : undefined}
             />
             {fieldErrors[`items.${index}.color`] ? (
-              <p id={fieldErrorId(`item-${index}-color`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{fieldErrors[`items.${index}.color`]}</p>
+              <p id={fieldErrorId(`item-${index}-color`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{fieldErrors[`items.${index}.color`]}</p>
             ) : null}
           </label>
           <label style={{ margin: 0 }}>
@@ -1097,7 +1104,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               aria-describedby={fieldErrors[`items.${index}.texture`] ? fieldErrorId(`item-${index}-texture`) : undefined}
             />
             {fieldErrors[`items.${index}.texture`] ? (
-              <p id={fieldErrorId(`item-${index}-texture`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{fieldErrors[`items.${index}.texture`]}</p>
+              <p id={fieldErrorId(`item-${index}-texture`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{fieldErrors[`items.${index}.texture`]}</p>
             ) : null}
           </label>
           <label style={{ margin: 0 }}>
@@ -1114,7 +1121,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               aria-describedby={fieldErrors[`items.${index}.size`] ? fieldErrorId(`item-${index}-size`) : undefined}
             />
             {fieldErrors[`items.${index}.size`] ? (
-              <p id={fieldErrorId(`item-${index}-size`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{fieldErrors[`items.${index}.size`]}</p>
+              <p id={fieldErrorId(`item-${index}-size`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{fieldErrors[`items.${index}.size`]}</p>
             ) : null}
           </label>
           <label style={{ margin: 0 }}>
@@ -1136,7 +1143,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                 </label>
               ))}
               {item.sqmPerPiece && (
-                <span style={{ fontSize: 11, color: '#64748b' }}>· 1 แผ่น = {item.sqmPerPiece} ตร.ม.</span>
+                <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>· 1 แผ่น = {item.sqmPerPiece} ตร.ม.</span>
               )}
             </div>
           </div>
@@ -1156,12 +1163,12 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   aria-describedby={fieldErrors[`items.${index}.qty`] ? fieldErrorId(`item-${index}-qty`) : undefined}
                 />
                 {fieldErrors[`items.${index}.qty`] ? (
-                  <p id={fieldErrorId(`item-${index}-qty`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{fieldErrors[`items.${index}.qty`]}</p>
+                  <p id={fieldErrorId(`item-${index}-qty`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{fieldErrors[`items.${index}.qty`]}</p>
                 ) : null}
               </label>
               <div style={{ margin: 0 }}>
                 <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>พื้นที่รวม (ตร.ม.)</span>
-                <div style={{ padding: '7px 10px', border: '1px solid #e2e8f0', borderRadius: 6, background: '#f8fafc', fontSize: 13, color: item.qtySqm ? '#475569' : '#94a3b8' }}>
+                <div style={{ padding: '7px 10px', border: '1px solid #e2e8f0', borderRadius: 6, background: '#f8fafc', fontSize: 13, color: item.qtySqm ? '#475569' : 'var(--color-text-muted)' }}>
                   {item.qtySqm ? `${Number(item.qtySqm).toFixed(3)} ตร.ม.` : item.sqmPerPiece ? 'กรอกจำนวนแผ่นก่อน' : '—'}
                 </div>
               </div>
@@ -1180,12 +1187,12 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   aria-describedby={fieldErrors[`items.${index}.qtySqm`] ? fieldErrorId(`item-${index}-qtySqm`) : undefined}
                 />
                 {fieldErrors[`items.${index}.qtySqm`] ? (
-                  <p id={fieldErrorId(`item-${index}-qtySqm`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>{fieldErrors[`items.${index}.qtySqm`]}</p>
+                  <p id={fieldErrorId(`item-${index}-qtySqm`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{fieldErrors[`items.${index}.qtySqm`]}</p>
                 ) : null}
               </label>
               <div style={{ margin: 0 }}>
                 <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>จำนวน (แผ่น)</span>
-                <div style={{ padding: '7px 10px', border: '1px solid #e2e8f0', borderRadius: 6, background: '#f8fafc', fontSize: 13, color: item.qty ? '#475569' : '#94a3b8' }}>
+                <div style={{ padding: '7px 10px', border: '1px solid #e2e8f0', borderRadius: 6, background: '#f8fafc', fontSize: 13, color: item.qty ? '#475569' : 'var(--color-text-muted)' }}>
                   {item.qty ? `${item.qty} แผ่น` : item.sqmPerPiece ? 'กรอกพื้นที่ก่อน' : '—'}
                 </div>
               </div>
@@ -1194,8 +1201,13 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
           {item.catalogPrice != null ? (
             <div style={{ margin: 0, gridColumn: '1 / -1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', border: '1px solid #dfe5ee', borderRadius: 8, background: '#f8fafc' }}>
-              <span style={{ fontSize: 11, color: '#64748b', fontWeight: 700 }}>
-                ราคาอ้างอิง (แคตตาล็อก) <span style={{ fontWeight: 500, color: '#94a3b8' }}>— ราคาขายจริงมาจากขั้น PCR</span>
+              {/* Two-tone hierarchy restored here (review-remediation, fix/ui-contrast-tokens):
+                  both label and caveat used to share --color-text-muted after the AA fix, which
+                  flattened the label/caveat distinction to weight alone. The label now uses
+                  --color-icon-muted (#475569, 7.24:1+ on this row's surfaces) so it reads a step
+                  darker than the caveat's --color-text-muted (#5c6b80, 5.19:1) — both clear AA. */}
+              <span style={{ fontSize: 11, color: 'var(--color-icon-muted)', fontWeight: 700 }}>
+                ราคาอ้างอิง (แคตตาล็อก) <span style={{ fontWeight: 500, color: 'var(--color-text-muted)' }}>— ราคาขายจริงมาจากขั้น PCR</span>
               </span>
               <span style={{ fontWeight: 800, fontSize: 14 }}>
                 {Number(item.catalogPrice).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {item.catalogCurrency}
@@ -1259,7 +1271,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   <button type="button" className="icon-button" aria-label={`แก้ไขรายการที่ ${index + 1}`} onClick={() => setEditingItemIndex(index)}>
                     <Icon name="pencil" size={14} />
                   </button>
-                  <button type="button" className="icon-button" aria-label={`ลบรายการที่ ${index + 1}`} style={{ color: '#ef4444' }} onClick={() => removeItem(index)}>
+                  <button type="button" className="icon-button" aria-label={`ลบรายการที่ ${index + 1}`} style={{ color: 'var(--color-danger)' }} onClick={() => removeItem(index)}>
                     <Icon name="close" size={14} />
                   </button>
                 </div>
@@ -1279,7 +1291,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       <div className="flex flex-col gap-4">
         <BackLink onClick={() => setView('hub')} />
         <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-          ชื่อดีล <span className="font-semibold text-text-faint">(ไม่บังคับ — ค่าเริ่มต้นคือชื่อลูกค้า)</span>
+          ชื่อดีล <span className="font-semibold text-text-muted">(ไม่บังคับ — ค่าเริ่มต้นคือชื่อลูกค้า)</span>
           <input
             value={dealTitle}
             onChange={(e) => setDealTitle(e.target.value)}
@@ -1288,7 +1300,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         </label>
 
         <div>
-          <span className="mb-1.5 block text-sm font-bold text-text-secondary">ความสำคัญ <span className="font-semibold text-text-faint">(ไม่บังคับ)</span></span>
+          <span className="mb-1.5 block text-sm font-bold text-text-secondary">ความสำคัญ <span className="font-semibold text-text-muted">(ไม่บังคับ)</span></span>
           <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="ความสำคัญ">
             {PRIORITY_OPTIONS.map((option) => {
               const selected = priority === option.code;
@@ -1355,7 +1367,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             <button type="button" className="text-xs font-extrabold text-primary" onClick={() => setView('customer')}>แก้ไข</button>
           </div>
           <div className="px-3.5 py-2.5 text-sm">
-            {selectedCustomer ? selectedCustomer.name : <span className="text-text-faint">ยังไม่ได้เลือก</span>}
+            {selectedCustomer ? selectedCustomer.name : <span className="text-text-muted">ยังไม่ได้เลือก</span>}
           </div>
         </div>
 
@@ -1365,7 +1377,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             <button type="button" className="text-xs font-extrabold text-primary" onClick={() => setView('project')}>แก้ไข</button>
           </div>
           <div className="px-3.5 py-2.5 text-sm">
-            {selectedProject ? selectedProject.name : <span className="text-text-faint">ยังไม่ได้เลือก</span>}
+            {selectedProject ? selectedProject.name : <span className="text-text-muted">ยังไม่ได้เลือก</span>}
           </div>
         </div>
 
@@ -1376,7 +1388,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           </div>
           <div className="flex flex-col gap-0.5 px-3.5 py-2.5 text-sm">
             <span>ช่องทาง: {entryChannelLabel}</span>
-            <span>ผู้ติดต่อ: {selectedContact ? `${selectedContact.firstName} ${selectedContact.lastName}`.trim() : <span className="text-text-faint">ไม่ได้ระบุ</span>}</span>
+            <span>ผู้ติดต่อ: {selectedContact ? `${selectedContact.firstName} ${selectedContact.lastName}`.trim() : <span className="text-text-muted">ไม่ได้ระบุ</span>}</span>
           </div>
         </div>
 
@@ -1411,7 +1423,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           <div className="flex flex-col gap-0.5 px-3.5 py-2.5 text-sm">
             <span>ชื่อดีล: {dealTitle.trim() || (selectedCustomer?.name ?? '—')}</span>
             <span>ความสำคัญ: {priorityLabel}</span>
-            <span>หมายเหตุ: {form.note.trim() || <span className="text-text-faint">ไม่มี</span>}</span>
+            <span>หมายเหตุ: {form.note.trim() || <span className="text-text-muted">ไม่มี</span>}</span>
           </div>
         </div>
 
@@ -1441,7 +1453,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     if (view === 'items' && editingItemIndex != null) {
       return (
         <>
-          <button type="button" className="secondary-button" style={{ color: '#ef4444' }} onClick={() => removeItem(editingItemIndex)}>ลบ</button>
+          <button type="button" className="secondary-button" style={{ color: 'var(--color-danger)' }} onClick={() => removeItem(editingItemIndex)}>ลบ</button>
           <button type="button" className="primary-button" onClick={() => setEditingItemIndex(null)}>
             <Icon name="check" size={14} /> บันทึกรายการ
           </button>

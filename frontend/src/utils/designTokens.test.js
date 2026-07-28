@@ -36,6 +36,21 @@ function contrastRatio(hexA, hexB) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+// Reads a custom-property's *declared* hex value straight out of index.css —
+// never a hardcoded literal — so a future edit to the token's value (not just
+// its existence) flows into the contrast assertions below and can turn them
+// red. Matches only the `--token: #hex;` declaration itself (colon
+// immediately followed by the hex value), not `var(--token)` call sites or
+// prose mentions elsewhere in the file's comments.
+function token(name) {
+  const re = new RegExp(`${name}:\\s*(#[0-9a-fA-F]{3,8})\\s*;`);
+  const match = indexCss.match(re);
+  if (!match) {
+    throw new Error(`token ${name} not found (as a declaration) in index.css`);
+  }
+  return match[1];
+}
+
 describe('design tokens — Phase 3.4 infrastructure', () => {
   it('defines every gap token TOKENS.md documents', () => {
     const expectedTokens = [
@@ -79,31 +94,64 @@ describe('design tokens — Phase 3.4 infrastructure', () => {
   });
 
   describe('contrast (WCAG 2.1 AA) — pairs cited in DESIGN.md §19 / TOKENS.md', () => {
+    // Every fg/bg here is read live from index.css via token() (see above) —
+    // never a hardcoded hex literal. This is the point of the rewrite
+    // (fix/ui-contrast-tokens review remediation, 2026-07-28): the previous
+    // version of this table inlined hex values, so reverting either
+    // --color-text-muted or --color-success in index.css left this file
+    // 14/14 green — a token-value edit could silently reintroduce every
+    // contrast failure this branch fixed. Mutation-checked: reverting
+    // --color-text-muted to #64748b turns the surface-subtle/workspace rows
+    // red (4.34:1 / 4.20:1) while white/surface-muted stay green (4.76:1 /
+    // 4.55:1 — right at the edge, which is exactly why the multi-surface
+    // fix mattered); reverting --color-success to #059669 turns both
+    // success-fill rows red (3.77:1); nothing else moves.
     it.each([
-      ['text-secondary on surface-panel', '#334155', '#ffffff', 4.5],
-      ['text-muted floor on surface-panel', '#64748b', '#ffffff', 4.5],
-      ['text-inverse on action-primary', '#ffffff', '#4f46e5', 4.5],
-      ['action-danger text on surface-panel', '#dc2626', '#ffffff', 4.5],
-      ['status-warning text on warning bg', '#b45309', '#fef3c7', 4.5],
+      ['text-secondary on surface-panel', token('--color-text-secondary'), token('--color-surface'), 4.5],
+      // fix/ui-contrast-tokens (2026-07-28): --color-text-muted moved from
+      // #64748b (only ~4.76:1 on pure white; measured as low as 3.93:1 on
+      // this app's actual light surfaces — workspace, surface-subtle,
+      // #efefef) to #5c6b80, which clears 4.5+ on every light surface it's
+      // used on. Still fails on the dark sidebar rail (~3.45:1) — text
+      // there uses --color-text-faint instead (see designTokens usage in
+      // Sidebar.jsx / styles.css `.brand small`).
+      ['text-muted floor on surface-panel (white)', token('--color-text-muted'), token('--color-surface'), 4.5],
+      ['text-muted floor on surface-muted', token('--color-text-muted'), token('--color-surface-muted'), 4.5],
+      ['text-muted floor on surface-subtle', token('--color-text-muted'), token('--color-surface-subtle'), 4.5],
+      ['text-muted floor on workspace bg', token('--color-text-muted'), token('--color-bg'), 4.5],
+      ['text-inverse on action-primary', token('--color-surface'), token('--color-primary'), 4.5],
+      ['action-danger text on surface-panel', token('--color-danger'), token('--color-surface'), 4.5],
+      ['status-warning text on warning bg', token('--color-warning'), token('--color-warning-bg'), 4.5],
       // .status-danger pairs danger-bg with danger-dark, not the plain
       // danger action color (styles.css :695-735) — matches actual CSS.
-      ['status-danger text on danger bg', '#b91c1c', '#fee2e2', 4.5],
-      ['status-success text on success bg', '#15803d', '#dcfce7', 4.5],
-      ['status-info text on info bg', '#1d4ed8', '#dbeafe', 4.5],
-      ['link on surface-panel', '#2563eb', '#ffffff', 4.5],
-    ])('%s clears %s:1', (_label, fg, bg, min) => {
+      ['status-danger text on danger bg', token('--color-danger-dark'), token('--color-danger-bg'), 4.5],
+      ['status-success text on success bg', token('--color-success-dark'), token('--color-success-bg'), 4.5],
+      ['status-info text on info bg', token('--color-info'), token('--color-info-bg'), 4.5],
+      ['link on surface-panel', token('--color-link'), token('--color-surface'), 4.5],
+      // fix/ui-contrast-tokens (2026-07-28): --color-success moved from
+      // #059669 to #047857 specifically because white-on-success-fill (the
+      // "อนุมัติ" Approve button on /requests) only cleared 3.77:1 — this
+      // pairing used to be a documented large/bold-text-only exception
+      // (see the removed 'borderline pairing' test below this array in git
+      // history) and now clears the full body-text floor like every other
+      // pairing in this list.
+      ['action-success (white on success fill)', token('--color-surface'), token('--color-success'), 4.5],
+      // Same token, other direction — --color-success used as plain text
+      // (not a button fill) on a light surface, e.g. .event-dot.success and
+      // any future success-toned label.
+      ['success text on surface-panel', token('--color-success'), token('--color-surface'), 4.5],
+      // Ink Faint is deliberately allowed as TEXT only on the dark sidebar
+      // rail (see index.css's --color-text-faint comment) — this is the one
+      // pairing where Faint-as-text is correct, not a violation.
+      ['text-faint on sidebar rail', token('--color-text-faint'), token('--color-sidebar-bg'), 4.5],
+      // --color-accent-dark backs the sidebar unread badge label and the
+      // ImportOverview teal pulse numeral, both on light surfaces.
+      ['accent-dark text on surface-panel', token('--color-accent-dark'), token('--color-surface'), 4.5],
+      // `%s` fills positionally, so a second `%s` would print `fg` (a hex),
+      // not `min` — e.g. "clears #64748b:1". Name by label only; the assertion
+      // message already reports the actual ratio when a row fails.
+    ])('%s clears its documented floor', (_label, fg, bg, min) => {
       expect(contrastRatio(fg, bg)).toBeGreaterThanOrEqual(min);
-    });
-
-    // TOKENS.md §D flags this pair as a documented exception: white on the
-    // success fill only clears the large/bold-text floor (3:1), not the body
-    // floor (4.5:1). This test locks that caveat in — if it ever crosses 4.5
-    // the token's value changed and the "bold-label only" note in DESIGN.md
-    // needs re-checking, not silent drift.
-    it('action-success (large/bold text only) — documents the borderline pairing', () => {
-      const ratio = contrastRatio('#ffffff', '#059669');
-      expect(ratio).toBeGreaterThanOrEqual(3);
-      expect(ratio).toBeLessThan(4.5);
     });
   });
 });

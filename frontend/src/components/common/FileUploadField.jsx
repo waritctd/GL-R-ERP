@@ -85,7 +85,7 @@ export const FileUploadField = forwardRef(function FileUploadField(
         <span
           className={cn(
             // Muted, not faint: this is read as text, and faint (#94a3b8) is
-            // ~2.8:1 on white. Muted (#64748b) clears 4.5:1.
+            // ~2.8:1 on white. Muted (#5c6b80) clears 4.5:1.
             'min-w-0 flex-1 truncate text-sm',
             hasFiles ? 'font-semibold text-text' : 'text-text-muted',
           )}
