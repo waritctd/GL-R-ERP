@@ -18,14 +18,31 @@ SET search_path = hr, public;
 -- ---------------------------------------------------------------------
 
 -- ---------------------------------------------------------------------
--- 1. พิเศษ 9 -- ค่าเช่าบ้าน (housing allowance). APPEND ONLY.
+-- 1. A ninth special_pay column, added APPEND-ONLY at the time this
+-- migration was written.
 --
--- hr.payroll_line already carries 149 processed rows across five filed
--- months whose special_pay_1..8 values mean exactly what the current
--- labels say (see PayrollService#specialPayDtos). Inserting ค่าเช่าบ้าน
--- anywhere but the end would silently redefine every historical figure
--- and every ภ.ง.ด.1 already filed from them. พิเศษ 1 stays ค่าครองชีพ;
--- this is a new ninth slot, not a relabel of an existing one.
+-- CORRECTED IN PLACE (F7/"Also", Opus review 2026-07-30) -- comment only,
+-- no DDL below has changed. This originally argued: hr.payroll_line
+-- already carries 149 processed rows across five filed months whose
+-- special_pay_1..8 values mean exactly what the current labels said,
+-- so inserting ค่าเช่าบ้าน anywhere but the end would silently redefine
+-- every historical figure and every ภ.ง.ด.1 already filed from them --
+-- therefore APPEND ONLY, never renumber.
+--
+-- That premise is now FALSE, and was overtaken the same day it was
+-- written. The handoff's section 9e records that all five of those
+-- "processed" 2026 periods were owner-confirmed test runs and were
+-- VOIDed on production (no ภ.ง.ด.1 was ever filed, no SSO ever
+-- remitted from this system) -- so there was nothing real for a
+-- renumber to silently redefine. Section 9d's later "align the system
+-- to the accountant's workbook" decision then DID renumber: ค่าเช่าบ้าน
+-- moved from this new ninth slot to special_pay_2, and special_pay_9 is
+-- now เงินรางวัล/เงินช่วยเหลืออื่นๆ. See PayrollComponent's javadoc for
+-- the current, authoritative slot -> label mapping. This section only
+-- adds the ninth NUMERIC column; it carries no opinion on which พิเศษ
+-- label ends up assigned to which slot -- that lives entirely in Java
+-- (PayrollService#specialPayDtos / PayrollComponent) and the frontend,
+-- neither of which this migration constrains.
 -- ---------------------------------------------------------------------
 ALTER TABLE hr.payroll_line
     ADD COLUMN IF NOT EXISTS special_pay_9 NUMERIC(12,2) NOT NULL DEFAULT 0;

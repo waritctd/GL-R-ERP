@@ -512,6 +512,76 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
         assertThat(decemberLine.annualTax()).isEqualByComparingTo("72900.00");
     }
 
+    /**
+     * REVIEWER ADDITION (Opus review, 2026-07-30). The two whole-year simulations above each exercise
+     * exactly ONE extra limb: {@link #twelveMonthSimulationTotalsToTheCorrectAnnualLiability} runs
+     * REGULAR + {@code EXTRA_CUMULATIVE_ACTUAL} with no bonus, and {@link
+     * #twelveMonthSimulationWithAMidYearBonusMatchesAHandComputedAnnualLiability} runs REGULAR +
+     * {@code EXTRA_KNOWN_FREQUENCY} with no cumulative income. Neither runs BOTH, which is the
+     * combination a real GL&amp;R sales employee actually has — the handoff names commission as the
+     * archetypal {@code EXTRA_CUMULATIVE_ACTUAL} and bonus as the archetypal {@code
+     * EXTRA_KNOWN_FREQUENCY}, and a rep who receives both in one tax year is the normal case, not an
+     * exotic one.
+     *
+     * <p>The liability below is computed BY HAND from the statute, never from engine output:
+     *
+     * <pre>
+     *   annual income = 80,000 x 12 + 200,000 bonus + 15,000 x 12 commission = 1,340,000
+     *   expense deduction  = min(50%, 100,000 cap)                           =   100,000
+     *   personal allowance                                                   =    60,000
+     *   SSO (17,500 ceiling x 5% = 875/mo, annual cap 10,500)                =    10,500
+     *   net taxable = 1,340,000 - 170,500                                    = 1,169,500
+     *
+     *   progressive tax on 1,169,500:
+     *       150,001-  300,000 @  5% = 150,000 x 0.05 =  7,500
+     *       300,001-  500,000 @ 10% = 200,000 x 0.10 = 20,000
+     *       500,001-  750,000 @ 15% = 250,000 x 0.15 = 37,500
+     *       750,001-1,000,000 @ 20% = 250,000 x 0.20 = 50,000
+     *     1,000,001-1,169,500 @ 25% = 169,500 x 0.25 = 42,375
+     *                                          total = 157,375
+     * </pre>
+     *
+     * <p>{@code calculateClassified} stacks the KNOWN limb and the CUMULATIVE limb on the regular
+     * limb INDEPENDENTLY — stage 2 taxes {@code netRegular + knownThisPeriod} and stage 3 taxes
+     * {@code netWithKnown + cumulativeYtdTotal}, but {@code knownThisPeriod} is only ever THIS
+     * period's amount and no {@code knownLimb*} field exists on {@link PayrollYearToDate} to carry a
+     * settled bonus forward. So in every month after the bonus, stage 3 layers the cumulative total
+     * onto a stack that no longer contains the bonus, and the two limbs consume the same tax brackets
+     * twice.
+     */
+    @Test
+    void twelveMonthSimulationWithBothABonusAndCumulativeCommissionMatchesTheHandComputedLiability() {
+        long employeeId = seedEmployee("SIM-12M-BOTH", "โบนัสและคอมมิชชั่น", "ทดสอบ", new BigDecimal("80000.00"));
+        payrollRepository.upsertComponentTaxTreatment(TAX_YEAR, List.of(
+            new ComponentTaxTreatmentUpsertRequest(
+                employeeId, PayrollComponent.BONUS_PAY, PayrollTaxTreatment.EXTRA_KNOWN_FREQUENCY),
+            new ComponentTaxTreatmentUpsertRequest(
+                employeeId, PayrollComponent.SPECIAL_PAY_7, PayrollTaxTreatment.EXTRA_CUMULATIVE_ACTUAL)
+        ), employeeId);
+
+        BigDecimal sumOfMonthlyWithholding = BigDecimal.ZERO;
+        for (int month = 1; month <= 12; month++) {
+            BigDecimal bonusThisMonth = month == 6 ? new BigDecimal("200000.00") : BigDecimal.ZERO;
+            BigDecimal[] specialPays = new BigDecimal[]{
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, new BigDecimal("15000.00"), BigDecimal.ZERO, BigDecimal.ZERO};
+            PayrollEmployeeInputRequest input = input(employeeId, specialPays,
+                BigDecimal.ZERO, null, null, BigDecimal.ZERO, bonusThisMonth, null, false, null, null);
+
+            PayrollPeriodDto period = payrollService.process(
+                new ProcessPayrollRequest(LocalDate.of(2026, month, 1), List.of(input)), hr());
+            sumOfMonthlyWithholding = sumOfMonthlyWithholding.add(onlyLine(period, employeeId).withholdingTax());
+        }
+
+        assertThat(sumOfMonthlyWithholding)
+            .withFailMessage(
+                "12 months of withholding must equal the hand-computed ป.96 liability of 157,375.00, was %s "
+                    + "(a shortfall means the KNOWN and CUMULATIVE limbs are stacked on the regular limb "
+                    + "independently and consume the same tax brackets twice)",
+                sumOfMonthlyWithholding)
+            .isEqualByComparingTo("157375.00");
+    }
+
     // --- helpers ------------------------------------------------------------
 
     private PayrollLineDto previewLineFor(LocalDate payrollMonth, long employeeId, PayrollEmployeeInputRequest input) {

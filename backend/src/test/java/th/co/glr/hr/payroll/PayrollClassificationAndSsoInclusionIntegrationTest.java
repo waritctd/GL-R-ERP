@@ -26,7 +26,11 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  *   <li>SSO-inclusion defaults seeding TRUE everywhere except DIRECTOR_REMUNERATION / NON_TAXABLE_INCOME
  *   <li>Tax-treatment classification round-tripping, with {@code null} preserved as "unclassified"
  *   <li>The SALARY-locked-to-REGULAR_REPROJECT CHECK constraint actually rejecting a bad write
- *   <li>The ninth special-pay slot (พิเศษ 9 -- ค่าเช่าบ้าน) persisting and reading back
+ *   <li>The ninth special-pay slot (originally ค่าเช่าบ้าน at V95; the accountant's-workbook
+ *       renumbering, handoff section 9d, later moved ค่าเช่าบ้าน to specialPay2 and made specialPay9
+ *       เงินรางวัล/เงินช่วยเหลืออื่นๆ instead -- see PayrollComponent's javadoc for the current mapping.
+ *       This test only exercises the SLOT persisting/reading back, not its label) persisting and
+ *       reading back
  *   <li>Declaration verification status + deadline round-tripping
  * </ul>
  */
@@ -190,7 +194,11 @@ class PayrollClassificationAndSsoInclusionIntegrationTest extends AbstractPostgr
             new PayrollSpecialPayDto("specialPay6", "พิเศษ 6", BigDecimal.ZERO),
             new PayrollSpecialPayDto("specialPay7", "พิเศษ 7", BigDecimal.ZERO),
             new PayrollSpecialPayDto("specialPay8", "พิเศษ 8", BigDecimal.ZERO),
-            new PayrollSpecialPayDto("specialPay9", "พิเศษ 9 (ค่าเช่าบ้าน)", specialPay9));
+            // F7 correction (Opus review, 2026-07-30): label text is decorative only here -- this
+            // fixture's assertions check key()/amount(), never label() -- but "ค่าเช่าบ้าน" was V95's
+            // original slot-9 label before the accountant's-workbook renumbering (handoff section 9d)
+            // moved it to specialPay2 and made specialPay9 เงินรางวัล/เงินช่วยเหลืออื่นๆ instead.
+            new PayrollSpecialPayDto("specialPay9", "พิเศษ 9 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)", specialPay9));
         BigDecimal gross = new BigDecimal("30000.00").add(specialPay9);
         return new PayrollLineDto(
             null, employeeId, code, name,

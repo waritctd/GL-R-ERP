@@ -112,7 +112,13 @@ public class PayrollRepository {
                    COALESCE(SUM(regular_limb_taxable_income), 0) AS regular_limb_taxable_income,
                    COALESCE(SUM(regular_limb_withholding_tax), 0) AS regular_limb_withholding_tax,
                    COALESCE(SUM(cumulative_limb_taxable_income), 0) AS cumulative_limb_taxable_income,
-                   COALESCE(SUM(cumulative_limb_withholding_tax), 0) AS cumulative_limb_withholding_tax
+                   COALESCE(SUM(cumulative_limb_withholding_tax), 0) AS cumulative_limb_withholding_tax,
+                   -- F1 fix (Opus review, 2026-07-30): the running total of every period's OWN
+                   -- taxable_income_known_limb this tax year -- see PayrollYearToDate's field javadoc
+                   -- for why the calculator needs this to layer the cumulative limb on top of income
+                   -- that includes a settled known-frequency payment, in every period after the one
+                   -- that paid it.
+                   COALESCE(SUM(known_limb_taxable_income), 0) AS known_limb_taxable_income
               FROM (
                   -- V92's regular/variable columns feed the legacy calculate() 2-limb model;
                   -- V96's *_limb columns feed calculateClassified()'s 3-limb model. calculateLine now
@@ -130,7 +136,8 @@ public class PayrollRepository {
                          pl.taxable_income_regular_limb AS regular_limb_taxable_income,
                          pl.withholding_tax_regular_limb AS regular_limb_withholding_tax,
                          pl.taxable_income_cumulative_limb AS cumulative_limb_taxable_income,
-                         pl.withholding_tax_cumulative_limb AS cumulative_limb_withholding_tax
+                         pl.withholding_tax_cumulative_limb AS cumulative_limb_withholding_tax,
+                         pl.taxable_income_known_limb AS known_limb_taxable_income
                     FROM hr.payroll_line pl
                     JOIN hr.payroll_period pp ON pp.period_id = pl.period_id
                    WHERE pp.payroll_month >= date_trunc('year', :payrollMonth::date)::date
@@ -151,7 +158,12 @@ public class PayrollRepository {
                          s.withholding_tax,
                          s.taxable_income,
                          s.withholding_tax,
-                         s.cumulative_limb_taxable_income, s.cumulative_limb_withholding_tax
+                         s.cumulative_limb_taxable_income, s.cumulative_limb_withholding_tax,
+                         -- The seed predates the three-limb model entirely (produced by the old
+                         -- single-limb engine, back-loaded pre-system history) -- there is no
+                         -- known-limb figure to carry, same rationale as the cumulative limb columns
+                         -- added by V96 for this table having no known-limb counterpart either.
+                         0::numeric AS known_limb_taxable_income
                     FROM hr.payroll_year_to_date_seed s
                    WHERE s.tax_year = EXTRACT(YEAR FROM :payrollMonth::date)::int
               ) combined
@@ -168,7 +180,8 @@ public class PayrollRepository {
                 money(rs.getBigDecimal("regular_limb_taxable_income")),
                 money(rs.getBigDecimal("regular_limb_withholding_tax")),
                 money(rs.getBigDecimal("cumulative_limb_taxable_income")),
-                money(rs.getBigDecimal("cumulative_limb_withholding_tax"))
+                money(rs.getBigDecimal("cumulative_limb_withholding_tax")),
+                money(rs.getBigDecimal("known_limb_taxable_income"))
             )))
             .stream()
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));

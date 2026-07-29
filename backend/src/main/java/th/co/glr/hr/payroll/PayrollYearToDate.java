@@ -10,12 +10,18 @@ import java.math.BigDecimal;
  *
  * <ul>
  *   <li><b>regular</b> — เงินได้ที่จ่ายตามปกติ (ข้อ 2.1): annualised by multiplying by
- *       จำนวนคราวที่ต้องจ่าย. Base salary, <b>พิเศษ 6 (คอมมิชชั่น)</b> and the commission feed, and
+ *       จำนวนคราวที่ต้องจ่าย. Base salary, <b>พิเศษ 7 (คอมมิชชั่น)</b> and the commission feed, and
  *       ค่าตอบแทนกรรมการ — the items paid every คราว, whatever the amount.</li>
- *   <li><b>variable</b> — เงินพิเศษที่จ่ายเป็นครั้งคราว (ข้อ 2.5): ค่าล่วงเวลา, <b>พิเศษ 1-5, 7, 8</b>,
+ *   <li><b>variable</b> — เงินพิเศษที่จ่ายเป็นครั้งคราว (ข้อ 2.5): ค่าล่วงเวลา, <b>พิเศษ 1-6, 8, 9</b>,
  *       and the dedicated bonus / อื่นๆ fields. Taken at its ACTUAL cumulative amount and never
  *       multiplied out, then taxed as the DIFFERENCE between the tax with it and the tax without it.</li>
  * </ul>
+ *
+ * <p>F7 correction (Opus review, 2026-07-30): the slot numbers above were updated to match the
+ * accountant's-workbook renumbering (handoff section 9d, 2026-07-29) -- คอมมิชชั่น moved from พิเศษ 6
+ * to พิเศษ 7 (a new พิเศษ 2, ค่าเช่าบ้าน, was inserted ahead of it, shifting every later slot by one).
+ * See {@code PayrollCalculator}'s {@code COMMISSION_SPECIAL_PAY_INDEX}, already correct, for the same
+ * numbering applied to the actual index used by {@code calculate()}.
  *
  * <p>The split is owner-stated, not inferred from the slot labels — an earlier version read พิเศษ 1-5
  * as standing allowances and had this exactly backwards. See {@code PayrollCalculator}'s
@@ -41,21 +47,36 @@ public record PayrollYearToDate(
     // deliberately NOT carried here -- each known-frequency payment is taxed as its own period's
     // marginal difference and never reprojected forward, so it needs no YTD state.
     //
-    // SUPERSEDED going forward for the regular/variable pair above (rebase, 2026-07-29): calculateLine
-    // now runs exclusively through calculateClassified, which reads the *Limb fields below, not
-    // regularIncome/variableIncome/regularWithholdingTax/variableWithholdingTax. Those four (and the
-    // legacy calculate() method that still reads them) exist only for PayrollExcelReconciliationTest's
+    // SUPERSEDED going forward for the regular/variable pair above (rebase onto branch 117, commit
+    // c52080b6, 2026-07-29 -- see docs/agent-handoffs/118_feat-payroll-classification-and-hr-
+    // declarations.md, "Progress -- task 4: rebase report + F1-F7 fixes" for what that rebase actually
+    // changed; F4 correction, Opus review 2026-07-30, that section did not exist when this comment was
+    // first written): calculateLine now runs exclusively through calculateClassified, which reads the
+    // *Limb fields below, not regularIncome/variableIncome/regularWithholdingTax/variableWithholdingTax.
+    // Those four (and the legacy calculate() method that still reads them) exist only for
+    // PayrollExcelReconciliationTest's
     // frozen regression suite and other calculate()-only callers.
     BigDecimal withholdingTax,
     BigDecimal regularLimbTaxableIncome,
     BigDecimal regularLimbWithholdingTax,
     BigDecimal cumulativeLimbTaxableIncome,
-    BigDecimal cumulativeLimbWithholdingTax
+    BigDecimal cumulativeLimbWithholdingTax,
+    // F1 fix (Opus review, 2026-07-30): a settled EXTRA_KNOWN_FREQUENCY payment (ข้อ 1(5), e.g. a
+    // bonus) is taxed and fully withheld in the period it is paid and is deliberately NOT reprojected
+    // -- but it is still real income that must stay part of the running total the CUMULATIVE limb is
+    // layered on top of in every LATER period. Without this field, PayrollCalculator#calculateClassified
+    // had no way to know a known-limb payment had already happened this year once its own period ended,
+    // so the cumulative limb's marginal tax silently dropped it from the bracket position -- the KNOWN
+    // and CUMULATIVE limbs then consumed the same tax brackets twice and the year under-withheld. This
+    // is the sum of every period's own taxable_income_known_limb (payroll_line), i.e. the running total
+    // of known-limb income SETTLED so far this year -- not reprojected, just accumulated.
+    BigDecimal knownLimbTaxableIncome
 ) {
     public static PayrollYearToDate empty() {
         return new PayrollYearToDate(
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO
         );
     }
 
@@ -78,7 +99,7 @@ public record PayrollYearToDate(
         this(
             regularIncome, variableIncome, socialSecurity, regularWithholdingTax, variableWithholdingTax,
             nz(regularWithholdingTax).add(nz(variableWithholdingTax)),
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
         );
     }
 
@@ -99,7 +120,8 @@ public record PayrollYearToDate(
     ) {
         this(
             taxableIncome, BigDecimal.ZERO, socialSecurity, withholdingTax, BigDecimal.ZERO,
-            withholdingTax, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+            withholdingTax, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO
         );
     }
 

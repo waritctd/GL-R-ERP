@@ -30,9 +30,14 @@ class PayrollCarryForwardSuggestionsIntegrationTest extends AbstractPostgresInte
     void returnsTheCarriedFieldsFromTheLatestPriorProcessedLineAndExcludesEventDrivenAndCommissionFields() {
         long alice = seedEmployee("EMP-CF-001", "อลิสา", "แครี่", true);
 
-        // June: processed period, all carried fields populated, PLUS commission (specialPay6),
-        // KPI (specialPay7), bonus (specialPay8) and an event-driven unpaid-leave-deduction, all of
-        // which must NOT appear anywhere in the suggestion (the DTO simply has no such fields).
+        // June: processed period, all carried fields populated, PLUS specialPay6 (ค่า GPRS),
+        // specialPay7 (the historical คอมมิชชั่น พิเศษ slot -- F7 correction, Opus review 2026-07-30:
+        // this comment previously said "commission (specialPay6) ... KPI (specialPay7)", the numbering
+        // from before the accountant's-workbook renumbering, handoff section 9d), specialPay8 (ทำได้
+        // ตาม KPI), and an event-driven unpaid-leave-deduction. None of these five are flagged to carry
+        // for Alice below (only SPECIAL_PAY_1-5 are), so none of them should appear in the suggestion
+        // -- NOT because the DTO lacks the fields (it has carried specialPay6-9 since task 3's Fix 5;
+        // see SuggestedInputRow), but because the carry-forward flag governs it per V98.
         repository.saveProcessedPeriod(LocalDate.of(2026, 6, 1), alice, List.of(
             fullLine(alice, "EMP-CF-001", "อลิสา แครี่",
                 "111.11", "222.22", "333.33", "444.44", "555.55",

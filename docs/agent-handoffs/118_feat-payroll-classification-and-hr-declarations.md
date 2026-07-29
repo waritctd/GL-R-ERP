@@ -764,13 +764,392 @@ gap (V97 columns). No role gate, scope filter, or permission check was added, re
    here has touched any real database — verified against Testcontainers only, per this session's
    explicit instructions.
 
+---
+
+# Progress — task 4: rebase report + F1-F7 Opus review fixes (2026-07-30)
+
+This section is the "rebase report" three source comments (`PayrollService.java`, `PayrollYearToDate
+.java`) referred to without it existing — F4 below. It covers the two commits since task 3
+(`c52080b6`, `f5eaa01e`) that were never recorded here, plus a fresh Opus review of the branch that
+REJECTED it, and this task's fixes for that review's findings (F1-F7, F9 explicitly deferred).
+
+## What `c52080b6` did — rebase onto branch 117's two-limb split
+
+`fix/payroll-wht-po96-compliance` (117) merged to `main` between task 3 and this task. Rebasing this
+branch onto it left five payroll tests red: four were collision damage (117's fixtures seeded a
+special pay with no tax treatment, which task 1's classification gate correctly refuses to run, and
+inserted employees by raw SQL bypassing SSO-inclusion-default seeding), one was a real production
+defect the collision exposed.
+
+**Production fix**: `calculateClassified` built its `calculationNote` without
+`clampedAllowanceNote`, which the legacy `calculate()` appends — so every per-head allowance clamp
+(บุตร / คนพิการ) was silently applied to the tax and left off the payslip, the exact silent-clamp
+failure mode V93 exists to prevent, on the engine actually in production use. Fixed: the note now
+includes the clamp text. Note-text only; no monetary or tax figure changed.
+
+Also landed: `PayrollExcelReconciliationTest`'s empty-year-to-date hazard re-measured post-rebase
+(now depends on HR's per-component classification, not a hardcoded slot split — REGULAR_REPROJECT
+decays to zero in June, EXTRA_CUMULATIVE_ACTUAL in March); rebase conflict resolutions favouring
+117's three-argument `retirementAllowance` (implements the SSF sunset) over 118's two-argument form.
+**NOT closed**: the pre-existing per-head allowance residual (`PayrollService#headCountFor` still
+derives a head count from the run-body amount when no stored count exists) — pinned, not fixed, per
+this branch's own instruction not to touch it (see "Do NOT fix" at the top of this file).
+
+Full detail: `git show c52080b6`.
+
+## What `f5eaa01e` did — V99 (drop PVD) + the commission slot-index fix
+
+1. **`COMMISSION_SPECIAL_PAY_INDEX`** corrected from `5` (zero-based, พิเศษ 6) to `6` (พิเศษ 7),
+   matching the 2026-07-29 workbook realignment (section 9d). Before this fix the LEGACY `calculate()`
+   engine (zero production callers) put ค่า GPRS(เพิ่ม) in the regular limb and คอมมิชชั่น in the
+   occasional limb — both backwards. **The commit message's claim "no test places a non-zero amount at
+   either index" was FALSE** — see F4 below for the correction and the test that now actually pins it.
+2. **V99 removes provident-fund allowance entirely** (owner decision): production has ZERO
+   `hr_restricted.employee_pii.provident_fund_no` rows, so V93's inference (a schema column implies
+   the company has PVD members) was wrong on the facts. `V99__remove_provident_fund_allowance.sql`
+   drops `chk_eta_counts_non_negative`, drops `provident_fund_allowance`, and re-adds the constraint
+   minus that term — done in that order deliberately, because Postgres drops a multi-column CHECK
+   constraint in its entirety when any referenced column is dropped, and that constraint also guards
+   `child_count`/`child_count_double`/`disabled_care_count` and the `child_count_double <= child_count`
+   invariant. A bare `DROP COLUMN` would have silently taken all four guards with it — concretely, HR
+   could then declare 5 second-or-later children against a `child_count` of 2 and collect ฿90,000 more
+   child allowance than the law permits. `PayrollProvidentFundRemovalIntegrationTest` pins that specific
+   rejection wrong-way-round. The ฿500,000 retirement cluster now begins at RMF instead of PVD; RMF ->
+   SSF -> pension order, the ceiling, มาตรา 42 bis and the RMF/pension sub-caps are unchanged.
+   `hr_restricted.employee_pii.provident_fund_no` (a genuine, unrelated PII field) is untouched.
+
+Full detail: `git show f5eaa01e`.
+
+## This task: an Opus review REJECTED the branch — findings and fixes
+
+Working directory `/Users/ploy_warit/Desktop/GL-R-ERP-payroll-hr` (a separate worktree from the one
+task 1-3 used). One uncommitted file was already in the tree at task start:
+`PayrollClassifiedEngineIntegrationTest.java`, containing the reviewer's new RED test
+(`twelveMonthSimulationWithBothABonusAndCumulativeCommissionMatchesTheHandComputedLiability`) — kept
+verbatim, not modified, per instruction; it is F1's acceptance criterion.
+
+### F1 (P1, BLOCKING) — the KNOWN and CUMULATIVE limbs consumed the same tax brackets twice
+
+**Defect**: `calculateClassified` taxed Stage 2 (`EXTRA_KNOWN_FREQUENCY`, e.g. a bonus) against
+`netRegular + knownThisPeriod` and Stage 3 (`EXTRA_CUMULATIVE_ACTUAL`, e.g. commission) against
+`netWithKnown + cumulativeYtdTotal` — but `knownThisPeriod` was only ever THAT period's own amount,
+and `PayrollYearToDate` had no field carrying a SETTLED known-limb payment forward. So in every month
+after a bonus was paid, Stage 3 re-based itself on a stack that had silently forgotten the bonus,
+taxing the cumulative limb's income at a LOWER bracket than the year's true position warranted — the
+KNOWN and CUMULATIVE limbs consumed the same tax brackets twice and the year under-withheld.
+
+**Reproduction** (the reviewer's test): ฿80,000/mo salary (`REGULAR_REPROJECT`) + a ฿200,000 bonus in
+month 6 (`EXTRA_KNOWN_FREQUENCY`) + ฿15,000/mo commission (`EXTRA_CUMULATIVE_ACTUAL`). Hand-computed
+correct ป.96 annual liability = **฿157,375.00**. Engine produced **฿148,900.00** — a **฿8,475.00**
+shortfall.
+
+**Fix**:
+- `PayrollYearToDate.java`: added `knownLimbTaxableIncome` — the running sum of every period's OWN
+  `taxable_income_known_limb`, i.e. every known-limb baht SETTLED so far this tax year (not
+  reprojected, just accumulated). Both legacy constructors default it to zero.
+- `PayrollRepository.java` (`findYearToDateByEmployee`): the query's inner UNION now selects
+  `pl.taxable_income_known_limb AS known_limb_taxable_income` from processed lines (the column already
+  existed and was already written — task 2 wrote it, nothing ever read it back) and `0::numeric` from
+  the go-live seed (which predates the three-limb model entirely, same rationale as its existing
+  cumulative-limb columns). Outer query sums it; the row mapper passes it into the 11th
+  `PayrollYearToDate` constructor argument.
+- `PayrollCalculator.java` (`calculateClassified`): added `knownLimbYtdTotal` (this period's own
+  `knownThisPeriod` plus every prior period's settled known-limb income) and a SEPARATE stage-3-only
+  base (`netWithKnownYtd` / `netWithCumulativeYtd`) built from it. **Deliberately does NOT touch**
+  `netWithKnown`/`taxableWithKnown`/`annualTaxWithKnown` (Stage 2's own marginal-tax computation, which
+  correctly stays THIS-period-only — a settled ข้อ 1(5) payment is taxed once, at the moment it is
+  paid, and that never changes) or the REPORTED `taxableAnnualIncome`/`annualTax` fields (still
+  computed from the OLD narrower base, by design — see `PayrollYearToDate`'s own javadoc on why a
+  settled known-limb payment is not carried into any later PROJECTION). Only `withholdCumulative`'s
+  computation was repointed onto the YTD-inclusive base, so the MONEY actually withheld is correct
+  even though the reported annual-liability projection intentionally is not (that gap already existed
+  and is documented, unrelated to this fix).
+
+**Why the reported fields were deliberately left alone**: an earlier attempt at this fix (folding the
+YTD-known base into `netWithCumulative` directly, changing what `taxableAnnualIncome`/`annualTax`
+report) broke the ALREADY-GREEN
+`twelveMonthSimulationWithAMidYearBonusMatchesAHandComputedAnnualLiability` test, which explicitly pins
+`decemberLine.annualTax() == 72900.00` — the regular-limb-only figure, deliberately excluding the
+settled bonus, "by design" per that test's own docstring. Mathematically, changing the reported field
+to include the settled bonus is a MORE honest figure (it would equal 112,900, the true total annual
+liability at that point) — but the task's acceptance criterion required BOTH the reviewer's test at
+exactly ฿157,375.00 AND every other test in the file staying green without their own expected values
+being touched. The chosen design threads that needle: `withholdCumulative` (money) uses the corrected
+base; `taxableAnnualIncome`/`annualTax` (the reported projection) keep their pre-existing, narrower,
+already-tested meaning. This is recorded here explicitly per CLAUDE.md so it reads as a considered
+scope decision, not an oversight.
+
+**Result**: reviewer's test now asserts exactly ฿157,375.00 and passes, unmodified. The other two
+whole-year simulation tests
+(`twelveMonthSimulationTotalsToTheCorrectAnnualLiability`,
+`twelveMonthSimulationWithAMidYearBonusMatchesAHandComputedAnnualLiability`) are numerically UNCHANGED
+by the fix (proved algebraically above and confirmed by the test run: both have
+`knownLimbYtdTotal == knownThisPeriod` in every period they cover, because neither scenario mixes a
+settled known-limb payment with genuine cumulative income in the same year — that combination is
+exactly what the reviewer's NEW test adds). All 14 tests in `PayrollClassifiedEngineIntegrationTest`
+pass.
+
+**Mutation-check**: reverted `withholdCumulative` to subtract `annualTaxWithKnown`/`annualTaxWithCumulative`
+(the pre-fix, non-YTD variables) instead of the new `annualTaxWithKnownYtd`/`annualTaxWithCumulativeYtd`.
+Result: **exactly 1 failure** — the reviewer's test, reproducing the EXACT pre-fix figure
+(`148900.00`, shortfall message intact) — and nothing else. Reverted to an empty diff; confirmed clean
+(`grep MUTATION` finds nothing).
+
+### F2 (P1, BLOCKING) — HR could build a payroll run that failed at Process
+
+**Defect**: the frontend defined `mealAllowance`/`perDiemExempt`/`perDiemTaxable` in
+`namedAllowanceFields`/`payrollInputKeys` but **never actually rendered them** — no input existed
+anywhere in `PayrollPage.jsx`, `blankAdjustment` never defaulted them, `adjustmentFromLine` never
+populated them from a loaded line. There was also no basis selector and `perDiemBasis` was absent from
+`payrollInputKeys` entirely. Backend `PayrollService#calculateLine` passed `input.perDiemBasis()`
+straight through to the INSERT with no validation, so V97's
+`chk_payroll_line_per_diem_basis_present` CHECK constraint was the only thing standing between a
+per-diem amount with no basis and a clean run — meaning Process 500'd (Preview always "succeeded"
+because it never writes a row).
+
+**Fix — backend** (`PayrollService.java`, `calculateLine`): validates
+`perDiemExempt + perDiemTaxable > 0 && perDiemBasis == null` BEFORE the calculation/insert path is
+reached, throwing `ApiException(HttpStatus.BAD_REQUEST, ...)` with a Thai message naming the employee
+code/name and the missing basis. Runs for both `preview()` and `process()` (they share `calculateLine`)
+— Preview now fails fast too, rather than only Process.
+
+**Fix — frontend** (`PayrollPage.jsx`): added the missing `mealAllowance`/`perDiemExempt`/
+`perDiemTaxable` inputs (a new "ค่าอาหาร / เบี้ยเลี้ยง" `CollapsibleSection`, matching the page's
+existing `FormGrid`/`MoneyInput`/`InfoTip` patterns) AND a `perDiemBasis` `<select>` (matching the
+page's existing plain-`<select>` convention, e.g. the export-kind picker), shown only once
+`perDiemExempt` or `perDiemTaxable` is non-zero. `perDiemBasis` is nullable, handled exactly like
+`withholdingTaxOverride` (kept out of the numeric `payrollInputKeys` spread; `''` submits as `null`).
+`blankAdjustment`/`adjustmentFromLine` now default/populate all four fields.
+
+**Tests**:
+- Backend, real-DB, real `PayrollService` (`PayrollMealAndPerDiemIntegrationTest.java`, 4 new tests):
+  `processRejectsAPerDiemAmountWithNoBasisAsACleanFourHundredNotAFiveHundred` and the exempt-only
+  variant assert `ApiException` / `HttpStatus.BAD_REQUEST` naming the employee, thrown BEFORE any
+  INSERT (`findPeriodByMonth` empty afterwards); `previewAlsoRejects...` proves Preview shares the
+  guard; `processStillSucceedsWhenAPerDiemAmountHasAChosenBasis` proves the happy path is unaffected.
+  Mutation-checked: disabling the new `if` block reproduces exactly the 3 negative-path failures and
+  nothing else, reverted clean.
+- Frontend (`PayrollPage.test.jsx`, 6 new tests, `describe('per-diem basis selector (V97 / F2)')`):
+  selector hidden until an amount is entered (both the exempt and taxable fields independently trigger
+  it), hidden again when cleared, `perDiemBasis` submitted verbatim matching the backend enum names,
+  `perDiemBasis` sent as `null` (never `''`) when nothing is entered, and the backend's Thai rejection
+  message surfaces through `showToast('error', ...)` when Process is attempted without a basis.
+
+**Authz**: none. This is a data-completeness validation (a required-when-non-zero field), not a role
+gate, scope, or permission check.
+
+### F3 (P2) — `excessWithheldToDate` hardcoded to zero
+
+**Defect**: `PayrollService#calculateLine` wrote `BigDecimal.ZERO` for `excessWithheldToDate` on every
+line processed through `calculateClassified` (the ONLY engine `calculateLine` calls), making
+`PayslipRenderer`'s over-withholding notice (line 158) permanently unreachable and losing the figure
+for ภ.ง.ด.1 working-paper reconciliation (spec section 8 explicitly requires keeping it).
+
+**Fix**: `PayrollCalculator.calculateClassified` now computes it as the classified engine's own
+analogue of the legacy `calculate()`'s field of the same name: `max(0, (yearToDate.withholdingTax() +
+this period's POST-OVERRIDE withholdingTax) - annualTaxWithCumulativeYtd)` — the running total actually
+withheld this tax year exceeding the TRUE annual liability given everything known so far (F1's
+`annualTaxWithCumulativeYtd`, not the narrower reported `annualTax` field, for the same reason F1's fix
+doesn't touch that field — the excess must reflect real stranded money, not a figure that will
+reproject itself away next period). In the normal, no-override path this is always zero (each limb's
+own withholding is already capped at what remains owed on it); only an HR override that pushes
+withholding past the true liability makes the two differ — matching the legacy engine's own documented
+reasoning for the same field. Added as a new trailing field on `PayrollClassifiedCalculation` (no
+legacy constructor on that record, one construction call site, updated) and threaded through
+`PayrollService#calculateLine` in place of the hardcoded zero.
+
+**Tests** (new file, `PayrollExcessWithheldClassifiedEngineIntegrationTest.java`, real-DB, real
+`PayrollService`, 3 tests): normal processing (no override, ฿10,000/mo employee whose true annual
+liability is genuinely ฿0) leaves `excessWithheldToDate` at exactly `0.00`; a ฿5,000 HR override
+against that same ฿0 true liability produces `excessWithheldToDate == 5000.00`, confirmed both from the
+in-memory result and re-read from the DB; a second consecutive month with the same ฿2,000 override
+compounds to `4000.00`, confirming it carries forward. Mutation-checked: reverting to the hardcoded
+`BigDecimal.ZERO` reproduces exactly the 2 override-path failures (the zero-override test stays green,
+correctly) and nothing else in the payroll suite, reverted clean.
+
+### F4 (P2) — the handoff recorded only 2 of 4 commits (this section)
+
+This section is the fix — see "What `c52080b6` did" / "What `f5eaa01e` did" above.
+
+Also corrected: `f5eaa01e`'s commit message claims "no test places a non-zero amount at either index"
+for `COMMISSION_SPECIAL_PAY_INDEX`. **False** — `PayrollCalculatorTest.java`'s
+`theTwoIncomeLimbsAlwaysSumToGrossTaxableIncome`, first row, places `5000.00` at zero-based index 6.
+It stayed green through the whole slot-index defect (before AND after the fix) only because it asserts
+a PARTITION invariant (`regularTaxableIncome + variableTaxableIncome == grossTaxableIncome`) that holds
+no matter which limb index 6 is assigned to — an engine that put commission in the wrong limb would
+still pass it. Fixed by adding a new dedicated test,
+`theSeventhSpecialPaySlotIsCommissionAndLandsInTheRegularLimbNotVariable`, which isolates specialPay7's
+own contribution (against an otherwise-identical zeroed run) and asserts it specifically lands in
+`regularTaxableIncome`, not `variableTaxableIncome`. Also fixed the row's own stale inline comment
+(labelled specialPay7 "(occasional)", the pre-realignment reading). Mutation-checked: reverting
+`COMMISSION_SPECIAL_PAY_INDEX` to the old value `5` fails exactly the new test and nothing else in
+`PayrollCalculatorTest` (45 tests, 1 failure) — proving the OLD test genuinely could not have caught
+this, reverted clean.
+
+Repointed the three "see the rebase report" source comments that deferred to a document which did not
+exist (`PayrollService.java` ~line 305, `PayrollYearToDate.java` ~line 44) at this section by name;
+the third (`PayrollService.java` ~line 487) was resolved as a side effect of the F3 fix (the comment
+described `excessWithheldToDate`'s own gap, which F3 closes).
+
+### F6 (P2) — payslip layout tests one พิเศษ slot short of the true worst case
+
+`PayslipMaximalLayoutReviewTest` and `PayslipProvisionalNoticeGeometryReviewTest` each looped
+`slot = 1..8` building the "biggest payslip the engine can produce" fixture, under docstrings claiming
+"all 8 พิเศษ slots" — but there have been nine พิเศษ slots since V95 (2026-07-29), so the true
+worst-case geometry had never actually been checked. Fixed both loops to `1..9`, both docstrings, and
+bumped the hardcoded `specialPayTotal` fixture value by ฿1,000 to stay internally consistent (these are
+hand-built `PayrollLineDto` fixtures for pure PDF-geometry testing, not derived totals — several other
+hardcoded totals in the same fixtures were already inconsistent with their component sums before this
+change and are out of scope here).
+
+**Confirmed the PDF still lays out correctly at nine slots** — both test classes pass (2 + 4 = 6
+tests): every glyph stays inside the A4 media box, the notice/note both wrap inside the printable
+width, and the page count stays at 1. No overflow finding to report.
+
+### F7 (P3) — stale old-numbering documentation
+
+Corrected to the authoritative numbering (below) in: `PayrollCalculator.java` (`SPECIAL_PAY_SLOTS`'s
+comment, which said "พิเศษ 9 -- ค่าเช่าบ้าน" — the pre-9d numbering; `COMMISSION_SPECIAL_PAY_INDEX`
+itself was ALREADY correct, fixed by `f5eaa01e`), `PayrollYearToDate.java` (class javadoc said
+"พิเศษ 6 (คอมมิชชั่น)" / "พิเศษ 1-5, 7, 8"), `PayrollCarryForwardDtos.java` (class javadoc said
+"พิเศษ 1-8 except 6"), `PayrollEmployeeInputRequest.java` (`specialPay9`'s field comment still said
+ค่าเช่าบ้าน and "append-only", both superseded by 9d), `PayrollCalculatorTest.java` (a case-array
+header comment mislabelled the now-recurring commission slot "(occasional)"),
+`PayrollCarryForwardSuggestionsIntegrationTest.java` (a test comment said "commission (specialPay6),
+KPI (specialPay7)" — the old numbering — and separately claimed the `SuggestedInputRow` DTO "has no
+such fields" for specialPay6-9, which task 3's Fix 5 made false independent of the renumbering).
+Additionally found and fixed while auditing for the same wrong table:
+`PayrollClassificationAndSsoInclusionIntegrationTest.java`'s class javadoc and a fixture's hardcoded
+label string, both still saying พิเศษ 9 = ค่าเช่าบ้าน (label is decorative there — the test asserts
+`key()`/`amount()`, never `label()` — fixed anyway for hygiene). No occurrence of the OTHER wrong table
+(พิเศษ 1 = ค่า GPRS / พิเศษ 3 = ค่าโทรศัพท์) found anywhere in the repo.
+
+**AUTHORITATIVE NUMBERING** (unchanged from this file's own header, repeated here for convenience):
+
+| Slot | Name |
+|---|---|
+| 1 | ค่าครองชีพ |
+| 2 | ค่าเช่าบ้าน |
+| 3 | เบี้ยเลี้ยงประจำ |
+| 4 | ค่าตำแหน่ง |
+| 5 | เบี้ยขยันประจำ |
+| 6 | ค่า GPRS |
+| 7 | คอมมิชชั่น |
+| 8 | ทำได้ตาม KPI |
+| 9 | เงินรางวัล/เงินช่วยเหลืออื่นๆ |
+
+### "Also" — V95's stale comment about processed payroll periods
+
+`V95__payroll_classification_and_hr_declarations.sql`'s section-1 comment (originally lines ~22-28)
+argued พิเศษ 9 must be APPEND ONLY because 149 real processed rows across five filed months would
+otherwise be silently redefined. That premise is now false: section 9e records that all five of those
+2026 periods were owner-confirmed test runs, VOIDed on production, with no ภ.ง.ด.1 ever filed and no
+SSO ever remitted from this system — and section 9d's later renumbering DID move ค่าเช่าบ้าน off the
+ninth slot regardless. Corrected the comment in place (comment only; no DDL changed) so it no longer
+contradicts the premise the later renumbering rests on.
+
+### F9 — NOT fixed, recorded as instructed
+
+`PayrollService.java` (`calculateLine`, ~line 392): when an unearned customer return
+(`customerReturnDeduction`) exceeds the commission paid this period, `effectiveCommissionPay =
+effectiveCommissionPay.subtract(customerReturnDeduction).max(BigDecimal.ZERO)` silently TRUNCATES the
+excess rather than tracking it. Concrete example: an employee earns ฿3,000 commission this period but
+has a ฿10,000 unearned customer return to net out — `effectiveCommissionPay` becomes `max(3000 - 10000,
+0) = 0`, and the ฿7,000 the return exceeded the period's commission by simply vanishes: not carried to
+a future period, not recorded as a receivable, not visible anywhere on the line or payslip. This is
+business logic (how money is deducted / whether an over-recovery carries forward) and is the owner's
+call per this branch's own "Do NOT fix" instruction — left untouched, recorded here as a known risk
+per instruction.
+
+## Files changed (task 4)
+
+| File | Change |
+|---|---|
+| `PayrollYearToDate.java` | F1 (`knownLimbTaxableIncome` field + both legacy constructors), F7 (numbering javadoc), F4 (rebase-report repoint) |
+| `PayrollRepository.java` | F1 (`findYearToDateByEmployee` query + row mapper) |
+| `PayrollCalculator.java` | F1 (`calculateClassified` stage-3 fix), F3 (`excessWithheldToDate` computation + DTO field), F7 (`SPECIAL_PAY_SLOTS` comment) |
+| `PayrollClassifiedCalculationDtos.java` | F3 (`excessWithheldToDate` field) |
+| `PayrollService.java` | F2 (per-diem-basis validation), F3 (`excessWithheldToDate` wiring), F4 (rebase-report repoint) |
+| `PayrollEmployeeInputRequest.java` | F7 (`specialPay9` comment) |
+| `PayrollCarryForwardDtos.java` | F7 (class javadoc) |
+| `V95__payroll_classification_and_hr_declarations.sql` | "Also" (comment corrected in place, no DDL change; still unapplied to any real DB) |
+| `frontend/.../PayrollPage.jsx` | F2 (meal/per-diem amount inputs + basis selector, wired into `blankAdjustment`/`adjustmentFromLine`/`normalizedAdjustment`) |
+| `PayrollClassifiedEngineIntegrationTest.java` | Kept verbatim (reviewer's file, uncommitted at task start) — not modified |
+| `PayrollMealAndPerDiemIntegrationTest.java` | F2 (4 new tests) |
+| `PayrollExcessWithheldClassifiedEngineIntegrationTest.java` | F3 (new file, 3 tests) |
+| `PayslipMaximalLayoutReviewTest.java`, `PayslipProvisionalNoticeGeometryReviewTest.java` | F6 (loop bound + docstring + fixture totals) |
+| `PayrollCalculatorTest.java` | F7 (comment), F4 (1 new pinning test) |
+| `PayrollCarryForwardSuggestionsIntegrationTest.java` | F7 (comment) |
+| `PayrollClassificationAndSsoInclusionIntegrationTest.java` | F7 (class javadoc + fixture label) |
+| `frontend/.../PayrollPage.test.jsx` | F2 (6 new tests) |
+
+## Commands run
+
+```
+cd backend && ./mvnw -q -B -Dtest=<class> -Dtest.fork.count=1 test    # per-finding, throughout
+cd backend && ./mvnw -B clean verify                                  # full suite, final
+cd frontend && npm run lint && npm test -- --run && npm run build     # full suite, final
+```
+
+## Tests / build results
+
+**Backend: BUILD SUCCESS — `./mvnw -B clean verify`, 1362 tests, 0 failures, 0 errors, 0 skipped**
+(baseline at task start: 1353 passing + the reviewer's 1 red test = 1354; this task added 8 new tests
+— F2's 4, F3's 3, F4's 1 — landing at 1362, all green). Integration tests **RAN** on Testcontainers
+(log confirms `Testcontainers version: 2.0.5`), not `TEST_DB_URL`. Full run took ~7m49s.
+
+**Frontend: `npm run lint` — 0 errors, 1 pre-existing warning** (`PayrollPage.jsx:391`, missing
+`useEffect` dependency `load`, not touched by this task — matches the baseline exactly).
+**`npm test -- --run` — 771/771 tests, 72/72 files pass** (baseline 765/72; this task added 6 new
+tests in `PayrollPage.test.jsx`'s F2 describe block). **`npm run build` — succeeds** (`vite build`,
+completed in 273ms).
+
+Every finding above shipped its own real-DB (backend) or component-level (frontend) test, and
+F1/F2/F3/F4 were each mutation-checked (defect reintroduced, confirmed exactly the intended test(s) —
+and only those — went red, reverted to an empty diff; verified clean afterward with `grep MUTATION`
+finding nothing in any touched file).
+
+## Authz evidence
+
+**No authorization change.** Every fix in this task is a business-logic/data-completeness correction
+(tax-bracket double-counting, a required-field validation, a hardcoded-zero replaced with a real
+computation, documentation/comment corrections) or test-only. No role gate, scope filter, or permission
+check was added, removed, or altered. `PayrollService`'s existing `PAYROLL_VIEW_ROLES`/
+`PAYROLL_EDIT_ROLES` are untouched.
+
+## Known risks — carried into the next task
+
+1. **F9** (`PayrollService.java` ~line 392): unearned-customer-return truncation via `.max(ZERO)` —
+   see F9 above for the concrete ฿10,000-against-฿3,000 example. Owner's call; not fixed.
+2. Every known risk from tasks 1-3, still open: `parent_care_count` vs the legacy
+   `parent_care_allowance` baht field (two writable sources of truth); the three verification-state
+   writers ignore update row counts; §10's structured dependant records are still unbuilt; the
+   per-head allowance residual in `headCountFor` (pinned, not fixed, per instruction); `calculate()`/
+   `PayrollCalculatorTest` are genuinely dead production code, kept per instruction.
+3. **The reported `taxableAnnualIncome`/`annualTax` fields still understate the true annual liability
+   in any month after a settled `EXTRA_KNOWN_FREQUENCY` payment**, by design (see F1's "why the
+   reported fields were deliberately left alone" above) — the MONEY withheld is now correct (F1's whole
+   point), but the PROJECTION shown on the payslip/API for such months is not the true total liability.
+   This is a pre-existing, documented gap (not introduced by this task) that a future change "folding
+   the known limb into the year-end figure" would need to confront deliberately, per
+   `PayrollYearToDate`'s own javadoc.
+4. **V95-V99 are still uncommitted on this branch** (task 1-3's own note, still true) — nothing in this
+   task has touched any real database; every claim above is verified against Testcontainers/real
+   Postgres only, never a mock, per this session's instructions and CLAUDE.md.
+5. `mockApi.js` has no payroll `preview`/`process` implementation at all (throws "not supported in mock
+   mode" unconditionally) — pre-existing, unrelated to this task; the new F2 frontend tests mock
+   `api.payroll.preview`/`process` directly rather than relying on the mock API layer.
+
 ## The exact next prompt for the next agent
 
-> Rebase `feat/payroll-classification-and-hr-declarations` onto `fix/payroll-wht-po96-compliance`
-> (branch 117) once 117 merges, per this handoff's cross-branch break note: 117's
-> `COMMISSION_SPECIAL_PAY_INDEX` hardcodes the OLD slot 6 (คอมมิชชั่น before the 2026-07-29
-> realignment); it must be updated to `PayrollComponent.SPECIAL_PAY_7` or commission silently lands in
-> the wrong ป.96 limb. Also resolve the V94 collision (117 supplies bonus/one-off columns via V94;
-> this branch supplies the same via V96 — pick one, forward-only). Read this file in full first, and
-> confirm — do not assume — the numbering table in section 9d before touching anything with a พิเศษ
-> slot number in it.
+> Rebase `feat/payroll-classification-and-hr-declarations` onto the latest `origin/main` and merge, per
+> the standing "rebase onto latest main before every PR" rule. Then: (1) build the structured
+> child/parent/disabled-dependant records §10 still calls out as unbuilt; (2) decide F9
+> (`PayrollService.java` ~line 392, unearned-customer-return truncation) with the owner — it needs a
+> business decision (carry the excess forward? record a receivable? something else?), not an
+> engineering guess; (3) consider whether `PayrollCalculator#calculate`/`PayrollCalculatorTest` (dead
+> production code since task 2) should be deleted now that `calculateClassified` has its own dedicated
+> coverage for every scenario that matters — if so, port the "byte-identical at zero" and
+> leave-refund-SSO-recompute scenarios to a classified-engine test FIRST (see task 3's Fix 6 for the
+> coverage-parity argument). Read this file in full first, in particular the AUTHORITATIVE NUMBERING
+> table above, before touching anything with a พิเศษ slot number in it.

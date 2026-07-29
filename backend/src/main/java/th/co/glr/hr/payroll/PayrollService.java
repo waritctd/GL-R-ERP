@@ -309,7 +309,10 @@ public class PayrollService {
                 // elderly/disabled exemption (exemptIncome/assessAnnualTax are calculate()-only). Kept
                 // as-is rather than threaded through calculateClassified/PayrollClassifiedCalculationInput,
                 // which would be inventing behaviour fa69e4fa does not implement; flagged as a known gap
-                // in the rebase report, not fixed here.
+                // in docs/agent-handoffs/118_feat-payroll-classification-and-hr-declarations.md,
+                // "Progress -- task 4: rebase report + F1-F7 fixes" section, known risks (F4 correction,
+                // Opus review 2026-07-30: that section did not exist when this comment was written;
+                // it now does).
                 treatmentsByEmployee.getOrDefault(employee.employeeId(), Map.of()),
                 ssoInclusionByEmployee.getOrDefault(employee.employeeId(), Map.of())
             ))
@@ -359,6 +362,24 @@ public class PayrollService {
         BigDecimal effectiveWithholdingOverride = perRunWithholdingOverride != null
             ? perRunWithholdingOverride
             : employee.withholdingTaxOverride();
+
+        // F2 fix (Opus review, 2026-07-30): the frontend used to expose per-diem AMOUNT inputs with no
+        // basis selector, and this method passed input.perDiemBasis() straight through to the INSERT
+        // unvalidated -- so Preview always succeeded (it never writes a row) but Process 500'd on
+        // V97's chk_payroll_line_per_diem_basis_present CHECK constraint the moment HR typed a
+        // per-diem amount without a basis. Validate here, before that INSERT is ever reached, and fail
+        // with a clear Thai-language 400 naming the employee and the missing basis instead of a bare
+        // DataIntegrityViolationException turning into a 500.
+        BigDecimal perDiemExemptAmount = input == null ? BigDecimal.ZERO : safe(input.perDiemExempt());
+        BigDecimal perDiemTaxableAmount = input == null ? BigDecimal.ZERO : safe(input.perDiemTaxable());
+        if (perDiemExemptAmount.add(perDiemTaxableAmount).signum() > 0
+            && (input == null || input.perDiemBasis() == null)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "พนักงาน " + employee.employeeCode() + " " + employee.employeeName()
+                    + " มีการจ่ายเบี้ยเลี้ยง (เบี้ยเลี้ยง ตจว/ตปท) แต่ไม่ได้ระบุฐานตามมาตรา 42"
+                    + " (เหมาจ่ายตามอัตราราชการ มาตรา 42(2) หรือจ่ายจริงตามหน้าที่ มาตรา 42(1))"
+                    + " กรุณาเลือกฐานก่อนประมวลผลเงินเดือน");
+        }
 
         // ลูกค้าคืนสินค้า earned/unearned flag (handoff section 6): not yet earned reduces the
         // commission earning itself, PRE-TAX -- netted into COMMISSION_PAY here, before it ever
@@ -485,10 +506,12 @@ public class PayrollService {
             BigDecimal.ZERO,
             calculation.bonusPay(),
             calculation.otherOneOffPay(),
-            // V94's excessWithheldToDate has no equivalent in PayrollClassifiedCalculation (the
-            // classified engine does not track a stranded-excess figure) -- known gap, not fixed by this
-            // rebase; see the rebase report.
-            BigDecimal.ZERO,
+            // F3 fix (Opus review, 2026-07-30): this used to be hardcoded to ZERO on every processed
+            // line -- see calculateClassified's own comment on excessWithheldToDate for the computation
+            // and why it now flows through. Kept persisting it so PayslipRenderer's over-withholding
+            // notice (line 158) and the ภ.ง.ด.1 working-paper figure spec section 8 requires are both
+            // reachable again.
+            calculation.excessWithheldToDate(),
             calculation.taxableIncomeRegularLimb(),
             calculation.taxableIncomeKnownLimb(),
             calculation.taxableIncomeCumulativeLimb(),

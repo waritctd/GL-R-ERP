@@ -38,8 +38,10 @@ class PayrollCalculatorTest {
         String salary, String bonus, PayrollYearToDate yearToDate, int month, int remainingPayPeriods) {
         return calculator.calculate(new PayrollCalculationInput(
             new BigDecimal(salary),
-            // Slot 1: where HR actually types a bonus (owner-confirmed 2026-07-29). Slots 1-5, 7 and 8
-            // are all occasional, so this is the ข้อ 2.5 limb.
+            // Slot 1: where HR actually types a bonus (owner-confirmed 2026-07-29). Slots 1-6 and 8
+            // (F7 correction, Opus review 2026-07-30: was "1-5, 7 and 8" -- the accountant's-workbook
+            // renumbering, handoff section 9d, moved คอมมิชชั่น from slot 6 to slot 7, so it is now slot
+            // 7 that is excluded, not slot 6) are all occasional, so this is the ข้อ 2.5 limb.
             List.of(new BigDecimal(bonus), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
@@ -394,7 +396,15 @@ class PayrollCalculatorTest {
     @Test
     void theTwoIncomeLimbsAlwaysSumToGrossTaxableIncome() {
         String[][] cases = {
-            // salary, พิเศษ7 (occasional), พิเศษ1 (occasional/bonus), OT, commission (RECURRING), unpaid leave days
+            // F7 correction (Opus review, 2026-07-30): this row's พิเศษ7 value was labelled
+            // "(occasional)", which was true under the OLD numbering (พิเศษ7 was ทำได้ตาม KPI, an
+            // occasional slot) but is now wrong -- the accountant's-workbook renumbering (handoff
+            // section 9d) moved คอมมิชชั่น to พิเศษ7, and COMMISSION_SPECIAL_PAY_INDEX now correctly
+            // treats it as RECURRING (the regular limb). See
+            // theSeventhSpecialPaySlotIsCommissionAndLandsInTheRegularLimbNotVariable below for a test
+            // that actually pins this, unlike the partition-only assertions in this method.
+            //
+            // salary, พิเศษ7 (RECURRING -- commission slot), พิเศษ1 (occasional/bonus), OT, commissionPay field (RECURRING), unpaid leave days
             {"50000.00", "5000.00", "100000.00", "3000.00", "8000.00", "0"},
             {"50000.00", "0", "0", "0", "0", "5"},
             {"3000.00", "0", "20000.00", "0", "0", "30"},     // deductions exceed the regular limb
@@ -420,6 +430,53 @@ class PayrollCalculatorTest {
                 .withFailMessage("withholding split must sum to withholdingTax for salary=%s", row[0])
                 .isEqualByComparingTo(result.withholdingTax());
         }
+    }
+
+    /**
+     * F4 correction (Opus review, 2026-07-30): commit f5eaa01e ("fix the commission slot index")
+     * claimed "no test places a non-zero amount at either index" -- false. The first row of {@link
+     * #theTwoIncomeLimbsAlwaysSumToGrossTaxableIncome} above places 5,000.00 at zero-based index 6
+     * (specialPay7) and always passed anyway, because that test only asserts a PARTITION invariant
+     * (regular + variable == gross) that holds no matter which limb index 6 lands in -- an engine that
+     * put specialPay7 in the WRONG limb would still pass it. It is structurally incapable of catching
+     * what it appears to cover.
+     *
+     * <p>This test closes that gap: it isolates specialPay7's own contribution (against an otherwise
+     * identical zeroed run) and pins specifically that it lands in the REGULAR limb, not the variable
+     * one -- the actual behaviour {@code COMMISSION_SPECIAL_PAY_INDEX} is supposed to produce.
+     */
+    @Test
+    void theSeventhSpecialPaySlotIsCommissionAndLandsInTheRegularLimbNotVariable() {
+        PayrollCalculation withCommissionSlot = calculator.calculate(new PayrollCalculationInput(
+            new BigDecimal("50000.00"),
+            List.of(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("5000.00"), BigDecimal.ZERO),
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 3,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, null, 2026, 0));
+        PayrollCalculation withoutCommissionSlot = calculator.calculate(new PayrollCalculationInput(
+            new BigDecimal("50000.00"),
+            List.of(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 3,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, null, 2026, 0));
+
+        BigDecimal regularContribution = withCommissionSlot.regularTaxableIncome()
+            .subtract(withoutCommissionSlot.regularTaxableIncome());
+        BigDecimal variableContribution = withCommissionSlot.variableTaxableIncome()
+            .subtract(withoutCommissionSlot.variableTaxableIncome());
+
+        assertThat(regularContribution)
+            .withFailMessage("specialPay7 (คอมมิชชั่น) must land in the REGULAR limb -- COMMISSION_SPECIAL_PAY_INDEX")
+            .isEqualByComparingTo("5000.00");
+        assertThat(variableContribution)
+            .withFailMessage("specialPay7 must NOT land in the variable limb")
+            .isEqualByComparingTo("0.00");
     }
 
     /**

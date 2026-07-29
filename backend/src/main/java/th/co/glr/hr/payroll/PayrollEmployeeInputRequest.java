@@ -15,8 +15,10 @@ public record PayrollEmployeeInputRequest(
     @PositiveOrZero BigDecimal specialPay6,
     @PositiveOrZero BigDecimal specialPay7,
     @PositiveOrZero BigDecimal specialPay8,
-    // พิเศษ 9 -- ค่าเช่าบ้าน (2026-07-29, V95). Appended after specialPay8, never inserted earlier --
-    // see PayrollComponent's javadoc for why the พิเศษ slots are append-only.
+    // พิเศษ 9 (2026-07-29, V95) -- originally appended as ค่าเช่าบ้าน. F7 correction (Opus review,
+    // 2026-07-30): the accountant's-workbook renumbering (handoff section 9d, later the same day)
+    // moved ค่าเช่าบ้าน to specialPay2 instead and specialPay9 is now เงินรางวัล/เงินช่วยเหลืออื่นๆ --
+    // see PayrollComponent's javadoc for the CURRENT, authoritative slot -> label mapping.
     @PositiveOrZero BigDecimal specialPay9,
     @PositiveOrZero BigDecimal nonTaxableIncome,
     @PositiveOrZero BigDecimal unpaidLeaveDays,

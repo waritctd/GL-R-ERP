@@ -181,17 +181,21 @@ class PayslipProvisionalNoticeGeometryReviewTest {
         return collected;
     }
 
-    /** The biggest payslip the engine can produce — mirrors {@link PayslipMaximalLayoutReviewTest}. */
+    /**
+     * The biggest payslip the engine can produce — mirrors {@link PayslipMaximalLayoutReviewTest}.
+     * All 9 พิเศษ slots (F6 fix, Opus review 2026-07-30 -- see that class's own comment; this loop
+     * had the identical one-slot-short defect).
+     */
     private PayrollLineDto maximalLine(BigDecimal excessWithheld, String note) {
         List<PayrollSpecialPayDto> specials = new ArrayList<>();
-        for (int slot = 1; slot <= 8; slot += 1) {
+        for (int slot = 1; slot <= 9; slot += 1) {
             specials.add(new PayrollSpecialPayDto("specialPay" + slot,
                 "พิเศษ " + slot + " (ค่าครองชีพประจำเดือน)", money("1000.00")));
         }
         return new PayrollLineDto(
             1L, 7L, "GLR-07", "ทดสอบ ยาวมากเป็นพิเศษ", "AC-บัญชีและการเงิน", "ธ.กสิกรไทย", "1234567890",
             money("50000.00"), money("1666.67"), money("208.33"),
-            specials, money("8000.00"),
+            specials, money("9000.00"),
             money("3000.00"), money("9000.00"), money("125000.00"), money("2000.00"),
             money("1.50"), money("2500.00"),
             money("122500.00"), money("17500.00"), money("875.00"),

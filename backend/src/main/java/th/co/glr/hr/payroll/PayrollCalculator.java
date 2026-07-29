@@ -34,8 +34,12 @@ public class PayrollCalculator {
     // SSF purchases were deductible for ปีภาษี 2563-2567 only; ปีภาษี 2568 = Gregorian 2025.
     private static final int SSF_FIRST_NON_DEDUCTIBLE_TAX_YEAR = 2025;
     private static final BigDecimal MIN_NET_AFTER_LEGAL_EXECUTION = new BigDecimal("20000.00");
-    // 2026-07-29 (V95): พิเศษ 9 -- ค่าเช่าบ้าน, appended after พิเศษ 8. See PayrollComponent and
-    // PayrollService#specialPayDtos for the full slot -> label mapping.
+    // 2026-07-29 (V95): a ninth พิเศษ slot added (ค่าเช่าบ้าน). F7 correction (Opus review,
+    // 2026-07-30): this comment previously said "พิเศษ 9 -- ค่าเช่าบ้าน", which was V95's ORIGINAL
+    // append-only numbering. The handoff's section 9d renumbering (also 2026-07-29, later the same
+    // day) aligned the system to the accountant's workbook instead: ค่าเช่าบ้าน is พิเศษ 2 and พิเศษ 9
+    // is now เงินรางวัล/เงินช่วยเหลืออื่นๆ. See PayrollComponent and PayrollService#specialPayDtos for
+    // the full, CURRENT slot -> label mapping.
     private static final int SPECIAL_PAY_SLOTS = 9;
     // ป.96/2543 income classification. คำชี้แจง แบบ ภ.ง.ด.1 splits employment income into
     // เงินได้ที่จ่ายตามปกติ (ข้อ 2.1, annualised by x จำนวนคราวที่ต้องจ่าย) and เงินพิเศษที่จ่ายเป็น
@@ -602,6 +606,15 @@ public class PayrollCalculator {
         BigDecimal regularAnnualProjection = money(money(yearToDate.regularLimbTaxableIncome())
             .add(regularSumAfterLeave.multiply(BigDecimal.valueOf(monthsRemaining))));
         BigDecimal knownThisPeriod = knownSum;
+        // F1 fix (Opus review, 2026-07-30): the running total of every EXTRA_KNOWN_FREQUENCY baht
+        // settled so far this tax year, THIS period included -- see PayrollYearToDate#knownLimbTaxableIncome's
+        // javadoc. knownThisPeriod above stays this period's own amount only (Stage 2 below is
+        // unchanged: ข้อ 1(5) taxes a known-frequency payment as its own one-off marginal difference at
+        // the moment it is paid, and that never changes). This YTD total exists solely so Stage 3 can
+        // layer the cumulative limb on top of the TRUE running income -- without it, the moment a
+        // bonus's own period ends, the cumulative limb's marginal tax silently forgot the bonus had
+        // ever been paid and re-taxed the same brackets a second time, under-withholding the year.
+        BigDecimal knownLimbYtdTotal = money(money(yearToDate.knownLimbTaxableIncome()).add(knownThisPeriod));
         BigDecimal cumulativeYtdTotal = money(money(yearToDate.cumulativeLimbTaxableIncome()).add(cumulativeSum));
         BigDecimal fullAnnualProjection = money(regularAnnualProjection.add(knownThisPeriod).add(cumulativeYtdTotal));
 
@@ -632,6 +645,16 @@ public class PayrollCalculator {
         BigDecimal netRegular = regularAnnualProjection.subtract(deductionsTotal);
         BigDecimal netWithKnown = netRegular.add(knownThisPeriod);
         BigDecimal netWithCumulative = netWithKnown.add(cumulativeYtdTotal);
+        // F1 fix (Opus review, 2026-07-30): Stage 3's OWN base, layering the cumulative limb on top of
+        // the regular limb plus every known-limb baht settled THIS YEAR TO DATE (not just this
+        // period's) -- see the knownLimbYtdTotal comment above. Deliberately NOT used for the reported
+        // taxableAnnualIncome/annualTax fields below (netWithCumulative/taxableWithCumulative/
+        // annualTaxWithCumulative stay as before, this period's known amount only, by design -- see
+        // PayrollYearToDate's javadoc on why a settled known-limb payment is not carried into any LATER
+        // PROJECTION); netWithCumulativeYtd exists solely to get the CUMULATIVE limb's own marginal
+        // WITHHOLDING right.
+        BigDecimal netWithKnownYtd = netRegular.add(knownLimbYtdTotal);
+        BigDecimal netWithCumulativeYtd = netWithKnownYtd.add(cumulativeYtdTotal);
 
         BigDecimal taxableRegularOnly = money(netRegular.max(ZERO));
         BigDecimal annualTaxRegular = progressiveTax(taxableRegularOnly);
@@ -644,11 +667,17 @@ public class PayrollCalculator {
         BigDecimal withholdKnown = annualTaxWithKnown.subtract(annualTaxRegular).max(ZERO);
 
         // ---- Stage 3 (ข้อ 6): EXTRA_CUMULATIVE_ACTUAL, full year-to-date actual layered on top, less
-        // tax already withheld on this limb.
+        // tax already withheld on this limb. taxableWithCumulative/annualTaxWithCumulative (reported on
+        // the line, unchanged) still reflect the OLD narrower base; withholdCumulative below is computed
+        // from the YTD-known-inclusive base (netWithCumulativeYtd) so the MONEY withheld is correct even
+        // though the reported projection fields are not (F1 fix -- see comments above).
         BigDecimal taxableWithCumulative = money(netWithCumulative.max(ZERO));
         BigDecimal annualTaxWithCumulative = progressiveTax(taxableWithCumulative);
-        BigDecimal withholdCumulative = annualTaxWithCumulative
-            .subtract(annualTaxWithKnown)
+        BigDecimal taxableWithCumulativeYtd = money(netWithCumulativeYtd.max(ZERO));
+        BigDecimal annualTaxWithCumulativeYtd = progressiveTax(taxableWithCumulativeYtd);
+        BigDecimal annualTaxWithKnownYtd = progressiveTax(money(netWithKnownYtd.max(ZERO)));
+        BigDecimal withholdCumulative = annualTaxWithCumulativeYtd
+            .subtract(annualTaxWithKnownYtd)
             .subtract(money(yearToDate.cumulativeLimbWithholdingTax()))
             .max(ZERO);
 
@@ -680,6 +709,32 @@ public class PayrollCalculator {
                 + " Withholding tax overridden by HR to " + withholdingTaxOverride.toPlainString()
                 + " (computed projection retained for transparency).";
         }
+
+        // F3 fix (Opus review, 2026-07-30): PayrollService used to hardcode excessWithheldToDate to
+        // ZERO on every processed line, making PayslipRenderer's over-withholding notice permanently
+        // unreachable and losing the figure spec section 8 requires be kept "for the ภ.ง.ด.1 working
+        // papers and reconciliation". This is the classified engine's own analogue of the legacy
+        // #calculate()'s excessWithheldToDate (see that field's own comment above #calculate's return
+        // statement): the running total ACTUALLY withheld this tax year AS AT THE END OF THIS PERIOD
+        // (yearToDate.withholdingTax() -- every PRIOR period's own persisted total across all three
+        // limbs -- plus THIS period's own withholdingTax, taken AFTER the override above, for the same
+        // reason the legacy engine computes it after: an HR override that pushes withholding past the
+        // true liability must show up here, not be silently absorbed) exceeding the TRUE annual
+        // liability given everything known so far this year -- annualTaxWithCumulativeYtd, NOT the
+        // narrower taxableAnnualIncome/annualTax fields reported below, because those deliberately
+        // exclude a settled known-limb payment from later months (F1) and would over-report an excess
+        // that reprojects itself away next period rather than one that is genuinely stranded.
+        //
+        // In the normal (no override) path this is always zero: each limb's own withholding is already
+        // capped at "what remains owed on that limb", so the three limbs summed can never exceed the
+        // combined annual liability they were each computed against. Only an HR override (or a
+        // correction that lowers a later period's projected liability below what was already withheld)
+        // can make the two differ -- exactly the case this exists to surface, matching the legacy
+        // engine's own reasoning.
+        BigDecimal totalWithheldToDateIncludingThisPeriod =
+            money(money(yearToDate.withholdingTax()).add(withholdingTax));
+        BigDecimal excessWithheldToDate =
+            money(totalWithheldToDateIncludingThisPeriod.subtract(annualTaxWithCumulativeYtd).max(ZERO));
 
         BigDecimal studentLoanDeduction = money(input.studentLoanDeduction());
         BigDecimal otherPostTaxDeductions = money(input.otherPostTaxDeductions());
@@ -768,7 +823,8 @@ public class PayrollCalculator {
             withholdingTaxCumulativeLimb,
             garnishmentType,
             money(input.amountOf(PayrollComponent.MEAL_ALLOWANCE)),
-            money(input.amountOf(PayrollComponent.PER_DIEM_TAXABLE))
+            money(input.amountOf(PayrollComponent.PER_DIEM_TAXABLE)),
+            excessWithheldToDate
         );
     }
 

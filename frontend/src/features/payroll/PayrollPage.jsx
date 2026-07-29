@@ -107,6 +107,15 @@ const namedAllowanceFields = [
   { key: 'perDiemExempt', label: 'เบี้ยเลี้ยง — ส่วนที่ยกเว้นภาษี (ม.42)' },
   { key: 'perDiemTaxable', label: 'เบี้ยเลี้ยง — ส่วนเกิน (เสียภาษี)' },
 ];
+
+// F2 fix (Opus review, 2026-07-30): the two มาตรา 42 limbs a เบี้ยเลี้ยง payment can be made under —
+// see backend PerDiemBasis. Values must match that enum's names exactly; they are sent verbatim as
+// `perDiemBasis` on the request. Required only when a per-diem amount (exempt or taxable) is actually
+// entered — V97's chk_payroll_line_per_diem_basis_present CHECK otherwise rejects the Process insert.
+const PER_DIEM_BASIS_OPTIONS = [
+  { value: 'FLAT_RATE_S42_2', label: 'เหมาจ่ายตามอัตราราชการ (ม.42(2)) — ไม่ต้องมีใบเสร็จ' },
+  { value: 'REIMBURSED_S42_1', label: 'จ่ายจริงตามหน้าที่ (ม.42(1)) — ต้องมีใบเสร็จ' },
+];
 const specialPayKeys = specialPayFields.map((field) => field.key);
 const namedAllowanceKeys = namedAllowanceFields.map((field) => field.key);
 const incomeInputKeys = ['nonTaxableIncome'];
@@ -189,6 +198,15 @@ function blankAdjustment(employeeId, { applyDefaults = false } = {}) {
     warningLetterDeduction: '',
     customerReturnDeduction: '',
     otherPretaxDeduction: '',
+    // F2 fix (Opus review, 2026-07-30): ค่าอาหาร/เบี้ยเลี้ยง (V97) were defined in
+    // namedAllowanceFields/payrollInputKeys but never actually defaulted or rendered -- HR had no way
+    // to enter them at all. mealAllowance/perDiemExempt/perDiemTaxable are plain numeric fields like
+    // the special-pay slots above; perDiemBasis is a nullable enum ('' = not yet chosen), same
+    // treatment as withholdingTaxOverride below -- kept out of the numeric payrollInputKeys.
+    mealAllowance: '',
+    perDiemExempt: '',
+    perDiemTaxable: '',
+    perDiemBasis: '',
     // Nullable per-run withholding override ('' = compute/standing). Kept out of the numeric keys below.
     withholdingTaxOverride: '',
   };
@@ -217,6 +235,14 @@ function adjustmentFromLine(line, { applyDefaults = false, suggestion = null } =
   adjustment.warningLetterDeduction = draftValue(line.warningLetterDeduction);
   adjustment.customerReturnDeduction = draftValue(line.customerReturnDeduction);
   adjustment.otherPretaxDeduction = draftValue(line.otherPretaxDeduction);
+  // ค่าอาหาร carries forward like the other recurring fields above; the two เบี้ยเลี้ยง amounts and
+  // the basis do not (V98's carry-forward flags only cover mealAllowance for this group -- see the
+  // task-3 handoff fix 5) -- a per-diem is trip-driven, not a standing monthly figure, so re-entering
+  // it (and its basis) fresh each run is correct, not a gap.
+  adjustment.mealAllowance = draftValue(line.mealAllowance, suggestedFallback(suggestion, 'mealAllowance') ?? '');
+  adjustment.perDiemExempt = draftValue(line.perDiemExempt);
+  adjustment.perDiemTaxable = draftValue(line.perDiemTaxable);
+  adjustment.perDiemBasis = line.perDiemBasis || '';
   adjustment.withholdingTaxOverride = overrideDraft(line.withholdingTaxOverride, suggestion);
   return adjustment;
 }
@@ -226,6 +252,14 @@ function withholdingOverrideValue(input) {
   return raw === '' || raw == null ? null : Number(raw);
 }
 
+// F2 fix (Opus review, 2026-07-30): perDiemBasis is a nullable enum, not an amount -- same reasoning
+// as withholdingOverrideValue above. '' (never chosen) submits as null; a chosen value submits as its
+// PerDiemBasis name verbatim (matches th.co.glr.hr.payroll.PerDiemBasis exactly).
+function perDiemBasisValue(input) {
+  const raw = input.perDiemBasis;
+  return raw === '' || raw == null ? null : raw;
+}
+
 function normalizedAdjustment(input) {
   return {
     employeeId: input.employeeId,
@@ -233,6 +267,8 @@ function normalizedAdjustment(input) {
     // Nullable: '' -> null ("compute/standing"), a number (incl. 0) -> that override. Kept separate
     // from the numeric keys above precisely so a cleared field stays null instead of collapsing to 0.
     withholdingTaxOverride: withholdingOverrideValue(input),
+    // F2 fix (Opus review, 2026-07-30): nullable enum, same reasoning as withholdingTaxOverride above.
+    perDiemBasis: perDiemBasisValue(input),
   };
 }
 
@@ -661,6 +697,64 @@ export function PayrollPage({ showToast }) {
                     );
                   })}
                 </div>
+              </CollapsibleSection>
+
+              <CollapsibleSection
+                title="ค่าอาหาร / เบี้ยเลี้ยง"
+                defaultOpen={false}
+                headerRight={(
+                  <span className="collapsible-total">
+                    {formatMoney(namedAllowanceKeys.reduce((sum, key) => sum + parsePayrollNumber(selectedAdjustment[key]), 0))}
+                  </span>
+                )}
+              >
+                <FormGrid>
+                  <label htmlFor="payroll-meal-allowance">
+                    ค่าอาหาร
+                    <MoneyInput id="payroll-meal-allowance" value={selectedAdjustment.mealAllowance} onChange={(value) => updateAdjustment('mealAllowance', value)} />
+                  </label>
+                  <label htmlFor="payroll-per-diem-exempt">
+                    เบี้ยเลี้ยง — ส่วนที่ยกเว้นภาษี (ม.42)
+                    <InfoTip
+                      label="เบี้ยเลี้ยง — ส่วนที่ยกเว้นภาษี (ม.42)"
+                      text="ส่วนของเบี้ยเลี้ยงที่อยู่ภายในอัตราที่ได้รับการยกเว้นภาษีตามมาตรา 42 กรอกแยกจากส่วนเกิน"
+                    />
+                    <MoneyInput id="payroll-per-diem-exempt" value={selectedAdjustment.perDiemExempt} onChange={(value) => updateAdjustment('perDiemExempt', value)} />
+                  </label>
+                  <label htmlFor="payroll-per-diem-taxable">
+                    เบี้ยเลี้ยง — ส่วนเกิน (เสียภาษี)
+                    <InfoTip
+                      label="เบี้ยเลี้ยง — ส่วนเกิน (เสียภาษี)"
+                      text="ส่วนของเบี้ยเลี้ยงที่เกินอัตรายกเว้นตามมาตรา 42 ถือเป็นเงินได้ต้องเสียภาษีตามปกติ"
+                    />
+                    <MoneyInput id="payroll-per-diem-taxable" value={selectedAdjustment.perDiemTaxable} onChange={(value) => updateAdjustment('perDiemTaxable', value)} />
+                  </label>
+                  {/* F2 fix (Opus review, 2026-07-30): shown only once a per-diem amount is actually
+                      entered -- HR classifying a basis for money nobody paid has nothing to classify,
+                      same "only where money is actually moving" principle as tax-treatment classification
+                      elsewhere on this page. Required the moment either amount above is non-zero, or
+                      V97's chk_payroll_line_per_diem_basis_present CHECK rejects Process with a 500 (now
+                      caught earlier server-side too -- see PayrollService#calculateLine). */}
+                  {(parsePayrollNumber(selectedAdjustment.perDiemExempt) > 0 || parsePayrollNumber(selectedAdjustment.perDiemTaxable) > 0) && (
+                    <label htmlFor="payroll-per-diem-basis">
+                      ฐานเบี้ยเลี้ยง (มาตรา 42)
+                      <InfoTip
+                        label="ฐานเบี้ยเลี้ยง (มาตรา 42)"
+                        text="เลือกว่าเบี้ยเลี้ยงนี้จ่ายแบบเหมาจ่ายตามอัตราราชการ (ไม่ต้องมีใบเสร็จ) หรือจ่ายจริงตามหน้าที่ (ต้องมีใบเสร็จ) จำเป็นต้องเลือกก่อนประมวลผลเงินเดือน"
+                      />
+                      <select
+                        id="payroll-per-diem-basis"
+                        value={selectedAdjustment.perDiemBasis}
+                        onChange={(event) => updateAdjustment('perDiemBasis', event.target.value)}
+                      >
+                        <option value="">— เลือกฐาน —</option>
+                        {PER_DIEM_BASIS_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                </FormGrid>
               </CollapsibleSection>
 
               <CollapsibleSection title="รายได้ไม่คิดภาษี" defaultOpen={false}>

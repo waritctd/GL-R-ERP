@@ -10,6 +10,7 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
@@ -18,6 +19,7 @@ import th.co.glr.hr.commission.CommissionAttachmentRepository;
 import th.co.glr.hr.commission.CommissionCalculator;
 import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.CommissionService;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -140,6 +142,84 @@ class PayrollMealAndPerDiemIntegrationTest extends AbstractPostgresIntegrationTe
             LocalDate.of(2026, 3, 1), employeeId, List.of(lineWithNoBasis)))
             .as("chk_payroll_line_per_diem_basis_present must reject a non-zero per-diem amount with no basis")
             .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    /**
+     * F2 fix (Opus review, 2026-07-30): before this fix, the frontend had no basis selector at all
+     * (so HR could never supply one) and {@link PayrollService#calculateLine} passed
+     * {@code input.perDiemBasis()} straight through to the INSERT unvalidated -- Preview always
+     * succeeded (it never writes a row) and Process 500'd on {@code
+     * chk_payroll_line_per_diem_basis_present} the moment HR typed a per-diem amount. This drives
+     * the REAL {@link PayrollService#process} (not the repository directly, unlike the DB-level test
+     * above) and asserts the failure is now a clean {@link ApiException} 400 naming the employee and
+     * the missing basis, thrown BEFORE any INSERT is attempted -- never a bare
+     * {@link DataIntegrityViolationException} surfacing as a 500.
+     */
+    @Test
+    void processRejectsAPerDiemAmountWithNoBasisAsACleanFourHundredNotAFiveHundred() {
+        long employeeId = seedEmployee("MEAL-004", "ไม่ระบุฐาน", "ทดสอบ", new BigDecimal("30000.00"));
+
+        PayrollEmployeeInputRequest input = mealAndPerDiemInput(
+            employeeId, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("300.00"), null);
+
+        assertThatThrownBy(() -> payrollService.process(
+            new ProcessPayrollRequest(LocalDate.of(2026, 4, 1), List.of(input)), hr()))
+            .isInstanceOf(ApiException.class)
+            .satisfies(ex -> assertThat(((ApiException) ex).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST))
+            .hasMessageContaining("MEAL-004")
+            .hasMessageContaining("มาตรา 42");
+
+        // Nothing was inserted -- the run was rejected up front, not partially committed.
+        assertThat(payrollRepository.findPeriodByMonth(LocalDate.of(2026, 4, 1))).isEmpty();
+    }
+
+    /** The exempt-only amount must trip the same validation as the taxable-only case above. */
+    @Test
+    void processRejectsAnExemptOnlyPerDiemAmountWithNoBasisToo() {
+        long employeeId = seedEmployee("MEAL-005", "ยกเว้นไม่ระบุฐาน", "ทดสอบ", new BigDecimal("30000.00"));
+
+        PayrollEmployeeInputRequest input = mealAndPerDiemInput(
+            employeeId, BigDecimal.ZERO, new BigDecimal("700.00"), BigDecimal.ZERO, null);
+
+        assertThatThrownBy(() -> payrollService.process(
+            new ProcessPayrollRequest(LocalDate.of(2026, 5, 1), List.of(input)), hr()))
+            .isInstanceOf(ApiException.class)
+            .satisfies(ex -> assertThat(((ApiException) ex).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST))
+            .hasMessageContaining("MEAL-005");
+    }
+
+    /**
+     * Preview shares {@link PayrollService#calculateLine} with Process, so it now catches the same
+     * missing-basis defect up front too -- fail fast rather than letting HR reach Process only to be
+     * rejected there.
+     */
+    @Test
+    void previewAlsoRejectsAPerDiemAmountWithNoBasisBeforeAnyDatabaseWriteIsEvenAttempted() {
+        long employeeId = seedEmployee("MEAL-006", "พรีวิวไม่ระบุฐาน", "ทดสอบ", new BigDecimal("30000.00"));
+
+        PayrollEmployeeInputRequest input = mealAndPerDiemInput(
+            employeeId, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("300.00"), null);
+
+        assertThatThrownBy(() -> payrollService.preview(
+            new ProcessPayrollRequest(LocalDate.of(2026, 6, 1), List.of(input)), hr()))
+            .isInstanceOf(ApiException.class)
+            .satisfies(ex -> assertThat(((ApiException) ex).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    /** The happy path (amount + a chosen basis) must keep working through Process, unaffected. */
+    @Test
+    void processStillSucceedsWhenAPerDiemAmountHasAChosenBasis() {
+        long employeeId = seedEmployee("MEAL-007", "ระบุฐานแล้ว", "ทดสอบ", new BigDecimal("30000.00"));
+        seedRegularTaxTreatment(employeeId, TAX_YEAR, PayrollComponent.PER_DIEM_TAXABLE);
+        seedSsoIncluded(employeeId, TAX_YEAR, PayrollComponent.SALARY);
+
+        PayrollEmployeeInputRequest input = mealAndPerDiemInput(
+            employeeId, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("300.00"), PerDiemBasis.FLAT_RATE_S42_2);
+
+        PayrollPeriodDto processed = payrollService.process(
+            new ProcessPayrollRequest(LocalDate.of(2026, 7, 1), List.of(input)), hr());
+
+        assertThat(onlyLine(processed, employeeId).perDiemBasis()).isEqualTo("FLAT_RATE_S42_2");
     }
 
     // --- helpers ------------------------------------------------------------

@@ -145,6 +145,14 @@ public final class PayrollClassifiedCalculationDtos {
         // reached the INSERT column list. mealAllowance/perDiemTaxable mirror bonusPay/otherOneOffPay
         // above: an explicit echo of the already-classified component amount, not a new calculation.
         BigDecimal mealAllowance,
-        BigDecimal perDiemTaxable
+        BigDecimal perDiemTaxable,
+        // F3 fix (Opus review, 2026-07-30): the classified engine's own analogue of the legacy
+        // #calculate()'s excessWithheldToDate -- over-withholding for the tax year AS AT THE END OF
+        // THIS PERIOD, i.e. the running total actually withheld (yearToDate.withholdingTax() plus this
+        // period's own POST-OVERRIDE withholdingTax above) exceeding the TRUE annual liability given
+        // everything known so far this year. See #calculateClassified's own computation for why
+        // annualTaxWithCumulativeYtd (F1's carried-known-limb base), not the narrower reported
+        // taxableAnnualIncome/annualTax fields above, is the correct liability to compare against.
+        BigDecimal excessWithheldToDate
     ) {}
 }

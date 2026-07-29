@@ -361,6 +361,92 @@ describe('PayrollPage adjustment inputs', () => {
     });
   });
 
+  // F2 (Opus review, 2026-07-30): HR could type a per-diem amount with no basis selector at all --
+  // Preview always succeeded (it never writes a row), then Process 500'd on V97's
+  // chk_payroll_line_per_diem_basis_present CHECK. Fixed by adding the missing amount inputs AND the
+  // basis selector (shown only once an amount is entered), plus a server-side 400 as a second line of
+  // defence (PayrollService#calculateLine).
+  describe('per-diem basis selector (V97 / F2)', () => {
+    async function openPerDiemSection() {
+      fireEvent.click(await screen.findByRole('button', { name: /ค่าอาหาร \/ เบี้ยเลี้ยง/ }));
+      return screen.findByLabelText(/เบี้ยเลี้ยง — ส่วนเกิน \(เสียภาษี\)/, { selector: 'input' });
+    }
+
+    it('hides the basis selector until a per-diem amount is entered', async () => {
+      renderPayrollPage();
+      await openPerDiemSection();
+
+      expect(screen.queryByLabelText(/ฐานเบี้ยเลี้ยง \(มาตรา 42\)/)).toBeNull();
+    });
+
+    it('shows the basis selector once a taxable per-diem amount is entered, and hides it again when cleared', async () => {
+      renderPayrollPage();
+      const taxable = await openPerDiemSection();
+
+      fireEvent.change(taxable, { target: { value: '300' } });
+      const basis = await screen.findByLabelText(/ฐานเบี้ยเลี้ยง \(มาตรา 42\)/, { selector: 'select' });
+      expect(basis).toBeTruthy();
+
+      fireEvent.change(taxable, { target: { value: '' } });
+      await waitFor(() => expect(screen.queryByLabelText(/ฐานเบี้ยเลี้ยง \(มาตรา 42\)/)).toBeNull());
+    });
+
+    it('shows the basis selector for the exempt amount too, not only the taxable one', async () => {
+      renderPayrollPage();
+      fireEvent.click(await screen.findByRole('button', { name: /ค่าอาหาร \/ เบี้ยเลี้ยง/ }));
+      const exempt = await screen.findByLabelText(/เบี้ยเลี้ยง — ส่วนที่ยกเว้นภาษี \(ม\.42\)/, { selector: 'input' });
+
+      fireEvent.change(exempt, { target: { value: '700' } });
+      expect(await screen.findByLabelText(/ฐานเบี้ยเลี้ยง \(มาตรา 42\)/, { selector: 'select' })).toBeTruthy();
+    });
+
+    it('submits the chosen per-diem basis verbatim, matching the backend PerDiemBasis enum', async () => {
+      renderPayrollPage();
+      const taxable = await openPerDiemSection();
+      fireEvent.change(taxable, { target: { value: '300' } });
+      const basis = await screen.findByLabelText(/ฐานเบี้ยเลี้ยง \(มาตรา 42\)/, { selector: 'select' });
+      fireEvent.change(basis, { target: { value: 'REIMBURSED_S42_1' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted.perDiemTaxable).toBe(300);
+      expect(submitted.perDiemBasis).toBe('REIMBURSED_S42_1');
+    });
+
+    it('sends perDiemBasis as null, never a blank string, when no per-diem amount is entered', async () => {
+      renderPayrollPage();
+      await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted).toBeDefined();
+      expect(submitted.perDiemBasis).toBeNull();
+    });
+
+    // The backend now rejects this before the INSERT (see PayrollService#calculateLine's F2 fix) with
+    // a 400 naming the employee and the missing basis, instead of the DB CHECK constraint turning it
+    // into a bare 500. This proves the page surfaces that rejection cleanly rather than swallowing it.
+    it('surfaces the backend rejection cleanly when Process is attempted without a chosen basis', async () => {
+      const showToast = vi.fn();
+      api.payroll.process.mockRejectedValue(new Error(
+        'พนักงาน GLR-001 พนักงาน ทดสอบ มีการจ่ายเบี้ยเลี้ยง (เบี้ยเลี้ยง ตจว/ตปท) แต่ไม่ได้ระบุฐานตามมาตรา 42'
+        + ' (เหมาจ่ายตามอัตราราชการ มาตรา 42(2) หรือจ่ายจริงตามหน้าที่ มาตรา 42(1)) กรุณาเลือกฐานก่อนประมวลผลเงินเดือน',
+      ));
+      render(<PayrollPage showToast={showToast} />);
+      const taxable = await openPerDiemSection();
+      fireEvent.change(taxable, { target: { value: '300' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /ประมวลผลเงินเดือน/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /ยืนยันประมวลผล/i }));
+
+      await waitFor(() => expect(api.payroll.process).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('กรุณาเลือกฐานก่อนประมวลผลเงินเดือน')));
+    });
+  });
+
   it('generates the selected statutory export file with the chosen pay date', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
 

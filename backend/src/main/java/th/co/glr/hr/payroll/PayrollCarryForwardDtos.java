@@ -21,11 +21,13 @@ import java.util.List;
  * are still never carried — those describe THIS month's events, not a standing recurring amount.
  *
  * <p>Supersedes the earlier special_pay_1..5-only design from the ป.96 branch (117), which rested on
- * a classification the owner later contradicted (2026-07-29): พิเศษ 1-8 except 6 are occasional, not
- * standing allowances, so a hardcoded 1..5 carry-list could re-propose a one-off bonus as if it
- * recurred. V98's per-employee, per-component carry-forward table (seeded from the accountant's
- * ledger at a 70%-same-value rule) replaces the hardcoded list entirely -- see that migration's
- * comment and {@code PayrollRepository#findCarryForwardSuggestions}.
+ * a classification the owner later contradicted (2026-07-29): พิเศษ 1-9 except 7 (คอมมิชชั่น, per the
+ * accountant's-workbook renumbering, handoff section 9d -- F7 correction, Opus review 2026-07-30; this
+ * was พิเศษ 6 before that renumbering) are occasional, not standing allowances, so a hardcoded 1..5
+ * carry-list could re-propose a one-off bonus as if it recurred. V98's per-employee, per-component
+ * carry-forward table (seeded from the accountant's ledger at a 70%-same-value rule) replaces the
+ * hardcoded list entirely -- see that migration's comment and {@code
+ * PayrollRepository#findCarryForwardSuggestions}.
  *
  * <p>Leave -&gt; payroll unpaid-day deduction (2026-07-23): {@code unpaidLeaveDays} IS event-driven
  * (this month's approved-beyond-quota leave, from {@code LeaveRepository
