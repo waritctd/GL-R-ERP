@@ -31,12 +31,10 @@ screen that will eventually need the input fields listed in risk 5. Whoever buil
 from the rebased version, not the pre-rebase one.
 
 ## Current Commit
-**Not committed.** Nothing has been committed or pushed, and no PR has been opened — the owner asked
-for the rebase only. The whole change is 29 files in the working tree of the worktree named above.
+`1eff276e` — committed 2026-07-29 on the owner's instruction, 29 files, +4106/−97.
 
-⚠️ It is therefore recoverable only from that worktree. A backup of the exact post-rebase state was
-taken at `/tmp/po96-backup/` (`tracked.patch` + `untracked.tgz`); it is in `/tmp` and will not survive
-a reboot. This repo has lost uncommitted branch work before.
+**NOT pushed. No PR opened.** The owner asked for the commit only. `origin` has never seen this
+branch.
 
 ## Agent / Model Used
 Claude Opus 5 throughout. The standing Sonnet-implements/Opus-reviews loop could not be used — the
