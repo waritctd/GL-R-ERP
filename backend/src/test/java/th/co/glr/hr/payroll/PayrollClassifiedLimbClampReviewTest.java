@@ -67,7 +67,7 @@ class PayrollClassifiedLimbClampReviewTest {
             1L, "REV-001 ทดสอบ", amounts, treatments, sso,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO, false, BigDecimal.ZERO, null,
-            allowances, PayrollYearToDate.empty(), 1, null
+            allowances, PayrollYearToDate.empty(), 1, 2026, null
         ));
 
         // The identity, using only figures the engine itself reports.
@@ -108,7 +108,7 @@ class PayrollClassifiedLimbClampReviewTest {
             1L, "REV-002 ทดสอบ", amounts, new EnumMap<>(PayrollComponent.class), sso,
             new BigDecimal("10"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO, false, BigDecimal.ZERO, null,
-            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1, null
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1, 2026, null
         ));
 
         // Legacy engine, same facts: ssoWageBase(15,000 - 5,000) = 10,000 -> 500.00.

@@ -121,6 +121,43 @@ public final class PayrollReconciliationDtos {
                 false, 0, 1, null);
         }
 
+        /**
+         * Legacy 17-arg constructor: branch 118's own original signature (16 base allowances +
+         * {@code parentCareCount}, no ล.ย.01 completeness/dating fields) before those fields (V93,
+         * branch 117) were merged in. Kept so pre-merge task-2 call sites that supply
+         * {@code parentCareCount} explicitly -- including {@code PayrollClassifiedEngineIntegrationTest}
+         * -- still compile. The ล.ย.01 fields default the same way the 16-arg legacy constructor above
+         * does; {@code parentCareCount} is taken from the caller, not defaulted.
+         */
+        public EmployeeTaxAllowanceUpsertRequest(
+            Long employeeId,
+            BigDecimal spouseAllowance,
+            BigDecimal childAllowance,
+            BigDecimal parentCareAllowance,
+            BigDecimal disabledCareAllowance,
+            BigDecimal maternityAllowance,
+            BigDecimal lifeInsuranceAllowance,
+            BigDecimal healthInsuranceAllowance,
+            BigDecimal parentHealthInsuranceAllowance,
+            BigDecimal rmfAllowance,
+            BigDecimal ssfAllowance,
+            BigDecimal pensionInsuranceAllowance,
+            BigDecimal thaiEsgAllowance,
+            BigDecimal homeLoanInterestAllowance,
+            BigDecimal educationDonation,
+            BigDecimal generalDonation,
+            BigDecimal politicalDonation,
+            Integer parentCareCount
+        ) {
+            this(employeeId, spouseAllowance, childAllowance, parentCareAllowance, disabledCareAllowance,
+                maternityAllowance, lifeInsuranceAllowance, healthInsuranceAllowance,
+                parentHealthInsuranceAllowance, rmfAllowance, ssfAllowance, pensionInsuranceAllowance,
+                thaiEsgAllowance, homeLoanInterestAllowance, educationDonation, generalDonation,
+                politicalDonation, BigDecimal.ZERO,
+                headCount(childAllowance, "30000"), 0, headCount(disabledCareAllowance, "60000"),
+                false, parentCareCount, 1, null);
+        }
+
         /** Smallest head count that would permit the declared amount -- see the legacy constructor. */
         private static int headCount(BigDecimal declaredAmount, String perHead) {
             if (declaredAmount == null || declaredAmount.signum() <= 0) {

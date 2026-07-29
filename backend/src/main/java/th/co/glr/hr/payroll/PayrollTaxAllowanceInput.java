@@ -123,6 +123,88 @@ public record PayrollTaxAllowanceInput(
         );
     }
 
+    /**
+     * Legacy 21-arg constructor: branch 117's own full signature (16 base allowances + ล.ย.01
+     * completeness) before {@code parentCareCount} (task 2) existed. Kept so pre-task-2 call sites --
+     * including several {@code PayrollCalculatorPo96ReviewTest}/{@code PayrollCalculatorTest} cases
+     * that construct the per-head-count fields explicitly -- still compile. {@code parentCareCount}
+     * defaults to 0 ("no count declared"), same as the 16-arg legacy constructor above.
+     */
+    public PayrollTaxAllowanceInput(
+        BigDecimal spouseAllowance,
+        BigDecimal childAllowance,
+        BigDecimal parentCareAllowance,
+        BigDecimal disabledCareAllowance,
+        BigDecimal maternityAllowance,
+        BigDecimal lifeInsuranceAllowance,
+        BigDecimal healthInsuranceAllowance,
+        BigDecimal parentHealthInsuranceAllowance,
+        BigDecimal rmfAllowance,
+        BigDecimal ssfAllowance,
+        BigDecimal pensionInsuranceAllowance,
+        BigDecimal thaiEsgAllowance,
+        BigDecimal homeLoanInterestAllowance,
+        BigDecimal educationDonation,
+        BigDecimal generalDonation,
+        BigDecimal politicalDonation,
+        BigDecimal providentFundAllowance,
+        int childCount,
+        int childCountDouble,
+        int disabledCareCount,
+        boolean disabilityCardHolder
+    ) {
+        this(
+            spouseAllowance, childAllowance, parentCareAllowance, disabledCareAllowance,
+            maternityAllowance, lifeInsuranceAllowance, healthInsuranceAllowance,
+            parentHealthInsuranceAllowance, rmfAllowance, ssfAllowance, pensionInsuranceAllowance,
+            thaiEsgAllowance, homeLoanInterestAllowance, educationDonation, generalDonation,
+            politicalDonation, providentFundAllowance, childCount, childCountDouble,
+            disabledCareCount, disabilityCardHolder, 0
+        );
+    }
+
+    /**
+     * Legacy 17-arg constructor: branch 118's own original signature (16 base allowances +
+     * {@code parentCareCount}, no ล.ย.01 completeness fields) before those fields (V93, branch 117)
+     * were merged in. Kept so pre-merge task-2 call sites that supply {@code parentCareCount}
+     * explicitly -- including {@code PayrollClassifiedLimbClampReviewTest} -- still compile. The
+     * ล.ย.01 fields default the same way the 16-arg legacy constructor above does; {@code
+     * parentCareCount} is taken from the caller, not defaulted.
+     */
+    public PayrollTaxAllowanceInput(
+        BigDecimal spouseAllowance,
+        BigDecimal childAllowance,
+        BigDecimal parentCareAllowance,
+        BigDecimal disabledCareAllowance,
+        BigDecimal maternityAllowance,
+        BigDecimal lifeInsuranceAllowance,
+        BigDecimal healthInsuranceAllowance,
+        BigDecimal parentHealthInsuranceAllowance,
+        BigDecimal rmfAllowance,
+        BigDecimal ssfAllowance,
+        BigDecimal pensionInsuranceAllowance,
+        BigDecimal thaiEsgAllowance,
+        BigDecimal homeLoanInterestAllowance,
+        BigDecimal educationDonation,
+        BigDecimal generalDonation,
+        BigDecimal politicalDonation,
+        int parentCareCount
+    ) {
+        this(
+            spouseAllowance, childAllowance, parentCareAllowance, disabledCareAllowance,
+            maternityAllowance, lifeInsuranceAllowance, healthInsuranceAllowance,
+            parentHealthInsuranceAllowance, rmfAllowance, ssfAllowance, pensionInsuranceAllowance,
+            thaiEsgAllowance, homeLoanInterestAllowance, educationDonation, generalDonation,
+            politicalDonation,
+            BigDecimal.ZERO,
+            headCount(childAllowance, "30000"),
+            0,
+            headCount(disabledCareAllowance, "60000"),
+            false,
+            parentCareCount
+        );
+    }
+
     /** Smallest head count that would permit the declared amount — see the legacy constructor. */
     private static int headCount(BigDecimal declaredAmount, String perHead) {
         if (declaredAmount == null || declaredAmount.signum() <= 0) {

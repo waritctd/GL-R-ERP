@@ -647,7 +647,14 @@ public class PayrollCalculator {
         BigDecimal withholdingTax = computedWithholding;
         BigDecimal withholdingTaxRegularLimb = withholdRegular;
         BigDecimal withholdingTaxCumulativeLimb = withholdCumulative;
-        String calculationNote = "Classified per-component withholding (ป.96/2543 ข้อ 1(4)/(5)/(6)), SSO 5% cap by inclusion matrix, and garnishment cap by payment type applied.";
+        // The per-head allowance clamp note (บุตร / คนพิการ) was wired into the legacy #calculate
+        // engine only. PayrollService#calculateLine has called #calculateClassified exclusively since
+        // task 2, so an unlawful clamp on the live engine went un-announced on every payslip -- the
+        // exact silent-clamp failure mode V93 exists to prevent, just moved to the engine nobody was
+        // still watching. Wired here to match #calculate's own pattern (see clampedAllowanceNote's own
+        // javadoc: "Visible on the payslip rather than silent").
+        String calculationNote = "Classified per-component withholding (ป.96/2543 ข้อ 1(4)/(5)/(6)), SSO 5% cap by inclusion matrix, and garnishment cap by payment type applied."
+            + clampedAllowanceNote(allowances);
         if (withholdingTaxOverride != null) {
             withholdingTax = withholdingTaxOverride;
             // The override REPLACES the final withheld amount only -- every projection/annual-tax

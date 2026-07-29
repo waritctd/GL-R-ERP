@@ -28,10 +28,20 @@ import th.co.glr.hr.payroll.PayrollClassifiedCalculationDtos.PayrollClassifiedCa
  * calculateClassified}, driven with every non-zero component classified {@code REGULAR_REPROJECT}
  * (the layered engine's equivalent of the legacy single-limb annualisation when nothing is KNOWN or
  * CUMULATIVE) so the two engines are asked the same question. Every expected figure below is
- * UNCHANGED from before this repoint — same transcribed sheet values, same assertions — because
- * {@code calculateClassified} must (and does) reproduce {@code calculate}'s numbers on this
- * classification shape; see this class's own tests for the proof. {@code calculate} itself is left
- * in place (not deleted) per instruction; the other 27 tests exercising it directly ({@code
+ * UNCHANGED from before this repoint — same transcribed sheet values, same assertions.
+ *
+ * <p><b>Correction (2026-07-29, later same day, after this branch was rebased onto
+ * fix/payroll-wht-po96-compliance):</b> the paragraph above used to go on to claim {@code
+ * calculateClassified} "must (and does) reproduce {@code calculate}'s numbers" on this
+ * classification shape. That was true against the engine {@code calculate} was AT THE TIME — the
+ * single-limb annualiser task 2 inherited. The rebase replaced {@code calculate}'s body with branch
+ * 117's own two-limb ป.96 engine, in which เงินพิเศษ (ข้อ 2.5) is taken at its actual cumulative
+ * amount and is deliberately NOT multiplied out — the opposite of what REGULAR_REPROJECT does to the
+ * พิเศษ block below. The two engines no longer agree on this shape, and they do not need to:
+ * {@code calculate} still has zero production callers (confirmed unchanged by the rebase), so
+ * nothing in this file is reconciled against it. Every test below is reconciled directly against the
+ * accountant's workbook figures, which is the only agreement that matters. {@code calculate} itself
+ * is left in place (not deleted) per instruction; the other 27 tests exercising it directly ({@code
  * PayrollCalculatorTest}) are a separate call, recorded in the branch's handoff.
  *
  * <p>What this test deliberately does NOT assert: the withholding-tax column (AE). That figure
@@ -206,38 +216,96 @@ class PayrollExcelReconciliationTest {
     }
 
     /**
-     * A migration hazard, pinned so it cannot be forgotten.
+     * A migration hazard, pinned so it cannot be forgotten — under BOTH classifications a real
+     * one-off allowance could carry, not just one, now that classification is per-component HR data
+     * rather than a hardcoded slot (handoff section 1: "no component except salary is hardcoded to a
+     * limb").
      *
-     * <p>{@code fullAnnualProjection = yearToDate + thisMonth x monthsRemaining}. That is correct
-     * as a catch-up mechanism <em>when year-to-date figures are loaded</em>. With an empty YTD it
-     * projects only the months that remain, so the later in the year payroll is first run, the less
-     * tax is withheld — reaching ZERO from August onward for an employee the accountant taxes every
-     * month.
+     * <p>{@code fullAnnualProjection = yearToDate + thisMonth x monthsRemaining} for the REGULAR
+     * limb (ข้อ 1(4)): correct as a catch-up mechanism <em>when year-to-date figures are loaded</em>,
+     * but with an empty YTD it projects only the months that remain, so the later in the year payroll
+     * is first run, the less tax is withheld. The CUMULATIVE limb (ข้อ 1(6)) has no such multiplier —
+     * it is taken at its actual year-to-date amount, full stop — so an empty YTD there does not
+     * shrink a projection, it simply reports what one period's actual figure implies with nothing
+     * annualised at all, which collapses to zero even faster.
+     *
+     * <p><b>Correction (2026-07-29, after this branch was rebased onto
+     * fix/payroll-wht-po96-compliance):</b> an earlier version of this test asserted the hazard from
+     * a hardcoded REGULAR_REPROJECT classification and claimed withholding reached zero "by May
+     * rather than August". That claim does not hold against the post-rebase engine: measured below,
+     * REGULAR_REPROJECT is still withholding ฿268.75 in May and reaches zero only from June. It is
+     * EXTRA_CUMULATIVE_ACTUAL — not REGULAR_REPROJECT — that collapses to zero that early (by March).
+     * Rather than guess which classification a real HR record would carry, both are driven explicitly
+     * below and each is pinned to its own measured zero-point, so a future change to either limb's
+     * math is caught regardless of which one narrows or widens.
      *
      * <p>So: before the first live run mid-year, each employee's year-to-date taxable income, SSO
      * and withholding must be back-loaded, or every employee is under-withheld and discovers it at
-     * filing time.
+     * filing time — CUMULATIVE-classified components soonest of all.
      */
     @Test
     void anEmptyYearToDateUnderWithholdsAndReachesZeroLateInTheYear() {
         SheetRow row = sheetRow("จริญญา");
 
-        BigDecimal january = calculateForMonth(row, PayrollTaxAllowanceInput.empty(), 1).withholdingTax();
-        BigDecimal may = calculateForMonth(row, PayrollTaxAllowanceInput.empty(), 5).withholdingTax();
-        BigDecimal august = calculateForMonth(row, PayrollTaxAllowanceInput.empty(), 8).withholdingTax();
+        // REGULAR_REPROJECT (ข้อ 1(4)): annualised x months remaining, so it decays gradually and is
+        // still withholding something through May; zero only from June (measured).
+        assertDecaysToZeroWithNoYearToDate(row, PayrollTaxTreatment.REGULAR_REPROJECT,
+            new BigDecimal("1204.17"), new BigDecimal("268.75"), 6);
 
-        // ป.96/2543 (2026-07-29): the hazard is unchanged but it now bites EARLIER. The พิเศษ block is
-        // occasional income (ข้อ 2.5) and is no longer multiplied out, so the projection falls away
-        // faster and withholding reaches zero by May rather than August. May > August was the original
-        // assertion; both are now zero, so the decay is asserted from January instead. If anything this
-        // strengthens the warning below: back-load year-to-date BEFORE the first live run.
-        assertThat(january).isGreaterThan(may);
-        assertThat(january).isGreaterThan(august);
+        // EXTRA_CUMULATIVE_ACTUAL (ข้อ 1(6)): actual amount, never multiplied out, so there is no
+        // projection to shrink gradually -- it is already zero by March (measured).
+        assertDecaysToZeroWithNoYearToDate(row, PayrollTaxTreatment.EXTRA_CUMULATIVE_ACTUAL,
+            new BigDecimal("914.58"), BigDecimal.ZERO, 3);
+    }
+
+    /**
+     * Drives January, May, August, and the month immediately before {@code firstZeroMonth}, then
+     * asserts: January is pinned to the exact figure named by {@code expectedJanuary}; withholding
+     * never rises January→May→August (the direction the migration hazard runs); May is pinned to
+     * {@code expectedMay} (which may itself be zero, for the classification that has already
+     * collapsed by then); the month before the pinned zero-point is still withholding something
+     * (so the pin cannot be satisfied by an engine that withholds nothing all year); and the pinned
+     * month is exactly zero. Wrong-way-round by construction: an engine that stopped decaying, or
+     * that reached zero on a DIFFERENT month than the one pinned here, fails one of these, not just
+     * the ones that happen to already be true.
+     */
+    private void assertDecaysToZeroWithNoYearToDate(
+            SheetRow row, PayrollTaxTreatment treatment,
+            BigDecimal expectedJanuary, BigDecimal expectedMay, int firstZeroMonth) {
+        BigDecimal january = calculateForMonth(row, PayrollTaxAllowanceInput.empty(), 1, treatment).withholdingTax();
+        BigDecimal may = calculateForMonth(row, PayrollTaxAllowanceInput.empty(), 5, treatment).withholdingTax();
+        BigDecimal august = calculateForMonth(row, PayrollTaxAllowanceInput.empty(), 8, treatment).withholdingTax();
+        BigDecimal monthBeforeZero = calculateForMonth(
+            row, PayrollTaxAllowanceInput.empty(), firstZeroMonth - 1, treatment).withholdingTax();
+        BigDecimal zeroMonth = calculateForMonth(
+            row, PayrollTaxAllowanceInput.empty(), firstZeroMonth, treatment).withholdingTax();
+
+        assertThat(january)
+            .as("[%s] January, empty YTD", treatment)
+            .isEqualByComparingTo(expectedJanuary);
+        assertThat(january)
+            .as("[%s] withholding must strictly fall from January to May under an empty YTD", treatment)
+            .isGreaterThan(may);
         assertThat(may)
-            .withFailMessage("a mid-year first-run with no YTD stops withholding entirely")
-            .isEqualByComparingTo(BigDecimal.ZERO);
+            .as("[%s] withholding must never rise from May to August under an empty YTD", treatment)
+            .isGreaterThanOrEqualTo(august);
+        assertThat(may)
+            .as("[%s] May, empty YTD", treatment)
+            .isEqualByComparingTo(expectedMay);
         assertThat(august)
-            .withFailMessage("an August first-run with no YTD withholds nothing at all")
+            .withFailMessage("[%s] an August first-run with no YTD withholds nothing at all", treatment)
+            .isEqualByComparingTo(BigDecimal.ZERO);
+
+        assertThat(monthBeforeZero)
+            .as("[%s] month %d must still withhold something, or the zero-point pin below is vacuous",
+                treatment, firstZeroMonth - 1)
+            .isGreaterThan(BigDecimal.ZERO);
+        assertThat(zeroMonth)
+            .withFailMessage("[%s] MIGRATION HAZARD, pinned: month %d is the first month this "
+                + "classification withholds nothing with an empty YTD. If this now reads nonzero the "
+                + "hazard narrowed for this classification and the pin should move later; if an "
+                + "EARLIER month already reads zero the hazard widened and this pin should move "
+                + "earlier -- either way, do not just delete the pin.", treatment, firstZeroMonth)
             .isEqualByComparingTo(BigDecimal.ZERO);
     }
 
@@ -249,26 +317,54 @@ class PayrollExcelReconciliationTest {
 
     private PayrollClassifiedCalculation calculateForMonth(
             SheetRow row, PayrollTaxAllowanceInput allowances, int month) {
+        return calculateForMonth(row, allowances, month, PayrollTaxTreatment.REGULAR_REPROJECT);
+    }
+
+    /**
+     * Same as the 3-arg overload, but with the พิเศษ block's classification left open rather than
+     * hardcoded to {@code REGULAR_REPROJECT}. Added for {@link
+     * #anEmptyYearToDateUnderWithholdsAndReachesZeroLateInTheYear()}, which must drive the
+     * mid-year-first-run hazard under more than one classification -- see that test's own javadoc.
+     */
+    private PayrollClassifiedCalculation calculateForMonth(
+            SheetRow row, PayrollTaxAllowanceInput allowances, int month, PayrollTaxTreatment specialPayTreatment) {
         // The whole พิเศษ block collapsed into slot 1 (only the total matters for the maths, same as
         // the pre-repoint helper), SSO-included -- doesn't affect any of these rows' SSO figure
         // (every base salary here already saturates the 17,500 ceiling on its own).
         return calculateClassified(
             new BigDecimal(row.baseSalary()), new BigDecimal(row.allowances()), BigDecimal.ZERO,
-            true, allowances, month);
+            true, allowances, month, specialPayTreatment);
     }
 
     /**
      * Drives {@link PayrollCalculator#calculateClassified} with salary, one allowance slot
-     * (พิเศษ 1) and director remuneration, everything classified {@code REGULAR_REPROJECT} -- the
-     * layered engine's equivalent of the legacy single-limb annualisation this file reconciled
-     * against before the repoint (no EXTRA_KNOWN_FREQUENCY / EXTRA_CUMULATIVE_ACTUAL component in
-     * any of these fixtures, so the three-limb layering collapses to exactly one limb, matching
-     * {@link PayrollCalculator#calculate} figure-for-figure). {@code ssoIncludeSpecialPay1} lets the
-     * two director-remuneration tests reproduce the legacy engine's salary-only SSO base precisely.
+     * (พิเศษ 1, classified {@code REGULAR_REPROJECT}) and director remuneration (also
+     * {@code REGULAR_REPROJECT}) -- the layered engine's equivalent of the legacy single-limb
+     * annualisation this file reconciled against before the repoint (no EXTRA_KNOWN_FREQUENCY /
+     * EXTRA_CUMULATIVE_ACTUAL component in any of these fixtures, so the three-limb layering
+     * collapses to exactly one limb). {@code ssoIncludeSpecialPay1} lets the two director-remuneration
+     * tests reproduce the legacy engine's salary-only SSO base precisely.
+     *
+     * <p><b>Correction (2026-07-29, post-118 rebase):</b> the javadoc here used to claim this
+     * reproduces {@link PayrollCalculator#calculate} "figure-for-figure". That was true when it was
+     * written, against the single-limb engine that predated the rebase. The rebase replaced {@code
+     * calculate} with branch 117's own two-limb ป.96 engine, in which เงินพิเศษ (ข้อ 2.5) is taken at
+     * its actual cumulative amount and is explicitly NOT multiplied out by the months remaining --
+     * the opposite of what REGULAR_REPROJECT does here. {@code calculate} has zero production callers
+     * either way (see the class javadoc), so nothing here needs to match it; the seven tests above
+     * only need {@code calculateClassified} to reproduce the accountant's workbook, which they do.
      */
     private PayrollClassifiedCalculation calculateClassified(
             BigDecimal baseSalary, BigDecimal specialPay1, BigDecimal directorRemuneration,
             boolean ssoIncludeSpecialPay1, PayrollTaxAllowanceInput allowances, int month) {
+        return calculateClassified(baseSalary, specialPay1, directorRemuneration, ssoIncludeSpecialPay1,
+            allowances, month, PayrollTaxTreatment.REGULAR_REPROJECT);
+    }
+
+    private PayrollClassifiedCalculation calculateClassified(
+            BigDecimal baseSalary, BigDecimal specialPay1, BigDecimal directorRemuneration,
+            boolean ssoIncludeSpecialPay1, PayrollTaxAllowanceInput allowances, int month,
+            PayrollTaxTreatment specialPayTreatment) {
         Map<PayrollComponent, BigDecimal> amounts = new EnumMap<>(PayrollComponent.class);
         amounts.put(PayrollComponent.SALARY, baseSalary);
         amounts.put(PayrollComponent.SPECIAL_PAY_1, specialPay1);
@@ -277,7 +373,7 @@ class PayrollExcelReconciliationTest {
         Map<PayrollComponent, PayrollTaxTreatment> treatments = new EnumMap<>(PayrollComponent.class);
         // SALARY is auto-REGULAR_REPROJECT (PayrollClassifiedCalculationInput#treatmentOf) -- no
         // entry needed here.
-        treatments.put(PayrollComponent.SPECIAL_PAY_1, PayrollTaxTreatment.REGULAR_REPROJECT);
+        treatments.put(PayrollComponent.SPECIAL_PAY_1, specialPayTreatment);
         treatments.put(PayrollComponent.DIRECTOR_REMUNERATION, PayrollTaxTreatment.REGULAR_REPROJECT);
 
         Map<PayrollComponent, Boolean> sso = new EnumMap<>(PayrollComponent.class);
@@ -305,6 +401,7 @@ class PayrollExcelReconciliationTest {
             allowances,
             PayrollYearToDate.empty(),
             month,
+            2026,             // taxYear (the sheet is พ.ค.69 / May 2026)
             null              // withholdingTaxOverride
         ));
     }

@@ -84,6 +84,13 @@ class PayrollAllowanceCapIntegrationTest extends AbstractPostgresIntegrationTest
     void aRunBodyEntryMustNotDisturbThePerHeadChildAllowanceCap() {
         LocalDate month = LocalDate.of(2026, 1, 1);
         long employeeId = seedEmployee("CAP-001", "เกินเพดาน", "บุตร", new BigDecimal("200000.00"));
+        // Post-118 rebase: onlyASpecialPay() below puts ฿500 in SPECIAL_PAY_1, which
+        // calculateClassified now REJECTS unless HR has classified it (the gate this branch added).
+        // seedSsoIncluded is needed too -- a raw SQL-inserted employee (bypassing EmployeeService) gets
+        // no SSO-inclusion rows at all, so without this the 10,500 SSO allowance this test expects is
+        // silently zero.
+        seedRegularTaxTreatment(employeeId, 2026, PayrollComponent.SPECIAL_PAY_1);
+        seedSsoIncluded(employeeId, 2026, PayrollComponent.SALARY);
         jdbc.update("""
             INSERT INTO hr.employee_tax_allowance
                 (employee_id, tax_year, child_allowance, child_count, effective_month)
@@ -134,6 +141,9 @@ class PayrollAllowanceCapIntegrationTest extends AbstractPostgresIntegrationTest
     void aRunBodyEntryMustNotDisturbThePerHeadDisabledCareCap() {
         LocalDate month = LocalDate.of(2026, 1, 1);
         long employeeId = seedEmployee("CAP-002", "เกินเพดาน", "คนพิการ", new BigDecimal("200000.00"));
+        // See the sibling test above for why both seed calls are needed post-118.
+        seedRegularTaxTreatment(employeeId, 2026, PayrollComponent.SPECIAL_PAY_1);
+        seedSsoIncluded(employeeId, 2026, PayrollComponent.SALARY);
         jdbc.update("""
             INSERT INTO hr.employee_tax_allowance
                 (employee_id, tax_year, disabled_care_allowance, disabled_care_count, effective_month)

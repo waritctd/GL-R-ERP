@@ -382,4 +382,168 @@ public record PayrollLineDto(
             false, null
         );
     }
+
+    /**
+     * Legacy 47-arg constructor: branch 117's own full canonical signature (V92 two-limb split +
+     * V94 bonus/one-off pay + excessWithheldToDate), before the task-2 three-limb fields existed.
+     * Kept so pre-merge branch-117 call sites that construct the two-limb fields explicitly --
+     * including {@code PayslipRendererTest}/{@code PayslipMaximalLayoutReviewTest}/{@code
+     * PayslipProvisionalNoticeGeometryReviewTest} -- still compile.
+     *
+     * <p>The task-2-only fields are backfilled from these two-limb figures the same way the 40-arg
+     * legacy constructor above already backfills them from grossTaxableIncome/withholdingTax: the
+     * regular limb takes the caller's regular-limb figures, the known/cumulative limbs stay zero
+     * (this caller has no concept of them), and the V97 meal/per-diem/garnishment/customer-return
+     * fields default the same as every other legacy arity in this file.
+     */
+    public PayrollLineDto(
+        Long id,
+        long employeeId,
+        String employeeCode,
+        String employeeName,
+        String departmentName,
+        String bankName,
+        String bankAccount,
+        BigDecimal baseSalary,
+        BigDecimal dailyRate,
+        BigDecimal hourlyRate,
+        List<PayrollSpecialPayDto> specialPays,
+        BigDecimal specialPayTotal,
+        BigDecimal overtimePay,
+        BigDecimal commissionPay,
+        BigDecimal grossEarnings,
+        BigDecimal nonTaxableIncome,
+        BigDecimal unpaidLeaveDays,
+        BigDecimal unpaidLeaveDeduction,
+        BigDecimal grossTaxableIncome,
+        BigDecimal ssoWageBase,
+        BigDecimal socialSecurity,
+        BigDecimal projectedAnnualIncome,
+        BigDecimal taxExpenseDeduction,
+        BigDecimal taxAllowanceTotal,
+        BigDecimal taxableAnnualIncome,
+        BigDecimal annualTax,
+        BigDecimal withholdingTax,
+        BigDecimal studentLoanDeduction,
+        BigDecimal legalExecutionDeduction,
+        BigDecimal otherPostTaxDeductions,
+        BigDecimal totalDeductions,
+        BigDecimal netPay,
+        String calculationNote,
+        BigDecimal directorRemuneration,
+        BigDecimal warningLetterDeduction,
+        BigDecimal customerReturnDeduction,
+        BigDecimal otherPretaxDeduction,
+        BigDecimal leaveRefundDays,
+        BigDecimal leaveDeductionRefund,
+        BigDecimal withholdingTaxOverride,
+        BigDecimal regularTaxableIncome,
+        BigDecimal variableTaxableIncome,
+        BigDecimal regularWithholdingTax,
+        BigDecimal variableWithholdingTax,
+        BigDecimal bonusPay,
+        BigDecimal otherOneOffPay,
+        BigDecimal excessWithheldToDate
+    ) {
+        this(
+            id, employeeId, employeeCode, employeeName, departmentName, bankName, bankAccount,
+            baseSalary, dailyRate, hourlyRate, specialPays, specialPayTotal, overtimePay, commissionPay,
+            grossEarnings, nonTaxableIncome, unpaidLeaveDays, unpaidLeaveDeduction, grossTaxableIncome,
+            ssoWageBase, socialSecurity, projectedAnnualIncome, taxExpenseDeduction, taxAllowanceTotal,
+            taxableAnnualIncome, annualTax, withholdingTax, studentLoanDeduction, legalExecutionDeduction,
+            otherPostTaxDeductions, totalDeductions, netPay, calculationNote,
+            directorRemuneration, warningLetterDeduction, customerReturnDeduction, otherPretaxDeduction,
+            leaveRefundDays, leaveDeductionRefund, withholdingTaxOverride,
+            regularTaxableIncome, variableTaxableIncome, regularWithholdingTax, variableWithholdingTax,
+            bonusPay, otherOneOffPay, excessWithheldToDate,
+            regularTaxableIncome, BigDecimal.ZERO, BigDecimal.ZERO,
+            regularWithholdingTax, BigDecimal.ZERO,
+            false, null,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null
+        );
+    }
+
+    /**
+     * Legacy 53-arg constructor: branch 118's own original full canonical signature (V96 three-limb
+     * split + V97 meal/per-diem + garnishment/customer-return, no V92 two-limb fields at all), before
+     * the rebase merged branch 117's V92 fields in. Kept so pre-merge task-2 call sites that construct
+     * the FULL V96/V97 tail explicitly -- including {@code PayrollCarryForwardSuggestionsIntegrationTest}
+     * and {@code PayrollMealAndPerDiemIntegrationTest} -- still compile.
+     *
+     * <p>The V92 two-limb fields (unknown to this arity) are backfilled from grossTaxableIncome /
+     * withholdingTax, the same way the 40-arg legacy constructor above backfills them.
+     */
+    public PayrollLineDto(
+        Long id,
+        long employeeId,
+        String employeeCode,
+        String employeeName,
+        String departmentName,
+        String bankName,
+        String bankAccount,
+        BigDecimal baseSalary,
+        BigDecimal dailyRate,
+        BigDecimal hourlyRate,
+        List<PayrollSpecialPayDto> specialPays,
+        BigDecimal specialPayTotal,
+        BigDecimal overtimePay,
+        BigDecimal commissionPay,
+        BigDecimal grossEarnings,
+        BigDecimal nonTaxableIncome,
+        BigDecimal unpaidLeaveDays,
+        BigDecimal unpaidLeaveDeduction,
+        BigDecimal grossTaxableIncome,
+        BigDecimal ssoWageBase,
+        BigDecimal socialSecurity,
+        BigDecimal projectedAnnualIncome,
+        BigDecimal taxExpenseDeduction,
+        BigDecimal taxAllowanceTotal,
+        BigDecimal taxableAnnualIncome,
+        BigDecimal annualTax,
+        BigDecimal withholdingTax,
+        BigDecimal studentLoanDeduction,
+        BigDecimal legalExecutionDeduction,
+        BigDecimal otherPostTaxDeductions,
+        BigDecimal totalDeductions,
+        BigDecimal netPay,
+        String calculationNote,
+        BigDecimal directorRemuneration,
+        BigDecimal warningLetterDeduction,
+        BigDecimal customerReturnDeduction,
+        BigDecimal otherPretaxDeduction,
+        BigDecimal leaveRefundDays,
+        BigDecimal leaveDeductionRefund,
+        BigDecimal withholdingTaxOverride,
+        BigDecimal bonusPay,
+        BigDecimal otherOneOffPay,
+        BigDecimal taxableIncomeRegularLimb,
+        BigDecimal taxableIncomeKnownLimb,
+        BigDecimal taxableIncomeCumulativeLimb,
+        BigDecimal withholdingTaxRegularLimb,
+        BigDecimal withholdingTaxCumulativeLimb,
+        boolean customerReturnAlreadyEarned,
+        String garnishmentType,
+        BigDecimal mealAllowance,
+        BigDecimal perDiemExempt,
+        BigDecimal perDiemTaxable,
+        String perDiemBasis
+    ) {
+        this(
+            id, employeeId, employeeCode, employeeName, departmentName, bankName, bankAccount,
+            baseSalary, dailyRate, hourlyRate, specialPays, specialPayTotal, overtimePay, commissionPay,
+            grossEarnings, nonTaxableIncome, unpaidLeaveDays, unpaidLeaveDeduction, grossTaxableIncome,
+            ssoWageBase, socialSecurity, projectedAnnualIncome, taxExpenseDeduction, taxAllowanceTotal,
+            taxableAnnualIncome, annualTax, withholdingTax, studentLoanDeduction, legalExecutionDeduction,
+            otherPostTaxDeductions, totalDeductions, netPay, calculationNote,
+            directorRemuneration, warningLetterDeduction, customerReturnDeduction, otherPretaxDeduction,
+            leaveRefundDays, leaveDeductionRefund, withholdingTaxOverride,
+            grossTaxableIncome == null ? BigDecimal.ZERO : grossTaxableIncome, BigDecimal.ZERO,
+            withholdingTax == null ? BigDecimal.ZERO : withholdingTax, BigDecimal.ZERO,
+            bonusPay, otherOneOffPay, BigDecimal.ZERO,
+            taxableIncomeRegularLimb, taxableIncomeKnownLimb, taxableIncomeCumulativeLimb,
+            withholdingTaxRegularLimb, withholdingTaxCumulativeLimb,
+            customerReturnAlreadyEarned, garnishmentType,
+            mealAllowance, perDiemExempt, perDiemTaxable, perDiemBasis
+        );
+    }
 }
