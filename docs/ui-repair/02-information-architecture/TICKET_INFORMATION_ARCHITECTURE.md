@@ -53,18 +53,24 @@ Tabs are **role-projected** — a viewer only sees tabs they have data/permissio
 | Tab | Contents | Visible to |
 |---|---|---|
 | **ภาพรวม (Overview)** | customer/project/contact (2), items (9), summary, notes | all viewers of the deal |
-| **ราคา (Pricing)** | PCR list + detail (10), approved selling price (11) for all listed; **cost / margin / factory-raw-price sub-sections import+ceo ONLY** (CF1/CF3) | approved-price view: sales(owner), **sales_manager (price only)**, import, ceo · **cost/margin/factory sub-sections: import, ceo only** |
-| **ใบเสนอราคา (Quotations)** | quotations (12), outcomes, docs | sales(owner), sales_manager, ceo, import(view); **account excluded** |
-| **การเงิน (Money)** | payments/deposit/billing (13) | account, ceo, sales(owner); **import denied** |
-| **จัดซื้อ-ส่งมอบ (Fulfilment)** | fulfilment + factory POs + delivery (14) | import, ceo; scoped |
-| **เอกสาร (Documents)** | generated + uploaded docs (15) | per-doc visibility (deposit notice hidden from import) |
-| **กิจกรรม (Activity)** | activity/tracking (17) + audit history (18) | all viewers (audit read-only) |
+| **ราคา (Pricing)** | PCR list + detail (10), approved selling price (11) for all listed; **cost / margin / factory-raw-price sub-sections import+ceo ONLY** (CF1/CF3) | approved-price view: sales(owner), **sales_manager (price only)**, import, ceo — **account excluded** (`PricingRequestService.VIEWER_ROLES = {sales, import, ceo, sales_manager}`, `requireViewable`) · **cost/margin/factory sub-sections: import, ceo only** |
+| **ใบเสนอราคา (Quotations)** | quotations (12), outcomes, docs | sales(owner), sales_manager, ceo, import(view); **account excluded** (`CustomerQuotationService.VIEW_ROLES`) |
+| **การเงิน (Money)** | payments/deposit/billing (13) | account, ceo, sales(owner); **import denied on both sub-reads, by two separate gates, not one** — the payment ledger via `TicketService.listPayments`'s own explicit `IMPORT_ROLES` 403 (layered on top of `requireViewAccess`); the deposit notice / remaining-invoice via `DepositNoticeService.requireTicketViewer`'s own explicit import check (its `VIEWER_ROLES` `Set.of(...)` literal still lists `"import"` as a member, but the method denies it anyway — read the code, not the constant name). Both were mutation-verified in `TicketIaAuthzMatrixIntegrationTest` |
+| **จัดซื้อ-ส่งมอบ (Fulfilment)** | fulfilment + factory POs + delivery (14) | import, ceo; scoped. The raw factory-PO sub-view is `ProcurementService.RAW_PO_ROLES = {import, ceo}` **only** — sales_manager and account, who can read every other viewer-role tab, are 403'd here |
+| **เอกสาร (Documents)** | generated + uploaded docs (15) | per-doc visibility (deposit notice hidden from import). **Uploaded attachments use a different, wider, identity-based model, not the tab's general viewer gate**: `AttachmentController.requireTicketAccess` grants the ticket's participants (`createdById`/`assignedToId`) OR `MANAGER_ROLES = {hr, sales_manager, ceo}` — and `hr` is in that set despite being unable to read the ticket, its pricing, its quotations, its ledger, its deposit notices, or its activity feed anywhere else in this document. Owner-confirmed as intentional and pinned as-is in `TicketIaAuthzMatrixIntegrationTest`; a separate task tracks whether it should change |
+| **กิจกรรม (Activity)** | activity/tracking (17) + audit history (18) | **NOT all viewers** — `TicketService.listActivities` gates on `requireDealOwnership` (deal owner, sales_manager, ceo — its own narrower set, not the tab-general `VIEWER_ROLES`). Owner-confirmed as intentional: import and account are 403'd on the activity feed even though they can read the ticket itself, its pricing, and (import) its quotations. Verified in `TicketIaAuthzMatrixIntegrationTest` |
 
 Tab visibility follows the frontend `salesViewScope` mirror, which itself mirrors the Java
 projection (import sees pricingRequest+delivery, account sees payment/delivery/quotation/
 depositNotice, both hidden from dealTracking). **This is presentation projection, not the
 security boundary** — the backend still enforces per-endpoint. The UI must not render a tab
 whose data the backend would 403.
+
+The role → data gate for every tab above is pinned against the real services and real
+Postgres, per role, including the refusals, in
+`backend/src/test/java/th/co/glr/hr/ticket/TicketIaAuthzMatrixIntegrationTest.java` — read
+that file (not this doc, not the mock) before building the tab-visibility logic; every
+correction in this section traces to a line in it.
 
 ## Context / side panel
 
@@ -106,8 +112,12 @@ button. Driven by the same role+state gates as the backend (`salesActions`/`impo
 |---|---|---|
 | **Cost / landed cost** | import, ceo | costing/decision `RAW_*` roles |
 | **Margin / selling-price math** | ceo (decision), import (cost side) | `RAW_DECISION_ROLES={import,ceo}`; sales gets `salesView` (price only) |
-| **Payment ledger / deposit notice** | account, ceo, sales(owner) | import denied (`DepositNoticeService`, `listPayments`) |
-| **Customer quotation content** | sales(owner), sales_manager, ceo, import(view) | account excluded |
+| **Pricing requests (PCR list/detail)** | sales(owner), import, ceo, sales_manager | `PricingRequestService.VIEWER_ROLES` — **account excluded**, unlike the ledger/fulfilment/deal-read tabs where account IS a viewer |
+| **Payment ledger / deposit notice** | account, ceo, sales(owner) | import denied by **two independent gates**, not one — `TicketService.listPayments`'s inline `IMPORT_ROLES` 403, and `DepositNoticeService.requireTicketViewer`'s own separate inline import check |
+| **Customer quotation content** | sales(owner), sales_manager, ceo, import(view) | account excluded (`CustomerQuotationService.VIEW_ROLES`) |
+| **Raw factory purchase order** | import, ceo **only** | `ProcurementService.RAW_PO_ROLES` — sales_manager and account do not get this, despite being deal viewers everywhere else |
+| **Activity feed / deal tracking** | deal owner, sales_manager, ceo | `TicketService.requireDealOwnership` (`listActivities`) — import and account excluded, unlike every other viewer-role tab |
+| **Uploaded attachments** | ticket participant (`createdById`/`assignedToId`) or hr/sales_manager/ceo | `AttachmentController.requireTicketAccess` — an identity-based model, not the tab's role gate; **includes hr**, which cannot read the ticket anywhere else in this table (owner-confirmed, tracked separately) |
 | **Deal at all** | `VIEWER_ROLES={sales,import,ceo,account,sales_manager}`, sales own-only | `requireViewAccess`; hr/employee cannot read tickets |
 
 The ticket screen is **not** a place to show employee PII — that lives only on the HR
