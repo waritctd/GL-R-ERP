@@ -105,8 +105,18 @@ class PayslipProvisionalNoticeGeometryReviewTest {
      * {@code PayrollService#remainingPayPeriods}'s {@code 13 - month}: December, and only December,
      * is the period after which no further withholding can absorb the excess.
      */
+    /**
+     * P2 fix (Opus review, 2026-07-30): re-pinned against the owner-approved wording (spec section 8)
+     * after {@code PayslipRenderer} stopped printing the excess baht figure. The figure itself
+     * ({@code "17,527.51"}) must now be ABSENT from every month's notice -- spec section 8 says
+     * plainly "Do not print the excess amount"; {@code excessWithheldToDate} is still computed and
+     * persisted for the ภ.ง.ด.1 working papers (unchanged), only the printed text changed. December's
+     * wording also no longer says "ไม่สามารถคืนผ่านระบบเงินเดือนได้" (not part of the owner's approved
+     * text) and names BOTH ภ.ง.ด.90 and ภ.ง.ด.91 (never 91 unconditionally, per the handoff), so the
+     * assertion below checks for "ภ.ง.ด.90" and "ภ.ง.ด.91" together rather than the old sole-91 phrase.
+     */
     @Test
-    @DisplayName("only December prints the ภ.ง.ด.91 wording; November is still provisional")
+    @DisplayName("only December prints the year-end ภ.ง.ด.90/91 wording; November is still provisional")
     void onlyDecemberAssertsTheExcessIsUnrecoverable() throws Exception {
         PayrollLineDto line = maximalLine(new BigDecimal("17527.51"), MAXIMAL_NOTE);
 
@@ -115,17 +125,19 @@ class PayslipProvisionalNoticeGeometryReviewTest {
             assertThat(text)
                 .as("month %s is not the final period, so the payslip must not tell the employee a "
                     + "still-moving figure is unrecoverable", month)
-                .doesNotContain("ภ.ง.ด.91")
-                .doesNotContain("ไม่สามารถคืนผ่านระบบเงินเดือนได้");
+                .doesNotContain("ภ.ง.ด.91");
             assertThat(text)
-                .as("month %s must still disclose the excess, labelled as an estimate", month)
+                .as("month %s must still disclose that the withholding shown is an estimate, but "
+                    + "spec section 8 forbids printing the excess baht figure itself", month)
                 .contains("ประมาณการ")
-                .contains("17,527.51");
+                .doesNotContain("17,527.51");
         }
 
         String december = text(renderer.toPdf(line, periodForMonth(line, 12)));
-        assertThat(december).contains("ภ.ง.ด.91");
-        assertThat(december).contains("ไม่สามารถคืนผ่านระบบเงินเดือนได้");
+        assertThat(december).contains("ภ.ง.ด.90").contains("ภ.ง.ด.91");
+        assertThat(december)
+            .as("spec section 8 forbids printing the excess baht figure, even in the final period")
+            .doesNotContain("17,527.51");
         assertThat(december)
             .as("the final wording must not also be hedged as an estimate")
             .doesNotContain("ประมาณการ:");

@@ -358,6 +358,13 @@ export const api = {
     // C2: year-to-date backfill seed for a mid-year go-live. Same view/edit split.
     getYtdSeed: (year) => apiRequest(withQuery(API_ROUTES.payroll.ytdSeed, { year })),
     saveYtdSeed: (year, items) => apiRequest(withQuery(API_ROUTES.payroll.ytdSeed, { year }), { method: 'PUT', body: { items } }),
+    // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix. GET is HR+CEO
+    // (view), PUT is HR-only (edit) — same split as tax-allowances/ytd-seed above. The PUT body is the
+    // raw array (not wrapped in { items }) — mirrors PayrollController#putComponentTaxTreatments,
+    // which binds a bare List<ComponentTaxTreatmentUpsertRequest>.
+    getComponentTaxTreatments: (year) => apiRequest(withQuery(API_ROUTES.payroll.componentTaxTreatments, { year })),
+    saveComponentTaxTreatments: (year, items) =>
+      apiRequest(withQuery(API_ROUTES.payroll.componentTaxTreatments, { year }), { method: 'PUT', body: items }),
   },
   priceImport: {
     factories: () => apiRequest(API_ROUTES.priceImport.factories),

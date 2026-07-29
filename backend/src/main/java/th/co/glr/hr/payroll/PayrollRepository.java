@@ -735,6 +735,89 @@ public class PayrollRepository {
     }
 
     /**
+     * P0 fix (Opus review, 2026-07-30), layer 1b: seeds a SAFE DEFAULT classification for every
+     * classification-eligible {@link PayrollComponent} for one employee/tax year, mirroring {@link
+     * #seedSsoInclusionDefaults}'s own shape exactly. {@code ON CONFLICT DO NOTHING} -- this only
+     * fills components that have no row yet, so it never clobbers an HR classification made through
+     * the matrix screen, and re-running it is always safe.
+     *
+     * <p>Why this exists ALONGSIDE {@code V100}'s migration backfill rather than instead of it:
+     * {@code V100} only reaches employees that existed in {@code hr.employee} at the moment that
+     * migration ran. A migration is a one-time event; a NEW employee hired the day after deploy would
+     * still have zero classification rows and hit exactly the same 409 the migration was written to
+     * fix. This method is the creation-time counterpart -- wired into {@code EmployeeService#create}
+     * next to {@link #seedSsoInclusionDefaults}, the exact call site {@link
+     * PayrollClassificationReachabilityIntegrationTest} reproduces to prove the fix is reachable
+     * through the real employee-creation path, not just a one-off SQL script.
+     *
+     * <p>This is NOT the "silent default" handoff section 1 forbids: that section is about {@link
+     * PayrollCalculator#calculateClassified} never inventing a treatment for a row it cannot see. A
+     * stored, {@code updated_by_id = NULL}-tagged default row that HR can see and override on the
+     * matrix screen before it ever affects a real run is the same mechanism {@code
+     * seedSsoInclusionDefaults} already uses for SSO inclusion, applied to the sibling matrix.
+     *
+     * <p>Defaults mirror {@code V100}'s own reasoning (kept in sync there via {@link
+     * #defaultTaxTreatment}, not re-derived): {@link PayrollComponent#BONUS_PAY}/{@link
+     * PayrollComponent#OTHER_ONE_OFF_PAY} -&gt; {@link PayrollTaxTreatment#EXTRA_KNOWN_FREQUENCY}
+     * (handoff-explicit); {@link PayrollComponent#DIRECTOR_REMUNERATION} -&gt; {@link
+     * PayrollTaxTreatment#REGULAR_REPROJECT} (owner-confirmed: paid every คราว, ป.96/2543 ข้อ 2.1/2.4
+     * -- see {@link #defaultTaxTreatment}'s own javadoc for the correction history); every other
+     * classification-eligible component -&gt; {@link PayrollTaxTreatment#EXTRA_CUMULATIVE_ACTUAL}, the
+     * safe choice for a component this method has zero history to evidence recurrence for (see {@code
+     * V100}'s migration comment for the full worked argument on why cumulative-actual, not
+     * regular-reproject or known-frequency, is the safe unknown-recurrence default for THOSE
+     * components).
+     */
+    public void seedComponentTaxTreatmentDefaults(long employeeId, int taxYear, Long updatedById) {
+        for (PayrollComponent component : PayrollComponent.values()) {
+            if (component == PayrollComponent.SALARY || component == PayrollComponent.NON_TAXABLE_INCOME) {
+                continue; // SALARY is locked without ever needing a row; NON_TAXABLE_INCOME is out of scope.
+            }
+            jdbc.update("""
+                INSERT INTO hr.payroll_component_tax_treatment (
+                    employee_id, tax_year, component, tax_treatment, updated_by_id, updated_at
+                ) VALUES (
+                    :employeeId, :taxYear, :component, :taxTreatment, :updatedById, now()
+                )
+                ON CONFLICT (employee_id, tax_year, component) DO NOTHING
+                """,
+                new MapSqlParameterSource()
+                    .addValue("employeeId", employeeId)
+                    .addValue("taxYear", taxYear)
+                    .addValue("component", component.name())
+                    .addValue("taxTreatment", defaultTaxTreatment(component).name())
+                    .addValue("updatedById", updatedById));
+        }
+    }
+
+    /**
+     * The safe company-wide default treatment for a component with no per-employee evidence.
+     *
+     * <p>Correction (owner, 2026-07-29, caught in review before this branch merged): {@code
+     * DIRECTOR_REMUNERATION} does NOT fall to the generic unknown-recurrence default below. The owner
+     * stated directly: "director remuneration is every month but the pay may change once in a while."
+     * Paid every คราว makes it เงินได้ที่จ่ายตามปกติ under ป.96/2543 ข้อ 2.1, not a เงินพิเศษ under
+     * ข้อ 2.5 -- the amount varying occasionally is not an obstacle, because ข้อ 2.4 requires
+     * recomputing the withholding every คราว from the actual year-to-date figure, which is exactly what
+     * {@code REGULAR_REPROJECT} already does. This is also why {@link PayrollCalculator}'s legacy
+     * {@code calculate()} engine (see that method's own comment on the two-limb split) hardcodes
+     * director remuneration into its REGULAR limb, not the occasional one -- the two engines must not
+     * disagree about directors. An earlier version of this method (and {@code V100}'s migration)
+     * defaulted {@code DIRECTOR_REMUNERATION} to {@code EXTRA_CUMULATIVE_ACTUAL} on the premise that
+     * some directors are paid annually rather than monthly -- that premise is factually wrong for GL&amp;R
+     * and was corrected here before merge.
+     */
+    public static PayrollTaxTreatment defaultTaxTreatment(PayrollComponent component) {
+        if (component == PayrollComponent.DIRECTOR_REMUNERATION) {
+            return PayrollTaxTreatment.REGULAR_REPROJECT;
+        }
+        if (component == PayrollComponent.BONUS_PAY || component == PayrollComponent.OTHER_ONE_OFF_PAY) {
+            return PayrollTaxTreatment.EXTRA_KNOWN_FREQUENCY;
+        }
+        return PayrollTaxTreatment.EXTRA_CUMULATIVE_ACTUAL;
+    }
+
+    /**
      * Per-employee, per-component SSO wage-base inclusion for a tax year. Unlike tax treatment,
      * a component with no stored row has no application-level default until {@link
      * #seedSsoInclusionDefaults} runs for that employee -- this method only returns what is
@@ -803,8 +886,6 @@ public class PayrollRepository {
      */
     public void seedSsoInclusionDefaults(long employeeId, int taxYear, Long updatedById) {
         for (PayrollComponent component : PayrollComponent.values()) {
-            boolean defaultIncluded = component != PayrollComponent.DIRECTOR_REMUNERATION
-                && component != PayrollComponent.NON_TAXABLE_INCOME;
             jdbc.update("""
                 INSERT INTO hr.payroll_component_sso_inclusion (
                     employee_id, tax_year, component, is_included, updated_by_id, updated_at
@@ -817,9 +898,24 @@ public class PayrollRepository {
                     .addValue("employeeId", employeeId)
                     .addValue("taxYear", taxYear)
                     .addValue("component", component.name())
-                    .addValue("isIncluded", defaultIncluded)
+                    .addValue("isIncluded", defaultSsoIncluded(component))
                     .addValue("updatedById", updatedById));
         }
+    }
+
+    /**
+     * The company-wide SSO-inclusion default (handoff section 5): every component is IN the wage base
+     * except {@code DIRECTOR_REMUNERATION} (not wages under the Social Security Act) and {@code
+     * NON_TAXABLE_INCOME} (out of scope for any wage base by definition). Factored out of {@link
+     * #seedSsoInclusionDefaults}'s inline boolean (P1 fix, Opus review 2026-07-30) so the SAME rule
+     * backs both the SQL-writing seed path above and the read-side fallback in
+     * {@link #findComponentSsoInclusionByEmployee} below -- see that method's own comment for why a
+     * second, independent copy of this rule would be exactly the kind of drift this fix exists to
+     * prevent.
+     */
+    public static boolean defaultSsoIncluded(PayrollComponent component) {
+        return component != PayrollComponent.DIRECTOR_REMUNERATION
+            && component != PayrollComponent.NON_TAXABLE_INCOME;
     }
 
     public Optional<PayrollPeriodDto> findPeriodByMonth(LocalDate payrollMonth) {

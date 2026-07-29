@@ -2,6 +2,7 @@ package th.co.glr.hr.payroll;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -10,11 +11,22 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
+import th.co.glr.hr.attachment.AttachmentRepository;
+import th.co.glr.hr.attachment.FileStorageService;
+import th.co.glr.hr.audit.AuditService;
+import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.commission.CommissionAttachmentRepository;
+import th.co.glr.hr.commission.CommissionCalculator;
+import th.co.glr.hr.commission.CommissionRepository;
+import th.co.glr.hr.commission.CommissionService;
+import th.co.glr.hr.leave.LeaveRepository;
+import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentSsoInclusionUpsertRequest;
 import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentTaxTreatmentUpsertRequest;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceDto;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.ticket.TicketRepository;
 
 /**
  * Exercises the V95 payroll withholding classification + HR declaration schema against a real
@@ -83,6 +95,102 @@ class PayrollClassificationAndSsoInclusionIntegrationTest extends AbstractPostgr
 
         Map<PayrollComponent, Boolean> bobInclusion = repository.findComponentSsoInclusionByEmployee(2026).get(bob);
         assertThat(bobInclusion.get(PayrollComponent.DIRECTOR_REMUNERATION)).isTrue();
+    }
+
+    /**
+     * P1 fix (Opus review, 2026-07-30): {@code EmployeeService#create} seeds SSO-inclusion defaults
+     * only on the API create path. An employee inserted by raw SQL (uat's {@code V900}, {@code
+     * db/migration-demo/V21}, any bulk import) never runs that call and used to compute SSO to
+     * ฿0.00 with no error at all -- {@code PayrollRepository#findComponentSsoInclusionByEmployee}
+     * returns nothing for such an employee, and the pre-fix call site collapsed that to {@code
+     * Map.of()}, under which every component reads as excluded. Fixed at the read/resolution layer
+     * ({@code PayrollService#ssoInclusionFor}), driven here through the real {@link PayrollService},
+     * not the repository alone, because the fix lives at that layer.
+     *
+     * <p>Two employees, BOTH inserted by raw SQL with ZERO {@code hr.payroll_component_sso_inclusion}
+     * rows -- neither {@code seedSsoInclusionDefaults} nor {@code seedSsoIncluded} (the test-only
+     * partial-seed helper) is called for either. Same salary, so any inclusion difference between them
+     * can only come from the director fee the second one also carries.
+     */
+    @Test
+    void anEmployeeInsertedByRawSqlWithNoSsoInclusionRowsStillGetsTheCompanyWideDefault() {
+        long salaryOnly = seedEmployee("EMP-CLS-011", "จูน", "คลาส");
+        long salaryPlusDirectorFee = seedEmployeeWithDirectorFee("EMP-CLS-012", "กันต์", "คลาส", new BigDecimal("20000.00"));
+        // DIRECTOR_REMUNERATION is the only non-zero, non-SALARY component the second employee carries
+        // this run -- classify it so the run is not blocked by the UNRELATED classification gate this
+        // test is not exercising. SALARY needs no row (locked to REGULAR_REPROJECT).
+        seedRegularTaxTreatment(salaryPlusDirectorFee, 2026, PayrollComponent.DIRECTOR_REMUNERATION);
+
+        PayrollService payrollService = wireRealPayrollService();
+        PayrollPeriodDto period = payrollService.preview(
+            new ProcessPayrollRequest(LocalDate.of(2026, 3, 1), List.of()), hr());
+
+        BigDecimal salaryOnlySso = lineFor(period, salaryOnly).socialSecurity();
+        BigDecimal salaryPlusDirectorFeeSso = lineFor(period, salaryPlusDirectorFee).socialSecurity();
+
+        // Proof 1: an employee with ZERO stored SSO-inclusion rows must not silently compute ฿0.00 --
+        // the exact pre-fix failure mode (Map.of() -> every component excluded, including SALARY).
+        assertThat(salaryOnlySso)
+            .withFailMessage("an employee inserted by raw SQL with no SSO-inclusion rows at all must "
+                + "still get the company-wide default (TRUE except DIRECTOR_REMUNERATION/"
+                + "NON_TAXABLE_INCOME), not silently compute ฿0.00 social security")
+            .isGreaterThan(BigDecimal.ZERO);
+
+        // Proof 2, WRONG-WAY-ROUND: the synthesized default must still EXCLUDE DIRECTOR_REMUNERATION,
+        // exactly like PayrollRepository#seedSsoInclusionDefaults would have written. Both employees
+        // share the identical ฿30,000 salary (seedEmployee's hardcoded figure); adding a ฿20,000
+        // director fee on top must not move the SSO figure AT ALL. A fix that wrongly defaulted every
+        // absent component (including DIRECTOR_REMUNERATION) to included would fail exactly this
+        // assertion while still passing proof 1 above.
+        assertThat(salaryPlusDirectorFeeSso)
+            .withFailMessage("DIRECTOR_REMUNERATION must stay excluded from the SSO wage base even "
+                + "under the synthesized default -- a director fee must never inflate social security")
+            .isEqualByComparingTo(salaryOnlySso);
+    }
+
+    private PayrollLineDto lineFor(PayrollPeriodDto period, long employeeId) {
+        return period.lines().stream()
+            .filter(line -> line.employeeId() == employeeId)
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("no line for employee " + employeeId));
+    }
+
+    private PayrollService wireRealPayrollService() {
+        CommissionService commissionService = new CommissionService(
+            new CommissionRepository(jdbc),
+            mock(CommissionAttachmentRepository.class),
+            new CommissionCalculator(),
+            mock(FileStorageService.class),
+            mock(AuditService.class),
+            mock(NotificationService.class),
+            mock(TicketRepository.class),
+            mock(AttachmentRepository.class));
+        return new PayrollService(
+            repository,
+            new PayrollCalculator(),
+            commissionService,
+            mock(AuditService.class),
+            mock(PayslipRenderer.class),
+            new LeaveRepository(jdbc),
+            new th.co.glr.hr.payroll.export.KBankPctExporter(),
+            new th.co.glr.hr.payroll.export.Pnd1Exporter(),
+            new th.co.glr.hr.payroll.export.SsoExporter(),
+            new th.co.glr.hr.config.AppProperties());
+    }
+
+    private UserPrincipal hr() {
+        return new UserPrincipal(1L, "hr@glr.co.th", "HR", "hr", 1L, true, LocalDate.now(), false, null, false);
+    }
+
+    private long seedEmployeeWithDirectorFee(String code, String firstNameTh, String lastNameTh, BigDecimal directorFee) {
+        return jdbc.queryForObject(
+            """
+            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, director_remuneration, is_active)
+            VALUES (:code, :first, :last, 30000, :directorFee, TRUE)
+            RETURNING employee_id
+            """,
+            Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "directorFee", directorFee),
+            Long.class);
     }
 
     // ---- Tax-treatment classification ------------------------------------------------------

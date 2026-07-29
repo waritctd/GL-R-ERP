@@ -163,6 +163,9 @@ export const API_ROUTES = {
     distribute: (periodId) => `/api/payroll/${periodId}/distribute`,
     taxAllowances: '/api/payroll/tax-allowances',
     ytdSeed: '/api/payroll/ytd-seed',
+    // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix. Mirrors
+    // PayrollController's component-tax-treatments mapping.
+    componentTaxTreatments: '/api/payroll/component-tax-treatments',
   },
   priceImport: {
     factories: '/api/price-import/factories',

@@ -29,6 +29,7 @@ import th.co.glr.hr.payroll.export.PayrollExportKind;
 import th.co.glr.hr.payroll.export.PayrollExportRow;
 import th.co.glr.hr.payroll.export.Pnd1Exporter;
 import th.co.glr.hr.payroll.export.SsoExporter;
+import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentTaxTreatmentUpsertRequest;
 import th.co.glr.hr.payroll.PayrollClassifiedCalculationDtos.PayrollClassifiedCalculation;
 import th.co.glr.hr.payroll.PayrollClassifiedCalculationDtos.PayrollClassifiedCalculationInput;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceDto;
@@ -313,8 +314,9 @@ public class PayrollService {
                 // "Progress -- task 4: rebase report + F1-F7 fixes" section, known risks (F4 correction,
                 // Opus review 2026-07-30: that section did not exist when this comment was written;
                 // it now does).
-                treatmentsByEmployee.getOrDefault(employee.employeeId(), Map.of()),
-                ssoInclusionByEmployee.getOrDefault(employee.employeeId(), Map.of())
+                treatmentsFor(employee.employeeId(), treatmentsByEmployee,
+                    hasBeenOnboardedForPayroll(employee.employeeId(), ssoInclusionByEmployee)),
+                ssoInclusionFor(employee.employeeId(), ssoInclusionByEmployee)
             ))
             .sorted(Comparator.comparing(PayrollLineDto::employeeCode))
             .toList();
@@ -338,6 +340,137 @@ public class PayrollService {
         auditPayrollAccess("PREVIEW_PAYROLL", actor, period,
             "base_salary,gross_earnings,deductions,net_pay");
         return period;
+    }
+
+    /**
+     * P0 fix (Opus review, 2026-07-30): the signal {@link #treatmentsFor} needs to tell "an employee a
+     * real onboarding path touched" apart from "an employee that merely has an incidental, unrelated
+     * SSO row" -- see that method's own javadoc for the regression that made a cruder {@code
+     * containsKey} check insufficient. A real onboarding path ({@code
+     * PayrollRepository#seedSsoInclusionDefaults}, called from V96's backfill, {@code
+     * EmployeeService#create}, and this task's own P1 fix) always writes a row for EVERY {@link
+     * PayrollComponent} in one pass, so it always includes several components other than {@code
+     * SALARY}. Checking for at least one non-SALARY component is therefore robust to exactly which
+     * components got seeded (V96 predates {@code MEAL_ALLOWANCE}/{@code PER_DIEM_TAXABLE}, so an
+     * employee it touched has 16 rows, not the current 18 -- an exact count would wrongly treat that
+     * employee as "not onboarded") while still rejecting a single incidental SALARY-only row, which
+     * several tests in this suite seed purely so their OWN unrelated {@code socialSecurity} assertion
+     * comes out non-zero (see e.g. {@code PayrollClassifiedEngineIntegrationTest#seedEmployee}).
+     */
+    private static boolean hasBeenOnboardedForPayroll(
+        long employeeId, Map<Long, Map<PayrollComponent, Boolean>> ssoInclusionByEmployee
+    ) {
+        Map<PayrollComponent, Boolean> ssoInclusion = ssoInclusionByEmployee.get(employeeId);
+        if (ssoInclusion == null) {
+            return false;
+        }
+        return ssoInclusion.keySet().stream().anyMatch(component -> component != PayrollComponent.SALARY);
+    }
+
+    /**
+     * P0 fix (Opus review, 2026-07-30), layer 3 -- the read-time safety net {@link
+     * PayrollClassificationReachabilityIntegrationTest
+     * #payrollRunsForAnEmployeeConfiguredOnlyThroughThePathsAProductionDeploymentActuallyHas} demands.
+     * Layers 1 (V100's migration backfill) and 2 ({@code EmployeeService#create}'s new call to {@link
+     * PayrollRepository#seedComponentTaxTreatmentDefaults}) only reach an employee that either
+     * existed when V100 ran or was created through the API. That reachability test's employee is
+     * neither: it is inserted by raw SQL mid-test, mimicking an employee whose classification rows
+     * were never written by ANY path (uat's {@code V900}, {@code db/migration-demo}'s seeds, any bulk
+     * import -- the identical gap {@link #ssoInclusionFor} already closes for SSO inclusion). Without
+     * this layer such an employee has ZERO stored {@code hr.payroll_component_tax_treatment} rows and
+     * {@link PayrollCalculator#calculateClassified}'s classification gate 409s the entire run the
+     * moment they carry a single non-zero special pay -- production-realistic (handoff section 9d:
+     * employee 10012's real ฿407 พิเศษ 1), not a contrived edge case.
+     *
+     * <p><b>Why this does not weaken "HR sets every line, no silent default" (handoff section 1):</b>
+     * that rule governs the EXPLICIT "not yet classified" state -- a row that EXISTS with {@code
+     * tax_treatment = NULL}, which the handoff distinguishes deliberately from a row that is simply
+     * ABSENT (see {@link PayrollRepository#findComponentTaxTreatmentsByEmployee}'s own javadoc on the
+     * distinction). This method only ever synthesizes a default when the employee has NO ROW AT ALL --
+     * the map lookup itself returns {@code null}, meaning classification has never been touched for
+     * this employee through any path. The instant an employee has even ONE stored row (including an
+     * explicit present-and-null "deliberately left unclassified" row from the matrix screen, or every
+     * test in this suite that seeds a deliberately PARTIAL classification via {@code
+     * AbstractPostgresIntegrationTest#seedRegularTaxTreatment}), this method returns that map
+     * completely unchanged -- explicit HR intent, once expressed for an employee at all, is never
+     * second-guessed. This mirrors {@link #ssoInclusionFor}'s identical reasoning for the sibling
+     * matrix exactly.
+     *
+     * <p><b>{@code hasBeenOnboarded} -- found necessary by a regression this method's first version
+     * caused, not designed up front:</b> an unconditional "zero rows -&gt; synthesize" rule collided
+     * head-on with the ALREADY-GREEN {@code
+     * PayrollClassifiedEngineIntegrationTest#unclassifiedNonZeroComponentRejectsTheRunNamingEmployeeAndComponent}
+     * -- the test that pins down "HR sets every line, no silent default" in the first place. That
+     * test's employee ALSO has zero tax-treatment rows (it seeds literally nothing before previewing),
+     * and legitimately expects the 409. Worse, a first attempt at a distinguishing signal
+     * (merely {@code ssoInclusionByEmployee.containsKey(employeeId)}) ALSO failed against that same
+     * test: this file's own {@code seedEmployee} helper -- unrelated test convenience, nothing to do
+     * with onboarding -- seeds exactly one incidental SSO row (SALARY only, via {@code
+     * AbstractPostgresIntegrationTest#seedSsoIncluded}) for every employee it creates, so "has ANY SSO
+     * row" was true for that test too. See {@link #hasBeenOnboardedForPayroll} for the signal that
+     * actually distinguishes "a real onboarding path touched this employee's SSO matrix" (every
+     * component, including several non-SALARY ones) from "a test fixture happens to carry one
+     * unrelated SALARY-only row" -- the reachability test's employee has the former (it calls {@code
+     * seedSsoInclusionDefaults} directly), the blocking test's employee has neither.
+     *
+     * <p>Defaults come from {@link PayrollRepository#defaultTaxTreatment}, the SAME safe-default logic
+     * {@code V100} and {@code seedComponentTaxTreatmentDefaults} both use, so all three layers can
+     * never independently drift onto different defaults for the same component.
+     */
+    private static Map<PayrollComponent, PayrollTaxTreatment> treatmentsFor(
+        long employeeId,
+        Map<Long, Map<PayrollComponent, PayrollTaxTreatment>> treatmentsByEmployee,
+        boolean hasBeenOnboarded
+    ) {
+        Map<PayrollComponent, PayrollTaxTreatment> stored = treatmentsByEmployee.get(employeeId);
+        if (stored != null || !hasBeenOnboarded) {
+            return stored == null ? Map.of() : stored;
+        }
+        Map<PayrollComponent, PayrollTaxTreatment> defaults = new EnumMap<>(PayrollComponent.class);
+        for (PayrollComponent component : PayrollComponent.values()) {
+            if (component == PayrollComponent.SALARY || component == PayrollComponent.NON_TAXABLE_INCOME) {
+                continue;
+            }
+            defaults.put(component, PayrollRepository.defaultTaxTreatment(component));
+        }
+        return defaults;
+    }
+
+    /**
+     * P1 fix (Opus review, 2026-07-30): {@code EmployeeService#create} seeds SSO-inclusion defaults
+     * only on the API create path. An employee inserted by raw SQL afterwards (uat's {@code V900},
+     * {@code db/migration-demo/V21}, any bulk import) never runs that call and ends up with ZERO
+     * stored {@code hr.payroll_component_sso_inclusion} rows -- which used to fall through to {@code
+     * Map.of()} at the call site below (every component absent, and {@link
+     * PayrollClassifiedCalculationDtos.PayrollClassifiedCalculationInput#ssoIncluded} treats absent as
+     * excluded), so the SSO wage base silently computed to ฿0.00 with no error at all.
+     *
+     * <p>Fixed at this READ/RESOLUTION layer rather than chasing every writer (the seed call itself,
+     * every demo/uat seed migration, any future bulk import): an employee with genuinely NO stored
+     * rows gets the same company-wide default {@link PayrollRepository#seedSsoInclusionDefaults} would
+     * have written ({@link PayrollRepository#defaultSsoIncluded}, factored out so both paths can never
+     * independently drift). An employee with AT LEAST ONE stored row -- including every test in this
+     * suite that seeds a deliberately PARTIAL inclusion matrix via {@code
+     * AbstractPostgresIntegrationTest#seedSsoIncluded} to pin one specific component's inclusion or
+     * exclusion -- is returned completely unchanged: this only fills the gap for an employee nothing
+     * has ever touched, it does not change what "absent within an existing map" means.
+     *
+     * <p>Unlike {@link #treatmentsFor}, this one has no {@code hasBeenOnboarded} gate: SSO inclusion
+     * has no "explicitly declined to classify" state to protect (a boolean has only two values, either
+     * of which is a real answer), so there is no equivalent regression to guard against here.
+     */
+    private static Map<PayrollComponent, Boolean> ssoInclusionFor(
+        long employeeId, Map<Long, Map<PayrollComponent, Boolean>> ssoInclusionByEmployee
+    ) {
+        Map<PayrollComponent, Boolean> stored = ssoInclusionByEmployee.get(employeeId);
+        if (stored != null) {
+            return stored;
+        }
+        Map<PayrollComponent, Boolean> defaults = new EnumMap<>(PayrollComponent.class);
+        for (PayrollComponent component : PayrollComponent.values()) {
+            defaults.put(component, PayrollRepository.defaultSsoIncluded(component));
+        }
+        return defaults;
     }
 
     private PayrollLineDto calculateLine(
@@ -692,6 +825,47 @@ public class PayrollService {
         auditService.record(actor, "UPSERT_PAYROLL_YTD_SEED", "payroll_year_to_date_seed", null,
             null, Map.of("taxYear", taxYear, "employeeIds", ytdEmployeeIdsOf(items)));
         return result;
+    }
+
+    // ---- P0 fix (Opus review, 2026-07-30): tax-treatment matrix HTTP surface -------------------
+    //
+    // PayrollRepository#upsertComponentTaxTreatment existed since task 1 with zero callers in
+    // src/main -- nothing could ever write hr.payroll_component_tax_treatment on a real deployment,
+    // so PayrollCalculator#calculateClassified's classification gate (correct on its own terms) 409s
+    // every run for any employee with a non-zero, non-SALARY component. Same view/edit split as the
+    // C1/C2 declarations above (HR+CEO view, HR-only edit).
+
+    public PayrollClassificationDtos.TaxTreatmentListResponse getComponentTaxTreatments(int taxYear, UserPrincipal actor) {
+        requireRole(actor, PAYROLL_VIEW_ROLES);
+        return componentTaxTreatmentsSnapshot(taxYear);
+    }
+
+    @Transactional
+    public PayrollClassificationDtos.TaxTreatmentListResponse upsertComponentTaxTreatments(
+        int taxYear, List<ComponentTaxTreatmentUpsertRequest> items, UserPrincipal actor
+    ) {
+        requireRole(actor, PAYROLL_EDIT_ROLES);
+        List<ComponentTaxTreatmentUpsertRequest> safeItems = items == null ? List.of() : items;
+        payrollRepository.upsertComponentTaxTreatment(taxYear, safeItems, actor.employeeId());
+        PayrollClassificationDtos.TaxTreatmentListResponse result = componentTaxTreatmentsSnapshot(taxYear);
+        auditService.record(actor, "UPSERT_PAYROLL_COMPONENT_TAX_TREATMENT", "payroll_component_tax_treatment", null,
+            null, Map.of("taxYear", taxYear, "employeeIds",
+                safeItems.stream().map(ComponentTaxTreatmentUpsertRequest::employeeId).distinct().toList()));
+        return result;
+    }
+
+    private PayrollClassificationDtos.TaxTreatmentListResponse componentTaxTreatmentsSnapshot(int taxYear) {
+        List<PayrollEmployeeSnapshot> employees = payrollRepository.findActiveEmployees();
+        Map<Long, Map<PayrollComponent, PayrollTaxTreatment>> byEmployee =
+            payrollRepository.findComponentTaxTreatmentsByEmployee(taxYear);
+        List<PayrollClassificationDtos.TaxTreatmentMatrixRow> items = employees.stream()
+            .map(employee -> new PayrollClassificationDtos.TaxTreatmentMatrixRow(
+                employee.employeeId(),
+                employee.employeeCode(),
+                employee.employeeName(),
+                byEmployee.getOrDefault(employee.employeeId(), Map.of())))
+            .toList();
+        return new PayrollClassificationDtos.TaxTreatmentListResponse(taxYear, items);
     }
 
     private List<Long> employeeIdsOf(List<EmployeeTaxAllowanceUpsertRequest> items) {

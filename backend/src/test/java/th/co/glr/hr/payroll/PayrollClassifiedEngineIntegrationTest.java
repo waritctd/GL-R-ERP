@@ -541,13 +541,16 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
      *                                          total = 157,375
      * </pre>
      *
-     * <p>{@code calculateClassified} stacks the KNOWN limb and the CUMULATIVE limb on the regular
-     * limb INDEPENDENTLY — stage 2 taxes {@code netRegular + knownThisPeriod} and stage 3 taxes
-     * {@code netWithKnown + cumulativeYtdTotal}, but {@code knownThisPeriod} is only ever THIS
-     * period's amount and no {@code knownLimb*} field exists on {@link PayrollYearToDate} to carry a
-     * settled bonus forward. So in every month after the bonus, stage 3 layers the cumulative total
-     * onto a stack that no longer contains the bonus, and the two limbs consume the same tax brackets
-     * twice.
+     * <p><b>F1 correction (Opus review, 2026-07-30, P3):</b> this docstring originally described the
+     * defect this test caught in the present tense — "{@code calculateClassified} stacks the KNOWN
+     * limb and the CUMULATIVE limb on the regular limb INDEPENDENTLY ... but {@code knownThisPeriod}
+     * is only ever THIS period's amount and no {@code knownLimb*} field exists on {@link
+     * PayrollYearToDate} to carry a settled bonus forward." F1 (see the handoff's "task 4" progress
+     * section) made that false: {@link PayrollYearToDate#knownLimbTaxableIncome()} now carries every
+     * settled known-limb baht forward, and stage 3's own YTD-inclusive base
+     * ({@code netWithCumulativeYtd}) is built from it, so the two limbs no longer consume the same tax
+     * brackets twice. This test now PASSES and pins that fix — see F1's fuller writeup in the handoff
+     * for the mechanism and the mutation-check that proves this specific test catches a regression.
      */
     @Test
     void twelveMonthSimulationWithBothABonusAndCumulativeCommissionMatchesTheHandComputedLiability() {

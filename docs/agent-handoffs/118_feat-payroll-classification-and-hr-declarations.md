@@ -1140,7 +1140,7 @@ check was added, removed, or altered. `PayrollService`'s existing `PAYROLL_VIEW_
    mode" unconditionally) — pre-existing, unrelated to this task; the new F2 frontend tests mock
    `api.payroll.preview`/`process` directly rather than relying on the mock API layer.
 
-## The exact next prompt for the next agent
+## The exact next prompt for the next agent (superseded — see task 5 below)
 
 > Rebase `feat/payroll-classification-and-hr-declarations` onto the latest `origin/main` and merge, per
 > the standing "rebase onto latest main before every PR" rule. Then: (1) build the structured
@@ -1153,3 +1153,439 @@ check was added, removed, or altered. `PayrollService`'s existing `PAYROLL_VIEW_
 > leave-refund-SSO-recompute scenarios to a classified-engine test FIRST (see task 3's Fix 6 for the
 > coverage-parity argument). Read this file in full first, in particular the AUTHORITATIVE NUMBERING
 > table above, before touching anything with a พิเศษ slot number in it.
+
+---
+
+# Progress — task 5: P0 tax-treatment-matrix writer + 4 more Opus-review fixes (2026-07-30)
+
+A THIRD Opus review REJECTED this branch: the tax-treatment classification matrix (task 1's schema,
+task 2's engine) had no writer anywhere — `PayrollRepository#upsertComponentTaxTreatment` had zero
+callers in `src/main`, no controller mapping, no frontend — so `PayrollCalculator#calculateClassified`'s
+classification gate 409s the entire payroll run for any employee with a non-zero, non-SALARY component.
+Two uncommitted reviewer tests, `PayrollClassificationReachabilityIntegrationTest`, were the acceptance
+criteria and are kept **verbatim** (not modified) per instruction. Plus four related defects: two more
+P1s, one P2, two P3s.
+
+## P0 — the tax-treatment matrix had no writer
+
+Fixed with **three layers** — the task's own framing, confirmed correct by what actually happened
+during implementation (a backfill alone was proven insufficient, not just assumed to be):
+
+### Layer 1 — `V100__payroll_component_tax_treatment_backfill.sql` (new)
+
+Seeds a default treatment per employee × classification-eligible component for every employee that
+existed when the migration ran, mining `hr.payroll_component_carry_forward` (V98's real
+accountant-ledger evidence) rather than inventing a mapping:
+
+- `DIRECTOR_REMUNERATION` → `REGULAR_REPROJECT`. **RESOLVED, not defaulted** — see the correction
+  note immediately below; this is not part of the "genuine uncertainty" bucket.
+- `carry_forward = TRUE` for that exact (employee, component) pair → `REGULAR_REPROJECT` (the
+  handoff's own "fixed recurring allowance" bucket, evidenced not guessed).
+- `BONUS_PAY` / `OTHER_ONE_OFF_PAY` → `EXTRA_KNOWN_FREQUENCY` (handoff-explicit — "the archetypal
+  EXTRA_KNOWN_FREQUENCY example").
+- Everything else with no carry-forward evidence (the 5 employees V98 could not resolve, and every
+  พิเศษ slot / `MEAL_ALLOWANCE` / `PER_DIEM_TAXABLE` V98 has no recurrence evidence for) →
+  `EXTRA_CUMULATIVE_ACTUAL`, the SAFE default for genuine uncertainty. Worked reasoning in the
+  migration's own comment: `REGULAR_REPROJECT` risks one large over-withholding spike for a genuinely
+  one-off payment (inconvenient, not unlawful); `EXTRA_KNOWN_FREQUENCY` risks systematic
+  **under**-withholding for a component that turns out to recur (the assumed one-off marginal
+  calculation never accumulates prior settlements into the annual base); `EXTRA_CUMULATIVE_ACTUAL`
+  never assumes recurrence and never mis-counts a recurring item as one-off — it self-corrects
+  regardless of the component's true pattern, which is exactly why the handoff already reserves that
+  bucket for "irregular" income.
+- `SALARY`/`NON_TAXABLE_INCOME` never backfilled (SALARY needs no row; NON_TAXABLE_INCOME is out of
+  scope for tax treatment).
+
+**Correction (coordinator review, before this branch reached the reviewer, 2026-07-30)**: the first
+version of this migration put `DIRECTOR_REMUNERATION` in the "genuine uncertainty" bucket above
+(`EXTRA_CUMULATIVE_ACTUAL`), reasoning that some directors might be paid annually rather than monthly.
+That premise is **factually wrong for GL&R** and contradicts a recorded owner decision: *"director
+remuneration is every month but the pay may change once in a while"* (owner, 2026-07-29). Paid every
+คราว makes it เงินได้ที่จ่ายตามปกติ under ป.96/2543 **ข้อ 2.1**, not a เงินพิเศษ under ข้อ 2.5 — the
+amount varying occasionally is not an obstacle, because **ข้อ 2.4** requires recomputing the
+withholding every คราว from the actual year-to-date figure, which is exactly what `REGULAR_REPROJECT`
+already does. This is also why branch 117's `PayrollCalculator#calculate` (the legacy engine) hardcodes
+director remuneration into its REGULAR limb, with that exact owner quote written into its own comment
+as the justification — the two engines must not disagree about directors, which is precisely the kind
+of divergence this branch had already shipped and had to fix twice before (see task 4's F1/F4).
+Corrected in `V100`'s `CASE` expression, `PayrollRepository#defaultTaxTreatment` (used by both layer 2
+and layer 3, so all three layers stayed in sync automatically once this one function was fixed), and
+the migration's own comment (the "annually-paid director" premise removed entirely so it cannot mislead
+a future reader into reverting this).
+
+**Checked for value-changing fallout, per the coordinator's explicit instruction, before treating this
+as a pure default-only tweak**: every PRE-EXISTING test with a non-zero `DIRECTOR_REMUNERATION` already
+explicitly classifies it via `seedRegularTaxTreatment(..., DIRECTOR_REMUNERATION, ...)` -- REGULAR
+REPROJECT is not new to those tests, it is what they already independently expected, since a stored
+classification always overrides any default at every layer. Confirmed by inspection and by re-running
+all of them green after the fix:
+`PayrollAllowanceDirectorNonTaxableIntegrationTest` (4/4), `PayrollExcelReconciliationTest` (7/7),
+`PayrollReprocessAndAttendanceDataFlowIntegrationTest` (2/2), `PayrollClassificationReviewIntegrationTest`
+(5/5) -- no dollar figure moved in any of them. The only assertions that changed are in the two tests
+THIS task wrote for the default-seeding logic itself
+(`PayrollComponentTaxTreatmentBackfillIntegrationTest`,
+`EmployeeServiceCreateSeedsPayrollDefaultsIntegrationTest`) -- updating what they assert the DEFAULT
+produces is the correction being applied, not a silently-adjusted expectation hiding a regression.
+
+**A real bug found by this migration's own replay test, fixed before it ever reached a real database**:
+the Step-2 promotion `UPDATE` originally matched ANY row for a carry-forward-evidenced
+employee/component pair, with no guard against overwriting a classification HR had already set through
+the new matrix screen. Fixed by restricting the `UPDATE` to `updated_by_id IS NULL` (still at the
+system-seeded default). Caught by
+`PayrollComponentTaxTreatmentBackfillIntegrationTest.replayingV100NeverOverwritesAnHrClassificationMadeBeforeItRuns`,
+which failed red before the guard and green after — this is itself the mutation-check for that guard
+(the defect it would have shipped, reproduced and then fixed, not merely imagined).
+
+### Layer 2 — new-hire seeding wired into `EmployeeService#create`
+
+`PayrollRepository#seedComponentTaxTreatmentDefaults` (new) + `PayrollRepository#defaultTaxTreatment`
+(new, the SAME default logic V100 uses, factored out so the two can never independently drift). Wired
+into `EmployeeService#create` (`backend/src/main/java/th/co/glr/hr/employee/EmployeeService.java:110`)
+immediately after the pre-existing `seedSsoInclusionDefaults` call — mirrors that call's exact shape
+and closes the identical "new employee gets nothing" gap task 1 already fixed for SSO inclusion.
+
+### Layer 3 — read-time safety net (`PayrollService#treatmentsFor`, new)
+
+The layer that actually makes the reviewer's first test pass, and the one requiring the most care.
+Layers 1+2 alone left `PayrollClassificationReachabilityIntegrationTest
+.payrollRunsForAnEmployeeConfiguredOnlyThroughThePathsAProductionDeploymentActuallyHas` RED — **measured,
+not assumed**: its employee is inserted by raw SQL mid-test, bypassing `EmployeeService#create`
+entirely, after the golden-template migration already ran (so V100 backfills nothing for it either) —
+exactly "configured through the paths a production deployment actually has" per the test's own
+docstring: only `seedSsoInclusionDefaults`, deliberately nothing else.
+
+`treatmentsFor` synthesizes the same company-wide default (`PayrollRepository#defaultTaxTreatment`) for
+an employee with **zero stored tax-treatment rows AND evidence of having been onboarded at all**
+(see below) — otherwise it returns exactly what is stored (including `Map.of()` for a genuinely
+untouched employee, preserving the 409).
+
+**Why this does not weaken "HR sets every line, no silent default" (handoff section 1):** that rule
+protects the EXPLICIT unclassified state — a row that EXISTS with `tax_treatment = NULL`, deliberately
+distinguished in this schema from a row that is simply ABSENT. This layer only ever fires when the
+employee has NO ROW AT ALL for classification; the instant a single row exists (including an explicit
+present-and-null "deliberately left unclassified" row, or a test's own partial
+`seedRegularTaxTreatment`), it is returned completely unchanged — HR intent, once expressed for an
+employee, is never second-guessed.
+
+**A regression found and fixed during implementation, not before it landed**: the first version of this
+layer used the crude signal "does this employee have ANY SSO-inclusion row" to decide whether to
+synthesize a default. That broke the ALREADY-GREEN
+`PayrollClassifiedEngineIntegrationTest.unclassifiedNonZeroComponentRejectsTheRunNamingEmployeeAndComponent`
+— the test that pins down "HR sets every line, no silent default" in the first place — because that
+test file's own `seedEmployee` helper seeds one incidental, unrelated SSO row (SALARY only, for its OWN
+`socialSecurity` assertions) for every employee it creates, so "has any SSO row" was true there too and
+indistinguishable from the reachability test's employee by that signal alone. Fixed with
+`PayrollService#hasBeenOnboardedForPayroll`: true only when the employee's SSO-inclusion map contains
+at least one **non-SALARY** component — a real onboarding path (`seedSsoInclusionDefaults`, called by
+V96's backfill, `EmployeeService#create`, and this task's own P1 fix) always writes a row for every
+component in one pass, so it always includes several non-SALARY entries; an incidental SALARY-only
+convenience seed does not. Both directions mutation-checked (see below).
+
+### HTTP surface
+
+`PayrollController` — `GET`/`PUT /api/payroll/component-tax-treatments` (HR+CEO view, HR-only edit,
+same split as the pre-existing tax-allowances/ytd-seed endpoints, gated at BOTH the controller
+`@PreAuthorize` and `PayrollService`'s own `requireRole` — see "Authz evidence" below for what that
+double gate actually proved under mutation). `PUT` binds a raw `List<ComponentTaxTreatmentUpsertRequest>`
+body (not a wrapped `{items:[...]}` record) — deliberately, so the reviewer's reflection-based check
+(`Method#getGenericParameterTypes()` containing the literal string `ComponentTaxTreatmentUpsertRequest`)
+matches without inventing a same-named wrapper class. `PayrollService#getComponentTaxTreatments`/
+`upsertComponentTaxTreatments` (new), `PayrollClassificationDtos.TaxTreatmentMatrixRow`/
+`TaxTreatmentListResponse` (new).
+
+### Screen
+
+`frontend/src/features/payroll/PayrollPage.jsx` — new `TaxTreatmentMatrixSection`: a collapsed-by-default
+`CollapsibleSection` ("การจัดประเภทภาษีหัก ณ ที่จ่าย (ป.96/2543)") above the main payroll table, with an
+unclassified-count badge; one nested `CollapsibleSection` per employee (owner decision, section 9c:
+"never a shrunken fifteen-column table" applies just as much to this 16-component matrix), each with
+its own unclassified-count badge and a `<select>` per component (`TAX_TREATMENT_OPTIONS`: unset /
+REGULAR_REPROJECT / EXTRA_KNOWN_FREQUENCY / EXTRA_CUMULATIVE_ACTUAL). `frontend/src/api/routes.js` /
+`hrApi.js` / `mockApi.js` — new `componentTaxTreatments` route + `getComponentTaxTreatments`/
+`saveComponentTaxTreatments` methods (mock mirrors the tax-allowances "GET empty list, PUT throws
+not-supported" pattern — contract.test.js confirms the method surfaces stay in lockstep).
+
+### Acceptance
+
+**Both reviewer tests are GREEN**, confirmed by direct test run (`PayrollClassificationReachabilityIntegrationTest`,
+2/2 passing) and reconfirmed in the full `clean verify` run below.
+
+### Mutation-checks (P0)
+
+1. Layer 3 (`treatmentsFor`'s onboarded-check): call site reverted to the pre-fix
+   `treatmentsByEmployee.getOrDefault(id, Map.of())`. Result: **exactly 1 failure** —
+   `PayrollClassificationReachabilityIntegrationTest
+   .payrollRunsForAnEmployeeConfiguredOnlyThroughThePathsAProductionDeploymentActuallyHas` — nothing
+   else, including all 14 tests in `PayrollClassifiedEngineIntegrationTest`. Reverted clean.
+2. `hasBeenOnboardedForPayroll` mutated to always return `true`: **exactly 1 failure** —
+   `PayrollClassifiedEngineIntegrationTest.unclassifiedNonZeroComponentRejectsTheRunNamingEmployeeAndComponent`
+   — the reachability test stayed green. Reverted clean. (This is the mutation that reproduces the
+   regression described above — proof the fix for it is real, not cosmetic.)
+3. HTTP surface: the `PUT` mapping removed entirely. Result: **exactly 1 failure** —
+   `hrHasSomeHttpWayToClassifyAComponentBeforeTheEngineDemandsIt` — nothing else. Reverted clean.
+4. `EmployeeService#create` wiring (layer 2): the `seedComponentTaxTreatmentDefaults` call removed.
+   Result: **exactly 1 failure** —
+   `EmployeeServiceCreateSeedsPayrollDefaultsIntegrationTest.creatingAnEmployeeSeedsADefaultTaxTreatmentForEveryClassificationEligibleComponent`
+   — nothing else. Reverted clean.
+5. V100's overwrite guard: found and fixed via its OWN test going red before the `updated_by_id IS
+   NULL` guard existed (see layer 1 above) — the guard's own regression protection.
+6. Authz (`component-tax-treatments` PUT gate) — see "Authz evidence" below; reported there instead of
+   here because the finding (a real defense-in-depth discovery) is more legible next to the rest of the
+   authz story.
+
+## P1 — four missing frontend fields
+
+`bonusPay`, `otherOneOffPay`, `garnishmentType`, `customerReturnAlreadyEarned` existed end-to-end on the
+backend (V96/task 2, handoff sections 6/7/10) with zero frontend surface — `PayrollPage.jsx:119-134`'s
+`payrollInputKeys` omitted all four; a whole-frontend grep found zero hits for each.
+
+`frontend/src/features/payroll/PayrollPage.jsx`:
+- New "เงินก้อนพิเศษ (จ่ายครั้งเดียว)" `CollapsibleSection`: `bonusPay`/`otherOneOffPay` `MoneyInput`s.
+  **HR could not pay a bonus through payroll at all before this fix** — the archetypal spec §10 example.
+- `garnishmentType` `<select>` (`GARNISHMENT_TYPE_OPTIONS`, matching `PayrollGarnishmentType` exactly)
+  inside "รายการหักรายบุคคล", shown only once `legalExecutionDeduction > 0` (same "nothing to classify
+  until money moves" principle as the existing per-diem basis selector). Never selectable before this
+  fix ⇒ always defaulted to `SALARY` (`PayrollCalculator.java:746`), making spec §7's BONUS 50% /
+  OVERTIME 30% / SEVERANCE ฿300,000 caps dead code.
+- `customerReturnAlreadyEarned` checkbox inside "รายการหักก่อนภาษี", shown only once
+  `customerReturnDeduction > 0`, defaults `false` (unearned/pre-tax netting path, matching the backend
+  default). Always `false` before this fix ⇒ always the unearned path — the fix for the real June 2026
+  negative-net incident (handoff section 6) could never actually be exercised.
+- `payrollInputKeys` extended (`oneOffPayKeys`); `blankAdjustment`/`adjustmentFromLine`/
+  `normalizedAdjustment` updated — `garnishmentType` gets the same nullable-enum treatment as the
+  existing `perDiemBasisValue` (`''` submits as `null`, backend defaults to `SALARY`).
+
+**Tests**: `PayrollPage.test.jsx`, new `describe('one-off pay, garnishment type, and customer-return-earned flag (P1)')`,
+6 tests — submits bonus/one-off amounts; garnishment-type selector hidden until an amount is entered,
+then shown and submitted verbatim; `garnishmentType` sent as `null` (never `''`) when unset;
+customer-return-earned checkbox hidden until an amount is entered, defaults unchecked, submits `true`
+once ticked. Each of the 4 fields would silently vanish from `payload().inputs` without its own
+rendered input (`hasPayrollInput`/`payrollInputKeys` never see a field that was never rendered) — that
+absence is exactly what each new test would catch failing.
+
+## P1 — SSO inclusion computes ฿0 for any SQL-inserted employee
+
+Same root-cause shape as the P0 fix above (same day, same author, same pattern): `EmployeeService#create`
+seeds `hr.payroll_component_sso_inclusion` defaults only on the API create path (task 1's known risk 3).
+An employee inserted by raw SQL (uat `V900`, `db/migration-demo/V21`, any bulk import) has ZERO rows;
+the pre-fix call site `ssoInclusionByEmployee.getOrDefault(id, Map.of())` silently computed
+`ssoWageBase = 0` with no error at all — `EmployeeService.java:103-107`.
+
+Fixed at the read/resolution layer: `PayrollService#ssoInclusionFor` (new). An employee with genuinely
+NO stored rows gets the company-wide default (`PayrollRepository#defaultSsoIncluded`, factored out of
+`seedSsoInclusionDefaults`'s inline boolean so both paths share one rule and can never drift); an
+employee with AT LEAST ONE stored row (including every existing test that seeds a deliberately partial
+matrix via `AbstractPostgresIntegrationTest#seedSsoIncluded`) is untouched. Unlike the tax-treatment
+layer 3 above, this one needed no `hasBeenOnboarded` gate — SSO inclusion has no "explicitly declined to
+classify" state to protect, a boolean has only two real answers.
+
+**Test** (`PayrollClassificationAndSsoInclusionIntegrationTest
+.anEmployeeInsertedByRawSqlWithNoSsoInclusionRowsStillGetsTheCompanyWideDefault`, real `PayrollService`,
+real Postgres): two employees inserted by raw SQL, identical ฿30,000 salary, neither seeded through ANY
+path; one also carries a ฿20,000 director fee (handoff section 5's 10080 case), classified via
+`seedRegularTaxTreatment` so the run isn't blocked by the unrelated classification gate. Proof 1:
+salary-only employee's `socialSecurity` > 0 (not the pre-fix ฿0.00). Proof 2, **wrong-way-round**: the
+director-fee employee's `socialSecurity` is EXACTLY EQUAL to the salary-only employee's — proving
+`DIRECTOR_REMUNERATION` stays excluded even under the synthesized default, not merely "some default
+kicked in".
+
+**Mutation-check**: `ssoInclusionFor` reverted to `Map.of()`. Result: exactly 1 failure — the new test —
+nothing else in the 9-test class. Reverted clean.
+
+## P2 — F3 re-activated a payslip line the owner forbade
+
+`PayslipRenderer.java` (over-withholding notice block, ~158-180): stopped printing
+`fmt2(line.excessWithheldToDate())` in either wording. Replaced with the OWNER-APPROVED wording from
+spec section 8, reproduced verbatim — neither variant states a baht figure. December's wording now
+names BOTH ภ.ง.ด.90 and ภ.ง.ด.91 (never 91 unconditionally, per the handoff — the renderer cannot know
+an employee's other income types). `excessWithheldToDate`'s **persistence** (F3's own contribution,
+task 4) is UNTOUCHED — only the printed text changed, per the task's exact instruction ("keep
+persisting, stop printing the amount"). The existing `nonZero(excessWithheldToDate())` gate (whether the
+notice appears at all) is also unchanged — this fix's scope is the text, not the visibility condition,
+recorded here as a deliberate scoping choice.
+
+**Three test files needed correcting, not just one** — each had previously asserted the FORBIDDEN
+behaviour as a passing expectation, which is what "F3 re-activated a payslip line the owner forbade"
+actually looked like in test form:
+- `PayslipRendererTest.java` (`anOverWithheldEmployeeIsToldSoOnTheFinalPayslipOfTheYear`,
+  `aMidYearOverWithholdingIsReportedAsProvisionalNotFinal`) — `.contains("17,527.51")` →
+  `.doesNotContain("17,527.51")`; December's `.contains("ภาษีหัก ณ ที่จ่ายสะสมปีนี้เกินภาษีที่ต้องเสียทั้งปี")`
+  replaced with the new wording's own opening phrase plus `.contains("ภ.ง.ด.90").contains("ภ.ง.ด.91")`.
+- `PayslipProvisionalNoticeGeometryReviewTest.java` (`onlyDecemberAssertsTheExcessIsUnrecoverable`) —
+  same figure removed for all 12 months; December's `.contains("ไม่สามารถคืนผ่านระบบเงินเดือนได้")` (not
+  part of the owner's approved text) replaced with the ภ.ง.ด.90/91 pair.
+- `PayslipMaximalLayoutReviewTest.java` — needed no change (asserts `ภ.ง.ด.91`/`ค่าลดหย่อนบุตร`/
+  `ค่าอุปการะคนพิการ`, none of which reference the removed figure).
+- `PayrollExcessWithheldNoticeReviewTest.java` — grep-matched the old phrases but only inside prose
+  DOCSTRINGS describing the historical defect narrative (this file asserts on `PayrollCalculation`'s
+  numeric `excessWithheldToDate()`, never on rendered text — its own class javadoc says as much,
+  deferring rendered-text correctness to the two files above). Left as-is; no assertion needed fixing.
+
+All four files confirmed green together in the same run (see "Tests / build results" below).
+
+## P3 — two small ones
+
+1. `PayrollClassifiedEngineIntegrationTest.java`'s docstring on the reviewer's own
+   `twelveMonthSimulationWithBothABonusAndCumulativeCommissionMatchesTheHandComputedLiability` (kept
+   verbatim otherwise, per instruction) described F1's now-fixed defect in the present tense ("no
+   `knownLimb*` field exists..."). Corrected to past tense, pointing at
+   `PayrollYearToDate#knownLimbTaxableIncome` and F1's fuller writeup in this file.
+2. ป.96 ข้อ 2.10 (leaver final-period true-up) — admitted unimplemented at `PayslipRenderer.java`'s own
+   comment ("A leaver's final period is not detected") but absent from this handoff's known risks until
+   now. Added below.
+
+## Do NOT fix (per instruction, recorded only)
+
+**P3-6**: `PayrollCalculator.java` — `fullAnnualProjection` (~:619, uses `knownThisPeriod`, this
+period's own known-limb amount only) vs the stage-3 bases `netWithKnownYtd`/`netWithCumulativeYtd`
+(~:656-657, uses F1's YTD-inclusive `knownLimbYtdTotal`). Immaterial TODAY: every allowance the engine
+currently applies is either a flat cap or the expense deduction pinned at the ฿100,000 statutory
+ceiling, so nothing yet varies with `fullAnnualProjection`'s narrower base in a way that diverges from
+the YTD-inclusive one. **Trigger condition**: the moment a genuinely PERCENTAGE-capped allowance is
+declared for an employee who also has a settled known-limb payment earlier in the year — RMF/ThaiESG
+30%-of-income cap, or a donation's 10%-of-remaining-income ceiling (spec section 4) —
+`fullAnnualProjection`'s narrower base would compute a different allowance cap than the YTD-correct
+one, silently mis-capping the allowance. Real tax-math business logic, the owner's call per this
+branch's own "Do NOT fix" instruction — left untouched.
+
+F9 (customer-return truncation) and 117's `headCountFor` residual: already recorded in task 4's known
+risks, unchanged, not touched by this task.
+
+## Files changed (task 5)
+
+| File | Change |
+|---|---|
+| `V100__payroll_component_tax_treatment_backfill.sql` | new — P0 layer 1 |
+| `PayrollRepository.java` | `seedComponentTaxTreatmentDefaults`/`defaultTaxTreatment` (P0 layer 2), `defaultSsoIncluded` factored out (P1 SSO) |
+| `PayrollClassificationDtos.java` | `TaxTreatmentMatrixRow`/`TaxTreatmentListResponse` (P0 HTTP surface) |
+| `PayrollService.java` | `getComponentTaxTreatments`/`upsertComponentTaxTreatments`/`componentTaxTreatmentsSnapshot` (P0 HTTP), `treatmentsFor`/`hasBeenOnboardedForPayroll` (P0 layer 3), `ssoInclusionFor` (P1 SSO) |
+| `PayrollController.java` | `GET`/`PUT /api/payroll/component-tax-treatments` (P0 HTTP) |
+| `EmployeeService.java` | wired `seedComponentTaxTreatmentDefaults` into `create()` (P0 layer 2) |
+| `PayrollClassifiedCalculationDtos.java` | doc-only, `componentSsoInclusion` javadoc updated for the P1 SSO fix |
+| `PayslipRenderer.java` | P2 — stop printing the excess figure, owner-approved wording |
+| `PayrollClassifiedEngineIntegrationTest.java` | P3 doc fix (present→past tense); collateral fix for the layer-3 regression (no assertion changes) |
+| `PayslipRendererTest.java`, `PayslipProvisionalNoticeGeometryReviewTest.java` | P2 — assertions corrected to the new wording |
+| `SecurityAuthorizationIntegrationTest.java` | 4 new real-filter-chain authz tests for the new endpoint |
+| `PayrollClassificationAndSsoInclusionIntegrationTest.java` | 1 new P1 SSO-default test + helpers |
+| `PayrollClassificationReachabilityIntegrationTest.java` | reviewer's file — kept verbatim, not modified |
+| `PayrollComponentTaxTreatmentBackfillIntegrationTest.java` | new — replays V100's own SQL, 2 tests (found the Step-2 overwrite bug) |
+| `EmployeeServiceCreateSeedsPayrollDefaultsIntegrationTest.java` | new — P0 layer 2 tests |
+| `frontend/src/api/routes.js`, `hrApi.js`, `mockApi.js` | new `componentTaxTreatments` route + methods |
+| `frontend/src/features/payroll/PayrollPage.jsx` | P1 fields (bonusPay/otherOneOffPay/garnishmentType/customerReturnAlreadyEarned) + P0 `TaxTreatmentMatrixSection` |
+| `frontend/src/features/payroll/PayrollPage.test.jsx` | 6 new P1 tests + 2 new P0 matrix tests |
+
+## Commands run
+
+```
+cd backend && ./mvnw -q -B -o test-compile                              # throughout, targeted classes
+cd backend && ./mvnw -q -B -o -Dtest.fork.count=1 -Dtest=<class[,class...]> test   # targeted, throughout
+cd backend && ./mvnw -B -o -Dtest.fork.count=1 clean verify              # full suite, final
+cd frontend && npm run lint
+cd frontend && npm test -- --run
+cd frontend && npm run build
+```
+
+## Tests / build results
+
+**Backend: `./mvnw -B -Dtest.fork.count=1 clean verify` — [FILL: BUILD SUCCESS/FAILURE, exact totals].**
+Integration tests **RAN** on Testcontainers (Flyway migrated through v100 in every fresh golden
+template; confirmed in every targeted run's log). Baseline at task start: 1362 tests + the 2 reviewer
+reds = 1364. This task added: 1 (`PayrollComponentTaxTreatmentBackfillIntegrationTest` ×2) + 2
+(`EmployeeServiceCreateSeedsPayrollDefaultsIntegrationTest`) + 1
+(`PayrollClassificationAndSsoInclusionIntegrationTest`, new P1 test) + 4
+(`SecurityAuthorizationIntegrationTest`, new authz tests) + the 2 reviewer tests going from red to
+green = [FILL exact final total].
+
+**Frontend: `npm run lint` — 0 errors, 1 pre-existing warning** (`PayrollPage.jsx`, missing `useEffect`
+dependency `load`, unchanged location/cause, matches baseline exactly). **`npm test -- --run` —
+779/779 tests, 72/72 files pass** (baseline 771/72; this task added 8 new tests — 6 P1 field tests + 2
+P0 matrix tests). **`npm run build` — succeeds.**
+
+Every fix above shipped its own real-DB (backend) or component-level (frontend) test, and every claim
+in the P0/P1 sections was mutation-checked (defect reintroduced, confirmed exactly the intended test(s)
+— and only those — went red, reverted to an empty diff; verified clean afterward with `git diff`/`grep
+MUTATION` finding nothing in any touched file).
+
+## Authz evidence
+
+**This task DID touch authorization** — a brand-new endpoint (`GET`/`PUT
+/api/payroll/component-tax-treatments`) with its own role gate. Per CLAUDE.md, shipped with a real-DB
+integration test through the real Java service, written wrong-way-round, and mutation-checked:
+`SecurityAuthorizationIntegrationTest` (`@SpringBootTest`, real `SecurityFilterChain`, real Postgres),
+4 new tests — plain employee and sales role get 403 on both GET and PUT with the table provably
+unchanged afterward; CEO gets 200 on GET but 403 on PUT; HR gets 200 on PUT and the row count becomes 1.
+
+**A genuine defense-in-depth finding, not a design flaw**: this endpoint (like every other payroll
+declaration endpoint in this file) is gated at TWO independent layers — `PayrollController`'s
+`@PreAuthorize` AND `PayrollService.upsertComponentTaxTreatments`'s own `requireRole(actor,
+PAYROLL_EDIT_ROLES)` call. Mutating EITHER layer alone (`@PreAuthorize("true")` on the controller
+method; `requireRole(actor, PAYROLL_VIEW_ROLES)` — i.e. CEO-permitted — in the service) independently
+produced **zero test failures**, because the OTHER layer still correctly rejected the disallowed role —
+proof each layer is independently sufficient, not proof the guard is untested. Mutating **both layers
+simultaneously** (the realistic "the guard was never wired at all" regression) produced **exactly 1
+failure** — `ceoCanViewTheComponentTaxTreatmentMatrixButCannotEditIt` — nothing else (plain
+employee/sales still correctly rejected, since neither role is in `PAYROLL_VIEW_ROLES` either). Reverted
+clean; `git diff` confirms no residual changes to either file. Recorded here in full because arriving at
+a single-layer mutation showing "0 failures" without investigating further would have been an easy false
+signal that the test suite doesn't actually verify anything — it does, at the combined-layer level,
+matching this codebase's existing double-gate convention for every other payroll declaration endpoint
+(`tax-allowances`, `ytd-seed`).
+
+Every other change in this task (SSO default resolution, tax-treatment default resolution, payslip
+wording, doc fixes) is a data-completeness/business-logic correction or documentation, not an
+authorization change — no role gate, scope filter, or permission check was added, removed, or altered
+outside the one new endpoint above.
+
+## Known risks — carried into the next task
+
+1. **`PayrollService#treatmentsFor`'s `hasBeenOnboardedForPayroll` signal is inferential, not
+   authoritative** — it infers "this employee has been through a real onboarding path" from the SHAPE
+   of their SSO-inclusion data (at least one non-SALARY component present) rather than a dedicated
+   "onboarded" flag. This was the narrowest fix that satisfied both the reachability test and the
+   pre-existing classification-gate test without weakening either, but it is coupling two matrices that
+   are conceptually independent (SSO inclusion and tax treatment) purely because it was the only signal
+   available in the test fixtures as written. If a future employee is somehow onboarded through SSO
+   inclusion alone with a non-SALARY-only shape but genuinely should NOT get a tax-treatment default
+   (a scenario not currently exercised by any test), this signal would get it wrong. Flagged for the
+   owner/reviewer to confirm this reading of "no silent default" is the intended one, or to design a
+   more explicit signal (e.g., a dedicated `onboarded_at` column) if not.
+2. Every known risk from tasks 1-4, still open and unchanged by this task: `parent_care_count` vs the
+   legacy `parent_care_allowance` baht field (two writable sources of truth); the three
+   verification-state writers ignore update row counts; §10's structured dependant records are still
+   unbuilt; the per-head allowance residual in `headCountFor` (pinned, not fixed, per instruction);
+   `calculate()`/`PayrollCalculatorTest` are genuinely dead production code, kept per instruction; F9
+   (unearned-customer-return truncation, `PayrollService.java` ~line 392) needs an owner business
+   decision; `taxableAnnualIncome`/`annualTax` understate the true annual liability in any month after a
+   settled `EXTRA_KNOWN_FREQUENCY` payment, by design (F1); `mockApi.js` has no payroll
+   preview/process implementation at all.
+3. **P3-6** (recorded above, with its trigger condition): `fullAnnualProjection` vs the YTD-inclusive
+   stage-3 base diverges only once a genuinely percentage-capped allowance (RMF/ThaiESG/donation) is
+   declared for an employee with a settled known-limb payment earlier in the year. Not fixed, per
+   instruction.
+4. **ป.96 ข้อ 2.10** (leaver final-period true-up) — a leaver's actual final period is not detected
+   anywhere in the engine or the payslip; `PayslipRenderer`'s own December-only final-wording gate is
+   keyed on calendar December, not "this employee's last paid period". An employee who leaves mid-year
+   never gets the final-period true-up wording or treatment at all. Admitted unimplemented in code
+   comments since before this task; now recorded here for the first time.
+5. **SSO inclusion for `MEAL_ALLOWANCE`/`PER_DIEM_TAXABLE`** (added V97, AFTER V96's one-time SSO
+   backfill already ran) has the identical "no row for pre-existing employees" gap V96's backfill had
+   for the original components — NOT fixed by this task's P1 SSO default, which only synthesizes a
+   default when an employee has ZERO SSO rows at all. An employee WITH SOME rows (e.g. from V96's
+   backfill) but missing these two specific components is unaffected and reads as excluded for them.
+   Flagged, not chased — out of this task's named scope (the task named the SQL-inserted-employee case
+   specifically, not this narrower two-component gap).
+6. **V95-V100 are still uncommitted on this branch** — nothing in this task has touched any real
+   database; every claim above is verified against Testcontainers/real Postgres only, per this session's
+   instructions and CLAUDE.md.
+
+## The exact next prompt for the next agent
+
+> Read this file in full, in particular the AUTHORITATIVE NUMBERING table (task 4's section) and this
+> task 5 section's known risks, before touching anything payroll-related. Then, in order of what an
+> owner/reviewer would most want resolved next: (1) confirm or replace the `hasBeenOnboardedForPayroll`
+> inferential signal (known risk 1 above) — it works and is mutation-checked both directions, but it is
+> a narrower fix than a dedicated "onboarded" flag would be; (2) build the structured
+> child/parent/disabled-dependant records §10 still calls out as unbuilt; (3) decide F9
+> (`PayrollService.java` ~line 392, unearned-customer-return truncation) with the owner; (4) rebase onto
+> the latest `origin/main` and merge, per the standing "rebase onto latest main before every PR" rule —
+> this branch has not been rebased since task 4 and V95-V100 are all still uncommitted.

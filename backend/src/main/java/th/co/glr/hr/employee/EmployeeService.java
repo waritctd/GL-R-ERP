@@ -105,6 +105,13 @@ public class EmployeeService {
         long id = employees.create(request);
         int taxYear = java.time.LocalDate.now(BUSINESS_ZONE).getYear();
         payrollRepository.seedSsoInclusionDefaults(id, taxYear, user == null ? null : user.employeeId());
+        // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix has the exact
+        // same "new employee gets nothing" gap SSO inclusion had before the call above -- see
+        // PayrollRepository#seedComponentTaxTreatmentDefaults' own javadoc. Without this, a new hire
+        // paid anything beyond bare salary hits PayrollCalculator#calculateClassified's classification
+        // 409 on their very first payroll run, exactly like every pre-existing employee did before the
+        // V100 migration backfill (which only reaches employees that already existed when it ran).
+        payrollRepository.seedComponentTaxTreatmentDefaults(id, taxYear, user == null ? null : user.employeeId());
         EmployeeDto created = get(id, user);
         auditService.record(user, "CREATE_EMPLOYEE", "employee", id, null, created);
         return created;

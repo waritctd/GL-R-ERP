@@ -1,6 +1,7 @@
 package th.co.glr.hr.payroll;
 
 import jakarta.validation.constraints.NotNull;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -33,6 +34,27 @@ public final class PayrollClassificationDtos {
         // classified" rather than being coerced to any treatment.
         PayrollTaxTreatment taxTreatment
     ) {}
+
+    /**
+     * P0 fix (Opus review, 2026-07-30): the HTTP surface + screen the reachability test demanded.
+     * One employee's full classification row for the matrix screen, WITH the display fields
+     * {@link EmployeeComponentTaxTreatments} deliberately omits -- that record is keyed purely by
+     * employeeId because it existed only for internal (repository/calculator) plumbing before this
+     * fix; the screen needs a name and code to render a matrix a human can read.
+     */
+    public record TaxTreatmentMatrixRow(
+        long employeeId,
+        String employeeCode,
+        String employeeName,
+        // Absent from this map, or present with a null value, both mean "not yet classified" -- same
+        // distinction as EmployeeComponentTaxTreatments#byComponent. SALARY is deliberately never a
+        // key here: it is locked to REGULAR_REPROJECT without ever needing a stored row (see
+        // PayrollClassifiedCalculationDtos#treatmentOf), so the matrix screen must render it as a
+        // fixed label, never an editable cell.
+        Map<PayrollComponent, PayrollTaxTreatment> byComponent
+    ) {}
+
+    public record TaxTreatmentListResponse(int taxYear, List<TaxTreatmentMatrixRow> items) {}
 
     // ---- SSO wage-base inclusion (hr.payroll_component_sso_inclusion) --------------------------
 

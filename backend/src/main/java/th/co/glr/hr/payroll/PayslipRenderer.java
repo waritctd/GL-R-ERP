@@ -149,36 +149,44 @@ public class PayslipRenderer {
             pdf.moveTo(pdf.cursorY() - 25f);
 
             // --- Over-withholding notice ---------------------------------------------------
-            // Printed only when it exists, and printed as prose rather than a deduction row, because it
-            // is neither an earning nor a deduction: it is money already remitted to the RD in an
-            // earlier period of this tax year that exceeds the year's assessed liability. Payroll
-            // cannot return it -- the employee reclaims it on their ภ.ง.ด.91 -- so the one thing that
-            // must not happen is for it to be invisible. Without this the condition shows only as a
-            // 0.00 ภาษี line, which reads as "no tax was due this month".
+            // Printed only when an excess exists, and printed as prose rather than a deduction row,
+            // because it is neither an earning nor a deduction: it is money already remitted to the RD
+            // in an earlier period of this tax year that exceeds the year's assessed liability.
+            //
+            // P2 fix (Opus review, 2026-07-30): F3 (task 4, same day) replaced the hardcoded-zero
+            // excessWithheldToDate with a real computation, which woke this block back up -- and this
+            // block prints the baht figure, which spec section 8 explicitly forbids: "Do not print the
+            // excess amount. Keep persisting excess_withheld_to_date for the ภ.ง.ด.1 working papers and
+            // reconciliation." F3 cited section 8 while restoring exactly what it forbids. The
+            // PERSISTENCE F3 added is correct and untouched (line.excessWithheldToDate() is still
+            // computed and stored for the ภ.ง.ด.1 working papers); only the PRINTED TEXT changes here,
+            // to the owner-approved wording from section 8 verbatim -- which never states a figure, only
+            // that the withholding shown is an estimate (normal/mid-year) or a year-end true-up
+            // (December). The existing nonZero(excessWithheldToDate()) gate is kept as-is (unchanged
+            // scope: this fix removes the number from the notice, it does not change when the notice
+            // appears -- see the branch handoff for that scoping note).
             if (nonZero(line.excessWithheldToDate())) {
                 float noticeWidth = pdf.right() - left;
                 // FINAL vs PROVISIONAL (2026-07-29, after review). excessWithheldToDate is measured
                 // against the CURRENT period's projected annual tax, so before the last period of the
-                // year it is an estimate that later periods can still absorb by withholding less. An
-                // unconditional "ไม่สามารถคืนผ่านระบบเงินเดือนได้" was therefore a FALSE statement on a
-                // payroll document from as early as April, naming a baht figure an employee could carry
-                // onto a ภ.ง.ด.91 -- review built a case where payroll then did return it. Only the
-                // final period of the year can assert the excess is unrecoverable.
+                // year it is an estimate that later periods can still absorb by withholding less.
                 // Derived from the payroll month rather than carried on the line: PayrollService
                 // computes จำนวนคราวที่ต้องจ่าย as 13 - month, so December IS the final period, and
                 // reading it off the period keeps the renderer from needing a field it would only use
-                // here. (A leaver's final period is not detected -- ข้อ 2.10 is a known gap.)
+                // here. (A leaver's final period is not detected -- ป.96 ข้อ 2.10 is a known gap, see
+                // this method's own note below and the handoff's known risks.)
                 boolean finalPeriodOfYear = period.payrollMonth() != null
                     && period.payrollMonth().getMonthValue() >= 12;
+                // Owner-approved wording (handoff section 8), reproduced verbatim -- neither variant
+                // states a baht figure. December names both ภ.ง.ด.90 and ภ.ง.ด.91 (never 91
+                // unconditionally, per the handoff: only a 40(1)-only employee ever needs 91 alone; the
+                // renderer has no way to know an employee's other income types, so it names both).
                 String notice = finalPeriodOfYear
-                    ? "ภาษีหัก ณ ที่จ่ายสะสมปีนี้เกินภาษีที่ต้องเสียทั้งปี "
-                        + fmt2(line.excessWithheldToDate()) + " บาท "
-                        + "ส่วนเกินนี้ไม่สามารถคืนผ่านระบบเงินเดือนได้ "
-                        + "ท่านสามารถขอคืนได้เมื่อยื่นแบบ ภ.ง.ด.91 ประจำปี"
-                    : "ประมาณการ: ภาษีหัก ณ ที่จ่ายสะสมถึงงวดนี้สูงกว่าประมาณการภาษีทั้งปีอยู่ "
-                        + fmt2(line.excessWithheldToDate()) + " บาท "
-                        + "ส่วนต่างนี้อาจลดลงได้จากการหักภาษีในงวดที่เหลือ "
-                        + "ยอดที่แน่นอนจะทราบเมื่อสิ้นปีภาษี";
+                    ? "ภาษีหัก ณ ที่จ่ายเดือนธันวาคมเป็นการปรับปรุงยอดปลายปีจากเงินได้ที่บริษัทจ่ายจริง "
+                        + "รายการลดหย่อนที่พนักงานแจ้ง และภาษีที่หักไว้แล้ว "
+                        + "ทั้งนี้ พนักงานยังต้องยื่นแบบ ภ.ง.ด.90 หรือ ภ.ง.ด.91 ตามเงินได้ทั้งหมดของตน"
+                    : "ภาษีหัก ณ ที่จ่ายงวดนี้คำนวณจากเงินได้และรายการลดหย่อนที่บริษัทมีข้อมูลในขณะประมวลผล "
+                        + "จึงเป็นยอดประมาณการ และอาจเปลี่ยนแปลงเมื่อเงินได้หรือรายการลดหย่อนเปลี่ยนแปลง";
                 for (String noticeLine : wrapToWidth(pdf, regular, 9, noticeWidth, notice)) {
                     pdf.textAt(regular, 9, left, noticeLine);
                     pdf.moveTo(pdf.cursorY() - 11f);

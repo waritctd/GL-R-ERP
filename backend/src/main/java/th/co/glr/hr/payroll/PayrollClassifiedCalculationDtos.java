@@ -40,10 +40,15 @@ public final class PayrollClassifiedCalculationDtos {
         // what (if anything) is stored, matching the V95 CHECK constraint.
         Map<PayrollComponent, PayrollTaxTreatment> componentTaxTreatments,
         // Per-component SSO wage-base inclusion for this employee/tax-year (PayrollRepository
-        // #findComponentSsoInclusionByEmployee). A component absent from this map is excluded from the
-        // SSO wage base -- there is no implicit default at the calculator layer; the default-TRUE
-        // behaviour lives entirely in PayrollRepository#seedSsoInclusionDefaults, upstream of this
-        // input.
+        // #findComponentSsoInclusionByEmployee). A component absent from THIS map is excluded from the
+        // SSO wage base -- there is still no implicit default at this calculator layer, deliberately:
+        // #ssoIncluded below stays a pure lookup. P1 fix (Opus review, 2026-07-30): the default-TRUE
+        // behaviour used to live ONLY in PayrollRepository#seedSsoInclusionDefaults, reachable solely
+        // through the API create path -- an employee inserted by raw SQL got no rows at all and
+        // silently computed ฿0.00 SSO. PayrollService#ssoInclusionFor now supplies the SAME default
+        // map (PayrollRepository#defaultSsoIncluded) as this constructor argument whenever an employee
+        // has NO stored rows, one layer upstream of this record -- so this map is never actually empty
+        // for a real employee any more, even though the map/lookup semantics here are unchanged.
         Map<PayrollComponent, Boolean> componentSsoInclusion,
         BigDecimal unpaidLeaveDays,
         BigDecimal leaveRefundDays,
