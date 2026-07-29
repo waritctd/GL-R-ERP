@@ -264,7 +264,7 @@ public class PayrollService {
         // field the request body supplies for an employee (non-null) is an in-run correction and wins
         // over the stored value -- stored = standing declaration, body = this-run override.
         Map<Long, PayrollTaxAllowanceInput> storedAllowancesByEmployee =
-            payrollRepository.findTaxAllowancesByEmployee(payrollMonth.getYear());
+            payrollRepository.findTaxAllowancesByEmployee(payrollMonth);
         // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): existingPeriodId is null the first
         // time this month is previewed/processed, and non-null on a re-preview/re-process of a month
         // that already has a period row (PREVIEW-only rows from currentOrPreview's persistence path
@@ -286,7 +286,9 @@ public class PayrollService {
                 yearToDateByEmployee.getOrDefault(employee.employeeId(), PayrollYearToDate.empty()),
                 storedAllowancesByEmployee.get(employee.employeeId()),
                 leaveRefundDaysByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
-                payrollMonth
+                payrollMonth,
+                remainingPayPeriods(payrollMonth),
+                taxpayerAge(employee.dateOfBirth(), payrollMonth)
             ))
             .sorted(Comparator.comparing(PayrollLineDto::employeeCode))
             .toList();
@@ -320,7 +322,9 @@ public class PayrollService {
         PayrollYearToDate yearToDate,
         PayrollTaxAllowanceInput storedAllowances,
         BigDecimal leaveRefundDays,
-        LocalDate payrollMonth
+        LocalDate payrollMonth,
+        int remainingPayPeriods,
+        int taxpayerAge
     ) {
         // Withholding-tax override precedence (2026-07-24, V88): a per-run HR-typed value wins; else
         // the employee's standing override; else null (= compute normally). NULL is meaningful at every
@@ -354,7 +358,16 @@ public class PayrollService {
             leaveRefundDays == null ? BigDecimal.ZERO : leaveRefundDays,
             // Withholding-tax override (2026-07-24, V88): the RESOLVED effective override (per-run wins
             // over standing), or null to compute normally.
-            effectiveWithholdingOverride
+            effectiveWithholdingOverride,
+            // ป.96/2543 (V92): the Gregorian tax year, and จำนวนคราวที่ต้องจ่าย remaining including
+            // this period (ข้อ 2.1). NOT capped for leavers -- ข้อ 2.10 is a known gap, see
+            // #remainingPayPeriods.
+            payrollMonth.getYear(),
+            remainingPayPeriods,
+            taxpayerAge,
+            // Dedicated one-off pay (V94), HR-typed per run.
+            input == null ? BigDecimal.ZERO : input.bonusPay(),
+            input == null ? BigDecimal.ZERO : input.otherOneOffPay()
         ));
         return new PayrollLineDto(
             null,
@@ -401,16 +414,43 @@ public class PayrollService {
             // run, so storing it on the line and carrying it forward would double-apply it. When HR
             // relied on the standing value this stays null and next month's carry-forward is empty --
             // exactly the desired "standing keeps applying, per-run field starts blank" behaviour.
-            perRunWithholdingOverride
+            perRunWithholdingOverride,
+            // ป.96/2543 limbs (V92): persisted so next period's projection can annualise the regular
+            // limb and net the ข้อ 2.5 difference against the variable limb separately.
+            calculation.regularTaxableIncome(),
+            calculation.variableTaxableIncome(),
+            calculation.regularWithholdingTax(),
+            calculation.variableWithholdingTax(),
+            calculation.bonusPay(),
+            calculation.otherOneOffPay(),
+            calculation.excessWithheldToDate()
         );
+    }
+
+    /**
+     * จำนวนคราวที่ต้องจ่าย remaining in this tax year, INCLUDING this period — คำชี้แจง ภ.ง.ด.1 ข้อ 2.1.
+     *
+     * <p>Monthly payroll, so this is {@code 13 - month}: 12 in January, 1 in December. A mid-year
+     * JOINER needs no special handling — their year-to-date is empty, so January..March simply never
+     * enter the projection and an April start naturally projects over 9 periods, which is the RD's own
+     * worked example in ข้อ 2.1.
+     *
+     * <p>A mid-year LEAVER is NOT handled, so ข้อ 2.10's final-period true-up does not happen. It WAS
+     * implemented against {@code hr.resignation} and then removed (2026-07-29): the owner confirms
+     * resignations are not recorded in this platform at all — they live in another system — so nothing
+     * ever populates that table, and {@code findActiveEmployees} filters on {@code is_active} anyway,
+     * which drops a leaver out of payroll before any of it could apply. Code that cannot execute is
+     * worse than an acknowledged gap, because it reads as a compliance feature that works. ข้อ 2.10 is
+     * on the known-gaps list pending resignation data from the other platform.
+     */
+    private int remainingPayPeriods(LocalDate payrollMonth) {
+        return Math.max(1, 13 - payrollMonth.getMonthValue());
     }
 
     /**
      * C1: merges the standing stored declaration with this run's request body, field by field. A
      * non-null field on the request is an explicit in-run correction and wins; a null field falls back
-     * to the stored value (or zero if nothing is stored yet). This is deliberately per-field rather
-     * than "any input present replaces everything" -- HR should be able to correct e.g. just this
-     * month's donation figure without having to retype the other 15 allowances.
+     * to the stored standing declaration.
      */
     private PayrollTaxAllowanceInput mergeAllowances(PayrollTaxAllowanceInput stored, PayrollEmployeeInputRequest input) {
         PayrollTaxAllowanceInput base = stored == null ? PayrollTaxAllowanceInput.empty() : stored;
@@ -433,8 +473,70 @@ public class PayrollService {
             firstNonNull(input.homeLoanInterestAllowance(), base.homeLoanInterestAllowance()),
             firstNonNull(input.educationDonation(), base.educationDonation()),
             firstNonNull(input.generalDonation(), base.generalDonation()),
-            firstNonNull(input.politicalDonation(), base.politicalDonation())
+            firstNonNull(input.politicalDonation(), base.politicalDonation()),
+            base.providentFundAllowance(),
+            // Head counts come from the stored ล.ย.01 declaration -- standing facts about the
+            // employee's household, recorded with evidence, not something a payroll operator retypes.
+            //
+            // EXCEPT when the run body supplies an AMOUNT the stored declaration cannot support. The
+            // amount and the count travel separately, so an employee with no stored row for whom HR
+            // types childAllowance = 60,000 would otherwise meet a cap of zero and lose the whole
+            // allowance silently. Deriving a count from the supplied amount in exactly that case is the
+            // same decision taken in PayrollTaxAllowanceInput's legacy constructor and V93's backfill:
+            // the amount is the only evidence there is, and reading it as an overstatement would delete
+            // a real declaration.
+            headCountFor(base.childCount(), input.childAllowance(), "30000"),
+            base.childCountDouble(),
+            headCountFor(base.disabledCareCount(), input.disabledCareAllowance(), "60000"),
+            base.disabilityCardHolder()
         );
+    }
+
+    /**
+     * The head count to apply when the stored ล.ย.01 declaration has NONE and this run supplies an
+     * amount: the smallest count that would permit that amount. A stored count always wins outright.
+     *
+     * <p>Deliberately narrow, and narrowed twice. It exists for exactly one case — an employee with no
+     * stored declaration for whom HR types an allowance in the run body, who would otherwise meet a
+     * cap of zero and lose it silently. It must NOT do more than that:
+     *
+     * <ul>
+     *   <li>An earlier version took {@code max(declaredCount, impliedCount)} so a STALE count would be
+     *       raised too. Review showed that destroyed the cap entirely: the amount fell back to the
+     *       STORED figure when the run body omitted the field, so the count was raised to cover the
+     *       very amount it exists to constrain, and a ฿300,000 declaration against one child was
+     *       allowed in full. Direction of error was UNDER-withholding.</li>
+     *   <li>So a stale or too-small count now CLAMPS, and {@code PayrollCalculator#clampedAllowanceNote}
+     *       says so on the payslip. Clamp-and-warn is the correct answer to a declaration the head
+     *       count cannot support; silently raising the cap is not.</li>
+     * </ul>
+     *
+     * <p>{@code runBodyAmount} must be the request-body value ONLY, never the stored one — falling
+     * back to stored is precisely the hole described above.
+     */
+    private int headCountFor(int storedCount, BigDecimal runBodyAmount, String perHead) {
+        if (storedCount > 0 || runBodyAmount == null || runBodyAmount.signum() <= 0) {
+            return storedCount;
+        }
+        return runBodyAmount
+            .divide(new BigDecimal(perHead), 0, java.math.RoundingMode.CEILING)
+            .intValueExact();
+    }
+
+    /**
+     * The employee's age in the payroll month's TAX YEAR, for the ยกเว้นเงินได้ 190,000 available from
+     * 65 (กฎกระทรวง ฉบับที่ 126).
+     *
+     * <p>Measured at 31 December of the tax year, not at the payroll month: the exemption belongs to
+     * the tax year as a whole, so someone turning 65 in November is 65 for that year's withholding
+     * from January. Returns 0 when the date of birth is unknown, which the calculator treats as
+     * "do not grant the exemption on an assumption".
+     */
+    private int taxpayerAge(LocalDate dateOfBirth, LocalDate payrollMonth) {
+        if (dateOfBirth == null) {
+            return 0;
+        }
+        return Math.max(0, payrollMonth.getYear() - dateOfBirth.getYear());
     }
 
     private BigDecimal firstNonNull(BigDecimal requested, BigDecimal stored) {

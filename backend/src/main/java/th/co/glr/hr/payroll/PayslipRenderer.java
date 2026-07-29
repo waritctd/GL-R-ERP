@@ -74,6 +74,8 @@ public class PayslipRenderer {
             }
             addIfNonZero(earnings, "ค่าล่วงเวลา", line.overtimePay());
             addIfNonZero(earnings, "ค่าคอมมิชชั่น", line.commissionPay());
+            addIfNonZero(earnings, "เงินโบนัส", line.bonusPay());
+            addIfNonZero(earnings, "เงินได้อื่นๆ (ครั้งคราว)", line.otherOneOffPay());
             addIfNonZero(earnings, "ค่าตอบแทนกรรมการ", line.directorRemuneration());
             addIfNonZero(earnings, "รายได้ไม่คิดภาษี", line.nonTaxableIncome());
 
@@ -132,15 +134,87 @@ public class PayslipRenderer {
             pdf.textAt(regular, BODY, mid + 18, "……………………………………   วันที่");
             pdf.moveTo(pdf.cursorY() - 25f);
 
+            // --- Over-withholding notice ---------------------------------------------------
+            // Printed only when it exists, and printed as prose rather than a deduction row, because it
+            // is neither an earning nor a deduction: it is money already remitted to the RD in an
+            // earlier period of this tax year that exceeds the year's assessed liability. Payroll
+            // cannot return it -- the employee reclaims it on their ภ.ง.ด.91 -- so the one thing that
+            // must not happen is for it to be invisible. Without this the condition shows only as a
+            // 0.00 ภาษี line, which reads as "no tax was due this month".
+            if (nonZero(line.excessWithheldToDate())) {
+                float noticeWidth = pdf.right() - left;
+                // FINAL vs PROVISIONAL (2026-07-29, after review). excessWithheldToDate is measured
+                // against the CURRENT period's projected annual tax, so before the last period of the
+                // year it is an estimate that later periods can still absorb by withholding less. An
+                // unconditional "ไม่สามารถคืนผ่านระบบเงินเดือนได้" was therefore a FALSE statement on a
+                // payroll document from as early as April, naming a baht figure an employee could carry
+                // onto a ภ.ง.ด.91 -- review built a case where payroll then did return it. Only the
+                // final period of the year can assert the excess is unrecoverable.
+                // Derived from the payroll month rather than carried on the line: PayrollService
+                // computes จำนวนคราวที่ต้องจ่าย as 13 - month, so December IS the final period, and
+                // reading it off the period keeps the renderer from needing a field it would only use
+                // here. (A leaver's final period is not detected -- ข้อ 2.10 is a known gap.)
+                boolean finalPeriodOfYear = period.payrollMonth() != null
+                    && period.payrollMonth().getMonthValue() >= 12;
+                String notice = finalPeriodOfYear
+                    ? "ภาษีหัก ณ ที่จ่ายสะสมปีนี้เกินภาษีที่ต้องเสียทั้งปี "
+                        + fmt2(line.excessWithheldToDate()) + " บาท "
+                        + "ส่วนเกินนี้ไม่สามารถคืนผ่านระบบเงินเดือนได้ "
+                        + "ท่านสามารถขอคืนได้เมื่อยื่นแบบ ภ.ง.ด.91 ประจำปี"
+                    : "ประมาณการ: ภาษีหัก ณ ที่จ่ายสะสมถึงงวดนี้สูงกว่าประมาณการภาษีทั้งปีอยู่ "
+                        + fmt2(line.excessWithheldToDate()) + " บาท "
+                        + "ส่วนต่างนี้อาจลดลงได้จากการหักภาษีในงวดที่เหลือ "
+                        + "ยอดที่แน่นอนจะทราบเมื่อสิ้นปีภาษี";
+                for (String noticeLine : wrapToWidth(pdf, regular, 9, noticeWidth, notice)) {
+                    pdf.textAt(regular, 9, left, noticeLine);
+                    pdf.moveTo(pdf.cursorY() - 11f);
+                }
+                pdf.moveTo(pdf.cursorY() - 4f);
+            }
+
             // --- Optional note ------------------------------------------------------------
+            // WRAPPED (2026-07-29). This drew one unwrapped line, which fitted only because the note
+            // was short; PDFBox draws past the page edge without complaining, so nothing failed and no
+            // test caught it. The ป.96 note is longer, and a withholding-override or clamp warning can
+            // triple it -- text that runs off the right edge is not a note, it is a note that is gone.
             if (line.calculationNote() != null && !line.calculationNote().isBlank()) {
-                pdf.textAt(regular, 9, left, "หมายเหตุ: " + line.calculationNote());
+                float noteWidth = pdf.right() - left;
+                for (String noteLine : wrapToWidth(pdf, regular, 9, noteWidth, "หมายเหตุ: " + line.calculationNote())) {
+                    pdf.textAt(regular, 9, left, noteLine);
+                    pdf.moveTo(pdf.cursorY() - 11f);
+                }
             }
 
             return pdf.toBytes();
         } catch (IOException e) {
             throw new RuntimeException("Payslip PDF render failed: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Greedy word wrap to a pixel width, measured with the real font rather than guessed from a
+     * character count — Sarabun is proportional and Thai has no inter-word spaces, so a character
+     * budget would be wrong in both directions. A single token longer than the line (a very long
+     * reference, say) is emitted on its own line rather than dropped: overflowing one line beats
+     * losing the content.
+     */
+    List<String> wrapToWidth(PdfDocumentWriter pdf, PDFont font, float size, float maxWidth, String text)
+        throws IOException {
+        List<String> lines = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String word : text.split(" ")) {
+            String candidate = current.isEmpty() ? word : current + " " + word;
+            if (!current.isEmpty() && pdf.width(font, size, candidate) > maxWidth) {
+                lines.add(current.toString());
+                current = new StringBuilder(word);
+            } else {
+                current = new StringBuilder(candidate);
+            }
+        }
+        if (!current.isEmpty()) {
+            lines.add(current.toString());
+        }
+        return lines;
     }
 
     private void addIfNonZero(List<String[]> rows, String label, BigDecimal amount) {

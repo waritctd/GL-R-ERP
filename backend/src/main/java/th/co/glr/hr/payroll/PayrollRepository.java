@@ -44,7 +44,8 @@ public class PayrollRepository {
                    ba.account_no AS bank_account,
                    COALESCE(e.current_salary, 0) AS base_salary,
                    COALESCE(e.director_remuneration, 0) AS director_remuneration,
-                   e.withholding_tax_override AS withholding_tax_override
+                   e.withholding_tax_override AS withholding_tax_override,
+                   e.date_of_birth AS date_of_birth
               FROM hr.employee e
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
               LEFT JOIN hr.employee_bank_account ba ON ba.employee_id = e.employee_id
@@ -63,7 +64,10 @@ public class PayrollRepository {
                 rs.getBigDecimal("director_remuneration"),
                 // NULLABLE standing override -- read raw so SQL NULL stays null (no COALESCE):
                 // null = no standing override, distinct from a 0 override.
-                rs.getBigDecimal("withholding_tax_override")
+                rs.getBigDecimal("withholding_tax_override"),
+                // Drives the ยกเว้นเงินได้ 190,000 for taxpayers aged 65+ (V93). Nullable: a missing
+                // date of birth means the exemption is not granted on an assumption.
+                rs.getObject("date_of_birth", LocalDate.class)
             ));
     }
 
@@ -96,23 +100,38 @@ public class PayrollRepository {
      * exists per employee, equivalent to a FULL OUTER JOIN without the NULL-handling ceremony.
      */
     public Map<Long, PayrollYearToDate> findYearToDateByEmployee(LocalDate payrollMonth) {
+        // ป.96/2543: the two limbs are summed SEPARATELY. Collapsing them here would destroy the
+        // variable-limb withholding figure that next period's ข้อ 2.5 difference must net against.
         return jdbc.query("""
             SELECT employee_id,
-                   COALESCE(SUM(taxable_income), 0) AS taxable_income,
+                   COALESCE(SUM(regular_income), 0) AS regular_income,
+                   COALESCE(SUM(variable_income), 0) AS variable_income,
                    COALESCE(SUM(social_security), 0) AS social_security,
-                   COALESCE(SUM(withholding_tax), 0) AS withholding_tax
+                   COALESCE(SUM(regular_withholding_tax), 0) AS regular_withholding_tax,
+                   COALESCE(SUM(variable_withholding_tax), 0) AS variable_withholding_tax
               FROM (
                   SELECT pl.employee_id,
-                         pl.gross_taxable_income AS taxable_income,
+                         pl.regular_taxable_income AS regular_income,
+                         pl.variable_taxable_income AS variable_income,
                          pl.social_security AS social_security,
-                         pl.withholding_tax AS withholding_tax
+                         pl.regular_withholding_tax AS regular_withholding_tax,
+                         pl.variable_withholding_tax AS variable_withholding_tax
                     FROM hr.payroll_line pl
                     JOIN hr.payroll_period pp ON pp.period_id = pl.period_id
                    WHERE pp.payroll_month >= date_trunc('year', :payrollMonth::date)::date
                      AND pp.payroll_month < :payrollMonth
                      AND pp.status <> 'VOID'
                   UNION ALL
-                  SELECT s.employee_id, s.taxable_income, s.social_security, s.withholding_tax
+                  -- The go-live seed carries NO limb split and never will: it is pre-system history
+                  -- from the accountant's records, produced by the single-limb method, in which every
+                  -- baht WAS annualised as regular pay. Mapping it to the regular limb is therefore
+                  -- accurate rather than a fallback. See the V92 migration comment.
+                  SELECT s.employee_id,
+                         s.taxable_income,
+                         0::numeric,
+                         s.social_security,
+                         s.withholding_tax,
+                         0::numeric
                     FROM hr.payroll_year_to_date_seed s
                    WHERE s.tax_year = EXTRACT(YEAR FROM :payrollMonth::date)::int
               ) combined
@@ -120,9 +139,11 @@ public class PayrollRepository {
             """,
             Map.of("payrollMonth", payrollMonth),
             (rs, rowNum) -> Map.entry(rs.getLong("employee_id"), new PayrollYearToDate(
-                money(rs.getBigDecimal("taxable_income")),
+                money(rs.getBigDecimal("regular_income")),
+                money(rs.getBigDecimal("variable_income")),
                 money(rs.getBigDecimal("social_security")),
-                money(rs.getBigDecimal("withholding_tax"))
+                money(rs.getBigDecimal("regular_withholding_tax")),
+                money(rs.getBigDecimal("variable_withholding_tax"))
             )))
             .stream()
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
@@ -175,18 +196,31 @@ public class PayrollRepository {
             ));
     }
 
-    /** C1: the standing tax-allowance declaration per employee for a given tax year. */
-    public Map<Long, PayrollTaxAllowanceInput> findTaxAllowancesByEmployee(int taxYear) {
+    /**
+     * C1 + ล.ย.01 effective dating (V93): the declaration IN FORCE for a given payroll month.
+     *
+     * <p>คำชี้แจง ภ.ง.ด.1 ข้อ 2.2: the employer computes ค่าลดหย่อน from what the employee declared on
+     * แบบ ล.ย.01, and where the employee notifies a change during the year the NEW declaration applies
+     * from the period it was notified. Declarations are therefore dated rows, and this resolves the
+     * latest one on or before the payroll month — never a later one, so re-running an earlier month
+     * reproduces the tax that month was actually filed on.
+     */
+    public Map<Long, PayrollTaxAllowanceInput> findTaxAllowancesByEmployee(LocalDate payrollMonth) {
         return jdbc.query("""
-            SELECT employee_id, spouse_allowance, child_allowance, parent_care_allowance,
+            SELECT DISTINCT ON (employee_id)
+                   employee_id, spouse_allowance, child_allowance, parent_care_allowance,
                    disabled_care_allowance, maternity_allowance, life_insurance_allowance,
                    health_insurance_allowance, parent_health_insurance_allowance, rmf_allowance,
                    ssf_allowance, pension_insurance_allowance, thai_esg_allowance,
-                   home_loan_interest_allowance, education_donation, general_donation, political_donation
+                   home_loan_interest_allowance, education_donation, general_donation, political_donation,
+                   provident_fund_allowance, child_count, child_count_double, disabled_care_count,
+                   disability_card_holder
               FROM hr.employee_tax_allowance
              WHERE tax_year = :taxYear
+               AND effective_month <= :payrollMonthValue
+             ORDER BY employee_id, effective_month DESC
             """,
-            Map.of("taxYear", taxYear),
+            Map.of("taxYear", payrollMonth.getYear(), "payrollMonthValue", payrollMonth.getMonthValue()),
             (rs, rowNum) -> Map.entry(rs.getLong("employee_id"), new PayrollTaxAllowanceInput(
                 money(rs.getBigDecimal("spouse_allowance")),
                 money(rs.getBigDecimal("child_allowance")),
@@ -203,7 +237,13 @@ public class PayrollRepository {
                 money(rs.getBigDecimal("home_loan_interest_allowance")),
                 money(rs.getBigDecimal("education_donation")),
                 money(rs.getBigDecimal("general_donation")),
-                money(rs.getBigDecimal("political_donation"))
+                money(rs.getBigDecimal("political_donation")),
+                // ล.ย.01 completeness (V93).
+                money(rs.getBigDecimal("provident_fund_allowance")),
+                rs.getInt("child_count"),
+                rs.getInt("child_count_double"),
+                rs.getInt("disabled_care_count"),
+                rs.getBoolean("disability_card_holder")
             )))
             .stream()
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
@@ -219,10 +259,12 @@ public class PayrollRepository {
                    eta.health_insurance_allowance, eta.parent_health_insurance_allowance, eta.rmf_allowance,
                    eta.ssf_allowance, eta.pension_insurance_allowance, eta.thai_esg_allowance,
                    eta.home_loan_interest_allowance, eta.education_donation, eta.general_donation,
-                   eta.political_donation, eta.updated_at
+                   eta.political_donation, eta.provident_fund_allowance, eta.child_count,
+                   eta.child_count_double, eta.disabled_care_count, eta.disability_card_holder,
+                   eta.effective_month, eta.document_reference, eta.updated_at
               FROM hr.employee e
               JOIN hr.employee_tax_allowance eta ON eta.employee_id = e.employee_id AND eta.tax_year = :taxYear
-             ORDER BY e.employee_code
+             ORDER BY e.employee_code, eta.effective_month
             """,
             Map.of("taxYear", taxYear),
             (rs, rowNum) -> new EmployeeTaxAllowanceDto(
@@ -245,8 +287,15 @@ public class PayrollRepository {
                     money(rs.getBigDecimal("home_loan_interest_allowance")),
                     money(rs.getBigDecimal("education_donation")),
                     money(rs.getBigDecimal("general_donation")),
-                    money(rs.getBigDecimal("political_donation"))
+                    money(rs.getBigDecimal("political_donation")),
+                    money(rs.getBigDecimal("provident_fund_allowance")),
+                    rs.getInt("child_count"),
+                    rs.getInt("child_count_double"),
+                    rs.getInt("disabled_care_count"),
+                    rs.getBoolean("disability_card_holder")
                 ),
+                rs.getInt("effective_month"),
+                rs.getString("document_reference"),
                 rs.getObject("updated_at", OffsetDateTime.class)
             ));
     }
@@ -261,16 +310,20 @@ public class PayrollRepository {
                     health_insurance_allowance, parent_health_insurance_allowance, rmf_allowance,
                     ssf_allowance, pension_insurance_allowance, thai_esg_allowance,
                     home_loan_interest_allowance, education_donation, general_donation,
-                    political_donation, updated_by_id, updated_at
+                    political_donation, provident_fund_allowance, child_count, child_count_double,
+                    disabled_care_count, disability_card_holder, effective_month, document_reference,
+                    updated_by_id, updated_at
                 ) VALUES (
                     :employeeId, :taxYear, :spouseAllowance, :childAllowance, :parentCareAllowance,
                     :disabledCareAllowance, :maternityAllowance, :lifeInsuranceAllowance,
                     :healthInsuranceAllowance, :parentHealthInsuranceAllowance, :rmfAllowance,
                     :ssfAllowance, :pensionInsuranceAllowance, :thaiEsgAllowance,
                     :homeLoanInterestAllowance, :educationDonation, :generalDonation,
-                    :politicalDonation, :updatedById, now()
+                    :politicalDonation, :providentFundAllowance, :childCount, :childCountDouble,
+                    :disabledCareCount, :disabilityCardHolder, :effectiveMonth, :documentReference,
+                    :updatedById, now()
                 )
-                ON CONFLICT (employee_id, tax_year) DO UPDATE SET
+                ON CONFLICT (employee_id, tax_year, effective_month) DO UPDATE SET
                     spouse_allowance = EXCLUDED.spouse_allowance,
                     child_allowance = EXCLUDED.child_allowance,
                     parent_care_allowance = EXCLUDED.parent_care_allowance,
@@ -287,6 +340,12 @@ public class PayrollRepository {
                     education_donation = EXCLUDED.education_donation,
                     general_donation = EXCLUDED.general_donation,
                     political_donation = EXCLUDED.political_donation,
+                    provident_fund_allowance = EXCLUDED.provident_fund_allowance,
+                    child_count = EXCLUDED.child_count,
+                    child_count_double = EXCLUDED.child_count_double,
+                    disabled_care_count = EXCLUDED.disabled_care_count,
+                    disability_card_holder = EXCLUDED.disability_card_holder,
+                    document_reference = EXCLUDED.document_reference,
                     updated_by_id = EXCLUDED.updated_by_id,
                     updated_at = now()
                 """,
@@ -309,6 +368,15 @@ public class PayrollRepository {
                     .addValue("educationDonation", safe(item.educationDonation()))
                     .addValue("generalDonation", safe(item.generalDonation()))
                     .addValue("politicalDonation", safe(item.politicalDonation()))
+                    .addValue("providentFundAllowance", safe(item.providentFundAllowance()))
+                    .addValue("childCount", item.childCount() == null ? 0 : item.childCount())
+                    .addValue("childCountDouble", item.childCountDouble() == null ? 0 : item.childCountDouble())
+                    .addValue("disabledCareCount", item.disabledCareCount() == null ? 0 : item.disabledCareCount())
+                    .addValue("disabilityCardHolder", Boolean.TRUE.equals(item.disabilityCardHolder()))
+                    // ล.ย.01 ข้อ 2.2: a declaration with no stated month is the one in force from
+                    // January, which is how every pre-V93 row was already applied.
+                    .addValue("effectiveMonth", item.effectiveMonth() == null ? 1 : item.effectiveMonth())
+                    .addValue("documentReference", item.documentReference())
                     .addValue("updatedById", updatedById));
         }
     }
@@ -453,7 +521,10 @@ public class PayrollRepository {
                    pl.director_remuneration, pl.warning_letter_deduction,
                    pl.customer_return_deduction, pl.other_pretax_deduction,
                    pl.leave_refund_days, pl.leave_deduction_refund,
-                   pl.withholding_tax_override
+                   pl.withholding_tax_override,
+                   pl.regular_taxable_income, pl.variable_taxable_income,
+                   pl.regular_withholding_tax, pl.variable_withholding_tax,
+                   pl.bonus_pay, pl.other_one_off_pay, pl.excess_withheld_to_date
               FROM hr.payroll_line pl
               JOIN hr.employee e ON e.employee_id = pl.employee_id
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
@@ -689,7 +760,10 @@ public class PayrollRepository {
                 director_remuneration, warning_letter_deduction,
                 customer_return_deduction, other_pretax_deduction,
                 leave_refund_days, leave_deduction_refund,
-                withholding_tax_override
+                withholding_tax_override,
+                regular_taxable_income, variable_taxable_income,
+                regular_withholding_tax, variable_withholding_tax,
+                bonus_pay, other_one_off_pay, excess_withheld_to_date
             )
             VALUES (
                 :periodId, :employeeId, :baseSalary, :dailyRate, :hourlyRate,
@@ -706,7 +780,10 @@ public class PayrollRepository {
                 :directorRemuneration, :warningLetterDeduction,
                 :customerReturnDeduction, :otherPretaxDeduction,
                 :leaveRefundDays, :leaveDeductionRefund,
-                :withholdingTaxOverride
+                :withholdingTaxOverride,
+                :regularTaxableIncome, :variableTaxableIncome,
+                :regularWithholdingTax, :variableWithholdingTax,
+                :bonusPay, :otherOneOffPay, :excessWithheldToDate
             )
             """,
             new MapSqlParameterSource()
@@ -753,7 +830,14 @@ public class PayrollRepository {
                 .addValue("leaveDeductionRefund", line.leaveDeductionRefund())
                 // Nullable per-run typed override -- pass through null (no COALESCE) so "none typed"
                 // persists as SQL NULL, distinct from a 0 override.
-                .addValue("withholdingTaxOverride", line.withholdingTaxOverride()));
+                .addValue("withholdingTaxOverride", line.withholdingTaxOverride())
+                .addValue("regularTaxableIncome", line.regularTaxableIncome())
+                .addValue("variableTaxableIncome", line.variableTaxableIncome())
+                .addValue("regularWithholdingTax", line.regularWithholdingTax())
+                .addValue("variableWithholdingTax", line.variableWithholdingTax())
+                .addValue("bonusPay", line.bonusPay())
+                .addValue("otherOneOffPay", line.otherOneOffPay())
+                .addValue("excessWithheldToDate", line.excessWithheldToDate()));
     }
 
     private PayrollPeriodDto toPeriod(PayrollPeriodHeader header, List<PayrollLineDto> lines) {
@@ -819,7 +903,15 @@ public class PayrollRepository {
             money(rs.getBigDecimal("leave_deduction_refund")),
             // Nullable per-run typed override -- read raw so SQL NULL stays null (money() would coerce
             // it to 0.00, which is a different, meaningful override value).
-            rs.getBigDecimal("withholding_tax_override")
+            rs.getBigDecimal("withholding_tax_override"),
+            // ป.96/2543 limbs (V92).
+            money(rs.getBigDecimal("regular_taxable_income")),
+            money(rs.getBigDecimal("variable_taxable_income")),
+            money(rs.getBigDecimal("regular_withholding_tax")),
+            money(rs.getBigDecimal("variable_withholding_tax")),
+            money(rs.getBigDecimal("bonus_pay")),
+            money(rs.getBigDecimal("other_one_off_pay")),
+            money(rs.getBigDecimal("excess_withheld_to_date"))
         );
     }
 
