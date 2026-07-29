@@ -617,3 +617,175 @@ round 2 (or finish that live walk-through), decide on the `issue_quotation` dead
 Known Risks), rebase onto the latest origin/main, re-run `npm run lint && npm test && npm run build`,
 and merge.
 ```
+
+## Follow-up: `openIssueQuotation` silent no-op fix — Option 2 (separate session, same branch/worktree)
+
+**Context**: this is the fix for the "second, real bug" flagged in the "Follow-up: CI e2e fix — PR
+#343" section above and in "Recommended Next Agent"'s open item. `nextSalesAction`'s
+`ISSUE_QUOTATION` bucket (`frontend/src/features/tickets/salesActions.js:103`) fires the sticky
+primary CTA purely off `pr.status === 'APPROVED_FOR_QUOTATION'`, which is true the instant CEO
+approves the price — before anyone has clicked "สร้างร่างใบเสนอราคาลูกค้า" to actually create a
+customer-quotation draft. `DealQuotationPanel`'s `openIssueQuotation` ref opener required an
+existing draft (`current`) and was a **silent no-op** otherwise — no toast, no error, nothing.
+
+Two options were on the table: (1) narrow `nextSalesAction`'s `ISSUE_QUOTATION` condition to require
+a draft already exists, or (2) make `openIssueQuotation` create-then-issue when no draft exists.
+Option 1 was rejected: `salesActions.js`'s own module doc comment states it is built entirely from
+the ticket-list row + the rep's PR queue and deliberately never triggers a per-ticket detail fetch,
+but "a draft quotation exists" only comes from `api.pricingRequests.listCustomerQuotations(pr.id)`,
+a per-PR fetch that only `DealQuotationPanel` makes. Widening `salesActions.js` to know this would
+have meant giving it a fetch it explicitly documents it doesn't do. **Option 2 was implemented.**
+
+### Files changed
+- `frontend/src/features/tickets/DealQuotationPanel.jsx`:
+  - `issueQuotation` mutation now takes the quotation id as its mutate variable
+    (`mutationFn: (quotationId) => ...`) instead of closing over `current.id`; its one call site
+    updated to `issueQuotation.mutate(current.id)`.
+  - New `createAndIssueQuotation` mutation: chains `createCustomerQuotation(pr.id, ...)` →
+    `issueCustomerQuotation(<returned draft id>, ...)`, with its own success/error toast.
+  - `useImperativeHandle`'s `openIssueQuotation` rewritten as a 5-branch decision tree: (1) bail
+    silently while any of the three mutations is already pending (no double-fire, no duplicate
+    draft); (2) an existing editable draft → issue it directly (unchanged original behaviour); (3)
+    no draft yet AND `quotationsQuery` hasn't resolved (`canView && !quotationsQuery.isSuccess`) →
+    error toast telling the user to try again (creating here would risk a duplicate draft once the
+    real list lands); (4) no draft, query settled, PR/user pass `canCreateCustomerQuotation` → fire
+    `createAndIssueQuotation`; (5) anything else → error toast pointing at the "ราคาและใบเสนอราคา"
+    section. `openConfirmOrder` got the same treatment: an `isPending` guard plus a real `else`
+    error toast instead of a bare no-op.
+  - Updated the in-panel "CEO อนุมัติราคาขายแล้ว…" copy (the `!current && canCreateCustomerQuotation`
+    branch) to explain both paths now available: the sticky button creates-and-issues in one step;
+    this in-panel button creates a draft only, for reps who want to edit discounts first.
+  - Extended the component's top-of-file doc comment with the full root-cause/fix narrative, matching
+    this file's existing convention of long rationale comments.
+- `frontend/src/features/tickets/TicketDetailPage.test.jsx`: new describe block `sticky primary
+  "ออกใบเสนอราคา" before any draft quotation exists yet (handoff 117 fix)` (placed directly after the
+  existing "ISSUE_QUOTATION/CONFIRM_ORDER own their labels alone" describe), 3 new tests:
+  1. **The regression case** — PR `APPROVED_FOR_QUOTATION`, no quotations yet. Clicking the sticky
+     button calls `createCustomerQuotation(501, ...)`, then `issueCustomerQuotation(555, ...)` (555
+     being the id the mocked create call returned — proves the draft's own id is used, not the PR
+     id), then shows the chained-success toast.
+  2. **Unchanged happy path** — a DRAFT quotation already exists. Clicking issues that quotation
+     directly and asserts `createCustomerQuotation` is never called.
+  3. **Defense in depth** — the only quotation on file is already `ISSUED` (`current` non-null but
+     not editable). Clicking fires an error toast and calls neither mutation.
+
+  Note on a plan deviation caught during implementation: `toHaveAttribute` (jest-dom) is **not**
+  available in this project's Vitest setup (`src/test/setup.js` never imports `@testing-library/
+  jest-dom`, and no other test in the codebase uses that matcher) — swapped for plain
+  `element.getAttribute('data-action')` equality checks instead. Also had to add explicit `findBy`
+  waits before each click (for the sticky text/button, and for `DealQuotationPanel`'s own settled
+  state — the "สร้างร่างใบเสนอราคาลูกค้า" button for test 1, "พร้อมออกใบเสนอราคาแล้ว" for test 2,
+  "บันทึกผลจากลูกค้า" for test 3) — without them the click could race `api.pricingRequests
+  .listForTicket`/`listCustomerQuotations` still resolving and land on the wrong branch (e.g. the
+  sticky button still reading `create_pcr` before the PR list loads). This mirrors the exact
+  create→issue race the e2e-fix session above already found and fixed the same way.
+
+### Commands run (from `frontend/`)
+- `npx vitest run src/features/tickets/TicketDetailPage.test.jsx -t "handoff 117 fix"` — iteratively
+  while fixing the 3 new tests' timing/matcher issues, final run: 3/3 pass.
+- `npx vitest run src/features/tickets/TicketDetailPage.test.jsx` — 41/41 pass (was 38 before this
+  session's +3 net new).
+- `npm test -- --run` (full suite) — **72 files, 768 tests, all pass** (was 765 before this session).
+- `npm run lint` — 0 errors, 1 pre-existing `PayrollPage.jsx:336` warning (expected, unchanged).
+- `npm run build` — pass, no new warnings.
+
+### Authz evidence
+**No authorization change.** `canCreateCustomerQuotation`, `canManageCustomerQuotation`, and
+`canConfirmOrder` (`frontend/src/features/pricingRequests/pricingRequestMeta.js`) are byte-identical
+to before this session — every branch in the rewritten `openIssueQuotation`/`openConfirmOrder` still
+re-checks the exact same predicates before calling any mutation. The fix only changes **which**
+already-permitted mutation a single already-visible, already-permitted button fires, and adds
+honest error feedback for the branches where none of them apply. Verification this session was
+frontend-unit-only (`VITE_USE_MOCKS`-shaped Vitest/RTL, no browser click-through, no backend). Per
+CLAUDE.md's mock-authz rule this is **unverified against the real Java service** — though there is
+no authz surface here to verify in the first place, since no gate changed.
+
+### Known risks
+- **This is a real, intentional sales-workflow behaviour change, not a side effect** — see the
+  prominent callout below.
+- The `createAndIssueQuotation` chained mutation is not atomic from the UI's point of view: if
+  `createCustomerQuotation` succeeds but the subsequent `issueCustomerQuotation` call fails (network
+  blip, a server-side re-validation rejecting the just-created draft, etc.), the user is left with an
+  un-issued DRAFT they didn't explicitly ask to create, and only the error toast to explain it. The
+  draft is not orphaned or unrecoverable — it is exactly the same state as if they'd clicked
+  "สร้างร่างใบเสนอราคาลูกค้า" by hand and then hadn't yet issued it, visible and actionable in the
+  panel below — but the UX of "I clicked one button and got a half-finished document" was not
+  polished further in this session (no rollback/compensating action was implemented or requested by
+  the plan).
+- The "query not yet settled" branch (step 3 of the decision tree) shows an error-toned toast for
+  what is really a transient/informational state ("still loading, try again"). **Corrected in the
+  Opus review pass** — the implementer's note here originally claimed `Toast`/`useToast` "only
+  support `'success'`/`'error'`", which overstates it. Accurately: every one of the ~194 existing
+  `showToast(...)` call sites passes only `'success'` or `'error'`, and `src/styles.css` only styles
+  `.toast-success svg` / `.toast-error svg` (lines 1955/1959) — but `Toast.jsx:5` already has an
+  explicit third-kind fallback (`... : 'clipboard'` icon) and its own line-6 comment names "info"
+  as a polite-announcement kind, and `className={`toast toast-${toast.kind}`}` would emit a valid
+  `toast-info` class. So an `'info'` kind would render today, just with an unstyled icon colour.
+  Using `'error'` here was still the right call for this task (no new tone invented, consistent with
+  every other call site), but adding a real `'info'` kind is a smaller change than the original
+  wording implied — it needs one CSS rule, not a component redesign.
+- Not verified against a live browser session or the real backend this session — frontend Vitest/RTL
+  only, per the plan's instructions (no dev server / browser step was requested for this task).
+- **Post-success refetch window (found in the Opus review pass, not by the implementer).** The
+  in-flight guard (step 1 of the decision tree) only covers a mutation that is still pending. Once
+  `createAndIssueQuotation` *succeeds*, `invalidate()` fires an async refetch of both
+  `customerQuotations(pr.id)` and `pricingRequestsByTicket(ticketId)`. During that refetch window
+  react-query keeps `isSuccess === true` with the previous (empty) data, so `current` is still null
+  and the `pricingRequests` prop still reads `APPROVED_FOR_QUOTATION` — meaning a second click in
+  that window re-enters step 4 and calls `createCustomerQuotation` again. This does **not** produce
+  a duplicate issued quotation: both the mock (`mockApi.js:6316`) and the real service
+  (`CustomerQuotationService.create`, `customerquotation/CustomerQuotationService.java:117-120`,
+  which additionally takes `lockPricingRequest`) gate creation on
+  `status === APPROVED_FOR_QUOTATION`, and `issue` flips the pricing request to `QUOTATION_ISSUED`
+  (mock `mockApi.js:6427-6429`; `PricingRequestStatus.ALLOWED` has `APPROVED_FOR_QUOTATION ->
+  QUOTATION_ISSUED` as the only forward exit). So the second call 409s server-side and surfaces as
+  an error toast. Verified by reading both implementations; **not** covered by a test. The residual
+  defect is a confusing error toast on a fast double-click, not data corruption. The clean fix would
+  be to disable the sticky button while any panel mutation is pending, which needs the panel to
+  report pending state up to `TicketDetailPage` (the ref is currently one-way, parent → panel) —
+  deliberately out of scope here.
+
+### ⚠️ Sales/CRM workflow behaviour change (CLAUDE.md "Sales flow redesign" — stated explicitly, not a side effect)
+**Before this fix**: issuing a customer quotation always took two deliberate, separate clicks —
+"สร้างร่างใบเสนอราคาลูกค้า" (create the DRAFT) then, later, "ออกใบเสนอราคา" (issue it) — giving the
+rep a guaranteed opportunity to review or discount the draft before it became a customer-facing,
+immutable document.
+
+**After this fix**: a sales rep clicking the sticky "ออกใบเสนอราคา" button while no draft exists yet
+now creates a draft **and** issues it in the same click, with default (no-discount) terms. This
+collapses what was always a two-step, reviewable process into one step whenever the rep uses the
+sticky button first.
+
+**Mitigation / why this was accepted as the fix rather than blocked**:
+- The in-panel "สร้างร่างใบเสนอราคาลูกค้า" button is left in place specifically for reps who want to
+  edit discounts/details before issuing — its copy was updated this session to point this out
+  explicitly (see Files Changed above). A rep who wants the old two-step control still has it.
+- The outcome is recoverable, not destructive: `canCreateCommercialOnlyRevision`
+  (`pricingRequestMeta.js:217`) allows a `createRevision` from `ISSUED`, so an accidentally-issued,
+  no-discount quotation can be revised afterward rather than being a dead end.
+- This is the task's explicitly chosen fix (Option 2, "already decided" per the task brief) — the
+  alternative (Option 1, narrowing `nextSalesAction`) was rejected for the technical reason above, not
+  re-litigated here.
+
+Flagging this per CLAUDE.md's requirement that sales-flow business-logic changes be recorded with
+their reasoning, plainly, so a reviewer can tell this was an intended workflow change and not
+something smuggled in under a UI-only ticket.
+
+### Exact next prompt
+```
+This branch (refactor/ui-ticket-header-actions, PR #343) has now had Phase 1 + the round-1/round-2
+clutter follow-ups + the CI e2e fix (see earlier "Follow-up" sections) + the openIssueQuotation
+silent-no-op fix (this section, DealQuotationPanel.jsx's create-and-issue chained mutation) all
+implemented. lint/test/build are green (72 files / 768 tests). The two e2e specs that exercise the
+old create→issue happy path (e2e/pcr-chain.spec.js, e2e/deposit-fulfilment-close.spec.js) were
+reasoned through, not re-run: both create the draft via `deal-quotation-create` and wait for
+"พร้อมออกใบเสนอราคาแล้ว" before touching the sticky button, so they always hit the unchanged
+`current`-exists branch and should be unaffected — but this was not re-verified live. Next: (1) run
+the full local e2e suite (`npx playwright test`) to confirm those two specs plus everything else
+still passes 64/64, ideally add a NEW e2e case that exercises the create-and-issue path this session
+added (click the sticky button before ever touching `deal-quotation-create`) since none of the
+existing specs cover it; (2) get owner sign-off specifically on the workflow-behaviour-change
+callout above (one-click issue with no discount review) — this is a genuine product decision, not
+just a bug fix, and CLAUDE.md requires it be recorded, not that it be silently accepted; (3) rebase
+onto the latest origin/main, re-run `npm run lint && npm test && npm run build`, and merge.
+```
