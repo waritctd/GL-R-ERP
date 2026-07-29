@@ -7,18 +7,26 @@ import {
 import { activePricingRequestsSummary } from '../pricingRequests/pricingRequestMeta.js';
 
 /**
- * One compact "stat chip": a label over either a StatusBadge (when `tone` is
- * given) or a plain value (deal value, which has no status tone of its own).
+ * One compact "stat chip": a label (dt) over either a StatusBadge (when
+ * `tone` is given) or a plain value (dd) — deal value has no status tone of
+ * its own. Nesting fix (card-diet, 2026-07): this used to be its own
+ * bordered/background box (`rounded-lg border border-border bg-surface-subtle
+ * px-3 py-2`) sitting INSIDE DealStateHeader's own card — a nested card,
+ * never right per DESIGN.md. Renders as a plain dt/dd pair now; the parent
+ * `<dl>` grid spacing is what keeps the five values distinct, not per-item
+ * chrome.
  */
 function StatChip({ label, value, tone }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1 rounded-lg border border-border bg-surface-subtle px-3 py-2">
-      <span className="text-2xs font-bold uppercase tracking-wide text-text-muted">{label}</span>
-      {tone ? (
-        <StatusBadge tone={tone}>{value}</StatusBadge>
-      ) : (
-        <span className="truncate text-sm font-extrabold text-text">{value}</span>
-      )}
+    <div className="flex min-w-0 flex-col gap-1">
+      <dt className="text-2xs font-bold uppercase tracking-wide text-text-muted">{label}</dt>
+      <dd className="m-0 min-w-0">
+        {tone ? (
+          <StatusBadge tone={tone}>{value}</StatusBadge>
+        ) : (
+          <span className="block truncate text-sm font-extrabold text-text">{value}</span>
+        )}
+      </dd>
     </div>
   );
 }
@@ -84,7 +92,7 @@ export function DealStateHeader({
         ) : null}
       </div>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+      <dl className="m-0 grid grid-cols-2 gap-x-3 gap-y-3 sm:grid-cols-5">
         <StatChip label="ขั้นตอนดีล" value={stage.label} tone={stage.tone} />
         <StatChip
           label="ใบขอราคา (PCR)"
@@ -98,7 +106,7 @@ export function DealStateHeader({
           tone={fulfilment ? fulfilment.tone : 'neutral'}
         />
         <StatChip label="มูลค่าดีล" value={formatMoney(summary.amountPayable ?? 0)} />
-      </div>
+      </dl>
 
       {queueText ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info-border bg-info-bg px-4 py-3">
