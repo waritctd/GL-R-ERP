@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PricingRequestPanel } from './PricingRequestPanel.jsx';
 import { api } from '../../api/index.js';
@@ -76,20 +76,66 @@ describe('PricingRequestPanel', () => {
     vi.clearAllMocks();
   });
 
-  it('shows an empty state and a create button for the deal owner when there are no requests', async () => {
+  // Ticket-detail IA rebuild Phase 1 clutter follow-up (FIX 1): this panel no
+  // longer renders its own "สร้างใบขอราคา" button — TicketDetailPage's sticky
+  // header CTA owns that action now (opening this panel's create modal via
+  // its forwardRef, see the "imperative handle" describe block below), so
+  // the same label no longer appears twice on one page. The empty state
+  // still explains what the section is for, just without a duplicate CTA.
+  it('shows an empty state for the deal owner when there are no requests, with no create button of its own', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
     renderPanel();
 
     expect(await screen.findByText('ยังไม่มีใบขอราคา')).not.toBeNull();
-    expect(screen.getByRole('button', { name: /สร้างใบขอราคา/ })).not.toBeNull();
+    expect(screen.getByText(/สร้างได้จากปุ่ม/)).not.toBeNull();
+    expect(screen.queryByRole('button', { name: /สร้างใบขอราคา/ })).toBeNull();
   });
 
-  it('does not show the create button for a non-owner', async () => {
+  it('shows a plainer empty-state description for a non-owner (also no create button)', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
     renderPanel({ user: { id: 2, name: 'อื่น', role: 'sales' } });
 
     await screen.findByText('ยังไม่มีใบขอราคา');
+    expect(screen.getByText('ยังไม่มีใบขอราคาสำหรับดีลนี้')).not.toBeNull();
     expect(screen.queryByRole('button', { name: /สร้างใบขอราคา/ })).toBeNull();
+  });
+
+  describe('imperative handle (sticky header CTA trigger)', () => {
+    it('openCreate() is a no-op for a non-owner', async () => {
+      api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
+      const ref = React.createRef();
+      render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <PricingRequestPanel
+            ref={ref}
+            ticketId={701}
+            deal={deal}
+            ticketItems={[]}
+            user={{ id: 2, name: 'อื่น', role: 'sales' }}
+          />
+        </QueryClientProvider>,
+      );
+      await screen.findByText('ยังไม่มีใบขอราคา');
+
+      act(() => ref.current.openCreate());
+
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('openCreate() opens the create modal for the owning sales rep', async () => {
+      api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
+      const ref = React.createRef();
+      render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <PricingRequestPanel ref={ref} ticketId={701} deal={deal} ticketItems={[]} user={salesOwner} />
+        </QueryClientProvider>,
+      );
+      await screen.findByText('ยังไม่มีใบขอราคา');
+
+      act(() => ref.current.openCreate());
+
+      expect(await screen.findByRole('dialog')).not.toBeNull();
+    });
   });
 
   it('renders a request row with its status badge and an expand toggle that loads items/events', async () => {

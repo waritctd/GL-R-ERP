@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { forwardRef, useImperativeHandle, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -32,9 +33,19 @@ const EVENT_LABEL = {
  * created and submitted (see TicketService.create/submit, commit 5).
  *
  * `deal` is the ticket's summary (createdById + lifecycle) — used only for the
- * create-button gate; this component does not know about ticket status/stage.
+ * create gate; this component does not know about ticket status/stage.
+ *
+ * Ticket-detail IA rebuild Phase 1 clutter follow-up: this panel no longer
+ * renders its own "สร้างใบขอราคา" button — the sticky header's primary CTA
+ * (TicketDetailPage's `workState`-derived `CREATE_PCR` action) owns that
+ * action outright now, and opens THIS panel's create modal via the forwardRef
+ * below (same "parent triggers, panel stays the sole gate + mutation owner"
+ * convention DealStagePanel already uses for openEditStage/openHold/...).
+ * Before this, the same "สร้างใบขอราคา" label rendered twice on one page (the
+ * sticky bar's own copy, plus this panel's) — the Phase-1 follow-up audit's
+ * FIX 1.
  */
-export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user, hasHeaderPrimaryAction = false }) {
+export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ ticketId, deal, ticketItems = [], user }, ref) {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
@@ -89,77 +100,60 @@ export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user, ha
   });
 
   const canCreate = canCreatePricingRequest(user, deal);
-  const activeRequest = requests.find((request) => !['CANCELLED', 'SUPERSEDED'].includes(request.status)) ?? requests[0] ?? null;
-  const activeStatus = activeRequest ? pricingRequestStatusLabel(activeRequest.status) : null;
+
+  // Defensive re-check before acting (same convention as DealStagePanel's
+  // ref-exposed openers): a stale or over-eager caller cannot force the
+  // create modal open past the real gate.
+  useImperativeHandle(ref, () => ({
+    openCreate: () => { if (canCreate) setCreateOpen(true); },
+  }));
 
   return (
-    <section className="panel" data-testid="pricing-request-panel">
-      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-        <div className="min-w-0">
-          <h2>ใบขอราคา</h2>
-          <p className="mt-1 text-xs text-text-muted">
-            {requests.length} รายการ
-            {activeRequest ? ` · งานปัจจุบัน ${activeRequest.requestCode} (${activeStatus.label})` : ' · ยังไม่มีงานขอราคา'}
-          </p>
-        </div>
-        {canCreate ? (
-          <button
-            type="button"
-            className={hasHeaderPrimaryAction ? 'secondary-button' : 'primary-button'}
-            onClick={() => setCreateOpen(true)}
-          >
-            <Icon name="plus" size={14} />
-            สร้างใบขอราคา
-          </button>
-        ) : null}
+    <section className="table-panel">
+      <div className="panel-header">
+        <h2>ใบขอราคา (Pricing Request)</h2>
       </div>
 
       {requests.length === 0 ? (
-        <div className="mx-4 mb-4 flex items-start gap-3 rounded-md bg-surface-subtle px-3 py-3 text-sm text-text-muted sm:mx-5">
-          <Icon name="fileText" size={16} className="mt-0.5 shrink-0" />
-          <div className="min-w-0">
-            <div className="font-extrabold text-text-secondary">ยังไม่มีใบขอราคา</div>
-            <div className="mt-1 text-xs leading-snug">
-              {canCreate ? 'สร้างใบขอราคาเพื่อส่งให้ฝ่ายนำเข้าเสนอราคา' : 'ยังไม่มีใบขอราคาสำหรับดีลนี้'}
-            </div>
-          </div>
-        </div>
+        <EmptyState
+          icon="fileText"
+          title="ยังไม่มีใบขอราคา"
+          description={canCreate
+            ? 'ใบขอราคาส่งรายละเอียดสินค้าให้ฝ่ายนำเข้าเสนอราคา — สร้างได้จากปุ่ม “สร้างใบขอราคา” บนแถบด้านบนของหน้า'
+            : 'ยังไม่มีใบขอราคาสำหรับดีลนี้'}
+        />
       ) : (
-        <div className="mx-4 mb-4 divide-y divide-border-subtle border-y border-border-subtle sm:mx-5">
+        <div className="flex flex-col gap-2 p-3">
           {requests.map((pr) => {
             const status = pricingRequestStatusLabel(pr.status);
             const expanded = expandedId === pr.id;
             const detail = expanded ? detailQuery.data : null;
             return (
-              <div key={pr.id} className="bg-surface">
+              <div key={pr.id} className="overflow-hidden rounded-lg border border-border bg-surface">
                 <button
                   type="button"
-                  className="grid w-full gap-2 px-0 py-3 text-left sm:grid-cols-[auto_1fr_auto] sm:items-center"
+                  className="flex w-full flex-wrap items-center gap-2 px-3 py-2.5 text-left"
                   onClick={() => setExpandedId(expanded ? null : pr.id)}
                   aria-expanded={expanded}
                 >
-                  <Icon name={expanded ? 'chevronUp' : 'chevronDown'} size={14} className="mt-0.5 shrink-0 text-text-muted sm:mt-0" />
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <code className="text-xs text-text-muted">{pr.requestCode}</code>
-                      <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-                    </div>
-                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-text-muted">
-                      <span>
-                        {pricingRequestRecipientLabel(pr.recipientType)}
-                        {pr.recipientLabel ? ` · ${pr.recipientLabel}` : ''}
-                      </span>
-                      <span>{pr.itemCount} รายการ</span>
-                      {pr.requiredDate ? <span>ต้องการภายใน {formatThaiDate(pr.requiredDate)}</span> : null}
-                    </div>
-                  </div>
-                  <span className="text-xs text-text-muted sm:text-right">
+                  <Icon name={expanded ? 'chevronUp' : 'chevronDown'} size={14} className="shrink-0 text-text-muted" />
+                  <code className="text-xs text-text-muted">{pr.requestCode}</code>
+                  <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                  <span className="text-xs text-text-muted">
+                    {pricingRequestRecipientLabel(pr.recipientType)}
+                    {pr.recipientLabel ? ` · ${pr.recipientLabel}` : ''}
+                  </span>
+                  <span className="text-xs text-text-muted">{pr.itemCount} รายการ</span>
+                  {pr.requiredDate ? (
+                    <span className="text-xs text-text-muted">ต้องการภายใน {formatThaiDate(pr.requiredDate)}</span>
+                  ) : null}
+                  <span className="ml-auto text-xs text-text-muted">
                     {pr.assignedImportName ? `Import: ${pr.assignedImportName}` : 'ยังไม่มีผู้รับเรื่อง'}
                   </span>
                 </button>
 
                 {(canUpdatePricingRequest(user, pr) || canSubmitPricingRequest(user, pr) || canRequestInformation(user, pr) || canRespondInformation(user, pr) || canCancelPricingRequest(user, pr)) ? (
-                  <div className="flex flex-wrap items-center gap-2 border-t border-border-subtle py-2">
+                  <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2">
                     {canUpdatePricingRequest(user, pr) ? (
                       <button type="button" className="secondary-button" onClick={() => setEditingId(pr.id)}>
                         แก้ไขร่าง
@@ -199,7 +193,7 @@ export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user, ha
                 ) : null}
 
                 {expanded ? (
-                  <div className="border-t border-border-subtle py-3">
+                  <div className="border-t border-border px-3 py-3">
                     {detailQuery.isLoading ? (
                       <p className="text-xs text-text-muted">กำลังโหลด...</p>
                     ) : (
@@ -216,7 +210,7 @@ export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user, ha
                                 ) : null}
                                 <span className="text-text-muted">{[item.color, item.texture, item.size].filter(Boolean).join(' · ')}</span>
                                 <span className="text-text-muted">{item.requestedQty} {item.requestedUnit}</span>
-                                <span className="text-text-muted">ประเภทจำนวน: {quantityTypeLabel(item.quantityType)}</span>
+                                <StatusBadge tone="neutral">{quantityTypeLabel(item.quantityType)}</StatusBadge>
                                 {item.targetDeliveryDate ? (
                                   <span className="text-text-muted">ส่งมอบ {formatThaiDate(item.targetDeliveryDate)}</span>
                                 ) : null}
@@ -378,4 +372,4 @@ export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user, ha
       ) : null}
     </section>
   );
-}
+});

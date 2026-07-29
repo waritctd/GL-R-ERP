@@ -39,23 +39,12 @@ The header answers "which deal, where is it, whose move, what next" without scro
 the four questions the design law demands. It holds:
 
 - **Identity** (1): deal #, customer, project title, owner.
-- **Compact stage context** (3): current phase, current step, optional previous/next context and
-  progress summary. The complete 14-step pipeline stays behind "ดูขั้นตอนทั้งหมด"; it does not
-  dominate the first viewport.
+- **Stage strip** (3): the 14-step pipeline with phase grouping and the current step — the
+  existing pipeline strip, kept; "ดูขั้นตอนทั้งหมด (14 ขั้น)" expands detail.
 - **Work-state banner** (4/6/7): "รอคุณอนุมัติราคา" / "รอฝ่ายนำเข้า" / "CEO ส่งกลับให้แก้ไข"
   — the single most important line, viewer-specific, with the blocker if any.
-- **Compact metadata strip:** inline label/value pairs for supporting axes such as pricing,
-  payment, import and deal value. These are not equal-weight cards.
-- **One next-action slot**: the current viewer's primary action when one exists, plus refresh as
-  an icon action.
 - **Not** a full-width centered "กลับ" back bar (F-14) — the breadcrumb is the single up-nav;
   drop the marketing-ish back bar.
-
-Phase 5A's strict first-viewport rules live in
-`../05-ticket-workspace/PHASE_5A_FIRST_VIEWPORT_CONTRACT.md`; the badge budget lives in
-`../05-ticket-workspace/PHASE_5A_BADGE_AUDIT.md`; the action hierarchy lives in
-`../05-ticket-workspace/PHASE_5A_ACTION_HIERARCHY.md`; loading/error/empty state feedback lives
-in `../05-ticket-workspace/PHASE_5A_STATE_FEEDBACK_CONTRACT.md`.
 
 ## Tabs (the deal's depth)
 
@@ -64,23 +53,12 @@ Tabs are **role-projected** — a viewer only sees tabs they have data/permissio
 | Tab | Contents | Visible to |
 |---|---|---|
 | **ภาพรวม (Overview)** | customer/project/contact (2), items (9), summary, notes | all viewers of the deal |
-| **ราคา (Pricing)** | PCR list + detail (10), approved selling price (11) for all listed; **cost / margin / factory-raw-price sub-sections import+ceo ONLY** (CF1/CF3) | approved-price view: sales(owner), **sales_manager (price only)**, import, ceo · **cost/margin/factory sub-sections: import, ceo only** |
-| **ใบเสนอราคา (Quotations)** | quotations (12), outcomes, docs | sales(owner), sales_manager, ceo, import(view); **account excluded** |
-| **การเงิน (Money)** | payments/deposit/billing (13) | account, ceo, sales(owner); **import denied** |
-| **จัดซื้อ-ส่งมอบ (Fulfilment)** | fulfilment + factory POs + delivery (14) | import, ceo; scoped |
-| **เอกสาร (Documents)** | generated + uploaded docs (15) | per-doc visibility (deposit notice hidden from import) |
-| **กิจกรรม (Activity)** | activity/tracking (17) + audit history (18) | all viewers (audit read-only) |
-
-Phase 5A tightens the tab responsibilities in
-`../05-ticket-workspace/PHASE_5A_TAB_SIMPLIFICATION_CONTRACT.md`:
-
-- Overview is a concise operational summary, not a stack of every workflow panel.
-- Pricing is a compact pricing-request list with active request ownership and blockers.
-- Quotations are dense document rows with customer outcome separated from document status.
-- Money is a compact financial summary, not metric cards.
-- Fulfilment is two connected tracks: procurement/import and customer delivery.
-- Documents is the canonical grouped file list with one upload path.
-- Activity is one chronological structure for events, comments and follow-up.
+| **ราคา (Pricing)** | PCR list + detail (10), approved selling price (11) for all listed; **cost / margin / factory-raw-price sub-sections import+ceo ONLY** (CF1/CF3) | approved-price view: sales(owner), **sales_manager (price only)**, import, ceo — **account excluded** (`PricingRequestService.VIEWER_ROLES = {sales, import, ceo, sales_manager}`, `requireViewable`) · **cost/margin/factory sub-sections: import, ceo only** |
+| **ใบเสนอราคา (Quotations)** | quotations (12), outcomes, docs | sales(owner), sales_manager, ceo, import(view); **account excluded** (`CustomerQuotationService.VIEW_ROLES`) |
+| **การเงิน (Money)** | payments/deposit/billing (13) | account, ceo, sales(owner); **import denied on both sub-reads, by two separate gates, not one** — the payment ledger via `TicketService.listPayments`'s own explicit `IMPORT_ROLES` 403 (layered on top of `requireViewAccess`); the deposit notice / remaining-invoice via `DepositNoticeService.requireTicketViewer`'s own explicit import check (its `VIEWER_ROLES` `Set.of(...)` literal still lists `"import"` as a member, but the method denies it anyway — read the code, not the constant name). Both were mutation-verified in `TicketIaAuthzMatrixIntegrationTest` |
+| **จัดซื้อ-ส่งมอบ (Fulfilment)** | fulfilment + factory POs + delivery (14) | import, ceo; scoped. The raw factory-PO sub-view is `ProcurementService.RAW_PO_ROLES = {import, ceo}` **only** — sales_manager and account, who can read every other viewer-role tab, are 403'd here |
+| **เอกสาร (Documents)** | generated + uploaded docs (15) | per-doc visibility (deposit notice hidden from import). **Uploaded attachments use a different, wider, identity-based model, not the tab's general viewer gate**: `AttachmentController.requireTicketAccess` grants the ticket's participants (`createdById`/`assignedToId`) OR `MANAGER_ROLES = {hr, sales_manager, ceo}` — and `hr` is in that set despite being unable to read the ticket, its pricing, its quotations, its ledger, its deposit notices, or its activity feed anywhere else in this document. Owner-confirmed as intentional and pinned as-is in `TicketIaAuthzMatrixIntegrationTest`; a separate task tracks whether it should change |
+| **กิจกรรม (Activity)** | activity/tracking (17) + audit history (18) | **NOT all viewers** — `TicketService.listActivities` gates on `requireDealOwnership` (deal owner, sales_manager, ceo — its own narrower set, not the tab-general `VIEWER_ROLES`). Owner-confirmed as intentional: import and account are 403'd on the activity feed even though they can read the ticket itself, its pricing, and (import) its quotations. Verified in `TicketIaAuthzMatrixIntegrationTest` |
 
 Tab visibility follows the frontend `salesViewScope` mirror, which itself mirrors the Java
 projection (import sees pricingRequest+delivery, account sees payment/delivery/quotation/
@@ -88,9 +66,11 @@ depositNotice, both hidden from dealTracking). **This is presentation projection
 security boundary** — the backend still enforces per-endpoint. The UI must not render a tab
 whose data the backend would 403.
 
-State feedback follows `../05-ticket-workspace/PHASE_5A_STATE_FEEDBACK_CONTRACT.md`: omitted tab,
-permission-limited partial content, successful empty content, not-applicable stage content,
-loading content, failed content and completed content are different IA signals.
+The role → data gate for every tab above is pinned against the real services and real
+Postgres, per role, including the refusals, in
+`backend/src/test/java/th/co/glr/hr/ticket/TicketIaAuthzMatrixIntegrationTest.java` — read
+that file (not this doc, not the mock) before building the tab-visibility logic; every
+correction in this section traces to a line in it.
 
 ## Context / side panel
 
@@ -109,20 +89,14 @@ button. Driven by the same role+state gates as the backend (`salesActions`/`impo
 `accountActions` resolvers, re-checked server-side):
 - **Primary** = the single next action (8) for the work-state (e.g. "ออกใบเสนอราคา",
   "ยืนยันรับมัดจำ", "อนุมัติราคา").
-- **Secondary** = contextual/manual override actions such as revise or edit stage. The visible
-  bar shows at most two before overflow.
-- **Overflow / other actions** = hold/resume, long-pause, mark-lost and cancellation controls.
-- **Destructive actions** = separated from ordinary actions and confirmed.
+- **Secondary** = contextual (hold/resume, revise, cancel/mark-lost) behind a clearer
+  affordance.
 - **Disabled actions explain why** (design law) — e.g. "ออกใบเสนอราคา" disabled until CEO
   approves, with the reason inline (WHY was a Phase-1 gap on the ticket detail).
 - **Two-signature close** renders as two distinct states: account sees "ยืนยันพร้อมปิดงาน";
   CEO sees "ตรวจและปิดงาน" — never one combined "close" button (B-10).
 
 ## Mobile — what stays, what hides
-
-Phase 5A mobile ticket behaviour is governed by
-`../05-ticket-workspace/PHASE_5A_MOBILE_WORKSPACE_CONTRACT.md`. The core rule is that mobile is
-not desktop in one column.
 
 - **Always visible on mobile:** identity (1), stage chip (3), work-state banner (4/6/7),
   the sticky primary next action (8), blocker (7) when present.
@@ -131,8 +105,6 @@ not desktop in one column.
 - **Never on mobile:** nothing is *forbidden*, but cost/margin and the full audit table are
   low-priority; the deal must be *actionable* on mobile (approve, confirm, log activity,
   check status) even if deep editing (costing, quotation building) is desktop-leaning.
-- **Forbidden at page level:** horizontal scrolling. Long Thai customer/project names, filenames
-  and document numbers must wrap or truncate inside their owning row.
 
 ## Role-sensitive information (must not leak)
 
@@ -140,8 +112,12 @@ not desktop in one column.
 |---|---|---|
 | **Cost / landed cost** | import, ceo | costing/decision `RAW_*` roles |
 | **Margin / selling-price math** | ceo (decision), import (cost side) | `RAW_DECISION_ROLES={import,ceo}`; sales gets `salesView` (price only) |
-| **Payment ledger / deposit notice** | account, ceo, sales(owner) | import denied (`DepositNoticeService`, `listPayments`) |
-| **Customer quotation content** | sales(owner), sales_manager, ceo, import(view) | account excluded |
+| **Pricing requests (PCR list/detail)** | sales(owner), import, ceo, sales_manager | `PricingRequestService.VIEWER_ROLES` — **account excluded**, unlike the ledger/fulfilment/deal-read tabs where account IS a viewer |
+| **Payment ledger / deposit notice** | account, ceo, sales(owner) | import denied by **two independent gates**, not one — `TicketService.listPayments`'s inline `IMPORT_ROLES` 403, and `DepositNoticeService.requireTicketViewer`'s own separate inline import check |
+| **Customer quotation content** | sales(owner), sales_manager, ceo, import(view) | account excluded (`CustomerQuotationService.VIEW_ROLES`) |
+| **Raw factory purchase order** | import, ceo **only** | `ProcurementService.RAW_PO_ROLES` — sales_manager and account do not get this, despite being deal viewers everywhere else |
+| **Activity feed / deal tracking** | deal owner, sales_manager, ceo | `TicketService.requireDealOwnership` (`listActivities`) — import and account excluded, unlike every other viewer-role tab |
+| **Uploaded attachments** | ticket participant (`createdById`/`assignedToId`) or hr/sales_manager/ceo | `AttachmentController.requireTicketAccess` — an identity-based model, not the tab's role gate; **includes hr**, which cannot read the ticket anywhere else in this table (owner-confirmed, tracked separately) |
 | **Deal at all** | `VIEWER_ROLES={sales,import,ceo,account,sales_manager}`, sales own-only | `requireViewAccess`; hr/employee cannot read tickets |
 
 The ticket screen is **not** a place to show employee PII — that lives only on the HR

@@ -1,4 +1,5 @@
 import { Icon } from '../../components/common/Icon.jsx';
+import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
   dealLifecycleLabel, dealStageLabel, formatMoney, fulfilmentStatusLabel, paymentStageLabel,
@@ -32,29 +33,37 @@ function StatChip({ label, value, tone }) {
 }
 
 /**
- * Deal Workspace state header (Phase 2 Slice S2 — see
- * docs/agent-handoffs/104_feat-deal-workspace-unification.md): the single
- * glanceable summary of "where is this deal, and whose move is it" that sits
- * above every other section on the page — deal code/title/customer +
- * lifecycle badge, a compact stat strip (sales stage × PCR status × payment
- * status × fulfilment status × deal value), and a "ถึงคิวคุณ" line naming the
- * current owner-role's next action with one primary CTA that mirrors it.
+ * Deal Workspace state header (Phase 2 Slice S2, folded into the ticket-
+ * detail IA rebuild Phase 1 — see
+ * docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
+ * "Persistent header" / "Action bar (sticky)"): the single glanceable
+ * summary of "where is this deal, and whose move is it" — deal code/title/
+ * customer + lifecycle badge, a compact stat strip (sales stage × PCR status
+ * × payment status × fulfilment status × deal value), ONE work-state banner
+ * line ("whose move, what's blocking" — region 4/6/7 of the IA), and the
+ * sticky action bar's primary CTA + "⋯" overflow trigger. `sticky top-0`:
+ * this is the one thing that should never scroll out of view on a page this
+ * long (see the Phase-1 handoff's measured "4,324px / 12 panels / 15
+ * buttons" finding).
  *
  * Every value here is read straight off the ticket summary / the already-
- * fetched pricingRequests list, or derived by the parent from the SAME `can`
- * flags (themselves gated on `GET /{id}/actions`) that drive every button
- * elsewhere on the page — this component never invents a status or action
- * the data can't support, it only surfaces what TicketDetailPage already
- * computed, once, at the top.
+ * fetched pricingRequests list, or derived by the parent (workState.js's
+ * resolveWorkState + the SAME `can` flags, themselves gated on
+ * `GET /{id}/actions`, that drive every button elsewhere on the page) — this
+ * component never invents a status or action the data can't support, it
+ * only surfaces what TicketDetailPage already computed, once, at the top.
  *
- * `nextAction`: this viewer's own next step (text), or null if it isn't
- * their turn. `waitingHint`: who/what the deal is waiting on instead, when
- * `nextAction` is null. `primaryAction`: the same CTA node the page already
- * renders in the stage panel — passed through, not duplicated, so the two
- * never disagree.
+ * `bannerText`: the ONE work-state line (already composed by the parent —
+ * "ถึงคิวคุณ: ..." / "รอฝ่ายนำเข้า — รอชำระมัดจำ" / etc.), or null when there is
+ * nothing to say (e.g. the deal is on hold/dormant/lost — DealStagePanel
+ * already renders a dedicated banner for those states). `primaryAction`: the
+ * one CTA node this viewer may act on right now, or null — never a second
+ * copy of a button rendered elsewhere on the page. `overflowItems`: the
+ * "⋯" menu's items (see OverflowMenu.jsx), already filtered to what this
+ * viewer may do — empty/undefined renders no trigger at all.
  */
 export function DealStateHeader({
-  summary, pricingRequests = [], primaryAction, nextAction, waitingHint, onRefresh,
+  summary, pricingRequests = [], primaryAction, bannerText, overflowItems, onRefresh,
 }) {
   const lifecycle = dealLifecycleLabel(summary.lifecycle ?? 'ACTIVE');
   const stage = dealStageLabel(summary.salesStage);
@@ -68,10 +77,8 @@ export function DealStateHeader({
   const latestPr = pricingSummary ? pricingSummary.requests[pricingSummary.requests.length - 1] : null;
   const pricingStatus = latestPr ? pricingRequestStatusLabel(latestPr.status) : null;
 
-  const queueText = nextAction ?? waitingHint ?? null;
-
   return (
-    <section className="flex flex-col gap-4 rounded-xl border border-border bg-surface p-4 sm:p-5">
+    <section className="sticky top-0 z-10 flex flex-col gap-4 rounded-xl border border-border bg-surface p-4 shadow-sm sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -108,15 +115,24 @@ export function DealStateHeader({
         <StatChip label="มูลค่าดีล" value={formatMoney(summary.amountPayable ?? 0)} />
       </dl>
 
-      {queueText ? (
+      {/* The sticky action bar (IA "Action bar (sticky)"): ONE work-state
+          line + the one primary CTA this viewer may act on + the "⋯"
+          overflow. Hidden entirely when there is nothing to say and nothing
+          to do — never an empty chrome bar. */}
+      {bannerText || primaryAction || (overflowItems && overflowItems.length > 0) ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info-border bg-info-bg px-4 py-3">
           <div className="flex min-w-0 items-start gap-2">
-            <Icon name="chevronRight" size={14} className="mt-0.5 shrink-0 text-info" />
-            <span className="text-sm font-bold text-info">
-              {nextAction ? `ถึงคิวคุณ: ${nextAction}` : queueText}
-            </span>
+            {bannerText ? (
+              <>
+                <Icon name="chevronRight" size={14} className="mt-0.5 shrink-0 text-info" />
+                <span className="text-sm font-bold text-info">{bannerText}</span>
+              </>
+            ) : null}
           </div>
-          {nextAction && primaryAction ? <div className="shrink-0">{primaryAction}</div> : null}
+          <div className="flex shrink-0 items-center gap-2">
+            {primaryAction ? <div className="shrink-0">{primaryAction}</div> : null}
+            <OverflowMenu items={overflowItems} />
+          </div>
         </div>
       ) : null}
     </section>
