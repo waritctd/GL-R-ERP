@@ -26,6 +26,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         actions: vi.fn(),
         comment: vi.fn(),
         confirmFinalPayment: vi.fn(),
+        // Ticket-detail IA rebuild Phase 1 clutter follow-up (FIX 2): เลื่อนไป
+        // moved into the header overflow menu, whose onSelect calls this via
+        // DealStagePanel's own onUpdateStage prop — see the "stage-advance
+        // readiness travels with เลื่อนไป" describe block.
+        updateStage: vi.fn(),
         revision: vi.fn(),
         editItems: vi.fn(),
         downloadQuotationXlsx: vi.fn(),
@@ -696,8 +701,11 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage(salesOwnerUser);
 
-    fireEvent.click(await screen.findByRole('button', { name: /ขอแก้ไข \(Revise\)/ }));
-    const confirmButton = screen.getByRole('button', { name: 'ยืนยันขอแก้ไข' });
+    // ขอแก้ไข (Revise) collapsed into the header's "⋯" overflow menu
+    // (ticket-detail IA rebuild Phase 1) — open the menu, then its item.
+    fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /ขอแก้ไข \(Revise\)/ }));
+    const confirmButton = await screen.findByRole('button', { name: 'ยืนยันขอแก้ไข' });
 
     // The button's disabled={actionLoading || !reviseReason.trim()} guard
     // (unchanged by this slice) makes the inline-error branch in its onClick
@@ -718,9 +726,175 @@ describe('TicketDetailPage', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  // Ticket-detail IA rebuild Phase 1 clutter follow-up (FIX 1): CREATE_PCR
+  // used to render as a "scroll to PricingRequestPanel" sticky button while
+  // that panel ALSO rendered its own "สร้างใบขอราคา" button — the same label,
+  // visible twice at once (the sticky bar never scrolls out of view). The
+  // sticky bar now opens PricingRequestPanel's create modal directly via its
+  // forwardRef, and the panel renders no button of its own.
+  describe('sticky header primary CTA — CREATE_PCR owns "สร้างใบขอราคา" alone', () => {
+    it('renders exactly one "สร้างใบขอราคา" control (the sticky primary), and clicking it opens the PCR panel\'s own create modal', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'LEAD_APPROACH', createdById: 1 } }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'LEAD_APPROACH', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+        availableActions: [],
+      });
+      api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
+
+      renderTicketDetailPage(salesOwnerUser);
+
+      expect(await screen.findByText('ถึงคิวคุณ: สร้างใบขอราคา')).not.toBeNull();
+      const stickyButtons = await screen.findAllByRole('button', { name: /สร้างใบขอราคา/ });
+      expect(stickyButtons).toHaveLength(1);
+      expect(screen.queryByRole('dialog')).toBeNull();
+
+      fireEvent.click(stickyButtons[0]);
+
+      expect(await screen.findByRole('dialog')).not.toBeNull();
+      // Still exactly one "สร้างใบขอราคา" trigger even with the modal open —
+      // the modal's own title text uses the same string, so this scopes to
+      // buttons only (not headings) to keep proving "no duplicate button".
+      expect(screen.getAllByRole('button', { name: /สร้างใบขอราคา/ })).toHaveLength(1);
+    });
+  });
+
+  // Ticket-detail IA rebuild Phase 1 clutter follow-up round 2 (FIX 2): the
+  // previous pass only de-duplicated "สร้างใบขอราคา" — an independent review
+  // caught that "ออกใบเสนอราคา" (DealQuotationPanel.jsx, salesActions.js's
+  // ISSUE_QUOTATION label) and "ยืนยันคำสั่งซื้อ" (CONFIRM_ORDER) were STILL
+  // rendering twice: once as the sticky bar's own scroll-to-DealQuotationPanel
+  // button, once as DealQuotationPanel's own button underneath — both visible
+  // at once since the sticky bar never scrolls away. Same "ref-opener, one
+  // copy on the page, and it actually performs the mutation" fix as CREATE_PCR.
+  describe('sticky header primary CTA — ISSUE_QUOTATION/CONFIRM_ORDER own their labels alone', () => {
+    it('renders exactly one "ออกใบเสนอราคา" control (the sticky primary), and clicking it issues the quotation directly', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', createdById: 1 } }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+        availableActions: [],
+      });
+      api.pricingRequests.listForTicket.mockResolvedValue({
+        items: [{
+          id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
+          status: 'APPROVED_FOR_QUOTATION', recipientType: 'BUYER', recipientLabel: null, orderConfirmedAt: null,
+        }],
+      });
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({
+        items: [{ id: 9101, docStatus: 'DRAFT', quotationRevisionNo: 1, grandTotal: 1000 }],
+      });
+      api.pricingRequests.issueCustomerQuotation.mockResolvedValue({
+        quotation: { id: 9101, docStatus: 'ISSUED', quotationRevisionNo: 1 },
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+
+      expect(await screen.findByText('ถึงคิวคุณ: ออกใบเสนอราคา')).not.toBeNull();
+      const stickyButtons = await screen.findAllByRole('button', { name: /ออกใบเสนอราคา/ });
+      expect(stickyButtons).toHaveLength(1);
+
+      fireEvent.click(stickyButtons[0]);
+
+      await waitFor(() => expect(api.pricingRequests.issueCustomerQuotation).toHaveBeenCalledWith(
+        9101, expect.objectContaining({ clientRequestId: expect.any(String) }),
+      ));
+      // Still exactly one after the mutation resolves and the panel re-renders.
+      expect(screen.getAllByRole('button', { name: /ออกใบเสนอราคา/ })).toHaveLength(1);
+    });
+
+    it('renders exactly one "ยืนยันคำสั่งซื้อ" control (the sticky primary), and clicking it confirms the order directly', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', createdById: 1 } }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+        availableActions: [],
+      });
+      api.pricingRequests.listForTicket.mockResolvedValue({
+        items: [{
+          id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
+          status: 'QUOTATION_ACCEPTED', recipientType: 'BUYER', recipientLabel: null, orderConfirmedAt: null,
+        }],
+      });
+      api.pricingRequests.confirmOrder.mockResolvedValue({});
+
+      renderTicketDetailPage(salesOwnerUser);
+
+      expect(await screen.findByText('ถึงคิวคุณ: ยืนยันคำสั่งซื้อ')).not.toBeNull();
+      const stickyButtons = await screen.findAllByRole('button', { name: /ยืนยันคำสั่งซื้อ/ });
+      expect(stickyButtons).toHaveLength(1);
+
+      fireEvent.click(stickyButtons[0]);
+
+      await waitFor(() => expect(api.pricingRequests.confirmOrder).toHaveBeenCalledWith(
+        501, expect.objectContaining({ clientRequestId: expect.any(String) }),
+      ));
+      expect(screen.getAllByRole('button', { name: /ยืนยันคำสั่งซื้อ/ })).toHaveLength(1);
+    });
+  });
+
+  // P3 (review round 2): the blocker line ("รอชำระมัดจำ" / "รอชำระส่วนที่เหลือ")
+  // lost its `!isAccount` guard — account is the role whose OWN action
+  // (confirmDeposit/confirmFinalPayment, nextAccountAction) clears each wait,
+  // so it must never read as a blocker FOR them too. Uses a legacy
+  // (pre-dual-track, status: 'document_issued') ticket so nextAccountAction
+  // itself resolves to null (its own gates require status: 'quotation_issued')
+  // — isolating the blocker guard from FIX 1's resolver-first primary, which
+  // would otherwise mask the same bug by giving account a real primary action
+  // instead (see workState.test.js's own account/ORDER_RECEIVED case).
+  //
+  // The "shows it to someone else" side uses sales_manager, not ceo — ROLE_
+  // PERMISSIONS.canConfirmPayments (src/api/routes.js) is `['account', 'ceo']`,
+  // so `isAccount` is ALSO true for ceo (they can confirm payments too); using
+  // ceo here would have silently exercised the exact same guard as the
+  // account case instead of a genuine "someone who isn't account" control.
+  describe('blocker line respects !isAccount (P3)', () => {
+    function legacyDepositWaitingTicket() {
+      return buildTicket({
+        summary: {
+          lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE',
+          status: 'document_issued', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', createdById: 1,
+        },
+      });
+    }
+    const salesManagerUser = { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' };
+
+    it('shows "รอชำระมัดจำ" to a non-account role (sales_manager)', async () => {
+      api.tickets.get.mockResolvedValue({ ticket: legacyDepositWaitingTicket() });
+      api.tickets.actions.mockResolvedValue({
+        currentState: {
+          lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null, status: 'document_issued',
+        },
+        availableActions: [],
+      });
+
+      renderTicketDetailPage(salesManagerUser);
+
+      expect(await screen.findByText(/รอชำระมัดจำ/)).not.toBeNull();
+    });
+
+    it('never shows "รอชำระมัดจำ" to account — account is the role that clears it', async () => {
+      api.tickets.get.mockResolvedValue({ ticket: legacyDepositWaitingTicket() });
+      api.tickets.actions.mockResolvedValue({
+        currentState: {
+          lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null, status: 'document_issued',
+        },
+        availableActions: [],
+      });
+
+      renderTicketDetailPage(accountUser);
+
+      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      expect(screen.queryByText(/รอชำระมัดจำ/)).toBeNull();
+    });
+  });
+
   // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
   describe('deal tracking panel', () => {
-    it('shows the section, the win% default, and the pre-emptive gate hint when nextFollowUpAt is unset', async () => {
+    it('shows the section and the win% default; the pre-emptive gate hint now sits next to the advance button, not here', async () => {
       api.tickets.get.mockResolvedValue({
         ticket: buildTicket({ summary: { salesStage: 'QUOTE_DESIGN_SIDE' } }),
       });
@@ -731,7 +905,12 @@ describe('TicketDetailPage', () => {
       expect(await screen.findByText('ยังไม่พร้อม')).not.toBeNull();
       // QUOTE_DESIGN_SIDE's stage default (WIN_PROBABILITY_DEFAULTS) — no override set.
       expect(screen.getByText('40%')).not.toBeNull();
-      expect(screen.getByText(/ต้องระบุวันติดตามครั้งถัดไป และบันทึกกิจกรรมอย่างน้อย 1 รายการก่อนเลื่อนสถานะ/)).not.toBeNull();
+      // Ticket-detail IA rebuild Phase 1 (Phase-1 audit finding #3, "y=870"):
+      // the descriptive gate sentence moved out of this panel entirely — it
+      // now renders next to DealStagePanel's "เลื่อนไป" button instead (see
+      // the "stage-advance readiness sits next to the button" describe block
+      // below), so it must NOT reappear here alongside the compact badge.
+      expect(screen.queryByText(/ต้องระบุวันติดตามครั้งถัดไป/)).toBeNull();
     });
 
     it('is ready to advance once nextFollowUpAt is set and an activity was logged since the last stage change', async () => {
@@ -770,6 +949,151 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByRole('heading', { level: 2, name: 'การติดตามดีล' })).toBeNull();
       expect(screen.getByText('การติดตามดีล')).not.toBeNull(); // SectionPeek's title span
       expect(api.tickets.listActivities).not.toHaveBeenCalled();
+    });
+  });
+
+  // Ticket-detail IA rebuild Phase 1 (Phase-1 audit finding #3, "y=870"), then
+  // the Phase-1 clutter follow-up (FIX 2): the stage-advance readiness gate
+  // used to sit directly beside DealStagePanel's own "เลื่อนไป" button; that
+  // button then moved into the header "⋯" overflow menu (a second,
+  // filled-indigo "primary" competing with the sticky header's own CTA was
+  // exactly the clutter this follow-up exists to remove) — its gate had to
+  // travel with it, so it renders present-but-disabled-with-reason in the
+  // menu rather than just not being there.
+  describe('stage-advance readiness travels with เลื่อนไป into the overflow menu', () => {
+    function actionsWithAdvance(overrides = {}) {
+      return {
+        currentState: {
+          lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed',
+        },
+        availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'OWNER_SIGNOFF' }],
+        ...overrides,
+      };
+    }
+
+    it('lists เลื่อนไป present-but-disabled with the gate hint readable when not ready', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { salesStage: 'QUOTE_DESIGN_SIDE', nextFollowUpAt: null } }),
+      });
+      api.tickets.actions.mockResolvedValue(actionsWithAdvance());
+
+      renderTicketDetailPage(ceoUser);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+      const advanceItem = await screen.findByTestId('deal-stage-advance');
+      expect(advanceItem).not.toBeNull();
+      expect(advanceItem.getAttribute('aria-disabled')).toBe('true');
+      expect(within(advanceItem).getByText(/ต้องระบุวันติดตามครั้งถัดไป และบันทึกกิจกรรมอย่างน้อย 1 รายการก่อนเลื่อนสถานะ/)).not.toBeNull();
+
+      // Present-but-disabled, not reachable: clicking it must not fire the mutation.
+      fireEvent.click(advanceItem);
+      expect(api.tickets.updateStage).not.toHaveBeenCalled();
+      // Same reason it's a no-op still applies (list, not just its own gate) — see
+      // the DealStagePanel-side openAdvance() re-check tests for the pure gate.
+    });
+
+    it('lists เลื่อนไป enabled with no disabled reason once ready, and it actually advances the stage', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { salesStage: 'QUOTE_DESIGN_SIDE', nextFollowUpAt: '2026-07-15' } }),
+      });
+      api.tickets.actions.mockResolvedValue(actionsWithAdvance());
+      api.tickets.listActivities.mockResolvedValue({
+        items: [{
+          id: 1, ticketId: 701, activityDate: '2026-07-03', kind: 'CALL', note: 'โทรติดตาม',
+          createdById: 9, createdByName: 'CEO ทดสอบ', createdAt: '2026-07-03T09:00:00.000Z',
+        }],
+      });
+      api.tickets.updateStage.mockResolvedValue({});
+
+      renderTicketDetailPage(ceoUser);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+      const advanceItem = await screen.findByTestId('deal-stage-advance');
+      expect(advanceItem.getAttribute('aria-disabled')).toBeNull();
+      expect(screen.queryByText(/ต้องระบุวันติดตามครั้งถัดไป/)).toBeNull();
+
+      fireEvent.click(advanceItem);
+      await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledWith(701, { stage: 'OWNER_SIGNOFF' }));
+    });
+
+    // FIX 3 (P2, clutter-follow-up review round 2): the old inline "เลื่อนไป"
+    // button was `disabled={actionLoading}`, so a mutation already in flight
+    // blocked a second click. The overflow item's own `disabled` used to be
+    // `!readyToAdvance` ONLY — reopening "⋯" and clicking again while the
+    // first updateStage was still pending fired a second POST, the second
+    // one landing as a 409 "Deal is already in stage X" red toast
+    // (TicketService.java:1143). Proves the fix end-to-end: item disabled
+    // while in flight, AND the click is a genuine no-op (not just visually
+    // disabled) — exactly one request total.
+    it('a second click on เลื่อนไป while the first updateStage is still in flight does not fire a duplicate request', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { salesStage: 'QUOTE_DESIGN_SIDE', nextFollowUpAt: '2026-07-15' } }),
+      });
+      api.tickets.actions.mockResolvedValue(actionsWithAdvance());
+      api.tickets.listActivities.mockResolvedValue({
+        items: [{
+          id: 1, ticketId: 701, activityDate: '2026-07-03', kind: 'CALL', note: 'โทรติดตาม',
+          createdById: 9, createdByName: 'CEO ทดสอบ', createdAt: '2026-07-03T09:00:00.000Z',
+        }],
+      });
+      let resolveUpdateStage;
+      api.tickets.updateStage.mockImplementation(() => new Promise((resolve) => { resolveUpdateStage = resolve; }));
+
+      renderTicketDetailPage(ceoUser);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+      fireEvent.click(await screen.findByTestId('deal-stage-advance'));
+      await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledTimes(1));
+
+      // Reopen the menu while the first request is still pending (actionLoading
+      // is true) and click "เลื่อนไป" again.
+      fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+      const advanceItemAgain = await screen.findByTestId('deal-stage-advance');
+      expect(advanceItemAgain.getAttribute('aria-disabled')).toBe('true');
+      fireEvent.click(advanceItemAgain);
+
+      // Still exactly one request — both the item's own disabled state and
+      // openAdvance()'s actionLoading re-check block the second click.
+      expect(api.tickets.updateStage).toHaveBeenCalledTimes(1);
+
+      resolveUpdateStage({ ticket: buildTicket() });
+    });
+  });
+
+  // Ticket-detail IA rebuild Phase 1: the header overflow menu recomputes
+  // canEditStage/canHoldDeal/canDormantDeal/canLostDeal itself (it can't
+  // read them off DealStagePanel's ref during the parent's own render), so
+  // it must mirror DealStagePanel's full gate — including the IMPLICIT
+  // "only while lifecycle is plain ACTIVE" the panel enforced via which JSX
+  // branch rendered those buttons, not just the bare `hasAction(...)` calls.
+  describe('header overflow menu / danger zone (ON_HOLD lifecycle regression)', () => {
+    it('does not duplicate "พัก dormant" when the deal is ON_HOLD (DealStagePanel already offers it in its own banner)', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { lifecycle: 'ON_HOLD', salesStage: 'QUOTE_DESIGN_SIDE' } }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ON_HOLD', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+        // Mirrors the real service: an ON_HOLD deal's availableActions only
+        // ever include RESUME/MARK_DORMANT (see DealStagePanel's own
+        // ON_HOLD banner) — MARK_DORMANT being present here is exactly what
+        // makes the header menu's naive `hasAction('MARK_DORMANT')` check
+        // insufficient on its own.
+        availableActions: [{ action: 'RESUME' }, { action: 'MARK_DORMANT' }],
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+
+      // DealStagePanel's own ON_HOLD banner renders one "พัก dormant" button.
+      expect(await screen.findAllByText('พัก dormant')).toHaveLength(1);
+
+      // The header overflow trigger must not even offer a second copy —
+      // either it doesn't render at all (no other items available either),
+      // or its menu doesn't contain "พัก dormant".
+      const trigger = screen.queryByRole('button', { name: 'การดำเนินการเพิ่มเติม' });
+      if (trigger) {
+        fireEvent.click(trigger);
+        expect(screen.queryByRole('menuitem', { name: 'พัก dormant' })).toBeNull();
+      }
     });
   });
 

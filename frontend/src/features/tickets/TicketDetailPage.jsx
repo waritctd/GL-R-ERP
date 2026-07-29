@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
@@ -23,6 +24,7 @@ import {
 import { downloadBlob } from '../../utils/download.js';
 import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
 import { CancelDealModal } from './CancelDealModal.jsx';
+import { hasActivitySince, isReadyToAdvance, lastStageChangeAt, STAGE_ADVANCE_GATE_HINT } from './dealTrackingMeta.js';
 import { DealDepositPanel } from './DealDepositPanel.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
@@ -30,6 +32,51 @@ import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
+import { allowedTargetStages, canMarkLost, canSetStage, nextStage } from './stageMeta.js';
+import { resolveWorkState } from './workState.js';
+
+// Ticket-detail IA rebuild Phase 1 (see
+// docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
+// "Action bar (sticky)"): where the sticky primary button sends the viewer
+// when workState.js hands back an action this page has no dedicated `can.*`
+// button for (FOLLOW_UP/LOG_ACTIVITY for sales; the fulfilment chain for
+// import; the deposit/final-payment/close-ready steps for account) — an
+// in-page anchor id when the real control already lives further down THIS
+// page, so the button scrolls to it instead of duplicating its logic (never
+// a second copy of a mutation the real panel already owns and gates).
+// Import's pickup step and account's commission step point at a different
+// ROUTE entirely (nextImportAction/nextAccountAction's own `to`), handled
+// separately below. CREATE_PCR/ISSUE_QUOTATION/CONFIRM_ORDER are NOT
+// scroll targets — each opens its owning panel's mutation directly via a
+// forwardRef instead (see pricingRequestPanelRef/dealQuotationPanelRef
+// below and their own FIX 1/FIX 2 doc comments), so they are deliberately
+// absent from this map.
+const IN_PAGE_JUMP_TARGET = {
+  // salesActions.js SALES_ACTION keys
+  follow_up: 'deal-tracking-panel',
+  log_activity: 'deal-tracking-panel',
+  // importActions.js codes
+  issueImportRequest: 'deal-fulfilment-panel',
+  markIrSent: 'deal-fulfilment-panel',
+  markShipping: 'deal-fulfilment-panel',
+  markGoodsReceived: 'deal-fulfilment-panel',
+  recordDelivery: 'deal-fulfilment-panel',
+  // accountActions.js keys
+  chaseOverdue: 'deal-deposit-panel',
+  confirmDeposit: 'deal-deposit-panel',
+  confirmFinalPayment: 'deal-deposit-panel',
+  confirmCloseReady: 'deal-deposit-panel',
+};
+
+function scrollToSection(id) {
+  const el = typeof document !== 'undefined' ? document.getElementById(id) : null;
+  if (!el) return;
+  // jsdom (Vitest) doesn't implement scrollIntoView — guarded so the same
+  // jump helper used by the revise-form effect and the sticky primary CTA
+  // doesn't throw under test, only under a real browser's absence of it.
+  el.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  el.focus?.({ preventScroll: true });
+}
 
 const EVENT_KIND_LABEL = {
   CREATED:            'สร้างดีล',
@@ -144,6 +191,23 @@ function SectionPeek({ title, summary }) {
 
 export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  // Imperative handle onto DealStagePanel (see its own doc comment): the
+  // header overflow menu / bottom danger zone trigger its modals from here,
+  // but DealStagePanel stays the sole owner of whether each is actually
+  // available and of the modal/mutation itself.
+  const dealStagePanelRef = useRef(null);
+  // Imperative handle onto PricingRequestPanel (FIX 1, ticket-detail IA
+  // rebuild Phase 1 clutter follow-up): the sticky header's CREATE_PCR
+  // primary CTA opens this panel's own create modal directly instead of
+  // duplicating a second "สร้างใบขอราคา" button — same convention as
+  // dealStagePanelRef above.
+  const pricingRequestPanelRef = useRef(null);
+  // Imperative handle onto DealQuotationPanel (clutter follow-up round 2,
+  // FIX 2): the sticky header's ISSUE_QUOTATION/CONFIRM_ORDER primary CTAs
+  // trigger this panel's own mutations directly instead of scrolling to a
+  // second copy of each button — same convention as the two refs above.
+  const dealQuotationPanelRef = useRef(null);
 
   // Edit-items mode
   const [editMode, setEditMode] = useState(false);
@@ -298,6 +362,18 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   useEffect(() => {
     if (ticketQuery.error) showToast('error', ticketQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
   }, [ticketQuery.error, showToast]);
+
+  // The revise form (see the "can.revise && showReviseForm" section further
+  // down) opens ~400px below where its overflow-menu trigger lives — unlike
+  // every other overflow item, which opens a modal in place. Without this,
+  // opening it was a silent no-op from the viewer's vantage point (nothing
+  // visibly happened until they scrolled to look for it), which is exactly
+  // the "the control that matters is off-screen" problem this rebuild
+  // exists to fix. Runs after the section actually mounts (the effect fires
+  // on the render where showReviseForm just became true).
+  useEffect(() => {
+    if (showReviseForm) scrollToSection('revise-form');
+  }, [showReviseForm]);
 
   const attachmentsQuery = useQuery({
     queryKey: queryKeys.ticketAttachments(ticketId),
@@ -568,12 +644,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     downloadRemainingInvoice: st === 'quotation_issued' && fs === 'GOODS_RECEIVED' && isSales,
   };
 
-  // การดำเนินการอื่น ๆ now holds only the rare actions — everything workflow-
-  // shaped (dual-track confirmations/close) moved into the DealStagePanel
-  // cockpit, and docs live in its เอกสารของขั้นนี้ row. The section hides
-  // entirely when none of the remaining actions apply.
-  const hasActions = can.revise || can.editItems || can.cancel
-    || can.revokeCloseConfirm
+  // การดำเนินการอื่น ๆ now holds only the rare actions — the workflow-shaped
+  // dual-track confirmations/close live in the sticky header, docs live in
+  // DealStagePanel's เอกสารของขั้นนี้ row, and แก้ไขสถานะ/พักดีลไว้/พัก dormant/
+  // ขอแก้ไข/เสียงาน/ยกเลิก moved into the header overflow menu and the bottom
+  // "จัดการดีล" danger zone (ticket-detail IA rebuild Phase 1 — see
+  // workState.js's own doc comment). The section hides entirely when none of
+  // the remaining actions apply.
+  const hasActions = can.editItems || can.revokeCloseConfirm
     || (st === 'draft' && isOwner && items.length === 0);
 
   const status = ticketStatusLabel(st);
@@ -582,7 +660,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // `can` flags above (which already encode real status+role permission checks).
   // Verified against backend/mock transition handlers (see api.tickets.* in
   // src/api/mockApi.js) so the wording matches what the button actually does.
-  // Never invents an owner or action the data can't support.
+  // Never invents an owner or action the data can't support. 'revise' is
+  // deliberately NOT in this cascade any more (Phase-1 audit finding #1): it
+  // describes an OPTIONAL action, not something blocking the deal's progress,
+  // so it no longer competes for the one "ถึงคิวคุณ" banner slot — it is still
+  // fully reachable, from the header overflow menu.
   const NEXT_ACTION_STEPS = [
     // Dual-track steps: re-issuing/working the customer quotation lives in
     // DealQuotationPanel, the deposit-notice/deposit-payment steps live in
@@ -592,26 +674,33 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // operational chain this page's own primaryAction button still drives.
     ['confirmCustomer',  'ยืนยันว่าลูกค้าตกลงคำสั่งซื้อแล้ว'],
     ['confirmFinalPayment','ยืนยันว่าลูกค้าชำระส่วนที่เหลือครบแล้ว'],
-    ['revise',            'ขอแก้ไขรายละเอียดใบขอราคานี้ได้หากจำเป็น'],
     ['confirmClose',      'ส่งมอบและรับเงินครบแล้ว — ยืนยันเพื่อส่งให้ CEO ตรวจสอบปิดงาน'],
     ['verifyClose',       'ฝ่ายบัญชียืนยันแล้ว — ตรวจสอบและปิดงานได้เลย'],
   ];
   const nextAction = NEXT_ACTION_STEPS.find(([key, text]) => can[key] && text)?.[1] ?? null;
 
-  // Passive hint when the payment track waits on ฝ่ายบัญชี — money-receipt
-  // confirmations belong to the account role (CEO fallback), so sales/import
-  // would otherwise see a stalled payment stepper with no explanation. Shown
-  // alongside the personal next-action callout, not instead of it.
-  // Awaiting the CEO's verification outranks the payment hints: it is the last
-  // thing standing between this deal and closed, and it is invisible otherwise.
+  // The blocker line (region 7 of the IA — "unmet precondition"): why the
+  // deal isn't moving even though it might not be this viewer's turn to act.
+  // Paired with the "รอ<role>" waiting banner below, never with an actionable
+  // "ถึงคิวคุณ" line (a live primary action is never "blocked" by the same
+  // thing the banner would name — pairing the two would read as a
+  // contradiction). Kept to the fact only (design law: brief — who/what, not
+  // what-to-do-about-it-by-when).
   const closeConfirmedAt = summary?.closeConfirmedAt ?? null;
-  const waitingHint = closeConfirmedAt && !can.verifyClose
-    ? `ฝ่ายบัญชียืนยันพร้อมปิดงานแล้ว${summary?.closeConfirmedByName ? ` (${summary.closeConfirmedByName})` : ''} — รอ CEO ตรวจสอบ`
-    : (st === 'quotation_issued' && !isAccount)
-      ? (ps === 'DEPOSIT_NOTICE_ISSUED' ? 'รอฝ่ายบัญชียืนยันรับยอดมัดจำ'
-        : ps === 'AWAITING_FINAL_PAYMENT' ? 'รอฝ่ายบัญชียืนยันรับชำระส่วนที่เหลือ'
-        : null)
-      : null;
+  // !isAccount on the two payment-wait lines (P3, review round 2): account
+  // is the role that CLEARS these two waits (confirmDeposit/
+  // confirmFinalPayment — see nextAccountAction in accountActions.js) — for
+  // account specifically, this line would otherwise read "รอชำระมัดจำ" right
+  // next to their own resolver-derived "ถึงคิวคุณ: ยืนยันรับมัดจำ" primary,
+  // stating the same fact twice (once as a call to action, once as a
+  // blocker) instead of pairing the blocker with a role that ISN'T the one
+  // who can act on it — exactly the contradiction this line's own doc
+  // comment above warns against.
+  const blocker = closeConfirmedAt && !can.verifyClose
+    ? 'รอ CEO ตรวจสอบปิดงาน'
+    : ps === 'DEPOSIT_NOTICE_ISSUED' && !isAccount ? 'รอชำระมัดจำ'
+      : ps === 'AWAITING_FINAL_PAYMENT' && !isAccount ? 'รอชำระส่วนที่เหลือ'
+        : null;
 
   // The cockpit's primary action: the ONE workflow button for this viewer's
   // current sub-step (moved verbatim out of การดำเนินการอื่น ๆ). The
@@ -647,6 +736,206 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       ตรวจสอบและปิดงาน
     </button>
   ) : null;
+
+  // Sticky action bar (ticket-detail IA rebuild Phase 1). `primaryAction`
+  // above (confirmCustomer/finalPayment/close/verify) is a REAL, server-
+  // gated button — when it exists it always wins, unchanged. workState.js's
+  // resolveWorkState fills the gap for every earlier cascade step
+  // (CREATE_PCR/ISSUE_QUOTATION/CONFIRM_ORDER/FOLLOW_UP/LOG_ACTIVITY for
+  // sales; the fulfilment chain for import; deposit/final-payment/close-
+  // ready for account) that this page has no dedicated `can.*` button for —
+  // rendered as a "jump to the real control" convenience (in-page scroll,
+  // or a real route when the control lives elsewhere), never a duplicate of
+  // the mutation itself. See workState.js's own doc comment for why it can
+  // also say "not your turn" (`waitingRoleLabel`), which nextSalesAction/
+  // nextImportAction/nextAccountAction alone cannot express.
+  //
+  // CREATE_PCR/ISSUE_QUOTATION/CONFIRM_ORDER are the exceptions to "jump,
+  // don't duplicate" (FIX 1 + FIX 2, Phase-1 clutter follow-up rounds 1/2):
+  // each used to scroll to a panel that ALSO rendered its own button with
+  // the exact same label — visible twice at once, since a sticky bar never
+  // scrolls out of view. Each now triggers its owning panel's mutation
+  // directly via a forwardRef (pricingRequestPanelRef / dealQuotationPanelRef),
+  // and that panel no longer renders a trigger of its own — the sticky bar
+  // is the only copy of each label on the page.
+  const workState = resolveWorkState(user, summary, pricingRequests);
+  const workStateAction = workState.action;
+  let stickyPrimaryLabel = nextAction;
+  let stickyPrimaryAction = primaryAction;
+  if (!stickyPrimaryAction && workStateAction) {
+    const actionKey = workStateAction.key ?? workStateAction.code;
+    const jumpId = IN_PAGE_JUMP_TARGET[actionKey];
+    const to = workStateAction.to;
+    if (to && to !== `/tickets/${ticketId}`) {
+      stickyPrimaryAction = (
+        <button type="button" className="primary-button" onClick={() => navigate(to)}>
+          {workStateAction.label}
+          <Icon name="chevronRight" size={14} />
+        </button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
+    } else if (actionKey === 'create_pcr') {
+      stickyPrimaryAction = (
+        <button type="button" className="primary-button" onClick={() => pricingRequestPanelRef.current?.openCreate()}>
+          <Icon name="plus" size={14} />
+          {workStateAction.label}
+        </button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
+    } else if (actionKey === 'issue_quotation') {
+      stickyPrimaryAction = (
+        <button type="button" className="primary-button" onClick={() => dealQuotationPanelRef.current?.openIssueQuotation()}>
+          {workStateAction.label}
+        </button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
+    } else if (actionKey === 'confirm_order') {
+      stickyPrimaryAction = (
+        <button type="button" className="primary-button" onClick={() => dealQuotationPanelRef.current?.openConfirmOrder()}>
+          {workStateAction.label}
+        </button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
+    } else if (jumpId) {
+      stickyPrimaryAction = (
+        <button type="button" className="primary-button" onClick={() => scrollToSection(jumpId)}>
+          {workStateAction.label}
+          <Icon name="chevronRight" size={14} />
+        </button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
+    }
+  }
+
+  // The ONE work-state banner line (IA region 4/6/7 — replaces the old
+  // duplicated "ถึงคิวคุณ" text that used to appear once in DealStateHeader
+  // and again, unprefixed, in DealStagePanel's own guidance line — Phase-1
+  // audit findings #1/#2).
+  const bannerText = stickyPrimaryLabel
+    ? `ถึงคิวคุณ: ${stickyPrimaryLabel}`
+    : workState.waitingRoleLabel
+      ? `รอ${workState.waitingRoleLabel}${blocker ? ` — ${blocker}` : ''}`
+      : blocker;
+
+  // Overflow-menu / danger-zone availability — mirrors DealStagePanel's own
+  // canEditStage/canLost/canHold/canDormant gates byte-for-byte (same
+  // hasAction/canSetStage/canMarkLost/allowedTargetStages calls on the same
+  // data) so the header menu never offers something that panel itself
+  // wouldn't also allow. DealStagePanel stays the single actual authority —
+  // see its own doc comment on why the ref-exposed open functions re-check
+  // these same conditions instead of trusting the caller.
+  const lost = summary.lifecycle === 'CLOSED_LOST';
+  // DealStagePanel only ever rendered its แก้ไขสถานะ…/เสียงาน/พักดีลไว้/พัก
+  // dormant row inside its final "lifecycle is plain ACTIVE" JSX branch
+  // (neither the ON_HOLD/DORMANT recovery banner nor the lost banner) — that
+  // branch position, not just the four `can*` booleans, was what kept e.g.
+  // "พัก dormant" from also appearing on an ON_HOLD deal (which legitimately
+  // has MARK_DORMANT in availableActions, since ON_HOLD -> DORMANT is a real
+  // transition — DealStagePanel's OWN ON_HOLD banner already offers that
+  // exact button). Mirrored explicitly here so the header overflow menu
+  // can't duplicate it.
+  const isActiveLifecycle = (summary.lifecycle ?? 'ACTIVE') === 'ACTIVE';
+  const canEditStage = isActiveLifecycle && hasAction('UPDATE_STAGE') && allowedTargetStages(user, summary).length > 0 && !lost;
+  const canLostDeal = isActiveLifecycle && hasAction('MARK_LOST') && canMarkLost(user, summary) && !lost && summary.salesStage !== 'CLOSED_PAID';
+  const canHoldDeal = isActiveLifecycle && hasAction('PLACE_ON_HOLD');
+  const canDormantDeal = isActiveLifecycle && hasAction('MARK_DORMANT');
+  // Mirrors DealStagePanel's own `next`/`canAdvance` byte-for-byte, PLUS the
+  // explicit `isActiveLifecycle` guard DealStagePanel got "for free" from
+  // which JSX branch rendered its old inline "เลื่อนไป" button (only the
+  // plain-ACTIVE branch — never ON_HOLD/DORMANT/lost, which each render their
+  // own dedicated recovery/reopen actions instead) — same class of implicit
+  // gate this file already had to make explicit for canEditStage/
+  // canHoldDeal/canDormantDeal above (ON_HOLD lifecycle regression, see that
+  // describe block in TicketDetailPage.test.jsx).
+  //
+  // Deliberately NOT this file's own `hasAction(action)` above (single-arg,
+  // "is this action name present at all") — DealStagePanel's own hasAction
+  // takes a second `targetStage` argument and requires an exact match, so an
+  // ADVANCE_STAGE entry for some OTHER target stage would false-positive
+  // through the single-arg version. Checked directly against
+  // `availableActions` here so this stays byte-identical to DealStagePanel's
+  // gate, not just same-named.
+  const next = isActiveLifecycle && !lost ? nextStage(summary.salesStage) : null;
+  const hasAdvanceStageAction = Boolean(next) && availableActions.some(
+    (item) => item.action === 'ADVANCE_STAGE' && item.targetStage === next.code,
+  );
+  const canAdvance = Boolean(next) && !next.auto && hasAdvanceStageAction && canSetStage(user, summary, next.code);
+
+  // Stage-advance readiness (dealTrackingMeta.js's own gate, shared with
+  // DealTrackingPanel's badge): lifted up here (Phase-1 audit finding #3,
+  // "y=870") so it can sit right next to the "เลื่อนไป" action wherever that
+  // action itself renders — first DealStagePanel's own inline button, now
+  // (FIX 2, Phase-1 clutter follow-up) the header overflow menu item below.
+  // Only ever consulted when canAdvance is also true, and canAdvance is only
+  // ever true for a sales-gated next stage (every import/account-gated stage
+  // in SALES_STAGES is `auto: true`), so `activities` being empty for
+  // import/account viewers (canViewDealTracking below) never matters here.
+  //
+  // `activitiesQuery.isLoading` guards the initial fetch: `activities`
+  // defaults to `[]` before that query resolves, which would otherwise read
+  // as "not ready" for a beat on every load — a false negative that briefly
+  // disables เลื่อนไป (and shows the gate hint) for a deal that may actually
+  // already be ready, before flipping back. Treated as ready while loading
+  // (matches the button's pre-Phase-1 behaviour, which never waited on this
+  // query at all) rather than as not-ready.
+  const readyToAdvance = activitiesQuery.isLoading
+    || isReadyToAdvance(summary, hasActivitySince(activities, lastStageChangeAt(events, summary.createdAt)));
+
+  // Named handlers (not inline closures in the array below) so each ref read
+  // happens inside an ordinary event-handler function, not lexically inside
+  // an object/array literal being built during render.
+  function handleOpenEditStage() { dealStagePanelRef.current?.openEditStage(); }
+  function handleOpenHold() { dealStagePanelRef.current?.openHold(); }
+  function handleOpenDormant() { dealStagePanelRef.current?.openDormant(); }
+  function handleOpenAdvance() { dealStagePanelRef.current?.openAdvance(); }
+  function handleOpenRevise() { setShowReviseForm(true); clearFieldError('revise.reason'); }
+
+  // react-hooks/refs (react-hooks v7's Compiler-oriented ruleset — see this
+  // file's neighbouring `set-state-in-effect: 'off'` in eslint.config.js for
+  // the same class of false positive) flags every named handler below as
+  // "passing a ref to a function" because they end up as values inside this
+  // array, which is itself passed to OverflowMenu as a prop. Each handler
+  // only ever reads dealStagePanelRef.current from inside a real click
+  // handler (OverflowMenu's own onClick, see OverflowMenu.jsx) — never
+  // during render — so this is the same class of false positive, not a rule
+  // violation.
+  // eslint-disable-next-line react-hooks/refs
+  const overflowItems = [
+    // FIX 2 (Phase-1 clutter follow-up): "เลื่อนไป" moved out of DealStagePanel
+    // into the overflow — the sticky header's own primary CTA is now the ONE
+    // resolver-derived primary, so a second, filled-indigo "primary" button
+    // sitting in the pipeline panel no longer competes with it for attention.
+    // Its gate travels with it: shown only when canAdvance (the real
+    // ADVANCE_STAGE/canSetStage gate — unchanged), and disabled-with-reason
+    // (never silently hidden) when the readiness precondition isn't met yet.
+    // FIX 3 (P2, clutter-follow-up review round 2): the old inline buttons
+    // these overflow items replaced were each `disabled={actionLoading}` —
+    // a mutation already in flight blocked a second click on the SAME
+    // action. `disabled` here (rendered via OverflowMenu's aria-disabled,
+    // see its own doc comment) has to carry that same condition now that
+    // the click no longer runs through a native `disabled` button attribute
+    // — without it, reopening the menu mid-mutation and clicking again fired
+    // a second request (the second `updateStage` landing as a 409, "Deal is
+    // already in stage X" — TicketService.java:1143). The re-check inside
+    // each opener (DealStagePanel's openAdvance/openEditStage/openHold/
+    // openDormant) is the actual guard; this is the visible half of the
+    // same fix, so the item doesn't invite a click it's about to reject.
+    canAdvance && {
+      key: 'advanceStage',
+      label: `เลื่อนไป: ${next ? dealStageLabel(next.code).label : ''}`,
+      icon: 'chevronRight',
+      disabled: !readyToAdvance || actionLoading,
+      disabledReason: !readyToAdvance ? STAGE_ADVANCE_GATE_HINT : undefined,
+      onSelect: handleOpenAdvance,
+      testId: 'deal-stage-advance',
+    },
+    canEditStage && {
+      key: 'editStage', label: 'แก้ไขสถานะ…', icon: 'pencil', disabled: actionLoading, onSelect: handleOpenEditStage,
+    },
+    canHoldDeal && { key: 'hold', label: 'พักดีลไว้', disabled: actionLoading, onSelect: handleOpenHold },
+    canDormantDeal && { key: 'dormant', label: 'พัก dormant', disabled: actionLoading, onSelect: handleOpenDormant },
+    can.revise && { key: 'revise', label: 'ขอแก้ไข (Revise)', icon: 'pencil', onSelect: handleOpenRevise },
+  ].filter(Boolean);
 
   async function handleUploadAttachment(e, explicitType = null) {
     const file = e.target.files?.[0];
@@ -785,23 +1074,26 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   return (
     <div className="page-stack">
+      {/* F-14 (ticket-detail IA rebuild Phase 1): the breadcrumb is the single
+          up-nav — a full-width "กลับ" bar underneath it just repeated the same
+          affordance as page chrome. Verified safe to drop: every e2e "กลับ"
+          locator is scoped to the create-deal modal, not this page bar (see
+          frontend/e2e/) — onBack itself is unchanged, still reachable via the
+          breadcrumb's "ดีล" crumb. */}
       <Breadcrumbs items={[{ label: 'ดีล', onClick: onBack }, { label: summary.code || summary.customerName || summary.title }]} />
-      <button type="button" className="secondary-button self-start" onClick={onBack}>
-        <Icon name="chevronLeft" size={14} />
-        กลับ
-      </button>
 
-      {/* Deal Workspace state header (Phase 2 Slice S2 — see
-          docs/agent-handoffs/104_feat-deal-workspace-unification.md): deal
-          code/title/customer + lifecycle × stage × PCR × payment × fulfilment
-          at a glance, plus "ถึงคิวคุณ" and the one primary CTA that mirrors
-          it. Subsumes the old bare header (title/code/status/refresh). */}
+      {/* Deal Workspace state header (Phase 2 Slice S2, folded into the
+          ticket-detail IA rebuild Phase 1 — see DealStateHeader.jsx's own doc
+          comment): deal code/title/customer + lifecycle × stage × PCR ×
+          payment × fulfilment at a glance, the ONE work-state banner line,
+          the sticky primary CTA, and the "⋯" overflow. Subsumes the old bare
+          header (title/code/status/refresh). */}
       <DealStateHeader
         summary={summary}
         pricingRequests={pricingRequests}
-        primaryAction={primaryAction}
-        nextAction={nextAction}
-        waitingHint={waitingHint}
+        primaryAction={stickyPrimaryAction}
+        bannerText={bannerText}
+        overflowItems={overflowItems}
         onRefresh={refreshTicket}
       />
       <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted sm:gap-4">
@@ -818,6 +1110,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           row; once a document exists (quotation / ใบแจ้งยอดมัดจำ) it stays
           reachable from here through the later stages too. */}
       <DealStagePanel
+        ref={dealStagePanelRef}
         user={user}
         summary={summary}
         availableActions={availableActions}
@@ -825,7 +1118,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         // primaryAction now lives solely in DealStateHeader above (Phase 2 Slice S2's
         // "one primary CTA" — see its own doc comment) — not passed here too, to avoid
         // rendering the exact same button twice on one page.
-        guidance={nextAction ?? waitingHint}
+        advanceReady={readyToAdvance}
         actionLoading={actionLoading}
         deliveryProgress={{ delivered: totalDelivered, ordered: totalOrdered }}
         onUpdateStage={(payload) => doAction(() => api.tickets.updateStage(ticketId, payload), 'อัปเดตสถานะดีลแล้ว')}
@@ -869,17 +1162,22 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           dealTracking section id. Import/account get a one-line SectionPeek like every
           other role-scoped section on this page instead of the full panel. */}
       {sections.dealTracking ? (
-        <DealTrackingPanel
-          summary={summary}
-          events={events}
-          activities={activities}
-          activitiesLoading={activitiesQuery.isLoading}
-          canEdit={canViewDealTracking && (isOwner || role === 'sales_manager' || role === 'ceo')}
-          onUpdateTracking={(payload) => updateTrackingMutation.mutateAsync(payload)}
-          onAddActivity={(payload) => addActivityMutation.mutateAsync(payload)}
-          updating={updateTrackingMutation.isPending}
-          addingActivity={addActivityMutation.isPending}
-        />
+        // id: the sticky bar's FOLLOW_UP/LOG_ACTIVITY jump target (see
+        // IN_PAGE_JUMP_TARGET above) — scroll-mt so it doesn't tuck under the
+        // sticky header, tabIndex so the jump can actually move focus here.
+        <div id="deal-tracking-panel" tabIndex={-1} className="scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none">
+          <DealTrackingPanel
+            summary={summary}
+            events={events}
+            activities={activities}
+            activitiesLoading={activitiesQuery.isLoading}
+            canEdit={canViewDealTracking && (isOwner || role === 'sales_manager' || role === 'ceo')}
+            onUpdateTracking={(payload) => updateTrackingMutation.mutateAsync(payload)}
+            onAddActivity={(payload) => addActivityMutation.mutateAsync(payload)}
+            updating={updateTrackingMutation.isPending}
+            addingActivity={addActivityMutation.isPending}
+          />
+        </div>
       ) : (
         <SectionPeek title="การติดตามดีล" summary={summary} />
       )}
@@ -979,14 +1277,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 ดีลนี้ยังไม่มีรายการสินค้า — กด “แก้ไขรายการสินค้า” เพื่อเพิ่มก่อนส่งขอราคา
               </span>
             )}
-            {can.revise && !showReviseForm && (
-              <button type="button" className="secondary-button" disabled={actionLoading}
-                onClick={() => { setShowReviseForm(true); clearFieldError('revise.reason'); }}>
-                <Icon name="pencil" size={14} />
-                ขอแก้ไข (Revise)
-              </button>
-            )}
-
             {can.editItems && !editMode && (
               <button type="button" className="secondary-button" disabled={actionLoading}
                 onClick={() => {
@@ -1007,18 +1297,22 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 ยกเลิกการยืนยันปิดงาน
               </button>
             )}
-            {can.cancel && (
-              <button type="button" className="secondary-button" disabled={actionLoading}
-                style={{ marginLeft: 'auto', color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}
-                onClick={() => setConfirm({ kind: 'cancelTicket' })}>
-                ยกเลิก
-              </button>
-            )}
           </div>
+        </section>
+      )}
 
-          {showReviseForm && (
-            <div style={{ padding: '0 18px 14px', display: 'flex', flexDirection: 'column', gap: 10, borderTop: '1px solid var(--color-border)' }}>
-              <div style={{ fontSize: 13, fontWeight: 600, paddingTop: 12 }}>ประเภทการแก้ไข</div>
+      {/* ขอแก้ไข (Revise) now triggers from the header overflow menu (see
+          overflowItems above) rather than a button in the panel above — but
+          the form itself still needs somewhere to render once opened, and
+          hasActions no longer accounts for can.revise, so this stays its own
+          independent block instead of nesting inside that section. */}
+      {can.revise && showReviseForm && (
+        <section id="revise-form" tabIndex={-1} className="panel scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none" style={{ background: 'var(--color-surface-muted)' }}>
+          <div className="panel-header">
+            <h2>ขอแก้ไข (Revise)</h2>
+          </div>
+          <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, paddingTop: 12 }}>ประเภทการแก้ไข</div>
               {[
                 { value: 'QTY_OR_NOTE',  label: 'แก้จำนวน / หมายเหตุ / % มัดจำ', sub: 'ไม่ต้องอนุมัติใหม่ — ออกเอกสาร Rev ใหม่ได้เลย' },
                 { value: 'PRICE_CHANGE', label: 'แก้ราคา / ส่วนลดต่อหน่วย',       sub: 'CEO ต้องอนุมัติใหม่' },
@@ -1076,7 +1370,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 </button>
               </div>
             </div>
-          )}
         </section>
       )}
 
@@ -1382,22 +1675,33 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             )}
           </section>
 
-          {sections.pricingRequest ? (
-            canViewPricingRequests ? (
-              <PricingRequestPanel ticketId={ticketId} deal={summary} ticketItems={items} user={user} />
-            ) : null
-          ) : (
-            <SectionPeek title="ใบขอราคา (Pricing Request)" summary={summary} />
-          )}
+          {/* id: the sticky bar's CREATE_PCR jump target (see
+              IN_PAGE_JUMP_TARGET above). */}
+          <div id="pricing-request-panel" tabIndex={-1} className="scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none">
+            {sections.pricingRequest ? (
+              canViewPricingRequests ? (
+                <PricingRequestPanel ref={pricingRequestPanelRef} ticketId={ticketId} deal={summary} ticketItems={items} user={user} />
+              ) : null
+            ) : (
+              <SectionPeek title="ใบขอราคา (Pricing Request)" summary={summary} />
+            )}
+          </div>
 
           {/* "ราคาและใบเสนอราคา" (Phase 2 Slice S2): the customer-facing tail of
               the PricingRequest chain (issue/outcome + confirm-order), pulled
               onto the deal page. Renders nothing until a request reaches
               APPROVED_FOR_QUOTATION — see DealQuotationPanel's own doc
               comment. The factory/costing/CEO-price steps that precede that
-              stay on PricingRequestDetailPage, linked from inside the panel. */}
+              stay on PricingRequestDetailPage, linked from inside the panel.
+              The sticky bar's ISSUE_QUOTATION/CONFIRM_ORDER primary CTAs no
+              longer scroll here (FIX 2, clutter follow-up round 2) — they
+              call dealQuotationPanelRef directly — but the id/scroll-mt
+              wrapper stays for any other in-page anchor that might still
+              want it. */}
           {sections.dealQuotation && canViewPricingRequests ? (
-            <DealQuotationPanel ticketId={ticketId} pricingRequests={pricingRequests} user={user} showToast={showToast} />
+            <div id="deal-quotation-panel" tabIndex={-1} className="scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none">
+              <DealQuotationPanel ref={dealQuotationPanelRef} ticketId={ticketId} pricingRequests={pricingRequests} user={user} showToast={showToast} />
+            </div>
           ) : null}
 
           {/* "มัดจำ" (Phase 3 Slice S3 — see
@@ -1405,19 +1709,23 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               the one deposit section — policy (account/CEO) → notice (sales)
               → payment confirmation (account) — replacing the deposit-policy
               control that used to live in DealStagePanel and the deposit
-              doc/payment bits that used to live directly on this page. */}
-          {sections.depositNotice ? (
-            <DealDepositPanel
-              ticketId={ticketId}
-              user={user}
-              summary={summary}
-              availableActions={availableActions}
-              pricingRequests={pricingRequests}
-              showToast={showToast}
-            />
-          ) : (
-            <SectionPeek title="มัดจำ" summary={summary} />
-          )}
+              doc/payment bits that used to live directly on this page.
+              id: the sticky bar's account-role jump target (chaseOverdue/
+              confirmDeposit/confirmFinalPayment/confirmCloseReady). */}
+          <div id="deal-deposit-panel" tabIndex={-1} className="scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none">
+            {sections.depositNotice ? (
+              <DealDepositPanel
+                ticketId={ticketId}
+                user={user}
+                summary={summary}
+                availableActions={availableActions}
+                pricingRequests={pricingRequests}
+                showToast={showToast}
+              />
+            ) : (
+              <SectionPeek title="มัดจำ" summary={summary} />
+            )}
+          </div>
 
           {/* "การส่งมอบ / นำเข้า" (Phase 3 Slice S4 — see
               docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md):
@@ -1426,20 +1734,23 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               optional per-factory PO detail — replacing the "การส่งมอบสินค้า"
               panel and the IR button/delivery/stock modals that used to live
               directly on this page. Reuses the existing `delivery` section
-              id (salesViewScope.js) rather than adding a parallel one. */}
-          {sections.delivery ? (
-            <DealFulfilmentPanel
-              ticketId={ticketId}
-              user={user}
-              summary={summary}
-              items={items}
-              availableActions={availableActions}
-              pricingRequests={pricingRequests}
-              showToast={showToast}
-            />
-          ) : (
-            <SectionPeek title="การส่งมอบ / นำเข้า" summary={summary} />
-          )}
+              id (salesViewScope.js) rather than adding a parallel one.
+              id (DOM): the sticky bar's import-role fulfilment jump target. */}
+          <div id="deal-fulfilment-panel" tabIndex={-1} className="scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none">
+            {sections.delivery ? (
+              <DealFulfilmentPanel
+                ticketId={ticketId}
+                user={user}
+                summary={summary}
+                items={items}
+                availableActions={availableActions}
+                pricingRequests={pricingRequests}
+                showToast={showToast}
+              />
+            ) : (
+              <SectionPeek title="การส่งมอบ / นำเข้า" summary={summary} />
+            )}
+          </div>
 
           {/* R5: Attachments */}
           <section className="panel">
@@ -1663,6 +1974,44 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           )}
         </section>
       </div>
+
+      {/* "จัดการดีล" danger zone (ticket-detail IA rebuild Phase 1): เสียงาน /
+          ยกเลิก moved off the working surface into a clearly-labelled,
+          danger-toned section at the very bottom of the page — conventional
+          danger-zone pattern, no new route. Both actions stay exactly as
+          reachable as before (same canLostDeal/can.cancel gates, same
+          modals), only demoted from sitting inline among the day-to-day
+          pipeline controls. */}
+      {(canLostDeal || can.cancel) ? (
+        <section className="rounded-xl border border-danger-border bg-danger-bg p-4 sm:p-5" aria-labelledby="deal-danger-zone-heading">
+          <h2 id="deal-danger-zone-heading" className="m-0 text-sm font-extrabold text-danger-dark">จัดการดีล</h2>
+          <p className="mt-1 text-xs text-danger-dark">การดำเนินการเหล่านี้ส่งผลต่อทั้งดีล และบางรายการย้อนกลับไม่ได้ — ใช้เมื่อจำเป็นเท่านั้น</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {canLostDeal ? (
+              <button
+                type="button"
+                className="secondary-button"
+                style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}
+                disabled={actionLoading}
+                onClick={() => dealStagePanelRef.current?.openMarkLost()}
+              >
+                เสียงาน
+              </button>
+            ) : null}
+            {can.cancel ? (
+              <button
+                type="button"
+                className="secondary-button"
+                style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}
+                disabled={actionLoading}
+                onClick={() => setConfirm({ kind: 'cancelTicket' })}
+              >
+                ยกเลิก
+              </button>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
 
       {paymentModal && (
         <Modal
