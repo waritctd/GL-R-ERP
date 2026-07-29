@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { forwardRef, useImperativeHandle, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
@@ -55,8 +55,20 @@ function pickRelevantPricingRequest(pricingRequests = []) {
  * solely in DealDepositPanel's own "ใบแจ้งยอดมัดจำ" step — see this
  * component's git history for the removed `createDepositNotice`
  * mutation/`depositPercentInput` state if that overlap ever needs undoing.
+ *
+ * Ticket-detail IA rebuild Phase 1 clutter follow-up round 2 (FIX 2): this
+ * panel no longer renders its own "ออกใบเสนอราคา" / "ยืนยันคำสั่งซื้อ"
+ * buttons — the sticky header's primary CTA (TicketDetailPage's
+ * `workState`-derived ISSUE_QUOTATION/CONFIRM_ORDER action) owns both
+ * outright now, and triggers them here via the forwardRef below (same
+ * "parent triggers, panel stays the sole gate + mutation owner" convention
+ * DealStagePanel/PricingRequestPanel already use for their own openers).
+ * Before this, "ออกใบเสนอราคา" and "ยืนยันคำสั่งซื้อ" each rendered twice on
+ * one page (the sticky bar's own scroll-to-here copy, plus this panel's own
+ * button) — since the sticky bar is `sticky top-0`, both copies of each
+ * label were visible on screen simultaneously.
  */
-export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showToast }) {
+export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticketId, pricingRequests = [], user, showToast }, ref) {
   const queryClient = useQueryClient();
   const [outcomeNote, setOutcomeNote] = useState('');
   const [downloadingFormat, setDownloadingFormat] = useState(null);
@@ -107,6 +119,27 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
     onSuccess: () => { showToast?.('success', 'ยืนยันคำสั่งซื้อแล้ว'); invalidate(); },
     onError: (err) => showToast?.('error', err.message || 'ดำเนินการไม่สำเร็จ'),
   });
+
+  // Defensive re-check before acting (same convention as DealStagePanel's
+  // openAdvance/openEditStage/... and PricingRequestPanel's openCreate): a
+  // stale or over-eager caller — the sticky header's primary CTA is derived
+  // from a snapshot of `pricingRequests`/`summary` that could in principle
+  // race a fresher render — cannot force either mutation past the real gate.
+  // `current`/`pr` are computed above via useMemo and may be null (no
+  // qualifying pricing request / no editable quotation yet); both guards
+  // are null-safe through their own predicates.
+  useImperativeHandle(ref, () => ({
+    openIssueQuotation: () => {
+      if (current && isCustomerQuotationEditable(current) && canManageCustomerQuotation(user, pr)) {
+        issueQuotation.mutate();
+      }
+    },
+    openConfirmOrder: () => {
+      if (pr && canConfirmOrder(user, pr)) {
+        confirmOrder.mutate();
+      }
+    },
+  }));
 
   async function handleDownload(format) {
     setDownloadingFormat(format);
@@ -185,17 +218,21 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
                 <Icon name="fileText" size={12} /> {downloadingFormat === 'xlsx' ? 'กำลังดาวน์โหลด...' : 'Excel'}
               </button>
               {isCustomerQuotationEditable(current) && canManageCustomerQuotation(user, pr) ? (
-                <>
-                  <Link to={`/pricing-requests/${pr.id}`} className="secondary-button">
-                    แก้ไขรายละเอียด/ส่วนลด →
-                  </Link>
-                  <button type="button" className="primary-button" disabled={issueQuotation.isPending}
-                    onClick={() => issueQuotation.mutate()} data-testid="deal-quotation-issue">
-                    ออกใบเสนอราคา
-                  </button>
-                </>
+                <Link to={`/pricing-requests/${pr.id}`} className="secondary-button">
+                  แก้ไขรายละเอียด/ส่วนลด →
+                </Link>
               ) : null}
             </div>
+
+            {isCustomerQuotationEditable(current) && canManageCustomerQuotation(user, pr) ? (
+              // The "ออกใบเสนอราคา" button itself lives solely on the sticky
+              // header now (FIX 2, see this component's own doc comment) —
+              // this explains the section instead of duplicating the CTA.
+              <p className="text-xs text-text-muted">
+                พร้อมออกใบเสนอราคาแล้ว — กดปุ่ม “ออกใบเสนอราคา” บนแถบด้านบนของหน้า
+                หรือแก้ไขรายละเอียด/ส่วนลดก่อนได้ที่ลิงก์ด้านบน
+              </p>
+            ) : null}
 
             {canRecordCustomerQuotationOutcome(user, pr, current) ? (
               <div className="flex flex-col gap-2 border-t border-border-subtle pt-3">
@@ -237,13 +274,13 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
           <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
             <strong className="text-sm">ยืนยันคำสั่งซื้อ</strong>
             {canConfirmOrder(user, pr) ? (
-              <>
-                <p className="text-sm text-text-muted">ลูกค้ายอมรับใบเสนอราคาแล้ว — ยืนยันคำสั่งซื้อเพื่อเริ่มขั้นตอนรับมัดจำและนำเข้าสินค้า</p>
-                <button type="button" className="primary-button self-start" disabled={confirmOrder.isPending}
-                  onClick={() => confirmOrder.mutate()} data-testid="deal-quotation-confirm-order">
-                  ยืนยันคำสั่งซื้อ
-                </button>
-              </>
+              // The "ยืนยันคำสั่งซื้อ" button itself lives solely on the
+              // sticky header now (FIX 2, see this component's own doc
+              // comment) — this explains the section instead of duplicating
+              // the CTA.
+              <p className="text-sm text-text-muted">
+                ลูกค้ายอมรับใบเสนอราคาแล้ว — กดปุ่ม “ยืนยันคำสั่งซื้อ” บนแถบด้านบนของหน้าเพื่อเริ่มขั้นตอนรับมัดจำและนำเข้าสินค้า
+              </p>
             ) : (
               <p className="text-sm text-text-muted">
                 {pr.orderConfirmedAt
@@ -260,4 +297,4 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
       </div>
     </section>
   );
-}
+});

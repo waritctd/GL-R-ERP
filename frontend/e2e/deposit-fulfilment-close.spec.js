@@ -127,14 +127,38 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   const quotationPanel = page.getByTestId('deal-quotation-panel');
   await expect(quotationPanel).toBeVisible();
   await quotationPanel.getByTestId('deal-quotation-create').click();
-  await expect(quotationPanel.getByTestId('deal-quotation-issue')).toBeVisible();
-  await quotationPanel.getByTestId('deal-quotation-issue').click();
+  // "ออกใบเสนอราคา" and "ยืนยันคำสั่งซื้อ" no longer live in the panel — the
+  // ticket-detail IA rebuild (FIX 2) moved both to the sticky header's
+  // primary CTA (one render per action, driven via DealQuotationPanel's own
+  // forwardRef openers). Assert the sticky slot is actually offering THIS
+  // action (data-action) before driving it each time, not just that a
+  // button exists — the label/target changes as the deal advances.
+  //
+  // The sticky bar's issue_quotation CTA is driven by nextSalesAction, which
+  // fires purely off pr.status === 'APPROVED_FOR_QUOTATION' — a coarser
+  // signal than "a draft customer quotation exists". It is already visible
+  // (and clickable) the instant the PCR is approved, i.e. BEFORE this
+  // create-draft click's mutation has landed. DealQuotationPanel's own
+  // openIssueQuotation ref opener re-checks `current` (the draft) and is a
+  // silent no-op when it is still null, so driving the sticky button before
+  // the draft actually exists would click nothing. Wait for the panel's own
+  // "ready to issue" hint — printed only once `current` is populated and
+  // editable — before treating the sticky CTA as safe to click; this is the
+  // same precondition the OLD in-panel `deal-quotation-issue` button's own
+  // visibility used to enforce implicitly (it rendered in that same branch).
+  await expect(quotationPanel.getByText('พร้อมออกใบเสนอราคาแล้ว')).toBeVisible();
+  const issueAction = page.getByTestId('ticket-primary-action');
+  await expect(issueAction).toBeVisible();
+  await expect(issueAction).toHaveAttribute('data-action', 'issue_quotation');
+  await issueAction.click();
   await expect(quotationPanel.getByTestId('deal-quotation-accept')).toBeVisible();
   await quotationPanel.getByTestId('deal-quotation-accept').click();
   await expect(page.getByText('ลูกค้ายอมรับใบเสนอราคาแล้ว').first()).toBeVisible();
 
-  await expect(quotationPanel.getByTestId('deal-quotation-confirm-order')).toBeVisible();
-  await quotationPanel.getByTestId('deal-quotation-confirm-order').click();
+  const confirmOrderAction = page.getByTestId('ticket-primary-action');
+  await expect(confirmOrderAction).toBeVisible();
+  await expect(confirmOrderAction).toHaveAttribute('data-action', 'confirm_order');
+  await confirmOrderAction.click();
   // This is the "one deliberate bridge write" (see file header note):
   // ticket.status flips 'draft' -> 'quotation_issued' here, unlocking every
   // close-gated action for the rest of this spec.

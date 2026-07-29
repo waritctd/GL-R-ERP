@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { forwardRef, useImperativeHandle, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -33,9 +33,19 @@ const EVENT_LABEL = {
  * created and submitted (see TicketService.create/submit, commit 5).
  *
  * `deal` is the ticket's summary (createdById + lifecycle) — used only for the
- * create-button gate; this component does not know about ticket status/stage.
+ * create gate; this component does not know about ticket status/stage.
+ *
+ * Ticket-detail IA rebuild Phase 1 clutter follow-up: this panel no longer
+ * renders its own "สร้างใบขอราคา" button — the sticky header's primary CTA
+ * (TicketDetailPage's `workState`-derived `CREATE_PCR` action) owns that
+ * action outright now, and opens THIS panel's create modal via the forwardRef
+ * below (same "parent triggers, panel stays the sole gate + mutation owner"
+ * convention DealStagePanel already uses for openEditStage/openHold/...).
+ * Before this, the same "สร้างใบขอราคา" label rendered twice on one page (the
+ * sticky bar's own copy, plus this panel's) — the Phase-1 follow-up audit's
+ * FIX 1.
  */
-export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user }) {
+export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ ticketId, deal, ticketItems = [], user }, ref) {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
@@ -91,23 +101,26 @@ export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user }) 
 
   const canCreate = canCreatePricingRequest(user, deal);
 
+  // Defensive re-check before acting (same convention as DealStagePanel's
+  // ref-exposed openers): a stale or over-eager caller cannot force the
+  // create modal open past the real gate.
+  useImperativeHandle(ref, () => ({
+    openCreate: () => { if (canCreate) setCreateOpen(true); },
+  }));
+
   return (
     <section className="table-panel">
-      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="panel-header">
         <h2>ใบขอราคา (Pricing Request)</h2>
-        {canCreate ? (
-          <button type="button" className="primary-button" onClick={() => setCreateOpen(true)}>
-            <Icon name="plus" size={14} />
-            สร้างใบขอราคา
-          </button>
-        ) : null}
       </div>
 
       {requests.length === 0 ? (
         <EmptyState
           icon="fileText"
           title="ยังไม่มีใบขอราคา"
-          description={canCreate ? 'สร้างใบขอราคาเพื่อส่งให้ฝ่ายนำเข้าเสนอราคา' : 'ยังไม่มีใบขอราคาสำหรับดีลนี้'}
+          description={canCreate
+            ? 'ใบขอราคาส่งรายละเอียดสินค้าให้ฝ่ายนำเข้าเสนอราคา — สร้างได้จากปุ่ม “สร้างใบขอราคา” บนแถบด้านบนของหน้า'
+            : 'ยังไม่มีใบขอราคาสำหรับดีลนี้'}
         />
       ) : (
         <div className="flex flex-col gap-2 p-3">
@@ -359,4 +372,4 @@ export function PricingRequestPanel({ ticketId, deal, ticketItems = [], user }) 
       ) : null}
     </section>
   );
-}
+});
