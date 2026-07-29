@@ -107,14 +107,30 @@ public class PayrollRepository {
                    COALESCE(SUM(variable_income), 0) AS variable_income,
                    COALESCE(SUM(social_security), 0) AS social_security,
                    COALESCE(SUM(regular_withholding_tax), 0) AS regular_withholding_tax,
-                   COALESCE(SUM(variable_withholding_tax), 0) AS variable_withholding_tax
+                   COALESCE(SUM(variable_withholding_tax), 0) AS variable_withholding_tax,
+                   COALESCE(SUM(withholding_tax), 0) AS withholding_tax,
+                   COALESCE(SUM(regular_limb_taxable_income), 0) AS regular_limb_taxable_income,
+                   COALESCE(SUM(regular_limb_withholding_tax), 0) AS regular_limb_withholding_tax,
+                   COALESCE(SUM(cumulative_limb_taxable_income), 0) AS cumulative_limb_taxable_income,
+                   COALESCE(SUM(cumulative_limb_withholding_tax), 0) AS cumulative_limb_withholding_tax
               FROM (
+                  -- V92's regular/variable columns feed the legacy calculate() 2-limb model;
+                  -- V96's *_limb columns feed calculateClassified()'s 3-limb model. calculateLine now
+                  -- writes only the V96 columns (see PayrollService#calculateLine /
+                  -- PayrollLineDto), so V92's columns read back as their DB default (0) for every line
+                  -- processed from this rebase forward -- harmless, because calculate() is reachable
+                  -- only from PayrollExcelReconciliationTest's frozen regression suite.
                   SELECT pl.employee_id,
                          pl.regular_taxable_income AS regular_income,
                          pl.variable_taxable_income AS variable_income,
                          pl.social_security AS social_security,
                          pl.regular_withholding_tax AS regular_withholding_tax,
-                         pl.variable_withholding_tax AS variable_withholding_tax
+                         pl.variable_withholding_tax AS variable_withholding_tax,
+                         pl.withholding_tax AS withholding_tax,
+                         pl.taxable_income_regular_limb AS regular_limb_taxable_income,
+                         pl.withholding_tax_regular_limb AS regular_limb_withholding_tax,
+                         pl.taxable_income_cumulative_limb AS cumulative_limb_taxable_income,
+                         pl.withholding_tax_cumulative_limb AS cumulative_limb_withholding_tax
                     FROM hr.payroll_line pl
                     JOIN hr.payroll_period pp ON pp.period_id = pl.period_id
                    WHERE pp.payroll_month >= date_trunc('year', :payrollMonth::date)::date
@@ -123,14 +139,19 @@ public class PayrollRepository {
                   UNION ALL
                   -- The go-live seed carries NO limb split and never will: it is pre-system history
                   -- from the accountant's records, produced by the single-limb method, in which every
-                  -- baht WAS annualised as regular pay. Mapping it to the regular limb is therefore
-                  -- accurate rather than a fallback. See the V92 migration comment.
+                  -- baht WAS annualised as regular pay. Mapping it to the regular limb (both the V92
+                  -- two-limb sense and the V96 three-limb sense) is therefore accurate rather than a
+                  -- fallback. See the V92 and V96 migration comments.
                   SELECT s.employee_id,
                          s.taxable_income,
                          0::numeric,
                          s.social_security,
                          s.withholding_tax,
-                         0::numeric
+                         0::numeric,
+                         s.withholding_tax,
+                         s.taxable_income,
+                         s.withholding_tax,
+                         s.cumulative_limb_taxable_income, s.cumulative_limb_withholding_tax
                     FROM hr.payroll_year_to_date_seed s
                    WHERE s.tax_year = EXTRACT(YEAR FROM :payrollMonth::date)::int
               ) combined
@@ -142,32 +163,137 @@ public class PayrollRepository {
                 money(rs.getBigDecimal("variable_income")),
                 money(rs.getBigDecimal("social_security")),
                 money(rs.getBigDecimal("regular_withholding_tax")),
-                money(rs.getBigDecimal("variable_withholding_tax"))
+                money(rs.getBigDecimal("variable_withholding_tax")),
+                money(rs.getBigDecimal("withholding_tax")),
+                money(rs.getBigDecimal("regular_limb_taxable_income")),
+                money(rs.getBigDecimal("regular_limb_withholding_tax")),
+                money(rs.getBigDecimal("cumulative_limb_taxable_income")),
+                money(rs.getBigDecimal("cumulative_limb_withholding_tax"))
             )))
             .stream()
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
     /**
-     * Special-pay carry-forward (2026-07-23): per active employee, the carried recurring fields
-     * (special_pay_1..5, non_taxable_income, student_loan_deduction, legal_execution_deduction) from
+     * Special-pay carry-forward (2026-07-23, extended to all nine พิเศษ slots + meal allowance,
+     * Opus review 2026-07-29): per active employee, the carried recurring fields (special_pay_1..9,
+     * meal_allowance, non_taxable_income, student_loan_deduction, legal_execution_deduction) from
      * that employee's most-recent PRIOR processed {@code payroll_line} — the latest period strictly
      * before {@code payrollMonth} with {@code status <> 'VOID'}. {@code DISTINCT ON} picks exactly one
      * row per employee: the latest {@code payroll_month}. An employee with no qualifying prior line is
      * simply absent from the result (no fabricated zero row) — the caller treats "no suggestion" as
      * "nothing to pre-fill." Restricted to currently active employees so a terminated employee's old
      * figures never leak into a suggestion for a payroll run they are no longer part of.
+     *
+     * <p>Defect fix (Opus review, 2026-07-29): the original version joined only {@code cf1}-{@code
+     * cf5} (special_pay_1..5) and the DTO carried only those five slots, even though V98 also seeds
+     * carry-forward flags for {@code SPECIAL_PAY_6}, {@code SPECIAL_PAY_9} and {@code
+     * MEAL_ALLOWANCE} — the very components V98's own rationale names as recurring (ค่า GPRS(เพิ่ม),
+     * เงินรางวัล). Those flags were dead: stored, never read. Extended to join and carry all nine
+     * พิเศษ slots plus meal allowance, following the exact same {@code CASE WHEN cfN.carry_forward
+     * THEN pl.special_pay_N ELSE 0 END} shape as the original five.
+     *
+     * <p>Second defect fix, same review: each {@code cfN} join used to match on {@code cfN.tax_year =
+     * EXTRACT(YEAR FROM pp.payroll_month)} — the SOURCE row's own year, with no fallback. V98 seeded
+     * carry-forward flags for 2026 only, so a source row from January 2027 onward would find no
+     * matching flag row at all and every slot would silently stop carrying the instant the calendar
+     * rolled over — carry-forward "surviving" through the end of 2026 and then stopping dead in
+     * February 2027, exactly the per-employee/per-year cliff {@link #findComponentTaxTreatmentsByEmployee}
+     * had for the same underlying reason. Fixed with a {@code LATERAL} join per slot that picks, for
+     * that employee and component, the closest {@code tax_year <= EXTRACT(YEAR FROM pp.payroll_month)}
+     * — the same "roll forward to the most recent year at or before" resolution, done per row because
+     * (unlike the tax-treatment/SSO-inclusion reads) the source period differs per employee here.
      */
     public List<PayrollCarryForwardDtos.SuggestedInputRow> findCarryForwardSuggestions(LocalDate payrollMonth) {
         return jdbc.query("""
             SELECT DISTINCT ON (pl.employee_id)
                    pl.employee_id,
-                   pl.special_pay_1, pl.special_pay_2, pl.special_pay_3, pl.special_pay_4, pl.special_pay_5,
+                   -- Each slot is carried ONLY where that employee's own carry-forward flag says so
+                   -- (V98, seeded from the accountant's ledger at the owner's 70%-same-value rule).
+                   -- This replaced a hardcoded special_pay_1..5, which the V95/V97 renumbering had
+                   -- silently repointed at different money: the set gained ค่าเช่าบ้าน, which varies
+                   -- per employee, and lost ค่า GPRS, which does not.
+                   CASE WHEN cf1.carry_forward THEN pl.special_pay_1 ELSE 0 END AS special_pay_1,
+                   CASE WHEN cf2.carry_forward THEN pl.special_pay_2 ELSE 0 END AS special_pay_2,
+                   CASE WHEN cf3.carry_forward THEN pl.special_pay_3 ELSE 0 END AS special_pay_3,
+                   CASE WHEN cf4.carry_forward THEN pl.special_pay_4 ELSE 0 END AS special_pay_4,
+                   CASE WHEN cf5.carry_forward THEN pl.special_pay_5 ELSE 0 END AS special_pay_5,
+                   CASE WHEN cf6.carry_forward THEN pl.special_pay_6 ELSE 0 END AS special_pay_6,
+                   CASE WHEN cf7.carry_forward THEN pl.special_pay_7 ELSE 0 END AS special_pay_7,
+                   CASE WHEN cf8.carry_forward THEN pl.special_pay_8 ELSE 0 END AS special_pay_8,
+                   CASE WHEN cf9.carry_forward THEN pl.special_pay_9 ELSE 0 END AS special_pay_9,
+                   CASE WHEN cfMeal.carry_forward THEN pl.meal_allowance ELSE 0 END AS meal_allowance,
                    pl.non_taxable_income, pl.student_loan_deduction, pl.legal_execution_deduction,
                    pl.withholding_tax_override
               FROM hr.payroll_line pl
               JOIN hr.payroll_period pp ON pp.period_id = pl.period_id
               JOIN hr.employee e ON e.employee_id = pl.employee_id AND e.is_active = TRUE
+              -- LEFT JOIN LATERAL, one per component: an employee/component with no flag row at or
+              -- before the source period's year carries NOTHING, which is the safe default. Picking
+              -- the closest tax_year <= the source row's year (rather than an exact-year match) is
+              -- what keeps carry-forward alive past a calendar-year rollover -- see this method's
+              -- javadoc. Five workbook names could not be resolved to an employee and are deliberately
+              -- unseeded (see V98) -- they must pre-fill zero, not last month's figure.
+              LEFT JOIN LATERAL (
+                  SELECT carry_forward FROM hr.payroll_component_carry_forward cf
+                   WHERE cf.employee_id = pl.employee_id AND cf.component = 'SPECIAL_PAY_1'
+                     AND cf.tax_year <= EXTRACT(YEAR FROM pp.payroll_month)::smallint
+                   ORDER BY cf.tax_year DESC LIMIT 1
+              ) cf1 ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT carry_forward FROM hr.payroll_component_carry_forward cf
+                   WHERE cf.employee_id = pl.employee_id AND cf.component = 'SPECIAL_PAY_2'
+                     AND cf.tax_year <= EXTRACT(YEAR FROM pp.payroll_month)::smallint
+                   ORDER BY cf.tax_year DESC LIMIT 1
+              ) cf2 ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT carry_forward FROM hr.payroll_component_carry_forward cf
+                   WHERE cf.employee_id = pl.employee_id AND cf.component = 'SPECIAL_PAY_3'
+                     AND cf.tax_year <= EXTRACT(YEAR FROM pp.payroll_month)::smallint
+                   ORDER BY cf.tax_year DESC LIMIT 1
+              ) cf3 ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT carry_forward FROM hr.payroll_component_carry_forward cf
+                   WHERE cf.employee_id = pl.employee_id AND cf.component = 'SPECIAL_PAY_4'
+                     AND cf.tax_year <= EXTRACT(YEAR FROM pp.payroll_month)::smallint
+                   ORDER BY cf.tax_year DESC LIMIT 1
+              ) cf4 ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT carry_forward FROM hr.payroll_component_carry_forward cf
+                   WHERE cf.employee_id = pl.employee_id AND cf.component = 'SPECIAL_PAY_5'
+                     AND cf.tax_year <= EXTRACT(YEAR FROM pp.payroll_month)::smallint
+                   ORDER BY cf.tax_year DESC LIMIT 1
+              ) cf5 ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT carry_forward FROM hr.payroll_component_carry_forward cf
+                   WHERE cf.employee_id = pl.employee_id AND cf.component = 'SPECIAL_PAY_6'
+                     AND cf.tax_year <= EXTRACT(YEAR FROM pp.payroll_month)::smallint
+                   ORDER BY cf.tax_year DESC LIMIT 1
+              ) cf6 ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT carry_forward FROM hr.payroll_component_carry_forward cf
+                   WHERE cf.employee_id = pl.employee_id AND cf.component = 'SPECIAL_PAY_7'
+                     AND cf.tax_year <= EXTRACT(YEAR FROM pp.payroll_month)::smallint
+                   ORDER BY cf.tax_year DESC LIMIT 1
+              ) cf7 ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT carry_forward FROM hr.payroll_component_carry_forward cf
+                   WHERE cf.employee_id = pl.employee_id AND cf.component = 'SPECIAL_PAY_8'
+                     AND cf.tax_year <= EXTRACT(YEAR FROM pp.payroll_month)::smallint
+                   ORDER BY cf.tax_year DESC LIMIT 1
+              ) cf8 ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT carry_forward FROM hr.payroll_component_carry_forward cf
+                   WHERE cf.employee_id = pl.employee_id AND cf.component = 'SPECIAL_PAY_9'
+                     AND cf.tax_year <= EXTRACT(YEAR FROM pp.payroll_month)::smallint
+                   ORDER BY cf.tax_year DESC LIMIT 1
+              ) cf9 ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT carry_forward FROM hr.payroll_component_carry_forward cf
+                   WHERE cf.employee_id = pl.employee_id AND cf.component = 'MEAL_ALLOWANCE'
+                     AND cf.tax_year <= EXTRACT(YEAR FROM pp.payroll_month)::smallint
+                   ORDER BY cf.tax_year DESC LIMIT 1
+              ) cfMeal ON TRUE
              WHERE pp.payroll_month < :payrollMonth
                AND pp.status <> 'VOID'
              ORDER BY pl.employee_id, pp.payroll_month DESC
@@ -180,6 +306,11 @@ public class PayrollRepository {
                 money(rs.getBigDecimal("special_pay_3")),
                 money(rs.getBigDecimal("special_pay_4")),
                 money(rs.getBigDecimal("special_pay_5")),
+                money(rs.getBigDecimal("special_pay_6")),
+                money(rs.getBigDecimal("special_pay_7")),
+                money(rs.getBigDecimal("special_pay_8")),
+                money(rs.getBigDecimal("special_pay_9")),
+                money(rs.getBigDecimal("meal_allowance")),
                 money(rs.getBigDecimal("non_taxable_income")),
                 money(rs.getBigDecimal("student_loan_deduction")),
                 money(rs.getBigDecimal("legal_execution_deduction")),
@@ -213,10 +344,16 @@ public class PayrollRepository {
                    ssf_allowance, pension_insurance_allowance, thai_esg_allowance,
                    home_loan_interest_allowance, education_donation, general_donation, political_donation,
                    provident_fund_allowance, child_count, child_count_double, disabled_care_count,
-                   disability_card_holder
+                   disability_card_holder, parent_care_count
               FROM hr.employee_tax_allowance
              WHERE tax_year = :taxYear
                AND effective_month <= :payrollMonthValue
+               -- Declaration verification gating (handoff section 3, task 2): an EXPIRED_UNVERIFIED
+               -- declaration stops applying to withholding from the next payroll onward. Excluding it
+               -- here means PayrollService#mergeAllowances' stored=null fallback (PayrollTaxAllowanceInput
+               -- .empty()) applies automatically -- VERIFIED and GRANDFATHERED_UNVERIFIED both still
+               -- apply, matching "GRANDFATHERED_UNVERIFIED -> applied, HR + employee warned".
+               AND verification_status <> 'EXPIRED_UNVERIFIED'
              ORDER BY employee_id, effective_month DESC
             """,
             Map.of("taxYear", payrollMonth.getYear(), "payrollMonthValue", payrollMonth.getMonthValue()),
@@ -242,7 +379,8 @@ public class PayrollRepository {
                 rs.getInt("child_count"),
                 rs.getInt("child_count_double"),
                 rs.getInt("disabled_care_count"),
-                rs.getBoolean("disability_card_holder")
+                rs.getBoolean("disability_card_holder"),
+                rs.getInt("parent_care_count")
             )))
             .stream()
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
@@ -260,7 +398,7 @@ public class PayrollRepository {
                    eta.home_loan_interest_allowance, eta.education_donation, eta.general_donation,
                    eta.political_donation, eta.provident_fund_allowance, eta.child_count,
                    eta.child_count_double, eta.disabled_care_count, eta.disability_card_holder,
-                   eta.effective_month, eta.document_reference, eta.updated_at,
+                   eta.parent_care_count, eta.effective_month, eta.document_reference, eta.updated_at,
                    eta.verification_status, eta.verified_by_id, eta.verified_at, eta.verification_deadline
               FROM hr.employee e
               JOIN hr.employee_tax_allowance eta ON eta.employee_id = e.employee_id AND eta.tax_year = :taxYear
@@ -292,7 +430,8 @@ public class PayrollRepository {
                     rs.getInt("child_count"),
                     rs.getInt("child_count_double"),
                     rs.getInt("disabled_care_count"),
-                    rs.getBoolean("disability_card_holder")
+                    rs.getBoolean("disability_card_holder"),
+                    rs.getInt("parent_care_count")
                 ),
                 rs.getInt("effective_month"),
                 rs.getString("document_reference"),
@@ -315,8 +454,8 @@ public class PayrollRepository {
                     ssf_allowance, pension_insurance_allowance, thai_esg_allowance,
                     home_loan_interest_allowance, education_donation, general_donation,
                     political_donation, provident_fund_allowance, child_count, child_count_double,
-                    disabled_care_count, disability_card_holder, effective_month, document_reference,
-                    updated_by_id, updated_at
+                    disabled_care_count, disability_card_holder, parent_care_count, effective_month,
+                    document_reference, updated_by_id, updated_at
                 ) VALUES (
                     :employeeId, :taxYear, :spouseAllowance, :childAllowance, :parentCareAllowance,
                     :disabledCareAllowance, :maternityAllowance, :lifeInsuranceAllowance,
@@ -324,8 +463,8 @@ public class PayrollRepository {
                     :ssfAllowance, :pensionInsuranceAllowance, :thaiEsgAllowance,
                     :homeLoanInterestAllowance, :educationDonation, :generalDonation,
                     :politicalDonation, :providentFundAllowance, :childCount, :childCountDouble,
-                    :disabledCareCount, :disabilityCardHolder, :effectiveMonth, :documentReference,
-                    :updatedById, now()
+                    :disabledCareCount, :disabilityCardHolder, :parentCareCount, :effectiveMonth,
+                    :documentReference, :updatedById, now()
                 )
                 ON CONFLICT (employee_id, tax_year, effective_month) DO UPDATE SET
                     spouse_allowance = EXCLUDED.spouse_allowance,
@@ -349,6 +488,7 @@ public class PayrollRepository {
                     child_count_double = EXCLUDED.child_count_double,
                     disabled_care_count = EXCLUDED.disabled_care_count,
                     disability_card_holder = EXCLUDED.disability_card_holder,
+                    parent_care_count = EXCLUDED.parent_care_count,
                     document_reference = EXCLUDED.document_reference,
                     updated_by_id = EXCLUDED.updated_by_id,
                     updated_at = now()
@@ -377,6 +517,7 @@ public class PayrollRepository {
                     .addValue("childCountDouble", item.childCountDouble() == null ? 0 : item.childCountDouble())
                     .addValue("disabledCareCount", item.disabledCareCount() == null ? 0 : item.disabledCareCount())
                     .addValue("disabilityCardHolder", Boolean.TRUE.equals(item.disabilityCardHolder()))
+                    .addValue("parentCareCount", item.parentCareCount() == null ? 0 : item.parentCareCount())
                     // ล.ย.01 ข้อ 2.2: a declaration with no stated month is the one in force from
                     // January, which is how every pre-V93 row was already applied.
                     .addValue("effectiveMonth", item.effectiveMonth() == null ? 1 : item.effectiveMonth())
@@ -496,8 +637,8 @@ public class PayrollRepository {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Payroll withholding classification + SSO inclusion matrices (V95, 2026-07-29). Schema +
-    // repository only -- PayrollCalculator does not consult these yet (next task). See
+    // Payroll withholding classification + SSO inclusion matrices (V95, 2026-07-29), consulted by
+    // PayrollCalculator#calculateClassified since task 2. See
     // docs/agent-handoffs/118_feat-payroll-classification-and-hr-declarations.md.
     // ------------------------------------------------------------------------------------------
 
@@ -508,13 +649,31 @@ public class PayrollRepository {
      * classified"). Both read as "unclassified" to a caller, but they are NOT the same thing at
      * the SQL level and the distinction matters for {@link #upsertComponentTaxTreatment} callers
      * that need to know whether a row exists to update.
+     *
+     * <p>Defect fix (Opus review, 2026-07-29): the effective tax year is resolved PER EMPLOYEE (each
+     * employee rolls forward from their own most recent {@code tax_year <= taxYear}), not once for
+     * the whole table. The prior implementation took a single table-wide {@code MAX(tax_year)}: the
+     * first employee hired in a new tax year (seeded at their hire year by {@code EmployeeService
+     * #create}) flipped that single MAX forward for EVERY employee, so every pre-existing employee's
+     * classification map read back completely empty on the very next payroll run -- blocking the run
+     * for anyone with a non-zero non-salary component and silently zeroing the SSO wage base (no
+     * blocker there) for everyone else. Per-employee resolution means a lone new hire in 2027 reads
+     * their own 2027 row while every 2026-only employee keeps reading 2026, exactly like {@link
+     * #findCarryForwardSuggestions} must for the same reason (see that method's LATERAL joins).
      */
     public Map<Long, Map<PayrollComponent, PayrollTaxTreatment>> findComponentTaxTreatmentsByEmployee(int taxYear) {
         record Row(long employeeId, PayrollComponent component, PayrollTaxTreatment taxTreatment) {}
         List<Row> rows = jdbc.query("""
-            SELECT employee_id, component, tax_treatment
-              FROM hr.payroll_component_tax_treatment
-             WHERE tax_year = :taxYear
+            WITH employee_years AS (
+                SELECT employee_id, MAX(tax_year) AS effective_tax_year
+                  FROM hr.payroll_component_tax_treatment
+                 WHERE tax_year <= :taxYear
+                 GROUP BY employee_id
+            )
+            SELECT t.employee_id, t.component, t.tax_treatment
+              FROM hr.payroll_component_tax_treatment t
+              JOIN employee_years ey
+                ON ey.employee_id = t.employee_id AND t.tax_year = ey.effective_tax_year
             """,
             Map.of("taxYear", taxYear),
             (rs, rowNum) -> new Row(
@@ -571,13 +730,24 @@ public class PayrollRepository {
      * a component with no stored row has no application-level default until {@link
      * #seedSsoInclusionDefaults} runs for that employee -- this method only returns what is
      * actually stored, it does not synthesize the seed defaults on read.
+     *
+     * <p>Defect fix (Opus review, 2026-07-29): resolved PER EMPLOYEE, same as {@link
+     * #findComponentTaxTreatmentsByEmployee} -- see that method's javadoc for why a single
+     * table-wide resolution is wrong.
      */
     public Map<Long, Map<PayrollComponent, Boolean>> findComponentSsoInclusionByEmployee(int taxYear) {
         record Row(long employeeId, PayrollComponent component, boolean included) {}
         List<Row> rows = jdbc.query("""
-            SELECT employee_id, component, is_included
-              FROM hr.payroll_component_sso_inclusion
-             WHERE tax_year = :taxYear
+            WITH employee_years AS (
+                SELECT employee_id, MAX(tax_year) AS effective_tax_year
+                  FROM hr.payroll_component_sso_inclusion
+                 WHERE tax_year <= :taxYear
+                 GROUP BY employee_id
+            )
+            SELECT s.employee_id, s.component, s.is_included
+              FROM hr.payroll_component_sso_inclusion s
+              JOIN employee_years ey
+                ON ey.employee_id = s.employee_id AND s.tax_year = ey.effective_tax_year
             """,
             Map.of("taxYear", taxYear),
             (rs, rowNum) -> new Row(
@@ -710,7 +880,11 @@ public class PayrollRepository {
                    pl.withholding_tax_override,
                    pl.regular_taxable_income, pl.variable_taxable_income,
                    pl.regular_withholding_tax, pl.variable_withholding_tax,
-                   pl.bonus_pay, pl.other_one_off_pay, pl.excess_withheld_to_date
+                   pl.bonus_pay, pl.other_one_off_pay, pl.excess_withheld_to_date,
+                   pl.taxable_income_regular_limb, pl.taxable_income_known_limb, pl.taxable_income_cumulative_limb,
+                   pl.withholding_tax_regular_limb, pl.withholding_tax_cumulative_limb,
+                   pl.customer_return_already_earned, pl.garnishment_type,
+                   pl.meal_allowance, pl.per_diem_exempt, pl.per_diem_taxable, pl.per_diem_basis
               FROM hr.payroll_line pl
               JOIN hr.employee e ON e.employee_id = pl.employee_id
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
@@ -949,7 +1123,11 @@ public class PayrollRepository {
                 withholding_tax_override,
                 regular_taxable_income, variable_taxable_income,
                 regular_withholding_tax, variable_withholding_tax,
-                bonus_pay, other_one_off_pay, excess_withheld_to_date
+                bonus_pay, other_one_off_pay, excess_withheld_to_date,
+                taxable_income_regular_limb, taxable_income_known_limb, taxable_income_cumulative_limb,
+                withholding_tax_regular_limb, withholding_tax_cumulative_limb,
+                customer_return_already_earned, garnishment_type,
+                meal_allowance, per_diem_exempt, per_diem_taxable, per_diem_basis
             )
             VALUES (
                 :periodId, :employeeId, :baseSalary, :dailyRate, :hourlyRate,
@@ -969,7 +1147,11 @@ public class PayrollRepository {
                 :withholdingTaxOverride,
                 :regularTaxableIncome, :variableTaxableIncome,
                 :regularWithholdingTax, :variableWithholdingTax,
-                :bonusPay, :otherOneOffPay, :excessWithheldToDate
+                :bonusPay, :otherOneOffPay, :excessWithheldToDate,
+                :taxableIncomeRegularLimb, :taxableIncomeKnownLimb, :taxableIncomeCumulativeLimb,
+                :withholdingTaxRegularLimb, :withholdingTaxCumulativeLimb,
+                :customerReturnAlreadyEarned, :garnishmentType,
+                :mealAllowance, :perDiemExempt, :perDiemTaxable, :perDiemBasis
             )
             """,
             new MapSqlParameterSource()
@@ -1018,13 +1200,27 @@ public class PayrollRepository {
                 // Nullable per-run typed override -- pass through null (no COALESCE) so "none typed"
                 // persists as SQL NULL, distinct from a 0 override.
                 .addValue("withholdingTaxOverride", line.withholdingTaxOverride())
-                .addValue("regularTaxableIncome", line.regularTaxableIncome())
-                .addValue("variableTaxableIncome", line.variableTaxableIncome())
-                .addValue("regularWithholdingTax", line.regularWithholdingTax())
-                .addValue("variableWithholdingTax", line.variableWithholdingTax())
-                .addValue("bonusPay", line.bonusPay())
-                .addValue("otherOneOffPay", line.otherOneOffPay())
-                .addValue("excessWithheldToDate", line.excessWithheldToDate()));
+                .addValue("regularTaxableIncome", safe(line.regularTaxableIncome()))
+                .addValue("variableTaxableIncome", safe(line.variableTaxableIncome()))
+                .addValue("regularWithholdingTax", safe(line.regularWithholdingTax()))
+                .addValue("variableWithholdingTax", safe(line.variableWithholdingTax()))
+                .addValue("bonusPay", safe(line.bonusPay()))
+                .addValue("otherOneOffPay", safe(line.otherOneOffPay()))
+                .addValue("excessWithheldToDate", safe(line.excessWithheldToDate()))
+                .addValue("taxableIncomeRegularLimb", safe(line.taxableIncomeRegularLimb()))
+                .addValue("taxableIncomeKnownLimb", safe(line.taxableIncomeKnownLimb()))
+                .addValue("taxableIncomeCumulativeLimb", safe(line.taxableIncomeCumulativeLimb()))
+                .addValue("withholdingTaxRegularLimb", safe(line.withholdingTaxRegularLimb()))
+                .addValue("withholdingTaxCumulativeLimb", safe(line.withholdingTaxCumulativeLimb()))
+                .addValue("customerReturnAlreadyEarned", line.customerReturnAlreadyEarned())
+                .addValue("garnishmentType", line.garnishmentType() == null ? "SALARY" : line.garnishmentType())
+                .addValue("mealAllowance", safe(line.mealAllowance()))
+                .addValue("perDiemExempt", safe(line.perDiemExempt()))
+                .addValue("perDiemTaxable", safe(line.perDiemTaxable()))
+                // Nullable: null = no per-diem paid this line, matching the
+                // chk_payroll_line_per_diem_basis_present CHECK (no basis required when both
+                // per_diem_exempt/per_diem_taxable are zero).
+                .addValue("perDiemBasis", line.perDiemBasis()));
     }
 
     private PayrollPeriodDto toPeriod(PayrollPeriodHeader header, List<PayrollLineDto> lines) {
@@ -1091,28 +1287,49 @@ public class PayrollRepository {
             // Nullable per-run typed override -- read raw so SQL NULL stays null (money() would coerce
             // it to 0.00, which is a different, meaningful override value).
             rs.getBigDecimal("withholding_tax_override"),
-            // ป.96/2543 limbs (V92).
+            // ป.96/2543 limbs (V92, superseded going forward -- see PayrollLineDto's javadoc).
             money(rs.getBigDecimal("regular_taxable_income")),
             money(rs.getBigDecimal("variable_taxable_income")),
             money(rs.getBigDecimal("regular_withholding_tax")),
             money(rs.getBigDecimal("variable_withholding_tax")),
             money(rs.getBigDecimal("bonus_pay")),
             money(rs.getBigDecimal("other_one_off_pay")),
-            money(rs.getBigDecimal("excess_withheld_to_date"))
+            money(rs.getBigDecimal("excess_withheld_to_date")),
+            money(rs.getBigDecimal("taxable_income_regular_limb")),
+            money(rs.getBigDecimal("taxable_income_known_limb")),
+            money(rs.getBigDecimal("taxable_income_cumulative_limb")),
+            money(rs.getBigDecimal("withholding_tax_regular_limb")),
+            money(rs.getBigDecimal("withholding_tax_cumulative_limb")),
+            rs.getBoolean("customer_return_already_earned"),
+            rs.getString("garnishment_type"),
+            money(rs.getBigDecimal("meal_allowance")),
+            money(rs.getBigDecimal("per_diem_exempt")),
+            money(rs.getBigDecimal("per_diem_taxable")),
+            rs.getString("per_diem_basis")
         );
     }
 
+    /**
+     * Slot labels, ALIGNED TO THE ACCOUNTANT'S WORKBOOK (2026-07-29, owner decision) -- MUST match
+     * {@link PayrollService#specialPayDtos} exactly. Defect fix (Opus review, 2026-07-29): this
+     * method still carried the OLD (pre-realignment) labels after {@code PayrollService} was moved
+     * to the new numbering, so every processed payroll line was previewed under one label and read
+     * back from the database under a different one -- silently wrong Thai labels on every payslip
+     * PDF and HR screen for slots 2 through 9. See {@code PayrollService#specialPayDtos}'s javadoc
+     * for the full renumbering rationale; {@code PayrollSlotLabelAlignmentIntegrationTest} pins the
+     * two methods against each other so they cannot drift apart again.
+     */
     private List<PayrollSpecialPayDto> specialPays(ResultSet rs) throws SQLException {
         return List.of(
             specialPay("specialPay1", "พิเศษ 1 (ค่าครองชีพ)", rs.getBigDecimal("special_pay_1")),
-            specialPay("specialPay2", "พิเศษ 2 (เบี้ยเลี้ยงประจำ)", rs.getBigDecimal("special_pay_2")),
-            specialPay("specialPay3", "พิเศษ 3 (ค่าตำแหน่ง)", rs.getBigDecimal("special_pay_3")),
-            specialPay("specialPay4", "พิเศษ 4 (เบี้ยขยันประจำ)", rs.getBigDecimal("special_pay_4")),
-            specialPay("specialPay5", "พิเศษ 5 (ค่า GPRS)", rs.getBigDecimal("special_pay_5")),
-            specialPay("specialPay6", "พิเศษ 6 (คอมมิชชั่น)", rs.getBigDecimal("special_pay_6")),
-            specialPay("specialPay7", "พิเศษ 7 (ทำได้ตาม KPI)", rs.getBigDecimal("special_pay_7")),
-            specialPay("specialPay8", "พิเศษ 8 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)", rs.getBigDecimal("special_pay_8")),
-            specialPay("specialPay9", "พิเศษ 9 (ค่าเช่าบ้าน)", rs.getBigDecimal("special_pay_9"))
+            specialPay("specialPay2", "พิเศษ 2 (ค่าเช่าบ้าน)", rs.getBigDecimal("special_pay_2")),
+            specialPay("specialPay3", "พิเศษ 3 (เบี้ยเลี้ยงประจำ)", rs.getBigDecimal("special_pay_3")),
+            specialPay("specialPay4", "พิเศษ 4 (ค่าตำแหน่ง)", rs.getBigDecimal("special_pay_4")),
+            specialPay("specialPay5", "พิเศษ 5 (เบี้ยขยันประจำ)", rs.getBigDecimal("special_pay_5")),
+            specialPay("specialPay6", "พิเศษ 6 (ค่า GPRS)", rs.getBigDecimal("special_pay_6")),
+            specialPay("specialPay7", "พิเศษ 7 (คอมมิชชั่น)", rs.getBigDecimal("special_pay_7")),
+            specialPay("specialPay8", "พิเศษ 8 (ทำได้ตาม KPI)", rs.getBigDecimal("special_pay_8")),
+            specialPay("specialPay9", "พิเศษ 9 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)", rs.getBigDecimal("special_pay_9"))
         );
     }
 

@@ -288,7 +288,7 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
     }
 
     private long seedEmployee(String code, String firstNameTh, String lastNameTh, BigDecimal salary) {
-        return jdbc.queryForObject(
+        long employeeId = jdbc.queryForObject(
             """
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active)
             VALUES (:code, :first, :last, :salary, TRUE)
@@ -296,5 +296,10 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
             """,
             Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "salary", salary),
             Long.class);
+        // Task 2 (2026-07-29): this file is about the withholding-tax override, not classification --
+        // seed the real production SSO-inclusion defaults so socialSecurity comes out non-zero as
+        // pinned. SALARY needs no tax-treatment seed (locked to REGULAR_REPROJECT regardless).
+        new PayrollRepository(jdbc).seedSsoInclusionDefaults(employeeId, 2026, employeeId);
+        return employeeId;
     }
 }

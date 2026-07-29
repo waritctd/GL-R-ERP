@@ -1,6 +1,8 @@
 package th.co.glr.hr.support;
 
 import java.math.BigDecimal;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
@@ -9,6 +11,11 @@ import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentSsoInclusionUpsertRequest;
+import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentTaxTreatmentUpsertRequest;
+import th.co.glr.hr.payroll.PayrollComponent;
+import th.co.glr.hr.payroll.PayrollRepository;
+import th.co.glr.hr.payroll.PayrollTaxTreatment;
 
 /**
  * Base for repository integration tests that run the real dynamic SQL against a real PostgreSQL
@@ -119,5 +126,64 @@ public abstract class AbstractPostgresIntegrationTest {
                 .addValue("priceUnit", priceUnit),
             Long.class);
         return priceId;
+    }
+
+    /**
+     * Task 2 (2026-07-29): {@link th.co.glr.hr.payroll.PayrollCalculator#calculateClassified} rejects
+     * any non-zero pay component that has no stored withholding-tax classification (handoff section
+     * 1, docs/agent-handoffs/118_feat-payroll-classification-and-hr-declarations.md). Every payroll
+     * integration test that drives {@code PayrollService#preview}/{@code #process} with a non-zero
+     * component now needs a real classification row for that employee/component, or the run 409s --
+     * this is the seeding helper for the common case: classify every listed component
+     * {@code REGULAR_REPROJECT}, which reproduces the pre-task-2 engine's blended single-limb
+     * annualisation exactly for a test employee with no EXTRA_KNOWN_FREQUENCY/EXTRA_CUMULATIVE_ACTUAL
+     * components in play. SALARY needs no call (it is locked to REGULAR_REPROJECT regardless of
+     * whether a row exists).
+     */
+    /**
+     * V98 (2026-07-29): {@code findCarryForwardSuggestions} pre-fills a slot only where THAT employee
+     * has a carry-forward flag set. An employee with no flag row carries nothing, which is the safe
+     * default and what the five unresolved workbook names get — so any test asserting a carried
+     * figure has to seed the flags first, exactly as HR's real configuration does.
+     *
+     * <p>Do NOT reach for this to make an assertion pass. Carrying is per employee per component by
+     * design; a test that seeds every component is asserting against a configuration no real employee
+     * has.
+     */
+    protected void seedCarryForward(long employeeId, int taxYear, PayrollComponent... components) {
+        for (PayrollComponent component : components) {
+            jdbc.update("""
+                INSERT INTO hr.payroll_component_carry_forward
+                    (employee_id, tax_year, component, carry_forward, updated_at)
+                VALUES (:employeeId, :taxYear, :component, TRUE, now())
+                ON CONFLICT (employee_id, tax_year, component)
+                DO UPDATE SET carry_forward = TRUE
+                """,
+                new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
+                    .addValue("employeeId", employeeId)
+                    .addValue("taxYear", taxYear)
+                    .addValue("component", component.name()));
+        }
+    }
+
+    protected void seedRegularTaxTreatment(long employeeId, int taxYear, PayrollComponent... components) {
+        List<ComponentTaxTreatmentUpsertRequest> items = Arrays.stream(components)
+            .map(component -> new ComponentTaxTreatmentUpsertRequest(employeeId, component, PayrollTaxTreatment.REGULAR_REPROJECT))
+            .toList();
+        new PayrollRepository(jdbc).upsertComponentTaxTreatment(taxYear, items, employeeId);
+    }
+
+    /**
+     * Companion to {@link #seedRegularTaxTreatment}: SSO inclusion has no application-level default
+     * at the calculator layer (the TRUE-except-director/non-taxable default lives entirely in {@link
+     * PayrollRepository#seedSsoInclusionDefaults}, upstream of the calculator) -- an employee with no
+     * stored inclusion row is excluded from the SSO wage base entirely. Tests that assert a specific
+     * {@code socialSecurity} figure need this too, not just the tax-treatment seed above.
+     */
+    protected void seedSsoIncluded(long employeeId, int taxYear, PayrollComponent... components) {
+        List<ComponentSsoInclusionUpsertRequest> items = Arrays.stream(components)
+            .map(component -> new ComponentSsoInclusionUpsertRequest(employeeId, component, true))
+            .toList();
+        new PayrollRepository(jdbc).upsertComponentSsoInclusion(taxYear, items, employeeId);
     }
 }

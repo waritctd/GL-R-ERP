@@ -146,6 +146,65 @@ class PayrollClassificationReviewIntegrationTest extends AbstractPostgresIntegra
                 java.util.Arrays.stream(PayrollComponent.values()).map(Enum::name).toList());
     }
 
+    /**
+     * Defect fix (Opus review, 2026-07-29) -- the January cliff, corrected: {@link
+     * PayrollRepository#findComponentTaxTreatmentsByEmployee} and {@link PayrollRepository
+     * #findComponentSsoInclusionByEmployee} used to resolve one effective tax year for the WHOLE
+     * table ({@code SELECT MAX(tax_year) ... WHERE tax_year <= :taxYear}, no employee scoping). The
+     * first employee hired in January of a new tax year (seeded at their hire year by {@code
+     * EmployeeService#create}) flips that single table-wide MAX forward for EVERY employee, so on
+     * the very next payroll run every pre-existing employee's classification map reads back
+     * completely empty: any employee with a non-zero non-salary component gets the run rejected, and
+     * salary-only employees (which pass the classification gate because SALARY is always auto-
+     * REGULAR_REPROJECT) silently get an SSO wage base of zero.
+     *
+     * <p>Reproduces that exact shape: employee A gets a 2027 row (the new hire), employee B has only
+     * a 2026 row (the pre-existing employee) and no 2027 row at all. Reading at {@code taxYear=2027}
+     * must resolve A to 2027 and B to 2026 INDEPENDENTLY -- not collapse to one shared year for both.
+     */
+    @Test
+    void resolvesTheEffectiveTaxYearPerEmployeeNotForTheWholeTable() {
+        long employeeA = seedEmployee("EMP-REV-005", "เอ", "รีวิว");
+        long employeeB = seedEmployee("EMP-REV-006", "บี", "รีวิว");
+
+        // Employee A: hired/classified in 2027 only (the new-hire scenario that used to flip MAX).
+        repository.upsertComponentTaxTreatment(2027, List.of(
+            new ComponentTaxTreatmentUpsertRequest(employeeA, PayrollComponent.SPECIAL_PAY_1, PayrollTaxTreatment.EXTRA_KNOWN_FREQUENCY)
+        ), employeeA);
+        repository.upsertComponentSsoInclusion(2027, List.of(
+            new ComponentSsoInclusionUpsertRequest(employeeA, PayrollComponent.SALARY, true)
+        ), employeeA);
+
+        // Employee B: classified in 2026 only -- the pre-existing employee, never touched for 2027.
+        repository.upsertComponentTaxTreatment(2026, List.of(
+            new ComponentTaxTreatmentUpsertRequest(employeeB, PayrollComponent.SPECIAL_PAY_1, PayrollTaxTreatment.REGULAR_REPROJECT)
+        ), employeeB);
+        repository.upsertComponentSsoInclusion(2026, List.of(
+            new ComponentSsoInclusionUpsertRequest(employeeB, PayrollComponent.SALARY, true)
+        ), employeeB);
+
+        Map<Long, Map<PayrollComponent, PayrollTaxTreatment>> treatmentsAtRequestedYear2027 =
+            repository.findComponentTaxTreatmentsByEmployee(2027);
+        Map<Long, Map<PayrollComponent, Boolean>> ssoInclusionAtRequestedYear2027 =
+            repository.findComponentSsoInclusionByEmployee(2027);
+
+        assertThat(treatmentsAtRequestedYear2027.get(employeeA).get(PayrollComponent.SPECIAL_PAY_1))
+            .as("employee A must resolve to their own 2027 row")
+            .isEqualTo(PayrollTaxTreatment.EXTRA_KNOWN_FREQUENCY);
+        assertThat(treatmentsAtRequestedYear2027)
+            .as("employee B must still resolve, rolling forward from their own 2026 row -- "
+                + "NOT read as empty just because employee A has a 2027 row")
+            .containsKey(employeeB);
+        assertThat(treatmentsAtRequestedYear2027.get(employeeB).get(PayrollComponent.SPECIAL_PAY_1))
+            .isEqualTo(PayrollTaxTreatment.REGULAR_REPROJECT);
+
+        assertThat(ssoInclusionAtRequestedYear2027.get(employeeA).get(PayrollComponent.SALARY)).isTrue();
+        assertThat(ssoInclusionAtRequestedYear2027)
+            .as("employee B's SSO inclusion must not silently read as empty (which would zero their wage base)")
+            .containsKey(employeeB);
+        assertThat(ssoInclusionAtRequestedYear2027.get(employeeB).get(PayrollComponent.SALARY)).isTrue();
+    }
+
     private long seedEmployee(String code, String firstNameTh, String lastNameTh) {
         return jdbc.queryForObject(
             """

@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -28,6 +29,8 @@ import th.co.glr.hr.payroll.export.PayrollExportKind;
 import th.co.glr.hr.payroll.export.PayrollExportRow;
 import th.co.glr.hr.payroll.export.Pnd1Exporter;
 import th.co.glr.hr.payroll.export.SsoExporter;
+import th.co.glr.hr.payroll.PayrollClassifiedCalculationDtos.PayrollClassifiedCalculation;
+import th.co.glr.hr.payroll.PayrollClassifiedCalculationDtos.PayrollClassifiedCalculationInput;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceDto;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.TaxAllowanceBulkUpsertRequest;
@@ -136,6 +139,8 @@ public class PayrollService {
                 return new PayrollCarryForwardDtos.SuggestedInputRow(
                     employeeId,
                     base.specialPay1(), base.specialPay2(), base.specialPay3(), base.specialPay4(), base.specialPay5(),
+                    base.specialPay6(), base.specialPay7(), base.specialPay8(), base.specialPay9(),
+                    base.mealAllowance(),
                     base.nonTaxableIncome(), base.studentLoanDeduction(), base.legalExecutionDeduction(),
                     unpaidLeaveDaysByEmployee.getOrDefault(employeeId, BigDecimal.ZERO),
                     pendingCorrectionsByEmployee.getOrDefault(employeeId, BigDecimal.ZERO),
@@ -277,6 +282,15 @@ public class PayrollService {
         Long existingPeriodId = payrollRepository.findPeriodByMonth(payrollMonth).map(PayrollPeriodDto::id).orElse(null);
         Map<Long, BigDecimal> leaveRefundDaysByEmployee = leaveRepository.findRefundableUnpaidDaysByEmployee(existingPeriodId);
 
+        // Task 2 (2026-07-29): per-employee, per-component tax treatment + SSO inclusion, replacing
+        // the hardcoded single-limb split. See PayrollCalculator#calculateClassified and
+        // docs/agent-handoffs/118_feat-payroll-classification-and-hr-declarations.md.
+        int taxYear = payrollMonth.getYear();
+        Map<Long, Map<PayrollComponent, PayrollTaxTreatment>> treatmentsByEmployee =
+            payrollRepository.findComponentTaxTreatmentsByEmployee(taxYear);
+        Map<Long, Map<PayrollComponent, Boolean>> ssoInclusionByEmployee =
+            payrollRepository.findComponentSsoInclusionByEmployee(taxYear);
+
         List<PayrollLineDto> lines = employees.stream()
             .map(employee -> calculateLine(
                 employee,
@@ -287,8 +301,17 @@ public class PayrollService {
                 storedAllowancesByEmployee.get(employee.employeeId()),
                 leaveRefundDaysByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
                 payrollMonth,
-                remainingPayPeriods(payrollMonth),
-                taxpayerAge(employee.dateOfBirth(), payrollMonth)
+                // Genuine conflict (rebase, 2026-07-29), not a mechanical merge: branch 117's
+                // remainingPayPeriods/taxpayerAge fed the OLD single-limb payrollCalculator.calculate()
+                // path; branch 118 (task 2) repoints calculateLine onto calculateClassified exclusively
+                // (see PayrollClassifiedCalculationDtos' class javadoc), which has no use for either --
+                // it derives monthsRemaining from payrollMonthValue directly and does not apply the V93
+                // elderly/disabled exemption (exemptIncome/assessAnnualTax are calculate()-only). Kept
+                // as-is rather than threaded through calculateClassified/PayrollClassifiedCalculationInput,
+                // which would be inventing behaviour fa69e4fa does not implement; flagged as a known gap
+                // in the rebase report, not fixed here.
+                treatmentsByEmployee.getOrDefault(employee.employeeId(), Map.of()),
+                ssoInclusionByEmployee.getOrDefault(employee.employeeId(), Map.of())
             ))
             .sorted(Comparator.comparing(PayrollLineDto::employeeCode))
             .toList();
@@ -323,8 +346,8 @@ public class PayrollService {
         PayrollTaxAllowanceInput storedAllowances,
         BigDecimal leaveRefundDays,
         LocalDate payrollMonth,
-        int remainingPayPeriods,
-        int taxpayerAge
+        Map<PayrollComponent, PayrollTaxTreatment> componentTaxTreatments,
+        Map<PayrollComponent, Boolean> componentSsoInclusion
     ) {
         // Withholding-tax override precedence (2026-07-24, V88): a per-run HR-typed value wins; else
         // the employee's standing override; else null (= compute normally). NULL is meaningful at every
@@ -336,38 +359,71 @@ public class PayrollService {
         BigDecimal effectiveWithholdingOverride = perRunWithholdingOverride != null
             ? perRunWithholdingOverride
             : employee.withholdingTaxOverride();
-        PayrollCalculation calculation = payrollCalculator.calculate(new PayrollCalculationInput(
-            employee.baseSalary(),
-            input == null ? List.of() : input.specialPays(),
-            overtimePay,
-            commissionPay,
-            input == null ? BigDecimal.ZERO : input.nonTaxableIncome(),
+
+        // ลูกค้าคืนสินค้า earned/unearned flag (handoff section 6): not yet earned reduces the
+        // commission earning itself, PRE-TAX -- netted into COMMISSION_PAY here, before it ever
+        // reaches PayrollCalculator, so the calculator only ever sees a single already-net commission
+        // figure and applies the deduction a second time only for the already-earned clawback case.
+        boolean customerReturnAlreadyEarned = input != null && Boolean.TRUE.equals(input.customerReturnAlreadyEarned());
+        BigDecimal customerReturnDeduction = input == null ? BigDecimal.ZERO : safe(input.customerReturnDeduction());
+        BigDecimal effectiveCommissionPay = commissionPay == null ? BigDecimal.ZERO : commissionPay;
+        if (!customerReturnAlreadyEarned && customerReturnDeduction.signum() > 0) {
+            effectiveCommissionPay = effectiveCommissionPay.subtract(customerReturnDeduction).max(BigDecimal.ZERO);
+        }
+
+        List<BigDecimal> specialPays = input == null ? List.of() : input.specialPays();
+        Map<PayrollComponent, BigDecimal> componentAmounts = new EnumMap<>(PayrollComponent.class);
+        componentAmounts.put(PayrollComponent.SALARY, employee.baseSalary());
+        componentAmounts.put(PayrollComponent.SPECIAL_PAY_1, amountAt(specialPays, 0));
+        componentAmounts.put(PayrollComponent.SPECIAL_PAY_2, amountAt(specialPays, 1));
+        componentAmounts.put(PayrollComponent.SPECIAL_PAY_3, amountAt(specialPays, 2));
+        componentAmounts.put(PayrollComponent.SPECIAL_PAY_4, amountAt(specialPays, 3));
+        componentAmounts.put(PayrollComponent.SPECIAL_PAY_5, amountAt(specialPays, 4));
+        componentAmounts.put(PayrollComponent.SPECIAL_PAY_6, amountAt(specialPays, 5));
+        componentAmounts.put(PayrollComponent.SPECIAL_PAY_7, amountAt(specialPays, 6));
+        componentAmounts.put(PayrollComponent.SPECIAL_PAY_8, amountAt(specialPays, 7));
+        componentAmounts.put(PayrollComponent.SPECIAL_PAY_9, amountAt(specialPays, 8));
+        componentAmounts.put(PayrollComponent.OVERTIME_PAY, overtimePay == null ? BigDecimal.ZERO : overtimePay);
+        componentAmounts.put(PayrollComponent.COMMISSION_PAY, effectiveCommissionPay);
+        componentAmounts.put(PayrollComponent.MEAL_ALLOWANCE, input == null ? BigDecimal.ZERO : safe(input.mealAllowance()));
+        componentAmounts.put(PayrollComponent.PER_DIEM_TAXABLE, input == null ? BigDecimal.ZERO : safe(input.perDiemTaxable()));
+        componentAmounts.put(PayrollComponent.BONUS_PAY, input == null ? BigDecimal.ZERO : safe(input.bonusPay()));
+        componentAmounts.put(PayrollComponent.OTHER_ONE_OFF_PAY, input == null ? BigDecimal.ZERO : safe(input.otherOneOffPay()));
+        componentAmounts.put(PayrollComponent.DIRECTOR_REMUNERATION, employee.directorRemuneration());
+        // The มาตรา 42 exempt slice of เบี้ยเลี้ยง joins NON_TAXABLE_INCOME rather than getting its own
+        // component: it is outside the tax base AND the ประกันสังคม wage base, which is exactly what
+        // NON_TAXABLE_INCOME already means. Giving it a component would oblige HR to classify a ป.96
+        // treatment for money that is never taxed. It stays visible as its own figure on the line and
+        // the payslip -- only the tax/SSO arithmetic pools it here.
+        componentAmounts.put(PayrollComponent.NON_TAXABLE_INCOME,
+            input == null ? BigDecimal.ZERO : safe(input.nonTaxableIncome()).add(safe(input.perDiemExempt())));
+
+        PayrollClassifiedCalculation calculation = payrollCalculator.calculateClassified(new PayrollClassifiedCalculationInput(
+            employee.employeeId(),
+            employee.employeeCode() + " " + employee.employeeName(),
+            componentAmounts,
+            componentTaxTreatments,
+            componentSsoInclusion,
             input == null ? BigDecimal.ZERO : input.unpaidLeaveDays(),
+            leaveRefundDays == null ? BigDecimal.ZERO : leaveRefundDays,
             input == null ? BigDecimal.ZERO : input.studentLoanDeduction(),
-            input == null ? BigDecimal.ZERO : input.legalExecutionDeduction(),
+            input == null ? BigDecimal.ZERO : input.otherPretaxDeduction(),
             input == null ? BigDecimal.ZERO : input.otherPostTaxDeductions(),
+            // หักตามใบเตือน (handoff section 6): POST-TAX only now.
+            input == null ? BigDecimal.ZERO : input.warningLetterDeduction(),
+            customerReturnDeduction,
+            customerReturnAlreadyEarned,
+            input == null ? BigDecimal.ZERO : safe(input.legalExecutionDeduction()),
+            input == null ? null : input.garnishmentType(),
             mergeAllowances(storedAllowances, input),
             yearToDate,
             payrollMonth.getMonthValue(),
-            employee.directorRemuneration(),
-            input == null ? BigDecimal.ZERO : input.warningLetterDeduction(),
-            input == null ? BigDecimal.ZERO : input.customerReturnDeduction(),
-            input == null ? BigDecimal.ZERO : input.otherPretaxDeduction(),
-            // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): system-derived, never HR-typed --
-            // there is no corresponding field on PayrollEmployeeInputRequest.
-            leaveRefundDays == null ? BigDecimal.ZERO : leaveRefundDays,
-            // Withholding-tax override (2026-07-24, V88): the RESOLVED effective override (per-run wins
-            // over standing), or null to compute normally.
-            effectiveWithholdingOverride,
-            // ป.96/2543 (V92): the Gregorian tax year, and จำนวนคราวที่ต้องจ่าย remaining including
-            // this period (ข้อ 2.1). NOT capped for leavers -- ข้อ 2.10 is a known gap, see
-            // #remainingPayPeriods.
+            // Rebase consequence (2026-07-29): retirementAllowance's taxYear parameter (117) must reach
+            // calculateClassified too (see PayrollClassifiedCalculationDtos#taxYear javadoc). Derived
+            // the same way the outer preview()/process() methods already derive it for the tax-
+            // treatment/SSO-inclusion lookups above.
             payrollMonth.getYear(),
-            remainingPayPeriods,
-            taxpayerAge,
-            // Dedicated one-off pay (V94), HR-typed per run.
-            input == null ? BigDecimal.ZERO : input.bonusPay(),
-            input == null ? BigDecimal.ZERO : input.otherOneOffPay()
+            effectiveWithholdingOverride
         ));
         return new PayrollLineDto(
             null,
@@ -415,16 +471,49 @@ public class PayrollService {
             // relied on the standing value this stays null and next month's carry-forward is empty --
             // exactly the desired "standing keeps applying, per-run field starts blank" behaviour.
             perRunWithholdingOverride,
-            // ป.96/2543 limbs (V92): persisted so next period's projection can annualise the regular
-            // limb and net the ข้อ 2.5 difference against the variable limb separately.
-            calculation.regularTaxableIncome(),
-            calculation.variableTaxableIncome(),
-            calculation.regularWithholdingTax(),
-            calculation.variableWithholdingTax(),
+            // ป.96/2543 limbs (V92, regular/variable 2-limb): calculateLine now runs exclusively through
+            // calculateClassified (V96, regular/known/cumulative 3-limb -- see PayrollClassifiedCalculation
+            // below), which has no concept of this older 2-limb split at all. Backfilled the same way
+            // PayrollLineDto's own 40-arg legacy constructor already backfills the NEW limb fields for a
+            // caller with no limb concept: everything attributed to the regular limb (grossTaxableIncome /
+            // withholdingTax in full), nothing to the variable limb. These four columns are therefore
+            // vestigial for every line processed from this rebase forward -- kept only so historical rows
+            // written by the pre-task-2 engine still round-trip through this record's shape.
+            calculation.grossTaxableIncome(),
+            BigDecimal.ZERO,
+            calculation.withholdingTax(),
+            BigDecimal.ZERO,
             calculation.bonusPay(),
             calculation.otherOneOffPay(),
-            calculation.excessWithheldToDate()
+            // V94's excessWithheldToDate has no equivalent in PayrollClassifiedCalculation (the
+            // classified engine does not track a stranded-excess figure) -- known gap, not fixed by this
+            // rebase; see the rebase report.
+            BigDecimal.ZERO,
+            calculation.taxableIncomeRegularLimb(),
+            calculation.taxableIncomeKnownLimb(),
+            calculation.taxableIncomeCumulativeLimb(),
+            calculation.withholdingTaxRegularLimb(),
+            calculation.withholdingTaxCumulativeLimb(),
+            calculation.customerReturnAlreadyEarned(),
+            calculation.garnishmentType().name(),
+            calculation.mealAllowance(),
+            // perDiemExempt/perDiemBasis never reach the calculator: perDiemExempt is folded into
+            // NON_TAXABLE_INCOME above (it has no ป.96 treatment to classify -- see PayrollComponent's
+            // javadoc), and perDiemBasis is pure metadata with no arithmetic role at all. Both are
+            // passed straight through from the request so they are still persisted on the line.
+            input == null ? BigDecimal.ZERO : safe(input.perDiemExempt()),
+            calculation.perDiemTaxable(),
+            input == null || input.perDiemBasis() == null ? null : input.perDiemBasis().name()
         );
+    }
+
+    private BigDecimal amountAt(List<BigDecimal> values, int index) {
+        BigDecimal value = values == null || values.size() <= index ? null : values.get(index);
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private BigDecimal safe(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
     }
 
     /**
@@ -488,7 +577,8 @@ public class PayrollService {
             headCountFor(base.childCount(), input.childAllowance(), "30000"),
             base.childCountDouble(),
             headCountFor(base.disabledCareCount(), input.disabledCareAllowance(), "60000"),
-            base.disabilityCardHolder()
+            base.disabilityCardHolder(),
+            input.parentCareCount() != null ? input.parentCareCount() : (base.parentCareCount() == null ? 0 : base.parentCareCount())
         );
     }
 
@@ -611,18 +701,35 @@ public class PayrollService {
         return commissionService.payrollCommissionTotalsByEmployee(payrollMonth);
     }
 
+    /**
+     * Slot labels, ALIGNED TO THE ACCOUNTANT'S WORKBOOK (2026-07-29, owner decision).
+     *
+     * <p>`2026.xlsx` numbers these differently from the system's original labels: it carries
+     * ค่าเช่าบ้าน as พิเศษ 2, which shifted every later number by one. The names always matched; only
+     * the numbers disagreed, so the system's slot 6 (คอมมิชชั่น) was the workbook's พิเศษ 7 and every
+     * reconciliation needed a translation table in someone's head.
+     *
+     * <p>The first decision was to leave the system alone and have the accountant renumber, because
+     * renumbering would have redefined 149 processed rows across five filed months. The owner then
+     * confirmed **nothing has ever been processed or paid from this ERP** — all five runs were tests,
+     * now VOIDed — so that argument collapsed and the decision was reversed. With every period VOID
+     * this is a pure relabel: no stored figure moves and no filed return exists to be affected.
+     *
+     * <p>⚠️ Branch 117 hardcodes commission at slot 6. It is slot 7 now. See the handoff's cross-branch
+     * break note — merging 117 without updating that constant puts commission in the wrong ป.96 limb
+     * and annualises ค่า GPRS in its place, silently.
+     */
     private List<PayrollSpecialPayDto> specialPayDtos(List<BigDecimal> specialPays) {
         return List.of(
             new PayrollSpecialPayDto("specialPay1", "พิเศษ 1 (ค่าครองชีพ)", specialPays.get(0)),
-            new PayrollSpecialPayDto("specialPay2", "พิเศษ 2 (เบี้ยเลี้ยงประจำ)", specialPays.get(1)),
-            new PayrollSpecialPayDto("specialPay3", "พิเศษ 3 (ค่าตำแหน่ง)", specialPays.get(2)),
-            new PayrollSpecialPayDto("specialPay4", "พิเศษ 4 (เบี้ยขยันประจำ)", specialPays.get(3)),
-            new PayrollSpecialPayDto("specialPay5", "พิเศษ 5 (ค่า GPRS)", specialPays.get(4)),
-            new PayrollSpecialPayDto("specialPay6", "พิเศษ 6 (คอมมิชชั่น)", specialPays.get(5)),
-            new PayrollSpecialPayDto("specialPay7", "พิเศษ 7 (ทำได้ตาม KPI)", specialPays.get(6)),
-            new PayrollSpecialPayDto("specialPay8", "พิเศษ 8 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)", specialPays.get(7)),
-            // Appended 2026-07-29 (V95) -- never renumbered ahead of specialPay8, see PayrollComponent.
-            new PayrollSpecialPayDto("specialPay9", "พิเศษ 9 (ค่าเช่าบ้าน)", specialPays.get(8))
+            new PayrollSpecialPayDto("specialPay2", "พิเศษ 2 (ค่าเช่าบ้าน)", specialPays.get(1)),
+            new PayrollSpecialPayDto("specialPay3", "พิเศษ 3 (เบี้ยเลี้ยงประจำ)", specialPays.get(2)),
+            new PayrollSpecialPayDto("specialPay4", "พิเศษ 4 (ค่าตำแหน่ง)", specialPays.get(3)),
+            new PayrollSpecialPayDto("specialPay5", "พิเศษ 5 (เบี้ยขยันประจำ)", specialPays.get(4)),
+            new PayrollSpecialPayDto("specialPay6", "พิเศษ 6 (ค่า GPRS)", specialPays.get(5)),
+            new PayrollSpecialPayDto("specialPay7", "พิเศษ 7 (คอมมิชชั่น)", specialPays.get(6)),
+            new PayrollSpecialPayDto("specialPay8", "พิเศษ 8 (ทำได้ตาม KPI)", specialPays.get(7)),
+            new PayrollSpecialPayDto("specialPay9", "พิเศษ 9 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)", specialPays.get(8))
         );
     }
 

@@ -34,7 +34,14 @@ public record PayrollTaxAllowanceInput(
     int disabledCareCount,
     // บัตรประจำตัวคนพิการ. With it, the ยกเว้นเงินได้ 190,000 (กฎกระทรวง ฉบับที่ 126) applies at any
     // age; without it, only from 65. See PayrollCalculator#assessAnnualTax.
-    boolean disabilityCardHolder
+    boolean disabilityCardHolder,
+    // Parent allowance per qualifying head (2026-07-29, V95/task 2): ฿30,000 PER qualifying parent,
+    // ฿120,000 = the four-parent maximum -- NOT a flat cap regardless of count (handoff section 4).
+    // Nullable/0 means "no count declared yet"; PayrollCalculator falls back to the legacy flat-cap
+    // treatment of parentCareAllowance in that case (see that class for the reconciliation rule
+    // between this and the pre-existing baht-typed parentCareAllowance field above -- V95 known risk
+    // 2, "two sources of truth for one allowance", resolved there).
+    Integer parentCareCount
 ) {
     public static PayrollTaxAllowanceInput empty() {
         return new PayrollTaxAllowanceInput(
@@ -53,23 +60,35 @@ public record PayrollTaxAllowanceInput(
             BigDecimal.ZERO,
             BigDecimal.ZERO,
             BigDecimal.ZERO,
-            BigDecimal.ZERO
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            0,
+            0,
+            0,
+            false,
+            0
         );
     }
 
     /**
-     * Legacy 16-arg constructor: the full signature before the ล.ย.01 completeness fields existed.
+     * Legacy 16-arg constructor: the full signature before the ล.ย.01 completeness fields (V93) and
+     * {@code parentCareCount} (V95/task 2) existed. Kept so every pre-V93 call site keeps compiling --
+     * including {@code PayrollExcelReconciliationTest}, which still uses this exact arity after its
+     * 2026-07-29 repoint onto {@code calculateClassified} (Opus review; that repoint changed which
+     * {@link PayrollCalculator} entry point the file drives, not this constructor).
      *
      * <p>The per-head counts are DERIVED from the declared amounts rather than defaulted to zero, for
      * the same reason V93's migration backfills them that way: at this arity the amount is the only
      * evidence there is, and reading "30,000 declared, 0 children" as an overstatement would silently
      * delete a real allowance. Deriving keeps a legacy caller byte-identical to its pre-V93 result,
-     * while every caller that supplies real counts — which is the repository, and therefore all of
-     * production — gets the genuine per-head cap.
+     * while every caller that supplies real counts -- which is the repository, and therefore all of
+     * production -- gets the genuine per-head cap.
      *
      * <p>The doubled 60,000 rate for a second-or-later child born from พ.ศ. 2561 is NOT assumed here:
      * without the count there is nothing to say which children qualify, so the derivation stays on the
-     * plain 30,000 rate and under-claims rather than over-claims.
+     * plain 30,000 rate and under-claims rather than over-claims. {@code parentCareCount} defaults to
+     * 0 ("no count declared"), which reproduces the pre-existing flat-cap {@code parentCareAllowance}
+     * behaviour exactly -- see {@link PayrollCalculator}.
      */
     public PayrollTaxAllowanceInput(
         BigDecimal spouseAllowance,
@@ -99,7 +118,8 @@ public record PayrollTaxAllowanceInput(
             headCount(childAllowance, "30000"),
             0,
             headCount(disabledCareAllowance, "60000"),
-            false
+            false,
+            0
         );
     }
 

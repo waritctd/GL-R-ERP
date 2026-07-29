@@ -4,7 +4,11 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
+import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.payroll.PayrollClassifiedCalculationDtos.PayrollClassifiedCalculation;
+import th.co.glr.hr.payroll.PayrollClassifiedCalculationDtos.PayrollClassifiedCalculationInput;
 
 @Component
 public class PayrollCalculator {
@@ -59,6 +63,14 @@ public class PayrollCalculator {
     // amount is no obstacle, because ข้อ 2.4 requires exactly the re-projection this limb already does
     // (ให้คำนวณภาษีหัก ณ ที่จ่ายใหม่ทุกคราว), rebuilding from actual year-to-date each period.
     private static final int COMMISSION_SPECIAL_PAY_INDEX = 5;
+
+    // ---- Task 2 additions (2026-07-29): per-component classified withholding engine -----------
+    private static final BigDecimal PARENT_ALLOWANCE_PER_HEAD = new BigDecimal("30000.00");
+    private static final BigDecimal PARENT_ALLOWANCE_MAX = new BigDecimal("120000.00");
+    private static final BigDecimal GARNISHMENT_SALARY_MAX_RATE = new BigDecimal("0.30");
+    private static final BigDecimal GARNISHMENT_BONUS_MAX_RATE = new BigDecimal("0.50");
+    private static final BigDecimal GARNISHMENT_OVERTIME_MAX_RATE = new BigDecimal("0.30");
+    private static final BigDecimal MIN_NET_AFTER_SEVERANCE_GARNISHMENT = new BigDecimal("300000.00");
 
     public PayrollCalculation calculate(PayrollCalculationInput input) {
         PayrollYearToDate yearToDate = input.yearToDate() == null ? PayrollYearToDate.empty() : input.yearToDate();
@@ -465,6 +477,355 @@ public class PayrollCalculator {
         return eligible ? min(ELDERLY_DISABLED_EXEMPTION, annualIncome) : ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
     }
 
+    /**
+     * Task 2 (2026-07-29): computes withholding from the per-employee, per-component tax treatment
+     * and SSO inclusion data (V95/V96), replacing the hardcoded single-limb split {@link #calculate}
+     * still implements for its frozen regression suite. See docs/agent-handoffs/118_feat-payroll-
+     * classification-and-hr-declarations.md section 1 for the three treatments and their statutory
+     * citations (ป.96/2543 ข้อ 1(4)/(5)/(6)).
+     *
+     * <p><b>Blocker:</b> a component with a non-zero amount and no stored treatment rejects the run
+     * (409) naming the employee and the component -- a zero-amount component never blocks, so adding
+     * a new component (พิเศษ 9) does not halt payroll for employees who never receive it.
+     *
+     * <p><b>Three-stage layering</b> (mirrors how ป.96 builds up the annual figure: ข้อ 4 first, then
+     * ข้อ 5, then ข้อ 6 on top): the REGULAR limb is reprojected to an annual figure and taxed net of
+     * the FULL allowance/expense-deduction total (identical method to {@link #calculate}, restricted
+     * to REGULAR_REPROJECT components only); the KNOWN-FREQUENCY limb is taxed as the marginal
+     * difference of layering this period's known amount on top of that regular annual figure (no
+     * reprojection, no YTD subtraction -- each occurrence is its own one-off difference); the
+     * CUMULATIVE limb is taxed as the marginal difference of layering the full year-to-date cumulative
+     * actual on top of THAT, less whatever has already been withheld on this limb this year. This
+     * telescopes to the correct total annual liability by year end regardless of month-to-month
+     * allowance drift -- see the task-2 handoff progress notes for the algebraic argument and the
+     * 12-month integration test that exercises it.
+     */
+    public PayrollClassifiedCalculation calculateClassified(PayrollClassifiedCalculationInput input) {
+        PayrollYearToDate yearToDate = input.yearToDate() == null ? PayrollYearToDate.empty() : input.yearToDate();
+        PayrollTaxAllowanceInput allowances = input.taxAllowances() == null
+            ? PayrollTaxAllowanceInput.empty()
+            : input.taxAllowances();
+
+        requireEveryNonZeroComponentClassified(input);
+
+        BigDecimal regularSumRaw = ZERO;
+        BigDecimal knownSum = ZERO;
+        BigDecimal cumulativeSum = ZERO;
+        for (PayrollComponent component : PayrollComponent.values()) {
+            if (component == PayrollComponent.NON_TAXABLE_INCOME) {
+                continue;
+            }
+            BigDecimal amount = money(input.amountOf(component));
+            PayrollTaxTreatment treatment = input.treatmentOf(component);
+            if (treatment == null) {
+                continue; // zero amount (guaranteed by requireEveryNonZeroComponentClassified above,
+                          // which now also catches a NEGATIVE amount -- defect 4 fix, 2026-07-29)
+            }
+            switch (treatment) {
+                case REGULAR_REPROJECT -> regularSumRaw = regularSumRaw.add(amount);
+                case EXTRA_KNOWN_FREQUENCY -> knownSum = knownSum.add(amount);
+                case EXTRA_CUMULATIVE_ACTUAL -> cumulativeSum = cumulativeSum.add(amount);
+            }
+        }
+        regularSumRaw = money(regularSumRaw);
+        knownSum = money(knownSum);
+        cumulativeSum = money(cumulativeSum);
+
+        BigDecimal baseSalary = money(input.amountOf(PayrollComponent.SALARY));
+        BigDecimal dailyRate = baseSalary.divide(THIRTY, RATE_SCALE, RoundingMode.HALF_UP);
+        BigDecimal hourlyRate = dailyRate.divide(EIGHT, RATE_SCALE, RoundingMode.HALF_UP);
+        BigDecimal unpaidLeaveDays = quantity(input.unpaidLeaveDays());
+        BigDecimal unpaidLeaveDeduction = money(dailyRate.multiply(unpaidLeaveDays));
+        BigDecimal leaveRefundDays = quantity(input.leaveRefundDays());
+        BigDecimal leaveDeductionRefund = money(dailyRate.multiply(leaveRefundDays));
+        BigDecimal otherPretaxDeduction = money(input.otherPretaxDeduction());
+
+        BigDecimal grossEarnings = money(regularSumRaw.add(knownSum).add(cumulativeSum));
+        BigDecimal nonTaxableIncome = money(input.amountOf(PayrollComponent.NON_TAXABLE_INCOME));
+
+        // Pretax deductions (unpaid leave net of refund, other pretax) apply against the REGULAR limb
+        // only -- warning-letter deduction no longer reduces taxable income at all (handoff section 6,
+        // post-tax now), and an unearned customer return has already been netted out of
+        // componentAmounts.get(COMMISSION_PAY) by the caller, so it never reaches this subtraction.
+        BigDecimal regularSumAfterLeave = money(regularSumRaw
+            .subtract(unpaidLeaveDeduction)
+            .add(leaveDeductionRefund)
+            .subtract(otherPretaxDeduction)
+            .max(ZERO));
+        // Defect 4 fix (review, 2026-07-29): the legacy single-limb engine floors grossTaxableIncome
+        // at zero ONCE, on the combined total (see #calculate above). This layered rewrite floors
+        // regularSumAfterLeave on its own above (needed so the REGULAR limb's own annual reprojection
+        // never goes negative), but that is not a substitute for flooring the combined figure: a
+        // classified NEGATIVE component (e.g. an EXTRA_CUMULATIVE_ACTUAL commission clawback) can make
+        // knownSum/cumulativeSum negative enough to drag the total below zero even though
+        // regularSumAfterLeave alone was already non-negative. Restored here.
+        BigDecimal grossTaxableIncome = money(regularSumAfterLeave.add(knownSum).add(cumulativeSum).max(ZERO));
+
+        // Defect 2 fix (review, 2026-07-29): the legacy engine derives the SSO wage base from
+        // ssoWageBase(baseSalary - unpaidLeaveDeduction + leaveDeductionRefund) -- wages ACTUALLY
+        // paid, not the nominal salary -- and the 2026-07-23 cancel-after-close auto-refund flows
+        // through that same subtraction with the opposite sign. This rewrite must preserve that:
+        // applied only to the SALARY component's own contribution, because unpaidLeaveDeduction is
+        // computed off baseSalary/dailyRate and has no meaning against other SSO-included components
+        // (commission, OT, etc.), which are separately and fully paid regardless of this period's
+        // unpaid leave days.
+        BigDecimal ssoWageBaseRaw = ZERO;
+        for (PayrollComponent component : PayrollComponent.values()) {
+            if (!input.ssoIncluded(component)) {
+                continue;
+            }
+            BigDecimal componentAmount = money(input.amountOf(component));
+            if (component == PayrollComponent.SALARY) {
+                componentAmount = componentAmount.subtract(unpaidLeaveDeduction).add(leaveDeductionRefund);
+            }
+            ssoWageBaseRaw = ssoWageBaseRaw.add(componentAmount);
+        }
+        BigDecimal ssoWageBase = ssoWageBase(ssoWageBaseRaw);
+        BigDecimal monthlySso = money(ssoWageBase.multiply(SSO_RATE));
+        BigDecimal remainingSsoCap = SSO_YEAR_CAP.subtract(money(yearToDate.socialSecurity())).max(ZERO);
+        BigDecimal socialSecurity = min(monthlySso, remainingSsoCap);
+
+        int monthsRemaining = Math.max(1, 13 - input.payrollMonthValue());
+
+        // ---- Stage 1 (ข้อ 4): REGULAR limb, reprojected annually, full allowance/expense deduction.
+        BigDecimal regularAnnualProjection = money(money(yearToDate.regularLimbTaxableIncome())
+            .add(regularSumAfterLeave.multiply(BigDecimal.valueOf(monthsRemaining))));
+        BigDecimal knownThisPeriod = knownSum;
+        BigDecimal cumulativeYtdTotal = money(money(yearToDate.cumulativeLimbTaxableIncome()).add(cumulativeSum));
+        BigDecimal fullAnnualProjection = money(regularAnnualProjection.add(knownThisPeriod).add(cumulativeYtdTotal));
+
+        BigDecimal taxExpenseDeduction = min(fullAnnualProjection.multiply(new BigDecimal("0.50")), EXPENSE_DEDUCTION_CAP);
+        AllowanceBreakdown allowanceBreakdown = allowanceBreakdown(
+            allowances, fullAnnualProjection, taxExpenseDeduction, yearToDate, socialSecurity, monthsRemaining,
+            input.taxYear());
+
+        // Defect 1 fix (review, 2026-07-29): the invariant this engine must satisfy is that total
+        // annual taxable income is always (fullAnnualProjection - taxExpenseDeduction -
+        // allowanceBreakdown.total()), floored at zero exactly ONCE -- the three ป.96 limbs decide
+        // WHEN tax is withheld, never how much annual income is taxable. The previous version floored
+        // the REGULAR limb's own net figure at zero BEFORE layering KNOWN and CUMULATIVE on top, so
+        // any allowance/expense headroom the regular limb alone could not absorb (e.g. a modest salary
+        // with real declared allowances, plus a large irregular commission) was destroyed by that
+        // early clamp instead of sheltering the other two limbs.
+        //
+        // Fixed by carrying the UNCLAMPED running net through all three stages and flooring only the
+        // per-stage figure used to report/tax that stage -- never re-deriving a later stage from an
+        // already-clamped earlier one. netRegular/netWithKnown/netWithCumulative below may be
+        // negative; progressiveTax(...) already returns zero for a negative input (every bracket's
+        // income.compareTo(lower) <= 0 check is true), so the explicit .max(ZERO) on each *Taxable
+        // variable exists only to keep the reported figures non-negative, not to change what gets
+        // taxed. Algebraically netWithCumulative == fullAnnualProjection - taxExpenseDeduction -
+        // allowanceBreakdown.total() exactly (regularAnnualProjection + known + cumulative, minus the
+        // same total deduction once), which is the identity the review test asserts.
+        BigDecimal deductionsTotal = taxExpenseDeduction.add(allowanceBreakdown.total());
+        BigDecimal netRegular = regularAnnualProjection.subtract(deductionsTotal);
+        BigDecimal netWithKnown = netRegular.add(knownThisPeriod);
+        BigDecimal netWithCumulative = netWithKnown.add(cumulativeYtdTotal);
+
+        BigDecimal taxableRegularOnly = money(netRegular.max(ZERO));
+        BigDecimal annualTaxRegular = progressiveTax(taxableRegularOnly);
+        BigDecimal remainingRegularAnnualTax = annualTaxRegular.subtract(money(yearToDate.regularLimbWithholdingTax())).max(ZERO);
+        BigDecimal withholdRegular = money(remainingRegularAnnualTax.divide(BigDecimal.valueOf(monthsRemaining), MONEY_SCALE, RoundingMode.HALF_UP));
+
+        // ---- Stage 2 (ข้อ 5): EXTRA_KNOWN_FREQUENCY, layered on top, taxed as the marginal difference.
+        BigDecimal taxableWithKnown = money(netWithKnown.max(ZERO));
+        BigDecimal annualTaxWithKnown = progressiveTax(taxableWithKnown);
+        BigDecimal withholdKnown = annualTaxWithKnown.subtract(annualTaxRegular).max(ZERO);
+
+        // ---- Stage 3 (ข้อ 6): EXTRA_CUMULATIVE_ACTUAL, full year-to-date actual layered on top, less
+        // tax already withheld on this limb.
+        BigDecimal taxableWithCumulative = money(netWithCumulative.max(ZERO));
+        BigDecimal annualTaxWithCumulative = progressiveTax(taxableWithCumulative);
+        BigDecimal withholdCumulative = annualTaxWithCumulative
+            .subtract(annualTaxWithKnown)
+            .subtract(money(yearToDate.cumulativeLimbWithholdingTax()))
+            .max(ZERO);
+
+        BigDecimal computedWithholding = money(withholdRegular.add(withholdKnown).add(withholdCumulative));
+
+        BigDecimal withholdingTaxOverride = input.withholdingTaxOverride() == null ? null : money(input.withholdingTaxOverride());
+        BigDecimal withholdingTax = computedWithholding;
+        BigDecimal withholdingTaxRegularLimb = withholdRegular;
+        BigDecimal withholdingTaxCumulativeLimb = withholdCumulative;
+        String calculationNote = "Classified per-component withholding (ป.96/2543 ข้อ 1(4)/(5)/(6)), SSO 5% cap by inclusion matrix, and garnishment cap by payment type applied.";
+        if (withholdingTaxOverride != null) {
+            withholdingTax = withholdingTaxOverride;
+            // The override REPLACES the final withheld amount only -- every projection/annual-tax
+            // figure above is retained for transparency (same guardrail as the single-limb V88
+            // override). Attributed entirely to the regular limb for next period's YTD bookkeeping:
+            // there is no principled way to split a single HR-typed override across three limbs, and
+            // crediting the catch-all regular limb (rather than inventing cumulative-limb withholding
+            // that was never actually computed) avoids under-taxing a future period's cumulative limb.
+            withholdingTaxRegularLimb = withholdingTaxOverride;
+            withholdingTaxCumulativeLimb = ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+            calculationNote = calculationNote
+                + " Withholding tax overridden by HR to " + withholdingTaxOverride.toPlainString()
+                + " (computed projection retained for transparency).";
+        }
+
+        BigDecimal studentLoanDeduction = money(input.studentLoanDeduction());
+        BigDecimal otherPostTaxDeductions = money(input.otherPostTaxDeductions());
+        BigDecimal warningLetterDeduction = money(input.warningLetterDeduction());
+        BigDecimal customerReturnDeduction = input.customerReturnAlreadyEarned()
+            ? money(input.customerReturnDeduction())
+            : ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+
+        PayrollGarnishmentType garnishmentType = input.garnishmentType() == null ? PayrollGarnishmentType.SALARY : input.garnishmentType();
+        BigDecimal netBeforeGarnishment = grossTaxableIncome
+            .subtract(socialSecurity)
+            .subtract(withholdingTax)
+            .subtract(studentLoanDeduction)
+            .subtract(otherPostTaxDeductions)
+            .subtract(warningLetterDeduction)
+            .subtract(customerReturnDeduction);
+        BigDecimal garnishmentDeduction = garnishmentDeduction(
+            garnishmentType, money(input.garnishmentRequested()), input, grossTaxableIncome, netBeforeGarnishment);
+
+        BigDecimal totalDeductions = money(unpaidLeaveDeduction
+            .subtract(leaveDeductionRefund)
+            .add(otherPretaxDeduction)
+            .add(socialSecurity)
+            .add(withholdingTax)
+            .add(studentLoanDeduction)
+            .add(garnishmentDeduction)
+            .add(otherPostTaxDeductions)
+            .add(warningLetterDeduction)
+            .add(customerReturnDeduction));
+        BigDecimal netPay = money(grossEarnings.subtract(totalDeductions).add(nonTaxableIncome).max(ZERO));
+
+        List<BigDecimal> specialPays = List.of(
+            money(input.amountOf(PayrollComponent.SPECIAL_PAY_1)),
+            money(input.amountOf(PayrollComponent.SPECIAL_PAY_2)),
+            money(input.amountOf(PayrollComponent.SPECIAL_PAY_3)),
+            money(input.amountOf(PayrollComponent.SPECIAL_PAY_4)),
+            money(input.amountOf(PayrollComponent.SPECIAL_PAY_5)),
+            money(input.amountOf(PayrollComponent.SPECIAL_PAY_6)),
+            money(input.amountOf(PayrollComponent.SPECIAL_PAY_7)),
+            money(input.amountOf(PayrollComponent.SPECIAL_PAY_8)),
+            money(input.amountOf(PayrollComponent.SPECIAL_PAY_9))
+        );
+        BigDecimal specialPayTotal = specialPays.stream().reduce(ZERO, BigDecimal::add);
+
+        return new PayrollClassifiedCalculation(
+            baseSalary,
+            dailyRate,
+            hourlyRate,
+            specialPays,
+            specialPayTotal,
+            money(input.amountOf(PayrollComponent.OVERTIME_PAY)),
+            money(input.amountOf(PayrollComponent.COMMISSION_PAY)),
+            money(input.amountOf(PayrollComponent.BONUS_PAY)),
+            money(input.amountOf(PayrollComponent.OTHER_ONE_OFF_PAY)),
+            money(input.amountOf(PayrollComponent.DIRECTOR_REMUNERATION)),
+            grossEarnings,
+            nonTaxableIncome,
+            unpaidLeaveDays,
+            unpaidLeaveDeduction,
+            grossTaxableIncome,
+            ssoWageBase,
+            socialSecurity,
+            fullAnnualProjection,
+            taxExpenseDeduction,
+            allowanceBreakdown.total(),
+            taxableWithCumulative,
+            annualTaxWithCumulative,
+            withholdingTax,
+            studentLoanDeduction,
+            garnishmentDeduction,
+            otherPostTaxDeductions,
+            totalDeductions,
+            netPay,
+            calculationNote,
+            warningLetterDeduction,
+            customerReturnDeduction,
+            otherPretaxDeduction,
+            input.customerReturnAlreadyEarned(),
+            leaveRefundDays,
+            leaveDeductionRefund,
+            withholdingTaxOverride,
+            regularSumAfterLeave,
+            knownThisPeriod,
+            cumulativeSum,
+            withholdingTaxRegularLimb,
+            withholdingTaxCumulativeLimb,
+            garnishmentType,
+            money(input.amountOf(PayrollComponent.MEAL_ALLOWANCE)),
+            money(input.amountOf(PayrollComponent.PER_DIEM_TAXABLE))
+        );
+    }
+
+    /**
+     * Defect 4 fix (review, 2026-07-29): was {@code amount.signum() > 0}, so a NEGATIVE unclassified
+     * component (a commission clawback fed straight from {@code CommissionService}, per the June 2026
+     * production incident recorded in the task-2 handoff §6) skipped this blocker entirely and was
+     * then silently dropped from every limb in {@link #calculateClassified} -- while still being
+     * reported verbatim on the payslip line, breaking the invariant that itemised earnings sum to
+     * {@code grossEarnings}. Decision: a negative amount is treated exactly like a positive one for
+     * this purpose -- it is genuine, non-zero money movement, so it must be classified before it can
+     * be included in any limb, same as a positive amount. This is deliberately NOT a separate
+     * "negative amounts always block" rule; a negative amount on an ALREADY-classified component
+     * (e.g. an ongoing rep's cumulative commission with a clawback this month) sails through exactly
+     * like any other change in that component's amount and is included with its sign intact.
+     */
+    private void requireEveryNonZeroComponentClassified(PayrollClassifiedCalculationInput input) {
+        for (PayrollComponent component : PayrollComponent.values()) {
+            if (component == PayrollComponent.NON_TAXABLE_INCOME) {
+                continue; // out of scope for tax treatment (PayrollComponent's javadoc)
+            }
+            BigDecimal amount = money(input.amountOf(component));
+            if (amount.signum() != 0 && input.treatmentOf(component) == null) {
+                throw new ApiException(HttpStatus.CONFLICT, "Payroll component " + component
+                    + " for employee " + input.employeeLabel() + " (id " + input.employeeId()
+                    + ") has a non-zero amount of " + amount.toPlainString()
+                    + " but no withholding-tax classification. HR must classify this component before payroll can run.");
+            }
+        }
+    }
+
+    /** Garnishment cap by payment type (handoff section 7). See {@link PayrollGarnishmentType}. */
+    private BigDecimal garnishmentDeduction(
+        PayrollGarnishmentType type,
+        BigDecimal requested,
+        PayrollClassifiedCalculationInput input,
+        BigDecimal grossTaxableIncome,
+        BigDecimal netBeforeGarnishment
+    ) {
+        if (requested.signum() <= 0) {
+            return ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        }
+        return switch (type) {
+            // Identical to the legacy single-rule engine's legalExecutionDeduction: max 30% of gross
+            // taxable income, must leave >= ฿20,000 net.
+            case SALARY -> {
+                BigDecimal capByRate = percentOf(grossTaxableIncome, GARNISHMENT_SALARY_MAX_RATE.toPlainString());
+                BigDecimal capByFloor = netBeforeGarnishment.subtract(MIN_NET_AFTER_LEGAL_EXECUTION).max(ZERO);
+                yield money(min(requested, min(capByRate, capByFloor)));
+            }
+            case BONUS -> {
+                BigDecimal cap = percentOf(money(input.amountOf(PayrollComponent.BONUS_PAY)), GARNISHMENT_BONUS_MAX_RATE.toPlainString());
+                yield money(min(requested, cap));
+            }
+            case OVERTIME_OR_DILIGENCE -> {
+                // Defect fix (Opus review, 2026-07-29): was SPECIAL_PAY_4. Under the workbook
+                // realignment (see PayrollComponent's javadoc / PayrollService#specialPayDtos) slot 4
+                // is now ค่าตำแหน่ง (a position allowance), not เบี้ยขยันประจำ -- that moved to slot 5.
+                // Using the wrong slot let a position allowance quietly inflate the ป.วิ.พ. ม.302
+                // เบี้ยขยัน/ค่าล่วงเวลา garnishment cap.
+                BigDecimal base = money(input.amountOf(PayrollComponent.OVERTIME_PAY))
+                    .add(money(input.amountOf(PayrollComponent.SPECIAL_PAY_5)));
+                BigDecimal cap = percentOf(base, GARNISHMENT_OVERTIME_MAX_RATE.toPlainString());
+                yield money(min(requested, cap));
+            }
+            // No percentage cap -- must leave >= ฿300,000 net. Not modeled by any dedicated severance
+            // component today (this system has no termination-payout concept yet), so applied against
+            // the general net-before-garnishment floor as a best-effort stub.
+            case SEVERANCE -> {
+                BigDecimal capByFloor = netBeforeGarnishment.subtract(MIN_NET_AFTER_SEVERANCE_GARNISHMENT).max(ZERO);
+                yield money(min(requested, capByFloor));
+            }
+        };
+    }
+
     private List<BigDecimal> normalizeSpecialPays(List<BigDecimal> values) {
         List<BigDecimal> result = new ArrayList<>(SPECIAL_PAY_SLOTS);
         for (int index = 0; index < SPECIAL_PAY_SLOTS; index += 1) {
@@ -511,7 +872,7 @@ public class PayrollCalculator {
         // data error, and #clampedAllowanceNote surfaces it on the payslip's calculation note.
         BigDecimal family = min(money(input.spouseAllowance()), new BigDecimal("60000.00"))
             .add(min(money(input.childAllowance()), childCap))
-            .add(min(money(input.parentCareAllowance()), new BigDecimal("120000.00")))
+            .add(parentCareAllowance(input))
             .add(min(money(input.disabledCareAllowance()), disabledCareCap))
             .add(min(money(input.maternityAllowance()), new BigDecimal("60000.00")));
 
@@ -572,6 +933,30 @@ public class PayrollCalculator {
         return money(new BigDecimal("60000.00").multiply(BigDecimal.valueOf(Math.max(0, input.disabledCareCount()))));
     }
 
+    /**
+     * ค่าอุปการะเลี้ยงดูบิดามารดา (handoff section 4, task 2, 2026-07-29): ฿30,000 PER qualifying
+     * parent, ฿120,000 = the four-parent maximum -- NOT a flat cap regardless of count. Prefers {@code
+     * parentCareCount} (V95's {@code hr.employee_tax_allowance.parent_care_count}, wired by this
+     * task) when a count has been declared; falls back to the legacy flat-cap treatment of the
+     * pre-existing baht-typed {@code parentCareAllowance} field when no count is set (0 or null),
+     * which reproduces {@link PayrollCalculator}'s pre-task-2 behaviour exactly and is what every
+     * call site written before {@code parentCareCount} existed still gets (including {@code
+     * PayrollExcelReconciliationTest}, which sets neither field). This is the reconciliation rule V95
+     * flagged as an open gap ("two sources of truth for one allowance") -- count wins once declared,
+     * the baht figure is a pre-count-migration fallback, never both applied together.
+     */
+    private BigDecimal parentCareAllowance(PayrollTaxAllowanceInput input) {
+        Integer count = input.parentCareCount();
+        if (count != null && count > 0) {
+            return min(PARENT_ALLOWANCE_PER_HEAD.multiply(BigDecimal.valueOf(count)), PARENT_ALLOWANCE_MAX);
+        }
+        return min(money(input.parentCareAllowance()), PARENT_ALLOWANCE_MAX);
+    }
+
+    // Defect fix consequence (Opus review, 2026-07-29): retirementAllowance's 117 signature (below)
+    // carries taxYear so the SSF sunset (SSF_FIRST_NON_DEDUCTIBLE_TAX_YEAR) applies here too -- see
+    // PayrollCalculator#calculateClassified, which now resolves its own taxYear from
+    // input.payrollMonthValue() combined with the caller-supplied year (see PayrollService#calculateLine).
     private BigDecimal retirementAllowance(
         PayrollTaxAllowanceInput input, BigDecimal projectedAnnualIncome, int taxYear) {
         BigDecimal remainingCluster = new BigDecimal("500000.00");

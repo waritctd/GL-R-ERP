@@ -25,6 +25,17 @@ public enum PayrollTaxTreatment {
      * ป.96/2543 ข้อ 1(5): multiply by the known count of occurrences in the year (1 for an annual
      * bonus), taxed as the difference this payment makes to the annual projection. For a bonus or
      * any other confirmed one-off payment whose frequency is known in advance.
+     *
+     * <p><b>Known limitation (Opus review, 2026-07-29):</b> {@link PayrollCalculator
+     * #calculateClassified} does not read a frequency count anywhere -- it treats every occurrence
+     * of an {@code EXTRA_KNOWN_FREQUENCY} component this period as a single ป.96 ข้อ 1(5) event
+     * (this period's amount layered once on top of the regular annual projection), i.e. it assumes
+     * a count of 1 unconditionally. That is correct for the archetypal case (an annual bonus paid
+     * once) but not for a component with a known count &gt; 1 (e.g. a semi-annual bonus paid twice a
+     * year) -- ข้อ 1(5) would need the annualised-by-count treatment ข้อ 1(4) gets, not the
+     * marginal-difference treatment this limb actually applies. No {@code payroll_line} or
+     * classification-matrix column exists to record a count today; adding one is new scope for the
+     * owner to decide, not fixed here.
      */
     EXTRA_KNOWN_FREQUENCY,
 

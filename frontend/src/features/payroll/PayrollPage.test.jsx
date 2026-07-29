@@ -95,8 +95,8 @@ describe('PayrollPage adjustment inputs', () => {
     render(<PayrollPage showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
-    const gprs = screen.getByLabelText(/พิเศษ 5 \(ค่า GPRS\)/);
-    const allowance = screen.getByLabelText(/พิเศษ 2 \(เบี้ยเลี้ยงประจำ\)/);
+    const gprs = screen.getByLabelText(/พิเศษ 6 \(ค่า GPRS\)/);
+    const allowance = screen.getByLabelText(/พิเศษ 3 \(เบี้ยเลี้ยงประจำ\)/);
 
     expect(costOfLiving.value).toBe('500');
     expect(gprs.value).toBe('500');
@@ -108,7 +108,7 @@ describe('PayrollPage adjustment inputs', () => {
     render(<PayrollPage showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
-    const gprs = screen.getByLabelText(/พิเศษ 5 \(ค่า GPRS\)/);
+    const gprs = screen.getByLabelText(/พิเศษ 6 \(ค่า GPRS\)/);
 
     fireEvent.change(costOfLiving, { target: { value: '' } });
     fireEvent.change(gprs, { target: { value: '' } });
@@ -137,8 +137,8 @@ describe('PayrollPage adjustment inputs', () => {
     renderPayrollPage();
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
-    const gprs = screen.getByLabelText(/พิเศษ 5 \(ค่า GPRS\)/);
-    const allowance = screen.getByLabelText(/พิเศษ 2 \(เบี้ยเลี้ยงประจำ\)/);
+    const gprs = screen.getByLabelText(/พิเศษ 6 \(ค่า GPRS\)/);
+    const allowance = screen.getByLabelText(/พิเศษ 3 \(เบี้ยเลี้ยงประจำ\)/);
     fireEvent.change(costOfLiving, { target: { value: '' } });
     fireEvent.change(gprs, { target: { value: '' } });
     fireEvent.change(allowance, { target: { value: '1' } });
@@ -147,7 +147,8 @@ describe('PayrollPage adjustment inputs', () => {
     await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
     const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
     expect(submitted).toBeDefined();
-    expect(submitted.specialPay2).toBe(1);
+    // เบี้ยเลี้ยงประจำ is slot 3 after the realignment to the accountant's numbering.
+    expect(submitted.specialPay3).toBe(1);
   });
 
   it('downloads a saved payslip for the selected payroll line', async () => {

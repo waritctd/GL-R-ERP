@@ -74,8 +74,22 @@ public class PayslipRenderer {
             }
             addIfNonZero(earnings, "ค่าล่วงเวลา", line.overtimePay());
             addIfNonZero(earnings, "ค่าคอมมิชชั่น", line.commissionPay());
+            // Task 2 (2026-07-29): เงินโบนัส / อื่นๆ -- V94/V96 payroll_line columns (both branches
+            // added this pair). Without these two rows the printed รวมรายได้ (which reads
+            // grossEarnings directly, not a re-sum of this list) would exceed the sum of the itemized
+            // earnings above whenever either is non-zero, breaking this class's own documented
+            // invariant that every money-in component gets a row.
             addIfNonZero(earnings, "เงินโบนัส", line.bonusPay());
-            addIfNonZero(earnings, "เงินได้อื่นๆ (ครั้งคราว)", line.otherOneOffPay());
+            addIfNonZero(earnings, "รายได้อื่นๆ", line.otherOneOffPay());
+            // Defect fix (Opus review, 2026-07-29): ค่าอาหาร / เบี้ยเลี้ยง ส่วนเกิน -- V97
+            // payroll_line columns. Both are taxable (part of grossEarnings), same reasoning as
+            // bonusPay/otherOneOffPay above: without a row here, รวมรายได้ would silently exceed the
+            // sum of the itemised lines whenever either is non-zero. The exempt portion of เบี้ยเลี้ยง
+            // is deliberately NOT itemised separately here -- it is already folded into
+            // nonTaxableIncome (which IS itemised below as "รายได้ไม่คิดภาษี") because it shares that
+            // figure's tax treatment exactly (see PayrollComponent's javadoc).
+            addIfNonZero(earnings, "ค่าอาหาร", line.mealAllowance());
+            addIfNonZero(earnings, "เบี้ยเลี้ยง (ส่วนเกิน)", line.perDiemTaxable());
             addIfNonZero(earnings, "ค่าตอบแทนกรรมการ", line.directorRemuneration());
             addIfNonZero(earnings, "รายได้ไม่คิดภาษี", line.nonTaxableIncome());
 

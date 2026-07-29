@@ -66,6 +66,11 @@ public final class PayrollReconciliationDtos {
         @PositiveOrZero Integer childCountDouble,
         @PositiveOrZero Integer disabledCareCount,
         Boolean disabilityCardHolder,
+        // Parent allowance per qualifying head (task 2, 2026-07-29): the count PayrollCalculator
+        // multiplies by ฿30,000 (capped at ฿120,000 / 4 heads) -- see PayrollTaxAllowanceInput.
+        // Nullable: null/0 means "no count declared", and the calculator falls back to the legacy
+        // flat-cap treatment of parentCareAllowance above.
+        @jakarta.validation.constraints.Min(0) @jakarta.validation.constraints.Max(4) Integer parentCareCount,
         // ล.ย.01 effective dating (V93). The month this declaration takes effect from, 1..12 --
         // คำชี้แจง ภ.ง.ด.1 ข้อ 2.2 applies a mid-year change from the period it is notified, so a
         // correction is a NEW dated row rather than an overwrite of the old one. Null means January,
@@ -75,9 +80,12 @@ public final class PayrollReconciliationDtos {
         String documentReference
     ) {
         /**
-         * Legacy 17-arg constructor: the declaration shape before the ล.ย.01 completeness and dating
-         * fields existed. Everything new defaults to "not declared" and the row dates from January,
-         * which is exactly how a pre-V93 declaration was already being applied.
+         * Legacy 16-arg constructor: the declaration shape before the ล.ย.01 completeness/dating
+         * fields (V93) or {@code parentCareCount} (task 2) existed. Everything new defaults to "not
+         * declared" and the row dates from January, which is exactly how a pre-V93 declaration was
+         * already being applied. The per-head counts are DERIVED from the declared amounts rather
+         * than defaulted to zero, for the same reason V93's migration backfills them that way -- see
+         * {@link PayrollTaxAllowanceInput}'s legacy constructor for the full argument.
          */
         public EmployeeTaxAllowanceUpsertRequest(
             Long employeeId,
@@ -110,7 +118,7 @@ public final class PayrollReconciliationDtos {
                 // allowance. The doubled 60,000 rate is not assumed -- deriving stays on the plain
                 // 30,000 rate and under-claims rather than over-claims.
                 headCount(childAllowance, "30000"), 0, headCount(disabledCareAllowance, "60000"),
-                false, 1, null);
+                false, 0, 1, null);
         }
 
         /** Smallest head count that would permit the declared amount -- see the legacy constructor. */

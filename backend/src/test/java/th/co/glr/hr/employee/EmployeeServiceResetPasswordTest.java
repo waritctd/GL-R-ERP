@@ -24,6 +24,7 @@ import th.co.glr.hr.auth.LoginRequest;
 import th.co.glr.hr.auth.TemporaryPasswordGenerator;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.profile.ProfileRequestRepository;
 
 /**
@@ -39,7 +40,7 @@ class EmployeeServiceResetPasswordTest {
     private final TemporaryPasswordGenerator generator = new TemporaryPasswordGenerator();
     private final PasswordEncoder encoder = new BCryptPasswordEncoder();
     private final EmployeeService service = new EmployeeService(
-        employees, profileRequests, auditService, employeeAuth, generator, encoder);
+        employees, profileRequests, auditService, employeeAuth, generator, encoder, mock(PayrollRepository.class));
 
     private final UserPrincipal hrActor =
         new UserPrincipal(1L, "hr@glr.co.th", "HR", "hr", 1L, true, LocalDate.now(), false, null, false);

@@ -27,6 +27,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.Page;
 import th.co.glr.hr.common.PageRequest;
+import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.profile.ProfileRequestRepository;
 
 class EmployeeServiceTest {
@@ -34,7 +35,8 @@ class EmployeeServiceTest {
     private final ProfileRequestRepository profileRequests = mock(ProfileRequestRepository.class);
     private final AuditService auditService = mock(AuditService.class);
     private final EmployeeService service = new EmployeeService(employees, profileRequests, auditService,
-        mock(EmployeeAuthRepository.class), new TemporaryPasswordGenerator(), mock(PasswordEncoder.class));
+        mock(EmployeeAuthRepository.class), new TemporaryPasswordGenerator(), mock(PasswordEncoder.class),
+        mock(PayrollRepository.class));
 
     @Test
     void countsPendingRequestsOnlyForFilteredEmployees() {

@@ -1,5 +1,6 @@
 package th.co.glr.hr.employee;
 
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -16,6 +17,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.Page;
 import th.co.glr.hr.common.PageRequest;
+import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.profile.ProfileRequestRepository;
 
 @Service
@@ -23,6 +25,9 @@ public class EmployeeService {
     // Dedicated audit channel so PII-access events can be shipped/retained separately (issue #21).
     private static final Logger AUDIT = LoggerFactory.getLogger("th.co.glr.hr.audit");
     private static final java.util.Set<String> PRIVILEGED_EMPLOYEE_ROLES = java.util.Set.of("hr");
+    // Same business-day zone convention as LeaveService/OvertimeService/etc. -- "now" for payroll
+    // tax-year purposes is Asia/Bangkok, not the server's UTC.
+    private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
 
     private final EmployeeRepository employees;
     private final ProfileRequestRepository profileRequests;
@@ -30,17 +35,25 @@ public class EmployeeService {
     private final EmployeeAuthRepository employeeAuth;
     private final TemporaryPasswordGenerator temporaryPasswordGenerator;
     private final PasswordEncoder passwordEncoder;
+    // Known risk 3 (task 1 handoff): nothing seeded hr.payroll_component_sso_inclusion for a new
+    // hire, so their SSO wage base read as empty until someone manually ran the seed. Wired here so
+    // every newly-created employee gets the default matrix (TRUE except DIRECTOR_REMUNERATION /
+    // NON_TAXABLE_INCOME) the moment they exist, matching the V96 backfill for employees that
+    // predate this wiring.
+    private final PayrollRepository payrollRepository;
 
     public EmployeeService(EmployeeRepository employees, ProfileRequestRepository profileRequests,
                            AuditService auditService, EmployeeAuthRepository employeeAuth,
                            TemporaryPasswordGenerator temporaryPasswordGenerator,
-                           PasswordEncoder passwordEncoder) {
+                           PasswordEncoder passwordEncoder,
+                           PayrollRepository payrollRepository) {
         this.employees = employees;
         this.profileRequests = profileRequests;
         this.auditService = auditService;
         this.employeeAuth = employeeAuth;
         this.temporaryPasswordGenerator = temporaryPasswordGenerator;
         this.passwordEncoder = passwordEncoder;
+        this.payrollRepository = payrollRepository;
     }
 
     public List<EmployeeDto> list(EmployeeFilter filter, UserPrincipal user) {
@@ -90,6 +103,8 @@ public class EmployeeService {
     @Transactional
     public EmployeeDto create(UpsertEmployeeRequest request, UserPrincipal user) {
         long id = employees.create(request);
+        int taxYear = java.time.LocalDate.now(BUSINESS_ZONE).getYear();
+        payrollRepository.seedSsoInclusionDefaults(id, taxYear, user == null ? null : user.employeeId());
         EmployeeDto created = get(id, user);
         auditService.record(user, "CREATE_EMPLOYEE", "employee", id, null, created);
         return created;

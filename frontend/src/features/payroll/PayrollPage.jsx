@@ -83,16 +83,32 @@ const payrollColumns = [
 
 const thisMonth = new Date().toISOString().slice(0, 7);
 const specialPayFields = [
+  // Numbering ALIGNED to the accountant's workbook (2026.xlsx) on 2026-07-29 — see
+  // PayrollService#specialPayDtos for why the system moved rather than the ledger.
   { key: 'specialPay1', label: 'พิเศษ 1 (ค่าครองชีพ)', defaultValue: '500' },
-  { key: 'specialPay2', label: 'พิเศษ 2 (เบี้ยเลี้ยงประจำ)' },
-  { key: 'specialPay3', label: 'พิเศษ 3 (ค่าตำแหน่ง)' },
-  { key: 'specialPay4', label: 'พิเศษ 4 (เบี้ยขยันประจำ)' },
-  { key: 'specialPay5', label: 'พิเศษ 5 (ค่า GPRS)', defaultValue: '500' },
-  { key: 'specialPay6', label: 'พิเศษ 6 (คอมมิชชั่น)' },
-  { key: 'specialPay7', label: 'พิเศษ 7 (ทำได้ตาม KPI)' },
-  { key: 'specialPay8', label: 'พิเศษ 8 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)' },
+  { key: 'specialPay2', label: 'พิเศษ 2 (ค่าเช่าบ้าน)' },
+  { key: 'specialPay3', label: 'พิเศษ 3 (เบี้ยเลี้ยงประจำ)' },
+  { key: 'specialPay4', label: 'พิเศษ 4 (ค่าตำแหน่ง)' },
+  { key: 'specialPay5', label: 'พิเศษ 5 (เบี้ยขยันประจำ)' },
+  { key: 'specialPay6', label: 'พิเศษ 6 (ค่า GPRS)', defaultValue: '500' },
+  { key: 'specialPay7', label: 'พิเศษ 7 (คอมมิชชั่น)' },
+  { key: 'specialPay8', label: 'พิเศษ 8 (ทำได้ตาม KPI)' },
+  { key: 'specialPay9', label: 'พิเศษ 9 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)' },
+];
+
+// ค่าอาหาร and เบี้ยเลี้ยง (ตจว/ตปท) — V97. Real taxable columns in the accountant's ledger
+// (2026.xlsx cols K and P) that the product had no field for until 2026-07-29. Not พิเศษ slots:
+// the workbook doesn't number them as พิเศษ either.
+const namedAllowanceFields = [
+  { key: 'mealAllowance', label: 'ค่าอาหาร' },
+  // เบี้ยเลี้ยง is entered as two amounts because มาตรา 42 exempts it only PARTIALLY — the portion
+  // within the government rate is exempt, the excess is taxable. HR makes the split; the system
+  // can't, without knowing destination and employee grade.
+  { key: 'perDiemExempt', label: 'เบี้ยเลี้ยง — ส่วนที่ยกเว้นภาษี (ม.42)' },
+  { key: 'perDiemTaxable', label: 'เบี้ยเลี้ยง — ส่วนเกิน (เสียภาษี)' },
 ];
 const specialPayKeys = specialPayFields.map((field) => field.key);
+const namedAllowanceKeys = namedAllowanceFields.map((field) => field.key);
 const incomeInputKeys = ['nonTaxableIncome'];
 const deductionInputKeys = [
   'unpaidLeaveDays',
@@ -106,7 +122,7 @@ const deductionInputKeys = [
   'customerReturnDeduction',
   'otherPretaxDeduction',
 ];
-const payrollInputKeys = [...specialPayKeys, ...incomeInputKeys, ...deductionInputKeys];
+const payrollInputKeys = [...specialPayKeys, ...namedAllowanceKeys, ...incomeInputKeys, ...deductionInputKeys];
 
 function defaultSpecialPayValue(key, applyDefaults) {
   if (!applyDefaults) return '';
@@ -118,12 +134,15 @@ function draftValue(value, fallback = '') {
   return amount > 0 ? String(amount) : fallback;
 }
 
-// Special-pay carry-forward (2026-07-23): the recurring fields pre-filled from the employee's most
-// recent prior processed payroll_line (via GET /api/payroll/suggested-inputs) when HR starts a
-// brand-new run. Deliberately excludes specialPay6 (commission — already fed by the commission
-// engine), specialPay7/8 (KPI/bonus — one-off) and every event-driven field. This is a client-side
-// pre-fill convenience only: whatever value sits in the field when HR hits Preview/Process — carried,
-// edited, or explicitly cleared to 0 — is submitted as-is via `payload()` below, same as today.
+// Special-pay carry-forward (2026-07-23, extended to all 9 slots + meal allowance 2026-07-29): the
+// recurring fields pre-filled from the employee's most recent prior processed payroll_line (via GET
+// /api/payroll/suggested-inputs) when HR starts a brand-new run. Which of the nine specialPay slots
+// actually carries is now PER EMPLOYEE, PER COMPONENT (hr.payroll_component_carry_forward, V98) —
+// not a hardcoded slot exclusion here. An employee for whom a slot's carry_forward flag is off (or
+// unset) simply gets 0 back from the suggestions endpoint for that key, same as any other
+// non-recurring field. This is a client-side pre-fill convenience only: whatever value sits in the
+// field when HR hits Preview/Process — carried, edited, or explicitly cleared to 0 — is submitted
+// as-is via `payload()` below, same as today.
 function indexSuggestionsByEmployee(rows) {
   const map = {};
   (rows || []).forEach((row) => {

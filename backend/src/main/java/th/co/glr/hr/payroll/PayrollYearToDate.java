@@ -31,39 +31,81 @@ public record PayrollYearToDate(
     BigDecimal variableIncome,
     BigDecimal socialSecurity,
     BigDecimal regularWithholdingTax,
-    BigDecimal variableWithholdingTax
+    BigDecimal variableWithholdingTax,
+    // Per-limb breakdown (task 2, 2026-07-29): withholdingTax below stays the TOTAL across all three
+    // ป.96 limbs (still used by callers that only need the aggregate). The classified engine
+    // (PayrollCalculator#calculateClassified) needs the REGULAR and CUMULATIVE limbs' own prior
+    // contributions separately -- ข้อ 1(4)'s reprojection reads regularLimbTaxableIncome /
+    // regularLimbWithholdingTax, and ข้อ 1(6)'s "less tax already withheld" reads
+    // cumulativeLimbTaxableIncome / cumulativeLimbWithholdingTax. The known limb (ข้อ 1(5)) is
+    // deliberately NOT carried here -- each known-frequency payment is taxed as its own period's
+    // marginal difference and never reprojected forward, so it needs no YTD state.
+    //
+    // SUPERSEDED going forward for the regular/variable pair above (rebase, 2026-07-29): calculateLine
+    // now runs exclusively through calculateClassified, which reads the *Limb fields below, not
+    // regularIncome/variableIncome/regularWithholdingTax/variableWithholdingTax. Those four (and the
+    // legacy calculate() method that still reads them) exist only for PayrollExcelReconciliationTest's
+    // frozen regression suite and other calculate()-only callers.
+    BigDecimal withholdingTax,
+    BigDecimal regularLimbTaxableIncome,
+    BigDecimal regularLimbWithholdingTax,
+    BigDecimal cumulativeLimbTaxableIncome,
+    BigDecimal cumulativeLimbWithholdingTax
 ) {
     public static PayrollYearToDate empty() {
         return new PayrollYearToDate(
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+        );
+    }
+
+    /**
+     * Legacy 5-arg constructor {@code (regularIncome, variableIncome, socialSecurity,
+     * regularWithholdingTax, variableWithholdingTax)}, kept so every call site written before task 2's
+     * three-limb breakdown (including {@code PayrollCalculatorTest} and the other
+     * {@code PayrollCalculator#calculate}-only review tests) still compiles. {@code withholdingTax}
+     * defaults to the sum of the two known limbs; the three-limb-only fields default to zero -- a
+     * no-op for {@code calculate()}, which never reads them, matching how the classified engine's own
+     * legacy constructor below defaults fields it does not know about.
+     */
+    public PayrollYearToDate(
+        BigDecimal regularIncome,
+        BigDecimal variableIncome,
+        BigDecimal socialSecurity,
+        BigDecimal regularWithholdingTax,
+        BigDecimal variableWithholdingTax
+    ) {
+        this(
+            regularIncome, variableIncome, socialSecurity, regularWithholdingTax, variableWithholdingTax,
+            nz(regularWithholdingTax).add(nz(variableWithholdingTax)),
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+        );
     }
 
     /**
      * Legacy 3-arg constructor {@code (taxableIncome, socialSecurity, withholdingTax)}, kept so every
-     * call site written before the ป.96 limb split still compiles.
+     * call site written before EITHER limb split existed still compiles.
      *
-     * <p>The un-split figures are attributed ENTIRELY to the regular limb. That is the correct
-     * reading for pre-split history rather than a guess: months processed before this change
-     * annualised everything as if it were regular pay, so "regular" is what actually happened to
-     * them. It also means a legacy YTD reproduces the old projection shape for the regular limb
-     * exactly.
+     * <p>The un-split figures are attributed ENTIRELY to the regular limb of the two-limb model
+     * (regularIncome/regularWithholdingTax) -- the correct reading for pre-split history rather than a
+     * guess: months processed before that change annualised everything as if it were regular pay. The
+     * three-limb-only fields default to zero, exactly as the classified engine's own original 3-arg
+     * legacy constructor already did -- unknown at this arity, not fabricated.
      */
     public PayrollYearToDate(
         BigDecimal taxableIncome,
         BigDecimal socialSecurity,
         BigDecimal withholdingTax
     ) {
-        this(taxableIncome, BigDecimal.ZERO, socialSecurity, withholdingTax, BigDecimal.ZERO);
+        this(
+            taxableIncome, BigDecimal.ZERO, socialSecurity, withholdingTax, BigDecimal.ZERO,
+            withholdingTax, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
+        );
     }
 
-    /** Total year-to-date taxable income across both limbs. */
+    /** Total year-to-date taxable income across the two calculate()-only limbs. */
     public BigDecimal taxableIncome() {
         return nz(regularIncome).add(nz(variableIncome));
-    }
-
-    /** Total year-to-date withholding tax actually withheld across both limbs. */
-    public BigDecimal withholdingTax() {
-        return nz(regularWithholdingTax).add(nz(variableWithholdingTax));
     }
 
     private static BigDecimal nz(BigDecimal value) {
