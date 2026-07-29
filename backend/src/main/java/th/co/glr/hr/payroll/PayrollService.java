@@ -563,7 +563,6 @@ public class PayrollService {
             firstNonNull(input.educationDonation(), base.educationDonation()),
             firstNonNull(input.generalDonation(), base.generalDonation()),
             firstNonNull(input.politicalDonation(), base.politicalDonation()),
-            base.providentFundAllowance(),
             // Head counts come from the stored ล.ย.01 declaration -- standing facts about the
             // employee's household, recorded with evidence, not something a payroll operator retypes.
             //

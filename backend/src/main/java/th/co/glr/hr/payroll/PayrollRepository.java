@@ -343,7 +343,7 @@ public class PayrollRepository {
                    health_insurance_allowance, parent_health_insurance_allowance, rmf_allowance,
                    ssf_allowance, pension_insurance_allowance, thai_esg_allowance,
                    home_loan_interest_allowance, education_donation, general_donation, political_donation,
-                   provident_fund_allowance, child_count, child_count_double, disabled_care_count,
+                   child_count, child_count_double, disabled_care_count,
                    disability_card_holder, parent_care_count
               FROM hr.employee_tax_allowance
              WHERE tax_year = :taxYear
@@ -375,7 +375,6 @@ public class PayrollRepository {
                 money(rs.getBigDecimal("general_donation")),
                 money(rs.getBigDecimal("political_donation")),
                 // ล.ย.01 completeness (V93).
-                money(rs.getBigDecimal("provident_fund_allowance")),
                 rs.getInt("child_count"),
                 rs.getInt("child_count_double"),
                 rs.getInt("disabled_care_count"),
@@ -396,7 +395,7 @@ public class PayrollRepository {
                    eta.health_insurance_allowance, eta.parent_health_insurance_allowance, eta.rmf_allowance,
                    eta.ssf_allowance, eta.pension_insurance_allowance, eta.thai_esg_allowance,
                    eta.home_loan_interest_allowance, eta.education_donation, eta.general_donation,
-                   eta.political_donation, eta.provident_fund_allowance, eta.child_count,
+                   eta.political_donation, eta.child_count,
                    eta.child_count_double, eta.disabled_care_count, eta.disability_card_holder,
                    eta.parent_care_count, eta.effective_month, eta.document_reference, eta.updated_at,
                    eta.verification_status, eta.verified_by_id, eta.verified_at, eta.verification_deadline
@@ -426,7 +425,6 @@ public class PayrollRepository {
                     money(rs.getBigDecimal("education_donation")),
                     money(rs.getBigDecimal("general_donation")),
                     money(rs.getBigDecimal("political_donation")),
-                    money(rs.getBigDecimal("provident_fund_allowance")),
                     rs.getInt("child_count"),
                     rs.getInt("child_count_double"),
                     rs.getInt("disabled_care_count"),
@@ -453,7 +451,7 @@ public class PayrollRepository {
                     health_insurance_allowance, parent_health_insurance_allowance, rmf_allowance,
                     ssf_allowance, pension_insurance_allowance, thai_esg_allowance,
                     home_loan_interest_allowance, education_donation, general_donation,
-                    political_donation, provident_fund_allowance, child_count, child_count_double,
+                    political_donation, child_count, child_count_double,
                     disabled_care_count, disability_card_holder, parent_care_count, effective_month,
                     document_reference, updated_by_id, updated_at
                 ) VALUES (
@@ -462,7 +460,7 @@ public class PayrollRepository {
                     :healthInsuranceAllowance, :parentHealthInsuranceAllowance, :rmfAllowance,
                     :ssfAllowance, :pensionInsuranceAllowance, :thaiEsgAllowance,
                     :homeLoanInterestAllowance, :educationDonation, :generalDonation,
-                    :politicalDonation, :providentFundAllowance, :childCount, :childCountDouble,
+                    :politicalDonation, :childCount, :childCountDouble,
                     :disabledCareCount, :disabilityCardHolder, :parentCareCount, :effectiveMonth,
                     :documentReference, :updatedById, now()
                 )
@@ -483,7 +481,6 @@ public class PayrollRepository {
                     education_donation = EXCLUDED.education_donation,
                     general_donation = EXCLUDED.general_donation,
                     political_donation = EXCLUDED.political_donation,
-                    provident_fund_allowance = EXCLUDED.provident_fund_allowance,
                     child_count = EXCLUDED.child_count,
                     child_count_double = EXCLUDED.child_count_double,
                     disabled_care_count = EXCLUDED.disabled_care_count,
@@ -512,7 +509,6 @@ public class PayrollRepository {
                     .addValue("educationDonation", safe(item.educationDonation()))
                     .addValue("generalDonation", safe(item.generalDonation()))
                     .addValue("politicalDonation", safe(item.politicalDonation()))
-                    .addValue("providentFundAllowance", safe(item.providentFundAllowance()))
                     .addValue("childCount", item.childCount() == null ? 0 : item.childCount())
                     .addValue("childCountDouble", item.childCountDouble() == null ? 0 : item.childCountDouble())
                     .addValue("disabledCareCount", item.disabledCareCount() == null ? 0 : item.disabledCareCount())

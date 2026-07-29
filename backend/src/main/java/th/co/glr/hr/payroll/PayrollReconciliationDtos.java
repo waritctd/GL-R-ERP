@@ -59,9 +59,12 @@ public final class PayrollReconciliationDtos {
         @PositiveOrZero BigDecimal educationDonation,
         @PositiveOrZero BigDecimal generalDonation,
         @PositiveOrZero BigDecimal politicalDonation,
-        // ล.ย.01 completeness (V93): กองทุนสำรองเลี้ยงชีพ, the per-head counts behind the บุตร and
-        // อุปการะคนพิการ caps, and the บัตรประจำตัวคนพิการ declaration behind the 190,000 ยกเว้นเงินได้.
-        @PositiveOrZero BigDecimal providentFundAllowance,
+        // ล.ย.01 completeness (V93): the per-head counts behind the บุตร and อุปการะคนพิการ caps, and
+        // the บัตรประจำตัวคนพิการ declaration behind the 190,000 ยกเว้นเงินได้.
+        //
+        // กองทุนสำรองเลี้ยงชีพ REMOVED (owner decision, 2026-07-29, handoff section 4 / V99): GL&R
+        // operates no provident fund. See PayrollTaxAllowanceInput's field-removal comment for the
+        // full reasoning; do not resurrect this field.
         @PositiveOrZero Integer childCount,
         @PositiveOrZero Integer childCountDouble,
         @PositiveOrZero Integer disabledCareCount,
@@ -110,7 +113,7 @@ public final class PayrollReconciliationDtos {
                 maternityAllowance, lifeInsuranceAllowance, healthInsuranceAllowance,
                 parentHealthInsuranceAllowance, rmfAllowance, ssfAllowance, pensionInsuranceAllowance,
                 thaiEsgAllowance, homeLoanInterestAllowance, educationDonation, generalDonation,
-                politicalDonation, BigDecimal.ZERO,
+                politicalDonation,
                 // Head counts DERIVED from the declared amounts, for the same reason
                 // PayrollTaxAllowanceInput's legacy constructor derives them and V93's migration
                 // backfills them: at this arity the amount is the only evidence there is, and reading
@@ -153,7 +156,7 @@ public final class PayrollReconciliationDtos {
                 maternityAllowance, lifeInsuranceAllowance, healthInsuranceAllowance,
                 parentHealthInsuranceAllowance, rmfAllowance, ssfAllowance, pensionInsuranceAllowance,
                 thaiEsgAllowance, homeLoanInterestAllowance, educationDonation, generalDonation,
-                politicalDonation, BigDecimal.ZERO,
+                politicalDonation,
                 headCount(childAllowance, "30000"), 0, headCount(disabledCareAllowance, "60000"),
                 false, parentCareCount, 1, null);
         }

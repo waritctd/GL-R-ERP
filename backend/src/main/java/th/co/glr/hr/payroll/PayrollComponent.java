@@ -40,9 +40,11 @@ public enum PayrollComponent {
     SPECIAL_PAY_6,
     /**
      * พิเศษ 7 (คอมมิชชั่น) -- the historical พิเศษ slot, distinct from {@link #COMMISSION_PAY}.
-     * ⚠️ Was slot 6 before the 2026-07-29 workbook realignment; branch 117's
-     * {@code COMMISSION_SPECIAL_PAY_INDEX} constant hardcodes the OLD slot 6 and must be updated
-     * during that branch's rebase onto this one (see the task-118 handoff's cross-branch break note).
+     * Was slot 6 before the 2026-07-29 workbook realignment. {@code PayrollCalculator}'s legacy
+     * {@code calculate()} method (zero production callers; {@code calculateClassified} is the live
+     * engine) carried a now-corrected {@code COMMISSION_SPECIAL_PAY_INDEX} constant that hardcoded
+     * the OLD slot 6 -- see that constant's javadoc for the fix, applied 2026-07-29 as a follow-up
+     * once branch 117 was rebased in.
      */
     SPECIAL_PAY_7,
     /** พิเศษ 8 (ทำได้ตาม KPI). */

@@ -22,10 +22,12 @@ public record PayrollTaxAllowanceInput(
     // ล.ย.01 completeness (2026-07-28, V93). Appended last so every 16-arg positional call site keeps
     // compiling via the legacy constructor below.
     //
-    // กองทุนสำรองเลี้ยงชีพ: the employee's OWN contribution for the tax year. Was missing entirely,
-    // which over-withheld every provident-fund member. Deductible up to 15% of ค่าจ้าง and 500,000,
-    // inside the same 500,000 retirement cluster as RMF and บำนาญ.
-    BigDecimal providentFundAllowance,
+    // กองทุนสำรองเลี้ยงชีพ REMOVED (owner decision, 2026-07-29, handoff section 4 / V99): GL&R
+    // operates no provident fund -- the field existed because hr_restricted.employee_pii carries a
+    // provident_fund_no column, but verified against production, zero employees have one populated.
+    // Do not resurrect this field on the strength of that PII column existing again; see V99's
+    // migration comment and PayrollCalculator#retirementAllowance for the full reasoning.
+    //
     // Per-head counts, which is what แบบ ล.ย.01 actually asks for. The engine caps the declared baht
     // amounts against these rather than trusting a free-typed figure: 30,000 per child, 60,000 for the
     // second and later child born from พ.ศ. 2561, 60,000 per disabled person cared for.
@@ -45,7 +47,6 @@ public record PayrollTaxAllowanceInput(
 ) {
     public static PayrollTaxAllowanceInput empty() {
         return new PayrollTaxAllowanceInput(
-            BigDecimal.ZERO,
             BigDecimal.ZERO,
             BigDecimal.ZERO,
             BigDecimal.ZERO,
@@ -114,7 +115,6 @@ public record PayrollTaxAllowanceInput(
             parentHealthInsuranceAllowance, rmfAllowance, ssfAllowance, pensionInsuranceAllowance,
             thaiEsgAllowance, homeLoanInterestAllowance, educationDonation, generalDonation,
             politicalDonation,
-            BigDecimal.ZERO,
             headCount(childAllowance, "30000"),
             0,
             headCount(disabledCareAllowance, "60000"),
@@ -124,11 +124,17 @@ public record PayrollTaxAllowanceInput(
     }
 
     /**
-     * Legacy 21-arg constructor: branch 117's own full signature (16 base allowances + ล.ย.01
+     * Legacy 20-arg constructor: branch 117's own full signature (16 base allowances + ล.ย.01
      * completeness) before {@code parentCareCount} (task 2) existed. Kept so pre-task-2 call sites --
      * including several {@code PayrollCalculatorPo96ReviewTest}/{@code PayrollCalculatorTest} cases
      * that construct the per-head-count fields explicitly -- still compile. {@code parentCareCount}
      * defaults to 0 ("no count declared"), same as the 16-arg legacy constructor above.
+     *
+     * <p>Was 21-arg with an explicit {@code providentFundAllowance} parameter until that field was
+     * removed entirely (owner decision, 2026-07-29, handoff section 4 / V99, GL&R has no provident
+     * fund). Every call site this constructor's original 21-arg form had was passing a literal
+     * {@code BigDecimal.ZERO} for it, so dropping the parameter here needed no caller changes beyond
+     * deleting that one argument.
      */
     public PayrollTaxAllowanceInput(
         BigDecimal spouseAllowance,
@@ -147,7 +153,6 @@ public record PayrollTaxAllowanceInput(
         BigDecimal educationDonation,
         BigDecimal generalDonation,
         BigDecimal politicalDonation,
-        BigDecimal providentFundAllowance,
         int childCount,
         int childCountDouble,
         int disabledCareCount,
@@ -158,7 +163,7 @@ public record PayrollTaxAllowanceInput(
             maternityAllowance, lifeInsuranceAllowance, healthInsuranceAllowance,
             parentHealthInsuranceAllowance, rmfAllowance, ssfAllowance, pensionInsuranceAllowance,
             thaiEsgAllowance, homeLoanInterestAllowance, educationDonation, generalDonation,
-            politicalDonation, providentFundAllowance, childCount, childCountDouble,
+            politicalDonation, childCount, childCountDouble,
             disabledCareCount, disabilityCardHolder, 0
         );
     }
@@ -196,7 +201,6 @@ public record PayrollTaxAllowanceInput(
             parentHealthInsuranceAllowance, rmfAllowance, ssfAllowance, pensionInsuranceAllowance,
             thaiEsgAllowance, homeLoanInterestAllowance, educationDonation, generalDonation,
             politicalDonation,
-            BigDecimal.ZERO,
             headCount(childAllowance, "30000"),
             0,
             headCount(disabledCareAllowance, "60000"),

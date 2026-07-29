@@ -48,12 +48,17 @@ public class PayrollCalculator {
     //   "all of 1-8 is occasional for each employee in each month except พิเศษ 6 that is commission
     //    that sales get every month, just the amount varies"
     //
+    // RENUMBERED 2026-07-29 (handoff section 9d, "align the system to the accountant's workbook").
+    // ค่าเช่าบ้าน was inserted as พิเศษ 2, shifting every later slot by one -- คอมมิชชั่น moved from
+    // พิเศษ 6 to พิเศษ 7 (zero-based index 5 -> 6). This constant is updated to match; ค่า GPRS(เพิ่ม)
+    // now occupies the OLD index 5 and must NOT be treated as the recurring slot.
+    //
     // So the classification is NOT a contiguous slot range:
-    //   พิเศษ 6 (คอมมิชชั่น) + commissionPay  -> REGULAR. Paid every คราว, so จำนวนคราวที่ต้องจ่าย is
+    //   พิเศษ 7 (คอมมิชชั่น) + commissionPay  -> REGULAR. Paid every คราว, so จำนวนคราวที่ต้องจ่าย is
     //                                            the periods remaining, not 1. A varying amount is no
     //                                            obstacle -- the year-to-date carry-forward re-projects
     //                                            from the actual figure every period.
-    //   พิเศษ 1-5, 7, 8 + overtimePay        -> VARIABLE. All occasional, and this is where an annual
+    //   พิเศษ 1-6, 8, 9 + overtimePay        -> VARIABLE. All occasional, and this is where an annual
     //                                            bonus is actually typed (owner: "one of พิเศษ 1-5"),
     //                                            which is the case ข้อ 2.5 exists for. ข้อ 2.5 names
     //                                            ค่าล่วงเวลา and เงินโบนัส explicitly.
@@ -62,7 +67,13 @@ public class PayrollCalculator {
     // is every month but the pay may change once in a while." Paid every คราว, so ข้อ 2.1 -- a varying
     // amount is no obstacle, because ข้อ 2.4 requires exactly the re-projection this limb already does
     // (ให้คำนวณภาษีหัก ณ ที่จ่ายใหม่ทุกคราว), rebuilding from actual year-to-date each period.
-    private static final int COMMISSION_SPECIAL_PAY_INDEX = 5;
+    //
+    // NOT ON THE LIVE PATH. PayrollService#calculateLine calls only calculateClassified (task 2, this
+    // branch); this legacy calculate() method and its hardcoded slot split have zero production
+    // callers. This is a correctness fix to an engine that only PayrollCalculatorTest and the
+    // review-test suite still drive -- not a live-path fix. See PayrollComponent.SPECIAL_PAY_7's
+    // javadoc for the equivalent, HR-classified treatment on the engine actually in use.
+    private static final int COMMISSION_SPECIAL_PAY_INDEX = 6;
 
     // ---- Task 2 additions (2026-07-29): per-component classified withholding engine -----------
     private static final BigDecimal PARENT_ALLOWANCE_PER_HEAD = new BigDecimal("30000.00");
@@ -92,7 +103,7 @@ public class PayrollCalculator {
         // Director remuneration is REGULAR: paid every month (owner-confirmed), so เงินได้ที่จ่ายตาม
         // ปกติ under ข้อ 2.1, not a เงินพิเศษ under ข้อ 2.5. The amount changing occasionally does not
         // move it -- ข้อ 2.4 covers that, and this limb re-projects from year-to-date every period.
-        // Only พิเศษ 6 is recurring; every other slot is occasional (see COMMISSION_SPECIAL_PAY_INDEX).
+        // Only พิเศษ 7 is recurring; every other slot is occasional (see COMMISSION_SPECIAL_PAY_INDEX).
         // Deliberately index-based rather than a range: the classification is not contiguous, and
         // writing it as a range is exactly the mistake this replaces.
         BigDecimal recurringSpecialPayTotal = specialPays.get(COMMISSION_SPECIAL_PAY_INDEX);
@@ -102,7 +113,7 @@ public class PayrollCalculator {
                 occasionalSpecialPayTotal = occasionalSpecialPayTotal.add(specialPays.get(slot));
             }
         }
-        // commissionPay (fed from CommissionService) joins พิเศษ 6 in the regular limb -- it is the
+        // commissionPay (fed from CommissionService) joins พิเศษ 7 in the regular limb -- it is the
         // same income by another route. overtimePay is occasional and stays in the variable limb.
         BigDecimal regularGrossEarnings = money(baseSalary.add(recurringSpecialPayTotal)
             .add(commissionPay).add(directorRemuneration));
@@ -966,13 +977,14 @@ public class PayrollCalculator {
     // input.payrollMonthValue() combined with the caller-supplied year (see PayrollService#calculateLine).
     private BigDecimal retirementAllowance(
         PayrollTaxAllowanceInput input, BigDecimal projectedAnnualIncome, int taxYear) {
+        // กองทุนสำรองเลี้ยงชีพ REMOVED (owner decision, 2026-07-29, handoff section 4 / V99): GL&R
+        // operates no provident fund -- verified against production, zero employees hold a
+        // provident_fund_no. V93 placed PVD first in this cluster on the reasoning that a contribution
+        // taken at source cannot be stopped by the employee, so the cluster should exhaust against
+        // voluntary purchases instead; with PVD gone that reasoning has nothing left to apply to, and
+        // the cluster now simply starts at RMF. The remaining order (RMF -> SSF -> pension), the
+        // ฿500,000 ceiling, and the RMF/pension sub-caps are unchanged.
         BigDecimal remainingCluster = new BigDecimal("500000.00");
-
-        // กองทุนสำรองเลี้ยงชีพ: 15% of ค่าจ้าง, max 500,000, inside the cluster.
-        BigDecimal providentFund = min(money(input.providentFundAllowance()),
-            min(percentOf(projectedAnnualIncome, "0.15"), new BigDecimal("500000.00")));
-        providentFund = min(providentFund, remainingCluster);
-        remainingCluster = remainingCluster.subtract(providentFund);
 
         BigDecimal rmf = min(money(input.rmfAllowance()), min(percentOf(projectedAnnualIncome, "0.30"), new BigDecimal("500000.00")));
         rmf = min(rmf, remainingCluster);
@@ -991,7 +1003,7 @@ public class PayrollCalculator {
         BigDecimal pension = min(money(input.pensionInsuranceAllowance()), min(percentOf(projectedAnnualIncome, "0.15"), new BigDecimal("200000.00")));
         pension = min(pension, remainingCluster);
 
-        return money(providentFund.add(rmf).add(ssf).add(pension));
+        return money(rmf.add(ssf).add(pension));
     }
 
     private BigDecimal legalExecutionDeduction(
