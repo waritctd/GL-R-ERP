@@ -34,12 +34,24 @@ import { Skeleton } from './Skeleton.jsx';
  *
  * `helper` (the bilingual English subtitle StatCard renders as a separate
  * third line) is kept — it's folded into the label line as "label · helper"
- * so each item stays two lines instead of three.
+ * so each item is two lines in the common case instead of three. The label
+ * line is allowed to wrap (no `truncate`) rather than clip: at the ~150px
+ * columns this grid hits on a phone, a Thai label alone can eat the column,
+ * and `truncate` silently ellipsised the helper into nothing — see FIX 2,
+ * 2026-07 review. Only the value (`dd`) still truncates, with a `title`
+ * tooltip per DESIGN.md §18's "truncate with ellipsis + tooltip" rule.
  *
  * Values are pass-through content (already formatted by the caller, e.g.
  * `formatMoney`); this component never formats or computes a number itself.
  */
-export function CompactStatRow({ items, loading = false, loadingCount = 4, className, ...props }) {
+export function CompactStatRow({
+  items,
+  loading = false,
+  loadingCount = 4,
+  className,
+  'aria-label': ariaLabel,
+  ...props
+}) {
   const gridClassName = cn(
     'm-0 grid grid-cols-4 gap-x-6 gap-y-4 rounded-md border border-border bg-surface px-5 py-4',
     'max-[1040px]:grid-cols-2 max-[720px]:grid-cols-2 max-[720px]:gap-x-4 max-[720px]:gap-y-3 max-[720px]:px-4 max-[720px]:py-3.5',
@@ -52,11 +64,23 @@ export function CompactStatRow({ items, loading = false, loadingCount = 4, class
     // `aria-busy` + a caller-supplied `aria-label` so assistive tech
     // announces the loading state — mirrors every other `aria-busy`
     // loading region in this codebase (e.g. CeoOverview's StatGrid skeleton).
+    // A default label is provided so a future caller that forgets to pass
+    // one still ships an announced busy region instead of a silent one;
+    // callers may still override it via `aria-label`.
+    // Heights/gap below intentionally mirror the loaded row (11px label
+    // line + 2px gap + ~16-22px value line) so the strip does not change
+    // height when data lands and shift whatever sits below it.
     return (
-      <div className={gridClassName} aria-busy="true" data-testid="compact-stat-row" {...props}>
+      <div
+        className={gridClassName}
+        aria-busy="true"
+        aria-label={ariaLabel || 'กำลังโหลดข้อมูลสรุป'}
+        data-testid="compact-stat-row"
+        {...props}
+      >
         {Array.from({ length: loadingCount }, (_, index) => (
-          <div key={index} className="flex min-w-0 flex-col gap-2">
-            <Skeleton width="65%" height={10} />
+          <div key={index} className="flex min-w-0 flex-col gap-0.5">
+            <Skeleton width="65%" height={14} />
             <Skeleton width="45%" height={20} />
           </div>
         ))}
@@ -65,14 +89,17 @@ export function CompactStatRow({ items, loading = false, loadingCount = 4, class
   }
 
   return (
-    <dl className={gridClassName} data-testid="compact-stat-row" {...props}>
+    <dl className={gridClassName} aria-label={ariaLabel} data-testid="compact-stat-row" {...props}>
       {items.map((item) => (
         <div key={item.key ?? item.label} className="flex min-w-0 flex-col gap-0.5">
-          <dt className="truncate text-2xs font-bold uppercase tracking-wide text-text-muted">
+          <dt className="text-2xs font-bold uppercase tracking-wide text-text-muted">
             {item.label}
             {item.helper ? <span className="ml-1 font-normal normal-case">· {item.helper}</span> : null}
           </dt>
-          <dd className="m-0 truncate text-lg font-extrabold tabular-nums text-text sm:text-xl">
+          <dd
+            className="m-0 truncate text-lg font-extrabold tabular-nums text-text sm:text-xl"
+            title={String(item.value)}
+          >
             {item.value}
           </dd>
         </div>

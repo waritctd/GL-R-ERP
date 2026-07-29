@@ -524,16 +524,22 @@ export function LeavePage({ user, currentEmployee, showToast }) {
       {/* Nesting fix (card-diet, 2026-07): each balance used to be its own
           `.leave-balance-card` (border+radius+bg+padding) sitting INSIDE this
           Panel's own card chrome — a nested card, never right per DESIGN.md.
-          The three balances stay legible/distinct via typography (bold label,
+          The balances stay legible/distinct via typography (bold label,
           large tabular value, muted breakdown line) plus a divider between
-          them, not a second surface each. */}
+          them, not a second surface each. The real leave-type count is 4
+          (SICK/VACATION/PERSONAL/LEAVE_WITHOUT_PAY — see LeaveService.balances()),
+          not the 3 the mock seeds, and LEAVE_BALANCE_GRID is 3-column at
+          >=721px, so the divider must be row-aware (`nth-child(3n+1)`), not
+          `first-child` — `first-child` only clears item 1 of the whole list,
+          not item 1 of every row, and would leave a stray divider hanging
+          off the left edge wherever a row wraps. */}
       <Panel title="โควตาวันลา">
         <div className={LEAVE_BALANCE_GRID}>
           {balances.length === 0 ? (
             <EmptyState icon="calendar" title="ยังไม่มีข้อมูลโควตา" />
           ) : balances.map((balance) => (
             <div
-              className="grid min-w-0 gap-[5px] max-[720px]:border-t max-[720px]:border-border max-[720px]:pt-3 max-[720px]:first:border-t-0 max-[720px]:first:pt-0 min-[721px]:border-l min-[721px]:border-border min-[721px]:pl-4 min-[721px]:first:border-l-0 min-[721px]:first:pl-0"
+              className="grid min-w-0 gap-[5px] max-[720px]:border-t max-[720px]:border-border max-[720px]:pt-3 max-[720px]:first:border-t-0 max-[720px]:first:pt-0 min-[721px]:border-l min-[721px]:border-border min-[721px]:pl-4 min-[721px]:[&:nth-child(3n+1)]:border-l-0 min-[721px]:[&:nth-child(3n+1)]:pl-0"
               key={balance.leaveTypeCode}
             >
               <span className="block min-w-0 truncate text-sm font-bold text-text-secondary">
