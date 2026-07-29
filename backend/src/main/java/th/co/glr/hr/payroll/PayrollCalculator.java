@@ -30,7 +30,9 @@ public class PayrollCalculator {
     // SSF purchases were deductible for ปีภาษี 2563-2567 only; ปีภาษี 2568 = Gregorian 2025.
     private static final int SSF_FIRST_NON_DEDUCTIBLE_TAX_YEAR = 2025;
     private static final BigDecimal MIN_NET_AFTER_LEGAL_EXECUTION = new BigDecimal("20000.00");
-    private static final int SPECIAL_PAY_SLOTS = 8;
+    // 2026-07-29 (V95): พิเศษ 9 -- ค่าเช่าบ้าน, appended after พิเศษ 8. See PayrollComponent and
+    // PayrollService#specialPayDtos for the full slot -> label mapping.
+    private static final int SPECIAL_PAY_SLOTS = 9;
     // ป.96/2543 income classification. คำชี้แจง แบบ ภ.ง.ด.1 splits employment income into
     // เงินได้ที่จ่ายตามปกติ (ข้อ 2.1, annualised by x จำนวนคราวที่ต้องจ่าย) and เงินพิเศษที่จ่ายเป็น
     // ครั้งคราว (ข้อ 2.5, taken at its actual amount and taxed as the difference it makes).

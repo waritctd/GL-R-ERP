@@ -7,6 +7,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.Set;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -17,6 +18,8 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 import th.co.glr.hr.payroll.export.PayrollExportRow;
+import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentSsoInclusionUpsertRequest;
+import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentTaxTreatmentUpsertRequest;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceDto;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedDto;
@@ -257,7 +260,8 @@ public class PayrollRepository {
                    eta.home_loan_interest_allowance, eta.education_donation, eta.general_donation,
                    eta.political_donation, eta.provident_fund_allowance, eta.child_count,
                    eta.child_count_double, eta.disabled_care_count, eta.disability_card_holder,
-                   eta.effective_month, eta.document_reference, eta.updated_at
+                   eta.effective_month, eta.document_reference, eta.updated_at,
+                   eta.verification_status, eta.verified_by_id, eta.verified_at, eta.verification_deadline
               FROM hr.employee e
               JOIN hr.employee_tax_allowance eta ON eta.employee_id = e.employee_id AND eta.tax_year = :taxYear
              ORDER BY e.employee_code, eta.effective_month
@@ -292,7 +296,11 @@ public class PayrollRepository {
                 ),
                 rs.getInt("effective_month"),
                 rs.getString("document_reference"),
-                rs.getObject("updated_at", OffsetDateTime.class)
+                rs.getObject("updated_at", OffsetDateTime.class),
+                rs.getString("verification_status"),
+                nullableLong(rs, "verified_by_id"),
+                rs.getObject("verified_at", OffsetDateTime.class),
+                rs.getObject("verification_deadline", LocalDate.class)
             ));
     }
 
@@ -377,6 +385,59 @@ public class PayrollRepository {
         }
     }
 
+    // ------------------------------------------------------------------------------------------
+    // Declaration verification + grandfathering (V95, 2026-07-29). Deliberately separate from
+    // upsertTaxAllowances above: re-typing declared amounts does not, by itself, change
+    // verification state -- that state machine's transition rules are the next task's service-
+    // layer work. These three methods only persist a transition already decided by the caller.
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * Persists the verification deadline for a stored declaration -- "60 days or two payroll
+     * cut-offs after launch, whichever is later" (handoff section 3), computed by the service
+     * layer. This method only stores whatever deadline the caller passes.
+     */
+    public void setTaxAllowanceVerificationDeadline(long employeeId, int taxYear, LocalDate deadline) {
+        jdbc.update("""
+            UPDATE hr.employee_tax_allowance
+               SET verification_deadline = :deadline
+             WHERE employee_id = :employeeId AND tax_year = :taxYear
+            """,
+            new MapSqlParameterSource()
+                .addValue("employeeId", employeeId)
+                .addValue("taxYear", taxYear)
+                .addValue("deadline", deadline));
+    }
+
+    /** HR verifies a declaration against supporting documents: VERIFIED, verifier + timestamp recorded. */
+    public void markTaxAllowanceVerified(long employeeId, int taxYear, long verifiedById) {
+        jdbc.update("""
+            UPDATE hr.employee_tax_allowance
+               SET verification_status = 'VERIFIED',
+                   verified_by_id = :verifiedById,
+                   verified_at = now()
+             WHERE employee_id = :employeeId AND tax_year = :taxYear
+            """,
+            new MapSqlParameterSource()
+                .addValue("employeeId", employeeId)
+                .addValue("taxYear", taxYear)
+                .addValue("verifiedById", verifiedById));
+    }
+
+    /**
+     * The verification deadline lapsed unverified: EXPIRED_UNVERIFIED. From the next payroll the
+     * declared amount stops applying (service-layer concern -- this only flips the stored status;
+     * it never retro-alters an already-filed month).
+     */
+    public void expireTaxAllowanceVerification(long employeeId, int taxYear) {
+        jdbc.update("""
+            UPDATE hr.employee_tax_allowance
+               SET verification_status = 'EXPIRED_UNVERIFIED'
+             WHERE employee_id = :employeeId AND tax_year = :taxYear
+            """,
+            Map.of("employeeId", employeeId, "taxYear", taxYear));
+    }
+
     /** C2: rows for the GET /api/payroll/ytd-seed listing, joined to employee for display. */
     public List<YtdSeedDto> findYtdSeedRows(int taxYear) {
         return jdbc.query("""
@@ -434,6 +495,154 @@ public class PayrollRepository {
         return value == null ? BigDecimal.ZERO : value;
     }
 
+    // ------------------------------------------------------------------------------------------
+    // Payroll withholding classification + SSO inclusion matrices (V95, 2026-07-29). Schema +
+    // repository only -- PayrollCalculator does not consult these yet (next task). See
+    // docs/agent-handoffs/118_feat-payroll-classification-and-hr-declarations.md.
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * Per-employee, per-component withholding-tax treatment (ป.96/2543 ข้อ 1(4)/1(5)/1(6)) for a
+     * tax year. A component absent from an employee's inner map has no stored row at all; a
+     * component present with a {@code null} value has a row but no treatment set yet ("not yet
+     * classified"). Both read as "unclassified" to a caller, but they are NOT the same thing at
+     * the SQL level and the distinction matters for {@link #upsertComponentTaxTreatment} callers
+     * that need to know whether a row exists to update.
+     */
+    public Map<Long, Map<PayrollComponent, PayrollTaxTreatment>> findComponentTaxTreatmentsByEmployee(int taxYear) {
+        record Row(long employeeId, PayrollComponent component, PayrollTaxTreatment taxTreatment) {}
+        List<Row> rows = jdbc.query("""
+            SELECT employee_id, component, tax_treatment
+              FROM hr.payroll_component_tax_treatment
+             WHERE tax_year = :taxYear
+            """,
+            Map.of("taxYear", taxYear),
+            (rs, rowNum) -> new Row(
+                rs.getLong("employee_id"),
+                PayrollComponent.valueOf(rs.getString("component")),
+                // Read raw (nullable): a stored NULL means "row exists, not yet classified" and
+                // must stay distinct from any default treatment.
+                rs.getString("tax_treatment") == null ? null : PayrollTaxTreatment.valueOf(rs.getString("tax_treatment"))
+            ));
+        // Accumulated by hand into a HashMap, NOT via Collectors.toMap. toMap (and groupingBy's
+        // downstream toMap) route through Map.merge, which throws NullPointerException on a null
+        // VALUE -- so the standard collector cannot represent the one state this map exists to carry:
+        // a component row that exists but is not yet classified. That state is what blocks a payroll
+        // run, so losing it would silently let an unclassified line through.
+        //
+        // A key that is ABSENT and a key present with a NULL value mean different things here:
+        // absent = HR has never touched this component for this employee; present-and-null = a row
+        // was created and deliberately left unclassified. Both must survive the round trip.
+        Map<Long, Map<PayrollComponent, PayrollTaxTreatment>> byEmployee = new LinkedHashMap<>();
+        for (Row row : rows) {
+            byEmployee.computeIfAbsent(row.employeeId(), id -> new LinkedHashMap<>())
+                .put(row.component(), row.taxTreatment());
+        }
+        return byEmployee;
+    }
+
+    /** Bulk upsert of per-employee, per-component tax-treatment classifications for a tax year. */
+    public void upsertComponentTaxTreatment(int taxYear, List<ComponentTaxTreatmentUpsertRequest> items, Long updatedById) {
+        for (ComponentTaxTreatmentUpsertRequest item : items) {
+            jdbc.update("""
+                INSERT INTO hr.payroll_component_tax_treatment (
+                    employee_id, tax_year, component, tax_treatment, updated_by_id, updated_at
+                ) VALUES (
+                    :employeeId, :taxYear, :component, :taxTreatment, :updatedById, now()
+                )
+                ON CONFLICT (employee_id, tax_year, component) DO UPDATE SET
+                    tax_treatment = EXCLUDED.tax_treatment,
+                    updated_by_id = EXCLUDED.updated_by_id,
+                    updated_at = now()
+                """,
+                new MapSqlParameterSource()
+                    .addValue("employeeId", item.employeeId())
+                    .addValue("taxYear", taxYear)
+                    .addValue("component", item.component().name())
+                    // Nullable and meaningful: null explicitly resets to "not yet classified"
+                    // rather than being coerced to a default treatment.
+                    .addValue("taxTreatment", item.taxTreatment() == null ? null : item.taxTreatment().name())
+                    .addValue("updatedById", updatedById));
+        }
+    }
+
+    /**
+     * Per-employee, per-component SSO wage-base inclusion for a tax year. Unlike tax treatment,
+     * a component with no stored row has no application-level default until {@link
+     * #seedSsoInclusionDefaults} runs for that employee -- this method only returns what is
+     * actually stored, it does not synthesize the seed defaults on read.
+     */
+    public Map<Long, Map<PayrollComponent, Boolean>> findComponentSsoInclusionByEmployee(int taxYear) {
+        record Row(long employeeId, PayrollComponent component, boolean included) {}
+        List<Row> rows = jdbc.query("""
+            SELECT employee_id, component, is_included
+              FROM hr.payroll_component_sso_inclusion
+             WHERE tax_year = :taxYear
+            """,
+            Map.of("taxYear", taxYear),
+            (rs, rowNum) -> new Row(
+                rs.getLong("employee_id"),
+                PayrollComponent.valueOf(rs.getString("component")),
+                rs.getBoolean("is_included")
+            ));
+        return rows.stream().collect(Collectors.groupingBy(
+            Row::employeeId,
+            Collectors.toMap(Row::component, Row::included)));
+    }
+
+    /** Bulk upsert of per-employee, per-component SSO-inclusion ticks for a tax year. */
+    public void upsertComponentSsoInclusion(int taxYear, List<ComponentSsoInclusionUpsertRequest> items, Long updatedById) {
+        for (ComponentSsoInclusionUpsertRequest item : items) {
+            jdbc.update("""
+                INSERT INTO hr.payroll_component_sso_inclusion (
+                    employee_id, tax_year, component, is_included, updated_by_id, updated_at
+                ) VALUES (
+                    :employeeId, :taxYear, :component, :isIncluded, :updatedById, now()
+                )
+                ON CONFLICT (employee_id, tax_year, component) DO UPDATE SET
+                    is_included = EXCLUDED.is_included,
+                    updated_by_id = EXCLUDED.updated_by_id,
+                    updated_at = now()
+                """,
+                new MapSqlParameterSource()
+                    .addValue("employeeId", item.employeeId())
+                    .addValue("taxYear", taxYear)
+                    .addValue("component", item.component().name())
+                    .addValue("isIncluded", item.included())
+                    .addValue("updatedById", updatedById));
+        }
+    }
+
+    /**
+     * Seeds the SSO-inclusion default for every canonical {@link PayrollComponent} for one
+     * employee/tax year: TRUE except {@code DIRECTOR_REMUNERATION} and {@code NON_TAXABLE_INCOME}
+     * (handoff section 5). {@code ON CONFLICT DO NOTHING} -- this only fills in components that
+     * do not have a row yet, so calling it again (or after HR has already edited some rows) never
+     * clobbers an existing tick. Intended to run once per employee, e.g. when the employee record
+     * is created; wiring this into the actual employee-onboarding flow is service-layer work for a
+     * later task -- this method provides only the seeding behaviour itself.
+     */
+    public void seedSsoInclusionDefaults(long employeeId, int taxYear, Long updatedById) {
+        for (PayrollComponent component : PayrollComponent.values()) {
+            boolean defaultIncluded = component != PayrollComponent.DIRECTOR_REMUNERATION
+                && component != PayrollComponent.NON_TAXABLE_INCOME;
+            jdbc.update("""
+                INSERT INTO hr.payroll_component_sso_inclusion (
+                    employee_id, tax_year, component, is_included, updated_by_id, updated_at
+                ) VALUES (
+                    :employeeId, :taxYear, :component, :isIncluded, :updatedById, now()
+                )
+                ON CONFLICT (employee_id, tax_year, component) DO NOTHING
+                """,
+                new MapSqlParameterSource()
+                    .addValue("employeeId", employeeId)
+                    .addValue("taxYear", taxYear)
+                    .addValue("component", component.name())
+                    .addValue("isIncluded", defaultIncluded)
+                    .addValue("updatedById", updatedById));
+        }
+    }
+
     public Optional<PayrollPeriodDto> findPeriodByMonth(LocalDate payrollMonth) {
         return findPeriod("""
             SELECT period_id, payroll_month, period_start, period_end, pay_date, status, processed_at, processed_by_id
@@ -485,6 +694,7 @@ public class PayrollRepository {
                    pl.base_salary, pl.daily_rate, pl.hourly_rate,
                    pl.special_pay_1, pl.special_pay_2, pl.special_pay_3, pl.special_pay_4,
                    pl.special_pay_5, pl.special_pay_6, pl.special_pay_7, pl.special_pay_8,
+                   pl.special_pay_9,
                    pl.special_pay_total, pl.overtime_pay, pl.commission_pay,
                    pl.gross_amount, pl.non_taxable_income,
                    pl.unpaid_leave_days, pl.unpaid_leave_deduction,
@@ -724,7 +934,7 @@ public class PayrollRepository {
             INSERT INTO hr.payroll_line (
                 period_id, employee_id, base_salary, daily_rate, hourly_rate,
                 special_pay_1, special_pay_2, special_pay_3, special_pay_4,
-                special_pay_5, special_pay_6, special_pay_7, special_pay_8,
+                special_pay_5, special_pay_6, special_pay_7, special_pay_8, special_pay_9,
                 special_pay_total, overtime_pay, commission_pay, gross_amount,
                 non_taxable_income,
                 unpaid_leave_days, unpaid_leave_deduction, gross_taxable_income,
@@ -744,7 +954,7 @@ public class PayrollRepository {
             VALUES (
                 :periodId, :employeeId, :baseSalary, :dailyRate, :hourlyRate,
                 :specialPay1, :specialPay2, :specialPay3, :specialPay4,
-                :specialPay5, :specialPay6, :specialPay7, :specialPay8,
+                :specialPay5, :specialPay6, :specialPay7, :specialPay8, :specialPay9,
                 :specialPayTotal, :overtimePay, :commissionPay, :grossAmount,
                 :nonTaxableIncome,
                 :unpaidLeaveDays, :unpaidLeaveDeduction, :grossTaxableIncome,
@@ -776,6 +986,7 @@ public class PayrollRepository {
                 .addValue("specialPay6", amount(line.specialPays(), 5))
                 .addValue("specialPay7", amount(line.specialPays(), 6))
                 .addValue("specialPay8", amount(line.specialPays(), 7))
+                .addValue("specialPay9", amount(line.specialPays(), 8))
                 .addValue("specialPayTotal", line.specialPayTotal())
                 .addValue("overtimePay", line.overtimePay())
                 .addValue("commissionPay", line.commissionPay())
@@ -900,7 +1111,8 @@ public class PayrollRepository {
             specialPay("specialPay5", "พิเศษ 5 (ค่า GPRS)", rs.getBigDecimal("special_pay_5")),
             specialPay("specialPay6", "พิเศษ 6 (คอมมิชชั่น)", rs.getBigDecimal("special_pay_6")),
             specialPay("specialPay7", "พิเศษ 7 (ทำได้ตาม KPI)", rs.getBigDecimal("special_pay_7")),
-            specialPay("specialPay8", "พิเศษ 8 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)", rs.getBigDecimal("special_pay_8"))
+            specialPay("specialPay8", "พิเศษ 8 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)", rs.getBigDecimal("special_pay_8")),
+            specialPay("specialPay9", "พิเศษ 9 (ค่าเช่าบ้าน)", rs.getBigDecimal("special_pay_9"))
         );
     }
 

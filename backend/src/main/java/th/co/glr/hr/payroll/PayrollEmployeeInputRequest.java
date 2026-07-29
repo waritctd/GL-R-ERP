@@ -15,6 +15,9 @@ public record PayrollEmployeeInputRequest(
     @PositiveOrZero BigDecimal specialPay6,
     @PositiveOrZero BigDecimal specialPay7,
     @PositiveOrZero BigDecimal specialPay8,
+    // พิเศษ 9 -- ค่าเช่าบ้าน (2026-07-29, V95). Appended after specialPay8, never inserted earlier --
+    // see PayrollComponent's javadoc for why the พิเศษ slots are append-only.
+    @PositiveOrZero BigDecimal specialPay9,
     @PositiveOrZero BigDecimal nonTaxableIncome,
     @PositiveOrZero BigDecimal unpaidLeaveDays,
     @PositiveOrZero BigDecimal studentLoanDeduction,
@@ -92,7 +95,8 @@ public record PayrollEmployeeInputRequest(
             safe(specialPay5),
             safe(specialPay6),
             safe(specialPay7),
-            safe(specialPay8)
+            safe(specialPay8),
+            safe(specialPay9)
         );
     }
 

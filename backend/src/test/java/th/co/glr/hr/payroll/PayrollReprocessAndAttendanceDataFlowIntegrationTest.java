@@ -184,6 +184,7 @@ class PayrollReprocessAndAttendanceDataFlowIntegrationTest extends AbstractPostg
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, // specialPay2-4
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, // specialPay5-7
             BigDecimal.ZERO, // specialPay8
+            BigDecimal.ZERO, // specialPay9
             BigDecimal.ZERO, // nonTaxableIncome
             BigDecimal.ZERO, // unpaidLeaveDays
             BigDecimal.ZERO, // studentLoanDeduction

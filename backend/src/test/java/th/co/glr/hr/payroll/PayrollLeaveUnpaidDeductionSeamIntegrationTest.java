@@ -234,6 +234,7 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
             employeeId,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, // specialPay1-4
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, // specialPay5-8
+            BigDecimal.ZERO, // specialPay9
             BigDecimal.ZERO, // nonTaxableIncome
             unpaidLeaveDays,
             BigDecimal.ZERO, // studentLoanDeduction

@@ -620,7 +620,9 @@ public class PayrollService {
             new PayrollSpecialPayDto("specialPay5", "พิเศษ 5 (ค่า GPRS)", specialPays.get(4)),
             new PayrollSpecialPayDto("specialPay6", "พิเศษ 6 (คอมมิชชั่น)", specialPays.get(5)),
             new PayrollSpecialPayDto("specialPay7", "พิเศษ 7 (ทำได้ตาม KPI)", specialPays.get(6)),
-            new PayrollSpecialPayDto("specialPay8", "พิเศษ 8 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)", specialPays.get(7))
+            new PayrollSpecialPayDto("specialPay8", "พิเศษ 8 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)", specialPays.get(7)),
+            // Appended 2026-07-29 (V95) -- never renumbered ahead of specialPay8, see PayrollComponent.
+            new PayrollSpecialPayDto("specialPay9", "พิเศษ 9 (ค่าเช่าบ้าน)", specialPays.get(8))
         );
     }
 

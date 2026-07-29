@@ -243,6 +243,7 @@ class PayrollYtdAndSsoIntegrationTest extends AbstractPostgresIntegrationTest {
             new PayrollSpecialPayDto("specialPay5", "พิเศษ 5", BigDecimal.ZERO),
             new PayrollSpecialPayDto("specialPay6", "พิเศษ 6", BigDecimal.ZERO),
             new PayrollSpecialPayDto("specialPay7", "พิเศษ 7", BigDecimal.ZERO),
-            new PayrollSpecialPayDto("specialPay8", "พิเศษ 8", BigDecimal.ZERO));
+            new PayrollSpecialPayDto("specialPay8", "พิเศษ 8", BigDecimal.ZERO),
+            new PayrollSpecialPayDto("specialPay9", "พิเศษ 9", BigDecimal.ZERO));
     }
 }

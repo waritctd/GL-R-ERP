@@ -255,6 +255,7 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
             employeeId,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, // specialPay1-4
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, // specialPay5-8
+            BigDecimal.ZERO, // specialPay9
             BigDecimal.ZERO, // nonTaxableIncome
             BigDecimal.ZERO, // unpaidLeaveDays
             BigDecimal.ZERO, // studentLoanDeduction

@@ -5,6 +5,7 @@ import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 
@@ -27,7 +28,17 @@ public final class PayrollReconciliationDtos {
         // ล.ย.01 effective dating (V93): which dated declaration this row is, and the evidence behind it.
         int effectiveMonth,
         String documentReference,
-        OffsetDateTime updatedAt
+        OffsetDateTime updatedAt,
+        // Declaration verification + grandfathering (2026-07-29, V95). See
+        // docs/agent-handoffs/118_feat-payroll-classification-and-hr-declarations.md section 3.
+        // verificationStatus is one of VERIFIED / GRANDFATHERED_UNVERIFIED / EXPIRED_UNVERIFIED
+        // (never null -- the column has a NOT NULL DEFAULT). verifiedById/verifiedAt are nullable:
+        // null until HR verifies. verificationDeadline is nullable until the service layer (next
+        // task) computes and stores it.
+        String verificationStatus,
+        Long verifiedById,
+        OffsetDateTime verifiedAt,
+        LocalDate verificationDeadline
     ) {}
 
     public record EmployeeTaxAllowanceUpsertRequest(
