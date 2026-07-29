@@ -485,33 +485,135 @@ that were already present. `VITE_USE_MOCKS=true` only — per CLAUDE.md this is 
 real Java service, but there is no authz change here to verify (same `GET /{id}/actions` decision,
 same `pricingRequestMeta.js`/`stageMeta.js` predicates, presentation-only).
 
+## Follow-up: CI e2e fix — PR #343 (separate session, same branch/worktree)
+
+**Context**: `refactor/ui-ticket-header-actions` was pushed as commit `c9c8c757` (Phase 1 + FIX 1/2/3
++ P3s above, opened as PR #343). CI's `e2e` job failed deterministically (both run and retry) on two
+specs: `e2e/deposit-fulfilment-close.spec.js:31` and `e2e/pcr-chain.spec.js:69`, both on
+`expect(quotationPanel.getByTestId('deal-quotation-issue')).toBeVisible()` — that testid no longer
+exists anywhere in `src/` because FIX 2 (already committed) moved "ออกใบเสนอราคา"/"ยืนยันคำสั่งซื้อ"
+out of `DealQuotationPanel` onto the sticky header's primary CTA, and the sticky primary had **no
+`data-testid` at all**. This confirms the exact gap `Follow-up: review round 2`'s "Not independently
+verified live" paragraph (above) predicted it hadn't closed.
+
+**Fix 1 — stable test hook on the sticky primary** (`frontend/src/features/tickets/TicketDetailPage.jsx`,
+the 5 `stickyPrimaryAction` branches around line 788-826): added `data-testid="ticket-primary-action"`
++ `data-action={actionKey}` to all five branches (the `to`/navigate branch, `create_pcr`,
+`issue_quotation`, `confirm_order`, and the generic `jumpId` scroll branch) — one generic id (not
+five action-specific ones) because the bar is the ONE sticky primary slot on the page and its
+rendered action changes per stage/role; a spec should assert "the primary slot is now offering X" via
+`data-action`, not hard-code a label-specific id that breaks every time the resolver's cascade
+changes. The real `can.*`-gated buttons (`ticket-detail-confirm-customer`/`-final`/`-close`/
+`verify-close`) were left untouched — different kind of primary (server-gated, not resolver-derived),
+already stable, already covered.
+
+**Fix 2 — updated the two specs**, `deal-quotation-create`/`deal-quotation-accept` unchanged (still in
+the panel), only the "issue" step re-targeted at `page.getByTestId('ticket-primary-action')` +
+`toHaveAttribute('data-action', 'issue_quotation')` before clicking.
+
+**A second, real bug found while making the specs actually pass** (not just testid-shaped — the
+task's given diagnosis was necessary but not sufficient): pointing the spec at the new testid was not
+enough to go green. Root cause, confirmed via a temporary `console.error` inside
+`DealQuotationPanel`'s `openIssueQuotation` ref opener (removed before this handoff; the file is
+byte-identical to `c9c8c757` again): `nextSalesAction`'s `ISSUE_QUOTATION` bucket
+(`frontend/src/features/tickets/salesActions.js:104`) fires purely off
+`pr.status === 'APPROVED_FOR_QUOTATION'` — a coarser signal than "a draft customer quotation exists".
+The sticky bar shows "ออกใบเสนอราคา" the instant the PCR is approved, **before** anyone has clicked
+"สร้างร่างใบเสนอราคาลูกค้า" (`deal-quotation-create`) to actually create that draft.
+`openIssueQuotation` re-checks `current` (the draft) and is a silent no-op when it's still null — no
+toast, no error, nothing. In the spec, `deal-quotation-create`'s mutation hadn't landed yet (its
+`invalidateQueries` is async) when the *already-visible* sticky button got clicked, so the click did
+nothing and the subsequent `deal-quotation-accept` assertion timed out waiting for a UI transition
+that never happened. The OLD in-panel `deal-quotation-issue` button never had this race because it
+only existed in the DOM once `current` was already populated — its own visibility WAS the wait.
+Fixed by adding `await expect(quotationPanel.getByText('พร้อมออกใบเสนอราคาแล้ว')).toBeVisible()`
+before touching the sticky button in both specs — that hint text renders under the exact same
+`isCustomerQuotationEditable(current) && canManageCustomerQuotation(user, pr)` guard
+`openIssueQuotation` checks, so waiting for it is a faithful proxy for "the draft now exists and the
+click will do something." The `confirm_order` step needed no equivalent fix — its own pre-existing
+wait (`getByText('ลูกค้ายอมรับใบเสนอราคาแล้ว')`) already renders under exactly `pr.status ===
+'QUOTATION_ACCEPTED' && canConfirmOrder(user, pr)`, the same guard `openConfirmOrder` re-checks, so
+that wait was already sufficient — confirmed by it going green with no changes.
+
+**This is a real, user-facing dead-click bug independent of the tests**, introduced by FIX 2 (this
+same branch): before FIX 2, the sticky bar for `issue_quotation` just scrolled the page (`jumpId`)
+rather than firing the mutation directly, so a premature click was harmless — the user would land on
+the panel and see the actual create-vs-issue state for themselves. FIX 2 changed the click to fire
+the mutation straight through a ref opener, so now a sales rep who clicks "ออกใบเสนอราคา" the moment
+it appears (before creating the draft) gets nothing — no feedback at all. **Not fixed here** — fixing
+it would mean either changing `nextSalesAction`'s cascade condition or having `openIssueQuotation`
+create-then-issue when `current` is null, both of which are resolver/business-logic changes outside
+this task's explicit scope ("No gate or capability change"). Flagged via `spawn_task` for a follow-up
+session instead.
+
+**Sweep of every other e2e spec** (`e2e/auth.spec.js`, `commission.spec.js`, `deal-creation.spec.js`,
+`hr.spec.js`, `phase4a-acceptance.spec.js`, `rbac.spec.js`, plus the untouched parts of the two edited
+specs): diffed `c9c8c757`'s full file list against every `getByTestId`/`data-testid` in `e2e/*.spec.js`.
+Found one other testid `c9c8c757` actually removed — `deal-stage-advance` (the old inline "เลื่อนไป"
+button in `DealStagePanel.jsx`, moved into the header overflow menu, now driven by `testId:
+'deal-stage-advance'` at `TicketDetailPage.jsx:949` inside the overflow-items array, read by
+`OverflowMenu.jsx:121`'s `data-testid={item.testId}`) — grepped and confirmed **no e2e spec
+references it**, only `DealStagePanel.test.jsx`/`TicketDetailPage.test.jsx` (unit/component level,
+already updated in `c9c8c757` itself). Every other testid the seven other specs drive
+(`login-*`, `ticket-create-*`, `pcr-queue-pickup`, `pcr-generate-drafts`, `pcr-quote-*`,
+`pcr-costing-*`, `pcr-ceo-*`, `deal-deposit-*`, `deal-fulfilment-*`, `ticket-detail-confirm-*`,
+`ticket-detail-verify-close`, `commission-approve`) was grepped against current `src/` and confirmed
+present, unmoved, at the same call sites — none of them were touched by `c9c8c757`'s diff. `rbac.spec.js`
+only asserts render-vs-redirect (no control interaction) so it's structurally unaffected by any button
+move. `hr.spec.js` and `phase4a-acceptance.spec.js` don't touch ticket-detail at all. Nothing else
+found broken.
+
+**Verification**: `npm run lint` — 0 errors, 1 pre-existing `PayrollPage.jsx:336` warning (expected,
+unchanged). `npm test -- --run` — 72 files / 765 tests, all green (unchanged from `c9c8c757`, since
+no `src/` file besides the already-committed `TicketDetailPage.jsx` testid additions changed — wait,
+those ARE part of this session's uncommitted diff; see Files Changed note below). `npm run build` —
+green, no new warnings. **Ran the two previously-failing specs directly** (`npx playwright test
+e2e/deposit-fulfilment-close.spec.js e2e/pcr-chain.spec.js`, dedicated port 5250 per
+`playwright.config.js`'s own `webServer`) — both pass. **Then ran the full local e2e suite**
+(`npx playwright test`) as a final regression check beyond the two named specs — **64/64 passed**,
+including one pre-existing, non-asserting "rbac drift vs shoot-manifest" console log (informational
+only, `rbac.spec.js:107` logs drift but does not assert on it — unrelated to this change, present
+before this session).
+
+**Files changed this session** (all uncommitted, on top of `c9c8c757`, per instructions):
+- `frontend/src/features/tickets/TicketDetailPage.jsx` — added `data-testid="ticket-primary-action"` +
+  `data-action={actionKey}` to the 5 sticky-primary render branches (~line 788-826).
+- `frontend/e2e/deposit-fulfilment-close.spec.js` — re-targeted the issue-quotation step at the sticky
+  testid + `data-action` assertion, added the `พร้อมออกใบเสนอราคาแล้ว` wait to close the create→issue
+  race (confirm-order step unchanged, no fix needed).
+- `frontend/e2e/pcr-chain.spec.js` — same issue-quotation fix (this spec doesn't exercise confirm-order).
+
+**Authz**: no authorization change. `data-testid`/`data-action` are inert DOM attributes with no
+behavioral effect; the spec waits only change *when* a real click fires, not what it's gated by —
+`openIssueQuotation`'s own guard (`isCustomerQuotationEditable`/`canManageCustomerQuotation`) is
+unchanged.
+
+**Known risk carried forward, not fixed**: the `issue_quotation` sticky CTA is clickable-but-inert
+before a customer-quotation draft exists — see the "second, real bug" paragraph above. Flagged as a
+follow-up task, not blocking this PR (pre-dates this session, inherited from `c9c8c757`'s FIX 2).
+
 ## Recommended Next Agent
-Owner sign-off on the "not independently verified live" scenarios above (or have the next session
-finish the real PCR→quotation→order-confirm→deposit-notice walk-through to close that gap), then
-rebase onto latest `origin/main`, run the full backend+frontend gate one more time, and open the PR.
-The mobile bottom-pinned bar deviation (Known Risks, above) and the original FIX 3 "leave both
-inline" judgment calls (ดูขั้นตอนทั้งหมด/แก้ไขข้อมูลติดตาม, unrelated to this round's FIX 3 despite
-the same fix number) are both still open decisions for the owner, not blockers for this PR.
+CI's `e2e` job should now be green on PR #343 — re-run CI to confirm, then proceed with the owner
+sign-off / rebase-and-open-PR path already described below. Separately, a follow-up session should
+decide how to close the `issue_quotation` dead-click gap (either widen `nextSalesAction`'s
+`ISSUE_QUOTATION` bucket condition to require a draft quotation already exists, or have
+`openIssueQuotation` create-then-issue when `current` is null) — flagged via `spawn_task`, not a
+blocker for this PR. The mobile bottom-pinned bar deviation (Known Risks, above) and the original
+FIX 3 "leave both inline" judgment calls (ดูขั้นตอนทั้งหมด/แก้ไขข้อมูลติดตาม, unrelated to this
+round's FIX 3 despite the same fix number) remain open owner decisions, also not blockers.
 
 ## Exact Next Prompt
 ```
-This branch (refactor/ui-ticket-header-actions) has now had Phase 1 implemented + independently
-reviewed, a clutter follow-up (round 1: duplicate "สร้างใบขอราคา" removed; "เลื่อนไป" moved into the
-header overflow with its gate intact), AND a second review round fixing three more P2s (FIX 1:
-workState.js now asks the role resolver BEFORE checking the current stage's gate, so account/import
-see their real pending action instead of a stale "รอ<role>" banner on auto-advanced stages; FIX 2:
-"ออกใบเสนอราคา"/"ยืนยันคำสั่งซื้อ" de-duplicated the same way FIX 1 round 1 de-duplicated
-"สร้างใบขอราคา"; FIX 3: the header overflow's เลื่อนไป/แก้ไขสถานะ…/พักดีลไว้/พัก dormant items now
-respect actionLoading, closing a double-submit-under-409 gap) plus 3 P3s (blocker line's !isAccount
-guard restored; OverflowMenu roving-tabindex + Tab-closes-menu + disabled-item focus-highlight fix;
-a stale test-count line corrected) — see this handoff's "Follow-up: review round 2" section for the
-full diff, the exact TicketService.java line numbers each fix was verified against, and what was
-and wasn't confirmed live in the browser (the two FIX 1 backend-verified scenarios and FIX 2's
-exact-once-render were proven at the unit/component level with realistic seeded data, NOT live —
-the mock seed has no ticket in either exact state, and constructing one live was blocked partway by
-the create-PCR modal's catalog-linkage validation). lint/test/build are green (72 files / 765
-tests). Next: either close that live-verification gap (finish walking a ticket through the real
-PCR→quotation→order-confirm→deposit-notice chain across sales/import/CEO/account role switches), or
-get owner sign-off to proceed without it — then rebase onto the latest origin/main, re-run
-`npm run lint && npm test && npm run build`, and open the PR.
+This branch (refactor/ui-ticket-header-actions, PR #343) has now had Phase 1 implemented +
+independently reviewed, a clutter follow-up (round 1 + round 2's FIX 1/2/3 + P3s — see this
+handoff's earlier "Follow-up" sections for full detail), AND a CI e2e fix (see "Follow-up: CI e2e
+fix — PR #343" above): the sticky primary action now carries `data-testid="ticket-primary-action"` +
+`data-action`, the two failing specs were re-targeted and a real create→issue race was closed with an
+explicit wait, and every other e2e spec was swept for testids this branch moved (only
+`deal-stage-advance` moved, into the overflow menu, and no e2e spec referenced it). lint/test/build
+are green (72 files / 765 tests) and the full local e2e suite passes (64/64). Next: confirm CI is
+green on PR #343, then get owner sign-off on the "not independently verified live" scenarios from
+round 2 (or finish that live walk-through), decide on the `issue_quotation` dead-click gap (see
+Known Risks), rebase onto the latest origin/main, re-run `npm run lint && npm test && npm run build`,
+and merge.
 ```

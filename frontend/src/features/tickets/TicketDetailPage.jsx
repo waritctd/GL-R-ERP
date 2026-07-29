@@ -766,9 +766,28 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     const actionKey = workStateAction.key ?? workStateAction.code;
     const jumpId = IN_PAGE_JUMP_TARGET[actionKey];
     const to = workStateAction.to;
+    // data-testid="ticket-primary-action" + data-action={actionKey}: a
+    // stable e2e hook for this slot (added after PR #343's CI break —
+    // "ออกใบเสนอราคา"/"ยืนยันคำสั่งซื้อ" moved here from DealQuotationPanel's
+    // own buttons, which took their old `deal-quotation-issue`/
+    // `deal-quotation-confirm-order` testids with them when they were
+    // deleted, leaving nothing for e2e/pcr-chain.spec.js and
+    // e2e/deposit-fulfilment-close.spec.js to click). Deliberately generic
+    // and reused across every branch below rather than a per-action id:
+    // this bar is the ONE sticky primary slot on the page and its rendered
+    // action changes with the deal's stage/role, so a spec should assert
+    // "the primary slot is now offering X" (via data-action) rather than
+    // hard-code a label- or action-specific testid that would need
+    // updating every time the resolver's cascade changes. The real
+    // `can.*`-gated buttons above (confirmCustomer/confirmFinalPayment/
+    // confirmClose/verifyClose) keep their own long-lived
+    // `ticket-detail-confirm-*`/`ticket-detail-verify-close` testids
+    // unchanged — those are already stable, already covered by e2e specs,
+    // and are a different kind of primary (server-gated, not
+    // resolver-derived), so they are not folded into this generic id.
     if (to && to !== `/tickets/${ticketId}`) {
       stickyPrimaryAction = (
-        <button type="button" className="primary-button" onClick={() => navigate(to)}>
+        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => navigate(to)}>
           {workStateAction.label}
           <Icon name="chevronRight" size={14} />
         </button>
@@ -776,7 +795,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'create_pcr') {
       stickyPrimaryAction = (
-        <button type="button" className="primary-button" onClick={() => pricingRequestPanelRef.current?.openCreate()}>
+        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => pricingRequestPanelRef.current?.openCreate()}>
           <Icon name="plus" size={14} />
           {workStateAction.label}
         </button>
@@ -784,21 +803,21 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'issue_quotation') {
       stickyPrimaryAction = (
-        <button type="button" className="primary-button" onClick={() => dealQuotationPanelRef.current?.openIssueQuotation()}>
+        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => dealQuotationPanelRef.current?.openIssueQuotation()}>
           {workStateAction.label}
         </button>
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'confirm_order') {
       stickyPrimaryAction = (
-        <button type="button" className="primary-button" onClick={() => dealQuotationPanelRef.current?.openConfirmOrder()}>
+        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => dealQuotationPanelRef.current?.openConfirmOrder()}>
           {workStateAction.label}
         </button>
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (jumpId) {
       stickyPrimaryAction = (
-        <button type="button" className="primary-button" onClick={() => scrollToSection(jumpId)}>
+        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => scrollToSection(jumpId)}>
           {workStateAction.label}
           <Icon name="chevronRight" size={14} />
         </button>
