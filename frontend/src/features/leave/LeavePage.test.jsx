@@ -162,3 +162,55 @@ describe('LeavePage form validation', () => {
     expect(payload.endTime).toBe('12:30');
   });
 });
+
+describe('LeavePage balance grid divider (FIX 1, 2026-07 review)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.leave.employees.mockResolvedValue({
+      employees: [{
+        employeeId: 1,
+        employeeName: 'พนักงาน ทดสอบ',
+        employeeCode: 'GLR-001',
+        self: true,
+        directReport: false,
+      }],
+    });
+    api.leave.types.mockResolvedValue({ leaveTypes: [] });
+    api.leave.list.mockResolvedValue({ requests: [] });
+    api.leave.contactDefaults.mockResolvedValue({ contactDefaults: {} });
+    // The real schema has 4 leave types (SICK/VACATION/PERSONAL/LEAVE_WITHOUT_PAY --
+    // see V85__leave_payroll_unpaid_deduction.sql), not the 3 the mock seeds. That gap
+    // is exactly what hid the row-wrap divider bug: LEAVE_BALANCE_GRID is 3-column at
+    // >=721px, so a 4th item wraps to row 2 column 1, and a `first-child` divider reset
+    // only clears item 1 of the whole list, not item 1 of each row. Rendering 4 items
+    // here proves the fix (`nth-child(3n+1)`) independently of the mock's item count.
+    api.leave.balances.mockResolvedValue({
+      balances: [
+        { leaveTypeCode: 'PERSONAL', leaveTypeNameTh: 'ลากิจ', remainingDays: 7, approvedDays: 0, pendingDays: 0, annualQuotaDays: 7 },
+        { leaveTypeCode: 'SICK', leaveTypeNameTh: 'ลาป่วย', remainingDays: 30, approvedDays: 0, pendingDays: 0, annualQuotaDays: 30 },
+        { leaveTypeCode: 'VACATION', leaveTypeNameTh: 'ลาพักร้อน', remainingDays: 6, approvedDays: 0, pendingDays: 0, annualQuotaDays: 6 },
+        { leaveTypeCode: 'LEAVE_WITHOUT_PAY', leaveTypeNameTh: 'ลาไม่รับค่าจ้าง', remainingDays: 0, approvedDays: 0, pendingDays: 0, annualQuotaDays: 0 },
+      ],
+    });
+  });
+
+  it('resets the divider per grid row (nth-child(3n+1)), not just the first item of the whole list', async () => {
+    renderLeavePage();
+
+    await screen.findByText('ลาไม่รับค่าจ้าง');
+
+    const items = screen.getByText('ลากิจ').closest('.grid.min-w-0').parentElement.children;
+    expect(items).toHaveLength(4);
+
+    // Item 1 and item 4 both start a new grid row at >=721px (positions 1 and 4 of a
+    // 3-column grid) and must both carry the row-start reset. Items 2 and 3 must not.
+    const classNames = [...items].map((el) => el.className);
+    expect(classNames[0]).toMatch(/nth-child\(3n\+1\)/);
+    expect(classNames[3]).toMatch(/nth-child\(3n\+1\)/);
+    // Guard against regressing to a `first:` position-based reset, which only ever
+    // matches item 1 and would leave item 4's divider unclosed.
+    for (const className of classNames) {
+      expect(className).not.toMatch(/min-\[721px\]:first:border-l-0/);
+    }
+  });
+});

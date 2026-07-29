@@ -81,7 +81,7 @@ export function DealTrackingPanel({
 
       <div className="flex flex-col gap-4 px-4 py-4 sm:px-5">
         {!ready ? (
-          <div className="flex items-start gap-2 rounded-md bg-warning-bg-soft px-3 py-2.5 text-xs text-warning-dark">
+          <div className="flex items-start gap-2 rounded-lg border border-warning-border bg-warning-bg-soft px-3 py-2.5 text-xs text-warning-dark">
             <Icon name="clock" size={14} className="mt-0.5 shrink-0" />
             <span>{STAGE_ADVANCE_GATE_HINT}</span>
           </div>
@@ -187,11 +187,11 @@ export function DealTrackingPanel({
           ) : activities.length === 0 ? (
             <span className="text-xs text-text-muted">ยังไม่มีการบันทึกกิจกรรม</span>
           ) : (
-            <ul className="m-0 list-none divide-y divide-border-subtle border-y border-border-subtle p-0">
+            <ul className="m-0 flex list-none flex-col gap-2 p-0">
               {[...activities].reverse().map((activity) => (
-                <li key={activity.id} className="flex flex-col gap-1 py-2">
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <strong className="text-text">{activityKindLabel(activity.kind)}</strong>
+                <li key={activity.id} className="flex flex-col gap-0.5 rounded-lg border border-border-subtle bg-surface-subtle px-3 py-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge tone="neutral">{activityKindLabel(activity.kind)}</StatusBadge>
                     <span className="text-xs font-bold text-text-muted">{formatThaiDate(activity.activityDate)}</span>
                     <span className="text-2xs text-text-muted">· {activity.createdByName}</span>
                   </div>
@@ -202,7 +202,7 @@ export function DealTrackingPanel({
           )}
 
           {canEdit ? (
-            <div className="mt-1 flex flex-col gap-2 border-t border-border-subtle pt-3">
+            <div className="mt-1 flex flex-col gap-2 rounded-lg border border-dashed border-border p-3">
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                 <label className="flex flex-col gap-1 text-xs font-bold text-text-secondary">
                   วันที่

@@ -6,12 +6,12 @@ import { z } from 'zod';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
+import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { formGridSpan2, Panel, PageStack, RowActions, StatGrid } from '../../components/common/Layout.jsx';
-import { StatCard } from '../../components/common/StatCard.jsx';
+import { formGridSpan2, Panel, PageStack, RowActions } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { overtimeStatusLabel as statusInfo } from '../../utils/format.js';
 
@@ -399,13 +399,15 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
         </Button>
       </div>
 
-      <StatGrid>
-        <StatCard label="คำขอทั้งหมด" value={requests.length} helper="ในช่วงที่เลือก" icon="clock" tone="indigo" />
-        <StatCard label="รอผู้จัดการ" value={totals.submitted} helper="Submitted" icon="clipboard" tone="amber" />
-        <StatCard label="รอ CEO" value={totals.managerApproved} helper="Manager approved" icon="clipboard" tone="indigo" />
-        <StatCard label="อนุมัติแล้ว" value={totals.approved} helper="Approved" icon="check" tone="teal" />
-        <StatCard label="ชั่วโมงจ่ายได้" value={formatMinutes(totals.payableMinutes)} helper="Approved payable" icon="calendar" tone="blue" />
-      </StatGrid>
+      <CompactStatRow
+        items={[
+          { key: 'total', label: 'คำขอทั้งหมด', value: requests.length, helper: 'ในช่วงที่เลือก' },
+          { key: 'submitted', label: 'รอผู้จัดการ', value: totals.submitted, helper: 'Submitted' },
+          { key: 'managerApproved', label: 'รอ CEO', value: totals.managerApproved, helper: 'Manager approved' },
+          { key: 'approved', label: 'อนุมัติแล้ว', value: totals.approved, helper: 'Approved' },
+          { key: 'payable', label: 'ชั่วโมงจ่ายได้', value: formatMinutes(totals.payableMinutes), helper: 'Approved payable' },
+        ]}
+      />
 
       <form className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
         <label>

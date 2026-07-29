@@ -8,14 +8,14 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
+import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { formGridSpan2, Panel, PageStack, RowActions, StatGrid } from '../../components/common/Layout.jsx';
+import { formGridSpan2, Panel, PageStack, RowActions } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
-import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { leaveStatusLabel as statusInfo } from '../../utils/format.js';
 
@@ -512,22 +512,45 @@ export function LeavePage({ user, currentEmployee, showToast }) {
         )}
       />
 
-      <StatGrid>
-        <StatCard label="คำขอทั้งหมด" value={requests.length} helper="ในช่วงที่เลือก" icon="clipboard" tone="indigo" />
-        <StatCard label="รออนุมัติ" value={totals.submitted} helper="Submitted" icon="clock" tone="amber" />
-        <StatCard label="อนุมัติแล้ว" value={totals.approved} helper={formatDays(totals.approvedDays)} icon="check" tone="teal" />
-        <StatCard label="โควตาคงเหลือ" value={formatDays(totals.remainingDays)} helper="รวมประเภทที่เลือกได้" icon="calendar" tone="blue" />
-      </StatGrid>
+      <CompactStatRow
+        items={[
+          { key: 'total', label: 'คำขอทั้งหมด', value: requests.length, helper: 'ในช่วงที่เลือก' },
+          { key: 'submitted', label: 'รออนุมัติ', value: totals.submitted, helper: 'Submitted' },
+          { key: 'approved', label: 'อนุมัติแล้ว', value: totals.approved, helper: formatDays(totals.approvedDays) },
+          { key: 'remaining', label: 'โควตาคงเหลือ', value: formatDays(totals.remainingDays), helper: 'รวมประเภทที่เลือกได้' },
+        ]}
+      />
 
+      {/* Nesting fix (card-diet, 2026-07): each balance used to be its own
+          `.leave-balance-card` (border+radius+bg+padding) sitting INSIDE this
+          Panel's own card chrome — a nested card, never right per DESIGN.md.
+          The balances stay legible/distinct via typography (bold label,
+          large tabular value, muted breakdown line) plus a divider between
+          them, not a second surface each. The real leave-type count is 4
+          (SICK/VACATION/PERSONAL/LEAVE_WITHOUT_PAY — see LeaveService.balances()),
+          not the 3 the mock seeds, and LEAVE_BALANCE_GRID is 3-column at
+          >=721px, so the divider must be row-aware (`nth-child(3n+1)`), not
+          `first-child` — `first-child` only clears item 1 of the whole list,
+          not item 1 of every row, and would leave a stray divider hanging
+          off the left edge wherever a row wraps. */}
       <Panel title="โควตาวันลา">
         <div className={LEAVE_BALANCE_GRID}>
           {balances.length === 0 ? (
             <EmptyState icon="calendar" title="ยังไม่มีข้อมูลโควตา" />
           ) : balances.map((balance) => (
-            <div className="leave-balance-card" key={balance.leaveTypeCode}>
-              <span>{balance.leaveTypeNameTh || balance.leaveTypeCode}</span>
-              <strong>{formatDays(balance.remainingDays)}</strong>
-              <small>ใช้แล้ว {formatDays(balance.approvedDays)} · รออนุมัติ {formatDays(balance.pendingDays)} · สิทธิ์ {formatDays(balance.annualQuotaDays)}</small>
+            <div
+              className="grid min-w-0 gap-[5px] max-[720px]:border-t max-[720px]:border-border max-[720px]:pt-3 max-[720px]:first:border-t-0 max-[720px]:first:pt-0 min-[721px]:border-l min-[721px]:border-border min-[721px]:pl-4 min-[721px]:[&:nth-child(3n+1)]:border-l-0 min-[721px]:[&:nth-child(3n+1)]:pl-0"
+              key={balance.leaveTypeCode}
+            >
+              <span className="block min-w-0 truncate text-sm font-bold text-text-secondary">
+                {balance.leaveTypeNameTh || balance.leaveTypeCode}
+              </span>
+              <strong className="text-xl font-extrabold leading-tight tabular-nums text-text">
+                {formatDays(balance.remainingDays)}
+              </strong>
+              <small className="block min-w-0 truncate text-xs text-text-muted">
+                ใช้แล้ว {formatDays(balance.approvedDays)} · รออนุมัติ {formatDays(balance.pendingDays)} · สิทธิ์ {formatDays(balance.annualQuotaDays)}
+              </small>
             </div>
           ))}
         </div>
