@@ -101,11 +101,10 @@ test('sales -> import -> ceo -> sales walks a PCR from draft to quotation-accept
 
   await dealModal.getByTestId('ticket-create-submit').click();
   await expect(dealModal).toHaveCount(0);
-  await expect(page.getByTestId('deal-state-header').getByText('แบบร่าง', { exact: true })).toBeVisible();
+  await expect(page.getByText('แบบร่าง')).toBeVisible();
   const ticketPath = new URL(page.url()).pathname;
 
   // ── sales: create + submit the pricing request straight to Import ──
-  await page.getByRole('tab', { name: 'ราคา', exact: true }).click();
   await page.getByRole('button', { name: 'สร้างใบขอราคา' }).click();
   const pcrModal = page.getByRole('dialog', { name: 'สร้างใบขอราคา' });
   await expect(pcrModal).toBeVisible();
@@ -171,7 +170,6 @@ test('sales -> import -> ceo -> sales walks a PCR from draft to quotation-accept
   // ── sales: create + issue the customer quotation, record ACCEPTED ───
   await switchRole(page, 'sales');
   await spaGoto(page, ticketPath);
-  await page.getByRole('tab', { name: 'ใบเสนอราคา' }).click();
   const quotationPanel = page.getByTestId('deal-quotation-panel');
   await expect(quotationPanel).toBeVisible();
   await quotationPanel.getByTestId('deal-quotation-create').click();
