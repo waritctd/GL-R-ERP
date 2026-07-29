@@ -12,12 +12,24 @@ import java.util.List;
  * see {@link PayrollService#suggestedInputs}. This does not change {@code preview()}/{@code
  * process()} in any way; it is a separate, additive read path.
  *
- * <p>Only the recurring fields are carried: special_pay_1..5 (company allowances), non_taxable_income,
- * student_loan_deduction, legal_execution_deduction. Deliberately excluded: special_pay_6
- * (commission — {@code CommissionService} already feeds this; carrying it would double-count),
- * special_pay_7/8 (KPI / one-off bonus), and other event-driven fields (warning-letter /
- * customer-return deductions, other pre/post-tax deductions) — those describe THIS month's events,
- * not a standing recurring amount.
+ * <p>Carried: special_pay_1..5, non_taxable_income, student_loan_deduction,
+ * legal_execution_deduction. Excluded: special_pay_6 (commission — {@code CommissionService} already
+ * feeds this; carrying it would double-count), special_pay_7/8, and the event-driven fields
+ * (warning-letter / customer-return deductions, other pre/post-tax deductions).
+ *
+ * <p><b>WARNING — this selection rests on a classification the owner has since contradicted
+ * (2026-07-29).</b> It was written believing special_pay_1..5 were standing company allowances. The
+ * owner's account is that <em>all</em> of พิเศษ 1-8 except 6 are occasional, varying per employee per
+ * month, and that <em>an annual bonus is typed into one of พิเศษ 1-5</em>. So carrying 1..5 forward can
+ * re-propose last month's ONE-OFF payment — a ฿100,000 June bonus pre-fills again in July, and only HR
+ * noticing stops it. The pre-fill is a suggestion HR edits before submitting, never an automatic
+ * payment, so nothing is paid without a human; but the suggestion is now known to be wrong for exactly
+ * the payments that matter most.
+ *
+ * <p>Left as-is deliberately on the ป.96 branch: changing what carries forward is a payroll-entry
+ * behaviour change needing the owner's decision, not a side effect of a withholding fix. Recorded in
+ * that branch's handoff as an open risk. {@code PayrollCalculator}'s COMMISSION_SPECIAL_PAY_INDEX
+ * carries the authoritative classification — do not re-derive it from this javadoc.
  *
  * <p>Leave -&gt; payroll unpaid-day deduction (2026-07-23): {@code unpaidLeaveDays} IS event-driven
  * (this month's approved-beyond-quota leave, from {@code LeaveRepository

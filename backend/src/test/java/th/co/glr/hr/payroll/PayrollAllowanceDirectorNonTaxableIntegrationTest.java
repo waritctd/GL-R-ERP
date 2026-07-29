@@ -187,7 +187,61 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
         assertThat(line.netPay()).isEqualByComparingTo("33960.42");
     }
 
+    /**
+     * A per-run ค่าลดหย่อนบุตร typed by HR for an employee with NO stored ล.ย.01 row.
+     *
+     * <p>Regression test for a defect found in review. V93 caps บุตร per head, but the amount and the
+     * head count travel by different routes: {@link PayrollService#mergeAllowances} took the amount
+     * from the request body and the count from the stored declaration only. With no stored row the
+     * count was zero, so the cap was zero, and the whole declaration was erased — no error, no
+     * warning, just a larger tax bill. Only the stored-declaration path was covered before, which is
+     * why this passed review the first time.
+     *
+     * <p>Runs through the real {@link PayrollService#preview} against real Postgres, because the
+     * defect lived in the service's merge and not in the calculator: the calculator is right to
+     * enforce a zero cap on a zero count, otherwise any amount could be claimed by declaring nobody.
+     */
+    @Test
+    void aPerRunChildAllowanceSurvivesWhenTheEmployeeHasNoStoredDeclaration() {
+        LocalDate month = LocalDate.of(2026, 1, 1);
+        long employeeId = seedEmployee("ETA-900", "ไม่มี", "แบบแจ้ง", new BigDecimal("100000.00"));
+
+        PayrollLineDto withoutDeclaration = previewLineFor(month, employeeId);
+
+        PayrollPeriodDto withDeclaration = payrollService.preview(
+            new ProcessPayrollRequest(month, List.of(
+                inputWithChildAllowance(employeeId, new BigDecimal("60000.00")))), hr());
+        PayrollLineDto declaredLine = withDeclaration.lines().stream()
+            .filter(line -> line.employeeId() == employeeId)
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(declaredLine.taxAllowanceTotal())
+            .withFailMessage("a per-run 60,000 child allowance must not be erased by a zero stored head count")
+            .isEqualByComparingTo(withoutDeclaration.taxAllowanceTotal().add(new BigDecimal("60000.00")));
+        assertThat(declaredLine.withholdingTax()).isLessThan(withoutDeclaration.withholdingTax());
+    }
+
     // --- helpers ------------------------------------------------------------
+
+    private PayrollEmployeeInputRequest inputWithChildAllowance(long employeeId, BigDecimal childAllowance) {
+        PayrollEmployeeInputRequest base = inputWithNonTaxableIncome(employeeId, BigDecimal.ZERO);
+        return new PayrollEmployeeInputRequest(
+            base.employeeId(),
+            base.specialPay1(), base.specialPay2(), base.specialPay3(), base.specialPay4(),
+            base.specialPay5(), base.specialPay6(), base.specialPay7(), base.specialPay8(),
+            base.nonTaxableIncome(), base.unpaidLeaveDays(), base.studentLoanDeduction(),
+            base.legalExecutionDeduction(), base.otherPostTaxDeductions(),
+            base.spouseAllowance(),
+            childAllowance,
+            base.parentCareAllowance(), base.disabledCareAllowance(), base.maternityAllowance(),
+            base.lifeInsuranceAllowance(), base.healthInsuranceAllowance(),
+            base.parentHealthInsuranceAllowance(), base.rmfAllowance(), base.ssfAllowance(),
+            base.pensionInsuranceAllowance(), base.thaiEsgAllowance(), base.homeLoanInterestAllowance(),
+            base.educationDonation(), base.generalDonation(), base.politicalDonation(),
+            base.warningLetterDeduction(), base.customerReturnDeduction(), base.otherPretaxDeduction(),
+            base.withholdingTaxOverride());
+    }
 
     private PayrollLineDto previewLineFor(LocalDate payrollMonth, long employeeId) {
         PayrollPeriodDto period = payrollService.preview(

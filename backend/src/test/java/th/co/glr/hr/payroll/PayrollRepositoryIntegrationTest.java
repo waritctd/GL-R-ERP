@@ -141,7 +141,7 @@ class PayrollRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             new BigDecimal("1000.00"));
 
         repository.upsertTaxAllowances(2026, List.of(upsert), alice);
-        Map<Long, PayrollTaxAllowanceInput> firstRead = repository.findTaxAllowancesByEmployee(2026);
+        Map<Long, PayrollTaxAllowanceInput> firstRead = repository.findTaxAllowancesByEmployee(java.time.LocalDate.of(2026, 6, 1));
         assertThat(firstRead.get(alice).spouseAllowance()).isEqualByComparingTo("60000.00");
         assertThat(firstRead.get(alice).politicalDonation()).isEqualByComparingTo("1000.00");
 
@@ -156,7 +156,7 @@ class PayrollRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             new BigDecimal("1000.00"));
         repository.upsertTaxAllowances(2026, List.of(updated), alice);
 
-        Map<Long, PayrollTaxAllowanceInput> secondRead = repository.findTaxAllowancesByEmployee(2026);
+        Map<Long, PayrollTaxAllowanceInput> secondRead = repository.findTaxAllowancesByEmployee(java.time.LocalDate.of(2026, 6, 1));
         assertThat(secondRead).hasSize(1);
         assertThat(secondRead.get(alice).spouseAllowance()).isEqualByComparingTo("0.00");
 

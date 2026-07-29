@@ -46,8 +46,43 @@ public record PayrollEmployeeInputRequest(
     // override, else compute); a non-null value (including 0) WINS over the standing value. Read RAW
     // via withholdingTaxOverride() below (NOT through safe()) so null is preserved -- coercing it to
     // zero would silently force "withhold nothing" on every run. @PositiveOrZero still allows null.
-    @PositiveOrZero BigDecimal withholdingTaxOverride
+    @PositiveOrZero BigDecimal withholdingTaxOverride,
+    // Dedicated one-off pay (2026-07-29, V94): เงินโบนัส and อื่นๆ, entered in their own
+    // fields so a one-off is never typed into a พิเศษ slot that also carries a monthly allowance.
+    // Both are ข้อ 2.5 เงินพิเศษ -- see PayrollCalculator.
+    @PositiveOrZero BigDecimal bonusPay,
+    @PositiveOrZero BigDecimal otherOneOffPay
 ) {
+    /**
+     * Legacy constructor: the signature before the dedicated one-off pay fields (V94). Both default to
+     * zero, which is a no-op — an empty bonus and an empty อื่นๆ contribute nothing to either ป.96 limb.
+     */
+    public PayrollEmployeeInputRequest(
+        Long employeeId,
+        BigDecimal specialPay1, BigDecimal specialPay2, BigDecimal specialPay3, BigDecimal specialPay4,
+        BigDecimal specialPay5, BigDecimal specialPay6, BigDecimal specialPay7, BigDecimal specialPay8,
+        BigDecimal nonTaxableIncome, BigDecimal unpaidLeaveDays, BigDecimal studentLoanDeduction,
+        BigDecimal legalExecutionDeduction, BigDecimal otherPostTaxDeductions,
+        BigDecimal spouseAllowance, BigDecimal childAllowance, BigDecimal parentCareAllowance,
+        BigDecimal disabledCareAllowance, BigDecimal maternityAllowance,
+        BigDecimal lifeInsuranceAllowance, BigDecimal healthInsuranceAllowance,
+        BigDecimal parentHealthInsuranceAllowance, BigDecimal rmfAllowance, BigDecimal ssfAllowance,
+        BigDecimal pensionInsuranceAllowance, BigDecimal thaiEsgAllowance,
+        BigDecimal homeLoanInterestAllowance, BigDecimal educationDonation,
+        BigDecimal generalDonation, BigDecimal politicalDonation,
+        BigDecimal warningLetterDeduction, BigDecimal customerReturnDeduction,
+        BigDecimal otherPretaxDeduction, BigDecimal withholdingTaxOverride
+    ) {
+        this(employeeId, specialPay1, specialPay2, specialPay3, specialPay4, specialPay5, specialPay6,
+            specialPay7, specialPay8, nonTaxableIncome, unpaidLeaveDays, studentLoanDeduction,
+            legalExecutionDeduction, otherPostTaxDeductions, spouseAllowance, childAllowance,
+            parentCareAllowance, disabledCareAllowance, maternityAllowance, lifeInsuranceAllowance,
+            healthInsuranceAllowance, parentHealthInsuranceAllowance, rmfAllowance, ssfAllowance,
+            pensionInsuranceAllowance, thaiEsgAllowance, homeLoanInterestAllowance, educationDonation,
+            generalDonation, politicalDonation, warningLetterDeduction, customerReturnDeduction,
+            otherPretaxDeduction, withholdingTaxOverride, BigDecimal.ZERO, BigDecimal.ZERO);
+    }
+
     public List<BigDecimal> specialPays() {
         return List.of(
             safe(specialPay1),

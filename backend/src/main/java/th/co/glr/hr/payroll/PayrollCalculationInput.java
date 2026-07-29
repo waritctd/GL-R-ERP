@@ -37,8 +37,125 @@ public record PayrollCalculationInput(
     // Deliberately NOT defaulted to zero: zero is a legitimate override (withhold nothing), so it must
     // stay distinct from "no override". Appended last so every prior positional call site keeps
     // compiling via the legacy constructors below.
-    BigDecimal withholdingTaxOverride
+    BigDecimal withholdingTaxOverride,
+    // ป.96/2543 compliance (2026-07-28, V92). Both appended last, same reason as every field above:
+    // every prior positional call site keeps compiling via the legacy 18-arg constructor below.
+    //
+    // taxYear: the GREGORIAN tax year this run belongs to (e.g. 2026), from the payroll month. Needed
+    // because some ค่าลดหย่อน are year-scoped -- SSF purchases stopped being deductible from ปีภาษี
+    // 2568 (Gregorian 2025) -- so the calculator cannot apply the right rules without knowing the
+    // year. Zero means "unknown"; the calculator then applies no year-scoped restriction, which is
+    // what every legacy call site got before this field existed.
+    int taxYear,
+    // remainingPayPeriods: จำนวนคราวที่ต้องจ่าย remaining in this tax year INCLUDING this one, per
+    // คำชี้แจง ภ.ง.ด.1 ข้อ 2.1. PayrollService resolves it as 13 - month. It is NOT capped at a
+    // leaver's final period: ข้อ 2.10 is a known gap because resignations are not recorded in this
+    // platform at all -- see PayrollService#remainingPayPeriods.
+    // Zero means "not supplied"; the calculator falls back to 13 - payrollMonthValue, which is
+    // exactly what it computed internally before this field existed.
+    int remainingPayPeriods,
+    // taxpayerAge: the employee's age in this tax year, from hr.employee.date_of_birth. Drives the
+    // ยกเว้นเงินได้ 190,000 for taxpayers aged 65+ (กฎกระทรวง ฉบับที่ 126); the disability-card route
+    // to the same exemption is a ล.ย.01 declaration and travels on PayrollTaxAllowanceInput instead.
+    // Zero means "date of birth unknown" -- the exemption is then NOT granted on an assumption.
+    int taxpayerAge,
+    // Dedicated one-off pay (2026-07-29, V94). เงินโบนัส and อื่นๆ get their own fields so a one-off
+    // payment is no longer typed into a พิเศษ slot that also carries a monthly allowance -- the
+    // ambiguity that made every slot-based ป.96 classification wrong. Both join the ข้อ 2.5 variable
+    // limb; ข้อ 2.5 names เงินโบนัส explicitly.
+    BigDecimal bonusPay,
+    BigDecimal otherOneOffPay
 ) {
+    /** Legacy 21-arg constructor: the signature before the dedicated one-off pay fields existed. */
+    public PayrollCalculationInput(
+        BigDecimal baseSalary, List<BigDecimal> specialPays, BigDecimal overtimePay,
+        BigDecimal commissionPay, BigDecimal nonTaxableIncome, BigDecimal unpaidLeaveDays,
+        BigDecimal studentLoanDeduction, BigDecimal legalExecutionRequested,
+        BigDecimal otherPostTaxDeductions, PayrollTaxAllowanceInput taxAllowances,
+        PayrollYearToDate yearToDate, int payrollMonthValue, BigDecimal directorRemuneration,
+        BigDecimal warningLetterDeduction, BigDecimal customerReturnDeduction,
+        BigDecimal otherPretaxDeduction, BigDecimal leaveRefundDays,
+        BigDecimal withholdingTaxOverride, int taxYear, int remainingPayPeriods, int taxpayerAge
+    ) {
+        this(baseSalary, specialPays, overtimePay, commissionPay, nonTaxableIncome, unpaidLeaveDays,
+            studentLoanDeduction, legalExecutionRequested, otherPostTaxDeductions, taxAllowances,
+            yearToDate, payrollMonthValue, directorRemuneration, warningLetterDeduction,
+            customerReturnDeduction, otherPretaxDeduction, leaveRefundDays, withholdingTaxOverride,
+            taxYear, remainingPayPeriods, taxpayerAge, BigDecimal.ZERO, BigDecimal.ZERO);
+    }
+    /**
+     * Legacy 20-arg constructor: the full signature before {@code taxpayerAge} existed. Age defaults
+     * to zero, i.e. unknown, so the 65+ exemption is not granted — which is what every call site
+     * predating the field got.
+     */
+    public PayrollCalculationInput(
+        BigDecimal baseSalary,
+        List<BigDecimal> specialPays,
+        BigDecimal overtimePay,
+        BigDecimal commissionPay,
+        BigDecimal nonTaxableIncome,
+        BigDecimal unpaidLeaveDays,
+        BigDecimal studentLoanDeduction,
+        BigDecimal legalExecutionRequested,
+        BigDecimal otherPostTaxDeductions,
+        PayrollTaxAllowanceInput taxAllowances,
+        PayrollYearToDate yearToDate,
+        int payrollMonthValue,
+        BigDecimal directorRemuneration,
+        BigDecimal warningLetterDeduction,
+        BigDecimal customerReturnDeduction,
+        BigDecimal otherPretaxDeduction,
+        BigDecimal leaveRefundDays,
+        BigDecimal withholdingTaxOverride,
+        int taxYear,
+        int remainingPayPeriods
+    ) {
+        this(
+            baseSalary, specialPays, overtimePay, commissionPay, nonTaxableIncome, unpaidLeaveDays,
+            studentLoanDeduction, legalExecutionRequested, otherPostTaxDeductions, taxAllowances,
+            yearToDate, payrollMonthValue,
+            directorRemuneration, warningLetterDeduction, customerReturnDeduction, otherPretaxDeduction,
+            leaveRefundDays, withholdingTaxOverride, taxYear, remainingPayPeriods,
+            0
+        );
+    }
+
+    /**
+     * Legacy 18-arg constructor: the full signature as it stood before ป.96/2543 compliance added
+     * {@code taxYear} and {@code remainingPayPeriods}. Both default to zero, which the calculator
+     * reads as "not supplied" and handles exactly as it did before the fields existed -- no
+     * year-scoped allowance restriction, and pay periods derived from the payroll month.
+     */
+    public PayrollCalculationInput(
+        BigDecimal baseSalary,
+        List<BigDecimal> specialPays,
+        BigDecimal overtimePay,
+        BigDecimal commissionPay,
+        BigDecimal nonTaxableIncome,
+        BigDecimal unpaidLeaveDays,
+        BigDecimal studentLoanDeduction,
+        BigDecimal legalExecutionRequested,
+        BigDecimal otherPostTaxDeductions,
+        PayrollTaxAllowanceInput taxAllowances,
+        PayrollYearToDate yearToDate,
+        int payrollMonthValue,
+        BigDecimal directorRemuneration,
+        BigDecimal warningLetterDeduction,
+        BigDecimal customerReturnDeduction,
+        BigDecimal otherPretaxDeduction,
+        BigDecimal leaveRefundDays,
+        BigDecimal withholdingTaxOverride
+    ) {
+        this(
+            baseSalary, specialPays, overtimePay, commissionPay, nonTaxableIncome, unpaidLeaveDays,
+            studentLoanDeduction, legalExecutionRequested, otherPostTaxDeductions, taxAllowances,
+            yearToDate, payrollMonthValue,
+            directorRemuneration, warningLetterDeduction, customerReturnDeduction, otherPretaxDeduction,
+            leaveRefundDays, withholdingTaxOverride,
+            0, 0
+        );
+    }
+
     /**
      * Legacy 12-arg constructor, kept so every call site written before the reconciliation fields
      * existed (including {@code PayrollExcelReconciliationTest}, which must not be edited) still
