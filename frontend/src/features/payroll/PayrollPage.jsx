@@ -2,15 +2,15 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
+import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { DesktopOnlyNotice } from '../../components/common/DesktopOnlyNotice.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { InfoTip } from '../../components/common/InfoTip.jsx';
-import { FilterBar, FormGrid, PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
+import { FilterBar, FormGrid, PageStack, Panel } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
-import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { cn } from '../../utils/cn.js';
@@ -489,12 +489,14 @@ export function PayrollPage({ showToast }) {
         )}
       />
 
-      <StatGrid>
-        <StatCard icon="badgeDollar" label="รายได้รวม" value={formatMoney(period?.totalGross)} helper="Gross earnings" tone="indigo" />
-        <StatCard icon="clipboard" label="เงินหักรวม" value={formatMoney(period?.totalDeductions)} helper="Deductions" tone="amber" />
-        <StatCard icon="check" label="ยอดโอนสุทธิ" value={formatMoney(period?.totalNet)} helper="Net transfer" tone="teal" />
-        <StatCard icon="shield" label="ภาษี/ปกส." value={formatMoney(Number(period?.totalWithholdingTax || 0) + Number(period?.totalSocialSecurity || 0))} helper="Tax + SSO" tone="blue" />
-      </StatGrid>
+      <CompactStatRow
+        items={[
+          { key: 'gross', label: 'รายได้รวม', value: formatMoney(period?.totalGross), helper: 'Gross earnings' },
+          { key: 'deductions', label: 'เงินหักรวม', value: formatMoney(period?.totalDeductions), helper: 'Deductions' },
+          { key: 'net', label: 'ยอดโอนสุทธิ', value: formatMoney(period?.totalNet), helper: 'Net transfer' },
+          { key: 'tax', label: 'ภาษี/ปกส.', value: formatMoney(Number(period?.totalWithholdingTax || 0) + Number(period?.totalSocialSecurity || 0)), helper: 'Tax + SSO' },
+        ]}
+      />
 
       {/* F2: `.payroll-actions`'s own `flex-direction: column; align-items: stretch; gap: 14px;` rule
           was dead — Tailwind utilities in `layer(utilities)` always beat `styles.css` in
@@ -537,8 +539,17 @@ export function PayrollPage({ showToast }) {
               <Icon name="check" />
               ประมวลผลเงินเดือน
             </Button>
+            {/* Informational state, not an error: this explains why the button is
+                unavailable right now, so it reads in muted body colour rather than
+                danger red. Utilities at the call site, not a styles.css rule —
+                styles.css sits in @layer legacy and loses to any text utility a
+                future caller adds here. */}
             {processBlockedReason && (
-              <span id="payroll-process-block-reason" role="note" className="payroll-process-block-reason">
+              <span
+                id="payroll-process-block-reason"
+                role="note"
+                className="max-w-[34ch] text-xs font-semibold text-text-muted"
+              >
                 {processBlockedReason}
               </span>
             )}
