@@ -4,7 +4,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import {
   ACTIVITY_KINDS, activityKindLabel, effectiveWinProbability,
-  hasActivitySince, isReadyToAdvance, lastStageChangeAt, STAGE_ADVANCE_GATE_HINT,
+  hasActivitySince, isReadyToAdvance, lastStageChangeAt,
 } from './dealTrackingMeta.js';
 
 function today() {
@@ -21,6 +21,13 @@ const EMPTY_ACTIVITY_DRAFT = { activityDate: today(), kind: 'CALL', note: '' };
  * deal owner / sales_manager / ceo, mirroring TicketService.requireDealOwnership
  * (see DealTrackingAndActivityIntegrationTest, backend Slice B1 — the real
  * enforcement; this component's canEdit is a UI convenience, not authoritative).
+ *
+ * The "พร้อมเลื่อนสถานะ / ยังไม่พร้อม" badge below is a compact status readout
+ * only — ticket-detail IA rebuild Phase 1 moved the actual explanatory gate
+ * sentence (what to do about it) to sit next to DealStagePanel's "เลื่อนไป"
+ * button instead of living here, in a panel the button it blocks isn't even
+ * in (see workState.js / TicketDetailPage / DealStagePanel's own doc
+ * comment — this was the Phase-1 audit's "y=870" duplicate-panel finding).
  */
 export function DealTrackingPanel({
   summary, events, activities = [], activitiesLoading, canEdit,
@@ -80,13 +87,6 @@ export function DealTrackingPanel({
       </div>
 
       <div className="flex flex-col gap-4 px-4 py-4 sm:px-5">
-        {!ready ? (
-          <div className="flex items-start gap-2 rounded-lg border border-warning-border bg-warning-bg-soft px-3 py-2.5 text-xs text-warning-dark">
-            <Icon name="clock" size={14} className="mt-0.5 shrink-0" />
-            <span>{STAGE_ADVANCE_GATE_HINT}</span>
-          </div>
-        ) : null}
-
         {editOpen ? (
           <div className="flex flex-col gap-3">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
