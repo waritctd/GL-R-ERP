@@ -836,6 +836,129 @@ describe('TicketDetailPage', () => {
     });
   });
 
+  // Handoff 117 follow-up ("A second, real bug found while making the specs
+  // actually pass"): the describe block above proves the STEADY-STATE happy
+  // path — a draft customer quotation already exists when the sticky
+  // "ออกใบเสนอราคา" button is clicked. `nextSalesAction`'s ISSUE_QUOTATION
+  // bucket (salesActions.js) fires the instant `pr.status ===
+  // 'APPROVED_FOR_QUOTATION'`, which is BEFORE anyone has necessarily created
+  // that draft (the rep does so separately via "สร้างร่างใบเสนอราคาลูกค้า" in
+  // DealQuotationPanel). Before this fix, clicking the sticky button in that
+  // window was a silent no-op — no toast, no mutation, nothing.
+  describe('sticky primary "ออกใบเสนอราคา" before any draft quotation exists yet (handoff 117 fix)', () => {
+    function approvedForQuotationTicket() {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', createdById: 1 } }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+        availableActions: [],
+      });
+      api.pricingRequests.listForTicket.mockResolvedValue({
+        items: [{
+          id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
+          status: 'APPROVED_FOR_QUOTATION', recipientType: 'BUYER', recipientLabel: null, orderConfirmedAt: null,
+        }],
+      });
+    }
+
+    it('creates the draft AND issues it in one click when no draft exists yet (the regression itself)', async () => {
+      approvedForQuotationTicket();
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [] });
+      api.pricingRequests.createCustomerQuotation.mockResolvedValue({
+        quotation: { id: 555, docStatus: 'DRAFT', quotationRevisionNo: 1 },
+      });
+      api.pricingRequests.issueCustomerQuotation.mockResolvedValue({
+        quotation: { id: 555, docStatus: 'ISSUED', quotationRevisionNo: 1 },
+      });
+      const showToast = vi.fn();
+
+      renderTicketDetailPage(salesOwnerUser, showToast);
+
+      // Wait for the resolver to settle on ISSUE_QUOTATION (it renders
+      // CREATE_PCR first, before api.pricingRequests.listForTicket resolves).
+      await screen.findByText('ถึงคิวคุณ: ออกใบเสนอราคา');
+      const stickyButton = screen.getByTestId('ticket-primary-action');
+      expect(stickyButton.getAttribute('data-action')).toBe('issue_quotation');
+      // Also wait for DealQuotationPanel's own quotationsQuery to settle
+      // empty — this is the exact "quotationsQuery.isSuccess" state
+      // openIssueQuotation's create branch requires; without this wait the
+      // click could race the query and land on the "still loading" toast
+      // branch instead.
+      await screen.findByRole('button', { name: 'สร้างร่างใบเสนอราคาลูกค้า' });
+
+      fireEvent.click(stickyButton);
+
+      await waitFor(() => expect(api.pricingRequests.createCustomerQuotation).toHaveBeenCalledWith(
+        501, expect.objectContaining({ clientRequestId: expect.any(String) }),
+      ));
+      // The created draft's id (555), not the PR id, must be what gets issued.
+      await waitFor(() => expect(api.pricingRequests.issueCustomerQuotation).toHaveBeenCalledWith(
+        555, expect.objectContaining({ clientRequestId: expect.any(String) }),
+      ));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'สร้างร่างและออกใบเสนอราคาลูกค้าแล้ว'));
+    });
+
+    it('issues the existing draft directly, without creating a second one, when a draft already exists (unchanged happy path)', async () => {
+      approvedForQuotationTicket();
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({
+        items: [{ id: 9101, docStatus: 'DRAFT', quotationRevisionNo: 1, grandTotal: 1000 }],
+      });
+      api.pricingRequests.issueCustomerQuotation.mockResolvedValue({
+        quotation: { id: 9101, docStatus: 'ISSUED', quotationRevisionNo: 1 },
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+
+      // Wait for the "draft ready" hint under DealQuotationPanel — proves the
+      // quotations query has actually settled before we click. (The hint is
+      // one <p> whose full text also includes the rest of the sentence, so
+      // this matches on a substring rather than requiring an exact match.)
+      await screen.findByText(/พร้อมออกใบเสนอราคาแล้ว/);
+      const stickyButton = screen.getByTestId('ticket-primary-action');
+      expect(stickyButton.getAttribute('data-action')).toBe('issue_quotation');
+
+      fireEvent.click(stickyButton);
+
+      await waitFor(() => expect(api.pricingRequests.issueCustomerQuotation).toHaveBeenCalledWith(
+        9101, expect.objectContaining({ clientRequestId: expect.any(String) }),
+      ));
+      expect(api.pricingRequests.createCustomerQuotation).not.toHaveBeenCalled();
+    });
+
+    it('shows an error toast and fires neither mutation when the click genuinely cannot do anything (defense in depth)', async () => {
+      approvedForQuotationTicket();
+      // The only quotation on file is already ISSUED (not editable) — `current`
+      // is non-null but isCustomerQuotationEditable(current) is false, so
+      // neither the "issue existing draft" nor the "create+issue" branch applies.
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({
+        items: [{ id: 9101, docStatus: 'ISSUED', quotationRevisionNo: 1, grandTotal: 1000 }],
+      });
+      const showToast = vi.fn();
+
+      renderTicketDetailPage(salesOwnerUser, showToast);
+
+      await screen.findByText('ถึงคิวคุณ: ออกใบเสนอราคา');
+      const stickyButton = screen.getByTestId('ticket-primary-action');
+      // Wait for the quotations query to settle so the click below exercises
+      // the "current exists but isn't editable" branch, not the
+      // still-loading branch (which would show a different toast). The
+      // "บันทึกผลจากลูกค้า" outcome section only renders once the ISSUED
+      // quotation has actually landed (canRecordCustomerQuotationOutcome
+      // requires docStatus === 'ISSUED'), so waiting for it is a faithful
+      // proxy for "the query settled".
+      await screen.findByText('บันทึกผลจากลูกค้า');
+
+      fireEvent.click(stickyButton);
+
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+        'error', 'ยังออกใบเสนอราคาไม่ได้ — ตรวจสอบสถานะใบขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง',
+      ));
+      expect(api.pricingRequests.createCustomerQuotation).not.toHaveBeenCalled();
+      expect(api.pricingRequests.issueCustomerQuotation).not.toHaveBeenCalled();
+    });
+  });
+
   // P3 (review round 2): the blocker line ("รอชำระมัดจำ" / "รอชำระส่วนที่เหลือ")
   // lost its `!isAccount` guard — account is the role whose OWN action
   // (confirmDeposit/confirmFinalPayment, nextAccountAction) clears each wait,
