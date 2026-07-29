@@ -67,6 +67,37 @@ function pickRelevantPricingRequest(pricingRequests = []) {
  * one page (the sticky bar's own scroll-to-here copy, plus this panel's own
  * button) — since the sticky bar is `sticky top-0`, both copies of each
  * label were visible on screen simultaneously.
+ *
+ * Handoff 117 follow-up ("A second, real bug found while making the specs
+ * actually pass"): FIX 2 above made `openIssueQuotation` fire
+ * `issueQuotation` straight through the ref, but `nextSalesAction`'s
+ * ISSUE_QUOTATION bucket (salesActions.js) only checks
+ * `pr.status === 'APPROVED_FOR_QUOTATION'` — it has no visibility into
+ * whether a draft customer quotation exists yet, because that only comes
+ * from THIS panel's own per-PR `listCustomerQuotations` fetch
+ * (salesActions.js is deliberately built from the ticket-list row + PR queue
+ * alone and documents that it never triggers a per-ticket detail fetch — see
+ * its own module doc comment — so widening it to know "a draft exists" was
+ * rejected as the fix). That mismatch meant the sticky "ออกใบเสนอราคา" button
+ * appeared the instant CEO approved the price, but silently did nothing
+ * until the rep separately clicked "สร้างร่างใบเสนอราคาลูกค้า" below to
+ * create the draft `openIssueQuotation` requires.
+ *
+ * Fixed here (not in salesActions.js) by making `openIssueQuotation` smart:
+ * when no draft exists yet but the PR/permissions genuinely support
+ * creating one, it now creates the draft and issues it in one chained
+ * mutation (`createAndIssueQuotation`) instead of no-op'ing. This is a
+ * deliberate sales-workflow change (CLAUDE.md's "Sales flow redesign" —
+ * authorised, not a side effect): issuing a quotation used to always take
+ * two separate clicks (create, then issue) so a rep could review/discount
+ * the draft first; now the sticky button can collapse that into one click
+ * with default (no-discount) terms. The in-panel "สร้างร่างใบเสนอราคาลูกค้า"
+ * button below is left in place specifically so a rep who wants to edit
+ * discounts before issuing still has that path — see its updated copy. Every
+ * branch that still can't do anything (query not yet settled, gates fail,
+ * etc.) now shows a real `showToast?.('error', ...)` instead of doing
+ * nothing — see `openIssueQuotation`'s own decision-tree comment below for
+ * the exact branches.
  */
 export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticketId, pricingRequests = [], user, showToast }, ref) {
   const queryClient = useQueryClient();
@@ -103,8 +134,31 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
     onError: (err) => showToast?.('error', err.message || 'ดำเนินการไม่สำเร็จ'),
   });
   const issueQuotation = useMutation({
-    mutationFn: () => api.pricingRequests.issueCustomerQuotation(current.id, { clientRequestId: generateClientRequestId() }),
+    mutationFn: (quotationId) => api.pricingRequests.issueCustomerQuotation(quotationId, { clientRequestId: generateClientRequestId() }),
     onSuccess: () => { showToast?.('success', 'ออกใบเสนอราคาลูกค้าแล้ว'); invalidate(); },
+    onError: (err) => showToast?.('error', err.message || 'ดำเนินการไม่สำเร็จ'),
+  });
+  // Silent-no-op fix (handoff 117, "A second, real bug found while making the
+  // specs actually pass"): salesActions.js's ISSUE_QUOTATION bucket fires the
+  // sticky primary CTA off `pr.status === 'APPROVED_FOR_QUOTATION'` alone —
+  // it has no way to know whether a draft customer quotation already exists,
+  // because that only comes from this panel's own per-PR
+  // `listCustomerQuotations` fetch (salesActions.js's own doc comment states
+  // it never triggers a per-ticket detail fetch, so it can't be widened to
+  // know this — see the handoff for why that option was rejected). So when
+  // the sticky button is clicked before anyone has pressed "สร้างร่างใบเสนอ
+  // ราคาลูกค้า" below, `current` is still null and the click used to do
+  // nothing at all. This mutation closes that gap by creating the draft and
+  // issuing it in one chained action when the PR/permissions genuinely
+  // support it — see openIssueQuotation below for the full decision tree.
+  const createAndIssueQuotation = useMutation({
+    mutationFn: async () => {
+      const created = await api.pricingRequests.createCustomerQuotation(pr.id, { clientRequestId: generateClientRequestId() });
+      const draft = created?.quotation;
+      if (draft?.id == null) throw new Error('สร้างร่างใบเสนอราคาไม่สำเร็จ');
+      return api.pricingRequests.issueCustomerQuotation(draft.id, { clientRequestId: generateClientRequestId() });
+    },
+    onSuccess: () => { showToast?.('success', 'สร้างร่างและออกใบเสนอราคาลูกค้าแล้ว'); invalidate(); },
     onError: (err) => showToast?.('error', err.message || 'ดำเนินการไม่สำเร็จ'),
   });
   const recordOutcome = useMutation({
@@ -128,15 +182,47 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
   // `current`/`pr` are computed above via useMemo and may be null (no
   // qualifying pricing request / no editable quotation yet); both guards
   // are null-safe through their own predicates.
+  //
+  // openIssueQuotation's decision tree (handoff 117 fix for the "silent
+  // no-op" bug — see createAndIssueQuotation's own comment above for the
+  // root cause):
+  //   1. A mutation is already in flight → do nothing (a double-click must
+  //      never fire two mutations, and must never create two drafts).
+  //   2. An editable draft already exists → issue THAT draft (unchanged
+  //      original behaviour — this is still the common path once the rep
+  //      has used the in-panel "สร้างร่างใบเสนอราคาลูกค้า" button first).
+  //   3. No draft yet, but we genuinely don't know that for sure —
+  //      `quotationsQuery` hasn't resolved (it's `enabled: canView`, so also
+  //      gate on `canView` or a not-yet-enabled query reads as "not
+  //      success" forever). Creating here would risk a DUPLICATE draft once
+  //      the real list lands, so this is an explicit "try again" toast, not
+  //      a silent fall-through to step 4.
+  //   4. No draft, the query has genuinely settled empty, and the PR/user
+  //      still pass the create gate → create the draft and issue it in one
+  //      chained mutation. This is the actual bug fix: the sticky button
+  //      now always does SOMETHING when nextSalesAction says ISSUE_QUOTATION.
+  //   5. None of the above → the click cannot do anything (e.g. the only
+  //      quotation is already ISSUED/ACCEPTED/etc). Never fail silently —
+  //      tell the rep where to look.
   useImperativeHandle(ref, () => ({
     openIssueQuotation: () => {
+      if (issueQuotation.isPending || createQuotation.isPending || createAndIssueQuotation.isPending) return;
       if (current && isCustomerQuotationEditable(current) && canManageCustomerQuotation(user, pr)) {
-        issueQuotation.mutate();
+        issueQuotation.mutate(current.id);
+      } else if (!current && canView && !quotationsQuery.isSuccess) {
+        showToast?.('error', 'กำลังโหลดข้อมูลใบเสนอราคา — กรุณาลองอีกครั้ง');
+      } else if (!current && quotationsQuery.isSuccess && canCreateCustomerQuotation(user, pr)) {
+        createAndIssueQuotation.mutate();
+      } else {
+        showToast?.('error', 'ยังออกใบเสนอราคาไม่ได้ — ตรวจสอบสถานะใบขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
       }
     },
     openConfirmOrder: () => {
+      if (confirmOrder.isPending) return;
       if (pr && canConfirmOrder(user, pr)) {
         confirmOrder.mutate();
+      } else {
+        showToast?.('error', 'ยังยืนยันคำสั่งซื้อไม่ได้ — ตรวจสอบสถานะใบขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
       }
     },
   }));
@@ -183,7 +269,11 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
         ) : !current ? (
           canCreateCustomerQuotation(user, pr) ? (
             <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
-              <p className="text-sm text-text-muted">CEO อนุมัติราคาขายแล้ว — สร้างร่างใบเสนอราคาให้ลูกค้าได้เลย</p>
+              <p className="text-sm text-text-muted">
+                CEO อนุมัติราคาขายแล้ว — สร้างร่างใบเสนอราคาให้ลูกค้าได้เลย
+                หรือกดปุ่ม “ออกใบเสนอราคา” บนแถบด้านบนของหน้าเพื่อสร้างร่างและออกใบเสนอราคาในขั้นตอนเดียว
+                (ใช้ปุ่มด้านล่างนี้แทนหากต้องการแก้ไขส่วนลด/รายละเอียดก่อนออกจริง)
+              </p>
               <button type="button" className="primary-button self-start" disabled={createQuotation.isPending}
                 onClick={() => createQuotation.mutate()} data-testid="deal-quotation-create">
                 <Icon name="fileText" size={14} />
