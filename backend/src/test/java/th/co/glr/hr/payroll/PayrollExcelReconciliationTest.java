@@ -207,8 +207,16 @@ class PayrollExcelReconciliationTest {
         BigDecimal may = calculateForMonth(row, PayrollTaxAllowanceInput.empty(), 5).withholdingTax();
         BigDecimal august = calculateForMonth(row, PayrollTaxAllowanceInput.empty(), 8).withholdingTax();
 
+        // ป.96/2543 (2026-07-29): the hazard is unchanged but it now bites EARLIER. The พิเศษ block is
+        // occasional income (ข้อ 2.5) and is no longer multiplied out, so the projection falls away
+        // faster and withholding reaches zero by May rather than August. May > August was the original
+        // assertion; both are now zero, so the decay is asserted from January instead. If anything this
+        // strengthens the warning below: back-load year-to-date BEFORE the first live run.
         assertThat(january).isGreaterThan(may);
-        assertThat(may).isGreaterThan(august);
+        assertThat(january).isGreaterThan(august);
+        assertThat(may)
+            .withFailMessage("a mid-year first-run with no YTD stops withholding entirely")
+            .isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(august)
             .withFailMessage("an August first-run with no YTD withholds nothing at all")
             .isEqualByComparingTo(BigDecimal.ZERO);

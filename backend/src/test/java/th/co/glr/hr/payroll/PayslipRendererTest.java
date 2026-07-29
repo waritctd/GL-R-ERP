@@ -115,6 +115,105 @@ class PayslipRendererTest {
         );
     }
 
+    /**
+     * The over-withholding notice must reach the RENDERED PDF, not merely the DTO.
+     *
+     * <p>Review found `excessWithheldToDate` computed correctly and consumed by nothing at the time — the only
+     * signal of the branch's largest defect, visible to no one. Without it a stranded excess appears
+     * on the payslip as a 0.00 ภาษี line, indistinguishable from "no tax was due this month". Asserted
+     * through PDFTextStripper because that is the only thing that proves the employee can actually
+     * read it: an earlier "visible on the payslip" claim was true of the string and false of the page,
+     * where the text was drawn ~900pt past the right edge.
+     */
+    /**
+     * DECEMBER: the over-withholding is final, so the payslip may state plainly that payroll cannot
+     * return it and name the ภ.ง.ด.91 route.
+     *
+     * <p>Asserted through PDFTextStripper rather than on the DTO, deliberately: an earlier "visible on
+     * the payslip" claim was true of the string and false of the page, because the text was drawn ~900pt
+     * past the right edge. Reading it back out of the rendered PDF is the only thing that proves an
+     * employee can see it.
+     */
+    @Test
+    void anOverWithheldEmployeeIsToldSoOnTheFinalPayslipOfTheYear() throws Exception {
+        PayrollLineDto line = lineWithExcessWithheld(new BigDecimal("17527.51"));
+        String text = extractText(renderer.toPdf(line, periodForMonth(line, 12)));
+
+        assertThat(text).contains("ภาษีหัก ณ ที่จ่ายสะสมปีนี้เกินภาษีที่ต้องเสียทั้งปี");
+        assertThat(text).contains("17,527.51");
+        assertThat(text)
+            .as("the employee must be told the route to reclaim it, since payroll cannot return it")
+            .contains("ภ.ง.ด.91");
+    }
+
+    /**
+     * MID-YEAR: the same figure is only an estimate — later periods can still absorb it by withholding
+     * less — so the payslip must NOT assert it is unrecoverable.
+     *
+     * <p>Review built the case that forced this: a March commission spike produced a notice from April
+     * onward whose amount later periods then returned in full. Telling an employee on a payroll document
+     * that a named sum "ไม่สามารถคืนผ่านระบบเงินเดือนได้" when payroll subsequently returns it is a false
+     * statement they could carry onto a ภ.ง.ด.91.
+     */
+    @Test
+    void aMidYearOverWithholdingIsReportedAsProvisionalNotFinal() throws Exception {
+        PayrollLineDto line = lineWithExcessWithheld(new BigDecimal("17527.51"));
+        String text = extractText(renderer.toPdf(line, periodForMonth(line, 6)));
+
+        assertThat(text)
+            .as("mid-year the figure is an estimate and must be labelled as one")
+            .contains("ประมาณการ");
+        assertThat(text).contains("17,527.51");
+        assertThat(text)
+            .as("mid-year the payslip must not claim the excess is unrecoverable")
+            .doesNotContain("ไม่สามารถคืนผ่านระบบเงินเดือนได้");
+        assertThat(text)
+            .as("nor send the employee to ภ.ง.ด.91 over a figure that may still be absorbed")
+            .doesNotContain("ภ.ง.ด.91");
+    }
+
+    /** The ordinary case prints no notice at all — it must not become background noise. */
+    @Test
+    void aPayslipWithNoOverWithholdingCarriesNoNotice() throws Exception {
+        PayrollLineDto line = lineWithExcessWithheld(BigDecimal.ZERO);
+        String text = extractText(renderer.toPdf(line, periodForMonth(line, 12)));
+
+        assertThat(text).doesNotContain("ภ.ง.ด.91");
+        assertThat(text).doesNotContain("เกินภาษีที่ต้องเสียทั้งปี");
+        assertThat(text).doesNotContain("ประมาณการ");
+    }
+
+    private PayrollPeriodDto periodForMonth(PayrollLineDto line, int month) {
+        PayrollPeriodDto base = periodFor(line);
+        LocalDate payrollMonth = LocalDate.of(2026, month, 1);
+        return new PayrollPeriodDto(
+            base.id(), payrollMonth, payrollMonth,
+            payrollMonth.withDayOfMonth(payrollMonth.lengthOfMonth()),
+            payrollMonth.withDayOfMonth(payrollMonth.lengthOfMonth()),
+            base.status(), base.processedAt(), base.processedById(), base.lineCount(),
+            base.totalGross(), base.totalDeductions(), base.totalNet(),
+            base.totalSocialSecurity(), base.totalWithholdingTax(), base.lines());
+    }
+
+    private PayrollLineDto lineWithExcessWithheld(BigDecimal excess) {
+        PayrollLineDto base = line();
+        return new PayrollLineDto(
+            base.id(), base.employeeId(), base.employeeCode(), base.employeeName(),
+            base.departmentName(), base.bankName(), base.bankAccount(), base.baseSalary(),
+            base.dailyRate(), base.hourlyRate(), base.specialPays(), base.specialPayTotal(),
+            base.overtimePay(), base.commissionPay(), base.grossEarnings(), base.nonTaxableIncome(),
+            base.unpaidLeaveDays(), base.unpaidLeaveDeduction(), base.grossTaxableIncome(),
+            base.ssoWageBase(), base.socialSecurity(), base.projectedAnnualIncome(),
+            base.taxExpenseDeduction(), base.taxAllowanceTotal(), base.taxableAnnualIncome(),
+            base.annualTax(), base.withholdingTax(), base.studentLoanDeduction(),
+            base.legalExecutionDeduction(), base.otherPostTaxDeductions(), base.totalDeductions(),
+            base.netPay(), base.calculationNote(), base.directorRemuneration(),
+            base.warningLetterDeduction(), base.customerReturnDeduction(), base.otherPretaxDeduction(),
+            base.leaveRefundDays(), base.leaveDeductionRefund(), base.withholdingTaxOverride(),
+            base.regularTaxableIncome(), base.variableTaxableIncome(), base.regularWithholdingTax(),
+            base.variableWithholdingTax(), base.bonusPay(), base.otherOneOffPay(), excess);
+    }
+
     private PayrollLineDto line() {
         return new PayrollLineDto(
             123L,
