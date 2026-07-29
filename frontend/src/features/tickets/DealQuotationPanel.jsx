@@ -25,22 +25,6 @@ function generateClientRequestId() {
 // one this deal is currently working — ties broken by id (creation order).
 const QUOTATION_TAIL_STATUSES = new Set(['APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED', 'QUOTATION_ACCEPTED']);
 
-const CUSTOMER_QUOTATION_DOC_STATUS = {
-  DRAFT: { label: 'ร่าง', tone: 'neutral' },
-  ISSUED: { label: 'ออกแล้ว', tone: 'success' },
-  SENT: { label: 'ส่งแล้ว', tone: 'success' },
-  ACCEPTED: { label: 'ลูกค้ายอมรับ', tone: 'success' },
-  REJECTED: { label: 'ลูกค้าปฏิเสธ', tone: 'danger' },
-  CANCELLED: { label: 'ยกเลิก', tone: 'danger' },
-  EXPIRED: { label: 'หมดอายุ', tone: 'danger' },
-  REVISION_REQUESTED: { label: 'ลูกค้าขอแก้ไข', tone: 'warning' },
-  SUPERSEDED: { label: 'ถูกแทนที่', tone: 'neutral' },
-};
-
-function customerQuotationDocStatus(docStatus) {
-  return CUSTOMER_QUOTATION_DOC_STATUS[docStatus] ?? { label: docStatus || '-', tone: 'neutral' };
-}
-
 function pickRelevantPricingRequest(pricingRequests = []) {
   return pricingRequests
     .filter((pr) => QUOTATION_TAIL_STATUSES.has(pr.status))
@@ -143,27 +127,29 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
   const status = pricingRequestStatusLabel(pr.status);
 
   return (
-    <section className="panel" data-testid="deal-quotation-panel">
-      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-        <div className="min-w-0">
-          <h2>ราคาและใบเสนอราคา</h2>
-          <p className="mt-1 text-xs text-text-muted">
-            {pr.requestCode} · {pricingRequestRecipientLabel(pr.recipientType)}{pr.recipientLabel ? ` · ${pr.recipientLabel}` : ''} · {status.label}
-          </p>
-        </div>
+    <section className="table-panel" data-testid="deal-quotation-panel">
+      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <h2>ราคาและใบเสนอราคา</h2>
         <div className="flex items-center gap-2">
+          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
           <Link to={`/pricing-requests/${pr.id}`} className="text-xs font-bold text-link">
             ดูรายละเอียดเต็ม (ราคาโรงงาน/ต้นทุน/CEO) →
           </Link>
         </div>
       </div>
 
-      <div className="flex flex-col gap-4 px-4 pb-4 sm:px-5">
+      <div className="flex flex-col gap-3 p-4">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
+          <span>{pr.requestCode}</span>
+          <span>·</span>
+          <span>{pricingRequestRecipientLabel(pr.recipientType)}{pr.recipientLabel ? ` · ${pr.recipientLabel}` : ''}</span>
+        </div>
+
         {quotationsQuery.isLoading ? (
           <p className="text-sm text-text-muted">กำลังโหลด...</p>
         ) : !current ? (
           canCreateCustomerQuotation(user, pr) ? (
-            <div className="flex flex-col gap-3 rounded-md bg-info-bg px-3 py-3 text-info">
+            <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
               <p className="text-sm text-text-muted">CEO อนุมัติราคาขายแล้ว — สร้างร่างใบเสนอราคาให้ลูกค้าได้เลย</p>
               <button type="button" className="primary-button self-start" disabled={createQuotation.isPending}
                 onClick={() => createQuotation.mutate()} data-testid="deal-quotation-create">
@@ -175,34 +161,29 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
             <p className="text-sm text-text-muted">ยังไม่มีใบเสนอราคาลูกค้าสำหรับใบขอราคานี้</p>
           )
         ) : (
-          <div className="divide-y divide-border-subtle border-y border-border-subtle">
-            <div className="grid gap-2 py-3 text-sm sm:grid-cols-[1fr_1fr_auto] sm:items-center">
-              <div className="min-w-0">
-                <div className="font-mono font-bold text-text">{current.number ?? `Rev ${current.quotationRevisionNo}`}</div>
-                <div className="mt-1 flex flex-wrap items-center gap-2">
-                  {(() => {
-                    const docStatus = customerQuotationDocStatus(current.docStatus);
-                    return <StatusBadge tone={docStatus.tone}>{docStatus.label}</StatusBadge>;
-                  })()}
-                  <span className="text-xs text-text-muted">Revision {current.quotationRevisionNo}</span>
-                </div>
-              </div>
-              <div className="text-text-secondary">
-                <div className="font-bold">รวมทั้งสิ้น {formatMoney(current.grandTotal)}</div>
-                {current.validityDate ? <div className="text-xs text-text-muted">ยืนราคาถึง {formatThaiDate(current.validityDate)}</div> : null}
-              </div>
-              <div className="flex flex-wrap gap-2 sm:justify-end">
-                <button type="button" className="secondary-button" disabled={downloadingFormat === 'pdf'} onClick={() => handleDownload('pdf')}>
-                  <Icon name="fileText" size={12} /> {downloadingFormat === 'pdf' ? 'กำลังดาวน์โหลด...' : 'PDF'}
-                </button>
-                <button type="button" className="secondary-button" disabled={downloadingFormat === 'xlsx'} onClick={() => handleDownload('xlsx')}>
-                  <Icon name="fileText" size={12} /> {downloadingFormat === 'xlsx' ? 'กำลังดาวน์โหลด...' : 'Excel'}
-                </button>
-              </div>
+          <div className="flex flex-col gap-3 rounded-md border border-border bg-surface p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-mono text-sm font-bold">{current.number ?? `rev ${current.quotationRevisionNo}`}</span>
+              <StatusBadge tone={
+                ['ISSUED', 'SENT', 'ACCEPTED'].includes(current.docStatus) ? 'success'
+                  : ['REJECTED', 'CANCELLED', 'EXPIRED'].includes(current.docStatus) ? 'danger'
+                    : current.docStatus === 'REVISION_REQUESTED' ? 'warning' : 'neutral'
+              }>
+                {current.docStatus}
+              </StatusBadge>
+              <span className="text-sm text-text-muted">รวมทั้งสิ้น {formatMoney(current.grandTotal)}</span>
+              {current.validityDate ? (
+                <span className="text-xs text-text-muted">ยืนราคาถึง {formatThaiDate(current.validityDate)}</span>
+              ) : null}
             </div>
 
-            {(isCustomerQuotationEditable(current) && canManageCustomerQuotation(user, pr)) ? (
-            <div className="flex flex-wrap gap-2 py-3">
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="secondary-button" disabled={downloadingFormat === 'pdf'} onClick={() => handleDownload('pdf')}>
+                <Icon name="fileText" size={12} /> {downloadingFormat === 'pdf' ? 'กำลังดาวน์โหลด...' : 'PDF'}
+              </button>
+              <button type="button" className="secondary-button" disabled={downloadingFormat === 'xlsx'} onClick={() => handleDownload('xlsx')}>
+                <Icon name="fileText" size={12} /> {downloadingFormat === 'xlsx' ? 'กำลังดาวน์โหลด...' : 'Excel'}
+              </button>
               {isCustomerQuotationEditable(current) && canManageCustomerQuotation(user, pr) ? (
                 <>
                   <Link to={`/pricing-requests/${pr.id}`} className="secondary-button">
@@ -215,10 +196,9 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
                 </>
               ) : null}
             </div>
-            ) : null}
 
             {canRecordCustomerQuotationOutcome(user, pr, current) ? (
-              <div className="flex flex-col gap-2 py-3">
+              <div className="flex flex-col gap-2 border-t border-border-subtle pt-3">
                 <strong className="text-sm">บันทึกผลจากลูกค้า</strong>
                 <textarea
                   className="rounded border border-border p-2 text-sm"
@@ -245,8 +225,8 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
             ) : null}
 
             {['ACCEPTED', 'REJECTED', 'REVISION_REQUESTED', 'EXPIRED', 'SUPERSEDED'].includes(current.docStatus) ? (
-              <p className="py-3 text-xs text-text-muted">
-                ผลใบเสนอราคา: <strong>{customerQuotationDocStatus(current.docStatus).label}</strong>
+              <p className="text-xs text-text-muted">
+                ผลใบเสนอราคา: <strong>{current.docStatus}</strong>
                 {current.outcomeNote ? ` — ${current.outcomeNote}` : ''}
               </p>
             ) : null}
@@ -254,7 +234,7 @@ export function DealQuotationPanel({ ticketId, pricingRequests = [], user, showT
         )}
 
         {pr.status === 'QUOTATION_ACCEPTED' ? (
-          <div className="flex flex-col gap-2 rounded-md bg-info-bg px-3 py-3">
+          <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
             <strong className="text-sm">ยืนยันคำสั่งซื้อ</strong>
             {canConfirmOrder(user, pr) ? (
               <>

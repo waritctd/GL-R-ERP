@@ -2,14 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import imageCompression from 'browser-image-compression';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
+import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
-import { SkeletonCard } from '../../components/common/Skeleton.jsx';
-import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { commissionStatusLabel as statusInfo, dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
 import { invoiceCalculation, monthlyTierBase, round2, tierBreakdown } from './commissionCalc.js';
@@ -917,12 +916,14 @@ export function CommissionPage({ user, showToast }) {
         />
       ) : (
         <>
-          <div className="stat-grid">
-            <StatCard icon="badge" label="ฐานค่าคอมเดือนนี้" value={formatMoney(totals.base)} helper="Commissionable base" tone="indigo" />
-            <StatCard icon="check" label="อนุมัติแล้ว" value={totals.approved} helper="Approved records" tone="teal" />
-            <StatCard icon="clock" label="รอผู้จัดการ" value={totals.submitted} helper="Submitted records" tone="amber" />
-            <StatCard icon="clock" label="รอ CEO" value={totals.managerApproved} helper="Manager approved" tone="indigo" />
-          </div>
+          <CompactStatRow
+            items={[
+              { key: 'base', label: 'ฐานค่าคอมเดือนนี้', value: formatMoney(totals.base), helper: 'Commissionable base' },
+              { key: 'approved', label: 'อนุมัติแล้ว', value: totals.approved, helper: 'Approved records' },
+              { key: 'submitted', label: 'รอผู้จัดการ', value: totals.submitted, helper: 'Submitted records' },
+              { key: 'managerApproved', label: 'รอ CEO', value: totals.managerApproved, helper: 'Manager approved' },
+            ]}
+          />
 
           {canCreateManual && showManualForm && (
             <ManualCommissionForm
@@ -1466,24 +1467,20 @@ function MonthlyTierPanel({ summary }) {
 
 function PayrollSummary({ summary, loading }) {
   if (loading) {
-    return (
-      <div className="stat-grid" aria-busy="true" aria-label="กำลังโหลดสรุปค่าคอมมิชชัน Payroll">
-        <SkeletonCard lines={2} />
-        <SkeletonCard lines={2} />
-        <SkeletonCard lines={2} />
-      </div>
-    );
+    return <CompactStatRow items={[]} loading loadingCount={3} aria-label="กำลังโหลดสรุปค่าคอมมิชชัน Payroll" />;
   }
   if (!summary) {
     return <EmptyState icon="badge" title="ยังไม่มีข้อมูลค่าคอม" description="เลือกรอบเดือนอื่นเพื่อตรวจสอบ" />;
   }
   return (
     <>
-      <div className="stat-grid">
-        <StatCard icon="badge" label="ฐานค่าคอมรวม" value={formatMoney(summary.totalCommissionableBase)} helper="Payroll-ready base" tone="indigo" />
-        <StatCard icon="check" label="ค่าคอมที่ต้องจ่าย" value={formatMoney(summary.totalCommissionAmount)} helper={summary.status} tone="teal" />
-        <StatCard icon="users" label="จำนวน Sales" value={summary.salesReps?.length ?? 0} helper="Sales reps" tone="blue" />
-      </div>
+      <CompactStatRow
+        items={[
+          { key: 'base', label: 'ฐานค่าคอมรวม', value: formatMoney(summary.totalCommissionableBase), helper: 'Payroll-ready base' },
+          { key: 'amount', label: 'ค่าคอมที่ต้องจ่าย', value: formatMoney(summary.totalCommissionAmount), helper: summary.status },
+          { key: 'reps', label: 'จำนวน Sales', value: summary.salesReps?.length ?? 0, helper: 'Sales reps' },
+        ]}
+      />
       <section className="table-panel">
         <div className="commission-payroll-table table-head">
           <span>Sales Rep</span>

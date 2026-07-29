@@ -1,208 +1,124 @@
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { dealLifecycleLabel, dealStageLabel, formatThaiDate } from '../../utils/format.js';
+import {
+  dealLifecycleLabel, dealStageLabel, formatMoney, fulfilmentStatusLabel, paymentStageLabel,
+  pricingRequestStatusLabel,
+} from '../../utils/format.js';
 import { activePricingRequestsSummary } from '../pricingRequests/pricingRequestMeta.js';
-import { DEAL_WORK_STATES } from './dealWorkState.js';
-import { stageMeta } from './stageMeta.js';
 
-const ROLE_LABEL_TH = {
-  sales: 'ฝ่ายขาย',
-  sales_manager: 'ผู้จัดการฝ่ายขาย',
-  import: 'ฝ่ายนำเข้า',
-  account: 'ฝ่ายบัญชี',
-  ceo: 'CEO',
-};
-
-const WORK_STATE_TONE = {
-  [DEAL_WORK_STATES.NEEDS_ACTION]: 'info',
-  [DEAL_WORK_STATES.WAITING]: 'warning',
-  [DEAL_WORK_STATES.BLOCKED]: 'warning',
-  [DEAL_WORK_STATES.RETURNED]: 'danger',
-  [DEAL_WORK_STATES.OVERDUE]: 'danger',
-  [DEAL_WORK_STATES.DRAFT]: 'neutral',
-  [DEAL_WORK_STATES.COMPLETE]: 'success',
-  [DEAL_WORK_STATES.CANCELLED]: 'danger',
-  [DEAL_WORK_STATES.INFORMATIONAL]: 'neutral',
-};
-
-const BLOCKER_LABEL_TH = {
-  OVERDUE_PAYMENT: 'ยอดค้างชำระเกินกำหนด',
-  ON_HOLD: 'พักดีลไว้',
-  DORMANT: 'พักดีลระยะยาว',
-  OWNER_CANCELLED: 'เจ้าของยกเลิกโครงการ',
-  PROJECT_SUSPENDED: 'โครงการถูกระงับไม่มีกำหนด',
-  BUDGET_CANCELLED: 'งบประมาณถูกยกเลิก',
-  OTHER: 'อื่น ๆ',
-};
-
-const PRIMARY_ACTION_LABEL_TH = {
-  CREATE_PRICING_REQUEST: 'สร้างใบขอราคา',
-  SUBMIT_PRICING_REQUEST: 'ส่งใบขอราคา',
-  RESPOND_PRICING_INFO: 'ตอบข้อมูลที่ถูกส่งกลับ',
-  REVISE_COSTING: 'แก้ไขต้นทุน',
-  PICKUP_PRICING_REQUEST: 'รับงานขอราคา',
-  START_CEO_REVIEW: 'เริ่มตรวจราคาขาย',
-  DECIDE_PRICING: 'ตัดสินใจราคาขาย',
-  CREATE_CUSTOMER_QUOTATION: 'สร้างใบเสนอราคาลูกค้า',
-  CONFIRM_ORDER: 'ยืนยันคำสั่งซื้อ',
-};
-
-function DetailItem({ label, children }) {
+/**
+ * One compact "stat chip": a label (dt) over either a StatusBadge (when
+ * `tone` is given) or a plain value (dd) — deal value has no status tone of
+ * its own. Nesting fix (card-diet, 2026-07): this used to be its own
+ * bordered/background box (`rounded-lg border border-border bg-surface-subtle
+ * px-3 py-2`) sitting INSIDE DealStateHeader's own card — a nested card,
+ * never right per DESIGN.md. Renders as a plain dt/dd pair now; the parent
+ * `<dl>` grid spacing is what keeps the five values distinct, not per-item
+ * chrome.
+ */
+function StatChip({ label, value, tone }) {
   return (
-    <div className="min-w-0">
-      <dt className="text-2xs font-bold uppercase text-text-muted">{label}</dt>
-      <dd className="mt-0.5 break-words text-xs font-bold leading-snug text-text-secondary">
-        {children || '-'}
+    <div className="flex min-w-0 flex-col gap-1">
+      <dt className="text-2xs font-bold uppercase tracking-wide text-text-muted">{label}</dt>
+      <dd className="m-0 min-w-0">
+        {tone ? (
+          <StatusBadge tone={tone}>{value}</StatusBadge>
+        ) : (
+          <span className="block truncate text-sm font-extrabold text-text">{value}</span>
+        )}
       </dd>
     </div>
   );
 }
 
-function formatBlocker(blocker) {
-  if (!blocker) return '-';
-  return BLOCKER_LABEL_TH[blocker] ?? blocker;
-}
-
-function responsibilityInfo(workState) {
-  if (workState?.state === DEAL_WORK_STATES.WAITING) {
-    return {
-      label: 'รอ',
-      value: workState.responsibleRole
-        ? ROLE_LABEL_TH[workState.responsibleRole] ?? workState.responsibleRole
-        : 'ไม่มีฝ่ายภายในที่ระบุ',
-    };
-  }
-  if (workState?.responsibleRole) {
-    return {
-      label: 'ผู้รับผิดชอบ',
-      value: ROLE_LABEL_TH[workState.responsibleRole] ?? workState.responsibleRole,
-    };
-  }
-  return { label: 'รอ', value: 'ไม่รอฝ่ายภายใน' };
-}
-
-function latestRequiredDate(pricingRequests = []) {
-  const pricingSummary = activePricingRequestsSummary(pricingRequests);
-  return pricingSummary?.requests
-    ?.filter((request) => request.requiredDate)
-    ?.sort((a, b) => new Date(b.requiredDate) - new Date(a.requiredDate))[0]?.requiredDate ?? null;
-}
-
-function deadlineInfo(summary, pricingRequests) {
-  if (summary.overdue && summary.dueDate) {
-    return { label: 'กำหนด', value: `เกินกำหนดชำระ ${formatThaiDate(summary.dueDate)}` };
-  }
-  if (summary.dueDate) return { label: 'กำหนด', value: `ชำระ ${formatThaiDate(summary.dueDate)}` };
-  if (summary.nextFollowUpAt) return { label: 'ติดตาม', value: formatThaiDate(summary.nextFollowUpAt) };
-  const requiredDate = latestRequiredDate(pricingRequests);
-  if (requiredDate) return { label: 'กำหนด PCR', value: formatThaiDate(requiredDate) };
-  if (summary.stale) return { label: 'ความสดใหม่', value: 'ควรบันทึกกิจกรรมล่าสุด' };
-  if (summary.stageUpdatedAt) return { label: 'อัปเดตขั้น', value: formatThaiDate(summary.stageUpdatedAt) };
-  if (summary.updatedAt) return { label: 'อัปเดต', value: formatThaiDate(summary.updatedAt) };
-  return { label: 'ความสดใหม่', value: '-' };
-}
-
-function fallbackWorkState() {
-  return {
-    state: DEAL_WORK_STATES.INFORMATIONAL,
-    labelTh: 'ติดตามสถานะดีล',
-    explanationTh: 'ยังไม่มีงานเร่งด่วนจากข้อมูลที่โหลดมา',
-    responsibleRole: null,
-    blocker: null,
-    primaryActionKey: null,
-  };
-}
-
-function primaryActionLabel(workState) {
-  if (!workState?.primaryActionKey) return null;
-  return PRIMARY_ACTION_LABEL_TH[workState.primaryActionKey] ?? workState.labelTh;
-}
-
 /**
- * Persistent deal header: compact identity + current stage + presentation
- * work-state, kept above the workspace so tab changes do not hide the answer
- * to "where is this deal and whose move is it?".
+ * Deal Workspace state header (Phase 2 Slice S2 — see
+ * docs/agent-handoffs/104_feat-deal-workspace-unification.md): the single
+ * glanceable summary of "where is this deal, and whose move is it" that sits
+ * above every other section on the page — deal code/title/customer +
+ * lifecycle badge, a compact stat strip (sales stage × PCR status × payment
+ * status × fulfilment status × deal value), and a "ถึงคิวคุณ" line naming the
+ * current owner-role's next action with one primary CTA that mirrors it.
  *
- * `workState` comes from dealWorkState.js. The optional `primaryAction` is a
- * button the parent already gates from server-offered actions; this component
- * only places it.
+ * Every value here is read straight off the ticket summary / the already-
+ * fetched pricingRequests list, or derived by the parent from the SAME `can`
+ * flags (themselves gated on `GET /{id}/actions`) that drive every button
+ * elsewhere on the page — this component never invents a status or action
+ * the data can't support, it only surfaces what TicketDetailPage already
+ * computed, once, at the top.
+ *
+ * `nextAction`: this viewer's own next step (text), or null if it isn't
+ * their turn. `waitingHint`: who/what the deal is waiting on instead, when
+ * `nextAction` is null. `primaryAction`: the same CTA node the page already
+ * renders in the stage panel — passed through, not duplicated, so the two
+ * never disagree.
  */
 export function DealStateHeader({
-  summary, pricingRequests = [], primaryAction, workState, onRefresh,
+  summary, pricingRequests = [], primaryAction, nextAction, waitingHint, onRefresh,
 }) {
   const lifecycle = dealLifecycleLabel(summary.lifecycle ?? 'ACTIVE');
   const stage = dealStageLabel(summary.salesStage);
-  const meta = stageMeta(summary.salesStage);
-  const resolved = workState ?? fallbackWorkState();
-  const deadline = deadlineInfo(summary, pricingRequests);
-  const workTone = WORK_STATE_TONE[resolved.state] ?? 'neutral';
-  const actionLabel = primaryActionLabel(resolved);
-  const terminal = [DEAL_WORK_STATES.COMPLETE, DEAL_WORK_STATES.CANCELLED].includes(resolved.state);
-  const showLifecycleBadge = (summary.lifecycle ?? 'ACTIVE') !== 'ACTIVE';
-  const responsibility = responsibilityInfo(resolved);
+  const payment = paymentStageLabel(summary.paymentStage);
+  const fulfilment = summary.fulfillmentStatus ? fulfilmentStatusLabel(summary.fulfillmentStatus) : null;
+
+  // Most-recently-created non-cancelled pricing request stands in for "PCR
+  // status" at a glance — activePricingRequestsSummary already sorts oldest
+  // first (see pricingRequestMeta.js), so the last entry is the newest.
+  const pricingSummary = activePricingRequestsSummary(pricingRequests);
+  const latestPr = pricingSummary ? pricingSummary.requests[pricingSummary.requests.length - 1] : null;
+  const pricingStatus = latestPr ? pricingRequestStatusLabel(latestPr.status) : null;
+
+  const queueText = nextAction ?? waitingHint ?? null;
 
   return (
-    <section
-      className="sticky top-0 z-20 flex flex-col gap-3 border-y border-border bg-surface px-3 py-3 shadow-sm sm:rounded-lg sm:border sm:px-4"
-      data-testid="deal-state-header"
-      aria-label={`หัวดีล ${summary.code ?? ''}`}
-    >
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0 flex-1">
+    <section className="flex flex-col gap-4 rounded-xl border border-border bg-surface p-4 sm:p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <code className="rounded bg-surface-subtle px-2 py-0.5 text-xs text-text-muted">{summary.code}</code>
-            {showLifecycleBadge ? <StatusBadge tone={lifecycle.tone}>{lifecycle.label}</StatusBadge> : null}
-            {terminal ? <StatusBadge tone={workTone}>{resolved.labelTh}</StatusBadge> : null}
+            <StatusBadge tone={lifecycle.tone}>{lifecycle.label}</StatusBadge>
           </div>
-          <h1 className="mt-1 break-words text-lg font-extrabold leading-snug text-text sm:text-xl">
+          <h1 className="mt-2 truncate text-xl font-extrabold text-text sm:text-2xl">
             {summary.customerName || summary.title}
           </h1>
-          <p className="mt-1 break-words text-xs leading-snug text-text-muted">
-            โครงการ <strong className="text-text-secondary">{summary.projectName || '-'}</strong>
-          </p>
-        </div>
-
-        <div className="flex min-w-0 flex-col gap-2 lg:max-w-xl lg:items-end">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 lg:justify-end">
-            <span className="inline-flex items-center gap-2">
-              <span className="text-2xs font-bold uppercase text-text-muted">ขั้นตอน</span>
-              <StatusBadge tone={stage.tone}>
-                {meta ? `${meta.no}. ` : ''}{stage.label}
-              </StatusBadge>
-            </span>
-            <span className="inline-flex items-center gap-2">
-              <span className="text-2xs font-bold uppercase text-text-muted">สถานะงาน</span>
-              <StatusBadge tone={workTone}>{resolved.labelTh}</StatusBadge>
-            </span>
-            {onRefresh ? (
-              <button type="button" className="icon-button" onClick={onRefresh} title="รีเฟรช" aria-label="รีเฟรช">
-                <Icon name="refresh" />
-              </button>
-            ) : null}
-          </div>
-          <p className="break-words text-xs leading-snug text-text-muted lg:text-right">
-            {resolved.explanationTh}
-          </p>
-          {(actionLabel || primaryAction) ? (
-            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-              {actionLabel ? (
-                <span className="inline-flex min-w-0 items-center gap-1 text-xs font-bold text-info">
-                  <Icon name="chevronRight" size={14} className="shrink-0" />
-                  <span className="break-words">ถัดไป: {actionLabel}</span>
-                </span>
-              ) : null}
-              {primaryAction ? <div className="shrink-0">{primaryAction}</div> : null}
-            </div>
+          {summary.projectName ? (
+            <p className="mt-0.5 truncate text-sm text-text-muted">{summary.projectName}</p>
           ) : null}
         </div>
+        {onRefresh ? (
+          <button type="button" className="icon-button" onClick={onRefresh} title="รีเฟรช" aria-label="รีเฟรช">
+            <Icon name="refresh" />
+          </button>
+        ) : null}
       </div>
 
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-2 border-t border-border-subtle pt-3 sm:grid-cols-4">
-        <DetailItem label="เจ้าของฝ่ายขาย">{summary.createdByName || '-'}</DetailItem>
-        <DetailItem label={responsibility.label}>{responsibility.value}</DetailItem>
-        <DetailItem label="ตัวติดขัด">{formatBlocker(resolved.blocker)}</DetailItem>
-        <DetailItem label={deadline.label}>{deadline.value}</DetailItem>
+      <dl className="m-0 grid grid-cols-2 gap-x-3 gap-y-3 sm:grid-cols-5">
+        <StatChip label="ขั้นตอนดีล" value={stage.label} tone={stage.tone} />
+        <StatChip
+          label="ใบขอราคา (PCR)"
+          value={pricingStatus ? pricingStatus.label : 'ยังไม่มี'}
+          tone={pricingStatus ? pricingStatus.tone : 'neutral'}
+        />
+        <StatChip label="การชำระเงิน" value={payment.label} tone={payment.tone} />
+        <StatChip
+          label="การนำเข้า"
+          value={fulfilment ? fulfilment.label : 'ยังไม่เริ่ม'}
+          tone={fulfilment ? fulfilment.tone : 'neutral'}
+        />
+        <StatChip label="มูลค่าดีล" value={formatMoney(summary.amountPayable ?? 0)} />
       </dl>
+
+      {queueText ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info-border bg-info-bg px-4 py-3">
+          <div className="flex min-w-0 items-start gap-2">
+            <Icon name="chevronRight" size={14} className="mt-0.5 shrink-0 text-info" />
+            <span className="text-sm font-bold text-info">
+              {nextAction ? `ถึงคิวคุณ: ${nextAction}` : queueText}
+            </span>
+          </div>
+          {nextAction && primaryAction ? <div className="shrink-0">{primaryAction}</div> : null}
+        </div>
+      ) : null}
     </section>
   );
 }
