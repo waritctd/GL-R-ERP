@@ -82,8 +82,55 @@ public final class PayrollClassifiedCalculationDtos {
         // Resolved effective withholding-tax override (per-run typed value if present, else the
         // employee's standing override, else null). Same semantics as PayrollCalculationInput's field
         // of the same name -- see that record's javadoc.
-        BigDecimal withholdingTaxOverride
+        BigDecimal withholdingTaxOverride,
+        // Daily-rate support (2026-07-30): the employee's actual PER-DAY rate (hr.employee
+        // .current_salary for a pay_type = 'D' employee), or null for a monthly employee. When
+        // present, PayrollCalculator#calculateClassified uses this DIRECTLY as the dailyRate that
+        // feeds unpaidLeaveDeduction/leaveDeductionRefund/hourlyRate, instead of deriving it as
+        // amountOf(SALARY)/30 -- amountOf(SALARY) is this period's GROSS pay for a daily-rate employee
+        // (rate * daysWorked, computed by PayrollService#calculateLine), and dividing THAT by 30 would
+        // silently produce the wrong per-day figure (e.g. 11,250/30 = 375, not the true 450 rate) the
+        // moment a month's days-worked figure differs from a 30-day baseline. Null is a complete no-op:
+        // the monthly derivation (baseSalary/30) is exactly what ran before this field existed.
+        BigDecimal dailyRateOverride
     ) {
+        /**
+         * Legacy 20-arg constructor: the full signature as it stood right before {@code
+         * dailyRateOverride} (daily-rate support, 2026-07-30) existed -- i.e. through {@code
+         * withholdingTaxOverride}. Keeps every pre-existing positional call site (including
+         * PayrollExcelReconciliationTest and PayrollClassifiedLimbClampReviewTest, which must not be
+         * edited) compiling unchanged; {@code dailyRateOverride} defaults to {@code null} (monthly
+         * derivation, unchanged from today's behaviour).
+         */
+        public PayrollClassifiedCalculationInput(
+            long employeeId,
+            String employeeLabel,
+            Map<PayrollComponent, BigDecimal> componentAmounts,
+            Map<PayrollComponent, PayrollTaxTreatment> componentTaxTreatments,
+            Map<PayrollComponent, Boolean> componentSsoInclusion,
+            BigDecimal unpaidLeaveDays,
+            BigDecimal leaveRefundDays,
+            BigDecimal studentLoanDeduction,
+            BigDecimal otherPretaxDeduction,
+            BigDecimal otherPostTaxDeductions,
+            BigDecimal warningLetterDeduction,
+            BigDecimal customerReturnDeduction,
+            boolean customerReturnAlreadyEarned,
+            BigDecimal garnishmentRequested,
+            PayrollGarnishmentType garnishmentType,
+            PayrollTaxAllowanceInput taxAllowances,
+            PayrollYearToDate yearToDate,
+            int payrollMonthValue,
+            int taxYear,
+            BigDecimal withholdingTaxOverride
+        ) {
+            this(employeeId, employeeLabel, componentAmounts, componentTaxTreatments, componentSsoInclusion,
+                unpaidLeaveDays, leaveRefundDays, studentLoanDeduction, otherPretaxDeduction,
+                otherPostTaxDeductions, warningLetterDeduction, customerReturnDeduction,
+                customerReturnAlreadyEarned, garnishmentRequested, garnishmentType, taxAllowances,
+                yearToDate, payrollMonthValue, taxYear, withholdingTaxOverride, null);
+        }
+
         public BigDecimal amountOf(PayrollComponent component) {
             BigDecimal value = componentAmounts == null ? null : componentAmounts.get(component);
             return value == null ? BigDecimal.ZERO : value;

@@ -41,6 +41,14 @@ const payrollColumns = [
       <span>
         <strong>{line.employeeName}</strong>
         <small>{line.employeeCode} · {line.departmentName || '-'}</small>
+        {/* Finding 1 fix (Opus review, 2026-07-30): list-level warning so a daily-rate employee with
+            no/zero days-worked is visible WITHOUT having to open their detail panel first -- the gap
+            the ฿0-payslip bug actually lived in (hasPayrollInput below never submits a row with
+            nothing entered, so HR could Process a whole month without ever noticing). Purely a nudge;
+            PayrollService#requireEveryDailyRateEmployeeHasDaysWorked is the real enforcement. */}
+        {line.payType === 'D' && !(Number(line.daysWorked) > 0) && (
+          <small className="block text-warning">⚠ ยังไม่ได้ระบุจำนวนวันทำงาน</small>
+        )}
       </span>
     ),
   },
@@ -151,8 +159,15 @@ const deductionInputKeys = [
   'customerReturnDeduction',
   'otherPretaxDeduction',
 ];
+// Daily-rate support (2026-07-30): days worked this period. Only meaningful for a pay_type = 'D'
+// employee (hr.employee.current_salary is that employee's PER-DAY rate, not a monthly figure) --
+// PayrollComponent.SALARY for such an employee is rate * daysWorked. One-off like bonusPay/
+// otherOneOffPay above, re-entered fresh every run rather than carried forward, since a day count
+// is specific to the month worked.
+const dailyRateInputKeys = ['daysWorked'];
 const payrollInputKeys = [
   ...specialPayKeys, ...namedAllowanceKeys, ...oneOffPayKeys, ...incomeInputKeys, ...deductionInputKeys,
+  ...dailyRateInputKeys,
 ];
 
 // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix screen (spec sections 1
@@ -260,6 +275,9 @@ function blankAdjustment(employeeId, { applyDefaults = false } = {}) {
     perDiemExempt: '',
     perDiemTaxable: '',
     perDiemBasis: '',
+    // Daily-rate support (2026-07-30): one-off like bonusPay/otherOneOffPay above -- never carried
+    // forward, re-entered fresh every run.
+    daysWorked: '',
     // P1 fix (Opus review, 2026-07-30): เงินโบนัส/เงินก้อนอื่นๆ — plain numeric fields like the
     // special-pay slots above.
     bonusPay: '',
@@ -317,6 +335,10 @@ function adjustmentFromLine(line, { applyDefaults = false, suggestion = null } =
   // by definition, same reasoning as perDiemExempt/perDiemTaxable above) -- re-entered fresh each run.
   adjustment.bonusPay = draftValue(line.bonusPay);
   adjustment.otherOneOffPay = draftValue(line.otherOneOffPay);
+  // Daily-rate support (2026-07-30): survives a reload -- hydrate from the persisted line's own
+  // daysWorked, same as every other one-off field above. No carry-forward suggestion (a day count
+  // is specific to the month worked, not a recurring figure).
+  adjustment.daysWorked = draftValue(line.daysWorked);
   adjustment.garnishmentType = line.garnishmentType || '';
   adjustment.customerReturnAlreadyEarned = Boolean(line.customerReturnAlreadyEarned);
   adjustment.withholdingTaxOverride = overrideDraft(line.withholdingTaxOverride, suggestion);
@@ -777,6 +799,55 @@ export function PayrollPage({ showToast }) {
                 <MiniMetric label="ภาษีงวดนี้" value={formatMoney(selectedLine.withholdingTax)} />
                 <MiniMetric label="เงินโอนสุทธิ" value={formatMoney(selectedLine.netPay)} />
               </div>
+
+              {/* Daily-rate support (2026-07-30): shown only for a pay_type = 'D' employee --
+                  hr.employee.current_salary is that employee's PER-DAY rate (not a monthly figure),
+                  so "ฐานเงินเดือน" above is really rate * daysWorked and HR must type the day count
+                  each run. Reachable from selectedLine.payType, echoed onto PayrollLineDto by the
+                  backend precisely so this page can gate the field to the employees it applies to. */}
+              {selectedLine.payType === 'D' && (
+                <CollapsibleSection title="ค่าจ้างรายวัน" defaultOpen>
+                  <FormGrid>
+                    <label htmlFor="payroll-days-worked">
+                      จำนวนวันทำงานในงวดนี้
+                      <InfoTip
+                        label="จำนวนวันทำงานในงวดนี้"
+                        text={`พนักงานรายวัน — ค่าแรงงวดนี้ = อัตรารายวัน (${formatMoney(selectedLine.dailyRate)} บาท/วัน) x จำนวนวันทำงานที่กรอกด้านล่าง`}
+                      />
+                      <input
+                        id="payroll-days-worked"
+                        type="number"
+                        min="0"
+                        // Finding 4 fix (Opus review, 2026-07-30): frontend bound matching the
+                        // backend's @Max(31)/chk_payroll_line_days_worked_range -- no real month has
+                        // more than 31 days. Decimals stay legitimate (e.g. 21.5), so only the upper
+                        // bound is added here, step is unchanged.
+                        max="31"
+                        step="0.5"
+                        placeholder="0"
+                        value={selectedAdjustment.daysWorked}
+                        onChange={(event) => updateAdjustment('daysWorked', event.target.value)}
+                      />
+                    </label>
+                    <small className="block">
+                      อัตรารายวัน {formatMoney(selectedLine.dailyRate)} บาท/วัน
+                      {parsePayrollNumber(selectedAdjustment.daysWorked) > 0 && (
+                        <> — ค่าแรงงวดนี้โดยประมาณ {formatMoney(parsePayrollNumber(selectedAdjustment.daysWorked) * Number(selectedLine.dailyRate || 0))} บาท</>
+                      )}
+                    </small>
+                    {/* Finding 1 fix (Opus review, 2026-07-30): cheap client-side warning mirroring the
+                        server-side guard in PayrollService#requireEveryDailyRateEmployeeHasDaysWorked
+                        -- the UI warning is not the enforcement (it can always be bypassed / this panel
+                        may not even be opened), just an early nudge before HR hits Process, which then
+                        refuses the run server-side regardless. */}
+                    {!(parsePayrollNumber(selectedAdjustment.daysWorked) > 0) && (
+                      <small className="block text-warning">
+                        ⚠ ยังไม่ได้ระบุจำนวนวันทำงาน — พนักงานรายวันจะได้รับเงินเดือน ฿0 หากประมวลผลโดยไม่กรอกช่องนี้
+                      </small>
+                    )}
+                  </FormGrid>
+                </CollapsibleSection>
+              )}
 
               <CollapsibleSection
                 title="เงินพิเศษบริษัท"
