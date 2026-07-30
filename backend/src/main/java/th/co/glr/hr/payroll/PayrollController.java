@@ -80,6 +80,26 @@ public class PayrollController {
     }
 
     /**
+     * Payroll input draft (2026-07-30): HR's in-progress, not-yet-processed payroll inputs,
+     * persisted so a browser reload restores exactly what was typed. Same view/edit split as
+     * every other payroll sub-resource below (GET is HR+CEO, PUT is HR-only). Never feeds
+     * preview/process -- see PayrollService#getInputDraft/#saveInputDraft.
+     */
+    @GetMapping("/input-draft")
+    @PreAuthorize("hasAnyRole('HR','CEO')")
+    public PayrollInputDraftDtos.PayrollInputDraftResponse getInputDraft(@RequestParam String payrollMonth, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return payrollService.getInputDraft(parseMonth(payrollMonth), user);
+    }
+
+    @PutMapping("/input-draft")
+    @PreAuthorize("hasRole('HR')")
+    public PayrollInputDraftDtos.PayrollInputDraftResponse putInputDraft(@Valid @RequestBody ProcessPayrollRequest request, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return payrollService.saveInputDraft(normalizedRequest(request), user);
+    }
+
+    /**
      * Download one of the three statutory payroll files for a processed period:
      * {@code kind} ∈ {@code kbank} | {@code pnd1} | {@code sso}. Optional {@code effectiveDate}
      * (YYYY-MM-DD) is the KBank transfer / PND1 / SSO pay date; omitted falls back to the configured

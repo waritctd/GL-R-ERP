@@ -173,6 +173,12 @@ if (creditDemoTicket) {
   }
 }
 db.commissions = db.commissions || [];
+// Payroll input draft (2026-07-30): unlike preview/process below, saving a draft performs no
+// payroll/tax calculation at all -- it is a raw store of whatever HR typed -- so, unlike those,
+// it CAN be faked genuinely here rather than throwing "not supported in mock mode". Keyed on
+// `${employeeId}-${payrollMonth}`, mirroring hr.payroll_input_draft's (employee_id, payroll_month)
+// uniqueness.
+db.payrollInputDrafts = db.payrollInputDrafts || new Map();
 db.leaveTypes = db.leaveTypes || [
   // PERSONAL quota fix (2026-07-25): seeded at 3, company rule (§5.2) grants 7 paid personal
   // days/year -- see V90__leave_subday_and_contact.sql for the backend-side correction.
@@ -4748,6 +4754,27 @@ export const api = {
     async saveComponentTaxTreatments() {
       hasRole('hr');
       throw new Error('บันทึกการจัดประเภทภาษีหัก ณ ที่จ่ายไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    // Payroll input draft (2026-07-30): a genuine in-memory implementation, unlike
+    // preview/process/exportFile above -- saving a draft performs no payroll/tax calculation at
+    // all (it is a raw store of whatever HR typed), so it can be faked correctly rather than
+    // fabricating financial figures. Same view/edit split as the rest of this namespace.
+    async getInputDraft(params = {}) {
+      hasRole('hr', 'ceo');
+      const month = params.payrollMonth ? `${params.payrollMonth}-01` : null;
+      const drafts = month
+        ? [...db.payrollInputDrafts.values()].filter((row) => row.payrollMonth === month)
+        : [];
+      return delay({ payrollMonth: month, drafts: drafts.map((row) => row.input) });
+    },
+    async saveInputDraft(payload = {}) {
+      hasRole('hr');
+      const month = payload.payrollMonth ? `${payload.payrollMonth}`.slice(0, 7) + '-01' : null;
+      (payload.inputs || []).forEach((input) => {
+        if (input?.employeeId == null || !month) return;
+        db.payrollInputDrafts.set(`${input.employeeId}-${month}`, { payrollMonth: month, input });
+      });
+      return this.getInputDraft({ payrollMonth: month ? month.slice(0, 7) : null });
     },
   },
 
