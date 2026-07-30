@@ -134,9 +134,10 @@ components:
 > document is the visual law; the machine-readable token values live in the
 > frontmatter above and in `frontend/src/index.css` (`@theme`). Deeper working
 > specs — the semantic token table, per-status presentation, per-component
-> contracts, and the legacy-CSS migration plan — live under
-> [`docs/ui-repair/03-design-foundation/`](docs/ui-repair/03-design-foundation/).
-> No production screen is restyled from this document before Phase 4.
+> contracts, and the legacy-CSS migration plan — used to live under
+> `docs/ui-repair/03-design-foundation/`, retired in 2026-07. This document and
+> `frontend/src/index.css` are now the source of truth; the retired specs remain
+> readable in git history.
 
 ## 1. Creative north star
 
@@ -181,7 +182,7 @@ Density is expressed through three tuned levels, chosen by surface, not by toggl
 - **Default** — panels, forms, detail records, worklists. `20px` panel padding, `14px` body, comfortable field spacing. The everyday working density.
 - **Roomy** — approval tasks, empty states, first-run, confirm dialogs, and the mobile/floor surfaces. Bigger targets, more air, one decision in focus.
 
-Precise recommendations (elaborated in [`03-design-foundation/TOKENS.md`](docs/ui-repair/03-design-foundation/TOKENS.md) §Density):
+Precise recommendations (elaborated in ``03-design-foundation/TOKENS.md`` §Density):
 - **Table rows** — Dense (13px pad); sticky header; never wrap, truncate + tooltip.
 - **Form controls** — Default field spacing; 40px input height; 16px input font (iOS no-zoom).
 - **Page headings** — one Title (16px/800) per panel, one Display (34px) per screen at most.
@@ -233,7 +234,7 @@ Ramp (values in the frontmatter / `index.css`):
 - **Overline** 11px/800/0.04em/UPPERCASE — table column headers, small eyebrows. **The only place uppercase tracking is allowed.**
 - **Mono** 13px/400 — codes, reference numbers, currency figures needing alignment.
 
-**Available weights are 300–500–700** (the CDN loads Sarabun 300/400/500/600/700). The ramp uses **400 / 700**, and calls for **800**; 800 is not in the loaded set, so it currently falls back to the nearest available (700) — a real gap flagged in §18 and [`TOKENS.md`](docs/ui-repair/03-design-foundation/TOKENS.md). Either load 800 or retune "800" heads to 700; do not assume 800 renders today.
+**Available weights are 300–500–700** (the CDN loads Sarabun 300/400/500/600/700). The ramp uses **400 / 700**, and calls for **800**; 800 is not in the loaded set, so it currently falls back to the nearest available (700) — a real gap flagged in §18 and ``TOKENS.md``. Either load 800 or retune "800" heads to 700; do not assume 800 renders today.
 
 **Named rules:**
 - **The Weight-Not-Family Rule.** More contrast → go heavier or larger within Sarabun; never introduce a display or serif font into UI labels, buttons, or data.
@@ -328,9 +329,9 @@ Sturdy, legible, correct. One shared `FormField` vocabulary.
 
 Two distinct layers, both text-first:
 
-**(a) Backend lifecycle status** — the persisted value (ticket status, `PricingRequestStatus`, `LeaveStatus`, `CommissionStatus`, …). Shown as a `StatusBadge`: a pill with tinted bg + matching dark text + Thai label, always text (never colour-only). Backend statuses are **many**; they do **not** each get a unique colour — they map onto a small semantic set (neutral / info / success / warning / danger). Full mapping in [`STATUS_PRESENTATION.md`](docs/ui-repair/03-design-foundation/STATUS_PRESENTATION.md).
+**(a) Backend lifecycle status** — the persisted value (ticket status, `PricingRequestStatus`, `LeaveStatus`, `CommissionStatus`, …). Shown as a `StatusBadge`: a pill with tinted bg + matching dark text + Thai label, always text (never colour-only). Backend statuses are **many**; they do **not** each get a unique colour — they map onto a small semantic set (neutral / info / success / warning / danger). Full mapping in ``STATUS_PRESENTATION.md``.
 
-**(b) UX work-state** — the *computed* "whose move is it?" classification, per viewer, from data the app already has (never a new backend status). The nine states (from [`02-information-architecture/WORK_STATE_MODEL.md`](docs/ui-repair/02-information-architecture/WORK_STATE_MODEL.md)): **Needs-my-action, Waiting, Blocked, Overdue, Draft, Completed, Cancelled, Returned, Informational.** Rules:
+**(b) UX work-state** — the *computed* "whose move is it?" classification, per viewer, from data the app already has (never a new backend status). The nine states (from ``02-information-architecture/WORK_STATE_MODEL.md``): **Needs-my-action, Waiting, Blocked, Overdue, Draft, Completed, Cancelled, Returned, Informational.** Rules:
 
 - **Mine-to-act** (Needs-my-action / Overdue / Returned) reads with the highest weight and sits at the top of every worklist. **Waiting / Informational** are muted — visible, not urgent. **Completed / Cancelled** are archived-tone (greyed, struck).
 - **Overdue is a modifier**, an escalation of the underlying state, not a slot of its own.
@@ -355,7 +356,7 @@ Two distinct layers, both text-first:
 - **Landing stat rows** reflow to a wrapping 2-up grid or a summary line — never a clipping horizontal scroll (fixes F-12).
 - **Actions** are thumb-reachable, ≥44px; the cva `<Button>` carries the 44px floor (legacy `.*-button` may not — a migration target).
 - **Multi-step creation** is a full-screen sheet, not a modal (§16).
-- **The tablet band (721–1040px) is a first-class surface**, currently the weakest (F-01): the shell must keep a labelled rail longer *or* present a true icon-rail with tooltips and fully-suppressed group-header text — never fragmented labels. See §responsive in [`TOKENS.md`](docs/ui-repair/03-design-foundation/TOKENS.md).
+- **The tablet band (721–1040px) is a first-class surface**, currently the weakest (F-01): the shell must keep a labelled rail longer *or* present a true icon-rail with tooltips and fully-suppressed group-header text — never fragmented labels. See §responsive in ``TOKENS.md``.
 - **Payroll is desktop-only by design** (a month-end grid) and says so via `DesktopOnlyNotice` — an accepted, labelled exception, not a bug.
 
 ## 18. Thai-content rules
@@ -426,7 +427,7 @@ Every Phase-4 change ships **desktop (1366) and mobile (390)** before/after scre
 
 ## Appendix — palette reference
 
-A cool, rationed palette: neutral workspace and white surfaces carry the work, indigo and teal do the pointing, and semantic colors are reserved for state. (Machine-readable values in the frontmatter and `index.css`; the semantic-token table with contrast ratios and prohibited uses is in [`TOKENS.md`](docs/ui-repair/03-design-foundation/TOKENS.md).)
+A cool, rationed palette: neutral workspace and white surfaces carry the work, indigo and teal do the pointing, and semantic colors are reserved for state. (Machine-readable values in the frontmatter and `index.css`; the semantic-token table with contrast ratios and prohibited uses is in ``TOKENS.md``.)
 
 A cool, rationed palette: neutral workspace and white surfaces carry the work, indigo and teal do the pointing, and semantic colors are reserved for state.
 
