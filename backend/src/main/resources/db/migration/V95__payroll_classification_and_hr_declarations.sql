@@ -2,7 +2,7 @@ SET search_path = hr, public;
 
 -- ---------------------------------------------------------------------
 -- Payroll withholding classification + HR declaration schema.
--- Owner decisions 2026-07-29 -- see docs/agent-handoffs/118_feat-payroll-
+-- Owner decisions 2026-07-29 -- see docs/agent-handoffs/119_feat-payroll-
 -- classification-and-hr-declarations.md for the full specification and
 -- the production facts (queried read-only against tdyzcqzxmhtxpbouewud)
 -- that back every default and cap below.

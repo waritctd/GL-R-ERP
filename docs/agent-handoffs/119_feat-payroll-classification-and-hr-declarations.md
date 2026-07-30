@@ -1743,7 +1743,7 @@ the checkbox that gates on it being `> 0` disappeared with it, and a reprocess o
 silently stopped re-netting the commission — net pay would change with no HR action.
 
 **Fix**: new column `hr.payroll_line.customer_return_requested`
-(`V102__payroll_customer_return_requested_amount.sql`, non-negative CHECK, one-time backfill from
+(`V101__payroll_customer_return_requested_amount.sql`, non-negative CHECK, one-time backfill from
 `customer_return_deduction` for already-processed lines) always echoes the raw entered amount,
 regardless of `customerReturnAlreadyEarned`. `customer_return_deduction`'s existing post-tax-bookkeeping
 meaning is UNCHANGED (0 in the unearned path, full amount in the already-earned path) — the
@@ -1896,7 +1896,7 @@ within its text are self-referential prose, not links, so nothing else needed up
 
 | File | Change |
 |---|---|
-| `V102__payroll_customer_return_requested_amount.sql` | new — D1 (`customer_return_requested` column, non-negative CHECK, one-time backfill) |
+| `V101__payroll_customer_return_requested_amount.sql` | new — D1 (`customer_return_requested` column, non-negative CHECK, one-time backfill) |
 | `PayrollService.java` | Finding 1 (`hasBeenOnboardedForPayroll` polarity), D1 (`calculateLine` trailing arg), Minor (`upsertComponentTaxTreatments` validation) |
 | `PayrollRepository.java` | D2 (`findComponentTaxTreatmentsByEmployee` per-component `DISTINCT ON`), D1 (SELECT/INSERT/`mapLine` for the new column) |
 | `PayrollLineDto.java` | D1 (`customerReturnRequested` field appended; new 58-arg legacy constructor) |
@@ -2009,3 +2009,121 @@ altered. `PayrollService`'s existing `PAYROLL_VIEW_ROLES`/`PAYROLL_EDIT_ROLES`, 
 > (`PayrollService.java` ~line 392, unearned-customer-return truncation) and Finding 3 (V100's default,
 > known risk 1 above) with the owner — both are business decisions, not engineering guesses; (4) rebase
 > onto whatever `origin/main` has moved to by then before merging, per the standing rule.
+
+---
+
+## Progress — task 7 (final: F1 blocker, scope split, sixth review)
+
+### Files changed
+
+| Path | What changed |
+|---|---|
+| `PayrollService.java` | `treatmentsFor` resolves per MISSING component via new `mergeWithDefaults`, replacing an all-or-nothing per-employee short-circuit. `ssoInclusionFor` synthesizes company-wide defaults when an employee has no inclusion rows. `componentTaxTreatmentsSnapshot` now returns the EFFECTIVE map so the matrix screen stops reporting "unclassified" for components the engine is defaulting. |
+| `PayrollPage.jsx` | Matrix cells distinguish an HR-set value from a synthesized default (`ค่าเริ่มต้นของระบบ` hint). |
+| `V95`, `V96` | Comment-only: stale `118_…md` handoff pointers corrected to `119_`. |
+| `db/migration-demo/V21` | Comment-only: removed a false claim that `findActiveEmployees` excludes `DEMO-%` (only a NULL salary excludes them). |
+| Tests | `PayrollPartialClassificationCliffReviewTest` (reviewer's, kept verbatim, now GREEN) · `PayrollStoredTreatmentBeatsDefaultReviewTest` (pins the second direction of the contract) · a rebuilt-uat population test · a frontend default-hint test · `PayrollExcelReconciliationTest` SSO fixture. |
+
+### Commands run
+
+`./mvnw -B -Dtest.fork.count=1 clean verify` · `npm run lint` · `npm test -- --run` · `npm run build`
+
+⚠️ **Use `-Dtest.fork.count=1`.** The default `fork.count=2` produces ~416 spurious infrastructure
+errors on this machine (`Admin SQL failed: DROP DATABASE IF EXISTS wrk_it`), unrelated to any defect.
+
+### Tests / build results
+
+- Backend: **BUILD SUCCESS, 1385 tests, 0 failures, 0 errors, 0 skipped.** Integration tests **RAN**
+  on Testcontainers 2.0.5 (64 IT classes), Flyway to v101. Not `TEST_DB_URL`.
+- Frontend: **784 tests / 72 files passed**; lint 0 errors + 1 pre-existing warning
+  (`PayrollPage.jsx:480`, `useEffect`/`load`, unrelated); build clean.
+- The accountant's `2026.xlsx` figures are **unchanged** — verified by numeric-literal diff against
+  `origin/main`; `MAY_2026` byte-identical, 7/7 green.
+
+### Authz evidence
+
+**No authorization change in this task.** The endpoint added in task 6 is double-gated
+(`@PreAuthorize` + `requireRole`) with real-DB filter-chain tests. Reported honestly: mutating a
+single layer yields ZERO failures — only mutating BOTH goes red. So each gate is individually
+unproven by the suite; they are proven only in combination.
+
+**Mock mode cannot verify any of this branch's frontend work.** `mockApi.payroll.current()` returns a
+null period, so the detail panel renders `EmptyState` and none of the new inputs exist in the DOM;
+`saveComponentTaxTreatments` throws by design. Every frontend claim rests on unit tests and code
+reading, never on driving the page.
+
+### SPECIFIED BUT NOT DELIVERED — reopened, split to a follow-up branch
+
+Owner decision 2026-07-30. **A repository writer with zero callers is NOT a delivered feature.**
+Mistaking plumbing for a feature caused four of this branch's ten defects.
+
+| Spec | Status | Waiting on |
+|---|---|---|
+| §5 / §10 — HR-tickable SSO inclusion matrix | **NOT delivered** | `upsertComponentSsoInclusion` (`PayrollRepository.java:874`) has zero `src/main` callers, no controller mapping, nothing in `hrApi.js` or `PayrollPage.jsx`. HR cannot edit SSO inclusion at all. |
+| §3 — declaration-verification state machine | **NOT delivered** | `setTaxAllowanceVerificationDeadline` / `markTaxAllowanceVerified` / `expireTaxAllowanceVerification` have zero callers, so `GRANDFATHERED_UNVERIFIED` is permanent and the deadline inert. |
+| §2 — ฿190,000 HR reminder wording | **NOT delivered** | Absent from `frontend/src` entirely. (The engine correctly does NOT apply the exemption — that part is right.) |
+
+### Known risks
+
+1. **`findComponentSsoInclusionByEmployee` (`PayrollRepository.java:865`) still resolves per-EMPLOYEE
+   `MAX(tax_year)`, not per (employee, component)** — unlike its tax-treatment sibling, which was fixed.
+   Latent ONLY because the writer has no caller. **Fix in lockstep with the §5/§10 writer above**:
+   there the consequence is a silently wrong SSO wage base, i.e. money, not a loud 409.
+2. **V100 defaults ~500 of ~544 employee×component pairs to `EXTRA_CUMULATIVE_ACTUAL`** (V98 evidences
+   only 44). Annual total is correct, but for a genuinely fixed monthly allowance withholding is
+   **back-loaded** with the catch-up in December — on a modest December salary that can drive net pay
+   near zero, the same shape as the real June 2026 negative-net incident. Mitigated by HR reclassifying
+   on the matrix screen. Promoting the recurring ones is the owner's call.
+3. `EXTRA_KNOWN_FREQUENCY` assumes a count of 1; nothing stores one, so two bonuses in a year
+   under-project.
+4. **117's `headCountFor` per-head allowance residual is OPEN** — `PayrollService` still mints a head
+   count from the run-body amount, so a ฿300,000 declaration divides to ten children and manufactures
+   its own cap. Pre-existing, pinned by test, not this branch's.
+5. F9: an unearned customer return larger than the period's commission truncates via `.max(ZERO)`,
+   losing the remainder. Owner-deferred to the ข้อ 13 carry-forward branch.
+6. `fullAnnualProjection` builds the expense/allowance caps from this period's known-limb amount while
+   stage 3 builds its base from the known-limb YTD. Immaterial while the expense deduction sits at its
+   ฿100,000 cap; wrong once a percentage-capped allowance (RMF/ThaiESG 30%, donation 10%) is declared.
+7. ป.96 **ข้อ 2.10 (leaver final-period true-up) is unimplemented** — `13 − month` always assumes work
+   to December, with no leaver detection.
+8. V98's carry-forward seed covers **16 employees / 44 rows** (not "29 of 34" as an earlier comment
+   claimed); five workbook names were deliberately left unresolved pending the owner.
+9. **In-place comment edits to V95–V101 change Flyway checksums.** Absorbed by
+   `validate-on-migrate: false` on the prod/uat profiles. A locally-migrated dev DB on the default
+   profile needs a Flyway repair.
+10. **The `PayrollExcelReconciliationTest` SSO fixture cannot evidence the workbook's SSO semantics** —
+    every `MAY_2026` salary saturates the ฿17,500 ceiling, so SSO is ฿875 whichever way the พิเศษ block
+    is classified. Do not read that fixture as proof of the sheet's AF column.
+
+### Deploy
+
+**uat: migrate IN PLACE, do NOT rebuild** (owner decision). In-place is also the safer path on the
+merits — V96/V97/V100/V101 apply to a populated uat, so existing employees get real stored rows rather
+than synthesized ones. A rebuilt uat *does* now work (proven by the sixth review's population test:
+raw-SQL employees untouched by any backfill, HR classifies one cell, all lines still produced with
+non-zero SSO) but has only been exercised at 3 employees, not V900's 91.
+
+V95–V101 have never been applied to any real database. Production is at V94.
+
+### The exact next prompt for the next agent
+
+> Branch from latest `origin/main` (after PR #349 merges) as
+> `feat/payroll-hr-declaration-surfaces`. Migrations must start **above V102** — branch
+> `feat/commission-documentation-gate` holds V102.
+>
+> Deliver the three surfaces branch 119 specified but did not build, each with its own review:
+> **(1)** §5/§10 — the HR-tickable SSO inclusion matrix. Wire `upsertComponentSsoInclusion` to a
+> controller mapping, `hrApi.js` and a screen. **In the same change, fix
+> `findComponentSsoInclusionByEmployee` to resolve per (employee, component)** — it is per-employee
+> today and arming the writer without that fix yields a silently wrong SSO wage base. Employee 10080
+> (salary ฿30,000 plus a director fee) is the case this exists for.
+> **(2)** §3 — the declaration-verification state machine: a route from `GRANDFATHERED_UNVERIFIED` to
+> `VERIFIED`, the deadline computed and enforced, and only verified declarations effective for the
+> payroll month affecting tax.
+> **(3)** §2 — the owner-approved ฿190,000 HR reminder wording.
+>
+> Each touches who may read or write whose rows, so each needs a real-DB integration test through the
+> real Java service, written wrong-way-round and mutation-checked. **Verify every field is reachable
+> from the UI and survives a reload** — six of this branch's ten defects were backend-complete features
+> with no input on the page, or values that did not round-trip. Ask "who calls this?" before "is this
+> correct?".

@@ -3,7 +3,7 @@ SET search_path = hr, public;
 -- ---------------------------------------------------------------------
 -- Task 2 of the payroll withholding rework -- schema support for the
 -- per-employee, per-component PayrollCalculator rewrite. See
--- docs/agent-handoffs/118_feat-payroll-classification-and-hr-declarations.md
+-- docs/agent-handoffs/119_feat-payroll-classification-and-hr-declarations.md
 -- (owner decisions 2026-07-29) and the "task 2" progress section appended
 -- to that file for the full design.
 -- ---------------------------------------------------------------------

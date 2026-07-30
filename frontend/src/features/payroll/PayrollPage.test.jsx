@@ -678,5 +678,40 @@ describe('PayrollPage adjustment inputs', () => {
         { employeeId: 1, component: 'SPECIAL_PAY_1', taxTreatment: 'REGULAR_REPROJECT' },
       ]));
     });
+
+    // Sixth Opus review, 2026-07-30: `byComponent` now carries the EFFECTIVE classification
+    // (server-synthesized defaults merged in), so every cell renders non-blank and the section badge
+    // reads "จัดประเภทครบแล้ว" even when nobody has chosen anything. The per-cell
+    // "ค่าเริ่มต้นของระบบ" hint, keyed off `explicitlyClassifiedComponents`, is the ONLY thing left
+    // that tells HR "the system is defaulting this" from "someone chose this" — the branch's own
+    // stated back-loading-risk mitigation. It shipped with no test; this is it, written wrong-way-round
+    // (the explicitly-classified cell must NOT carry the hint).
+    it('flags a synthesized default but not a cell HR actually classified', async () => {
+      api.payroll.getComponentTaxTreatments.mockResolvedValue({
+        taxYear: 2026,
+        items: [{
+          employeeId: 1,
+          employeeCode: 'GLR-001',
+          employeeName: 'พนักงาน ทดสอบ',
+          byComponent: {
+            SPECIAL_PAY_1: 'EXTRA_CUMULATIVE_ACTUAL',
+            SPECIAL_PAY_2: 'REGULAR_REPROJECT',
+          },
+          explicitlyClassifiedComponents: ['SPECIAL_PAY_2'],
+        }],
+      });
+      renderPayrollPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /การจัดประเภทภาษีหัก ณ ที่จ่าย/ }));
+      fireEvent.click(await screen.findByRole('button', { name: /พนักงาน ทดสอบ \(GLR-001\)/ }));
+
+      const defaulted = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/, { selector: 'select' });
+      const chosenByHr = await screen.findByLabelText(/พิเศษ 2 \(ค่าเช่าบ้าน\)/, { selector: 'select' });
+
+      expect(defaulted.value).toBe('EXTRA_CUMULATIVE_ACTUAL');
+      expect(chosenByHr.value).toBe('REGULAR_REPROJECT');
+      expect(defaulted.closest('label').textContent).toContain('ค่าเริ่มต้นของระบบ');
+      expect(chosenByHr.closest('label').textContent).not.toContain('ค่าเริ่มต้นของระบบ');
+    });
   });
 });

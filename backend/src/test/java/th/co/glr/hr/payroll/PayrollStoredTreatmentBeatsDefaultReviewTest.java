@@ -148,10 +148,15 @@ class PayrollStoredTreatmentBeatsDefaultReviewTest extends AbstractPostgresInteg
         long untouchedB = seedEmployee("UAT-903", "ค", "ยูเอที", new BigDecimal("32000.00"));
         when(commissionService.payrollCommissionTotalsByEmployee(JANUARY)).thenReturn(Map.of());
 
+        // TWO non-zero components each, and HR classifies only ONE of them below. That asymmetry is
+        // what gives this test teeth: with a single non-zero component that HR then classifies, the
+        // pre-fix all-or-nothing resolution would ALSO have passed (nothing else was non-zero), so the
+        // test would prove nothing. พิเศษ 3 stands in for V902's approved overtime -- a non-zero
+        // component nobody classified.
         ProcessPayrollRequest request = new ProcessPayrollRequest(JANUARY, List.of(
-            specialPay1Of(untouchedA, new BigDecimal("1500.00")),
-            specialPay1Of(editedByHr, new BigDecimal("2000.00")),
-            specialPay1Of(untouchedB, new BigDecimal("2500.00"))));
+            specialPaysOf(untouchedA, new BigDecimal("1500.00"), new BigDecimal("900.00")),
+            specialPaysOf(editedByHr, new BigDecimal("2000.00"), new BigDecimal("1100.00")),
+            specialPaysOf(untouchedB, new BigDecimal("2500.00"), new BigDecimal("1300.00"))));
 
         // HR opens the matrix on a fresh uat and classifies ONE cell for ONE employee. PayrollPage's
         // save() sends only that diff, through this exact service method.
@@ -178,10 +183,16 @@ class PayrollStoredTreatmentBeatsDefaultReviewTest extends AbstractPostgresInteg
     // ------------------------------------------------------------------
 
     private PayrollEmployeeInputRequest specialPay1Of(long employeeId, BigDecimal specialPay1) {
+        return specialPaysOf(employeeId, specialPay1, BigDecimal.ZERO);
+    }
+
+    private PayrollEmployeeInputRequest specialPaysOf(
+        long employeeId, BigDecimal specialPay1, BigDecimal specialPay3
+    ) {
         BigDecimal zero = BigDecimal.ZERO;
         return new PayrollEmployeeInputRequest(
             employeeId,
-            specialPay1, zero, zero, zero, zero, zero, zero, zero, zero, // specialPay1-9
+            specialPay1, zero, specialPay3, zero, zero, zero, zero, zero, zero, // specialPay1-9
             zero, // nonTaxableIncome
             zero, // unpaidLeaveDays
             zero, // studentLoanDeduction
