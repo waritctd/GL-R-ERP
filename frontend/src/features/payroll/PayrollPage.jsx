@@ -22,12 +22,15 @@ import { formatMoney, formatShortDate, formatThaiMonthYearFromMonthInputValue, p
 // than wrapping a <section> inside an <aside> or changing the shared primitive.
 const PANEL_CLASS = 'bg-surface border border-border rounded-md shadow-sm p-5';
 
-// The three statutory files HR can generate for a processed period. `value` is the backend export
-// slug (/api/payroll/{id}/export/{value}); `filePrefix` names the downloaded blob.
+// The payroll export files HR can generate for a processed period. `value` is the backend export
+// slug (/api/payroll/{id}/export/{value}); `filePrefix` names the downloaded blob; `extension`
+// matches PayrollExportKind's own file extension (the three statutory kinds are CP874 .txt,
+// payroll-detail is a real xlsx workbook -- see PayrollController#export's javadoc).
 const EXPORT_KINDS = [
-  { value: 'kbank', label: 'KBank Payroll', filePrefix: 'PCT' },
-  { value: 'pnd1', label: 'ภ.ง.ด.1', filePrefix: 'Pnd1' },
-  { value: 'sso', label: 'ประกันสังคม (สปส.1-10)', filePrefix: 'SPS1-10' },
+  { value: 'kbank', label: 'KBank Payroll', filePrefix: 'PCT', extension: 'txt' },
+  { value: 'pnd1', label: 'ภ.ง.ด.1', filePrefix: 'Pnd1', extension: 'txt' },
+  { value: 'sso', label: 'ประกันสังคม (สปส.1-10)', filePrefix: 'SPS1-10', extension: 'txt' },
+  { value: 'payroll-detail', label: 'รายละเอียดเงินเดือนรายเดือน (Excel)', filePrefix: 'PayrollDetail', extension: 'xlsx' },
 ];
 
 const payrollColumns = [
@@ -656,17 +659,44 @@ export function PayrollPage({ showToast }) {
   }
 
   async function generateExportFile() {
-    if (!period?.id) return;
     const kind = EXPORT_KINDS.find((item) => item.value === exportKind) || EXPORT_KINDS[0];
+    const isDetailKind = kind.value === 'payroll-detail';
+    // KBank/PND1/SSO genuinely need a processed, paid period -- unchanged. payroll-detail must
+    // also work for a month that has never been processed (owner requirement, 2026-07-30: "July
+    // 2026 is live and still unprocessed... HR's whole reason to want this file is to review the
+    // month BEFORE committing it"), so it only requires SOME period to be loaded (lineCount > 0),
+    // not a persisted id.
+    if (isDetailKind ? !(period?.lineCount > 0) : !period?.id) return;
     setSaving(true);
     try {
-      // The backend returns raw CP874 bytes; exportFile fetches them as a binary blob so the Thai
-      // encoding survives the download intact. payDate is the salary pay/transfer date.
-      const blob = await api.payroll.exportFile(period.id, kind.value, payDate || undefined);
-      downloadBlob(blob, `${kind.filePrefix}-${month}.txt`);
+      // The three statutory kinds return raw CP874 bytes; payroll-detail returns a real xlsx
+      // workbook. Either way the result is fetched as a binary blob so the bytes survive the
+      // download intact. payDate is the salary pay/transfer date (payroll-detail just stamps it
+      // into the filename).
+      const blob = period?.id
+        ? await api.payroll.exportFile(period.id, kind.value, payDate || undefined)
+        // No persisted period (a fresh, unprocessed month) -- POST the same payrollMonth/inputs
+        // payload the Preview/Process buttons already send, so the workbook's figures are
+        // guaranteed to equal whatever the on-screen preview shows for the same inputs.
+        : await api.payroll.exportPreviewFile(payload(), kind.value, payDate || undefined);
+      downloadBlob(blob, `${kind.filePrefix}-${month}.${kind.extension}`);
       showToast('success', `ดาวน์โหลดไฟล์ ${kind.label} แล้ว`);
     } catch (error) {
       showToast('error', error.message || 'ดาวน์โหลดไฟล์ไม่สำเร็จ');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function downloadPayslipsZip() {
+    if (!period?.id || period?.status !== 'PROCESSED') return;
+    setSaving(true);
+    try {
+      const blob = await api.payroll.downloadPayslipsZip(period.id);
+      downloadBlob(blob, `glr-payslips-${month}.zip`);
+      showToast('success', 'ดาวน์โหลดสลิปเงินเดือนทั้งหมดแล้ว');
+    } catch (error) {
+      showToast('error', error.message || 'ดาวน์โหลดสลิปเงินเดือนทั้งหมดไม่สำเร็จ');
     } finally {
       setSaving(false);
     }
@@ -836,12 +866,17 @@ export function PayrollPage({ showToast }) {
             )}
           </div>
 
-          {/* Export — statutory file generation. */}
+          {/* Export — statutory file generation, plus the detail xlsx which also works pre-process. */}
           <div className="payroll-actions-group">
             <select
               value={exportKind}
               onChange={(event) => setExportKind(event.target.value)}
-              disabled={!period?.id || saving}
+              // Deliberately keyed on lineCount, NOT period?.id: HR must be able to pick
+              // "payroll-detail" from this SAME dropdown before a month has ever been processed
+              // (period.id is null) -- gating the select itself on period?.id would make that
+              // option unreachable. The per-kind requirement (detail vs the three statutory
+              // kinds) is instead enforced on the download button below.
+              disabled={saving || !(period?.lineCount > 0)}
               aria-label="ประเภทไฟล์ที่จะสร้าง"
             >
               {EXPORT_KINDS.map((kind) => (
@@ -854,18 +889,36 @@ export function PayrollPage({ showToast }) {
                 type="date"
                 value={payDate}
                 onChange={(event) => setPayDate(event.target.value)}
-                disabled={!period?.id || saving}
+                disabled={saving || !(period?.lineCount > 0)}
               />
               <small className="font-normal text-text-muted">({formatShortDate(payDate)})</small>
             </label>
-            <Button type="button" variant="secondary" onClick={generateExportFile} disabled={!period?.id || saving}>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={generateExportFile}
+              disabled={saving || (exportKind === 'payroll-detail' ? !(period?.lineCount > 0) : !period?.id)}
+            >
               <Icon name="fileText" />
               ดาวน์โหลดไฟล์
             </Button>
           </div>
 
-          {/* Send — notify employees. */}
+          {/* Send — notify employees. The bulk ZIP sits next to the email button so the
+              review-then-send order is obvious: check the whole batch, THEN distribute it.
+              Unlike the detail xlsx export above, this requires a genuinely PROCESSED period --
+              a payslip is a document about money actually paid, and generating 30 of them from an
+              uncommitted preview would let HR circulate paperwork for a run that never happened. */}
           <div className="payroll-actions-group">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={downloadPayslipsZip}
+              disabled={!period?.id || period?.status !== 'PROCESSED' || saving}
+            >
+              <Icon name="fileText" />
+              ดาวน์โหลดสลิปเงินเดือนทั้งหมด
+            </Button>
             <Button type="button" variant="secondary" onClick={distributePayslips} disabled={!period?.id || saving}>
               <Icon name="mail" />
               ส่งอีเมลสลิปเงินเดือน

@@ -15,6 +15,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
@@ -26,6 +27,7 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.payroll.export.KBankPctExporter;
+import th.co.glr.hr.payroll.export.PayrollDetailExporter;
 import th.co.glr.hr.payroll.export.PayrollExportFile;
 import th.co.glr.hr.payroll.export.PayrollExportKind;
 import th.co.glr.hr.payroll.export.PayrollExportRow;
@@ -50,6 +52,7 @@ class PayrollServiceTest {
         new KBankPctExporter(),
         new Pnd1Exporter(),
         new SsoExporter(),
+        new PayrollDetailExporter(),
         appProperties
     );
 
@@ -109,6 +112,155 @@ class PayrollServiceTest {
 
         assertThat(file.fileName()).isEqualTo("PCT260626.txt");
         assertThat(new String(file.content(), th.co.glr.hr.payroll.export.Cp874.CHARSET)).startsWith("HPCT");
+    }
+
+    @Test
+    void payrollDetailExportProducesAnXlsxWorkbookWithHeaderKnownRowAndCorrectTotals() throws Exception {
+        PayrollLineDto first = line(123L, 42L, "HR หนึ่ง");
+        PayrollLineDto second = line(124L, 43L, "HR สอง");
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period(List.of(first, second))));
+        when(payrollRepository.findLines(99L)).thenReturn(List.of(first, second));
+        when(payrollRepository.findDetailIdentity(java.util.Set.of(42L, 43L))).thenReturn(Map.of());
+
+        PayrollExportFile file = service.export(PayrollExportKind.PAYROLL_DETAIL, 99L, LocalDate.of(2026, 6, 26), hrUser());
+
+        assertThat(file.fileName()).isEqualTo("PayrollDetail260626.xlsx");
+        assertThat(file.kind().contentType())
+            .isEqualTo("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+
+        try (var workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook(
+                new java.io.ByteArrayInputStream(file.content()))) {
+            org.apache.poi.ss.usermodel.Sheet sheet = workbook.getSheetAt(0);
+            org.apache.poi.ss.usermodel.Row headerRow = sheet.getRow(0);
+            Map<String, Integer> columnIndex = new java.util.HashMap<>();
+            for (org.apache.poi.ss.usermodel.Cell cell : headerRow) {
+                columnIndex.put(cell.getStringCellValue(), cell.getColumnIndex());
+            }
+            // Thai headers survive real UTF-8 (xlsx), unlike the CP874 text exporters.
+            assertThat(columnIndex).containsKeys(
+                "รหัสพนักงาน", "ชื่อ", "เงินเดือน", "พิเศษ 7 (คอมมิชชั่น)", "ค่าคอมมิชชั่น (ระบบขาย)",
+                "รวมรายได้ที่ต้องคิดภาษี (A)", "คงเหลือจ่ายจริง (A-B-C+D)");
+
+            org.apache.poi.ss.usermodel.Row dataRow = sheet.getRow(1);
+            assertThat(dataRow.getCell(columnIndex.get("รหัสพนักงาน")).getStringCellValue()).isEqualTo("GLR-42");
+            assertThat(dataRow.getCell(columnIndex.get("ชื่อ")).getStringCellValue()).isEqualTo("HR หนึ่ง");
+            assertThat(dataRow.getCell(columnIndex.get("เงินเดือน")).getNumericCellValue()).isEqualTo(40000.00);
+            assertThat(dataRow.getCell(columnIndex.get("คงเหลือจ่ายจริง (A-B-C+D)")).getNumericCellValue())
+                .isEqualTo(30000.00);
+
+            int totalsRowIdx = sheet.getLastRowNum();
+            org.apache.poi.ss.usermodel.Row totalsRow = sheet.getRow(totalsRowIdx);
+            assertThat(totalsRow.getCell(columnIndex.get("เงินเดือน")).getNumericCellValue())
+                .as("totals row must equal the sum of the two data rows' เงินเดือน")
+                .isEqualTo(80000.00);
+            assertThat(totalsRow.getCell(columnIndex.get("คงเหลือจ่ายจริง (A-B-C+D)")).getNumericCellValue())
+                .isEqualTo(60000.00);
+        }
+    }
+
+    @Test
+    void payrollDetailExportOnAVoidedPeriodRecomputesRatherThanTrustingStaleLinesNo500() {
+        // No lines at all (the empty-employees case, matching hrProcessingPayrollRecordsAuditTrail's
+        // stubbing below) is enough to prove the reconstruct-and-recompute path (see
+        // PayrollService#export's PAYROLL_DETAIL/VOID branch) doesn't 500 -- the meaningful "stale
+        // figures get discarded, not trusted" case is covered end-to-end against real Postgres by
+        // PayrollDetailExportVoidRecomputeIntegrationTest.
+        PayrollPeriodDto voided = new PayrollPeriodDto(
+            99L, LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30),
+            LocalDate.of(2026, 6, 30), "VOID", OffsetDateTime.now(), 7L, 0,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, List.of());
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(voided));
+        when(payrollRepository.findActiveEmployees()).thenReturn(List.of());
+        when(payrollRepository.findApprovedOvertimePayByEmployee(LocalDate.of(2026, 6, 1))).thenReturn(Map.of());
+        when(payrollRepository.findYearToDateByEmployee(LocalDate.of(2026, 6, 1))).thenReturn(Map.of());
+        when(payrollRepository.findDetailIdentity(java.util.Set.of())).thenReturn(Map.of());
+
+        PayrollExportFile file = service.export(PayrollExportKind.PAYROLL_DETAIL, 99L, LocalDate.of(2026, 6, 26), hrUser());
+
+        assertThat(file.fileName()).isEqualTo("PayrollDetail260626.xlsx");
+    }
+
+    @Test
+    void exportDetailPreviewComputesFromTheSameLivePreviewPathWithNoPersistedPeriod() {
+        // Owner requirement (2026-07-30): July 2026 is live and unprocessed, so HR must be able to
+        // download the detail workbook for a month that has never been saved at all -- no periodId
+        // exists to key a GET off. This goes straight through the private preview() computation, so
+        // stubs mirror hrProcessingPayrollRecordsAuditTrail's (a live preview with zero employees).
+        when(payrollRepository.findActiveEmployees()).thenReturn(List.of());
+        when(payrollRepository.findApprovedOvertimePayByEmployee(LocalDate.of(2026, 7, 1))).thenReturn(Map.of());
+        when(payrollRepository.findYearToDateByEmployee(LocalDate.of(2026, 7, 1))).thenReturn(Map.of());
+        when(payrollRepository.findDetailIdentity(java.util.Set.of())).thenReturn(Map.of());
+
+        ProcessPayrollRequest request = new ProcessPayrollRequest(LocalDate.of(2026, 7, 1), List.of());
+        PayrollExportFile file = service.exportDetailPreview(request, LocalDate.of(2026, 7, 26), hrUser());
+
+        assertThat(file.fileName()).isEqualTo("PayrollDetail260726.xlsx");
+        assertThat(file.kind()).isEqualTo(PayrollExportKind.PAYROLL_DETAIL);
+        // No period was ever persisted -- confirms this truly went through preview(), not a
+        // findPeriodById/findLines lookup (verifyNoInteractions would be too strong since
+        // findActiveEmployees/findApprovedOvertimePayByEmployee/findYearToDateByEmployee ARE real
+        // interactions on payrollRepository; this instead asserts the one call that would only ever
+        // happen for a persisted period never happened).
+        org.mockito.Mockito.verify(payrollRepository, org.mockito.Mockito.never()).findPeriodById(org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    void bulkPayslipZipContainsOnePdfPerLineNamedByEmployeeCodeAndMatchingTheSingleDownload() throws Exception {
+        PayrollLineDto lineA = line(123L, 42L, "พนักงาน หนึ่ง");
+        PayrollLineDto lineB = line(124L, 43L, "พนักงาน สอง");
+        PayrollPeriodDto processed = period(List.of(lineA, lineB));
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(processed));
+        when(payslipRenderer.toPdf(lineA, processed)).thenReturn("%PDF-A".getBytes());
+        when(payslipRenderer.toPdf(lineB, processed)).thenReturn("%PDF-B".getBytes());
+
+        byte[] zipBytes = service.bulkPayslipZip(99L, hrUser());
+
+        Map<String, byte[]> entries = readZipEntries(zipBytes);
+        // Both lines share employeeCode "GLR-42" in this fixture (line() hardcodes it), so the
+        // second entry must be disambiguated rather than silently overwriting the first -- exactly
+        // two archive entries, one at the plain name, both PDF bodies present somewhere in the zip.
+        // The exact disambiguation scheme (suffix, counter, ...) is an implementation detail, so it
+        // is not asserted here beyond "a distinct second name exists".
+        assertThat(entries).hasSize(2);
+        assertThat(entries).containsKey("glr-payslip-GLR-42.pdf");
+        assertThat(entries.values()).extracting(String::new).containsExactlyInAnyOrder("%PDF-A", "%PDF-B");
+
+        // Byte-identical to the single-payslip endpoint for the same line -- the whole point of
+        // reusing PayslipRenderer#toPdf rather than a second renderer.
+        byte[] singleA = service.payslipPdf(99L, 123L, hrUser());
+        assertThat(singleA).isEqualTo("%PDF-A".getBytes());
+    }
+
+    @Test
+    void bulkPayslipZipRefusesANonProcessedPeriod() {
+        PayrollPeriodDto preview = new PayrollPeriodDto(
+            99L, LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30),
+            LocalDate.of(2026, 6, 30), "VOID", OffsetDateTime.now(), 7L, 0,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, List.of());
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(preview));
+
+        assertThatThrownBy(() -> service.bulkPayslipZip(99L, hrUser()))
+            .isInstanceOfSatisfying(ApiException.class, exception ->
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    @Test
+    void bulkPayslipZipForbiddenForRoleWithoutPayrollAccess() {
+        assertThatThrownBy(() -> service.bulkPayslipZip(99L, salesUser()))
+            .isInstanceOfSatisfying(ApiException.class, exception ->
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        verifyNoInteractions(payrollRepository);
+    }
+
+    private Map<String, byte[]> readZipEntries(byte[] zipBytes) throws java.io.IOException {
+        Map<String, byte[]> entries = new java.util.LinkedHashMap<>();
+        try (java.util.zip.ZipInputStream zip = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(zipBytes))) {
+            java.util.zip.ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                entries.put(entry.getName(), zip.readAllBytes());
+            }
+        }
+        return entries;
     }
 
     @Test

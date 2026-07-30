@@ -4711,7 +4711,18 @@ export const api = {
       hasRole('hr', 'ceo');
       throw new Error('ดาวน์โหลดไฟล์เงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
+    // Preview-time detail xlsx export (2026-07-30) -- same "not supported in mock mode" spirit as
+    // exportFile above (real tax/SSO figures, not worth fabricating).
+    async exportPreviewFile() {
+      hasRole('hr', 'ceo');
+      throw new Error('ดาวน์โหลดไฟล์เงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
     async downloadPayslip() {
+      hasRole('hr', 'ceo');
+      throw new Error('ดาวน์โหลดสลิปเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    // Bulk payslip ZIP (2026-07-30) -- same spirit as downloadPayslip above.
+    async downloadPayslipsZip() {
       hasRole('hr', 'ceo');
       throw new Error('ดาวน์โหลดสลิปเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },

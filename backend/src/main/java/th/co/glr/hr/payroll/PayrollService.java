@@ -1,10 +1,14 @@
 package th.co.glr.hr.payroll;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -12,6 +16,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -24,6 +30,8 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.payroll.export.KBankPctExporter;
+import th.co.glr.hr.payroll.export.PayrollDetailExporter;
+import th.co.glr.hr.payroll.export.PayrollDetailIdentityDto;
 import th.co.glr.hr.payroll.export.PayrollExportFile;
 import th.co.glr.hr.payroll.export.PayrollExportKind;
 import th.co.glr.hr.payroll.export.PayrollExportRow;
@@ -64,6 +72,7 @@ public class PayrollService {
     private final KBankPctExporter kbankExporter;
     private final Pnd1Exporter pnd1Exporter;
     private final SsoExporter ssoExporter;
+    private final PayrollDetailExporter payrollDetailExporter;
     private final AppProperties appProperties;
 
     public PayrollService(
@@ -76,6 +85,7 @@ public class PayrollService {
         KBankPctExporter kbankExporter,
         Pnd1Exporter pnd1Exporter,
         SsoExporter ssoExporter,
+        PayrollDetailExporter payrollDetailExporter,
         AppProperties appProperties
     ) {
         this.payrollRepository = payrollRepository;
@@ -87,6 +97,7 @@ public class PayrollService {
         this.kbankExporter = kbankExporter;
         this.pnd1Exporter = pnd1Exporter;
         this.ssoExporter = ssoExporter;
+        this.payrollDetailExporter = payrollDetailExporter;
         this.appProperties = appProperties;
     }
 
@@ -253,10 +264,27 @@ public class PayrollService {
     }
 
     /**
-     * Generate one of the three statutory payroll text files (KBank PCT, PND1, SSO สปส.1-10) for a
-     * processed period. HR/CEO only; reads PDPA-restricted PII for PND1/SSO, so every call is audited
-     * with the specific fields exposed. {@code effectiveDate} is the HR-picked transfer/pay date;
-     * null falls back to the configured default day (the 26th) of the payroll month.
+     * Generate one of HR's payroll export files for a period: the three statutory CP874 text files
+     * (KBank PCT, PND1, SSO สปส.1-10), or the {@link PayrollExportKind#PAYROLL_DETAIL} xlsx
+     * workbook. HR/CEO only; reads PDPA-restricted PII for PND1/SSO (and, for the detail workbook,
+     * bank account + every payroll_line figure), so every call is audited with the specific fields
+     * exposed. {@code effectiveDate} is the HR-picked transfer/pay date (or, for the detail
+     * workbook, just the date stamped into its filename); null falls back to the configured default
+     * day (the 26th) of the payroll month.
+     *
+     * <p>No status gate on {@code period.status()} for {@code KBANK}/{@code PND1}/{@code SSO}: a
+     * {@code VOID}ed period still has a real {@code periodId} and exports whatever remains in
+     * {@code hr.payroll_line} for it, same as those three kinds have always done ({@code
+     * findExportRows} has never special-cased VOID). {@link PayrollExportKind#PAYROLL_DETAIL} is
+     * different (owner requirement, 2026-07-30): for a genuinely {@code PROCESSED} period it reads
+     * the persisted lines verbatim (they ARE the authoritative record of what was actually paid),
+     * but for anything else — most concretely a {@code VOID} period whose {@code hr.payroll_line}
+     * rows hold HR's typed inputs behind stale/zero computed figures (a real, current example: 2026-07,
+     * {@code period_id=1}, {@code status='VOID'}) — this method reconstructs those inputs (see
+     * {@link #reconstructInputRequest}) and re-runs them through the SAME live {@link #preview}
+     * path a fresh preview uses, so the workbook always reflects a real calculation rather than
+     * whatever happens to be sitting in the row. See {@link #exportDetailPreview} for the case with
+     * no persisted period at all.
      */
     public PayrollExportFile export(PayrollExportKind kind, long periodId, LocalDate effectiveDate, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
@@ -264,28 +292,142 @@ public class PayrollService {
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
         LocalDate payrollMonth = period.payrollMonth();
         LocalDate payDate = resolveEffectiveDate(effectiveDate, payrollMonth);
-        List<PayrollExportRow> rows = payrollRepository.findExportRows(periodId);
         AppProperties.Employer employer = appProperties.getPayroll().getEmployer();
 
         byte[] content;
         String auditFields;
         switch (kind) {
             case KBANK -> {
-                content = kbankExporter.export(rows, employer, payDate);
+                content = kbankExporter.export(payrollRepository.findExportRows(periodId), employer, payDate);
                 auditFields = "bank_account,net_pay";
             }
             case PND1 -> {
-                content = pnd1Exporter.export(rows, employer, payrollMonth, payDate);
+                content = pnd1Exporter.export(payrollRepository.findExportRows(periodId), employer, payrollMonth, payDate);
                 auditFields = "national_id,tax_id,gross_taxable_income,withholding_tax";
             }
             case SSO -> {
-                content = ssoExporter.export(rows, employer, payrollMonth, payDate);
+                content = ssoExporter.export(payrollRepository.findExportRows(periodId), employer, payrollMonth, payDate);
                 auditFields = "social_security_no,sso_wage_base,social_security";
+            }
+            case PAYROLL_DETAIL -> {
+                PayrollPeriodDto detailPeriod;
+                if ("PROCESSED".equals(period.status())) {
+                    detailPeriod = period;
+                } else {
+                    List<PayrollEmployeeInputRequest> reconstructed = period.lines().stream()
+                        .map(this::reconstructInputRequest)
+                        .toList();
+                    detailPeriod = preview(payrollMonth, reconstructed, actor);
+                }
+                content = buildDetailContent(detailPeriod);
+                auditFields = DETAIL_EXPORT_AUDIT_FIELDS;
             }
             default -> throw new ApiException(HttpStatus.BAD_REQUEST, "Unsupported export kind");
         }
         auditPayrollAccess("EXPORT_PAYROLL_" + kind.name(), actor, period, auditFields);
         return new PayrollExportFile(kind, kind.fileName(payDate), content);
+    }
+
+    /**
+     * The detailed payroll xlsx for a month that has never been (or is not yet) processed at all --
+     * owner requirement, 2026-07-30: "July 2026 is live and still unprocessed... HR's whole reason
+     * to want this file is to review the month BEFORE committing it." There is no {@code periodId}
+     * to key off in this case ({@link #preview} never persists one), so the caller must submit the
+     * same {@code payrollMonth}/{@code inputs} payload {@code POST /api/payroll/preview} already
+     * takes. Reuses that exact private {@link #preview} computation -- the one the on-screen
+     * "Preview"/"Refresh" buttons call -- so the workbook's figures are, by construction, identical
+     * to whatever the screen shows for the same inputs; there is no second calculation path for the
+     * two to silently disagree over.
+     */
+    public PayrollExportFile exportDetailPreview(ProcessPayrollRequest request, LocalDate effectiveDate, UserPrincipal actor) {
+        requireRole(actor, PAYROLL_VIEW_ROLES);
+        LocalDate month = normalizeMonth(request.payrollMonth());
+        PayrollPeriodDto livePeriod = preview(month, safeInputs(request.inputs()), actor);
+        LocalDate payDate = resolveEffectiveDate(effectiveDate, month);
+        byte[] content = buildDetailContent(livePeriod);
+        auditPayrollAccess("EXPORT_PAYROLL_PAYROLL_DETAIL_PREVIEW", actor, livePeriod, DETAIL_EXPORT_AUDIT_FIELDS);
+        return new PayrollExportFile(PayrollExportKind.PAYROLL_DETAIL,
+            PayrollExportKind.PAYROLL_DETAIL.fileName(payDate), content);
+    }
+
+    private static final String DETAIL_EXPORT_AUDIT_FIELDS =
+        "employee_name,department_name,bank_account,base_salary,special_pays,gross_earnings,deductions,net_pay";
+
+    /**
+     * Builds the detail workbook from a fully-computed {@code period} (its {@code lines()} plus its
+     * own {@code periodStart}/{@code periodEnd}, which {@link PayrollDetailExporter} needs for the
+     * "เงินเดือนใหม่ this month" rule) -- NOT just a bare line list, so every call site (processed,
+     * recomputed-from-VOID, and pure preview) reports the correct period window.
+     */
+    private byte[] buildDetailContent(PayrollPeriodDto period) {
+        List<PayrollLineDto> lines = period.lines();
+        Set<Long> employeeIds = lines.stream().map(PayrollLineDto::employeeId).collect(Collectors.toSet());
+        Map<Long, PayrollDetailIdentityDto> identities = payrollRepository.findDetailIdentity(employeeIds);
+        return payrollDetailExporter.export(lines, identities, period);
+    }
+
+    /**
+     * Reverses a persisted (possibly stale) {@link PayrollLineDto} back into the input shape {@link
+     * #preview}/{@link #process} take, so a VOID period's already-typed HR inputs (special pays,
+     * meal/per-diem, days worked, ...) survive a fresh recompute instead of being discarded. The 16
+     * tax-allowance fields (spouse/child/parent-care/...) and {@code parentCareCount} are NOT
+     * reconstructable from a payroll_line row (only their already-summed {@code
+     * taxAllowanceTotal} is persisted, not the per-type breakdown) -- left {@code null}, which is
+     * "no per-run override", so the recompute falls back to the EMPLOYEE'S CURRENT standing
+     * tax-allowance declaration. That is the more correct answer, not a lesser one: it reflects
+     * whatever HR has on file today rather than replaying a historical override that may since have
+     * been corrected. {@code customerReturnDeduction} is read from {@code
+     * customerReturnRequested} (what HR actually typed) rather than {@code
+     * customerReturnDeduction} (the post-tax bookkeeping figure, which is 0 in the unearned path --
+     * see that field's own javadoc on {@link PayrollLineDto}).
+     */
+    private PayrollEmployeeInputRequest reconstructInputRequest(PayrollLineDto line) {
+        return new PayrollEmployeeInputRequest(
+            line.employeeId(),
+            specialPayAt(line, 0), specialPayAt(line, 1), specialPayAt(line, 2), specialPayAt(line, 3),
+            specialPayAt(line, 4), specialPayAt(line, 5), specialPayAt(line, 6), specialPayAt(line, 7),
+            specialPayAt(line, 8),
+            line.nonTaxableIncome(),
+            line.unpaidLeaveDays(),
+            line.studentLoanDeduction(),
+            line.legalExecutionDeduction(),
+            line.otherPostTaxDeductions(),
+            null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+            line.warningLetterDeduction(),
+            line.customerReturnRequested(),
+            line.otherPretaxDeduction(),
+            line.withholdingTaxOverride(),
+            line.mealAllowance(),
+            line.perDiemExempt(),
+            line.perDiemTaxable(),
+            parseEnum(PerDiemBasis.class, line.perDiemBasis()),
+            line.bonusPay(),
+            line.otherOneOffPay(),
+            line.customerReturnAlreadyEarned(),
+            parseEnum(PayrollGarnishmentType.class, line.garnishmentType()),
+            null,
+            line.daysWorked()
+        );
+    }
+
+    private BigDecimal specialPayAt(PayrollLineDto line, int index) {
+        List<PayrollSpecialPayDto> pays = line.specialPays();
+        if (pays == null || index >= pays.size()) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal amount = pays.get(index).amount();
+        return amount == null ? BigDecimal.ZERO : amount;
+    }
+
+    private <E extends Enum<E>> E parseEnum(Class<E> type, String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return Enum.valueOf(type, value);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     /** HR-picked date, else the configured default transfer day (26th) clamped to the month length. */
@@ -297,6 +439,61 @@ public class PayrollService {
             appProperties.getPayroll().getEmployer().getDefaultTransferDay(),
             payrollMonth.lengthOfMonth());
         return payrollMonth.withDayOfMonth(Math.max(day, 1));
+    }
+
+    /**
+     * Bulk payslip ZIP (owner requirement, 2026-07-30): every payslip for a processed period in one
+     * archive, so HR can review the whole batch BEFORE {@code POST /{periodId}/distribute} emails it
+     * to every employee -- today the only way to check is one-by-one, or after the emails are
+     * already out. Reuses {@link PayslipRenderer#toPdf} per line -- the EXACT same call {@link
+     * #payslipPdf} and the emailed attachment ({@link PayslipDistributionService}) already make --
+     * so every PDF in the archive is byte-identical to what those two paths independently produce.
+     * A second renderer here would let the reviewed artefact and the emailed one silently diverge,
+     * which is the whole failure mode this endpoint exists to close.
+     *
+     * <p>HR/CEO only, the same {@link #PAYROLL_VIEW_ROLES} gate {@link #payslipPdf}/{@link #export}
+     * already use. Requires a genuinely {@code PROCESSED} period -- unlike the detail xlsx export,
+     * a payslip is a document about money actually paid, and generating 30 of them from an
+     * uncommitted preview would let HR circulate paperwork for a run that never happened.
+     */
+    public byte[] bulkPayslipZip(long periodId, UserPrincipal actor) {
+        requireRole(actor, PAYROLL_VIEW_ROLES);
+        PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
+        if (!"PROCESSED".equals(period.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "งวดนี้ยังไม่ได้ประมวลผล ไม่สามารถดาวน์โหลดสลิปเงินเดือนทั้งหมดได้");
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(out)) {
+            Set<String> usedNames = new HashSet<>();
+            for (PayrollLineDto line : period.lines()) {
+                byte[] pdf = payslipRenderer.toPdf(line, period);
+                zip.putNextEntry(new ZipEntry(payslipEntryName(line, usedNames)));
+                zip.write(pdf);
+                zip.closeEntry();
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        auditPayrollAccess("BULK_DOWNLOAD_PAYSLIPS", actor, period,
+            "earnings,sso,tax,deductions,net_pay,bank_account");
+        auditService.record(actor, "BULK_DOWNLOAD_PAYSLIPS", "payroll_period", periodId, null,
+            Map.of("periodId", periodId, "employeeCount", period.lines().size()));
+        return out.toByteArray();
+    }
+
+    /** {@code employeeCode}, never just a first name -- see this method's caller's javadoc. */
+    private String payslipEntryName(PayrollLineDto line, Set<String> usedNames) {
+        String code = (line.employeeCode() == null || line.employeeCode().isBlank())
+            ? "emp" + line.employeeId()
+            : line.employeeCode();
+        String name = "glr-payslip-" + code + ".pdf";
+        int suffix = 2;
+        while (!usedNames.add(name)) {
+            name = "glr-payslip-" + code + "-" + (suffix++) + ".pdf";
+        }
+        return name;
     }
 
     public byte[] payslipPdf(long periodId, long lineId, UserPrincipal actor) {
