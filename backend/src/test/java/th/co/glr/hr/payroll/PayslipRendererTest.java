@@ -139,10 +139,19 @@ class PayslipRendererTest {
         PayrollLineDto line = lineWithExcessWithheld(new BigDecimal("17527.51"));
         String text = extractText(renderer.toPdf(line, periodForMonth(line, 12)));
 
-        assertThat(text).contains("ภาษีหัก ณ ที่จ่ายสะสมปีนี้เกินภาษีที่ต้องเสียทั้งปี");
-        assertThat(text).contains("17,527.51");
+        // P2 fix (Opus review, 2026-07-30): F3 re-activated a payslip line the owner forbade at spec
+        // section 8: "Do not print the excess amount." The notice text moved to the owner-approved
+        // wording verbatim, which states neither a figure nor "เกินภาษีที่ต้องเสียทั้งปี" -- it names
+        // WHY December's withholding differs (a year-end true-up) without ever quantifying the excess.
+        // excessWithheldToDate is still computed and persisted (F3's own contribution, untouched) for
+        // the ภ.ง.ด.1 working papers -- only what gets PRINTED changed here.
+        assertThat(text).contains("ภาษีหัก ณ ที่จ่ายเดือนธันวาคมเป็นการปรับปรุงยอดปลายปี");
         assertThat(text)
-            .as("the employee must be told the route to reclaim it, since payroll cannot return it")
+            .as("spec section 8 forbids printing the excess baht figure, even in the final period")
+            .doesNotContain("17,527.51");
+        assertThat(text)
+            .as("the employee must be told the route to reclaim any excess, since payroll cannot return it")
+            .contains("ภ.ง.ด.90")
             .contains("ภ.ง.ด.91");
     }
 
@@ -163,7 +172,11 @@ class PayslipRendererTest {
         assertThat(text)
             .as("mid-year the figure is an estimate and must be labelled as one")
             .contains("ประมาณการ");
-        assertThat(text).contains("17,527.51");
+        // P2 fix (Opus review, 2026-07-30): spec section 8 forbids printing the excess baht figure at
+        // all, in any month -- see the December test's own comment above for the full reasoning.
+        assertThat(text)
+            .as("spec section 8 forbids printing the excess baht figure")
+            .doesNotContain("17,527.51");
         assertThat(text)
             .as("mid-year the payslip must not claim the excess is unrecoverable")
             .doesNotContain("ไม่สามารถคืนผ่านระบบเงินเดือนได้");

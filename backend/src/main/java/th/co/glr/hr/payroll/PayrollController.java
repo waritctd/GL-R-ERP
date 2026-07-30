@@ -24,6 +24,9 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.payroll.export.PayrollExportFile;
 import th.co.glr.hr.payroll.export.PayrollExportKind;
+import java.util.List;
+import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentTaxTreatmentUpsertRequest;
+import th.co.glr.hr.payroll.PayrollClassificationDtos.TaxTreatmentListResponse;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.TaxAllowanceBulkUpsertRequest;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.TaxAllowanceListResponse;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedBulkUpsertRequest;
@@ -175,6 +178,36 @@ public class PayrollController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         return payrollService.upsertYtdSeed(year, request, user);
+    }
+
+    // ---- P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix's HTTP surface.
+    // Before this, PayrollRepository#upsertComponentTaxTreatment had no controller mapping at all --
+    // hr.payroll_component_tax_treatment could never be populated on a real deployment, so
+    // PayrollCalculator#calculateClassified's classification gate 409d every payroll run for any
+    // employee with a non-zero, non-SALARY component. Same view/edit split as tax-allowances/ytd-seed
+    // above, placed beside them per PayrollClassificationReachabilityIntegrationTest's own docs
+    // (asserted against this class for exactly that reason). The PUT body is a raw
+    // List<ComponentTaxTreatmentUpsertRequest> (not a wrapping "items" record like the other two
+    // bulk-upsert endpoints) so a null/empty submission is unambiguous and so the reachability test's
+    // reflection-based check (which looks for a parameter whose generic type literally names
+    // ComponentTaxTreatmentUpsertRequest) matches this mapping without needing a same-named wrapper.
+
+    @GetMapping("/component-tax-treatments")
+    @PreAuthorize("hasAnyRole('HR','CEO')")
+    public TaxTreatmentListResponse getComponentTaxTreatments(@RequestParam int year, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return payrollService.getComponentTaxTreatments(year, user);
+    }
+
+    @PutMapping("/component-tax-treatments")
+    @PreAuthorize("hasRole('HR')")
+    public TaxTreatmentListResponse putComponentTaxTreatments(
+        @RequestParam int year,
+        @Valid @RequestBody List<ComponentTaxTreatmentUpsertRequest> items,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return payrollService.upsertComponentTaxTreatments(year, items, user);
     }
 
     private PayrollExportKind parseKind(String kind) {

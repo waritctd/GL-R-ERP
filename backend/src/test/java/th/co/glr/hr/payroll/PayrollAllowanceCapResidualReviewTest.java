@@ -32,6 +32,20 @@ import th.co.glr.hr.ticket.TicketRepository;
  * came from the run body. That closes the STORED route. These tests pin what is left of the RUN-BODY
  * route, which the narrowing keeps open by design — so that the residual is a recorded decision
  * rather than something a fifth reader has to rediscover.
+ *
+ * <p><b>Re-verified after the 118 classification/SSO-inclusion rebase (2026-07-29):</b> both tests
+ * here failed post-rebase, but NOT because the run-body route closed. {@code
+ * PayrollService#headCountFor} is untouched by branch 118 and still derives a count from the run-body
+ * amount whenever the stored count is zero, so {@link #aRunBodyChildAllowanceStillSetsItsOwnCap()}
+ * still pins the SAME open residual, unchanged, with its original ฿370,500 expectation. The actual
+ * causes were incidental to 118: (1) a raw SQL-inserted employee gets no SSO-inclusion rows outside
+ * {@code EmployeeService#create}, so the ฿10,500 SSO allowance both tests assume was silently zero
+ * until {@code seedSsoIncluded} was added; and (2) {@code PayrollCalculator#calculateClassified} —
+ * the only engine {@code PayrollService} calls since task 2 — never wired in {@code
+ * clampedAllowanceNote}, so the WARNING {@link #theIdenticalAmountOnAStoredDeclarationClamps()}
+ * checks for was missing from every payslip regardless of this residual; fixed at the source
+ * ({@code PayrollCalculator#calculateClassified}'s {@code calculationNote} assembly). Do not read a
+ * green suite here as evidence the run-body cap was ever closed — it was not.
  */
 class PayrollAllowanceCapResidualReviewTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository payrollRepository;
@@ -77,6 +91,11 @@ class PayrollAllowanceCapResidualReviewTest extends AbstractPostgresIntegrationT
     void aRunBodyChildAllowanceStillSetsItsOwnCap() {
         LocalDate month = LocalDate.of(2026, 1, 1);
         long employeeId = seedEmployee("CAPR-001", "ไม่มี", "ลย01", new BigDecimal("200000.00"));
+        // Post-118 rebase: a raw SQL-inserted employee gets no SSO-inclusion rows (that seeding is an
+        // EmployeeService#create side effect this test's direct INSERT bypasses), so without this the
+        // 10,500 SSO allowance personalPlusSso assumes below is silently zero. Unrelated to the
+        // residual this test pins -- the per-head cap math is untouched by this call.
+        seedSsoIncluded(employeeId, 2026, PayrollComponent.SALARY);
         // No hr.employee_tax_allowance row whatsoever.
 
         PayrollLineDto line = lineFor(payrollService.preview(
@@ -109,6 +128,8 @@ class PayrollAllowanceCapResidualReviewTest extends AbstractPostgresIntegrationT
     void theIdenticalAmountOnAStoredDeclarationClamps() {
         LocalDate month = LocalDate.of(2026, 1, 1);
         long employeeId = seedEmployee("CAPR-002", "มี", "ลย01", new BigDecimal("200000.00"));
+        // See the sibling test above for why this is needed post-118.
+        seedSsoIncluded(employeeId, 2026, PayrollComponent.SALARY);
         jdbc.update("""
             INSERT INTO hr.employee_tax_allowance
                 (employee_id, tax_year, child_allowance, child_count, effective_month)

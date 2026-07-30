@@ -207,6 +207,65 @@ class SecurityAuthorizationIntegrationTest {
     }
 
     // ------------------------------------------------------------------------------------------
+    // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix's new HTTP surface
+    // (PayrollController#getComponentTaxTreatments/putComponentTaxTreatments). Same GET (HR+CEO view)
+    // broader than PUT (HR-only edit) split as the C1/C2 endpoints above, so the exact same
+    // wrong-way-round pattern applies: assert the caller CANNOT reach the write, and that the table is
+    // provably unchanged afterwards, through the real filter chain + real service + real repository.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void aPlainEmployeeCannotViewOrEditTheComponentTaxTreatmentMatrix() throws Exception {
+        mvc.perform(get("/api/payroll/component-tax-treatments?year=2026").session(sessionFor("employee")))
+            .andExpect(status().isForbidden());
+        mvc.perform(put("/api/payroll/component-tax-treatments?year=2026")
+                .session(sessionFor("employee"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(componentTaxTreatmentBody(9004L)))
+            .andExpect(status().isForbidden());
+
+        assertThat(countTaxTreatmentRows(9004L)).isZero();
+    }
+
+    @Test
+    void aSalesRoleCannotEditTheComponentTaxTreatmentMatrixEither() throws Exception {
+        mvc.perform(put("/api/payroll/component-tax-treatments?year=2026")
+                .session(sessionFor("sales"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(componentTaxTreatmentBody(9005L)))
+            .andExpect(status().isForbidden());
+
+        assertThat(countTaxTreatmentRows(9005L)).isZero();
+    }
+
+    @Test
+    void ceoCanViewTheComponentTaxTreatmentMatrixButCannotEditIt() throws Exception {
+        mvc.perform(get("/api/payroll/component-tax-treatments?year=2026").session(sessionFor("ceo")))
+            .andExpect(status().isOk());
+
+        mvc.perform(put("/api/payroll/component-tax-treatments?year=2026")
+                .session(sessionFor("ceo"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(componentTaxTreatmentBody(9006L)))
+            .andExpect(status().isForbidden());
+
+        assertThat(countTaxTreatmentRows(9006L)).isZero();
+    }
+
+    @Test
+    void anHrSessionCanEditTheComponentTaxTreatmentMatrix() throws Exception {
+        long employeeId = seedEmployeeForReconciliationAuthz("EMP-AUTHZ-2");
+
+        mvc.perform(put("/api/payroll/component-tax-treatments?year=2026")
+                .session(sessionFor("hr"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(componentTaxTreatmentBody(employeeId)))
+            .andExpect(status().isOk());
+
+        assertThat(countTaxTreatmentRows(employeeId)).isEqualTo(1);
+    }
+
+    // ------------------------------------------------------------------------------------------
     // Statutory export files (KBank/PND1/SSO). These read PDPA-restricted PII (national id, SSN, tax
     // id), so the HR/CEO gate must hold on the real filter chain. Written wrong-way-round: assert the
     // callers who must NOT reach the file get 403 on every kind, and that HR/CEO pass authorization
@@ -273,6 +332,20 @@ class SecurityAuthorizationIntegrationTest {
         return """
             {"items":[{"employeeId":%d,"taxableIncome":100000,"socialSecurity":5000,"withholdingTax":2000,
             "sourceNote":"authz test"}]}
+            """.formatted(employeeId);
+    }
+
+    private int countTaxTreatmentRows(long employeeId) {
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM hr.payroll_component_tax_treatment WHERE employee_id = :employeeId",
+            Map.of("employeeId", employeeId), Integer.class);
+        return count == null ? 0 : count;
+    }
+
+    /** PUT /api/payroll/component-tax-treatments binds a raw JSON array, not a wrapped object. */
+    private String componentTaxTreatmentBody(long employeeId) {
+        return """
+            [{"employeeId":%d,"component":"BONUS_PAY","taxTreatment":"EXTRA_KNOWN_FREQUENCY"}]
             """.formatted(employeeId);
     }
 

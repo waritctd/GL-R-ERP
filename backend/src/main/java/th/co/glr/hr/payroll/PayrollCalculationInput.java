@@ -158,10 +158,15 @@ public record PayrollCalculationInput(
 
     /**
      * Legacy 12-arg constructor, kept so every call site written before the reconciliation fields
-     * existed (including {@code PayrollExcelReconciliationTest}, which must not be edited) still
-     * compiles. The five new fields default to zero, which is required for the byte-identical
-     * regression guarantee: with all-zero new inputs, {@link PayrollCalculator} must reproduce
-     * exactly what it produced before this change.
+     * existed still compiles. The five new fields default to zero, which is required for the
+     * byte-identical regression guarantee: with all-zero new inputs, {@link PayrollCalculator} must
+     * reproduce exactly what it produced before this change.
+     *
+     * <p>{@code PayrollExcelReconciliationTest} no longer uses this type at all as of its 2026-07-29
+     * repoint onto {@code calculateClassified}/{@code PayrollClassifiedCalculationInput} (Opus
+     * review) -- {@link PayrollCalculator#calculate}, the engine this type feeds, has zero production
+     * callers since task 2. {@code calculate} and this type are kept (not deleted, per instruction)
+     * for {@code PayrollCalculatorTest}'s 27 tests, which still exercise {@code calculate} directly.
      */
     public PayrollCalculationInput(
         BigDecimal baseSalary,
