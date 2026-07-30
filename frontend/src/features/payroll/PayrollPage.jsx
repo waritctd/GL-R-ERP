@@ -237,13 +237,47 @@ function suggestedFallback(suggestion, key) {
   return amount > 0 ? String(amount) : null;
 }
 
+// Payroll input draft (2026-07-30): a saved-but-not-yet-processed value HR typed earlier this
+// session (or a prior one) beats a mere carried-forward guess -- it is HR's own actual work, not a
+// suggestion.
+//
+// DELIBERATELY NOT the same collapsing rule as suggestedFallback above. A suggestion is only ever
+// consulted to fill in a genuinely blank/zero field, so collapsing "suggested 0" to "no
+// suggestion" is harmless -- a suggested zero and no suggestion produce the identical outcome
+// either way. A DRAFT is different: it is saved as a COMPLETE snapshot of the whole form for that
+// employee (saveDraft() submits every field via normalizedAdjustment, not just the ones HR
+// touched), so once ANY draft row exists for an employee, every field in it -- including one HR
+// deliberately cleared down to zero -- is exactly what they saw on screen when they hit บันทึกร่าง,
+// and must win over the suggestion. Collapsing that zero to null here would let a stale
+// carry-forward suggestion silently resurrect over a value HR explicitly zeroed out (e.g. clearing
+// a carried เบี้ยขยันประจำ that should not repeat this month) -- the bug this comment replaces.
+//
+// So: return '' (not null) for "draft row exists, field is 0" -- a real, non-nullish value the
+// `??` chain at every call site will NOT fall through past, while still rendering as blank (not a
+// literal "0"), preserving the "0 and blank read the same" DISPLAY convention every other field on
+// this form already follows (see draftValue). Return null ONLY when there is no draft row at all
+// for this employee (they have never saved one this session) -- that is the one case where falling
+// through to the suggestion is correct.
+//
+// No field-level "was this key actually present" tracking is needed (the alternative the review
+// suggested): a draft row is written wholesale, all fields at once, so presence is naturally an
+// EMPLOYEE-level fact (does a row exist for employee+month), not a per-field one -- there is no
+// saved-draft state where some fields are "there" and others are structurally missing.
+function draftFallback(draft, key) {
+  if (!draft) return null;
+  const amount = Number(draft[key] || 0);
+  return amount > 0 ? String(amount) : '';
+}
+
 // Withholding-tax override (V88) is NULLABLE/meaningful, so it cannot ride the generic
 // draftValue/parsePayrollNumber machinery (which collapses ''<->0). A stored/carried 0 is a real
 // override (withhold nothing) and must round-trip as "0"; only null/'' means "no override".
-// Priority: the line's own persisted per-run value > last month's carried per-run value > blank.
-// The standing employee override is deliberately NOT surfaced here — it re-applies server-side.
-function overrideDraft(lineValue, suggestion) {
+// Priority: the line's own persisted per-run value > a saved draft (2026-07-30) > last month's
+// carried per-run value > blank. The standing employee override is deliberately NOT surfaced here
+// — it re-applies server-side.
+function overrideDraft(lineValue, suggestion, draft) {
   if (lineValue != null) return String(lineValue);
+  if (draft && draft.withholdingTaxOverride != null) return String(draft.withholdingTaxOverride);
   if (suggestion && suggestion.withholdingTaxOverride != null) return String(suggestion.withholdingTaxOverride);
   return '';
 }
@@ -293,27 +327,36 @@ function blankAdjustment(employeeId, { applyDefaults = false } = {}) {
   };
 }
 
-function adjustmentFromLine(line, { applyDefaults = false, suggestion = null } = {}) {
+function adjustmentFromLine(line, { applyDefaults = false, suggestion = null, draft = null } = {}) {
   const adjustment = blankAdjustment(line.employeeId, { applyDefaults });
   (line.specialPays || []).forEach((item, index) => {
     const key = `specialPay${index + 1}`;
-    // Priority: the line's own real value (already-submitted/persisted) > a carried figure from
-    // last month > the hardcoded UAT demo default. A suggestion only ever fills in for a genuinely
-    // blank/zero field on a fresh run.
-    const fallback = suggestedFallback(suggestion, key) ?? defaultSpecialPayValue(key, applyDefaults);
+    // Priority: the line's own real value (already-submitted/persisted) > a saved draft
+    // (2026-07-30, HR's own not-yet-processed work) > a carried figure from last month > the
+    // hardcoded UAT demo default. A draft/suggestion only ever fills in for a genuinely blank/zero
+    // field on a fresh run.
+    const fallback = draftFallback(draft, key) ?? suggestedFallback(suggestion, key) ?? defaultSpecialPayValue(key, applyDefaults);
     adjustment[key] = draftValue(item.amount, fallback);
   });
-  adjustment.nonTaxableIncome = draftValue(line.nonTaxableIncome, suggestedFallback(suggestion, 'nonTaxableIncome') ?? '');
+  adjustment.nonTaxableIncome = draftValue(
+    line.nonTaxableIncome,
+    draftFallback(draft, 'nonTaxableIncome') ?? suggestedFallback(suggestion, 'nonTaxableIncome') ?? '');
   // Leave -> payroll unpaid-day deduction (2026-07-23): unpaidLeaveDays is event-driven (this
   // month's approved-beyond-quota leave, from GET /api/payroll/suggested-inputs), unlike the other
   // carried fields above which are prior-month recurring amounts -- but it pre-fills the same way:
-  // a real line value (already-submitted/persisted) wins, otherwise fall back to the suggestion.
-  // HR can still edit/clear it before Preview/Process, same as every other field here.
-  adjustment.unpaidLeaveDays = draftValue(line.unpaidLeaveDays, suggestedFallback(suggestion, 'unpaidLeaveDays') ?? '');
-  adjustment.studentLoanDeduction = draftValue(line.studentLoanDeduction, suggestedFallback(suggestion, 'studentLoanDeduction') ?? '');
-  adjustment.legalExecutionDeduction = draftValue(line.legalExecutionDeduction, suggestedFallback(suggestion, 'legalExecutionDeduction') ?? '');
-  adjustment.otherPostTaxDeductions = draftValue(line.otherPostTaxDeductions);
-  adjustment.warningLetterDeduction = draftValue(line.warningLetterDeduction);
+  // a real line value (already-submitted/persisted) wins, otherwise a saved draft, otherwise the
+  // suggestion. HR can still edit/clear it before Preview/Process, same as every other field here.
+  adjustment.unpaidLeaveDays = draftValue(
+    line.unpaidLeaveDays,
+    draftFallback(draft, 'unpaidLeaveDays') ?? suggestedFallback(suggestion, 'unpaidLeaveDays') ?? '');
+  adjustment.studentLoanDeduction = draftValue(
+    line.studentLoanDeduction,
+    draftFallback(draft, 'studentLoanDeduction') ?? suggestedFallback(suggestion, 'studentLoanDeduction') ?? '');
+  adjustment.legalExecutionDeduction = draftValue(
+    line.legalExecutionDeduction,
+    draftFallback(draft, 'legalExecutionDeduction') ?? suggestedFallback(suggestion, 'legalExecutionDeduction') ?? '');
+  adjustment.otherPostTaxDeductions = draftValue(line.otherPostTaxDeductions, draftFallback(draft, 'otherPostTaxDeductions') ?? '');
+  adjustment.warningLetterDeduction = draftValue(line.warningLetterDeduction, draftFallback(draft, 'warningLetterDeduction') ?? '');
   // D1 fix (fourth reachability audit, 2026-07-30): hydrate from customerReturnRequested, NOT
   // customerReturnDeduction. The latter is the POST-TAX bookkeeping figure the backend persists --
   // it is 0 whenever customerReturnAlreadyEarned is false (the unearned amount is instead netted
@@ -321,27 +364,31 @@ function adjustmentFromLine(line, { applyDefaults = false, suggestion = null } =
   // checkbox below (which gates on this value being > 0) on every reload, and a reprocess of the
   // same month silently stopped re-applying the netting. customerReturnRequested always echoes what
   // was actually typed, regardless of the earned flag.
-  adjustment.customerReturnDeduction = draftValue(line.customerReturnRequested);
-  adjustment.otherPretaxDeduction = draftValue(line.otherPretaxDeduction);
+  adjustment.customerReturnDeduction = draftValue(line.customerReturnRequested, draftFallback(draft, 'customerReturnDeduction') ?? '');
+  adjustment.otherPretaxDeduction = draftValue(line.otherPretaxDeduction, draftFallback(draft, 'otherPretaxDeduction') ?? '');
   // ค่าอาหาร carries forward like the other recurring fields above; the two เบี้ยเลี้ยง amounts and
   // the basis do not (V98's carry-forward flags only cover mealAllowance for this group -- see the
   // task-3 handoff fix 5) -- a per-diem is trip-driven, not a standing monthly figure, so re-entering
-  // it (and its basis) fresh each run is correct, not a gap.
-  adjustment.mealAllowance = draftValue(line.mealAllowance, suggestedFallback(suggestion, 'mealAllowance') ?? '');
-  adjustment.perDiemExempt = draftValue(line.perDiemExempt);
-  adjustment.perDiemTaxable = draftValue(line.perDiemTaxable);
-  adjustment.perDiemBasis = line.perDiemBasis || '';
+  // it (and its basis) fresh each run is correct, not a gap. A saved draft still fills in for all
+  // three, same as it does for every other field here.
+  adjustment.mealAllowance = draftValue(
+    line.mealAllowance,
+    draftFallback(draft, 'mealAllowance') ?? suggestedFallback(suggestion, 'mealAllowance') ?? '');
+  adjustment.perDiemExempt = draftValue(line.perDiemExempt, draftFallback(draft, 'perDiemExempt') ?? '');
+  adjustment.perDiemTaxable = draftValue(line.perDiemTaxable, draftFallback(draft, 'perDiemTaxable') ?? '');
+  adjustment.perDiemBasis = line.perDiemBasis || draft?.perDiemBasis || '';
   // P1 fix (Opus review, 2026-07-30): bonusPay/otherOneOffPay do not carry forward (they are one-off
-  // by definition, same reasoning as perDiemExempt/perDiemTaxable above) -- re-entered fresh each run.
-  adjustment.bonusPay = draftValue(line.bonusPay);
-  adjustment.otherOneOffPay = draftValue(line.otherOneOffPay);
+  // by definition, same reasoning as perDiemExempt/perDiemTaxable above) -- re-entered fresh each
+  // run, though a saved draft still fills in.
+  adjustment.bonusPay = draftValue(line.bonusPay, draftFallback(draft, 'bonusPay') ?? '');
+  adjustment.otherOneOffPay = draftValue(line.otherOneOffPay, draftFallback(draft, 'otherOneOffPay') ?? '');
   // Daily-rate support (2026-07-30): survives a reload -- hydrate from the persisted line's own
-  // daysWorked, same as every other one-off field above. No carry-forward suggestion (a day count
-  // is specific to the month worked, not a recurring figure).
-  adjustment.daysWorked = draftValue(line.daysWorked);
-  adjustment.garnishmentType = line.garnishmentType || '';
-  adjustment.customerReturnAlreadyEarned = Boolean(line.customerReturnAlreadyEarned);
-  adjustment.withholdingTaxOverride = overrideDraft(line.withholdingTaxOverride, suggestion);
+  // daysWorked first, else a saved draft (2026-07-30). No carry-forward suggestion (a day count is
+  // specific to the month worked, not a recurring figure).
+  adjustment.daysWorked = draftValue(line.daysWorked, draftFallback(draft, 'daysWorked') ?? '');
+  adjustment.garnishmentType = line.garnishmentType || draft?.garnishmentType || '';
+  adjustment.customerReturnAlreadyEarned = Boolean(line.customerReturnAlreadyEarned) || Boolean(draft?.customerReturnAlreadyEarned);
+  adjustment.withholdingTaxOverride = overrideDraft(line.withholdingTaxOverride, suggestion, draft);
   return adjustment;
 }
 
@@ -416,6 +463,11 @@ export function PayrollPage({ showToast }) {
   const [suggestionsByEmployee, setSuggestionsByEmployee] = useState({});
   const [exportKind, setExportKind] = useState('kbank');
   const [payDate, setPayDate] = useState(`${thisMonth}-26`);
+  // Payroll input draft (2026-07-30): true once HR has typed something since the last load/save --
+  // a browser reload before this is saved still loses that in-between typing (the draft only
+  // persists what was explicitly saved), so this is surfaced next to the Save Draft button rather
+  // than silently autosaving.
+  const [draftDirty, setDraftDirty] = useState(false);
 
   const selectedLine = useMemo(
     () => (period?.lines || []).find((line) => Number(line.employeeId) === Number(selectedEmployeeId)) || period?.lines?.[0] || null,
@@ -446,6 +498,13 @@ export function PayrollPage({ showToast }) {
   // "enables Process Payroll for a fresh (never-processed) period ... id === null" test, which pins
   // this down as the regression guard against "simplifying" it back to `!period?.id`.
   const emptyPeriod = !period || !(period.lineCount > 0);
+  // Payroll input draft (2026-07-30): a draft is only ever consulted on load() for a brand-new,
+  // never-touched run (same condition as the suggested-inputs/draft fetch in load() above) -- once
+  // a period is PROCESSED, or VOID with real pre-loaded lines (like July's), the line's own value
+  // is already the source of truth and always wins regardless, so saving a draft here would do
+  // nothing useful. Hidden rather than shown-but-inert, so HR is not misled into thinking a save
+  // did something for an already-touched period.
+  const canSaveDraft = period?.status === 'PREVIEW' && !period?.id;
   const processBlockedReason = isMobile
     ? 'ปิดใช้งานบนหน้าจอมือถือ — การประมวลผลเงินเดือนย้อนกลับไม่ได้ กรุณาใช้เดสก์ท็อป'
     : emptyPeriod
@@ -457,10 +516,14 @@ export function PayrollPage({ showToast }) {
     try {
       const response = await api.payroll.current({ payrollMonth: month });
       const nextPeriod = response.period;
-      // Special-pay carry-forward: only fetch suggestions when starting a fresh run for this month
-      // (PREVIEW with no processed period yet) — a PROCESSED period already reflects real, submitted
-      // values and must never be overwritten by a stale suggestion.
+      // Special-pay carry-forward, and payroll input draft (2026-07-30): only fetch/apply either
+      // when starting a fresh run for this month (PREVIEW with no processed/void period yet) — an
+      // already-touched period (PROCESSED, or VOID like July's pre-loaded real inputs) already
+      // reflects real, submitted values in the line itself and must never be overwritten by a
+      // stale suggestion OR a stale draft. See adjustmentFromLine's precedence: the line's own
+      // value always wins first regardless.
       let suggestionsByEmployee = {};
+      let draftByEmployee = {};
       if (nextPeriod?.status === 'PREVIEW' && !nextPeriod?.id) {
         try {
           // Optional chaining keeps this resilient if a caller's api.payroll mock predates this
@@ -471,9 +534,18 @@ export function PayrollPage({ showToast }) {
         } catch {
           suggestionsByEmployee = {};
         }
+        try {
+          // Same resilience as suggestedInputs above -- a draft is a convenience restore only and
+          // must never block payroll from loading.
+          const draftResponse = await api.payroll.getInputDraft?.({ payrollMonth: month });
+          draftByEmployee = indexSuggestionsByEmployee(draftResponse?.drafts);
+        } catch {
+          draftByEmployee = {};
+        }
       }
       setSuggestionsByEmployee(suggestionsByEmployee);
-      applyPeriod(nextPeriod, { applyUatDefaults: true, suggestionsByEmployee });
+      setDraftDirty(false);
+      applyPeriod(nextPeriod, { applyUatDefaults: true, suggestionsByEmployee, draftByEmployee });
     } catch (error) {
       showToast('error', error.message || 'โหลดเงินเดือนไม่สำเร็จ');
     } finally {
@@ -481,7 +553,7 @@ export function PayrollPage({ showToast }) {
     }
   }
 
-  function applyPeriod(nextPeriod, { applyUatDefaults = false, suggestionsByEmployee = {} } = {}) {
+  function applyPeriod(nextPeriod, { applyUatDefaults = false, suggestionsByEmployee = {}, draftByEmployee = {} } = {}) {
     setPeriod(nextPeriod);
     const nextAdjustments = {};
     const applyDefaults = applyUatDefaults && nextPeriod?.status === 'PREVIEW';
@@ -489,6 +561,7 @@ export function PayrollPage({ showToast }) {
       nextAdjustments[line.employeeId] = adjustmentFromLine(line, {
         applyDefaults,
         suggestion: suggestionsByEmployee[line.employeeId],
+        draft: draftByEmployee[line.employeeId],
       });
     });
     setAdjustments(nextAdjustments);
@@ -540,6 +613,27 @@ export function PayrollPage({ showToast }) {
     }
   }
 
+  // Payroll input draft (2026-07-30): explicit save (not autosave, per the owner's steer) of
+  // whatever is currently typed, so a browser reload (or a same-account login elsewhere) restores
+  // it. Unfiltered by hasPayrollInput -- unlike payload() above, a draft must also capture an
+  // employee HR has started but not finished (e.g. only a garnishment type picked with no amount
+  // yet), not just what already qualifies for submission.
+  async function saveDraft() {
+    setSaving(true);
+    try {
+      await api.payroll.saveInputDraft({
+        payrollMonth: `${month}-01`,
+        inputs: Object.values(adjustments).map(normalizedAdjustment),
+      });
+      setDraftDirty(false);
+      showToast('success', 'บันทึกร่างข้อมูลเงินเดือนแล้ว');
+    } catch (error) {
+      showToast('error', error.message || 'บันทึกร่างไม่สำเร็จ');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function process() {
     setConfirmProcess(true);
   }
@@ -549,6 +643,9 @@ export function PayrollPage({ showToast }) {
     try {
       const response = await api.payroll.process(payload());
       applyPeriod(response.period);
+      // The backend clears hr.payroll_input_draft for this month once processed (see
+      // PayrollService#process) -- there is nothing left to save a draft over now.
+      setDraftDirty(false);
       showToast('success', 'ประมวลผลเงินเดือนเรียบร้อย');
       setConfirmProcess(false);
     } catch (error) {
@@ -630,6 +727,9 @@ export function PayrollPage({ showToast }) {
         [field]: value,
       },
     }));
+    // Payroll input draft (2026-07-30): any typed change is not yet saved anywhere durable until
+    // HR explicitly hits Save Draft (or Process, which persists it for real).
+    setDraftDirty(true);
   }
 
   return (
@@ -651,6 +751,21 @@ export function PayrollPage({ showToast }) {
               <Icon name="refresh" />
               รีเฟรช
             </Button>
+            {/* Payroll input draft (2026-07-30): explicit save, not autosave (owner's steer) -- HR's
+                in-progress inputs for a brand-new run had no persistent home before this and vanished
+                on a browser reload. Hidden once the period is no longer a fresh, never-touched run
+                (see canSaveDraft's own comment) -- saving one then would do nothing useful. */}
+            {canSaveDraft && (
+              <span className="inline-flex items-center gap-2">
+                <Button type="button" variant="secondary" onClick={saveDraft} disabled={loading || saving} title="บันทึกข้อมูลที่กรอกไว้ชั่วคราว (ยังไม่ประมวลผล) เพื่อไม่ให้หายเมื่อโหลดหน้าใหม่">
+                  <Icon name="save" />
+                  บันทึกร่าง
+                </Button>
+                {draftDirty && (
+                  <small className="text-xs font-semibold text-text-muted">มีการเปลี่ยนแปลงที่ยังไม่บันทึกร่าง</small>
+                )}
+              </span>
+            )}
           </div>
         )}
       />

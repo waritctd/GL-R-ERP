@@ -166,6 +166,9 @@ export const API_ROUTES = {
     // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix. Mirrors
     // PayrollController's component-tax-treatments mapping.
     componentTaxTreatments: '/api/payroll/component-tax-treatments',
+    // Payroll input draft (2026-07-30): HR's in-progress, not-yet-processed inputs, persisted so a
+    // browser reload restores exactly what was typed. Mirrors PayrollController's input-draft mapping.
+    inputDraft: '/api/payroll/input-draft',
   },
   priceImport: {
     factories: '/api/price-import/factories',

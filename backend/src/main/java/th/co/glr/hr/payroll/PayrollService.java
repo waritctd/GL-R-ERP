@@ -179,10 +179,44 @@ public class PayrollService {
         leaveRepository.resolvePendingCorrections(periodId);
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Payroll period was not saved"));
+        // Payroll input draft (2026-07-30): this month's real values are now committed to
+        // hr.payroll_line, so any leftover hr.payroll_input_draft rows for it are superseded --
+        // clear them in the same transaction so a stale draft can never resurrect over the
+        // processed values on a later reload (see #getInputDraft's precedence rule).
+        payrollRepository.deleteInputDrafts(month);
         auditPayrollAccess("PROCESS_PAYROLL", actor, period,
             "base_salary,gross_earnings,deductions,net_pay");
         auditService.record(actor, "PROCESS_PAYROLL", "payroll_period", periodId, null, period);
         return period;
+    }
+
+    /**
+     * Payroll input draft (2026-07-30): read back whatever HR last saved for this month via
+     * {@link #saveInputDraft}. Read-only, HR/CEO view like every other payroll GET -- never feeds
+     * {@link #preview}/{@link #process} directly. The frontend applies it ONLY when hydrating a
+     * brand-new run (a month with no processed/void period yet, {@code status == PREVIEW && id ==
+     * null}) so a draft can never shadow real persisted values from an already-touched period --
+     * see PayrollPage.jsx's {@code load()}/{@code applyPeriod} for that precedence rule.
+     */
+    public PayrollInputDraftDtos.PayrollInputDraftResponse getInputDraft(LocalDate payrollMonth, UserPrincipal actor) {
+        requireRole(actor, PAYROLL_VIEW_ROLES);
+        LocalDate month = normalizeMonth(payrollMonth);
+        return new PayrollInputDraftDtos.PayrollInputDraftResponse(month, payrollRepository.findInputDrafts(month));
+    }
+
+    /**
+     * Payroll input draft (2026-07-30): HR-only, same edit gate as {@code process}/tax-allowances/
+     * ytd-seed/component-tax-treatments. Persists the raw typed inputs as-is -- no calculation is
+     * performed here, and this never touches {@code hr.payroll_line} or any payroll math. See
+     * {@link #getInputDraft} for the read side and {@link #process} for how a draft is superseded
+     * once the month is actually processed.
+     */
+    @Transactional
+    public PayrollInputDraftDtos.PayrollInputDraftResponse saveInputDraft(ProcessPayrollRequest request, UserPrincipal actor) {
+        requireRole(actor, PAYROLL_EDIT_ROLES);
+        LocalDate month = normalizeMonth(request.payrollMonth());
+        payrollRepository.saveInputDrafts(month, safeInputs(request.inputs()), actor.employeeId());
+        return new PayrollInputDraftDtos.PayrollInputDraftResponse(month, payrollRepository.findInputDrafts(month));
     }
 
     /**

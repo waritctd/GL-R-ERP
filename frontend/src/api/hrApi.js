@@ -365,6 +365,13 @@ export const api = {
     getComponentTaxTreatments: (year) => apiRequest(withQuery(API_ROUTES.payroll.componentTaxTreatments, { year })),
     saveComponentTaxTreatments: (year, items) =>
       apiRequest(withQuery(API_ROUTES.payroll.componentTaxTreatments, { year }), { method: 'PUT', body: items }),
+    // Payroll input draft (2026-07-30): HR's in-progress, not-yet-processed inputs, persisted so a
+    // browser reload restores exactly what was typed instead of only whatever already sits in
+    // hr.payroll_line. GET is HR+CEO (view), PUT is HR-only (edit) -- same split as the rest of
+    // this namespace. `payload` is the same { payrollMonth, inputs } shape as preview/process.
+    // Mirrors PayrollController#getInputDraft / #putInputDraft.
+    getInputDraft: (params) => apiRequest(withQuery(API_ROUTES.payroll.inputDraft, params)),
+    saveInputDraft: (payload) => apiRequest(API_ROUTES.payroll.inputDraft, { method: 'PUT', body: payload }),
   },
   priceImport: {
     factories: () => apiRequest(API_ROUTES.priceImport.factories),
