@@ -4717,6 +4717,17 @@ export const api = {
       hasRole('hr');
       throw new Error('บันทึกยอดสะสมต้นปีไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
+    // P0 fix (Opus review, 2026-07-30): mirrors PayrollController's component-tax-treatments mapping.
+    // Same "carries real payroll figures, so mock mode surfaces a clear not-supported error on writes
+    // rather than fabricating a classification matrix" reasoning as tax-allowances/ytd-seed above.
+    async getComponentTaxTreatments() {
+      hasRole('hr', 'ceo');
+      return delay({ taxYear: new Date().getFullYear(), items: [] });
+    },
+    async saveComponentTaxTreatments() {
+      hasRole('hr');
+      throw new Error('บันทึกการจัดประเภทภาษีหัก ณ ที่จ่ายไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
   },
 
   // Mirrors AttendanceController + AttendanceService (attendance/).

@@ -16,6 +16,10 @@ vi.mock('../../api/index.js', () => ({
       downloadPayslip: vi.fn(),
       distributePayslips: vi.fn(),
       suggestedInputs: vi.fn(),
+      // P0 fix (Opus review, 2026-07-30): the tax-treatment matrix section PayrollPage now renders
+      // calls this on mount.
+      getComponentTaxTreatments: vi.fn(),
+      saveComponentTaxTreatments: vi.fn(),
     },
   },
 }));
@@ -50,6 +54,13 @@ const payrollLine = {
   studentLoanDeduction: 0,
   legalExecutionDeduction: 0,
   otherPostTaxDeductions: 0,
+  // P1 fix (Opus review, 2026-07-30): bonusPay/otherOneOffPay/garnishmentType/
+  // customerReturnAlreadyEarned had backend columns and no frontend field at all.
+  bonusPay: 0,
+  otherOneOffPay: 0,
+  customerReturnDeduction: 0,
+  garnishmentType: null,
+  customerReturnAlreadyEarned: false,
 };
 
 function previewPeriod(overrides = {}) {
@@ -89,14 +100,16 @@ describe('PayrollPage adjustment inputs', () => {
     api.payroll.exportFile.mockResolvedValue(new Blob(['HPCT'], { type: 'application/octet-stream' }));
     api.payroll.distributePayslips.mockResolvedValue({ periodId: 7, totalLines: 1, alreadySent: 0, queued: 1 });
     api.payroll.suggestedInputs.mockResolvedValue({ payrollMonth: '2026-07-01', suggestions: [] });
+    api.payroll.getComponentTaxTreatments.mockResolvedValue({ taxYear: 2026, items: [] });
+    api.payroll.saveComponentTaxTreatments.mockResolvedValue({ taxYear: 2026, items: [] });
   });
 
   it('uses Excel-based UAT defaults and shows a Baht prefix on money fields', async () => {
     render(<PayrollPage showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
-    const gprs = screen.getByLabelText(/พิเศษ 5 \(ค่า GPRS\)/);
-    const allowance = screen.getByLabelText(/พิเศษ 2 \(เบี้ยเลี้ยงประจำ\)/);
+    const gprs = screen.getByLabelText(/พิเศษ 6 \(ค่า GPRS\)/);
+    const allowance = screen.getByLabelText(/พิเศษ 3 \(เบี้ยเลี้ยงประจำ\)/);
 
     expect(costOfLiving.value).toBe('500');
     expect(gprs.value).toBe('500');
@@ -108,7 +121,7 @@ describe('PayrollPage adjustment inputs', () => {
     render(<PayrollPage showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
-    const gprs = screen.getByLabelText(/พิเศษ 5 \(ค่า GPRS\)/);
+    const gprs = screen.getByLabelText(/พิเศษ 6 \(ค่า GPRS\)/);
 
     fireEvent.change(costOfLiving, { target: { value: '' } });
     fireEvent.change(gprs, { target: { value: '' } });
@@ -137,8 +150,8 @@ describe('PayrollPage adjustment inputs', () => {
     renderPayrollPage();
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
-    const gprs = screen.getByLabelText(/พิเศษ 5 \(ค่า GPRS\)/);
-    const allowance = screen.getByLabelText(/พิเศษ 2 \(เบี้ยเลี้ยงประจำ\)/);
+    const gprs = screen.getByLabelText(/พิเศษ 6 \(ค่า GPRS\)/);
+    const allowance = screen.getByLabelText(/พิเศษ 3 \(เบี้ยเลี้ยงประจำ\)/);
     fireEvent.change(costOfLiving, { target: { value: '' } });
     fireEvent.change(gprs, { target: { value: '' } });
     fireEvent.change(allowance, { target: { value: '1' } });
@@ -147,7 +160,8 @@ describe('PayrollPage adjustment inputs', () => {
     await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
     const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
     expect(submitted).toBeDefined();
-    expect(submitted.specialPay2).toBe(1);
+    // เบี้ยเลี้ยงประจำ is slot 3 after the realignment to the accountant's numbering.
+    expect(submitted.specialPay3).toBe(1);
   });
 
   it('downloads a saved payslip for the selected payroll line', async () => {
@@ -360,6 +374,92 @@ describe('PayrollPage adjustment inputs', () => {
     });
   });
 
+  // F2 (Opus review, 2026-07-30): HR could type a per-diem amount with no basis selector at all --
+  // Preview always succeeded (it never writes a row), then Process 500'd on V97's
+  // chk_payroll_line_per_diem_basis_present CHECK. Fixed by adding the missing amount inputs AND the
+  // basis selector (shown only once an amount is entered), plus a server-side 400 as a second line of
+  // defence (PayrollService#calculateLine).
+  describe('per-diem basis selector (V97 / F2)', () => {
+    async function openPerDiemSection() {
+      fireEvent.click(await screen.findByRole('button', { name: /ค่าอาหาร \/ เบี้ยเลี้ยง/ }));
+      return screen.findByLabelText(/เบี้ยเลี้ยง — ส่วนเกิน \(เสียภาษี\)/, { selector: 'input' });
+    }
+
+    it('hides the basis selector until a per-diem amount is entered', async () => {
+      renderPayrollPage();
+      await openPerDiemSection();
+
+      expect(screen.queryByLabelText(/ฐานเบี้ยเลี้ยง \(มาตรา 42\)/)).toBeNull();
+    });
+
+    it('shows the basis selector once a taxable per-diem amount is entered, and hides it again when cleared', async () => {
+      renderPayrollPage();
+      const taxable = await openPerDiemSection();
+
+      fireEvent.change(taxable, { target: { value: '300' } });
+      const basis = await screen.findByLabelText(/ฐานเบี้ยเลี้ยง \(มาตรา 42\)/, { selector: 'select' });
+      expect(basis).toBeTruthy();
+
+      fireEvent.change(taxable, { target: { value: '' } });
+      await waitFor(() => expect(screen.queryByLabelText(/ฐานเบี้ยเลี้ยง \(มาตรา 42\)/)).toBeNull());
+    });
+
+    it('shows the basis selector for the exempt amount too, not only the taxable one', async () => {
+      renderPayrollPage();
+      fireEvent.click(await screen.findByRole('button', { name: /ค่าอาหาร \/ เบี้ยเลี้ยง/ }));
+      const exempt = await screen.findByLabelText(/เบี้ยเลี้ยง — ส่วนที่ยกเว้นภาษี \(ม\.42\)/, { selector: 'input' });
+
+      fireEvent.change(exempt, { target: { value: '700' } });
+      expect(await screen.findByLabelText(/ฐานเบี้ยเลี้ยง \(มาตรา 42\)/, { selector: 'select' })).toBeTruthy();
+    });
+
+    it('submits the chosen per-diem basis verbatim, matching the backend PerDiemBasis enum', async () => {
+      renderPayrollPage();
+      const taxable = await openPerDiemSection();
+      fireEvent.change(taxable, { target: { value: '300' } });
+      const basis = await screen.findByLabelText(/ฐานเบี้ยเลี้ยง \(มาตรา 42\)/, { selector: 'select' });
+      fireEvent.change(basis, { target: { value: 'REIMBURSED_S42_1' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted.perDiemTaxable).toBe(300);
+      expect(submitted.perDiemBasis).toBe('REIMBURSED_S42_1');
+    });
+
+    it('sends perDiemBasis as null, never a blank string, when no per-diem amount is entered', async () => {
+      renderPayrollPage();
+      await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted).toBeDefined();
+      expect(submitted.perDiemBasis).toBeNull();
+    });
+
+    // The backend now rejects this before the INSERT (see PayrollService#calculateLine's F2 fix) with
+    // a 400 naming the employee and the missing basis, instead of the DB CHECK constraint turning it
+    // into a bare 500. This proves the page surfaces that rejection cleanly rather than swallowing it.
+    it('surfaces the backend rejection cleanly when Process is attempted without a chosen basis', async () => {
+      const showToast = vi.fn();
+      api.payroll.process.mockRejectedValue(new Error(
+        'พนักงาน GLR-001 พนักงาน ทดสอบ มีการจ่ายเบี้ยเลี้ยง (เบี้ยเลี้ยง ตจว/ตปท) แต่ไม่ได้ระบุฐานตามมาตรา 42'
+        + ' (เหมาจ่ายตามอัตราราชการ มาตรา 42(2) หรือจ่ายจริงตามหน้าที่ มาตรา 42(1)) กรุณาเลือกฐานก่อนประมวลผลเงินเดือน',
+      ));
+      render(<PayrollPage showToast={showToast} />);
+      const taxable = await openPerDiemSection();
+      fireEvent.change(taxable, { target: { value: '300' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /ประมวลผลเงินเดือน/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /ยืนยันประมวลผล/i }));
+
+      await waitFor(() => expect(api.payroll.process).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('กรุณาเลือกฐานก่อนประมวลผลเงินเดือน')));
+    });
+  });
+
   it('generates the selected statutory export file with the chosen pay date', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
 
@@ -411,6 +511,207 @@ describe('PayrollPage adjustment inputs', () => {
       expect(reason.getAttribute('role')).toBe('note');
       const processButton = screen.getByRole('button', { name: /ประมวลผลเงินเดือน/i });
       expect(processButton.getAttribute('aria-describedby')).toBe(reason.id);
+    });
+  });
+
+  // P1 fix (Opus review, 2026-07-30): bonusPay/otherOneOffPay/garnishmentType/
+  // customerReturnAlreadyEarned existed end-to-end on the backend with no input anywhere on this page.
+  describe('one-off pay, garnishment type, and customer-return-earned flag (P1)', () => {
+    it('submits bonusPay and otherOneOffPay from the "เงินก้อนพิเศษ" section', async () => {
+      renderPayrollPage();
+      fireEvent.click(await screen.findByRole('button', { name: /เงินก้อนพิเศษ \(จ่ายครั้งเดียว\)/ }));
+      const bonus = await screen.findByLabelText(/เงินโบนัส/, { selector: 'input' });
+      const oneOff = await screen.findByLabelText(/เงินก้อนอื่นๆ \(ครั้งเดียว\)/, { selector: 'input' });
+
+      fireEvent.change(bonus, { target: { value: '20000' } });
+      fireEvent.change(oneOff, { target: { value: '1500' } });
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted.bonusPay).toBe(20000);
+      expect(submitted.otherOneOffPay).toBe(1500);
+    });
+
+    async function openIndividualDeductionsSection() {
+      fireEvent.click(await screen.findByRole('button', { name: /รายการหักรายบุคคล/ }));
+      return screen.findByLabelText(/หักอายัดกรมบังคับคดี/, { selector: 'input' });
+    }
+
+    it('hides the garnishment-type selector until an amount is entered under หักอายัดกรมบังคับคดี', async () => {
+      renderPayrollPage();
+      await openIndividualDeductionsSection();
+
+      expect(screen.queryByLabelText(/ประเภทเงินที่ถูกอายัด/)).toBeNull();
+    });
+
+    it('shows the garnishment-type selector once an amount is entered, and submits it verbatim', async () => {
+      renderPayrollPage();
+      const legalExecution = await openIndividualDeductionsSection();
+
+      fireEvent.change(legalExecution, { target: { value: '5000' } });
+      const garnishmentType = await screen.findByLabelText(/ประเภทเงินที่ถูกอายัด/, { selector: 'select' });
+      fireEvent.change(garnishmentType, { target: { value: 'OVERTIME_OR_DILIGENCE' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted.legalExecutionDeduction).toBe(5000);
+      expect(submitted.garnishmentType).toBe('OVERTIME_OR_DILIGENCE');
+    });
+
+    it('sends garnishmentType as null, never a blank string, when no garnishment amount is entered', async () => {
+      renderPayrollPage();
+      await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted).toBeDefined();
+      expect(submitted.garnishmentType).toBeNull();
+    });
+
+    it('hides the customer-return-earned checkbox until a return amount is entered, defaults to false', async () => {
+      renderPayrollPage();
+      fireEvent.click(await screen.findByRole('button', { name: /รายการหักก่อนภาษี/, expanded: false }));
+      const customerReturn = await screen.findByLabelText(/หักลูกค้าคืนสินค้า/, { selector: 'input' });
+
+      expect(screen.queryByLabelText(/คอมมิชชันนี้รับไปแล้ว/)).toBeNull();
+
+      fireEvent.change(customerReturn, { target: { value: '3000' } });
+      const alreadyEarned = await screen.findByLabelText(/คอมมิชชันนี้รับไปแล้ว/, { selector: 'input' });
+      expect(alreadyEarned.checked).toBe(false);
+
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted.customerReturnDeduction).toBe(3000);
+      expect(submitted.customerReturnAlreadyEarned).toBe(false);
+    });
+
+    it('submits customerReturnAlreadyEarned = true once HR ticks the box', async () => {
+      renderPayrollPage();
+      fireEvent.click(await screen.findByRole('button', { name: /รายการหักก่อนภาษี/, expanded: false }));
+      const customerReturn = await screen.findByLabelText(/หักลูกค้าคืนสินค้า/, { selector: 'input' });
+      fireEvent.change(customerReturn, { target: { value: '3000' } });
+      const alreadyEarned = await screen.findByLabelText(/คอมมิชชันนี้รับไปแล้ว/, { selector: 'input' });
+
+      fireEvent.click(alreadyEarned);
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted.customerReturnAlreadyEarned).toBe(true);
+    });
+
+    // D1 fix (fourth reachability audit, 2026-07-30): a processed line's customerReturnDeduction is
+    // the POST-TAX bookkeeping figure -- 0 in the unearned path, where the amount was instead netted
+    // pre-tax out of commission. Hydrating the form from THAT field (the pre-fix bug) silently wiped
+    // both the amount and the checkbox (which only renders once the field is > 0) on every reload.
+    // customerReturnRequested always carries what HR actually typed, regardless of the earned flag.
+    it('hydrates the entered amount (and keeps the checkbox visible) from customerReturnRequested on reload, not the zeroed post-tax figure', async () => {
+      api.payroll.current.mockResolvedValue({
+        period: previewPeriod({
+          id: 7,
+          status: 'PROCESSED',
+          lines: [{
+            ...payrollLine,
+            customerReturnDeduction: 0, // the unearned path's post-tax bookkeeping figure -- always 0
+            customerReturnRequested: 3000, // what HR actually typed
+            customerReturnAlreadyEarned: false,
+          }],
+        }),
+      });
+
+      renderPayrollPage();
+      fireEvent.click(await screen.findByRole('button', { name: /รายการหักก่อนภาษี/, expanded: false }));
+      const customerReturn = await screen.findByLabelText(/หักลูกค้าคืนสินค้า/, { selector: 'input' });
+
+      expect(customerReturn.value).toBe('3000');
+      // The checkbox's render gate is `> 0` on this same field -- if hydration had read the zeroed
+      // customerReturnDeduction instead, findByLabelText below would reject (no such element) rather
+      // than resolve.
+      const alreadyEarned = await screen.findByLabelText(/คอมมิชชันนี้รับไปแล้ว/, { selector: 'input' });
+      expect(alreadyEarned.checked).toBe(false);
+    });
+  });
+
+  // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix screen. Without a
+  // real screen, HR had no way to satisfy PayrollCalculator#calculateClassified's classification
+  // gate for any component beyond the V100 backfill defaults.
+  describe('withholding-tax classification matrix (P0)', () => {
+    it('loads the matrix on mount and shows an unclassified count per employee', async () => {
+      api.payroll.getComponentTaxTreatments.mockResolvedValue({
+        taxYear: 2026,
+        items: [{ employeeId: 1, employeeCode: 'GLR-001', employeeName: 'พนักงาน ทดสอบ', byComponent: {} }],
+      });
+      renderPayrollPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /การจัดประเภทภาษีหัก ณ ที่จ่าย/ }));
+      await waitFor(() => expect(api.payroll.getComponentTaxTreatments).toHaveBeenCalledWith(2026));
+      expect(await screen.findByRole('button', { name: /พนักงาน ทดสอบ \(GLR-001\)/ })).toBeTruthy();
+    });
+
+    it('saves an edited classification and reflects the server response', async () => {
+      api.payroll.getComponentTaxTreatments.mockResolvedValue({
+        taxYear: 2026,
+        items: [{ employeeId: 1, employeeCode: 'GLR-001', employeeName: 'พนักงาน ทดสอบ', byComponent: {} }],
+      });
+      api.payroll.saveComponentTaxTreatments.mockResolvedValue({
+        taxYear: 2026,
+        items: [{
+          employeeId: 1, employeeCode: 'GLR-001', employeeName: 'พนักงาน ทดสอบ',
+          byComponent: { SPECIAL_PAY_1: 'REGULAR_REPROJECT' },
+        }],
+      });
+      renderPayrollPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /การจัดประเภทภาษีหัก ณ ที่จ่าย/ }));
+      fireEvent.click(await screen.findByRole('button', { name: /พนักงาน ทดสอบ \(GLR-001\)/ }));
+      const specialPay1 = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/, { selector: 'select' });
+
+      fireEvent.change(specialPay1, { target: { value: 'REGULAR_REPROJECT' } });
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกการจัดประเภท/ }));
+
+      await waitFor(() => expect(api.payroll.saveComponentTaxTreatments).toHaveBeenCalledWith(2026, [
+        { employeeId: 1, component: 'SPECIAL_PAY_1', taxTreatment: 'REGULAR_REPROJECT' },
+      ]));
+    });
+
+    // Sixth Opus review, 2026-07-30: `byComponent` now carries the EFFECTIVE classification
+    // (server-synthesized defaults merged in), so every cell renders non-blank and the section badge
+    // reads "จัดประเภทครบแล้ว" even when nobody has chosen anything. The per-cell
+    // "ค่าเริ่มต้นของระบบ" hint, keyed off `explicitlyClassifiedComponents`, is the ONLY thing left
+    // that tells HR "the system is defaulting this" from "someone chose this" — the branch's own
+    // stated back-loading-risk mitigation. It shipped with no test; this is it, written wrong-way-round
+    // (the explicitly-classified cell must NOT carry the hint).
+    it('flags a synthesized default but not a cell HR actually classified', async () => {
+      api.payroll.getComponentTaxTreatments.mockResolvedValue({
+        taxYear: 2026,
+        items: [{
+          employeeId: 1,
+          employeeCode: 'GLR-001',
+          employeeName: 'พนักงาน ทดสอบ',
+          byComponent: {
+            SPECIAL_PAY_1: 'EXTRA_CUMULATIVE_ACTUAL',
+            SPECIAL_PAY_2: 'REGULAR_REPROJECT',
+          },
+          explicitlyClassifiedComponents: ['SPECIAL_PAY_2'],
+        }],
+      });
+      renderPayrollPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /การจัดประเภทภาษีหัก ณ ที่จ่าย/ }));
+      fireEvent.click(await screen.findByRole('button', { name: /พนักงาน ทดสอบ \(GLR-001\)/ }));
+
+      const defaulted = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/, { selector: 'select' });
+      const chosenByHr = await screen.findByLabelText(/พิเศษ 2 \(ค่าเช่าบ้าน\)/, { selector: 'select' });
+
+      expect(defaulted.value).toBe('EXTRA_CUMULATIVE_ACTUAL');
+      expect(chosenByHr.value).toBe('REGULAR_REPROJECT');
+      expect(defaulted.closest('label').textContent).toContain('ค่าเริ่มต้นของระบบ');
+      expect(chosenByHr.closest('label').textContent).not.toContain('ค่าเริ่มต้นของระบบ');
     });
   });
 });

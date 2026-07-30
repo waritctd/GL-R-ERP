@@ -12,24 +12,22 @@ import java.util.List;
  * see {@link PayrollService#suggestedInputs}. This does not change {@code preview()}/{@code
  * process()} in any way; it is a separate, additive read path.
  *
- * <p>Carried: special_pay_1..5, non_taxable_income, student_loan_deduction,
- * legal_execution_deduction. Excluded: special_pay_6 (commission — {@code CommissionService} already
- * feeds this; carrying it would double-count), special_pay_7/8, and the event-driven fields
- * (warning-letter / customer-return deductions, other pre/post-tax deductions).
+ * <p>The carried fields are special_pay_1..9, meal_allowance, non_taxable_income,
+ * student_loan_deduction, legal_execution_deduction. WHICH of the nine special-pay slots (and meal
+ * allowance) actually carries for a given employee is governed entirely by {@code
+ * hr.payroll_component_carry_forward} (V98, per-employee per-component) — not by a hardcoded slot
+ * list here. commission ({@code CommissionService}-fed, separate from any พิเศษ slot) and other
+ * event-driven fields (warning-letter / customer-return deductions, other pre/post-tax deductions)
+ * are still never carried — those describe THIS month's events, not a standing recurring amount.
  *
- * <p><b>WARNING — this selection rests on a classification the owner has since contradicted
- * (2026-07-29).</b> It was written believing special_pay_1..5 were standing company allowances. The
- * owner's account is that <em>all</em> of พิเศษ 1-8 except 6 are occasional, varying per employee per
- * month, and that <em>an annual bonus is typed into one of พิเศษ 1-5</em>. So carrying 1..5 forward can
- * re-propose last month's ONE-OFF payment — a ฿100,000 June bonus pre-fills again in July, and only HR
- * noticing stops it. The pre-fill is a suggestion HR edits before submitting, never an automatic
- * payment, so nothing is paid without a human; but the suggestion is now known to be wrong for exactly
- * the payments that matter most.
- *
- * <p>Left as-is deliberately on the ป.96 branch: changing what carries forward is a payroll-entry
- * behaviour change needing the owner's decision, not a side effect of a withholding fix. Recorded in
- * that branch's handoff as an open risk. {@code PayrollCalculator}'s COMMISSION_SPECIAL_PAY_INDEX
- * carries the authoritative classification — do not re-derive it from this javadoc.
+ * <p>Supersedes the earlier special_pay_1..5-only design from the ป.96 branch (117), which rested on
+ * a classification the owner later contradicted (2026-07-29): พิเศษ 1-9 except 7 (คอมมิชชั่น, per the
+ * accountant's-workbook renumbering, handoff section 9d -- F7 correction, Opus review 2026-07-30; this
+ * was พิเศษ 6 before that renumbering) are occasional, not standing allowances, so a hardcoded 1..5
+ * carry-list could re-propose a one-off bonus as if it recurred. V98's per-employee, per-component
+ * carry-forward table (seeded from the accountant's ledger at a 70%-same-value rule) replaces the
+ * hardcoded list entirely -- see that migration's comment and {@code
+ * PayrollRepository#findCarryForwardSuggestions}.
  *
  * <p>Leave -&gt; payroll unpaid-day deduction (2026-07-23): {@code unpaidLeaveDays} IS event-driven
  * (this month's approved-beyond-quota leave, from {@code LeaveRepository
@@ -52,6 +50,16 @@ public final class PayrollCarryForwardDtos {
         BigDecimal specialPay3,
         BigDecimal specialPay4,
         BigDecimal specialPay5,
+        // Extended to all nine พิเศษ slots (Opus review, 2026-07-29): V98 seeds carry-forward flags
+        // for SPECIAL_PAY_6/7/9 too (the accountant's ledger names ค่า GPRS(เพิ่ม) and เงินรางวัล as
+        // recurring for several employees), and the DTO used to have no field to carry them into.
+        BigDecimal specialPay6,
+        BigDecimal specialPay7,
+        BigDecimal specialPay8,
+        BigDecimal specialPay9,
+        // ค่าอาหาร (V97/V98) -- also carry-forward-flagged per employee, same mechanism as the พิเศษ
+        // slots.
+        BigDecimal mealAllowance,
         BigDecimal nonTaxableIncome,
         BigDecimal studentLoanDeduction,
         BigDecimal legalExecutionDeduction,
@@ -68,6 +76,7 @@ public final class PayrollCarryForwardDtos {
         public static SuggestedInputRow empty(Long employeeId) {
             return new SuggestedInputRow(
                 employeeId,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 null

@@ -257,6 +257,7 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
             employeeId,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, // specialPay1-4
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, // specialPay5-8
+            BigDecimal.ZERO, // specialPay9
             nonTaxableIncome,
             BigDecimal.ZERO, // unpaidLeaveDays
             BigDecimal.ZERO, // studentLoanDeduction
@@ -289,7 +290,7 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
     }
 
     private long seedEmployee(String code, String firstNameTh, String lastNameTh, BigDecimal salary) {
-        return jdbc.queryForObject(
+        long employeeId = jdbc.queryForObject(
             """
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active)
             VALUES (:code, :first, :last, :salary, TRUE)
@@ -297,11 +298,16 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
             """,
             Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "salary", salary),
             Long.class);
+        // SALARY needs no tax-treatment seed (locked to REGULAR_REPROJECT regardless), but SSO
+        // inclusion has no calculator-layer default -- seed it so socialSecurity comes out non-zero,
+        // matching every assertion in this file that expects the pre-task-2 salary-only SSO base.
+        seedSsoIncluded(employeeId, 2026, PayrollComponent.SALARY);
+        return employeeId;
     }
 
     /** A director: no salary at all, only director_remuneration -- must still be payroll-eligible. */
     private long seedDirector(String code, String firstNameTh, String lastNameTh, BigDecimal directorRemuneration) {
-        return jdbc.queryForObject(
+        long employeeId = jdbc.queryForObject(
             """
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, director_remuneration, is_active)
             VALUES (:code, :first, :last, 0, :directorRemuneration, TRUE)
@@ -309,5 +315,10 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
             """,
             Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "directorRemuneration", directorRemuneration),
             Long.class);
+        // DIRECTOR_REMUNERATION is non-zero and HR-classified per the handoff -- REGULAR_REPROJECT
+        // here (directors are typically paid the same amount every month). Deliberately NOT SSO-
+        // included: this test's whole point is that director remuneration stays outside the SSO base.
+        seedRegularTaxTreatment(employeeId, 2026, PayrollComponent.DIRECTOR_REMUNERATION);
+        return employeeId;
     }
 }

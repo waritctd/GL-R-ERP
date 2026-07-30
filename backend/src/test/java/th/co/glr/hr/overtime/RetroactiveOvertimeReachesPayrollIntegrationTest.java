@@ -28,6 +28,7 @@ import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollCalculator;
+import th.co.glr.hr.payroll.PayrollComponent;
 import th.co.glr.hr.payroll.PayrollLineDto;
 import th.co.glr.hr.payroll.PayrollPeriodDto;
 import th.co.glr.hr.payroll.PayrollRepository;
@@ -151,6 +152,12 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
     void backdatedOvertimeRaisesGrossAndNetOnThePayrollLine() {
         LocalDate workDate = backdatedWorkDateInCurrentMonth();
         LocalDate payrollMonth = workDate.withDayOfMonth(1);
+
+        // Task 2 (2026-07-29): a non-zero component with no withholding-tax classification rejects
+        // the run. This test's whole point is that backdated OT reaches the payroll line, so the OT
+        // it files IS non-zero and must be classified first -- exactly as HR would have to. Without
+        // this the run 409s on the second preview and the assertion below never runs.
+        seedRegularTaxTreatment(staff, payrollMonth.getYear(), PayrollComponent.OVERTIME_PAY);
 
         PayrollLineDto before = previewLineFor(payrollMonth, staff);
         fileAndFullyApprove(workDate);

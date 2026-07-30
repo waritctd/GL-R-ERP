@@ -38,8 +38,10 @@ class PayrollCalculatorTest {
         String salary, String bonus, PayrollYearToDate yearToDate, int month, int remainingPayPeriods) {
         return calculator.calculate(new PayrollCalculationInput(
             new BigDecimal(salary),
-            // Slot 1: where HR actually types a bonus (owner-confirmed 2026-07-29). Slots 1-5, 7 and 8
-            // are all occasional, so this is the ข้อ 2.5 limb.
+            // Slot 1: where HR actually types a bonus (owner-confirmed 2026-07-29). Slots 1-6 and 8
+            // (F7 correction, Opus review 2026-07-30: was "1-5, 7 and 8" -- the accountant's-workbook
+            // renumbering, handoff section 9d, moved คอมมิชชั่น from slot 6 to slot 7, so it is now slot
+            // 7 that is excluded, not slot 6) are all occasional, so this is the ข้อ 2.5 limb.
             List.of(new BigDecimal(bonus), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
@@ -89,65 +91,24 @@ class PayrollCalculatorTest {
             null, taxYear, 0, age));
     }
 
+    // กองทุนสำรองเลี้ยงชีพ REMOVED (owner decision, 2026-07-29, handoff section 4 / V99): GL&R
+    // operates no provident fund -- verified against production, zero employees hold a
+    // provident_fund_no. The three dedicated PVD tests that used to live here
+    // (providentFundContributionsReduceTheTaxableAnnualIncome,
+    // theProvidentFundDeductionIsCappedAtFifteenPercentOfPay,
+    // theProvidentFundTakesTheRetirementClusterAheadOfRmf) are deleted along with the field they
+    // exercised; see PayrollCalculator#retirementAllowance for the removal.
     private PayrollTaxAllowanceInput declaration(
         String childAllowance, String disabledCareAllowance, String rmf, String ssf,
-        String providentFund, int childCount, int childCountDouble, int disabledCareCount,
+        int childCount, int childCountDouble, int disabledCareCount,
         boolean disabilityCardHolder) {
         return new PayrollTaxAllowanceInput(
             BigDecimal.ZERO, new BigDecimal(childAllowance), BigDecimal.ZERO,
             new BigDecimal(disabledCareAllowance), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, new BigDecimal(rmf), new BigDecimal(ssf), BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            new BigDecimal(providentFund), childCount, childCountDouble, disabledCareCount,
+            childCount, childCountDouble, disabledCareCount,
             disabilityCardHolder);
-    }
-
-    /**
-     * กองทุนสำรองเลี้ยงชีพ was missing from the engine entirely, so every provident-fund member was
-     * over-withheld. It is deductible up to 15% of ค่าจ้าง and 500,000, inside the same 500,000
-     * retirement cluster as RMF and บำนาญ.
-     */
-    @Test
-    void providentFundContributionsReduceTheTaxableAnnualIncome() {
-        PayrollCalculation without = withAllowances(
-            declaration("0", "0", "0", "0", "0", 0, 0, 0, false), 2026, 40);
-        PayrollCalculation with = withAllowances(
-            declaration("0", "0", "0", "0", "120000.00", 0, 0, 0, false), 2026, 40);
-
-        // 15% of 1,200,000 is 180,000, so the whole 120,000 is allowed.
-        assertThat(without.taxableAnnualIncome().subtract(with.taxableAnnualIncome()))
-            .isEqualByComparingTo(new BigDecimal("120000.00"));
-        assertThat(with.withholdingTax()).isLessThan(without.withholdingTax());
-    }
-
-    /** The 15%-of-ค่าจ้าง ceiling on the provident-fund deduction is enforced. */
-    @Test
-    void theProvidentFundDeductionIsCappedAtFifteenPercentOfPay() {
-        PayrollCalculation baseline = withAllowances(
-            declaration("0", "0", "0", "0", "0", 0, 0, 0, false), 2026, 40);
-        // Declaring 400,000 against 1,200,000 of pay: 15% = 180,000 is the most that can be allowed.
-        PayrollCalculation capped = withAllowances(
-            declaration("0", "0", "0", "0", "400000.00", 0, 0, 0, false), 2026, 40);
-
-        assertThat(baseline.taxableAnnualIncome().subtract(capped.taxableAnnualIncome()))
-            .isEqualByComparingTo(new BigDecimal("180000.00"));
-    }
-
-    /**
-     * กองทุนสำรองเลี้ยงชีพ takes the 500,000 cluster FIRST. It is deducted from pay at source and the
-     * employee cannot choose to stop it, so when the cluster runs out it must run out against the
-     * voluntary RMF purchase instead.
-     */
-    @Test
-    void theProvidentFundTakesTheRetirementClusterAheadOfRmf() {
-        PayrollCalculation baseline = withAllowances(
-            declaration("0", "0", "0", "0", "0", 0, 0, 0, false), 2026, 40);
-        // PVD 180,000 (its own 15% ceiling) + RMF 500,000: the cluster allows 500,000 in total.
-        PayrollCalculation both = withAllowances(
-            declaration("0", "0", "500000.00", "0", "400000.00", 0, 0, 0, false), 2026, 40);
-
-        assertThat(baseline.taxableAnnualIncome().subtract(both.taxableAnnualIncome()))
-            .isEqualByComparingTo(new BigDecimal("500000.00"));
     }
 
     /**
@@ -157,12 +118,12 @@ class PayrollCalculatorTest {
      */
     @Test
     void ssfIsDeductibleUpToTaxYear2024AndIgnoredFrom2025() {
-        PayrollTaxAllowanceInput ssfOnly = declaration("0", "0", "0", "100000.00", "0", 0, 0, 0, false);
+        PayrollTaxAllowanceInput ssfOnly = declaration("0", "0", "0", "100000.00", 0, 0, 0, false);
         PayrollCalculation lastEligibleYear = withAllowances(ssfOnly, 2024, 40);
         PayrollCalculation firstIneligibleYear = withAllowances(ssfOnly, 2025, 40);
         PayrollCalculation currentYear = withAllowances(ssfOnly, 2026, 40);
         PayrollCalculation noSsfAtAll = withAllowances(
-            declaration("0", "0", "0", "0", "0", 0, 0, 0, false), 2026, 40);
+            declaration("0", "0", "0", "0", 0, 0, 0, false), 2026, 40);
 
         assertThat(lastEligibleYear.taxableAnnualIncome())
             .isEqualByComparingTo(firstIneligibleYear.taxableAnnualIncome().subtract(new BigDecimal("100000.00")));
@@ -177,10 +138,10 @@ class PayrollCalculatorTest {
     void theChildAllowanceIsCappedByTheDeclaredNumberOfChildren() {
         // Two children, the second born from 2561: 30,000 + 60,000 = 90,000 allowed.
         PayrollCalculation honest = withAllowances(
-            declaration("90000.00", "0", "0", "0", "0", 2, 1, 0, false), 2026, 40);
+            declaration("90000.00", "0", "0", "0", 2, 1, 0, false), 2026, 40);
         // Same household, but 500,000 typed into the box.
         PayrollCalculation overstated = withAllowances(
-            declaration("500000.00", "0", "0", "0", "0", 2, 1, 0, false), 2026, 40);
+            declaration("500000.00", "0", "0", "0", 2, 1, 0, false), 2026, 40);
 
         assertThat(overstated.taxableAnnualIncome()).isEqualByComparingTo(honest.taxableAnnualIncome());
         assertThat(overstated.taxAllowanceTotal())
@@ -191,9 +152,9 @@ class PayrollCalculatorTest {
     @Test
     void theDisabledCareAllowanceIsCappedByTheDeclaredNumberOfDependants() {
         PayrollCalculation honest = withAllowances(
-            declaration("0", "60000.00", "0", "0", "0", 0, 0, 1, false), 2026, 40);
+            declaration("0", "60000.00", "0", "0", 0, 0, 1, false), 2026, 40);
         PayrollCalculation overstated = withAllowances(
-            declaration("0", "300000.00", "0", "0", "0", 0, 0, 1, false), 2026, 40);
+            declaration("0", "300000.00", "0", "0", 0, 0, 1, false), 2026, 40);
 
         assertThat(overstated.taxableAnnualIncome()).isEqualByComparingTo(honest.taxableAnnualIncome());
     }
@@ -212,9 +173,9 @@ class PayrollCalculatorTest {
     @Test
     void ataxpayerAged65OrOverGetsThe190000Exemption() {
         PayrollCalculation under65 = withAllowances(
-            declaration("0", "0", "0", "0", "0", 0, 0, 0, false), 2026, 64);
+            declaration("0", "0", "0", "0", 0, 0, 0, false), 2026, 64);
         PayrollCalculation over65 = withAllowances(
-            declaration("0", "0", "0", "0", "0", 0, 0, 0, false), 2026, 65);
+            declaration("0", "0", "0", "0", 0, 0, 0, false), 2026, 65);
 
         assertThat(under65.taxableAnnualIncome().subtract(over65.taxableAnnualIncome()))
             .isEqualByComparingTo(new BigDecimal("190000.00"));
@@ -232,7 +193,7 @@ class PayrollCalculatorTest {
             new BigDecimal("25000.00"), List.of(),
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO,
-            declaration("0", "0", "0", "0", "0", 0, 0, 0, false),
+            declaration("0", "0", "0", "0", 0, 0, 0, false),
             PayrollYearToDate.empty(), 1,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             null, 2026, 0, 70));
@@ -246,9 +207,9 @@ class PayrollCalculatorTest {
     @Test
     void aDisabilityCardHolderUnder65GetsTheSameExemption() {
         PayrollCalculation withoutCard = withAllowances(
-            declaration("0", "0", "0", "0", "0", 0, 0, 0, false), 2026, 40);
+            declaration("0", "0", "0", "0", 0, 0, 0, false), 2026, 40);
         PayrollCalculation withCard = withAllowances(
-            declaration("0", "0", "0", "0", "0", 0, 0, 0, true), 2026, 40);
+            declaration("0", "0", "0", "0", 0, 0, 0, true), 2026, 40);
 
         assertThat(withoutCard.taxableAnnualIncome().subtract(withCard.taxableAnnualIncome()))
             .isEqualByComparingTo(new BigDecimal("190000.00"));
@@ -258,9 +219,9 @@ class PayrollCalculatorTest {
     @Test
     void anUnknownDateOfBirthDoesNotGrantTheExemption() {
         PayrollCalculation unknownAge = withAllowances(
-            declaration("0", "0", "0", "0", "0", 0, 0, 0, false), 2026, 0);
+            declaration("0", "0", "0", "0", 0, 0, 0, false), 2026, 0);
         PayrollCalculation knownYoung = withAllowances(
-            declaration("0", "0", "0", "0", "0", 0, 0, 0, false), 2026, 30);
+            declaration("0", "0", "0", "0", 0, 0, 0, false), 2026, 30);
 
         assertThat(unknownAge.taxableAnnualIncome()).isEqualByComparingTo(knownYoung.taxableAnnualIncome());
     }
@@ -435,7 +396,15 @@ class PayrollCalculatorTest {
     @Test
     void theTwoIncomeLimbsAlwaysSumToGrossTaxableIncome() {
         String[][] cases = {
-            // salary, พิเศษ7 (occasional), พิเศษ1 (occasional/bonus), OT, commission (RECURRING), unpaid leave days
+            // F7 correction (Opus review, 2026-07-30): this row's พิเศษ7 value was labelled
+            // "(occasional)", which was true under the OLD numbering (พิเศษ7 was ทำได้ตาม KPI, an
+            // occasional slot) but is now wrong -- the accountant's-workbook renumbering (handoff
+            // section 9d) moved คอมมิชชั่น to พิเศษ7, and COMMISSION_SPECIAL_PAY_INDEX now correctly
+            // treats it as RECURRING (the regular limb). See
+            // theSeventhSpecialPaySlotIsCommissionAndLandsInTheRegularLimbNotVariable below for a test
+            // that actually pins this, unlike the partition-only assertions in this method.
+            //
+            // salary, พิเศษ7 (RECURRING -- commission slot), พิเศษ1 (occasional/bonus), OT, commissionPay field (RECURRING), unpaid leave days
             {"50000.00", "5000.00", "100000.00", "3000.00", "8000.00", "0"},
             {"50000.00", "0", "0", "0", "0", "5"},
             {"3000.00", "0", "20000.00", "0", "0", "30"},     // deductions exceed the regular limb
@@ -461,6 +430,53 @@ class PayrollCalculatorTest {
                 .withFailMessage("withholding split must sum to withholdingTax for salary=%s", row[0])
                 .isEqualByComparingTo(result.withholdingTax());
         }
+    }
+
+    /**
+     * F4 correction (Opus review, 2026-07-30): commit f5eaa01e ("fix the commission slot index")
+     * claimed "no test places a non-zero amount at either index" -- false. The first row of {@link
+     * #theTwoIncomeLimbsAlwaysSumToGrossTaxableIncome} above places 5,000.00 at zero-based index 6
+     * (specialPay7) and always passed anyway, because that test only asserts a PARTITION invariant
+     * (regular + variable == gross) that holds no matter which limb index 6 lands in -- an engine that
+     * put specialPay7 in the WRONG limb would still pass it. It is structurally incapable of catching
+     * what it appears to cover.
+     *
+     * <p>This test closes that gap: it isolates specialPay7's own contribution (against an otherwise
+     * identical zeroed run) and pins specifically that it lands in the REGULAR limb, not the variable
+     * one -- the actual behaviour {@code COMMISSION_SPECIAL_PAY_INDEX} is supposed to produce.
+     */
+    @Test
+    void theSeventhSpecialPaySlotIsCommissionAndLandsInTheRegularLimbNotVariable() {
+        PayrollCalculation withCommissionSlot = calculator.calculate(new PayrollCalculationInput(
+            new BigDecimal("50000.00"),
+            List.of(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("5000.00"), BigDecimal.ZERO),
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 3,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, null, 2026, 0));
+        PayrollCalculation withoutCommissionSlot = calculator.calculate(new PayrollCalculationInput(
+            new BigDecimal("50000.00"),
+            List.of(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 3,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, null, 2026, 0));
+
+        BigDecimal regularContribution = withCommissionSlot.regularTaxableIncome()
+            .subtract(withoutCommissionSlot.regularTaxableIncome());
+        BigDecimal variableContribution = withCommissionSlot.variableTaxableIncome()
+            .subtract(withoutCommissionSlot.variableTaxableIncome());
+
+        assertThat(regularContribution)
+            .withFailMessage("specialPay7 (คอมมิชชั่น) must land in the REGULAR limb -- COMMISSION_SPECIAL_PAY_INDEX")
+            .isEqualByComparingTo("5000.00");
+        assertThat(variableContribution)
+            .withFailMessage("specialPay7 must NOT land in the variable limb")
+            .isEqualByComparingTo("0.00");
     }
 
     /**
