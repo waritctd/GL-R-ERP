@@ -7,8 +7,11 @@ It currently spans HR operations and sales/deal workflow surfaces.
 
 - `PRODUCT.md` explains users, product purpose, operating context, and guardrails.
 - `DESIGN.md` defines the approved visual language and design-system rules.
-- `docs/ui-repair/` contains the UI repair audit, component contracts, token notes,
-  and phase plans. Read the relevant phase docs before changing UI surfaces.
+- The `docs/ui-repair/` and `docs/ux-ui-audit/` corpora were retired in 2026-07; `DESIGN.md`
+  now carries the design language on its own, and `frontend/src/index.css` is the live source
+  of truth for tokens. Older commits and source comments still cite those paths — treat any
+  such pointer as a history reference, recoverable with `git show <sha>^:<path>`, not a
+  live file.
 
 ## Frontend Validation
 

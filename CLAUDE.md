@@ -3,9 +3,9 @@
 This repository is a GL&R **HR + Sales/CRM portal** growing into an ERP platform. It is not a complete ERP yet. Read this before doing anything.
 
 ## Start every session by reading context
-1. **Always read `docs/agent-handoffs/00_MASTER_CONTEXT.md` before starting.** It holds product identity, current priorities, and the non-negotiable rules.
-2. **Always read the latest relevant handoff file** in `docs/agent-handoffs/` before working on a task (the per-branch `NN_<branch>.md`, and `01_STABILIZATION_AUDIT.md` for the plan and branch sequence).
-3. **Always run `git status` before making any changes** and confirm which branch you are on.
+1. **Read this file and `AGENTS.md` before starting.** They hold the product identity, the current priorities, and the non-negotiable rules. There is no longer a separate handoff corpus to read — it was retired in 2026-07 (see "Where the old docs went" below).
+2. **Always run `git status` before making any changes** and confirm which branch you are on.
+3. **Check you are not on a stale base.** With several worktrees in play, `git fetch` then `git rev-list --left-right --count HEAD...origin/main` before you build anything substantial — this repo has had a full feature built on a base that `main` had already moved past.
 
 ## Scope rules — non-negotiable
 - **Do not change business logic** (payroll/tax/commission/pricing math, etc.) unless explicitly requested. This is the one rule that never relaxes. **Exception, currently live:** the sales deal/pricing workflow is under an approved redesign — see below.
@@ -34,9 +34,9 @@ Guardrails that do **not** relax:
 - **Payroll, tax, SSO and commission math stay untouchable.** This relaxation is scoped to the sales pricing/deal workflow and nothing else.
 - **Permission changes must be enforced and verified against the Java service**, never inferred from `mockApi.js`. A mock more permissive than production is the dangerous direction — see the section below.
 - **Schema changes are forward-only `Vnnn`.** Never edit an already-applied migration in place.
-- **Every such change is recorded in the branch's handoff, with its reasoning**, so a reviewer can tell an intended contract change from an accident.
+- **Every such change is stated explicitly in the PR body, with its reasoning**, so a reviewer can tell an intended contract change from an accident.
 
-Worked example: `docs/agent-handoffs/85_feat-sales-pricing-request-foundation.md`, including the deliberate divergences it records — the CEO may cancel a pricing request although `TicketService.cancel` is owner-only, and a `DRAFT` pricing request is visible only to its owning rep plus CEO/sales_manager.
+Known deliberate divergences worth knowing about: the CEO may cancel a pricing request although `TicketService.cancel` is owner-only, and a `DRAFT` pricing request is visible only to its owning rep plus CEO/sales_manager.
 
 ⚠️ Step 1 is **not independently deployable**: ticket-level `submit()` now 409s and the replacement chain does not yet produce a price, so a newly created deal cannot be priced, quoted, or advanced past the pre-quote stages until the later steps land. Do not deploy it alone.
 
@@ -110,16 +110,23 @@ The frontend is migrating from the single global `frontend/src/styles.css` to a 
   rows.) If yes, a real-DB integration test through the real Java service is **required** — see
   "Permission changes must ship evidence" above. If it ran on mocks only, report the permission
   aspect as **unverified**; do not describe it as tested.
-- **Update the relevant handoff file before ending.** Fill in every section, and always list:
+- **Write the PR body as the handoff.** It is now the only durable record of a change, so it must
+  always list:
   1. **Files changed** (path + what changed)
   2. **Commands run**
   3. **Tests / build results** (pass/fail/not run, and whether integration tests *ran* or were skipped)
   4. **Authz evidence** (real-service test, or "no authz change", or "unverified — mock only")
   5. **Known risks**
-  6. **The exact next prompt** for the next agent
 
-## Handoff system
-`docs/agent-handoffs/` is the shared memory between Claude, Codex, and reviewer agents. See `docs/agent-handoffs/README.md` for the process and the handoff template. Create a new `NN_<branch-name>.md` from the template when you start a branch.
+## Where the old docs went
+`docs/agent-handoffs/`, `docs/ui-repair/` and `docs/ux-ui-audit/` were retired in 2026-07. The
+per-branch handoff corpus had grown to ~260 files that no one read end-to-end, and a stale copy
+is worse than none — an agent following a superseded plan is the failure mode this repo actually
+hit. **The PR body is now the handoff**, and the code's own comments carry the reasoning.
+
+Nothing is lost: the files are in git history. `git log --diff-filter=D --oneline -- docs/ui-repair`
+finds the removal commit, and `git show <sha>^:docs/ui-repair/<path>` reads any of them. Source
+comments still cite those paths; treat such a pointer as a history reference, not a live file.
 
 ## Repo quick facts (frontend verified 2026-07-16)
 - **Frontend:** React 18 + Vite 8. Routing is `react-router-dom` 7 (`frontend/src/App.jsx`); server state via `@tanstack/react-query` 5; tables via `@tanstack/react-table` 8; forms via `react-hook-form` + `zod`. Styling is mid-migration: Tailwind 4 (`@tailwindcss/vite`) with tokens in `src/index.css`, alongside a legacy global `src/styles.css` (~2k lines) being progressively retired. Tests: Vitest. Lint: ESLint + jsx-a11y.
