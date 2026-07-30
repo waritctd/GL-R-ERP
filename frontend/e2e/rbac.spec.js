@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 import { SEEDED_ROLES, loginAs, seededUser, spaGoto } from './helpers/auth.js';
 // The exact function App.jsx's <RequireAccess> uses to decide render-vs-
@@ -25,7 +22,6 @@ import { canAccessPath } from '../src/app/permissions.js';
 // exists for either yet (owner decision, see docs/agent-handoffs).
 // ─────────────────────────────────────────────────────────────────────────
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Guarded routes, pulled from App.jsx's <Route element={<RequireAccess
 // user={user} />}> block. SALES_ENABLED defaults true under
@@ -102,41 +98,4 @@ test.describe('rbac gating (frontend-gating only, not a backend authz proof)', (
       }
     });
   }
-});
-
-test('rbac oracle vs docs/ux-ui-audit/data/shoot-manifest.json — drift is logged, not asserted', async () => {
-  // The manifest is a UX-audit-era regression baseline, not this spec's
-  // source of truth (that's canAccessPath itself, above). It predates
-  // /finance, /pricing-requests, /procurement, and the canViewDealPipeline
-  // split (role-scoped-views program) — so drift here is EXPECTED, not a
-  // failure. This just makes that drift visible instead of silent.
-  const manifestPath = path.join(__dirname, '..', '..', 'docs', 'ux-ui-audit', 'data', 'shoot-manifest.json');
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-
-  const seen = new Set();
-  const drifts = [];
-  for (const entry of manifest) {
-    const key = `${entry.role}|${entry.path}`;
-    if (seen.has(key)) continue; // dedupe across viewports (desktop/mobile shoot the same path twice)
-    seen.add(key);
-
-    if (!SEEDED_ROLES.includes(entry.role)) continue;
-
-    const liveOracleAllow = canAccessPath(entry.path, seededUser(entry.role));
-    const manifestAllow = !entry.redirected;
-
-    if (liveOracleAllow !== manifestAllow) {
-      drifts.push({ role: entry.role, path: entry.path, manifestAllow, liveOracleAllow });
-    }
-  }
-
-  // eslint-disable-next-line no-console
-  console.log(
-    drifts.length
-      ? `[rbac drift vs shoot-manifest] ${drifts.length} path(s) differ from the stale manifest baseline:\n${JSON.stringify(drifts, null, 2)}`
-      : '[rbac drift vs shoot-manifest] no drift found',
-  );
-
-  // Informational only — never fail the suite on manifest staleness.
-  expect(Array.isArray(drifts)).toBe(true);
 });
