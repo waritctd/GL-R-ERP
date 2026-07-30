@@ -119,8 +119,107 @@ public record PayrollLineDto(
     // being > 0 (PayrollPage.jsx), and a reprocess of the same month silently stopped re-applying the
     // pre-tax netting. Appended last so every prior positional call site keeps compiling via the new
     // legacy constructor immediately below.
-    BigDecimal customerReturnRequested
+    BigDecimal customerReturnRequested,
+    // Daily-rate support (2026-07-30). daysWorked is the raw HR-typed figure for this line (nullable
+    // -- distinct from zero, same reasoning as withholdingTaxOverride -- so a monthly employee's line,
+    // which never has this field, round-trips as null rather than a misleading 0). payType is the
+    // employee's hr.employee.pay_type code ("M"/"D"/null) AS OF THIS RUN, echoed straight from
+    // PayrollEmployeeSnapshot -- not persisted on hr.payroll_line (re-read live via the employee join
+    // in PayrollRepository#findLines/#findActiveEmployees), so it reflects the employee's CURRENT
+    // pay_type rather than a frozen-at-processing-time snapshot. Both exist solely so the frontend can
+    // gate the "days worked" input to daily-rate employees and so the value survives a reload -- see
+    // PayrollPage.jsx.
+    BigDecimal daysWorked,
+    String payType
 ) {
+    /**
+     * Legacy 59-arg constructor: the full signature as it stood right before {@code daysWorked}/
+     * {@code payType} (daily-rate support, 2026-07-30) existed -- i.e. through {@code
+     * customerReturnRequested}. Keeps every 59-arg positional call site compiling unchanged;
+     * {@code daysWorked}/{@code payType} default to {@code null} (no days-worked figure, pay type
+     * unknown to this caller -- both a no-op for every existing call site, which predates either
+     * concept).
+     */
+    public PayrollLineDto(
+        Long id,
+        long employeeId,
+        String employeeCode,
+        String employeeName,
+        String departmentName,
+        String bankName,
+        String bankAccount,
+        BigDecimal baseSalary,
+        BigDecimal dailyRate,
+        BigDecimal hourlyRate,
+        List<PayrollSpecialPayDto> specialPays,
+        BigDecimal specialPayTotal,
+        BigDecimal overtimePay,
+        BigDecimal commissionPay,
+        BigDecimal grossEarnings,
+        BigDecimal nonTaxableIncome,
+        BigDecimal unpaidLeaveDays,
+        BigDecimal unpaidLeaveDeduction,
+        BigDecimal grossTaxableIncome,
+        BigDecimal ssoWageBase,
+        BigDecimal socialSecurity,
+        BigDecimal projectedAnnualIncome,
+        BigDecimal taxExpenseDeduction,
+        BigDecimal taxAllowanceTotal,
+        BigDecimal taxableAnnualIncome,
+        BigDecimal annualTax,
+        BigDecimal withholdingTax,
+        BigDecimal studentLoanDeduction,
+        BigDecimal legalExecutionDeduction,
+        BigDecimal otherPostTaxDeductions,
+        BigDecimal totalDeductions,
+        BigDecimal netPay,
+        String calculationNote,
+        BigDecimal directorRemuneration,
+        BigDecimal warningLetterDeduction,
+        BigDecimal customerReturnDeduction,
+        BigDecimal otherPretaxDeduction,
+        BigDecimal leaveRefundDays,
+        BigDecimal leaveDeductionRefund,
+        BigDecimal withholdingTaxOverride,
+        BigDecimal regularTaxableIncome,
+        BigDecimal variableTaxableIncome,
+        BigDecimal regularWithholdingTax,
+        BigDecimal variableWithholdingTax,
+        BigDecimal bonusPay,
+        BigDecimal otherOneOffPay,
+        BigDecimal excessWithheldToDate,
+        BigDecimal taxableIncomeRegularLimb,
+        BigDecimal taxableIncomeKnownLimb,
+        BigDecimal taxableIncomeCumulativeLimb,
+        BigDecimal withholdingTaxRegularLimb,
+        BigDecimal withholdingTaxCumulativeLimb,
+        boolean customerReturnAlreadyEarned,
+        String garnishmentType,
+        BigDecimal mealAllowance,
+        BigDecimal perDiemExempt,
+        BigDecimal perDiemTaxable,
+        String perDiemBasis,
+        BigDecimal customerReturnRequested
+    ) {
+        this(
+            id, employeeId, employeeCode, employeeName, departmentName, bankName, bankAccount,
+            baseSalary, dailyRate, hourlyRate, specialPays, specialPayTotal, overtimePay, commissionPay,
+            grossEarnings, nonTaxableIncome, unpaidLeaveDays, unpaidLeaveDeduction, grossTaxableIncome,
+            ssoWageBase, socialSecurity, projectedAnnualIncome, taxExpenseDeduction, taxAllowanceTotal,
+            taxableAnnualIncome, annualTax, withholdingTax, studentLoanDeduction, legalExecutionDeduction,
+            otherPostTaxDeductions, totalDeductions, netPay, calculationNote,
+            directorRemuneration, warningLetterDeduction, customerReturnDeduction, otherPretaxDeduction,
+            leaveRefundDays, leaveDeductionRefund, withholdingTaxOverride,
+            regularTaxableIncome, variableTaxableIncome, regularWithholdingTax, variableWithholdingTax,
+            bonusPay, otherOneOffPay, excessWithheldToDate,
+            taxableIncomeRegularLimb, taxableIncomeKnownLimb, taxableIncomeCumulativeLimb,
+            withholdingTaxRegularLimb, withholdingTaxCumulativeLimb,
+            customerReturnAlreadyEarned, garnishmentType,
+            mealAllowance, perDiemExempt, perDiemTaxable, perDiemBasis,
+            customerReturnRequested, null, null
+        );
+    }
+
     /**
      * Legacy 58-arg constructor: the full signature as it stood right before {@code
      * customerReturnRequested} (V101/D1) existed (i.e. through {@code perDiemBasis}). Keeps every

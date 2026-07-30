@@ -45,6 +45,10 @@ public class PayrollService {
     private static final Set<String> PAYROLL_VIEW_ROLES = Set.of("hr", "ceo");
     private static final Set<String> PAYROLL_EDIT_ROLES = Set.of("hr");
     private static final Logger AUDIT = LoggerFactory.getLogger("th.co.glr.hr.audit");
+    // Finding 4 fix (Opus review, 2026-07-30): calendar-plausible ceiling for a daily-rate employee's
+    // HR-typed days-worked figure -- see #calculateLine's own comment on where this is enforced and
+    // why, and V103's chk_payroll_line_days_worked_range for the matching DB-level backstop.
+    private static final BigDecimal MAX_DAYS_WORKED = new BigDecimal("31");
 
     private final PayrollRepository payrollRepository;
     private final PayrollCalculator payrollCalculator;
@@ -165,6 +169,7 @@ public class PayrollService {
         requireRole(actor, PAYROLL_EDIT_ROLES);
         LocalDate month = normalizeMonth(request.payrollMonth());
         PayrollPeriodDto preview = preview(month, safeInputs(request.inputs()), actor);
+        requireEveryDailyRateEmployeeHasDaysWorked(preview.lines());
         long periodId = payrollRepository.saveProcessedPeriod(month, actor.employeeId(), preview.lines());
         // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): the lines just saved already have
         // the refund baked in (computed by #preview above, in this same transaction). Now mark the
@@ -178,6 +183,39 @@ public class PayrollService {
             "base_salary,gross_earnings,deductions,net_pay");
         auditService.record(actor, "PROCESS_PAYROLL", "payroll_period", periodId, null, period);
         return period;
+    }
+
+    /**
+     * Finding 1 fix (Opus review, 2026-07-30): a daily-rate employee HR never entered a day count
+     * for -- either because no input row was submitted at all for them, or an explicitly typed 0 --
+     * computes {@code SALARY = rate * 0 = ฿0} with no error anywhere: {@link #calculateLine} treats a
+     * null/omitted {@code daysWorked} as "0 unless entered", the exact same convention every other
+     * one-off field (bonusPay, otherOneOffPay, ...) already follows, and {@code
+     * requireEveryNonZeroComponentClassified} never fires because the resulting amount genuinely is
+     * zero. The run SUCCEEDS and produces a ฿0 payslip that nets to zero with nothing distinguishing
+     * it from an intentional zero-pay employee.
+     *
+     * <p>Refused here -- at PROCESS, not at {@link #preview}/{@link #currentOrPreview} -- because a
+     * blank/zero day count is the NORMAL, expected state of an in-progress run the moment HR opens a
+     * new month and has not yet typed anything for anyone: {@code calculateLine} runs identically for
+     * preview and process (both go through the same private method), so gating this inside it would
+     * 409 the mere act of opening the payroll page before HR has entered a single figure. Gating it
+     * here instead lets HR see the ฿0 line in Preview (exactly as before), edit it, and only blocks
+     * the one action that actually commits a payslip.
+     *
+     * <p>Mirrors {@code PayrollCalculator#requireEveryNonZeroComponentClassified}'s existing pattern
+     * (loop every line, throw a CONFLICT naming the employee on the first violation) rather than
+     * inventing a new shape for this refusal.
+     */
+    private void requireEveryDailyRateEmployeeHasDaysWorked(List<PayrollLineDto> lines) {
+        for (PayrollLineDto line : lines) {
+            if ("D".equals(line.payType()) && (line.daysWorked() == null || line.daysWorked().signum() <= 0)) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "พนักงาน " + line.employeeCode() + " " + line.employeeName()
+                        + " เป็นพนักงานรายวันแต่ยังไม่ได้ระบุจำนวนวันทำงานในงวดนี้"
+                        + " กรุณากรอกจำนวนวันทำงานก่อนประมวลผลเงินเดือน มิฉะนั้นพนักงานจะได้รับเงินเดือน ฿0");
+            }
+        }
     }
 
     /**
@@ -588,9 +626,46 @@ public class PayrollService {
             effectiveCommissionPay = effectiveCommissionPay.subtract(customerReturnDeduction).max(BigDecimal.ZERO);
         }
 
+        // Daily-rate support (2026-07-30): hr.employee.pay_type ('M'/'D', existed since V1) was never
+        // read by payroll before this fix -- current_salary went straight into PayrollComponent.SALARY
+        // as if it were always a monthly figure, so a daily-rate employee's DAY RATE was paid as their
+        // MONTHLY salary (verified in production: employee 203, ฿450/day, would be paid ฿450 instead
+        // of ฿11,250 for 25 days). For a 'D' employee, employee.baseSalary() (hr.employee.current_salary)
+        // IS the per-day rate; this period's gross SALARY component is that rate multiplied by
+        // HR-entered daysWorked (a null/omitted daysWorked contributes zero gross, same "0 unless
+        // entered" convention as bonusPay/otherOneOffPay). A monthly employee is entirely unaffected:
+        // daysWorked is never read for them, and grossSalaryComponent is employee.baseSalary() exactly
+        // as before this change.
+        boolean dailyRatePay = employee.dailyRatePay();
+        BigDecimal enteredDaysWorked = input == null ? null : input.daysWorked();
+        // Finding 4 fix (Opus review, 2026-07-30): @Max(31) on the request DTO is only enforced
+        // through @Valid at the controller boundary (PayrollController's /preview and /process),
+        // which every integration test in this package -- including the reviewer's own -- bypasses
+        // by calling PayrollService directly. Re-check here, in the one place BOTH entry points
+        // actually flow through, before daysWorked ever reaches the multiply below or an INSERT: a
+        // calendar-impossible count (e.g. 45 in a 31-day month) must not be accepted and paid, and a
+        // genuine typo (a 5-digit value) must not be left to overflow days_worked's NUMERIC(6,2)
+        // column as a raw Postgres error that 500s the whole run. Mirrors the existing per-diem-basis
+        // guard just above -- a clean Thai 400 instead of a bare DataIntegrityViolationException.
+        if (dailyRatePay && enteredDaysWorked != null && enteredDaysWorked.compareTo(MAX_DAYS_WORKED) > 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "พนักงาน " + employee.employeeCode() + " " + employee.employeeName()
+                    + " ระบุจำนวนวันทำงาน " + enteredDaysWorked.toPlainString()
+                    + " วัน ซึ่งเกินจำนวนวันสูงสุดที่รับได้ในหนึ่งงวด (31 วัน) กรุณาตรวจสอบตัวเลขที่กรอกใหม่อีกครั้ง");
+        }
+        BigDecimal grossSalaryComponent = dailyRatePay
+            ? employee.baseSalary().multiply(enteredDaysWorked == null ? BigDecimal.ZERO : enteredDaysWorked)
+            : employee.baseSalary();
+        // The employee's TRUE per-day rate, passed to the calculator so unpaidLeaveDeduction/
+        // leaveDeductionRefund/hourlyRate are derived from it directly instead of from
+        // grossSalaryComponent/30 (see PayrollClassifiedCalculationDtos#dailyRateOverride's own
+        // javadoc for why that division would be wrong the moment daysWorked != 30). Null for a
+        // monthly employee reproduces the pre-existing baseSalary/30 derivation exactly.
+        BigDecimal dailyRateOverride = dailyRatePay ? employee.baseSalary() : null;
+
         List<BigDecimal> specialPays = input == null ? List.of() : input.specialPays();
         Map<PayrollComponent, BigDecimal> componentAmounts = new EnumMap<>(PayrollComponent.class);
-        componentAmounts.put(PayrollComponent.SALARY, employee.baseSalary());
+        componentAmounts.put(PayrollComponent.SALARY, grossSalaryComponent);
         componentAmounts.put(PayrollComponent.SPECIAL_PAY_1, amountAt(specialPays, 0));
         componentAmounts.put(PayrollComponent.SPECIAL_PAY_2, amountAt(specialPays, 1));
         componentAmounts.put(PayrollComponent.SPECIAL_PAY_3, amountAt(specialPays, 2));
@@ -640,7 +715,8 @@ public class PayrollService {
             // the same way the outer preview()/process() methods already derive it for the tax-
             // treatment/SSO-inclusion lookups above.
             payrollMonth.getYear(),
-            effectiveWithholdingOverride
+            effectiveWithholdingOverride,
+            dailyRateOverride
         ));
         return new PayrollLineDto(
             null,
@@ -729,7 +805,13 @@ public class PayrollService {
             // above, which is calculateClassified's POST-TAX bookkeeping figure and stays 0 in the
             // unearned path (the amount is instead netted pre-tax out of commissionPay, see this
             // method's own `effectiveCommissionPay` computation above).
-            customerReturnDeduction
+            customerReturnDeduction,
+            // Daily-rate support (2026-07-30): the raw HR-typed days-worked figure (nullable -- see
+            // PayrollLineDto#daysWorked's own javadoc) and the employee's pay_type AS OF THIS RUN, so
+            // the frontend can gate the days-worked input to daily-rate employees and the value
+            // survives a reload.
+            enteredDaysWorked,
+            employee.payType()
         );
     }
 

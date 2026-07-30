@@ -163,7 +163,14 @@ function EmploymentTab({ employee, canSeeSalary }) {
         {canSeeSalary ? (
           <>
             <div className="mt-3 text-text text-3xl font-extrabold">{formatMoney(employee.salary)}</div>
-            <span className="text-text-secondary text-sm">ต่อเดือน · {employee.payType}</span>
+            {/* Finding 6 fix (Opus review, 2026-07-30): "ต่อเดือน" (per month) was hardcoded regardless
+                of pay type, so a daily-rate ('D') employee read as "฿450 / ต่อเดือน · รายวัน" --
+                per month, daily -- contradicting itself. employee.payType is already the backend's
+                Thai label (EmployeeRepository#payTypeLabel: "รายวัน"/"รายเดือน"), so the period label
+                simply follows it. */}
+            <span className="text-text-secondary text-sm">
+              {employee.payType === 'รายวัน' ? 'ต่อวัน' : 'ต่อเดือน'} · {employee.payType}
+            </span>
           </>
         ) : (
           <p className="mt-3 text-text-muted">แสดงเฉพาะบทบาท HR และ ADMIN</p>

@@ -44,7 +44,8 @@ public class PayrollRepository {
                    COALESCE(e.current_salary, 0) AS base_salary,
                    COALESCE(e.director_remuneration, 0) AS director_remuneration,
                    e.withholding_tax_override AS withholding_tax_override,
-                   e.date_of_birth AS date_of_birth
+                   e.date_of_birth AS date_of_birth,
+                   e.pay_type AS pay_type
               FROM hr.employee e
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
               LEFT JOIN hr.employee_bank_account ba ON ba.employee_id = e.employee_id
@@ -66,7 +67,12 @@ public class PayrollRepository {
                 rs.getBigDecimal("withholding_tax_override"),
                 // Drives the ยกเว้นเงินได้ 190,000 for taxpayers aged 65+ (V93). Nullable: a missing
                 // date of birth means the exemption is not granted on an assumption.
-                rs.getObject("date_of_birth", LocalDate.class)
+                rs.getObject("date_of_birth", LocalDate.class),
+                // Daily-rate support (2026-07-30): raw CHAR(1) code ('M'/'D'/null). Read raw --
+                // NULL means "never set" (172 legacy rows + any created before V1's default), which
+                // PayrollEmployeeSnapshot#dailyRatePay() and PayrollService treat as monthly, same as
+                // EmployeeRepository#payTypeLabel already does for display.
+                rs.getString("pay_type")
             ));
     }
 
@@ -1025,7 +1031,16 @@ public class PayrollRepository {
                    pl.withholding_tax_regular_limb, pl.withholding_tax_cumulative_limb,
                    pl.customer_return_already_earned, pl.garnishment_type,
                    pl.meal_allowance, pl.per_diem_exempt, pl.per_diem_taxable, pl.per_diem_basis,
-                   pl.customer_return_requested
+                   pl.customer_return_requested,
+                   pl.days_worked,
+                   -- Finding 3 fix (Opus review, 2026-07-30): was e.pay_type, read LIVE off the
+                   -- employee join -- so editing an employee's pay_type after processing retroactively
+                   -- changed how an already-processed historical line reported itself (the days-worked
+                   -- field would vanish from the UI while days_worked stayed on the row, and a
+                   -- reprocess would silently recompute SALARY as the bare rate again). pl.pay_type is
+                   -- frozen at processing time (see V103), the same pattern
+                   -- hr.overtime_request.salary_basis already uses for an identical reason.
+                   pl.pay_type
               FROM hr.payroll_line pl
               JOIN hr.employee e ON e.employee_id = pl.employee_id
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
@@ -1269,7 +1284,8 @@ public class PayrollRepository {
                 withholding_tax_regular_limb, withholding_tax_cumulative_limb,
                 customer_return_already_earned, garnishment_type,
                 meal_allowance, per_diem_exempt, per_diem_taxable, per_diem_basis,
-                customer_return_requested
+                customer_return_requested,
+                days_worked, pay_type
             )
             VALUES (
                 :periodId, :employeeId, :baseSalary, :dailyRate, :hourlyRate,
@@ -1294,7 +1310,8 @@ public class PayrollRepository {
                 :withholdingTaxRegularLimb, :withholdingTaxCumulativeLimb,
                 :customerReturnAlreadyEarned, :garnishmentType,
                 :mealAllowance, :perDiemExempt, :perDiemTaxable, :perDiemBasis,
-                :customerReturnRequested
+                :customerReturnRequested,
+                :daysWorked, :payType
             )
             """,
             new MapSqlParameterSource()
@@ -1366,7 +1383,16 @@ public class PayrollRepository {
                 .addValue("perDiemBasis", line.perDiemBasis())
                 // D1 fix (fourth reachability audit, 2026-07-30, V101): the raw entered amount,
                 // always -- see PayrollLineDto#customerReturnRequested's own javadoc.
-                .addValue("customerReturnRequested", safe(line.customerReturnRequested())));
+                .addValue("customerReturnRequested", safe(line.customerReturnRequested()))
+                // Daily-rate support (2026-07-30): nullable -- read raw so SQL NULL stays null
+                // (no COALESCE), same reasoning as withholdingTaxOverride above. NULL for every
+                // monthly employee and for any daily-rate line where HR typed nothing this run.
+                .addValue("daysWorked", line.daysWorked())
+                // Finding 3 fix (Opus review, 2026-07-30): freeze the employee's pay_type AS OF THIS
+                // RUN onto the line -- see this method's SELECT-side comment in findLines and V103's
+                // pay_type column comment for the full rationale (mirrors hr.overtime_request
+                // .salary_basis).
+                .addValue("payType", line.payType()));
     }
 
     private PayrollPeriodDto toPeriod(PayrollPeriodHeader header, List<PayrollLineDto> lines) {
@@ -1452,7 +1478,11 @@ public class PayrollRepository {
             money(rs.getBigDecimal("per_diem_exempt")),
             money(rs.getBigDecimal("per_diem_taxable")),
             rs.getString("per_diem_basis"),
-            money(rs.getBigDecimal("customer_return_requested"))
+            money(rs.getBigDecimal("customer_return_requested")),
+            // Daily-rate support (2026-07-30): nullable -- read raw (no money()) so a monthly
+            // employee's line, which never has this figure, stays null rather than a misleading 0.00.
+            rs.getBigDecimal("days_worked"),
+            rs.getString("pay_type")
         );
     }
 
