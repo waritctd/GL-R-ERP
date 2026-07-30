@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketDetailPage } from './TicketDetailPage.jsx';
 import { api } from '../../api/index.js';
@@ -152,6 +152,41 @@ function renderTicketDetailPage(user = ceoUser, showToast = vi.fn()) {
           onBack={vi.fn()}
           showToast={showToast}
         />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  return { ...utils, queryClient };
+}
+
+// Ticket-detail IA rebuild Phase 2: every section this file used to find
+// straight off the page now lives inside a tab (Tabs.jsx keeps only the
+// active one mounted — see TicketDetailPage.jsx's own "runOnTab" doc
+// comment). `namePattern` matches the tab BUTTON's accessible name, which
+// concatenates the Thai label and its English helper span with no inserted
+// whitespace in jsdom (no real layout, so no implied word boundary) — a
+// regex on the Thai label alone (e.g. `/ราคา/`) is enough and avoids
+// depending on that concatenation's exact shape.
+async function openTab(namePattern) {
+  fireEvent.click(await screen.findByRole('tab', { name: namePattern }));
+}
+
+// Exposes the current router location's search string as text, so a test
+// can assert `?tab=` was actually written (and with `replace: true`) without
+// reaching into react-router's internals.
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-probe">{location.pathname}{location.search}</div>;
+}
+
+function renderTicketDetailPageAtRoute(initialEntries, user = ceoUser, showToast = vi.fn()) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const utils = render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={initialEntries}>
+        <LocationProbe />
+        <TicketDetailPage user={user} ticketId={701} onBack={vi.fn()} showToast={showToast} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -316,6 +351,7 @@ describe('TicketDetailPage', () => {
     });
 
     renderTicketDetailPage();
+    await openTab(/ใบเสนอราคา/);
 
     expect(await screen.findByText('ผู้ออกแบบ')).not.toBeNull();
     expect(screen.getByText('เจ้าของ')).not.toBeNull();
@@ -367,14 +403,28 @@ describe('TicketDetailPage', () => {
     });
 
     renderTicketDetailPage();
+    await openTab(/การเงิน/);
 
     expect((await screen.findAllByText('ชำระบางส่วน')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('เกินกำหนด').length).toBeGreaterThan(0);
     // DealStateHeader's "มูลค่าดีล" chip also renders amountPayable — assert presence, not uniqueness.
     expect(screen.getAllByText('฿1,000').length).toBeGreaterThan(0);
-    expect(screen.getByText('฿400')).not.toBeNull();
-    expect(screen.getByText('฿600')).not.toBeNull();
+    // Scoped to the "ชำระแล้ว"/"คงเหลือ" summary tiles specifically: by the
+    // time this async assertion runs, the receipt-history row below (also
+    // ฿400, same receipt) has settled in too — dom-testing-library's default
+    // text matcher only looks at an element's own direct text children, so
+    // the receipt row's outer wrapper (a bare "฿400" text node next to a
+    // sibling <small>) matches the same string as the summary tile. A bare
+    // `getByText('฿400')` is therefore genuinely ambiguous on this page, not
+    // a test bug to paper over with getAllByText/greaterThan(0).
+    const paidTile = screen.getByText('ชำระแล้ว').parentElement;
+    expect(within(paidTile).getByText('฿400')).not.toBeNull();
+    const outstandingTile = screen.getByText('คงเหลือ').parentElement;
+    expect(within(outstandingTile).getByText('฿600')).not.toBeNull();
     expect(await screen.findByText('DEPOSIT')).not.toBeNull();
+    // The receipt row itself really did render (not just the tile) — proves
+    // the scoped assertion above didn't accidentally start passing vacuously.
+    expect(screen.getByText(/คุณบัญชี/)).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
   });
 
@@ -416,6 +466,11 @@ describe('TicketDetailPage', () => {
     renderTicketDetailPage(accountUser);
 
     expect(await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' })).not.toBeNull();
+    // Account never gets a "ราคา" tab at all (pricing_accountCannotReadAPricingRequest —
+    // see ticketDetailTabs.js), not just an empty panel inside one. Anchored
+    // to the start of the label so it doesn't also match "ใบเสนอราคา" (Quotations).
+    expect(screen.queryByRole('tab', { name: /^ราคา/ })).toBeNull();
+    await openTab(/การเงิน/);
     expect(await screen.findByText('DEPOSIT')).not.toBeNull();
     expect(screen.getAllByText('฿400').length).toBeGreaterThan(0);
     expect(api.pricingRequests.listForTicket).not.toHaveBeenCalled();
@@ -517,8 +572,13 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage();
 
+    // The deal pipeline panel (outside every tab) already shows the coarse
+    // progress; the delivery HISTORY rows (WAREHOUSE source, the record-
+    // delivery button) live inside DealFulfilmentPanel now, in the
+    // "จัดซื้อ-ส่งมอบ" tab.
     expect((await screen.findAllByText('40 / 100')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('ส่งมอบบางส่วน').length).toBeGreaterThan(0);
+    await openTab(/จัดซื้อ-ส่งมอบ/);
     expect(await screen.findByText('WAREHOUSE')).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกการส่งสินค้า' })).toBeNull();
   });
@@ -534,6 +594,8 @@ describe('TicketDetailPage', () => {
     queryClient.setQueryData(queryKeys.notifications(), []);
 
     await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+    // The comment box now lives in DealHistoryPanel, in the "กิจกรรม" tab.
+    await openTab(/กิจกรรม/);
 
     const textarea = screen.getByPlaceholderText('เพิ่มความคิดเห็น...');
     fireEvent.change(textarea, { target: { value: 'ทดสอบความคิดเห็น' } });
@@ -561,6 +623,10 @@ describe('TicketDetailPage', () => {
     });
 
     renderTicketDetailPage();
+    // "บันทึกรับชำระเงิน" lives in the "การเงิน" tab's payment section now —
+    // the Modal itself, once opened, stays mounted regardless of the active
+    // tab (it's not inside any TabPanel).
+    await openTab(/การเงิน/);
 
     fireEvent.click(await screen.findByRole('button', { name: 'บันทึกรับชำระเงิน' }));
     const dialog = await screen.findByRole('dialog', { name: 'บันทึกรับชำระเงิน' });
@@ -609,6 +675,8 @@ describe('TicketDetailPage', () => {
 
     const showToast = vi.fn();
     renderTicketDetailPage(ceoUser, showToast);
+    // DealFulfilmentPanel now lives in the "จัดซื้อ-ส่งมอบ" tab.
+    await openTab(/จัดซื้อ-ส่งมอบ/);
 
     fireEvent.click(await screen.findByRole('button', { name: 'บันทึกการส่งสินค้า' }));
     const dialog = await screen.findByRole('dialog', { name: 'บันทึกการส่งสินค้า' });
@@ -796,6 +864,15 @@ describe('TicketDetailPage', () => {
       const stickyButtons = await screen.findAllByRole('button', { name: /ออกใบเสนอราคา/ });
       expect(stickyButtons).toHaveLength(1);
 
+      // DealQuotationPanel now lives inside the "ใบเสนอราคา" tab, mounted
+      // (and its own quotationsQuery fetching) only once that tab is
+      // active — open it and wait for the query to settle BEFORE clicking
+      // the sticky button, so the click's own runOnTab (a no-op here, we're
+      // already on the right tab) exercises openIssueQuotation's real
+      // "existing draft" branch rather than racing quotationsQuery.
+      await openTab(/ใบเสนอราคา/);
+      await screen.findByText(/พร้อมออกใบเสนอราคาแล้ว/);
+
       fireEvent.click(stickyButtons[0]);
 
       await waitFor(() => expect(api.pricingRequests.issueCustomerQuotation).toHaveBeenCalledWith(
@@ -880,11 +957,17 @@ describe('TicketDetailPage', () => {
       await screen.findByText('ถึงคิวคุณ: ออกใบเสนอราคา');
       const stickyButton = screen.getByTestId('ticket-primary-action');
       expect(stickyButton.getAttribute('data-action')).toBe('issue_quotation');
+      // DealQuotationPanel now lives inside the "ใบเสนอราคา" tab — open it
+      // (mounting the panel, starting its own quotationsQuery) BEFORE
+      // clicking the sticky button, so the click's own runOnTab (a no-op,
+      // we're already there) exercises openIssueQuotation for real instead
+      // of a cross-tab jump racing a query that hasn't even started yet.
       // Also wait for DealQuotationPanel's own quotationsQuery to settle
       // empty — this is the exact "quotationsQuery.isSuccess" state
       // openIssueQuotation's create branch requires; without this wait the
       // click could race the query and land on the "still loading" toast
       // branch instead.
+      await openTab(/ใบเสนอราคา/);
       await screen.findByRole('button', { name: 'สร้างร่างใบเสนอราคาลูกค้า' });
 
       fireEvent.click(stickyButton);
@@ -910,10 +993,12 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesOwnerUser);
 
-      // Wait for the "draft ready" hint under DealQuotationPanel — proves the
-      // quotations query has actually settled before we click. (The hint is
-      // one <p> whose full text also includes the rest of the sentence, so
-      // this matches on a substring rather than requiring an exact match.)
+      // Open the "ใบเสนอราคา" tab (DealQuotationPanel's home) first, then
+      // wait for the "draft ready" hint under it — proves the quotations
+      // query has actually settled before we click. (The hint is one <p>
+      // whose full text also includes the rest of the sentence, so this
+      // matches on a substring rather than requiring an exact match.)
+      await openTab(/ใบเสนอราคา/);
       await screen.findByText(/พร้อมออกใบเสนอราคาแล้ว/);
       const stickyButton = screen.getByTestId('ticket-primary-action');
       expect(stickyButton.getAttribute('data-action')).toBe('issue_quotation');
@@ -940,13 +1025,14 @@ describe('TicketDetailPage', () => {
 
       await screen.findByText('ถึงคิวคุณ: ออกใบเสนอราคา');
       const stickyButton = screen.getByTestId('ticket-primary-action');
-      // Wait for the quotations query to settle so the click below exercises
-      // the "current exists but isn't editable" branch, not the
-      // still-loading branch (which would show a different toast). The
-      // "บันทึกผลจากลูกค้า" outcome section only renders once the ISSUED
-      // quotation has actually landed (canRecordCustomerQuotationOutcome
-      // requires docStatus === 'ISSUED'), so waiting for it is a faithful
-      // proxy for "the query settled".
+      // Open the "ใบเสนอราคา" tab, then wait for the quotations query to
+      // settle so the click below exercises the "current exists but isn't
+      // editable" branch, not the still-loading branch (which would show a
+      // different toast). The "บันทึกผลจากลูกค้า" outcome section only
+      // renders once the ISSUED quotation has actually landed
+      // (canRecordCustomerQuotationOutcome requires docStatus === 'ISSUED'),
+      // so waiting for it is a faithful proxy for "the query settled".
+      await openTab(/ใบเสนอราคา/);
       await screen.findByText('บันทึกผลจากลูกค้า');
 
       fireEvent.click(stickyButton);
@@ -956,6 +1042,59 @@ describe('TicketDetailPage', () => {
       ));
       expect(api.pricingRequests.createCustomerQuotation).not.toHaveBeenCalled();
       expect(api.pricingRequests.issueCustomerQuotation).not.toHaveBeenCalled();
+    });
+
+    // FIX 3 (Opus review — "cross-tab issue_quotation first-click dead end"):
+    // every test above deliberately opens the "ใบเสนอราคา" tab (and waits for
+    // DealQuotationPanel's own quotationsQuery to settle) BEFORE clicking the
+    // sticky button, which the review pointed out makes `runOnTab` a no-op in
+    // every one of them — none of them exercise the actual cross-tab path.
+    // This test drives the click from ภาพรวม (the real default tab on a
+    // session's first visit to a deal), so `runOnTab('quotations', ...)`
+    // genuinely switches tabs AND mounts DealQuotationPanel for the first
+    // time in the same commit the click's queued action tries to run. Before
+    // the fix, that raced quotationsQuery — `openIssueQuotation` reads
+    // `quotationsQuery.isSuccess` before the panel's own fetch had a chance
+    // to resolve, and landed on the "กำลังโหลดข้อมูลใบเสนอราคา — กรุณาลองอีกครั้ง"
+    // toast, doing nothing (see DealQuotationPanel.jsx's own FIX 3 comment for
+    // the fix: the queued intent now retries automatically once the query
+    // settles, instead of dead-ending on the first commit after the switch).
+    it('creates and issues the quotation when clicked directly from ภาพรวม — the cross-tab race (regression, no openTab pre-call)', async () => {
+      approvedForQuotationTicket();
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [] });
+      api.pricingRequests.createCustomerQuotation.mockResolvedValue({
+        quotation: { id: 777, docStatus: 'DRAFT', quotationRevisionNo: 1 },
+      });
+      api.pricingRequests.issueCustomerQuotation.mockResolvedValue({
+        quotation: { id: 777, docStatus: 'ISSUED', quotationRevisionNo: 1 },
+      });
+      const showToast = vi.fn();
+
+      renderTicketDetailPage(salesOwnerUser, showToast);
+
+      await screen.findByText('ถึงคิวคุณ: ออกใบเสนอราคา');
+      // Deliberately NOT calling openTab(/ใบเสนอราคา/) here — the sticky
+      // button is clicked while still on the default ภาพรวม tab, which is
+      // the exact precondition the review's repro names ("on the default
+      // ภาพรวม tab, first visit of a session").
+      const stickyButton = screen.getByTestId('ticket-primary-action');
+      expect(stickyButton.getAttribute('data-action')).toBe('issue_quotation');
+
+      fireEvent.click(stickyButton);
+
+      // The click's own runOnTab actually switches tabs this time (unlike
+      // every test above) — DealQuotationPanel mounts as a result.
+      expect(await screen.findByTestId('deal-quotation-panel')).not.toBeNull();
+
+      await waitFor(() => expect(api.pricingRequests.createCustomerQuotation).toHaveBeenCalledWith(
+        501, expect.objectContaining({ clientRequestId: expect.any(String) }),
+      ));
+      await waitFor(() => expect(api.pricingRequests.issueCustomerQuotation).toHaveBeenCalledWith(
+        777, expect.objectContaining({ clientRequestId: expect.any(String) }),
+      ));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'สร้างร่างและออกใบเสนอราคาลูกค้าแล้ว'));
+      // The dead-end symptom itself must never fire.
+      expect(showToast).not.toHaveBeenCalledWith('error', 'กำลังโหลดข้อมูลใบเสนอราคา — กรุณาลองอีกครั้ง');
     });
   });
 
@@ -1023,6 +1162,7 @@ describe('TicketDetailPage', () => {
       });
 
       renderTicketDetailPage(ceoUser);
+      await openTab(/กิจกรรม/);
 
       expect(await screen.findByRole('heading', { level: 2, name: 'การติดตามดีล' })).not.toBeNull();
       expect(await screen.findByText('ยังไม่พร้อม')).not.toBeNull();
@@ -1048,13 +1188,18 @@ describe('TicketDetailPage', () => {
       });
 
       renderTicketDetailPage(ceoUser);
+      await openTab(/กิจกรรม/);
 
       expect(await screen.findByText('พร้อมเลื่อนสถานะ')).not.toBeNull();
       expect(screen.queryByText(/ต้องระบุวันติดตามครั้งถัดไป/)).toBeNull();
     });
 
+    // The add-activity form moved from DealTrackingPanel into DealHistoryPanel
+    // (ticket-detail IA rebuild Phase 2 — the merged กิจกรรม tab), same
+    // fields/labels, same mutation.
     it('submits a new activity via api.tickets.addActivity', async () => {
       renderTicketDetailPage(ceoUser);
+      await openTab(/กิจกรรม/);
       await screen.findByRole('heading', { level: 2, name: 'การติดตามดีล' });
 
       fireEvent.change(screen.getByLabelText('บันทึก (ถ้ามี)'), { target: { value: 'โทรคุยเรื่องราคา' } });
@@ -1065,12 +1210,23 @@ describe('TicketDetailPage', () => {
       expect(api.tickets.addActivity.mock.calls[0][1]).toMatchObject({ kind: 'CALL', note: 'โทรคุยเรื่องราคา' });
     });
 
-    it('account does not see the deal-tracking panel, only a one-line peek', async () => {
+    // FIX 1 (Opus review, owner decision — supersedes the old "no tab at
+    // all" assertion): account now GETS the "กิจกรรม" tab (the audit trail +
+    // comment box are backed by requireViewAccess, which account passes),
+    // but DealTrackingPanel ("การติดตามดีล") and the activities fetch stay
+    // gated on requireDealOwnership — see ticketDetailTabs.js's own doc
+    // comment on the "activity" tab and TicketDetailPage.jsx's doc comment
+    // on this TabPanel for the split.
+    it('account gets the "กิจกรรม" tab (FIX 1) but not the deal-tracking panel or the activity feed fetch', async () => {
       renderTicketDetailPage(accountUser);
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      expect(screen.queryByRole('tab', { name: /กิจกรรม/ })).not.toBeNull();
+      await openTab(/กิจกรรม/);
+      // The plain audit trail (this ticket's one seeded SUBMITTED event)
+      // still renders — proves the tab isn't a shell with nothing in it.
+      expect(await screen.findByRole('heading', { level: 2, name: 'ประวัติดีล' })).not.toBeNull();
       expect(screen.queryByRole('heading', { level: 2, name: 'การติดตามดีล' })).toBeNull();
-      expect(screen.getByText('การติดตามดีล')).not.toBeNull(); // SectionPeek's title span
       expect(api.tickets.listActivities).not.toHaveBeenCalled();
     });
   });
@@ -1237,6 +1393,10 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage(salesOwnerUser);
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      // DealQuotationPanel's home tab is still visible to sales (it also
+      // hosts the legacy quotation docs) — open it to prove the panel
+      // itself renders nothing, not merely that we never looked.
+      await openTab(/ใบเสนอราคา/);
       expect(screen.queryByRole('heading', { level: 2, name: 'ราคาและใบเสนอราคา' })).toBeNull();
     });
 
@@ -1248,6 +1408,7 @@ describe('TicketDetailPage', () => {
       });
 
       renderTicketDetailPage(salesOwnerUser);
+      await openTab(/ใบเสนอราคา/);
 
       expect(await screen.findByRole('heading', { level: 2, name: 'ราคาและใบเสนอราคา' })).not.toBeNull();
       fireEvent.click(await screen.findByRole('button', { name: 'สร้างร่างใบเสนอราคาลูกค้า' }));
@@ -1257,12 +1418,17 @@ describe('TicketDetailPage', () => {
       ));
     });
 
-    it('import (no business in the customer quotation) never sees the section', async () => {
+    it('import (no business in the customer quotation) never sees the section — nor even the "ใบเสนอราคา" tab itself', async () => {
       api.pricingRequests.listForTicket.mockResolvedValue({ items: [approvedPr] });
 
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      // Pre-existing gap, unchanged by this branch (see ticketDetailTabs.js's
+      // own "KNOWN GAP" doc comment): salesViewScope.js hides BOTH
+      // dealQuotation and quotation from import outright, so the whole tab
+      // is absent — not just this one section within it.
+      expect(screen.queryByRole('tab', { name: /ใบเสนอราคา/ })).toBeNull();
       expect(screen.queryByRole('heading', { level: 2, name: 'ราคาและใบเสนอราคา' })).toBeNull();
     });
   });
@@ -1272,7 +1438,9 @@ describe('TicketDetailPage', () => {
   // that used to live in DealStagePanel and the deposit doc/payment bits
   // that used to live directly on this page.
   describe('deal deposit panel', () => {
+    // DealDepositPanel now lives inside the "การเงิน" tab.
     async function depositSection() {
+      await openTab(/การเงิน/);
       const heading = await screen.findByRole('heading', { level: 2, name: 'มัดจำ' });
       return within(heading.closest('section'));
     }
@@ -1338,12 +1506,15 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(api.tickets.confirmDepositPaid).toHaveBeenCalledWith(701));
     });
 
-    it('import (no business in the deposit section) never sees it, only a one-line peek', async () => {
+    it('import (no business in the deposit section) never gets a "การเงิน" tab at all', async () => {
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      // ledger_importCannotReadThePaymentLedger / depositNotice_import...Refused —
+      // both money sub-reads deny import, so the whole tab is absent (see
+      // ticketDetailTabs.js's "money" gate), not just this one section.
+      expect(screen.queryByRole('tab', { name: /การเงิน/ })).toBeNull();
       expect(screen.queryByRole('heading', { level: 2, name: 'มัดจำ' })).toBeNull();
-      expect(screen.getByText('มัดจำ')).not.toBeNull(); // SectionPeek's title span
       expect(api.depositNotices.listByTicket).not.toHaveBeenCalled();
     });
   });
@@ -1356,7 +1527,9 @@ describe('TicketDetailPage', () => {
   describe('deal fulfilment panel', () => {
     const importUser = { id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' };
 
+    // DealFulfilmentPanel now lives inside the "จัดซื้อ-ส่งมอบ" tab.
     async function fulfilmentSection() {
+      await openTab(/จัดซื้อ-ส่งมอบ/);
       const heading = await screen.findByRole('heading', { level: 2, name: 'การส่งมอบ / นำเข้า' });
       return within(heading.closest('section'));
     }
@@ -1439,6 +1612,179 @@ describe('TicketDetailPage', () => {
       expect(await section.findByText('FPO-2026-0001')).not.toBeNull();
       const link = section.getByRole('link', { name: /รายละเอียด/ });
       expect(link.getAttribute('href')).toBe('/factory-purchase-orders/3001');
+    });
+  });
+
+  // Ticket-detail IA rebuild Phase 2: role-projected tab VISIBILITY
+  // (ticketDetailTabs.js has its own unit tests for the pure function —
+  // these prove the page actually wires it in, per-role, end to end).
+  describe('tab visibility per role', () => {
+    // FIX 1 (Opus review): "กิจกรรม" is now role-unconditional (see
+    // ticketDetailTabs.js's own doc comment) — import keeps it too, even
+    // though the follow-up feed inside it stays gated.
+    it('import never gets "การเงิน", but keeps "ราคา", "จัดซื้อ-ส่งมอบ", and "กิจกรรม"', async () => {
+      renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
+
+      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      // ledger_importCannotReadThePaymentLedger
+      expect(screen.queryByRole('tab', { name: /การเงิน/ })).toBeNull();
+      expect(await screen.findByRole('tab', { name: /^ราคา/ })).not.toBeNull();
+      expect(screen.getByRole('tab', { name: /จัดซื้อ-ส่งมอบ/ })).not.toBeNull();
+      expect(screen.getByRole('tab', { name: /กิจกรรม/ })).not.toBeNull();
+    });
+
+    it('account never gets "ราคา" or "ใบเสนอราคา", but keeps "การเงิน", "จัดซื้อ-ส่งมอบ", and "กิจกรรม"', async () => {
+      renderTicketDetailPage(accountUser);
+
+      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      // pricing_accountCannotReadAPricingRequest / quotation_accountCannotListCustomerQuotations
+      expect(screen.queryByRole('tab', { name: /^ราคา/ })).toBeNull();
+      expect(screen.queryByRole('tab', { name: /ใบเสนอราคา/ })).toBeNull();
+      expect(await screen.findByRole('tab', { name: /การเงิน/ })).not.toBeNull();
+      expect(screen.getByRole('tab', { name: /จัดซื้อ-ส่งมอบ/ })).not.toBeNull();
+      // FIX 1: role-unconditional now (see ticketDetailTabs.js).
+      expect(screen.getByRole('tab', { name: /กิจกรรม/ })).not.toBeNull();
+    });
+
+    it('sales (deal owner), sales_manager, and ceo all see every one of the 7 tabs', async () => {
+      for (const user of [salesOwnerUser, { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' }, ceoUser]) {
+        const { unmount } = renderTicketDetailPage(user);
+        await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+        for (const namePattern of [/^ภาพรวม/, /^ราคา/, /ใบเสนอราคา/, /การเงิน/, /จัดซื้อ-ส่งมอบ/, /เอกสาร/, /กิจกรรม/]) {
+          expect(screen.getByRole('tab', { name: namePattern })).not.toBeNull();
+        }
+        unmount();
+      }
+    });
+
+    // FIX 2 (Opus review): ticketDetailTabs.js's own role-level predicate for
+    // "เอกสาร" is deliberately coarse (`() => true`, same as ภาพรวม) because
+    // role+sections alone can't express AttachmentController.
+    // requireTicketAccess's per-instance identity gate — TicketDetailPage.jsx
+    // applies `canViewDocumentsTab` (role===ceo||sales_manager||isOwner||
+    // user.id===summary.assignedToId) on top. This replaces the old
+    // "visible to every role" assertion, which was exactly the bug: account
+    // (never a ticket participant) and a non-assignee import used to get a
+    // rendered tab whose data the backend would 403.
+    it('"เอกสาร" (Documents) is gated on ticket-participant identity, not role alone (FIX 2)', async () => {
+      // ceo: always a participant-equivalent (MANAGER_ROLES).
+      const { unmount: unmountCeo } = renderTicketDetailPage(ceoUser);
+      expect(await screen.findByRole('tab', { name: /เอกสาร/ })).not.toBeNull();
+      unmountCeo();
+
+      // sales owner: buildTicket()'s default summary.createdById is 1, which
+      // is salesOwnerUser.id — isOwner.
+      const { unmount: unmountSales } = renderTicketDetailPage(salesOwnerUser);
+      expect(await screen.findByRole('tab', { name: /เอกสาร/ })).not.toBeNull();
+      unmountSales();
+
+      // account: never a ticket participant in this fixture (createdById 1,
+      // no assignedToId) and not a MANAGER_ROLES member — attachments_*
+      // pins this refusal on the real AttachmentController.
+      const { unmount: unmountAccount } = renderTicketDetailPage(accountUser);
+      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      expect(screen.queryByRole('tab', { name: /เอกสาร/ })).toBeNull();
+      unmountAccount();
+
+      // import who is NOT this ticket's assignedTo: also refused.
+      const nonAssigneeImport = { id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' };
+      const { unmount: unmountImport } = renderTicketDetailPage(nonAssigneeImport);
+      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      expect(screen.queryByRole('tab', { name: /เอกสาร/ })).toBeNull();
+      unmountImport();
+
+      // import who IS this ticket's assignedTo: allowed, mirroring the
+      // controller's participant check exactly.
+      api.tickets.get.mockResolvedValue({ ticket: buildTicket({ summary: { assignedToId: 7 } }) });
+      const assigneeImport = { id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' };
+      renderTicketDetailPage(assigneeImport);
+      expect(await screen.findByRole('tab', { name: /เอกสาร/ })).not.toBeNull();
+    });
+  });
+
+  // Ticket-detail IA rebuild Phase 2: `?tab=` is the single source of truth
+  // for which tab is open (TicketListPage.jsx's own filter-param convention).
+  describe('?tab= URL state', () => {
+    it('opens the tab named by ?tab= on first load, when this role may see it', async () => {
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=pricing'], salesOwnerUser);
+
+      const pricingTab = await screen.findByRole('tab', { name: /^ราคา/ });
+      await waitFor(() => expect(pricingTab.getAttribute('aria-selected')).toBe('true'));
+      // Overview-only content is absent — proves the panel actually swapped,
+      // not just that the tab button LOOKS selected.
+      expect(screen.queryByRole('heading', { level: 2, name: 'ข้อมูลทั่วไป' })).toBeNull();
+    });
+
+    it('falls back to ภาพรวม when ?tab= names a tab this role cannot see', async () => {
+      // account cannot see "pricing" (pricingRequest) — resolveTicketDetailTab
+      // must fall back rather than render nothing/crash. (FIX 1 made
+      // "activity" role-unconditional, so it no longer proves this case —
+      // see the ticketDetailTabs.js unit tests for that pure-function
+      // behaviour, and the test below for FIX 2's per-instance fallback.)
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=pricing'], accountUser);
+
+      const overviewTab = await screen.findByRole('tab', { name: /^ภาพรวม/ });
+      await waitFor(() => expect(overviewTab.getAttribute('aria-selected')).toBe('true'));
+      expect(await screen.findByRole('heading', { level: 2, name: 'ข้อมูลทั่วไป' })).not.toBeNull();
+    });
+
+    // FIX 2 (Opus review): ticketDetailTabs.js's own role-level predicate for
+    // "documents" would resolve it for account (`() => true`) — proving the
+    // page-level `visibleActiveTab` fallback (not just resolveTicketDetailTab)
+    // is what actually protects a stale/forbidden deep link here.
+    it('falls back to ภาพรวม for a per-instance-hidden tab even though the role-level predicate allows it (FIX 2, documents)', async () => {
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=documents'], accountUser);
+
+      const overviewTab = await screen.findByRole('tab', { name: /^ภาพรวม/ });
+      await waitFor(() => expect(overviewTab.getAttribute('aria-selected')).toBe('true'));
+      expect(await screen.findByRole('heading', { level: 2, name: 'ข้อมูลทั่วไป' })).not.toBeNull();
+      expect(screen.queryByRole('tab', { name: /เอกสาร/ })).toBeNull();
+    });
+
+    it('falls back to ภาพรวม for an absent or unknown ?tab= value', async () => {
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=not-a-real-tab'], ceoUser);
+
+      const overviewTab = await screen.findByRole('tab', { name: /^ภาพรวม/ });
+      await waitFor(() => expect(overviewTab.getAttribute('aria-selected')).toBe('true'));
+    });
+
+    it('clicking a tab writes ?tab= to the URL', async () => {
+      renderTicketDetailPageAtRoute(['/tickets/701'], ceoUser);
+      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+
+      await openTab(/การเงิน/);
+
+      await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toContain('tab=money'));
+    });
+  });
+
+  // Ticket-detail IA rebuild Phase 2: the merged กิจกรรม timeline
+  // (DealHistoryPanel — its own test file covers the id-tiebreak sort in
+  // isolation; this proves TicketDetailPage actually feeds it BOTH streams).
+  describe('merged กิจกรรม history (events + activities)', () => {
+    it('renders both the ticket-events audit trail and the rep activity log in one list, in the activity tab', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          events: [
+            { id: 1, kind: 'CREATED', actorName: 'สมชาย ใจดี', createdAt: '2026-07-01T09:00:00.000Z' },
+          ],
+        }),
+      });
+      api.tickets.listActivities.mockResolvedValue({
+        items: [{
+          id: 501, ticketId: 701, activityDate: '2026-07-10', kind: 'CALL', note: 'โทรติดตามลูกค้า',
+          createdById: 9, createdByName: 'CEO ทดสอบ', createdAt: '2026-07-10T09:00:00.000Z',
+        }],
+      });
+
+      renderTicketDetailPage(ceoUser);
+      await openTab(/กิจกรรม/);
+
+      // The audit event (from `events`) and the rep activity (from
+      // `activities`) both show up, in the same "ประวัติดีล" panel — not two
+      // separate histories any more.
+      expect(await screen.findByText('สร้างดีล')).not.toBeNull();
+      expect(screen.getByText('โทรติดตามลูกค้า')).not.toBeNull();
     });
   });
 });

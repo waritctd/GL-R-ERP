@@ -99,7 +99,33 @@ export function DealStateHeader({
         ) : null}
       </div>
 
-      <dl className="m-0 grid grid-cols-2 gap-x-3 gap-y-3 sm:grid-cols-5">
+      {/* Responsive-overflow fix (Phase 2): `.status-badge` is
+          `white-space: nowrap` (styles.css:1795). FIX 4 (Opus review —
+          measured truth, corrected): the widest Thai stage label is NOT
+          "เสนอราคาผู้ออกแบบ/เจ้าของ" (167px, stage 4 — the most common stage,
+          but not the widest one) — it's "นัดส่งสินค้า / นัดรับเงินส่วนที่เหลือ" at
+          190px, with "เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ" close behind at 189px.
+          At exactly 1024px (`lg:grid-cols-5`'s own breakpoint) this card's
+          fifth column measures ~174px — narrower than the 190px label — so
+          that badge WRAPS onto two lines there. That wrap is the fix working
+          as intended, not a bug: (a) below wraps the badge instead of
+          letting it overflow the column and paint over the next chip, and
+          the column only needs to be wide enough for the badge to wrap
+          sanely, not wide enough to fit the widest label on one line.
+          (a) `[&_.status-badge]:whitespace-normal` lets the badge wrap
+          inside THIS dl only — it wins over styles.css's nowrap because
+          that file loads into `@layer legacy` (src/index.css:1 declares
+          `@layer theme, legacy, utilities`), so an unlayered Tailwind
+          utility outranks it without needing `!`. The shared StatusBadge
+          component itself is untouched.
+          (b) The column count never strands a single chip alone on its own
+          row for these 5 items: 1 column (remainder 0), 3 columns
+          (remainder 2 — two chips share the last row), and 5 columns
+          (remainder 0) are the only counts that don't leave exactly one
+          chip stranded; 2 or 4 would. See this branch's handoff for the
+          measured label widths and the 390/834/1024/1440 column-width
+          proof. */}
+      <dl className="m-0 grid grid-cols-1 gap-x-3 gap-y-3 sm:grid-cols-3 lg:grid-cols-5 [&_.status-badge]:whitespace-normal">
         <StatChip label="ขั้นตอนดีล" value={stage.label} tone={stage.tone} />
         <StatChip
           label="ใบขอราคา (PCR)"

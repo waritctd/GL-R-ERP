@@ -3,23 +3,16 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import {
-  ACTIVITY_KINDS, activityKindLabel, effectiveWinProbability,
-  hasActivitySince, isReadyToAdvance, lastStageChangeAt,
+  effectiveWinProbability, hasActivitySince, isReadyToAdvance, lastStageChangeAt,
 } from './dealTrackingMeta.js';
-
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-const EMPTY_ACTIVITY_DRAFT = { activityDate: today(), kind: 'CALL', note: '' };
 
 /**
  * "การติดตามดีล" (Slice B2, handoff 103) — the weekly-report replacement: win%
- * (effective value + rep override), designer/owner/buyer names, next follow-up
- * date, and the activity log that backs the stage-advance gate. Read-only for
- * any viewer sections.dealTracking lets in; `canEdit` narrows further to the
- * deal owner / sales_manager / ceo, mirroring TicketService.requireDealOwnership
- * (see DealTrackingAndActivityIntegrationTest, backend Slice B1 — the real
+ * (effective value + rep override), designer/owner/buyer names, and next
+ * follow-up date. Read-only for any viewer sections.dealTracking lets in;
+ * `canEdit` narrows further to the deal owner / sales_manager / ceo,
+ * mirroring TicketService.requireDealOwnership (see
+ * DealTrackingAndActivityIntegrationTest, backend Slice B1 — the real
  * enforcement; this component's canEdit is a UI convenience, not authoritative).
  *
  * The "พร้อมเลื่อนสถานะ / ยังไม่พร้อม" badge below is a compact status readout
@@ -28,14 +21,25 @@ const EMPTY_ACTIVITY_DRAFT = { activityDate: today(), kind: 'CALL', note: '' };
  * button instead of living here, in a panel the button it blocks isn't even
  * in (see workState.js / TicketDetailPage / DealStagePanel's own doc
  * comment — this was the Phase-1 audit's "y=870" duplicate-panel finding).
+ *
+ * Ticket-detail IA rebuild Phase 2: this panel used to ALSO render its own
+ * "ประวัติการติดตาม (Activity log)" list + add-activity form below the
+ * tracking fields — a second, separate history from the ticket's own
+ * "ประวัติการดำเนินการ" events panel elsewhere on the page. The spec's
+ * กิจกรรม tab (docs/ui-repair/02-information-architecture/
+ * TICKET_INFORMATION_ARCHITECTURE.md, regions 17+18) merges both into one
+ * chronological stream — see DealHistoryPanel.jsx, rendered alongside this
+ * (trimmed) panel in that tab now. `activities` stays as a prop ONLY to feed
+ * the ready/not-ready badge's `hasActivitySince` check below; this component
+ * no longer renders the activities list or the add-activity form itself
+ * (DealHistoryPanel owns both).
  */
 export function DealTrackingPanel({
-  summary, events, activities = [], activitiesLoading, canEdit,
-  onUpdateTracking, onAddActivity, updating, addingActivity,
+  summary, events, activities = [], canEdit,
+  onUpdateTracking, updating,
 }) {
   const [editOpen, setEditOpen] = useState(false);
   const [draft, setDraft] = useState(null); // set on edit open
-  const [activityDraft, setActivityDraft] = useState(EMPTY_ACTIVITY_DRAFT);
 
   const effectiveWin = effectiveWinProbability(summary.winProbabilityOverride, summary.salesStage);
   const hasOverride = summary.winProbabilityOverride != null;
@@ -64,16 +68,6 @@ export function DealTrackingPanel({
       nextFollowUpAt: draft.nextFollowUpAt || null,
     });
     setEditOpen(false);
-  }
-
-  async function submitActivity() {
-    if (!activityDraft.activityDate) return;
-    await onAddActivity({
-      activityDate: activityDraft.activityDate,
-      kind: activityDraft.kind,
-      note: activityDraft.note.trim() || null,
-    });
-    setActivityDraft(EMPTY_ACTIVITY_DRAFT);
   }
 
   return (
@@ -179,72 +173,6 @@ export function DealTrackingPanel({
             ) : null}
           </div>
         )}
-
-        <div className="flex flex-col gap-2 border-t border-border pt-3">
-          <h3 className="m-0 text-sm font-extrabold text-text">ประวัติการติดตาม (Activity log)</h3>
-          {activitiesLoading ? (
-            <span className="text-xs text-text-muted">กำลังโหลด...</span>
-          ) : activities.length === 0 ? (
-            <span className="text-xs text-text-muted">ยังไม่มีการบันทึกกิจกรรม</span>
-          ) : (
-            <ul className="m-0 flex list-none flex-col gap-2 p-0">
-              {[...activities].reverse().map((activity) => (
-                <li key={activity.id} className="flex flex-col gap-0.5 rounded-lg border border-border-subtle bg-surface-subtle px-3 py-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <StatusBadge tone="neutral">{activityKindLabel(activity.kind)}</StatusBadge>
-                    <span className="text-xs font-bold text-text-muted">{formatThaiDate(activity.activityDate)}</span>
-                    <span className="text-2xs text-text-muted">· {activity.createdByName}</span>
-                  </div>
-                  {activity.note ? <p className="m-0 text-xs text-text-secondary">{activity.note}</p> : null}
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {canEdit ? (
-            <div className="mt-1 flex flex-col gap-2 rounded-lg border border-dashed border-border p-3">
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                <label className="flex flex-col gap-1 text-xs font-bold text-text-secondary">
-                  วันที่
-                  <input
-                    type="date" className="text-base"
-                    value={activityDraft.activityDate}
-                    onChange={(e) => setActivityDraft((d) => ({ ...d, activityDate: e.target.value }))}
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-xs font-bold text-text-secondary">
-                  ประเภท
-                  <select
-                    className="text-base"
-                    value={activityDraft.kind}
-                    onChange={(e) => setActivityDraft((d) => ({ ...d, kind: e.target.value }))}
-                  >
-                    {ACTIVITY_KINDS.map((k) => (
-                      <option key={k.code} value={k.code}>{k.label}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <label className="flex flex-col gap-1 text-xs font-bold text-text-secondary">
-                บันทึก (ถ้ามี)
-                <textarea
-                  rows={2}
-                  value={activityDraft.note}
-                  onChange={(e) => setActivityDraft((d) => ({ ...d, note: e.target.value }))}
-                  placeholder="รายละเอียดการติดตอบ / ผลที่ได้"
-                />
-              </label>
-              <button
-                type="button" className="secondary-button self-end"
-                disabled={addingActivity || !activityDraft.activityDate}
-                onClick={submitActivity}
-              >
-                <Icon name="plus" size={14} />
-                บันทึกกิจกรรม
-              </button>
-            </div>
-          ) : null}
-        </div>
       </div>
     </section>
   );
