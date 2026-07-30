@@ -46,6 +46,16 @@ public class CommissionController {
     // Slice A2 (AUTHZ CHANGE): sales removed — commission creation is now the accountant's
     // auto-create trigger (see createFromDeal below). sales_manager/ceo keep the manual-submission
     // ability they already had; account replaces sales as the day-to-day creator role here too.
+    //
+    // KNOWN DEAD ENDPOINT (F9, found 2026-07-30 during ข้อ 15 documentation-gate review — see
+    // this branch's PR body):
+    // this JSON route calls CommissionService#submit's 2-arg overload, which always passes a
+    // null invoiceAttachment into the 3-arg version -- and that now unconditionally 400s
+    // ("Tax invoice file is required"), so this endpoint can never succeed for ANY caller. It
+    // predates the attachment being made mandatory and was simply never removed. The real
+    // create paths are submitMultipart (below) and CommissionService#createFromDeal. Left as-is
+    // here (removing a public endpoint is out of scope for a documentation-gate branch); flagged
+    // as a known risk for a follow-up cleanup.
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     @PreAuthorize("hasAnyRole('ACCOUNT','SALES_MANAGER','CEO')")
     public CommissionDetailResponse submit(@Valid @RequestBody SubmitCommissionRequest request, HttpSession session) {

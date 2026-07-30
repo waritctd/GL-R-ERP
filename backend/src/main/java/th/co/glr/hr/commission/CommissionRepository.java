@@ -198,15 +198,60 @@ public class CommissionRepository {
             """, Map.of(), (rs, rowNum) -> rs.getLong("employee_id"));
     }
 
+    /**
+     * V102 note ({@code chk_invoice_details_evidence_present}, see
+     * {@code V102__invoice_evidence_provenance.sql}): a plain Postgres {@code CHECK} constraint is
+     * NOT deferrable — it is evaluated immediately after THIS statement, not at transaction
+     * commit. {@code CommissionService#submit}/{@code #createFromDeal} always insert the bare
+     * invoice row first and only attach the file in a second statement
+     * ({@link #attachInvoiceFile}) once it has been stored (storage needs this row's generated
+     * {@code invoice_id} first) — so at the moment of THIS insert, neither
+     * {@code invoice_attachment_id} nor a real {@code evidence_provenance} is known yet. To keep
+     * the constraint satisfied at every single statement (not just at the end of the
+     * transaction), this insert writes a transient, internal-only sentinel into {@code
+     * evidence_provenance}; {@link #attachInvoiceFile} clears it back to {@code NULL} in the same
+     * transaction, in the same statement that sets the real {@code invoice_attachment_id}. Because
+     * both callers of this method always call {@link #attachInvoiceFile} immediately after (inside
+     * the same {@code @Transactional} method), the sentinel is never visible outside this one
+     * transaction — Postgres MVCC hides uncommitted writes from every other transaction, and if
+     * anything throws before {@link #attachInvoiceFile} runs, the whole transaction (including
+     * this insert) rolls back. That rollback claim is the whole safety net this sentinel relies
+     * on and is not just asserted here — {@code CommissionInvoiceSentinelRollbackIntegrationTest}
+     * (real Postgres, a real {@code DataSourceTransactionManager}, not a hand-wired no-op service)
+     * proves a failure between this insert and {@link #attachInvoiceFile} leaves zero rows behind,
+     * and that {@code @Transactional} stays on both create paths. It is NOT a real evidence
+     * category and must never be treated as one — {@link #PENDING_ATTACHMENT_SENTINEL} is private
+     * to this class specifically so nothing outside it can read or branch on the value.
+     *
+     * <p><b>Review note (2026-07-30):</b> the preferred alternative — pre-allocate {@code
+     * invoice_id} via {@code nextval}, store the file, then INSERT once with the real {@code
+     * invoice_attachment_id} already known, eliminating the sentinel entirely — was evaluated and
+     * NOT taken. {@code invoice_id} is a {@code GENERATED ALWAYS AS IDENTITY} column, so writing a
+     * pre-fetched value back would need {@code OVERRIDING SYSTEM VALUE} on every insert path, and
+     * {@link #createInvoice}/{@link #attachInvoiceFile}'s current two-call shape is depended on
+     * directly (not just through {@code CommissionService}) by five other test files —
+     * {@code CommissionServiceTest} (Mockito call-count/argument verification on both methods),
+     * {@code ManualCommissionIntegrationTest}, {@code CommissionCalcRefineIntegrationTest}, {@code
+     * CommissionDocumentationInvariantIntegrationTest}, {@code
+     * InvoiceEvidenceProvenanceIntegrationTest}, and {@code
+     * PayrollCommissionWeightedBaseIntegrationTest} — plus the reviewer-authored {@code
+     * CommissionInvoiceSentinelRollbackIntegrationTest}, which this branch keeps verbatim. That is
+     * a wide, cross-cutting change for a documentation-branch fix to make safely; per the review
+     * instructions this was stopped rather than half-done. The sentinel stays, tightened instead
+     * (V102's CHECK is now a closed allow-list — {@code PRE_ERP_PAPER_APPROVAL} or {@code
+     * PENDING_ATTACHMENT} — rather than "any non-null string").
+     */
+    private static final String PENDING_ATTACHMENT_SENTINEL = "PENDING_ATTACHMENT";
+
     public long createInvoice(SubmitCommissionRequest request) {
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO sales.invoice_details
                 (invoice_number, invoice_date, gross_amount, bank_fees, suspense_vat,
-                 transport_fee, cut_fee, shortfall, withholding_tax, overpayment)
+                 transport_fee, cut_fee, shortfall, withholding_tax, overpayment, evidence_provenance)
             VALUES
                 (:invoiceNumber, :invoiceDate, :grossAmount, :bankFees, :suspenseVat,
-                 :transportFee, :cutFee, :shortfall, :withholdingTax, :overpayment)
+                 :transportFee, :cutFee, :shortfall, :withholdingTax, :overpayment, :evidenceProvenance)
             """,
             amountParams()
                 .addValue("invoiceNumber", request.invoiceNumber().trim())
@@ -218,16 +263,22 @@ public class CommissionRepository {
                 .addValue("cutFee", money(request.cutFee()))
                 .addValue("shortfall", money(request.shortfall()))
                 .addValue("withholdingTax", money(request.withholdingTax()))
-                .addValue("overpayment", money(request.overpayment())),
+                .addValue("overpayment", money(request.overpayment()))
+                .addValue("evidenceProvenance", PENDING_ATTACHMENT_SENTINEL),
             keyHolder,
             new String[]{"invoice_id"});
         return keyHolder.getKey().longValue();
     }
 
+    /** Sets the real attachment AND clears the {@link #PENDING_ATTACHMENT_SENTINEL} written by
+     * {@link #createInvoice} in the SAME statement — the row always has at least one of the two
+     * evidence columns non-null, satisfying {@code chk_invoice_details_evidence_present} at every
+     * individual statement, not just at the end of the transaction. */
     public void attachInvoiceFile(long invoiceId, long attachmentId) {
         jdbc.update("""
             UPDATE sales.invoice_details
                SET invoice_attachment_id = :attachmentId,
+                   evidence_provenance = NULL,
                    updated_at = now()
              WHERE invoice_id = :invoiceId
             """, Map.of("invoiceId", invoiceId, "attachmentId", attachmentId));

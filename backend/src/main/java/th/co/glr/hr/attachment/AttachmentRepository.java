@@ -81,6 +81,42 @@ public class AttachmentRepository {
         jdbc.update("DELETE FROM sales.attachment WHERE attachment_id = :id", Map.of("id", id));
     }
 
+    /**
+     * F5 fix (2026-07-30, ข้อ 15 evidence-chain hardening): {@code
+     * CommissionService#createFromDeal} registers ONE physical file into TWO independent
+     * registries that share nothing but the file's path — this table ({@code sales.attachment},
+     * the ticket's {@code INVOICE} attachment, deletable by the ticket's creator/assignee via
+     * {@link th.co.glr.hr.attachment.AttachmentController#delete}) and {@code hr.file_attachment}
+     * (the commission's ข้อ 15 evidence, referenced by {@code
+     * sales.invoice_details.invoice_attachment_id}, with no delete route of its own anywhere in
+     * this codebase). Before {@code AttachmentController#delete} unlinks a row AND the physical
+     * file, it must know whether some OTHER registry is still relying on that same file — this is
+     * that check, by file path (the only field the two registries actually share).
+     *
+     * <p>Scoped to commissions that are NOT {@code VOID}/{@code REJECTED} — mirrors {@code
+     * CommissionService#updateDeductions}'s own "cannot edit a void commission record" gate. A
+     * {@code SUBMITTED}/{@code MANAGER_APPROVED} commission needs this file intact for its
+     * remaining approver(s) to review, not just an {@code APPROVED} one for the permanent audit
+     * trail behind money already paid — gating on {@code APPROVED} alone would let a rep destroy
+     * the evidence a CEO is about to review, before it ever reaches that status.
+     */
+    public boolean backsLiveCommission(String filePath) {
+        if (filePath == null || filePath.isBlank()) {
+            return false;
+        }
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM hr.file_attachment fa
+                  JOIN sales.invoice_details inv ON inv.invoice_attachment_id = fa.attachment_id
+                  JOIN sales.commission_record cr ON cr.invoice_id = inv.invoice_id
+                 WHERE fa.file_path = :filePath
+                   AND cr.status NOT IN ('VOID', 'REJECTED')
+            )
+            """, Map.of("filePath", filePath), Boolean.class);
+        return Boolean.TRUE.equals(value);
+    }
+
     private AttachmentDto map(java.sql.ResultSet rs) throws java.sql.SQLException {
         long qidRaw = rs.getLong("quotation_id");
         Long qid = rs.wasNull() ? null : qidRaw;
