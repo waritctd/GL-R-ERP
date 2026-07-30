@@ -1,4 +1,6 @@
-import { forwardRef, useImperativeHandle, useMemo, useState } from 'react';
+import {
+  forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState,
+} from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
@@ -194,9 +196,9 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
   //   3. No draft yet, but we genuinely don't know that for sure —
   //      `quotationsQuery` hasn't resolved (it's `enabled: canView`, so also
   //      gate on `canView` or a not-yet-enabled query reads as "not
-  //      success" forever). Creating here would risk a DUPLICATE draft once
-  //      the real list lands, so this is an explicit "try again" toast, not
-  //      a silent fall-through to step 4.
+  //      success" forever). FIX 3 (Opus review — cross-tab dead end): queue
+  //      a silent retry instead of telling the rep to click again — see the
+  //      effect below.
   //   4. No draft, the query has genuinely settled empty, and the PR/user
   //      still pass the create gate → create the draft and issue it in one
   //      chained mutation. This is the actual bug fix: the sticky button
@@ -204,19 +206,62 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
   //   5. None of the above → the click cannot do anything (e.g. the only
   //      quotation is already ISSUED/ACCEPTED/etc). Never fail silently —
   //      tell the rep where to look.
+  //
+  // FIX 3 (Opus review, cross-tab `issue_quotation` first-click dead end):
+  // TicketDetailPage's `runOnTab('quotations', () =>
+  // dealQuotationPanelRef.current?.openIssueQuotation())` switches to this
+  // tab and calls this ref in the SAME commit the tab mounts — this panel's
+  // own `quotationsQuery` has only just started fetching, so on a rep's
+  // FIRST click from a different tab (e.g. ภาพรวม), branch 3 above used to
+  // fire unconditionally: the rep saw "กำลังโหลดข้อมูลใบเสนอราคา — กรุณาลองอีกครั้ง"
+  // and nothing happened, even though the very next tick would have had
+  // everything needed to issue for real. A second click (now with a warm,
+  // already-`isSuccess` query) always "fixed" it, which is exactly what made
+  // this easy to miss — it only reproduces on a session's first visit to
+  // this deal. Fixed WITHOUT pre-mounting every panel (that reinstates the
+  // 4,000px page this rebuild retires): `attemptIssueQuotation` is factored
+  // out so it can run twice — once immediately (branch 3 now just queues a
+  // retry instead of toasting) and once more, automatically, the moment
+  // `quotationsQuery` actually settles (the effect below, keyed on
+  // `quotationsQuery.isSuccess`). No polling, no fixed delay — the retry is
+  // driven by the query's own real state transition.
+  const pendingIssueIntentRef = useRef(false);
+
+  function attemptIssueQuotation() {
+    if (issueQuotation.isPending || createQuotation.isPending || createAndIssueQuotation.isPending) return;
+    if (current && isCustomerQuotationEditable(current) && canManageCustomerQuotation(user, pr)) {
+      pendingIssueIntentRef.current = false;
+      issueQuotation.mutate(current.id);
+    } else if (!current && canView && !quotationsQuery.isSuccess) {
+      // Not settled yet — queue the retry (see the effect below) instead of
+      // telling the rep to click again; this is the exact race FIX 3 closes.
+      pendingIssueIntentRef.current = true;
+    } else if (!current && quotationsQuery.isSuccess && canCreateCustomerQuotation(user, pr)) {
+      pendingIssueIntentRef.current = false;
+      createAndIssueQuotation.mutate();
+    } else {
+      pendingIssueIntentRef.current = false;
+      showToast?.('error', 'ยังออกใบเสนอราคาไม่ได้ — ตรวจสอบสถานะใบขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
+    }
+  }
+
+  // Fires the queued retry exactly once, the moment `quotationsQuery`
+  // actually resolves — `attemptIssueQuotation` re-reads `current`/
+  // `quotationsQuery.isSuccess` fresh (closures over this render's state),
+  // both already updated by the time this effect runs (the query settling
+  // is what triggered this very re-render). Re-entrant/idempotent by
+  // construction (the in-flight guard at the top of `attemptIssueQuotation`),
+  // so calling it again here is safe even if something else already resolved
+  // the intent in between.
+  useEffect(() => {
+    if (pendingIssueIntentRef.current && quotationsQuery.isSuccess) {
+      attemptIssueQuotation();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quotationsQuery.isSuccess]);
+
   useImperativeHandle(ref, () => ({
-    openIssueQuotation: () => {
-      if (issueQuotation.isPending || createQuotation.isPending || createAndIssueQuotation.isPending) return;
-      if (current && isCustomerQuotationEditable(current) && canManageCustomerQuotation(user, pr)) {
-        issueQuotation.mutate(current.id);
-      } else if (!current && canView && !quotationsQuery.isSuccess) {
-        showToast?.('error', 'กำลังโหลดข้อมูลใบเสนอราคา — กรุณาลองอีกครั้ง');
-      } else if (!current && quotationsQuery.isSuccess && canCreateCustomerQuotation(user, pr)) {
-        createAndIssueQuotation.mutate();
-      } else {
-        showToast?.('error', 'ยังออกใบเสนอราคาไม่ได้ — ตรวจสอบสถานะใบขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
-      }
-    },
+    openIssueQuotation: attemptIssueQuotation,
     openConfirmOrder: () => {
       if (confirmOrder.isPending) return;
       if (pr && canConfirmOrder(user, pr)) {

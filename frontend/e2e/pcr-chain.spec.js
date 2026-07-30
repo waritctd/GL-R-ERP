@@ -170,6 +170,11 @@ test('sales -> import -> ceo -> sales walks a PCR from draft to quotation-accept
   // ── sales: create + issue the customer quotation, record ACCEPTED ───
   await switchRole(page, 'sales');
   await spaGoto(page, ticketPath);
+  // Ticket-detail IA rebuild Phase 2 (FIX 5, Opus review): DealQuotationPanel
+  // now lives inside the "ใบเสนอราคา" tab, not on the page by default — a
+  // fresh navigation always lands on ภาพรวม, so this locator found nothing
+  // until the tab was opened.
+  await page.getByRole('tab', { name: 'ใบเสนอราคา' }).click();
   const quotationPanel = page.getByTestId('deal-quotation-panel');
   await expect(quotationPanel).toBeVisible();
   await quotationPanel.getByTestId('deal-quotation-create').click();

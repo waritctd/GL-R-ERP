@@ -27,8 +27,36 @@ import { loginAs, switchRole, spaGoto } from './helpers/auth.js';
 // FROM 'draft' only", mirroring TicketRepository
 // .markQuotationIssuedForOrderConfirmation). This spec depends on that
 // bridge firing — confirmOrder is called before any close-gated action.
+//
+// PRODUCTION GAP (owner-acknowledged, tracked separately, NOT fixed here —
+// see docs/agent-handoffs/119_refactor-ticket-workspace-ia-phase2.md "Known
+// Risks" + the follow-up task raised from it): the three-party close's
+// remaining step — attach the INVOICE, then CONFIRM_CLOSE — has never
+// actually worked and cannot work as the UI/backend stand today:
+//   - the only control that produces an INVOICE-type attachment is the
+//     `#ticket-invoice-file` input, hardcoded to `isAccount`
+//     (TicketDetailPage.jsx:1893, `!TERMINAL.includes(st) && isAccount`);
+//   - `AttachmentController.requireTicketAccess` refuses `account` outright —
+//     it is neither a ticket participant (creator/assignee) nor in
+//     `MANAGER_ROLES = {hr, sales_manager, ceo}` (AttachmentController.java,
+//     `MANAGER_ROLES` + `requireTicketAccess`, lines ~37 and ~116-125) — so
+//     that upload 403s for real against the Java service. This exact refusal
+//     is pinned by
+//     `TicketIaAuthzMatrixIntegrationTest.attachments_accountIsNeitherParticipantNorManagerAndIsRefused`.
+//   - `mockApi.js`'s `attachments` namespace has NO role gate at all, so this
+//     suite only ever passed here because the mock is more permissive than
+//     production — the same "mock hid a 403" shape as issue #199 (CLAUDE.md,
+//     "Mock API contract — shapes are faithful, authz is not").
+// The owner decided this is out of scope for the ticket-workspace-IA-Phase-2
+// branch: fixing it means changing who may attach the closing invoice, which
+// is a backend authorization change and must ship its own real-DB
+// integration test per CLAUDE.md, not ride along inside a UI-IA branch. So
+// this spec was adjusted (scoped down to the part that is genuinely
+// reachable in production) rather than the defect being patched. See the
+// `test.fixme()` call below for exactly where real coverage stops and the
+// tracked gap begins.
 
-test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ page }) => {
+test('deposit paid -> fulfilment -> final payment confirmed (invoice-gated close tracked separately)', async ({ page }) => {
   test.setTimeout(150_000);
 
   // ── sales: create a 2-unit deal + submit a catalog-backed PCR ───────
@@ -124,6 +152,10 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   // ── sales: issue + accept the customer quotation, confirm the order ─
   await switchRole(page, 'sales');
   await spaGoto(page, ticketPath);
+  // Ticket-detail IA rebuild Phase 2 (FIX 5, Opus review): DealQuotationPanel
+  // now lives inside the "ใบเสนอราคา" tab — a fresh navigation always lands
+  // on ภาพรวม, so this locator found nothing until the tab was opened.
+  await page.getByRole('tab', { name: 'ใบเสนอราคา' }).click();
   const quotationPanel = page.getByTestId('deal-quotation-panel');
   await expect(quotationPanel).toBeVisible();
   await quotationPanel.getByTestId('deal-quotation-create').click();
@@ -165,6 +197,10 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   await expect(page.getByText('แบบร่าง')).toHaveCount(0);
 
   // ── sales: create + issue the deposit notice ─────────────────────────
+  // Ticket-detail IA rebuild Phase 2 (FIX 5, Opus review): DealDepositPanel
+  // now lives inside the "การเงิน" tab, not "ใบเสนอราคา" (still active from
+  // the block above) — open it before looking for the panel.
+  await page.getByRole('tab', { name: 'การเงิน' }).click();
   const depositPanel = page.getByTestId('deal-deposit-panel');
   await expect(depositPanel.getByTestId('deal-deposit-create-notice')).toBeVisible();
   await depositPanel.getByTestId('deal-deposit-create-notice').click();
@@ -176,6 +212,12 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   // via api.depositNotices.listByTicket and now shows the issue action.
   await expect(page.getByRole('heading', { name: 'ใบแจ้งยอดเงินรับมัดจำ' })).toBeVisible();
   await page.getByRole('button', { name: 'กลับ' }).click();
+  // DepositNoticeRoute's onBack is a FIXED `navigate(/tickets/${ticketId})`
+  // (App.jsx), not `navigate(-1)` — it does not carry the `?tab=` query
+  // string back, so this round trip always lands back on ภาพรวม. Reopen
+  // "การเงิน" (found while actually running this suite, not called out by
+  // line number in the review — same underlying gap as the other spots).
+  await page.getByRole('tab', { name: 'การเงิน' }).click();
   await expect(depositPanel.getByTestId('deal-deposit-issue-notice')).toBeVisible();
   await depositPanel.getByTestId('deal-deposit-issue-notice').click();
   await expect(depositPanel.getByText('ออกแล้ว')).toBeVisible();
@@ -183,6 +225,8 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   // ── account: confirm the deposit paid ────────────────────────────────
   await switchRole(page, 'account');
   await spaGoto(page, ticketPath);
+  // Fresh navigation always lands on ภาพรวม — reopen "การเงิน" for this role too.
+  await page.getByRole('tab', { name: 'การเงิน' }).click();
   const depositPanelAccount = page.getByTestId('deal-deposit-panel');
   await expect(depositPanelAccount.getByTestId('deal-deposit-confirm')).toBeVisible();
   await depositPanelAccount.getByTestId('deal-deposit-confirm').click();
@@ -191,6 +235,9 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   // ── import: IR chain -> partial delivery -> complete delivery ───────
   await switchRole(page, 'import');
   await spaGoto(page, ticketPath);
+  // DealFulfilmentPanel lives inside "จัดซื้อ-ส่งมอบ" — open it before looking
+  // for the panel (fresh navigation always lands on ภาพรวม).
+  await page.getByRole('tab', { name: 'จัดซื้อ-ส่งมอบ' }).click();
   const fulfilmentPanel = page.getByTestId('deal-fulfilment-panel');
   await expect(fulfilmentPanel.getByTestId('deal-fulfilment-issue-ir')).toBeVisible();
   await fulfilmentPanel.getByTestId('deal-fulfilment-issue-ir').click();
@@ -217,7 +264,9 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   await fulfilmentPanel.getByTestId('deal-fulfilment-complete').click();
   await expect(fulfilmentPanel.getByText('2 / 2').first()).toBeVisible();
 
-  // ── account: confirm final payment, attach the invoice, confirm close ─
+  // ── account: confirm final payment ───────────────────────────────────
+  // This part genuinely works in production — FINAL_PAYMENT is gated on
+  // `isAccount && st === 'quotation_issued'` only, no attachment precondition.
   await switchRole(page, 'account');
   await spaGoto(page, ticketPath);
   await expect(page.getByTestId('ticket-detail-confirm-final')).toBeVisible();
@@ -226,21 +275,24 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
     .getByRole('button', { name: 'ยืนยันชำระครบ' }).click();
   await expect(page.getByTestId('ticket-detail-confirm-final')).toHaveCount(0);
 
-  // แนบใบกำกับภาษี is a hard precondition for CONFIRM_CLOSE
-  // (requireClosePrerequisites' hasInvoiceAttachment check).
-  await page.locator('#ticket-invoice-file').setInputFiles({
-    name: 'invoice.pdf',
-    mimeType: 'application/pdf',
-    buffer: Buffer.from('%PDF-1.4 e2e deposit-fulfilment-close test invoice'),
-  });
-  await expect(page.getByTestId('ticket-detail-confirm-close')).toBeVisible();
-  await page.getByTestId('ticket-detail-confirm-close').click();
-  await expect(page.getByTestId('ticket-detail-confirm-close')).toHaveCount(0);
-
-  // ── ceo: verify and close ────────────────────────────────────────────
-  await switchRole(page, 'ceo');
-  await spaGoto(page, ticketPath);
-  await expect(page.getByTestId('ticket-detail-verify-close')).toBeVisible();
-  await page.getByTestId('ticket-detail-verify-close').click();
-  await expect(page.getByText('ปิดแล้ว').first()).toBeVisible();
+  // ── STOP HERE: the remaining close path is untested by design ────────
+  // The rest of the real three-party close — attach แนบใบกำกับภาษี (a hard
+  // precondition for CONFIRM_CLOSE, `requireClosePrerequisites'
+  // hasInvoiceAttachment check), then account CONFIRM_CLOSE, then ceo
+  // VERIFY_CLOSE -> CLOSED_PAID — is NOT run here. It has never worked
+  // against the real Java service: the only control that produces an
+  // INVOICE attachment is `isAccount`-gated (TicketDetailPage.jsx:1893), and
+  // `AttachmentController.requireTicketAccess` refuses `account` (neither a
+  // ticket participant nor in `MANAGER_ROLES`), pinned by
+  // `TicketIaAuthzMatrixIntegrationTest.attachments_accountIsNeitherParticipantNorManagerAndIsRefused`.
+  // The suite only ever passed this part because `mockApi.js`'s
+  // `attachments` namespace has no role gate (issue-#199-shaped: mock more
+  // permissive than production). This is a tracked, owner-acknowledged
+  // production gap (see docs/agent-handoffs/119_refactor-ticket-workspace-ia-phase2.md,
+  // "Known Risks", and the follow-up task raised from it) requiring a
+  // backend authorization decision + a real-DB integration test — out of
+  // scope for this branch. `test.fixme()` below marks this test as
+  // known-incomplete rather than silently skipped or falsely green; it must
+  // show as fixme/skipped in the report, never as passed.
+  test.fixme(true, 'Invoice-gated three-party close is unreachable in production — account cannot attach INVOICE (AttachmentController.requireTicketAccess refuses it) though the UI\'s only upload control is isAccount-gated. Tracked separately; see docs/agent-handoffs/119_refactor-ticket-workspace-ia-phase2.md.');
 });

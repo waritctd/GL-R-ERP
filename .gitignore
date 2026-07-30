@@ -54,3 +54,6 @@ frontend/playwright-report/
 frontend/test-results/
 frontend/blob-report/
 frontend/playwright/.cache/
+
+# Untracked design-review tooling output (impeccable skill) — not source
+.impeccable/
