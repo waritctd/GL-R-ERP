@@ -258,7 +258,7 @@ class PayrollCalculatorPo96ReviewTest {
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, 0, 0, 0, false);
+            0, 0, 0, false);
         PayrollTaxAllowanceInput noAllowanceAtAll = PayrollTaxAllowanceInput.empty();
 
         BigDecimal withDeclaration = run(new BigDecimal("100000.00"), NO_SPECIAL, BigDecimal.ZERO,
@@ -302,7 +302,7 @@ class PayrollCalculatorPo96ReviewTest {
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, 0, 0, 0, false);
+            0, 0, 0, false);
 
         String plainNote = run(new BigDecimal("100000.00"), NO_SPECIAL, BigDecimal.ZERO,
             BigDecimal.ZERO, PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1, 12)
@@ -360,13 +360,13 @@ class PayrollCalculatorPo96ReviewTest {
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, 1, 0, 0, false);
+            1, 0, 0, false);
         PayrollTaxAllowanceInput oneChildDeclaredExactly = new PayrollTaxAllowanceInput(
             BigDecimal.ZERO, new BigDecimal("30000.00"), BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, 1, 0, 0, false);
+            1, 0, 0, false);
 
         PayrollCalculation clamped = run(new BigDecimal("100000.00"), NO_SPECIAL, BigDecimal.ZERO,
             BigDecimal.ZERO, threeChildrenOneCounted, PayrollYearToDate.empty(), 1, 12);

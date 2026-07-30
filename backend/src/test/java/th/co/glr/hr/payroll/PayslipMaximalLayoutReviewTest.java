@@ -123,20 +123,22 @@ class PayslipMaximalLayoutReviewTest {
     }
 
     /**
-     * The biggest payslip the engine can produce: all 8 พิเศษ slots populated, plus OT, commission,
-     * the two V94 one-off fields, ค่าตอบแทนกรรมการ and non-taxable income (14 earnings rows), against
-     * all 10 deduction rows.
+     * The biggest payslip the engine can produce: all 9 พิเศษ slots populated (F6 fix, Opus review
+     * 2026-07-30 -- พิเศษ 9/ค่าเช่าบ้าน exists since 2026-07-29 and this loop was never widened past
+     * the original 8, so the true worst case had never actually been geometry-checked), plus OT,
+     * commission, the two V94 one-off fields, ค่าตอบแทนกรรมการ and non-taxable income (15 earnings
+     * rows), against all 10 deduction rows.
      */
     private PayrollLineDto maximalLine(BigDecimal excessWithheld, String note) {
         List<PayrollSpecialPayDto> specials = new ArrayList<>();
-        for (int slot = 1; slot <= 8; slot += 1) {
+        for (int slot = 1; slot <= 9; slot += 1) {
             specials.add(new PayrollSpecialPayDto("specialPay" + slot,
                 "พิเศษ " + slot + " (ค่าครองชีพประจำเดือน)", money("1000.00")));
         }
         return new PayrollLineDto(
             1L, 7L, "GLR-07", "ทดสอบ ยาวมากเป็นพิเศษ", "AC-บัญชีและการเงิน", "ธ.กสิกรไทย", "1234567890",
             money("50000.00"), money("1666.67"), money("208.33"),
-            specials, money("8000.00"),
+            specials, money("9000.00"),
             money("3000.00"),    // overtime
             money("9000.00"),    // commission
             money("125000.00"),  // grossEarnings

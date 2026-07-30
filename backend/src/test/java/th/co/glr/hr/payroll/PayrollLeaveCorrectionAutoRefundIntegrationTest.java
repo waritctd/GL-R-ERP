@@ -222,6 +222,7 @@ class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIn
             employeeId,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, // specialPay9
             BigDecimal.ZERO,
             unpaidLeaveDays,
             BigDecimal.ZERO,

@@ -150,7 +150,7 @@ class PayrollPersistedPayslipIntegrationTest extends AbstractPostgresIntegration
     }
 
     private long seedEmployee(String code, String firstNameTh, String lastNameTh, BigDecimal salary) {
-        return jdbc.queryForObject(
+        long employeeId = jdbc.queryForObject(
             """
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active)
             VALUES (:code, :first, :last, :salary, TRUE)
@@ -158,5 +158,9 @@ class PayrollPersistedPayslipIntegrationTest extends AbstractPostgresIntegration
             """,
             Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "salary", salary),
             Long.class);
+        // Task 2 (2026-07-29): SSO inclusion has no calculator-layer default -- seed it so
+        // socialSecurity comes out non-zero, matching this file's pinned 875.00 expectation.
+        seedSsoIncluded(employeeId, 2026, PayrollComponent.SALARY);
+        return employeeId;
     }
 }

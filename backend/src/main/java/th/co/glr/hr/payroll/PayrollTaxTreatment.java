@@ -1,0 +1,48 @@
+package th.co.glr.hr.payroll;
+
+/**
+ * The three withholding-tax treatments a pay component can be given, per ป.96/2543 (the
+ * Thai Revenue Department's withholding-tax calculation order). Owner decision 2026-07-29
+ * (docs/agent-handoffs/119_feat-payroll-classification-and-hr-declarations.md, section 1):
+ * HR classifies every pay component per employee, per tax year -- there is no company-wide
+ * default except {@link #REGULAR_REPROJECT} being locked onto {@code SALARY}
+ * (see {@code hr.payroll_component_tax_treatment}'s CHECK constraint, V95).
+ *
+ * <p>{@code null} at the storage layer means "not yet classified" and is a distinct, meaningful
+ * state -- never coerce it to a default. A component with a non-zero amount in a given run and no
+ * classification blocks that run (enforced in the service layer; this enum and its storage only
+ * provide the vocabulary and the data).
+ */
+public enum PayrollTaxTreatment {
+    /**
+     * ป.96/2543 ข้อ 1(4): annualise this period's amount x จำนวนคราวที่ต้องจ่ายทั้งปี (the number of
+     * times paid in the year), recomputing the annual projection every period. For salary and any
+     * genuinely fixed, recurring allowance -- income the employee can count on every คราว.
+     */
+    REGULAR_REPROJECT,
+
+    /**
+     * ป.96/2543 ข้อ 1(5): multiply by the known count of occurrences in the year (1 for an annual
+     * bonus), taxed as the difference this payment makes to the annual projection. For a bonus or
+     * any other confirmed one-off payment whose frequency is known in advance.
+     *
+     * <p><b>Known limitation (Opus review, 2026-07-29):</b> {@link PayrollCalculator
+     * #calculateClassified} does not read a frequency count anywhere -- it treats every occurrence
+     * of an {@code EXTRA_KNOWN_FREQUENCY} component this period as a single ป.96 ข้อ 1(5) event
+     * (this period's amount layered once on top of the regular annual projection), i.e. it assumes
+     * a count of 1 unconditionally. That is correct for the archetypal case (an annual bonus paid
+     * once) but not for a component with a known count &gt; 1 (e.g. a semi-annual bonus paid twice a
+     * year) -- ข้อ 1(5) would need the annualised-by-count treatment ข้อ 1(4) gets, not the
+     * marginal-difference treatment this limb actually applies. No {@code payroll_line} or
+     * classification-matrix column exists to record a count today; adding one is new scope for the
+     * owner to decide, not fixed here.
+     */
+    EXTRA_KNOWN_FREQUENCY,
+
+    /**
+     * ป.96/2543 ข้อ 1(6): cumulative actual amount paid so far this year, less tax already withheld
+     * on it. For overtime, irregular commission, or any component whose frequency and amount are not
+     * known in advance.
+     */
+    EXTRA_CUMULATIVE_ACTUAL
+}

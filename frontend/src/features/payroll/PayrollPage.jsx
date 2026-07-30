@@ -83,16 +83,61 @@ const payrollColumns = [
 
 const thisMonth = new Date().toISOString().slice(0, 7);
 const specialPayFields = [
+  // Numbering ALIGNED to the accountant's workbook (2026.xlsx) on 2026-07-29 — see
+  // PayrollService#specialPayDtos for why the system moved rather than the ledger.
   { key: 'specialPay1', label: 'พิเศษ 1 (ค่าครองชีพ)', defaultValue: '500' },
-  { key: 'specialPay2', label: 'พิเศษ 2 (เบี้ยเลี้ยงประจำ)' },
-  { key: 'specialPay3', label: 'พิเศษ 3 (ค่าตำแหน่ง)' },
-  { key: 'specialPay4', label: 'พิเศษ 4 (เบี้ยขยันประจำ)' },
-  { key: 'specialPay5', label: 'พิเศษ 5 (ค่า GPRS)', defaultValue: '500' },
-  { key: 'specialPay6', label: 'พิเศษ 6 (คอมมิชชั่น)' },
-  { key: 'specialPay7', label: 'พิเศษ 7 (ทำได้ตาม KPI)' },
-  { key: 'specialPay8', label: 'พิเศษ 8 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)' },
+  { key: 'specialPay2', label: 'พิเศษ 2 (ค่าเช่าบ้าน)' },
+  { key: 'specialPay3', label: 'พิเศษ 3 (เบี้ยเลี้ยงประจำ)' },
+  { key: 'specialPay4', label: 'พิเศษ 4 (ค่าตำแหน่ง)' },
+  { key: 'specialPay5', label: 'พิเศษ 5 (เบี้ยขยันประจำ)' },
+  { key: 'specialPay6', label: 'พิเศษ 6 (ค่า GPRS)', defaultValue: '500' },
+  { key: 'specialPay7', label: 'พิเศษ 7 (คอมมิชชั่น)' },
+  { key: 'specialPay8', label: 'พิเศษ 8 (ทำได้ตาม KPI)' },
+  { key: 'specialPay9', label: 'พิเศษ 9 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)' },
+];
+
+// ค่าอาหาร and เบี้ยเลี้ยง (ตจว/ตปท) — V97. Real taxable columns in the accountant's ledger
+// (2026.xlsx cols K and P) that the product had no field for until 2026-07-29. Not พิเศษ slots:
+// the workbook doesn't number them as พิเศษ either.
+const namedAllowanceFields = [
+  { key: 'mealAllowance', label: 'ค่าอาหาร' },
+  // เบี้ยเลี้ยง is entered as two amounts because มาตรา 42 exempts it only PARTIALLY — the portion
+  // within the government rate is exempt, the excess is taxable. HR makes the split; the system
+  // can't, without knowing destination and employee grade.
+  { key: 'perDiemExempt', label: 'เบี้ยเลี้ยง — ส่วนที่ยกเว้นภาษี (ม.42)' },
+  { key: 'perDiemTaxable', label: 'เบี้ยเลี้ยง — ส่วนเกิน (เสียภาษี)' },
+];
+
+// F2 fix (Opus review, 2026-07-30): the two มาตรา 42 limbs a เบี้ยเลี้ยง payment can be made under —
+// see backend PerDiemBasis. Values must match that enum's names exactly; they are sent verbatim as
+// `perDiemBasis` on the request. Required only when a per-diem amount (exempt or taxable) is actually
+// entered — V97's chk_payroll_line_per_diem_basis_present CHECK otherwise rejects the Process insert.
+const PER_DIEM_BASIS_OPTIONS = [
+  { value: 'FLAT_RATE_S42_2', label: 'เหมาจ่ายตามอัตราราชการ (ม.42(2)) — ไม่ต้องมีใบเสร็จ' },
+  { value: 'REIMBURSED_S42_1', label: 'จ่ายจริงตามหน้าที่ (ม.42(1)) — ต้องมีใบเสร็จ' },
+];
+// P1 fix (Opus review, 2026-07-30): เงินโบนัส / อื่นๆ — the dedicated one-off fields the backend has
+// carried since V96 (task 2, 2026-07-29) with no input anywhere on this page. The spec calls
+// bonusPay "the archetypal EXTRA_KNOWN_FREQUENCY" and names it explicitly in section 10's list of HR
+// screens to build; until this fix HR could not pay a bonus through payroll at all.
+const oneOffPayFields = [
+  { key: 'bonusPay', label: 'เงินโบนัส' },
+  { key: 'otherOneOffPay', label: 'เงินก้อนอื่นๆ (ครั้งเดียว)' },
+];
+// P1 fix (Opus review, 2026-07-30): which statutory cap applies to a legal-execution garnishment
+// (handoff section 7 / backend PayrollGarnishmentType) — never selectable before this fix, so every
+// garnishment silently used the SALARY cap (PayrollCalculator:746 defaults null to SALARY) even for a
+// bonus, OT/diligence, or severance payout, making the BONUS 50% / OVERTIME 30% / SEVERANCE ฿300,000
+// rules dead code. Values must match PayrollGarnishmentType's names exactly.
+const GARNISHMENT_TYPE_OPTIONS = [
+  { value: 'SALARY', label: 'เงินเดือน/ค่าจ้าง — สูงสุด 30% ต้องเหลือสุทธิ ≥ ฿20,000' },
+  { value: 'BONUS', label: 'เงินโบนัส — สูงสุด 50% ของโบนัสงวดนี้' },
+  { value: 'OVERTIME_OR_DILIGENCE', label: 'เบี้ยขยัน/ค่าล่วงเวลา — สูงสุด 30% ของยอดที่จ่ายงวดนี้' },
+  { value: 'SEVERANCE', label: 'เงินตอบแทนกรณีออกจากงาน — ต้องเหลือสุทธิ ≥ ฿300,000' },
 ];
 const specialPayKeys = specialPayFields.map((field) => field.key);
+const namedAllowanceKeys = namedAllowanceFields.map((field) => field.key);
+const oneOffPayKeys = oneOffPayFields.map((field) => field.key);
 const incomeInputKeys = ['nonTaxableIncome'];
 const deductionInputKeys = [
   'unpaidLeaveDays',
@@ -106,7 +151,40 @@ const deductionInputKeys = [
   'customerReturnDeduction',
   'otherPretaxDeduction',
 ];
-const payrollInputKeys = [...specialPayKeys, ...incomeInputKeys, ...deductionInputKeys];
+const payrollInputKeys = [
+  ...specialPayKeys, ...namedAllowanceKeys, ...oneOffPayKeys, ...incomeInputKeys, ...deductionInputKeys,
+];
+
+// P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix screen (spec sections 1
+// and 10). Every non-SALARY, non-NON_TAXABLE_INCOME PayrollComponent HR can classify — labels mirror
+// specialPayFields/namedAllowanceFields/oneOffPayFields above and PayrollComponent's own javadoc.
+// SALARY is deliberately absent: it is locked to REGULAR_REPROJECT and never needs a stored row.
+const TAX_TREATMENT_COMPONENTS = [
+  { key: 'SPECIAL_PAY_1', label: 'พิเศษ 1 (ค่าครองชีพ)' },
+  { key: 'SPECIAL_PAY_2', label: 'พิเศษ 2 (ค่าเช่าบ้าน)' },
+  { key: 'SPECIAL_PAY_3', label: 'พิเศษ 3 (เบี้ยเลี้ยงประจำ)' },
+  { key: 'SPECIAL_PAY_4', label: 'พิเศษ 4 (ค่าตำแหน่ง)' },
+  { key: 'SPECIAL_PAY_5', label: 'พิเศษ 5 (เบี้ยขยันประจำ)' },
+  { key: 'SPECIAL_PAY_6', label: 'พิเศษ 6 (ค่า GPRS)' },
+  { key: 'SPECIAL_PAY_7', label: 'พิเศษ 7 (คอมมิชชั่น)' },
+  { key: 'SPECIAL_PAY_8', label: 'พิเศษ 8 (ทำได้ตาม KPI)' },
+  { key: 'SPECIAL_PAY_9', label: 'พิเศษ 9 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)' },
+  { key: 'OVERTIME_PAY', label: 'ค่าล่วงเวลา' },
+  { key: 'COMMISSION_PAY', label: 'คอมมิชชั่น (ระบบคอมมิชชัน อัตโนมัติ)' },
+  { key: 'MEAL_ALLOWANCE', label: 'ค่าอาหาร' },
+  { key: 'PER_DIEM_TAXABLE', label: 'เบี้ยเลี้ยง — ส่วนเกิน (เสียภาษี)' },
+  { key: 'BONUS_PAY', label: 'เงินโบนัส' },
+  { key: 'OTHER_ONE_OFF_PAY', label: 'เงินก้อนอื่นๆ (ครั้งเดียว)' },
+  { key: 'DIRECTOR_REMUNERATION', label: 'ค่าตอบแทนกรรมการ' },
+];
+// Values must match backend PayrollTaxTreatment's enum names exactly; '' means "not yet classified"
+// (submits as null, resetting the stored row per PayrollRepository#upsertComponentTaxTreatment).
+const TAX_TREATMENT_OPTIONS = [
+  { value: '', label: 'ยังไม่จัดประเภท' },
+  { value: 'REGULAR_REPROJECT', label: 'ประจำ (ข้อ 1(4)) — คำนวณใหม่ทุกงวดจากยอดที่จ่ายจริง' },
+  { value: 'EXTRA_KNOWN_FREQUENCY', label: 'พิเศษทราบจำนวนครั้ง (ข้อ 1(5)) — เช่น โบนัสประจำปี' },
+  { value: 'EXTRA_CUMULATIVE_ACTUAL', label: 'พิเศษไม่แน่นอน (ข้อ 1(6)) — เช่น OT, คอมมิชชันไม่ประจำ' },
+];
 
 function defaultSpecialPayValue(key, applyDefaults) {
   if (!applyDefaults) return '';
@@ -118,12 +196,15 @@ function draftValue(value, fallback = '') {
   return amount > 0 ? String(amount) : fallback;
 }
 
-// Special-pay carry-forward (2026-07-23): the recurring fields pre-filled from the employee's most
-// recent prior processed payroll_line (via GET /api/payroll/suggested-inputs) when HR starts a
-// brand-new run. Deliberately excludes specialPay6 (commission — already fed by the commission
-// engine), specialPay7/8 (KPI/bonus — one-off) and every event-driven field. This is a client-side
-// pre-fill convenience only: whatever value sits in the field when HR hits Preview/Process — carried,
-// edited, or explicitly cleared to 0 — is submitted as-is via `payload()` below, same as today.
+// Special-pay carry-forward (2026-07-23, extended to all 9 slots + meal allowance 2026-07-29): the
+// recurring fields pre-filled from the employee's most recent prior processed payroll_line (via GET
+// /api/payroll/suggested-inputs) when HR starts a brand-new run. Which of the nine specialPay slots
+// actually carries is now PER EMPLOYEE, PER COMPONENT (hr.payroll_component_carry_forward, V98) —
+// not a hardcoded slot exclusion here. An employee for whom a slot's carry_forward flag is off (or
+// unset) simply gets 0 back from the suggestions endpoint for that key, same as any other
+// non-recurring field. This is a client-side pre-fill convenience only: whatever value sits in the
+// field when HR hits Preview/Process — carried, edited, or explicitly cleared to 0 — is submitted
+// as-is via `payload()` below, same as today.
 function indexSuggestionsByEmployee(rows) {
   const map = {};
   (rows || []).forEach((row) => {
@@ -170,6 +251,25 @@ function blankAdjustment(employeeId, { applyDefaults = false } = {}) {
     warningLetterDeduction: '',
     customerReturnDeduction: '',
     otherPretaxDeduction: '',
+    // F2 fix (Opus review, 2026-07-30): ค่าอาหาร/เบี้ยเลี้ยง (V97) were defined in
+    // namedAllowanceFields/payrollInputKeys but never actually defaulted or rendered -- HR had no way
+    // to enter them at all. mealAllowance/perDiemExempt/perDiemTaxable are plain numeric fields like
+    // the special-pay slots above; perDiemBasis is a nullable enum ('' = not yet chosen), same
+    // treatment as withholdingTaxOverride below -- kept out of the numeric payrollInputKeys.
+    mealAllowance: '',
+    perDiemExempt: '',
+    perDiemTaxable: '',
+    perDiemBasis: '',
+    // P1 fix (Opus review, 2026-07-30): เงินโบนัส/เงินก้อนอื่นๆ — plain numeric fields like the
+    // special-pay slots above.
+    bonusPay: '',
+    otherOneOffPay: '',
+    // P1 fix (Opus review, 2026-07-30): garnishmentType is a nullable enum ('' = not chosen, backend
+    // defaults to SALARY), same treatment as perDiemBasis above. customerReturnAlreadyEarned is a
+    // plain boolean (default false = "not yet earned", the pre-tax netting path) -- see
+    // PayrollCalculator#calculateClassified's own comment on the flag for what each value means.
+    garnishmentType: '',
+    customerReturnAlreadyEarned: false,
     // Nullable per-run withholding override ('' = compute/standing). Kept out of the numeric keys below.
     withholdingTaxOverride: '',
   };
@@ -196,8 +296,29 @@ function adjustmentFromLine(line, { applyDefaults = false, suggestion = null } =
   adjustment.legalExecutionDeduction = draftValue(line.legalExecutionDeduction, suggestedFallback(suggestion, 'legalExecutionDeduction') ?? '');
   adjustment.otherPostTaxDeductions = draftValue(line.otherPostTaxDeductions);
   adjustment.warningLetterDeduction = draftValue(line.warningLetterDeduction);
-  adjustment.customerReturnDeduction = draftValue(line.customerReturnDeduction);
+  // D1 fix (fourth reachability audit, 2026-07-30): hydrate from customerReturnRequested, NOT
+  // customerReturnDeduction. The latter is the POST-TAX bookkeeping figure the backend persists --
+  // it is 0 whenever customerReturnAlreadyEarned is false (the unearned amount is instead netted
+  // pre-tax out of commission), so reading it back here silently wiped the form field AND the
+  // checkbox below (which gates on this value being > 0) on every reload, and a reprocess of the
+  // same month silently stopped re-applying the netting. customerReturnRequested always echoes what
+  // was actually typed, regardless of the earned flag.
+  adjustment.customerReturnDeduction = draftValue(line.customerReturnRequested);
   adjustment.otherPretaxDeduction = draftValue(line.otherPretaxDeduction);
+  // ค่าอาหาร carries forward like the other recurring fields above; the two เบี้ยเลี้ยง amounts and
+  // the basis do not (V98's carry-forward flags only cover mealAllowance for this group -- see the
+  // task-3 handoff fix 5) -- a per-diem is trip-driven, not a standing monthly figure, so re-entering
+  // it (and its basis) fresh each run is correct, not a gap.
+  adjustment.mealAllowance = draftValue(line.mealAllowance, suggestedFallback(suggestion, 'mealAllowance') ?? '');
+  adjustment.perDiemExempt = draftValue(line.perDiemExempt);
+  adjustment.perDiemTaxable = draftValue(line.perDiemTaxable);
+  adjustment.perDiemBasis = line.perDiemBasis || '';
+  // P1 fix (Opus review, 2026-07-30): bonusPay/otherOneOffPay do not carry forward (they are one-off
+  // by definition, same reasoning as perDiemExempt/perDiemTaxable above) -- re-entered fresh each run.
+  adjustment.bonusPay = draftValue(line.bonusPay);
+  adjustment.otherOneOffPay = draftValue(line.otherOneOffPay);
+  adjustment.garnishmentType = line.garnishmentType || '';
+  adjustment.customerReturnAlreadyEarned = Boolean(line.customerReturnAlreadyEarned);
   adjustment.withholdingTaxOverride = overrideDraft(line.withholdingTaxOverride, suggestion);
   return adjustment;
 }
@@ -207,6 +328,23 @@ function withholdingOverrideValue(input) {
   return raw === '' || raw == null ? null : Number(raw);
 }
 
+// F2 fix (Opus review, 2026-07-30): perDiemBasis is a nullable enum, not an amount -- same reasoning
+// as withholdingOverrideValue above. '' (never chosen) submits as null; a chosen value submits as its
+// PerDiemBasis name verbatim (matches th.co.glr.hr.payroll.PerDiemBasis exactly).
+function perDiemBasisValue(input) {
+  const raw = input.perDiemBasis;
+  return raw === '' || raw == null ? null : raw;
+}
+
+// P1 fix (Opus review, 2026-07-30): garnishmentType is a nullable enum, same reasoning as
+// perDiemBasisValue above. '' (never chosen) submits as null, which PayrollEmployeeInputRequest's own
+// javadoc says the backend defaults to SALARY -- reproducing the pre-existing single-rule behaviour
+// exactly for a run where HR does not pick a type.
+function garnishmentTypeValue(input) {
+  const raw = input.garnishmentType;
+  return raw === '' || raw == null ? null : raw;
+}
+
 function normalizedAdjustment(input) {
   return {
     employeeId: input.employeeId,
@@ -214,6 +352,12 @@ function normalizedAdjustment(input) {
     // Nullable: '' -> null ("compute/standing"), a number (incl. 0) -> that override. Kept separate
     // from the numeric keys above precisely so a cleared field stays null instead of collapsing to 0.
     withholdingTaxOverride: withholdingOverrideValue(input),
+    // F2 fix (Opus review, 2026-07-30): nullable enum, same reasoning as withholdingTaxOverride above.
+    perDiemBasis: perDiemBasisValue(input),
+    // P1 fix (Opus review, 2026-07-30): nullable enum (garnishmentType) and a plain boolean
+    // (customerReturnAlreadyEarned) -- neither belongs in the numeric payrollInputKeys spread above.
+    garnishmentType: garnishmentTypeValue(input),
+    customerReturnAlreadyEarned: Boolean(input.customerReturnAlreadyEarned),
   };
 }
 
@@ -593,6 +737,14 @@ export function PayrollPage({ showToast }) {
         </div>
       </FilterBar>
 
+      {/* P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix screen. Without
+          this, HR had no way to satisfy PayrollCalculator#calculateClassified's classification gate
+          for any component beyond the V100 backfill defaults — a screen HR can actually use, per spec
+          sections 1 and 10. Collapsed by default so it does not compete with the main payroll
+          workflow above; one employee per sub-section, per the owner's "never a shrunken
+          fifteen-column table" mobile decision (section 9c). */}
+      <TaxTreatmentMatrixSection payrollMonth={month} showToast={showToast} />
+
       <section className="payroll-workspace">
         <DataTable
           columns={columns}
@@ -644,6 +796,86 @@ export function PayrollPage({ showToast }) {
                 </div>
               </CollapsibleSection>
 
+              <CollapsibleSection
+                title="ค่าอาหาร / เบี้ยเลี้ยง"
+                defaultOpen={false}
+                headerRight={(
+                  <span className="collapsible-total">
+                    {formatMoney(namedAllowanceKeys.reduce((sum, key) => sum + parsePayrollNumber(selectedAdjustment[key]), 0))}
+                  </span>
+                )}
+              >
+                <FormGrid>
+                  <label htmlFor="payroll-meal-allowance">
+                    ค่าอาหาร
+                    <MoneyInput id="payroll-meal-allowance" value={selectedAdjustment.mealAllowance} onChange={(value) => updateAdjustment('mealAllowance', value)} />
+                  </label>
+                  <label htmlFor="payroll-per-diem-exempt">
+                    เบี้ยเลี้ยง — ส่วนที่ยกเว้นภาษี (ม.42)
+                    <InfoTip
+                      label="เบี้ยเลี้ยง — ส่วนที่ยกเว้นภาษี (ม.42)"
+                      text="ส่วนของเบี้ยเลี้ยงที่อยู่ภายในอัตราที่ได้รับการยกเว้นภาษีตามมาตรา 42 กรอกแยกจากส่วนเกิน"
+                    />
+                    <MoneyInput id="payroll-per-diem-exempt" value={selectedAdjustment.perDiemExempt} onChange={(value) => updateAdjustment('perDiemExempt', value)} />
+                  </label>
+                  <label htmlFor="payroll-per-diem-taxable">
+                    เบี้ยเลี้ยง — ส่วนเกิน (เสียภาษี)
+                    <InfoTip
+                      label="เบี้ยเลี้ยง — ส่วนเกิน (เสียภาษี)"
+                      text="ส่วนของเบี้ยเลี้ยงที่เกินอัตรายกเว้นตามมาตรา 42 ถือเป็นเงินได้ต้องเสียภาษีตามปกติ"
+                    />
+                    <MoneyInput id="payroll-per-diem-taxable" value={selectedAdjustment.perDiemTaxable} onChange={(value) => updateAdjustment('perDiemTaxable', value)} />
+                  </label>
+                  {/* F2 fix (Opus review, 2026-07-30): shown only once a per-diem amount is actually
+                      entered -- HR classifying a basis for money nobody paid has nothing to classify,
+                      same "only where money is actually moving" principle as tax-treatment classification
+                      elsewhere on this page. Required the moment either amount above is non-zero, or
+                      V97's chk_payroll_line_per_diem_basis_present CHECK rejects Process with a 500 (now
+                      caught earlier server-side too -- see PayrollService#calculateLine). */}
+                  {(parsePayrollNumber(selectedAdjustment.perDiemExempt) > 0 || parsePayrollNumber(selectedAdjustment.perDiemTaxable) > 0) && (
+                    <label htmlFor="payroll-per-diem-basis">
+                      ฐานเบี้ยเลี้ยง (มาตรา 42)
+                      <InfoTip
+                        label="ฐานเบี้ยเลี้ยง (มาตรา 42)"
+                        text="เลือกว่าเบี้ยเลี้ยงนี้จ่ายแบบเหมาจ่ายตามอัตราราชการ (ไม่ต้องมีใบเสร็จ) หรือจ่ายจริงตามหน้าที่ (ต้องมีใบเสร็จ) จำเป็นต้องเลือกก่อนประมวลผลเงินเดือน"
+                      />
+                      <select
+                        id="payroll-per-diem-basis"
+                        value={selectedAdjustment.perDiemBasis}
+                        onChange={(event) => updateAdjustment('perDiemBasis', event.target.value)}
+                      >
+                        <option value="">— เลือกฐาน —</option>
+                        {PER_DIEM_BASIS_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                </FormGrid>
+              </CollapsibleSection>
+
+              {/* P1 fix (Opus review, 2026-07-30): bonusPay/otherOneOffPay have existed end-to-end on
+                  the backend since V96 (task 2) with no input anywhere on this page — HR could not pay
+                  a bonus through payroll at all. The spec calls bonusPay "the archetypal
+                  EXTRA_KNOWN_FREQUENCY" component. */}
+              <CollapsibleSection
+                title="เงินก้อนพิเศษ (จ่ายครั้งเดียว)"
+                defaultOpen={false}
+                headerRight={<span className="collapsible-total">{formatMoney(oneOffPayKeys.reduce((sum, key) => sum + parsePayrollNumber(selectedAdjustment[key]), 0))}</span>}
+              >
+                <FormGrid>
+                  {oneOffPayFields.map((field) => {
+                    const inputId = `payroll-${field.key}`;
+                    return (
+                      <label key={field.key} htmlFor={inputId}>
+                        {field.label}
+                        <MoneyInput id={inputId} value={selectedAdjustment[field.key]} onChange={(value) => updateAdjustment(field.key, value)} />
+                      </label>
+                    );
+                  })}
+                </FormGrid>
+              </CollapsibleSection>
+
               <CollapsibleSection title="รายได้ไม่คิดภาษี" defaultOpen={false}>
                 <FormGrid>
                   <label htmlFor="payroll-non-taxable-income">
@@ -682,6 +914,30 @@ export function PayrollPage({ showToast }) {
                     <InfoTip label="หักอายัดกรมบังคับคดี" text="รายการหักตามคำสั่งอายัดเงินเดือนจากกรมบังคับคดี หักหลังคำนวณภาษีแล้ว" />
                     <MoneyInput id="payroll-legal-execution-deduction" value={selectedAdjustment.legalExecutionDeduction} onChange={(value) => updateAdjustment('legalExecutionDeduction', value)} />
                   </label>
+                  {/* P1 fix (Opus review, 2026-07-30): never selectable before this fix, so every
+                      garnishment silently used the SALARY cap (backend defaults null to SALARY) —
+                      making the BONUS 50% / OVERTIME 30% / SEVERANCE ฿300,000 rules dead code. Shown
+                      only once an amount is actually requested, same "nothing to classify until money
+                      moves" principle as the per-diem basis selector above. */}
+                  {parsePayrollNumber(selectedAdjustment.legalExecutionDeduction) > 0 && (
+                    <label htmlFor="payroll-garnishment-type">
+                      ประเภทเงินที่ถูกอายัด
+                      <InfoTip
+                        label="ประเภทเงินที่ถูกอายัด"
+                        text="เลือกประเภทเงินที่ถูกอายัด เพื่อใช้เพดานตามกฎหมายที่ถูกต้อง (เงินเดือน/ค่าจ้าง เงินโบนัส เบี้ยขยัน/ค่าล่วงเวลา หรือเงินตอบแทนกรณีออกจากงาน) จำเป็นต้องเลือกก่อนประมวลผลเงินเดือนหากมียอดหักอายัด"
+                      />
+                      <select
+                        id="payroll-garnishment-type"
+                        value={selectedAdjustment.garnishmentType}
+                        onChange={(event) => updateAdjustment('garnishmentType', event.target.value)}
+                      >
+                        <option value="">— เลือกประเภท (ค่าเริ่มต้น: เงินเดือน/ค่าจ้าง) —</option>
+                        {GARNISHMENT_TYPE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
                   <label htmlFor="payroll-other-post-tax-deductions">
                     หักอื่น ๆ หลังภาษี
                     <MoneyInput id="payroll-other-post-tax-deductions" value={selectedAdjustment.otherPostTaxDeductions} onChange={(value) => updateAdjustment('otherPostTaxDeductions', value)} />
@@ -714,6 +970,25 @@ export function PayrollPage({ showToast }) {
                     หักลูกค้าคืนสินค้า
                     <MoneyInput id="payroll-customer-return-deduction" value={selectedAdjustment.customerReturnDeduction} onChange={(value) => updateAdjustment('customerReturnDeduction', value)} />
                   </label>
+                  {/* P1 fix (Opus review, 2026-07-30): always false before this fix (never rendered),
+                      so the flag was always the unearned/pre-tax path — the fix for the real June 2026
+                      negative-net incident (handoff section 6) could never actually be selected. Shown
+                      only once a return amount is entered, same principle as the fields above. */}
+                  {parsePayrollNumber(selectedAdjustment.customerReturnDeduction) > 0 && (
+                    <label htmlFor="payroll-customer-return-already-earned" className="inline-flex items-center gap-2">
+                      <input
+                        id="payroll-customer-return-already-earned"
+                        type="checkbox"
+                        checked={selectedAdjustment.customerReturnAlreadyEarned}
+                        onChange={(event) => updateAdjustment('customerReturnAlreadyEarned', event.target.checked)}
+                      />
+                      คอมมิชชันนี้รับไปแล้ว (หักเป็นเงินคืนหลังภาษี ไม่ลดรายได้คิดภาษีงวดนี้)
+                      <InfoTip
+                        label="คอมมิชชันนี้รับไปแล้ว"
+                        text="ไม่ติ๊ก = คอมมิชชันยังไม่รับ ระบบจะลดยอดคอมมิชชันงวดนี้ก่อนคำนวณภาษี ติ๊ก = คอมมิชชันรับและจ่ายไปแล้ว ระบบจะหักเป็นรายการหักหลังภาษีแทน ไม่ลดรายได้คิดภาษีงวดนี้"
+                      />
+                    </label>
+                  )}
                   <label htmlFor="payroll-other-pretax-deduction">
                     หักอื่น ๆ ก่อนภาษี
                     <MoneyInput id="payroll-other-pretax-deduction" value={selectedAdjustment.otherPretaxDeduction} onChange={(value) => updateAdjustment('otherPretaxDeduction', value)} />
@@ -764,6 +1039,187 @@ export function PayrollPage({ showToast }) {
         onCancel={() => setConfirmProcess(false)}
       />
     </PageStack>
+  );
+}
+
+/**
+ * P0 fix (Opus review, 2026-07-30): the tax-treatment matrix screen. HR needs a place to classify
+ * every non-SALARY component per employee (spec sections 1 and 10) — before this fix
+ * `PayrollRepository#upsertComponentTaxTreatment` had no caller anywhere, backend HTTP surface
+ * included, so nothing could satisfy `PayrollCalculator#calculateClassified`'s classification gate
+ * beyond the V100 migration's one-time backfill. One `CollapsibleSection` per employee (owner
+ * decision, section 9c: "never a shrunken fifteen-column table" — this applies just as much to a
+ * 16-component matrix as to the pay-input grid it echoes), each with its own unclassified-count badge
+ * so HR can find the outliers without opening every employee.
+ *
+ * <p>F2 fix (fifth Opus review, 2026-07-30): `item.byComponent` now carries the EFFECTIVE
+ * classification (synthesized defaults merged in server-side by `PayrollService#treatmentsFor`),
+ * not the raw stored map — a select for a component nobody has classified yet now shows the
+ * treatment the engine actually applies, instead of blank. `item.explicitlyClassifiedComponents`
+ * says which of those values HR (or a backfill) actually set versus which are synthesized; the
+ * "ค่าเริ่มต้นของระบบ" hint below a select renders only for the latter, so HR can tell "the system is
+ * defaulting this" from "someone chose this" — the distinction the branch's back-loading-risk
+ * mitigation depends on.
+ */
+function TaxTreatmentMatrixSection({ payrollMonth, showToast }) {
+  const taxYear = Number(String(payrollMonth || '').slice(0, 4)) || new Date().getFullYear();
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // employeeId -> { [component]: 'REGULAR_REPROJECT' | 'EXTRA_KNOWN_FREQUENCY' |
+  // 'EXTRA_CUMULATIVE_ACTUAL' | '' } — unsaved edits only; not yet reconciled into `items`.
+  const [edits, setEdits] = useState({});
+
+  async function load() {
+    setLoading(true);
+    try {
+      const response = await api.payroll.getComponentTaxTreatments(taxYear);
+      setItems(response?.items || []);
+      setEdits({});
+    } catch (error) {
+      showToast('error', error.message || 'โหลดข้อมูลการจัดประเภทภาษีหัก ณ ที่จ่ายไม่สำเร็จ');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taxYear]);
+
+  function valueFor(item, componentKey) {
+    const edited = edits[item.employeeId]?.[componentKey];
+    if (edited !== undefined) return edited;
+    return item.byComponent?.[componentKey] || '';
+  }
+
+  // F2 fix (fifth Opus review, 2026-07-30): true once HR has an actual stored row for this cell (per
+  // `item.explicitlyClassifiedComponents`, from the effective-classification snapshot) OR is setting
+  // one right now in this unsaved session. False means `valueFor` above is showing a value the
+  // backend synthesized, not one anybody chose.
+  function isExplicit(item, componentKey) {
+    if (edits[item.employeeId]?.[componentKey] !== undefined) return true;
+    return item.explicitlyClassifiedComponents?.includes(componentKey) ?? false;
+  }
+
+  function setValue(employeeId, componentKey, value) {
+    setEdits((current) => ({
+      ...current,
+      [employeeId]: { ...(current[employeeId] || {}), [componentKey]: value },
+    }));
+  }
+
+  function unclassifiedCount(item) {
+    return TAX_TREATMENT_COMPONENTS.filter((field) => !valueFor(item, field.key)).length;
+  }
+
+  const totalUnclassified = items.reduce((sum, item) => sum + unclassifiedCount(item), 0);
+  const hasEdits = Object.keys(edits).length > 0;
+
+  async function save() {
+    const changes = [];
+    Object.entries(edits).forEach(([employeeId, byComponent]) => {
+      Object.entries(byComponent).forEach(([component, value]) => {
+        changes.push({
+          employeeId: Number(employeeId),
+          component,
+          taxTreatment: value === '' ? null : value,
+        });
+      });
+    });
+    if (changes.length === 0) return;
+    setSaving(true);
+    try {
+      const response = await api.payroll.saveComponentTaxTreatments(taxYear, changes);
+      setItems(response?.items || []);
+      setEdits({});
+      showToast('success', 'บันทึกการจัดประเภทภาษีหัก ณ ที่จ่ายแล้ว');
+    } catch (error) {
+      showToast('error', error.message || 'บันทึกการจัดประเภทภาษีหัก ณ ที่จ่ายไม่สำเร็จ');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <CollapsibleSection
+      title="การจัดประเภทภาษีหัก ณ ที่จ่าย (ป.96/2543)"
+      defaultOpen={false}
+      headerRight={(
+        <span className={cn('collapsible-total', totalUnclassified > 0 && 'text-danger')}>
+          {totalUnclassified > 0 ? `ยังไม่จัดประเภท ${totalUnclassified} รายการ` : 'จัดประเภทครบแล้ว'}
+        </span>
+      )}
+    >
+      <p className="text-sm text-text-muted mb-3">
+        เงินเดือนล็อกเป็น &quot;ประจำ&quot; เสมอ ส่วนประกอบอื่นทุกรายการต้องจัดประเภทก่อนจึงจะประมวลผลเงินเดือนได้
+        เมื่อพนักงานมียอดไม่เท่ากับศูนย์ในส่วนนั้นของงวดใดงวดหนึ่ง — รายการที่ยังไม่จัดประเภทและมียอดจะทำให้ระบบปฏิเสธการประมวลผลทั้งรอบ
+        รายการที่ขึ้นป้าย &quot;ค่าเริ่มต้นของระบบ&quot; ยังไม่มีใครกำหนด — ระบบใช้ค่าเริ่มต้นเพื่อให้ประมวลผลได้ก่อน
+        ควรตรวจสอบและเลือกให้ถูกต้องเมื่อสะดวก
+      </p>
+      {loading ? (
+        <p className="text-sm text-text-muted">กำลังโหลด…</p>
+      ) : items.length === 0 ? (
+        <EmptyState icon="badgeDollar" title="ไม่มีพนักงาน" description="ไม่พบพนักงานที่มีเงินเดือนหรือค่าตอบแทนกรรมการในรอบนี้" />
+      ) : (
+        <div className="flex flex-col gap-2">
+          {items.map((item) => {
+            const employeeUnclassified = unclassifiedCount(item);
+            return (
+              <CollapsibleSection
+                key={item.employeeId}
+                title={`${item.employeeName} (${item.employeeCode})`}
+                defaultOpen={false}
+                headerRight={(
+                  <span className={cn('collapsible-total', employeeUnclassified > 0 && 'text-danger')}>
+                    {employeeUnclassified > 0 ? `ยังไม่จัดประเภท ${employeeUnclassified}` : 'ครบ'}
+                  </span>
+                )}
+              >
+                <FormGrid>
+                  {TAX_TREATMENT_COMPONENTS.map((field) => {
+                    const inputId = `tax-treatment-${item.employeeId}-${field.key}`;
+                    const value = valueFor(item, field.key);
+                    // F2 fix (fifth Opus review, 2026-07-30): a non-blank value nobody explicitly set
+                    // is the backend's synthesized default -- flag it so HR does not mistake "the
+                    // system is defaulting this" for "someone already reviewed and chose this".
+                    const isDefaulted = Boolean(value) && !isExplicit(item, field.key);
+                    return (
+                      <label key={field.key} htmlFor={inputId}>
+                        {field.label}
+                        <select
+                          id={inputId}
+                          value={value}
+                          onChange={(event) => setValue(item.employeeId, field.key, event.target.value)}
+                        >
+                          {TAX_TREATMENT_OPTIONS.map((option) => (
+                            <option key={option.value || 'unset'} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                        {isDefaulted && (
+                          <small className="block text-text-muted">ค่าเริ่มต้นของระบบ — ยังไม่มีใครกำหนด</small>
+                        )}
+                      </label>
+                    );
+                  })}
+                </FormGrid>
+              </CollapsibleSection>
+            );
+          })}
+        </div>
+      )}
+      <div className="flex justify-end gap-2 mt-4">
+        <Button type="button" variant="secondary" onClick={load} disabled={loading || saving}>
+          <Icon name="refresh" />
+          รีเฟรช
+        </Button>
+        <Button type="button" onClick={save} disabled={loading || saving || !hasEdits}>
+          <Icon name="check" />
+          บันทึกการจัดประเภท
+        </Button>
+      </div>
+    </CollapsibleSection>
   );
 }
 

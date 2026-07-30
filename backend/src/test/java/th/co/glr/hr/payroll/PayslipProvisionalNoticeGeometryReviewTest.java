@@ -105,8 +105,18 @@ class PayslipProvisionalNoticeGeometryReviewTest {
      * {@code PayrollService#remainingPayPeriods}'s {@code 13 - month}: December, and only December,
      * is the period after which no further withholding can absorb the excess.
      */
+    /**
+     * P2 fix (Opus review, 2026-07-30): re-pinned against the owner-approved wording (spec section 8)
+     * after {@code PayslipRenderer} stopped printing the excess baht figure. The figure itself
+     * ({@code "17,527.51"}) must now be ABSENT from every month's notice -- spec section 8 says
+     * plainly "Do not print the excess amount"; {@code excessWithheldToDate} is still computed and
+     * persisted for the ภ.ง.ด.1 working papers (unchanged), only the printed text changed. December's
+     * wording also no longer says "ไม่สามารถคืนผ่านระบบเงินเดือนได้" (not part of the owner's approved
+     * text) and names BOTH ภ.ง.ด.90 and ภ.ง.ด.91 (never 91 unconditionally, per the handoff), so the
+     * assertion below checks for "ภ.ง.ด.90" and "ภ.ง.ด.91" together rather than the old sole-91 phrase.
+     */
     @Test
-    @DisplayName("only December prints the ภ.ง.ด.91 wording; November is still provisional")
+    @DisplayName("only December prints the year-end ภ.ง.ด.90/91 wording; November is still provisional")
     void onlyDecemberAssertsTheExcessIsUnrecoverable() throws Exception {
         PayrollLineDto line = maximalLine(new BigDecimal("17527.51"), MAXIMAL_NOTE);
 
@@ -115,17 +125,19 @@ class PayslipProvisionalNoticeGeometryReviewTest {
             assertThat(text)
                 .as("month %s is not the final period, so the payslip must not tell the employee a "
                     + "still-moving figure is unrecoverable", month)
-                .doesNotContain("ภ.ง.ด.91")
-                .doesNotContain("ไม่สามารถคืนผ่านระบบเงินเดือนได้");
+                .doesNotContain("ภ.ง.ด.91");
             assertThat(text)
-                .as("month %s must still disclose the excess, labelled as an estimate", month)
+                .as("month %s must still disclose that the withholding shown is an estimate, but "
+                    + "spec section 8 forbids printing the excess baht figure itself", month)
                 .contains("ประมาณการ")
-                .contains("17,527.51");
+                .doesNotContain("17,527.51");
         }
 
         String december = text(renderer.toPdf(line, periodForMonth(line, 12)));
-        assertThat(december).contains("ภ.ง.ด.91");
-        assertThat(december).contains("ไม่สามารถคืนผ่านระบบเงินเดือนได้");
+        assertThat(december).contains("ภ.ง.ด.90").contains("ภ.ง.ด.91");
+        assertThat(december)
+            .as("spec section 8 forbids printing the excess baht figure, even in the final period")
+            .doesNotContain("17,527.51");
         assertThat(december)
             .as("the final wording must not also be hedged as an estimate")
             .doesNotContain("ประมาณการ:");
@@ -181,17 +193,21 @@ class PayslipProvisionalNoticeGeometryReviewTest {
         return collected;
     }
 
-    /** The biggest payslip the engine can produce — mirrors {@link PayslipMaximalLayoutReviewTest}. */
+    /**
+     * The biggest payslip the engine can produce — mirrors {@link PayslipMaximalLayoutReviewTest}.
+     * All 9 พิเศษ slots (F6 fix, Opus review 2026-07-30 -- see that class's own comment; this loop
+     * had the identical one-slot-short defect).
+     */
     private PayrollLineDto maximalLine(BigDecimal excessWithheld, String note) {
         List<PayrollSpecialPayDto> specials = new ArrayList<>();
-        for (int slot = 1; slot <= 8; slot += 1) {
+        for (int slot = 1; slot <= 9; slot += 1) {
             specials.add(new PayrollSpecialPayDto("specialPay" + slot,
                 "พิเศษ " + slot + " (ค่าครองชีพประจำเดือน)", money("1000.00")));
         }
         return new PayrollLineDto(
             1L, 7L, "GLR-07", "ทดสอบ ยาวมากเป็นพิเศษ", "AC-บัญชีและการเงิน", "ธ.กสิกรไทย", "1234567890",
             money("50000.00"), money("1666.67"), money("208.33"),
-            specials, money("8000.00"),
+            specials, money("9000.00"),
             money("3000.00"), money("9000.00"), money("125000.00"), money("2000.00"),
             money("1.50"), money("2500.00"),
             money("122500.00"), money("17500.00"), money("875.00"),
