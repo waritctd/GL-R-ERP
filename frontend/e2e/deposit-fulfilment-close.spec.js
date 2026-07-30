@@ -28,35 +28,30 @@ import { loginAs, switchRole, spaGoto } from './helpers/auth.js';
 // .markQuotationIssuedForOrderConfirmation). This spec depends on that
 // bridge firing — confirmOrder is called before any close-gated action.
 //
-// PRODUCTION GAP (owner-acknowledged, tracked separately, NOT fixed here —
-// see docs/agent-handoffs/119_refactor-ticket-workspace-ia-phase2.md "Known
-// Risks" + the follow-up task raised from it): the three-party close's
-// remaining step — attach the INVOICE, then CONFIRM_CLOSE — has never
-// actually worked and cannot work as the UI/backend stand today:
-//   - the only control that produces an INVOICE-type attachment is the
-//     `#ticket-invoice-file` input, hardcoded to `isAccount`
-//     (TicketDetailPage.jsx:1893, `!TERMINAL.includes(st) && isAccount`);
-//   - `AttachmentController.requireTicketAccess` refuses `account` outright —
-//     it is neither a ticket participant (creator/assignee) nor in
-//     `MANAGER_ROLES = {hr, sales_manager, ceo}` (AttachmentController.java,
-//     `MANAGER_ROLES` + `requireTicketAccess`, lines ~37 and ~116-125) — so
-//     that upload 403s for real against the Java service. This exact refusal
-//     is pinned by
-//     `TicketIaAuthzMatrixIntegrationTest.attachments_accountIsNeitherParticipantNorManagerAndIsRefused`.
-//   - `mockApi.js`'s `attachments` namespace has NO role gate at all, so this
-//     suite only ever passed here because the mock is more permissive than
-//     production — the same "mock hid a 403" shape as issue #199 (CLAUDE.md,
-//     "Mock API contract — shapes are faithful, authz is not").
-// The owner decided this is out of scope for the ticket-workspace-IA-Phase-2
-// branch: fixing it means changing who may attach the closing invoice, which
-// is a backend authorization change and must ship its own real-DB
-// integration test per CLAUDE.md, not ride along inside a UI-IA branch. So
-// this spec was adjusted (scoped down to the part that is genuinely
-// reachable in production) rather than the defect being patched. See the
-// `test.fixme()` call below for exactly where real coverage stops and the
-// tracked gap begins.
+// The invoice-gated tail of this test was scoped out with a `test.fixme()` on
+// the phase-2 branch because it drove `#ticket-invoice-file` — a ticket-page
+// upload control gated `isAccount`, while `AttachmentController
+// .requireTicketAccess` grants only participants OR {hr, sales_manager, ceo},
+// so it 403'd against the real service. The diagnosis then was "the close's
+// INVOICE precondition is unreachable in production". That was wrong: it IS
+// reachable, just not there. `CommissionService.createFromDeal` (account-only)
+// dual-writes the INVOICE ticket attachment alongside the commission, so the
+// close gate opens from that one upload.
+//
+// The tail is restored below, driving that real path. `#ticket-invoice-file` has
+// been REMOVED rather than re-gated — a second route to `invoiceOnFile` would let
+// a deal close without a commission ever being created for the sales rep. The
+// panel comment in TicketDetailPage.jsx's "ไฟล์แนบ" section carries the full
+// reasoning, and TicketDetailPage.test.jsx guards against reintroduction.
+//
+// `mockApi.js`'s `attachments` namespace now also enforces a gate mirroring the
+// Java one. It previously had NO role gate at all — `requireSession()` and
+// nothing else — which is the only reason the old tail ever went green, and why
+// the same defect was misdiagnosed twice. That is the issue-#199 shape CLAUDE.md
+// names ("a mock more permissive than production is the dangerous direction").
+// Mock-based e2e is still not authz evidence.
 
-test('deposit paid -> fulfilment -> final payment confirmed (invoice-gated close tracked separately)', async ({ page }) => {
+test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ page }) => {
   test.setTimeout(150_000);
 
   // ── sales: create a 2-unit deal + submit a catalog-backed PCR ───────
@@ -93,6 +88,9 @@ test('deposit paid -> fulfilment -> final payment confirmed (invoice-gated close
   await expect(dealModal).toHaveCount(0);
   await expect(page.getByText('แบบร่าง')).toBeVisible();
   const ticketPath = new URL(page.url()).pathname;
+  // Needed later for /commissions?ticketId=NN, the accountant's invoice-record
+  // entry point (see the createFromDeal step near the end of this test).
+  const ticketId = ticketPath.split('/').pop();
 
   await page.getByRole('button', { name: 'สร้างใบขอราคา' }).click();
   const pcrModal = page.getByRole('dialog', { name: 'สร้างใบขอราคา' });
@@ -275,24 +273,46 @@ test('deposit paid -> fulfilment -> final payment confirmed (invoice-gated close
     .getByRole('button', { name: 'ยืนยันชำระครบ' }).click();
   await expect(page.getByTestId('ticket-detail-confirm-final')).toHaveCount(0);
 
-  // ── STOP HERE: the remaining close path is untested by design ────────
-  // The rest of the real three-party close — attach แนบใบกำกับภาษี (a hard
-  // precondition for CONFIRM_CLOSE, `requireClosePrerequisites'
-  // hasInvoiceAttachment check), then account CONFIRM_CLOSE, then ceo
-  // VERIFY_CLOSE -> CLOSED_PAID — is NOT run here. It has never worked
-  // against the real Java service: the only control that produces an
-  // INVOICE attachment is `isAccount`-gated (TicketDetailPage.jsx:1893), and
-  // `AttachmentController.requireTicketAccess` refuses `account` (neither a
-  // ticket participant nor in `MANAGER_ROLES`), pinned by
-  // `TicketIaAuthzMatrixIntegrationTest.attachments_accountIsNeitherParticipantNorManagerAndIsRefused`.
-  // The suite only ever passed this part because `mockApi.js`'s
-  // `attachments` namespace has no role gate (issue-#199-shaped: mock more
-  // permissive than production). This is a tracked, owner-acknowledged
-  // production gap (see docs/agent-handoffs/119_refactor-ticket-workspace-ia-phase2.md,
-  // "Known Risks", and the follow-up task raised from it) requiring a
-  // backend authorization decision + a real-DB integration test — out of
-  // scope for this branch. `test.fixme()` below marks this test as
-  // known-incomplete rather than silently skipped or falsely green; it must
-  // show as fixme/skipped in the report, never as passed.
-  test.fixme(true, 'Invoice-gated three-party close is unreachable in production — account cannot attach INVOICE (AttachmentController.requireTicketAccess refuses it) though the UI\'s only upload control is isAccount-gated. Tracked separately; see docs/agent-handoffs/119_refactor-ticket-workspace-ia-phase2.md.');
+  // ── account: record the tax invoice via createFromDeal ───────────────
+  // The INVOICE attachment is a hard precondition for CONFIRM_CLOSE
+  // (requireClosePrerequisites' invoiceOnFile check), and this is the ONLY
+  // supported way to produce it: CommissionService.createFromDeal dual-writes
+  // the same file as an AttachType.INVOICE ticket attachment AND creates the
+  // deal owner's commission in one transaction. There is deliberately no
+  // invoice-upload control on the ticket page — a second path would satisfy the
+  // close gate without creating the commission.
+  //
+  // The deal is CLOSED_PAID by now (maybeAdvanceClosedPaid fires on
+  // FULLY_PAID + FULLY_DELIVERED, before the three-party close), which is what
+  // makes both this page's ticket lookup and resolveDealLinkage accept it.
+  await expect(page.getByTestId('ticket-primary-action')).toContainText('บันทึกใบกำกับ + ออกค่าคอม');
+  await spaGoto(page, `/commissions?ticketId=${ticketId}`);
+
+  // ?ticketId= auto-loads the deal; the summary card appearing is the signal.
+  await expect(page.getByText('ยอดที่ต้องชำระของดีล')).toBeVisible();
+
+  await page.getByLabel('Invoice Number *').fill('INV-E2E-CLOSE-001');
+  await page.locator('#commission-invoice-file').setInputFiles({
+    name: 'invoice.pdf',
+    mimeType: 'application/pdf',
+    buffer: Buffer.from('%PDF-1.4 e2e deposit-fulfilment-close test invoice'),
+  });
+  await page.getByRole('button', { name: 'บันทึกและสร้างคำขอค่าคอม' }).click();
+  // The commission must actually be created — this is the half of the invariant a
+  // ticket-side invoice upload would silently skip. Asserted via the
+  // "บันทึกล่าสุดในเซสชันนี้" row, which only renders from the API's response.
+  await expect(page.getByText('INV-E2E-CLOSE-001').first()).toBeVisible();
+
+  // ── account: confirm close (now that the invoice is on file) ─────────
+  await spaGoto(page, ticketPath);
+  await expect(page.getByTestId('ticket-detail-confirm-close')).toBeVisible();
+  await page.getByTestId('ticket-detail-confirm-close').click();
+  await expect(page.getByTestId('ticket-detail-confirm-close')).toHaveCount(0);
+
+  // ── ceo: verify and close ────────────────────────────────────────────
+  await switchRole(page, 'ceo');
+  await spaGoto(page, ticketPath);
+  await expect(page.getByTestId('ticket-detail-verify-close')).toBeVisible();
+  await page.getByTestId('ticket-detail-verify-close').click();
+  await expect(page.getByText('ปิดแล้ว').first()).toBeVisible();
 });

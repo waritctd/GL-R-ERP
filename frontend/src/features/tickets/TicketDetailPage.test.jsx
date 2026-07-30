@@ -1700,6 +1700,30 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage(assigneeImport);
       expect(await screen.findByRole('tab', { name: /เอกสาร/ })).not.toBeNull();
     });
+
+    /**
+     * Anti-regression guard, not a coverage box-tick. The "แนบใบกำกับภาษี" control that
+     * used to live in this panel was gated `isAccount` while
+     * AttachmentController.requireTicketAccess grants only participants OR
+     * {hr, sales_manager, ceo} — so it 403'd for real, and only looked functional because
+     * mockApi.js had no authz on attachments at all.
+     *
+     * It was removed rather than re-gated (2026-07-30 owner decision): the closing tax
+     * invoice must come from CommissionService.createFromDeal, which writes the INVOICE
+     * attachment AND the deal owner's commission together. A second control here would
+     * satisfy the close gate's invoiceOnFile while silently skipping the commission.
+     * If this test goes red, someone has reintroduced that path.
+     */
+    it('offers NO ใบกำกับภาษี upload control in "เอกสาร" — the invoice comes from createFromDeal', async () => {
+      const { container } = renderTicketDetailPage(ceoUser);
+      fireEvent.click(await screen.findByRole('tab', { name: /เอกสาร/ }));
+
+      expect(container.querySelector('#ticket-invoice-file')).toBeNull();
+      expect(screen.queryByText('แนบใบกำกับภาษี')).toBeNull();
+      // The generic attachment control (PO / signed docs) must survive — this is a
+      // targeted removal, not a gutting of the panel.
+      expect(container.querySelector('#ticket-attachment-file')).not.toBeNull();
+    });
   });
 
   // Ticket-detail IA rebuild Phase 2: `?tab=` is the single source of truth

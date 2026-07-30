@@ -1018,13 +1018,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     can.revise && { key: 'revise', label: 'ขอแก้ไข (Revise)', icon: 'pencil', onSelect: handleOpenRevise },
   ].filter(Boolean);
 
-  async function handleUploadAttachment(e, explicitType = null) {
+  async function handleUploadAttachment(e) {
     const file = e.target.files?.[0];
     if (!file) return;
-    // INVOICE gates the close, so it is never inferred from the filename — ฝ่ายบัญชี
-    // picks it deliberately via the dedicated upload control.
-    const attachType = explicitType
-      ?? (file.name.toLowerCase().includes('po') ? 'PO' : 'OTHER');
+    // INVOICE is never produced here — not inferred from the filename, and no
+    // longer settable via an explicit type either. It gates the close and must
+    // come from CommissionService.createFromDeal, which writes it alongside the
+    // commission (see the "ไฟล์แนบ" panel comment below).
+    const attachType = file.name.toLowerCase().includes('po') ? 'PO' : 'OTHER';
     try {
       await uploadAttachmentMutation.mutateAsync({ file, attachType });
     } catch { /* onError above already toasted */ } finally {
@@ -1887,27 +1888,30 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           {/* R5: Attachments */}
           <section className="panel">
             <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2>ไฟล์แนบ (PO / ใบเซ็น / ใบกำกับภาษี)</h2>
-              {/* ใบกำกับภาษี is issued by an external system and uploaded here; its
-                  presence is a prerequisite for ฝ่ายบัญชี to confirm the close. */}
-              {!TERMINAL.includes(st) && isAccount && (
-                <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-invoice-file">
-                  <input
-                    id="ticket-invoice-file"
-                    type="file"
-                    className="sr-only h-px min-h-0 w-px border-0 p-0"
-                    onChange={(e) => handleUploadAttachment(e, 'INVOICE')}
-                    accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
-                  />
-                  <span
-                    className="secondary-button max-[720px]:min-h-11 max-[720px]:w-full"
-                    style={{ fontSize: 12, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                  >
-                    <Icon name="upload" size={13} />
-                    {uploadingFile ? 'กำลังอัปโหลด...' : 'แนบใบกำกับภาษี'}
-                  </span>
-                </label>
-              )}
+              <h2>ไฟล์แนบ (PO / ใบเซ็น)</h2>
+              {/* No แนบใบกำกับภาษี control here, deliberately (2026-07-30 owner
+                  decision). The closing tax invoice is ฝ่ายบัญชี's to record, and
+                  the ONLY supported path is CommissionService.createFromDeal
+                  (POST /api/commissions/from-deal, CREATE_FROM_DEAL_ROLES =
+                  account-only), reached from this page's own sticky CTA
+                  "บันทึกใบกำกับ + ออกค่าคอม" -> /commissions?ticketId=NN
+                  (accountActions.js). That one upload dual-writes the file as an
+                  AttachType.INVOICE ticket attachment, so it satisfies the close
+                  gate's invoiceOnFile check AND creates the deal owner's
+                  commission in the same transaction.
+
+                  A second invoice path here would satisfy the close gate WITHOUT
+                  creating the commission — the sales rep would silently lose it.
+                  That is why this is not simply re-gated to a role the backend
+                  permits: the control that used to live here was gated isAccount
+                  while AttachmentController.requireTicketAccess grants only
+                  participants OR hr/sales_manager/ceo, so it 403'd for
+                  real (pinned by TicketIaAuthzMatrixIntegrationTest
+                  .attachments_accountIsNeitherParticipantNorManagerAndIsRefused)
+                  and only ever looked functional because mockApi.js had no authz
+                  on attachments at all. Do not reintroduce it — the regression
+                  guard is TicketDetailPage.test.jsx, "offers NO ใบกำกับภาษี
+                  upload control in เอกสาร". */}
               {!TERMINAL.includes(st) && (
                 <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-attachment-file">
                   <input
