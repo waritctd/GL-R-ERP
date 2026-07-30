@@ -8,7 +8,7 @@ import java.util.Map;
  * Input/output for {@link PayrollCalculator#calculateClassified}, the task-2 (2026-07-29) rewrite
  * that replaces the hardcoded single-limb income split with the per-employee, per-component tax
  * treatment and SSO inclusion data introduced by task 1 (V95) and the per-limb year-to-date tracking
- * added by V96. See docs/agent-handoffs/118_feat-payroll-classification-and-hr-declarations.md.
+ * added by V96. See docs/agent-handoffs/119_feat-payroll-classification-and-hr-declarations.md.
  *
  * <p>Deliberately a NEW pair of records rather than more trailing fields on {@link
  * PayrollCalculationInput}/{@link PayrollCalculation}: those two are frozen by {@code

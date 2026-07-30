@@ -27,8 +27,15 @@ import th.co.glr.hr.payroll.PayrollClassifiedCalculationDtos.PayrollClassifiedCa
  * actually processes every payroll was reconciled against nothing. Repointed at {@code
  * calculateClassified}, driven with every non-zero component classified {@code REGULAR_REPROJECT}
  * (the layered engine's equivalent of the legacy single-limb annualisation when nothing is KNOWN or
- * CUMULATIVE) so the two engines are asked the same question. Every expected figure below is
- * UNCHANGED from before this repoint — same transcribed sheet values, same assertions.
+ * CUMULATIVE) so the two engines are asked the same question. Every ACCOUNTANT-WORKBOOK figure
+ * (the {@code MAY_2026} rows and every test driven directly from them) is UNCHANGED from before
+ * this repoint — same transcribed sheet values, same assertions. F8 fix (fifth Opus review,
+ * 2026-07-30): this used to say "every expected figure below", overselling scope -- {@link
+ * #anEmptyYearToDateUnderWithholdsAndReachesZeroLateInTheYear()} is NOT reconciled against the
+ * sheet (it drives an empty year-to-date, a scenario the sheet does not represent) and its own pin
+ * DID move, honestly disclosed in that test's own javadoc (the May REGULAR_REPROJECT figure moved
+ * 0 → ฿268.75 after the po96-compliance rebase). "Nothing here changed" was never true of the whole
+ * file, only of the workbook-reconciled figures.
  *
  * <p><b>Correction (2026-07-29, later same day, after this branch was rebased onto
  * fix/payroll-wht-po96-compliance):</b> the paragraph above used to go on to claim {@code
@@ -109,6 +116,31 @@ class PayrollExcelReconciliationTest {
                 .withFailMessage("SSO mismatch for %s", row.name())
                 .isEqualByComparingTo(new BigDecimal(row.sso()));
         }
+    }
+
+    /**
+     * F7 fix (fifth Opus review, 2026-07-30): {@link #socialSecurityMatchesTheSheet()} above cannot
+     * tell a correct salary-only SSO wage base apart from a wrongly-inclusive one -- every {@code
+     * MAY_2026} row's base salary already exceeds the ฿17,500 ceiling on its own, so the wage base
+     * lands on 875 whether or not the พิเศษ block is folded in. Driven through {@link
+     * #calculateForMonth(SheetRow, PayrollTaxAllowanceInput, int)} -- the exact path the seven
+     * sheet-reconciliation tests above use -- with a synthetic below-ceiling salary (not an
+     * accountant figure; nothing here is pinned against the workbook) specifically to make the
+     * difference observable: with พิเศษ wrongly included the base would be salary + allowance
+     * (15,000, 5%% = 750.00); with the sheet's actual AF-column semantics (salary only, handoff
+     * section 5) the base is salary alone (10,000, 5%% = 500.00).
+     */
+    @Test
+    void aBelowCeilingSalaryDetectsWhetherTheAllowanceBlockWronglyEntersTheSsoBase() {
+        SheetRow belowCeiling = new SheetRow(
+            "SYNTHETIC-BELOW-CEILING", "10000", "5000", "15000", "0", "500", "500", "14500");
+
+        PayrollClassifiedCalculation result = calculate(belowCeiling);
+
+        assertThat(result.socialSecurity())
+            .withFailMessage("SSO must be 5%% of SALARY ALONE (10,000 -> 500.00), not salary + the "
+                + "พิเศษ block (10,000 + 5,000 would wrongly land on 750.00)")
+            .isEqualByComparingTo(new BigDecimal("500.00"));
     }
 
     /**
@@ -329,11 +361,17 @@ class PayrollExcelReconciliationTest {
     private PayrollClassifiedCalculation calculateForMonth(
             SheetRow row, PayrollTaxAllowanceInput allowances, int month, PayrollTaxTreatment specialPayTreatment) {
         // The whole พิเศษ block collapsed into slot 1 (only the total matters for the maths, same as
-        // the pre-repoint helper), SSO-included -- doesn't affect any of these rows' SSO figure
-        // (every base salary here already saturates the 17,500 ceiling on its own).
+        // the pre-repoint helper), SSO-EXCLUDED -- matching the sheet's own AF column (handoff
+        // section 5: "In: เงินเดือน ... Out: ... รายได้ไม่คิดภาษี", and AF is salary-only in every row
+        // transcribed above). F7 fix (fifth Opus review, 2026-07-30): this used to pass SSO-INCLUDED,
+        // silently putting the whole พิเศษ block into the wage base -- undetected by any assertion
+        // here because every MAY_2026 row's base salary already saturates the ฿17,500 ceiling on its
+        // own, so socialSecurityMatchesTheSheet() landed on 875 either way. See
+        // aBelowCeilingSalaryDetectsWhetherTheAllowanceBlockWronglyEntersTheSsoBase() below for the
+        // case this fixture could not previously catch.
         return calculateClassified(
             new BigDecimal(row.baseSalary()), new BigDecimal(row.allowances()), BigDecimal.ZERO,
-            true, allowances, month, specialPayTreatment);
+            false, allowances, month, specialPayTreatment);
     }
 
     /**

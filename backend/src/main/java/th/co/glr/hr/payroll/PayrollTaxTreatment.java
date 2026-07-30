@@ -3,7 +3,7 @@ package th.co.glr.hr.payroll;
 /**
  * The three withholding-tax treatments a pay component can be given, per ป.96/2543 (the
  * Thai Revenue Department's withholding-tax calculation order). Owner decision 2026-07-29
- * (docs/agent-handoffs/118_feat-payroll-classification-and-hr-declarations.md, section 1):
+ * (docs/agent-handoffs/119_feat-payroll-classification-and-hr-declarations.md, section 1):
  * HR classifies every pay component per employee, per tax year -- there is no company-wide
  * default except {@link #REGULAR_REPROJECT} being locked onto {@code SALARY}
  * (see {@code hr.payroll_component_tax_treatment}'s CHECK constraint, V95).

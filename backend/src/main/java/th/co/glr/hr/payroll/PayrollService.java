@@ -285,7 +285,7 @@ public class PayrollService {
 
         // Task 2 (2026-07-29): per-employee, per-component tax treatment + SSO inclusion, replacing
         // the hardcoded single-limb split. See PayrollCalculator#calculateClassified and
-        // docs/agent-handoffs/118_feat-payroll-classification-and-hr-declarations.md.
+        // docs/agent-handoffs/119_feat-payroll-classification-and-hr-declarations.md.
         int taxYear = payrollMonth.getYear();
         Map<Long, Map<PayrollComponent, PayrollTaxTreatment>> treatmentsByEmployee =
             payrollRepository.findComponentTaxTreatmentsByEmployee(taxYear);
@@ -310,7 +310,7 @@ public class PayrollService {
                 // elderly/disabled exemption (exemptIncome/assessAnnualTax are calculate()-only). Kept
                 // as-is rather than threaded through calculateClassified/PayrollClassifiedCalculationInput,
                 // which would be inventing behaviour fa69e4fa does not implement; flagged as a known gap
-                // in docs/agent-handoffs/118_feat-payroll-classification-and-hr-declarations.md,
+                // in docs/agent-handoffs/119_feat-payroll-classification-and-hr-declarations.md,
                 // "Progress -- task 4: rebase report + F1-F7 fixes" section, known risks (F4 correction,
                 // Opus review 2026-07-30: that section did not exist when this comment was written;
                 // it now does).
@@ -447,17 +447,56 @@ public class PayrollService {
         boolean hasBeenOnboarded
     ) {
         Map<PayrollComponent, PayrollTaxTreatment> stored = treatmentsByEmployee.get(employeeId);
-        if (stored != null || !hasBeenOnboarded) {
-            return stored == null ? Map.of() : stored;
+        if (stored == null && !hasBeenOnboarded) {
+            return Map.of();
         }
-        Map<PayrollComponent, PayrollTaxTreatment> defaults = new EnumMap<>(PayrollComponent.class);
+        return mergeWithDefaults(stored);
+    }
+
+    /**
+     * P1 fix (fifth Opus review, 2026-07-30) -- the "partial classification cliff". {@link
+     * #treatmentsFor} used to be all-or-nothing PER EMPLOYEE: the instant {@code stored} was
+     * non-null (i.e. HR had classified even ONE component for this employee), it was returned
+     * VERBATIM, so every OTHER component silently lost its synthesized default and reverted to
+     * "not yet classified" -- which {@link PayrollCalculator#requireEveryNonZeroComponentClassified}
+     * then 409s for. Because {@code TaxTreatmentMatrixSection.save()} (PayrollPage.jsx) sends only
+     * the edited DIFF, not the full resolved matrix, classifying ONE cell for ONE employee took that
+     * employee from "zero rows, every component defaulted, run succeeds" to "one row, every OTHER
+     * non-zero component unclassified, run 409s" -- and because {@link #preview} maps every active
+     * employee through one stream, that 409 aborted the WHOLE period for EVERY employee, not just the
+     * one HR edited.
+     *
+     * <p>Fixed by resolving PER MISSING COMPONENT instead of per employee: merge the synthesized
+     * defaults UNDER whatever is actually stored, so a component with no stored row still gets its
+     * default and a component with a stored row keeps exactly what is stored.
+     *
+     * <p><b>This must not weaken the "HR sets every line, no silent default" gate.</b> A component
+     * that is PRESENT in {@code stored} with a {@code null} treatment means HR explicitly chose "not
+     * yet classified" -- that is a deliberate signal, not an accident, and must still block a
+     * non-zero amount. The distinction is carried entirely by {@code containsKey}: a component
+     * present in {@code stored} (even with a null value) is left exactly as stored; only a component
+     * genuinely ABSENT from {@code stored} -- one HR has never touched at all -- receives the
+     * synthesized default. {@code stored} itself already preserves this distinction end to end (see
+     * {@link PayrollRepository#findComponentTaxTreatmentsByEmployee}'s own javadoc), so this method
+     * only has to read it correctly, not invent the distinction.
+     */
+    private static Map<PayrollComponent, PayrollTaxTreatment> mergeWithDefaults(
+        Map<PayrollComponent, PayrollTaxTreatment> stored
+    ) {
+        Map<PayrollComponent, PayrollTaxTreatment> merged = new EnumMap<>(PayrollComponent.class);
         for (PayrollComponent component : PayrollComponent.values()) {
             if (component == PayrollComponent.SALARY || component == PayrollComponent.NON_TAXABLE_INCOME) {
                 continue;
             }
-            defaults.put(component, PayrollRepository.defaultTaxTreatment(component));
+            if (stored != null && stored.containsKey(component)) {
+                // Present -- may be a real treatment or an explicit "not yet classified" null; HR's
+                // stored intent always wins over a synthesized default, in either direction.
+                merged.put(component, stored.get(component));
+            } else {
+                merged.put(component, PayrollRepository.defaultTaxTreatment(component));
+            }
         }
-        return defaults;
+        return merged;
     }
 
     /**
@@ -912,16 +951,37 @@ public class PayrollService {
         return result;
     }
 
+    /**
+     * F2 fix (fifth Opus review, 2026-07-30): used to project {@code
+     * byEmployee.getOrDefault(id, Map.of())} -- the RAW stored map -- straight onto the screen,
+     * regardless of what {@link #treatmentsFor} would actually resolve for that same employee at
+     * payroll time. Now resolves the SAME merged/effective map {@code treatmentsFor} does (same
+     * {@code hasBeenOnboardedForPayroll} signal, same defaults), so the screen can never show a
+     * different classification than the engine applies, and separately reports which components HR
+     * actually has a stored row for, so the frontend can distinguish "HR set this" from "the system
+     * is defaulting this".
+     */
     private PayrollClassificationDtos.TaxTreatmentListResponse componentTaxTreatmentsSnapshot(int taxYear) {
         List<PayrollEmployeeSnapshot> employees = payrollRepository.findActiveEmployees();
         Map<Long, Map<PayrollComponent, PayrollTaxTreatment>> byEmployee =
             payrollRepository.findComponentTaxTreatmentsByEmployee(taxYear);
+        Map<Long, Map<PayrollComponent, Boolean>> ssoInclusionByEmployee =
+            payrollRepository.findComponentSsoInclusionByEmployee(taxYear);
         List<PayrollClassificationDtos.TaxTreatmentMatrixRow> items = employees.stream()
-            .map(employee -> new PayrollClassificationDtos.TaxTreatmentMatrixRow(
-                employee.employeeId(),
-                employee.employeeCode(),
-                employee.employeeName(),
-                byEmployee.getOrDefault(employee.employeeId(), Map.of())))
+            .map(employee -> {
+                long employeeId = employee.employeeId();
+                Map<PayrollComponent, PayrollTaxTreatment> stored = byEmployee.get(employeeId);
+                boolean onboarded = hasBeenOnboardedForPayroll(employeeId, ssoInclusionByEmployee);
+                Map<PayrollComponent, PayrollTaxTreatment> effective =
+                    treatmentsFor(employeeId, byEmployee, onboarded);
+                Set<PayrollComponent> explicit = stored == null ? Set.of() : Set.copyOf(stored.keySet());
+                return new PayrollClassificationDtos.TaxTreatmentMatrixRow(
+                    employeeId,
+                    employee.employeeCode(),
+                    employee.employeeName(),
+                    effective,
+                    explicit);
+            })
             .toList();
         return new PayrollClassificationDtos.TaxTreatmentListResponse(taxYear, items);
     }

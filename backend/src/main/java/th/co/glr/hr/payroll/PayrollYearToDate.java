@@ -48,7 +48,7 @@ public record PayrollYearToDate(
     // marginal difference and never reprojected forward, so it needs no YTD state.
     //
     // SUPERSEDED going forward for the regular/variable pair above (rebase onto branch 117, commit
-    // c52080b6, 2026-07-29 -- see docs/agent-handoffs/118_feat-payroll-classification-and-hr-
+    // c52080b6, 2026-07-29 -- see docs/agent-handoffs/119_feat-payroll-classification-and-hr-
     // declarations.md, "Progress -- task 4: rebase report + F1-F7 fixes" for what that rebase actually
     // changed; F4 correction, Opus review 2026-07-30, that section did not exist when this comment was
     // first written): calculateLine now runs exclusively through calculateClassified, which reads the

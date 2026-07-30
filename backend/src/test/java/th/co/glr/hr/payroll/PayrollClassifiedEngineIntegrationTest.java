@@ -33,7 +33,7 @@ import th.co.glr.hr.ticket.TicketRepository;
  * driven exclusively through the real {@link PayrollService#preview}/{@code #process} and {@link
  * PayrollRepository}, per CLAUDE.md's requirement for authz/business-logic changes ("a mocked
  * repository happily 'passes' while the SQL does something else"). See
- * docs/agent-handoffs/118_feat-payroll-classification-and-hr-declarations.md.
+ * docs/agent-handoffs/119_feat-payroll-classification-and-hr-declarations.md.
  *
  * <p>Covers: the three ป.96 treatments each producing the annualised figure the handoff specifies;
  * the unclassified-non-zero-component blocker firing (and a zero amount NOT firing it); the SSO

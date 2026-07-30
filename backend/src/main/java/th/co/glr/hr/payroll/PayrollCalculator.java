@@ -495,7 +495,7 @@ public class PayrollCalculator {
     /**
      * Task 2 (2026-07-29): computes withholding from the per-employee, per-component tax treatment
      * and SSO inclusion data (V95/V96), replacing the hardcoded single-limb split {@link #calculate}
-     * still implements for its frozen regression suite. See docs/agent-handoffs/118_feat-payroll-
+     * still implements for its frozen regression suite. See docs/agent-handoffs/119_feat-payroll-
      * classification-and-hr-declarations.md section 1 for the three treatments and their statutory
      * citations (ป.96/2543 ข้อ 1(4)/(5)/(6)).
      *

@@ -52,7 +52,7 @@ public record PayrollEmployeeInputRequest(
     // via withholdingTaxOverride() below (NOT through safe()) so null is preserved -- coercing it to
     // zero would silently force "withhold nothing" on every run. @PositiveOrZero still allows null.
     @PositiveOrZero BigDecimal withholdingTaxOverride,
-    // ---- Task 2 additions (2026-07-29). See docs/agent-handoffs/118_feat-payroll-classification-
+    // ---- Task 2 additions (2026-07-29). See docs/agent-handoffs/119_feat-payroll-classification-
     // and-hr-declarations.md.
     // เงินโบนัส / อื่นๆ (V96 payroll_line columns). commissionPay keeps its automatic CommissionService
     // feed (handoff section 10, "do NOT add an HR-typed commission field") -- these two are the

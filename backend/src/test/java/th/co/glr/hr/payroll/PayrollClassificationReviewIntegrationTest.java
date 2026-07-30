@@ -320,6 +320,76 @@ class PayrollClassificationReviewIntegrationTest extends AbstractPostgresIntegra
             .doesNotThrowAnyException();
     }
 
+    /**
+     * F1 fix (fifth Opus review, 2026-07-30): companion coverage for {@code
+     * PayrollPartialClassificationCliffReviewTest}. That test proves an ABSENT component still gets
+     * a synthesized default after the "partial classification cliff" fix. It never exercises the
+     * other half of the same fix's contract: a component PRESENT in the stored map with a {@code
+     * null} treatment -- HR deliberately choosing "ยังไม่จัดประเภท" through the matrix screen -- must
+     * still 409, not be silently defaulted by {@code PayrollService#mergeWithDefaults}. The whole
+     * point of resolving via {@code containsKey} rather than {@code getOrDefault} is that a present
+     * key always wins over a default, in EITHER direction; this pins the blocking direction so the
+     * merge fix cannot be over-corrected into re-opening the "no silent default" gate it must not
+     * weaken.
+     */
+    @Test
+    void aComponentExplicitlyLeftUnclassifiedStillBlocksAfterTheOtherComponentsGetSynthesizedDefaults() {
+        long employee = seedEmployee("EMP-REV-010", "จี", "รีวิว");
+
+        // HR opens the matrix, looks at SPECIAL_PAY_1, and explicitly leaves it "ยังไม่จัดประเภท" --
+        // the frontend submits this as taxTreatment: null, which the repository stores as a present
+        // row with a NULL value (see ComponentTaxTreatmentUpsertRequest's own javadoc).
+        repository.upsertComponentTaxTreatment(2026, List.of(
+            new ComponentTaxTreatmentUpsertRequest(employee, PayrollComponent.SPECIAL_PAY_1, null)
+        ), employee);
+
+        assertThat(repository.findComponentTaxTreatmentsByEmployee(2026).get(employee))
+            .as("the row must exist and be present-and-null, not absent")
+            .containsKey(PayrollComponent.SPECIAL_PAY_1)
+            .containsEntry(PayrollComponent.SPECIAL_PAY_1, null);
+
+        PayrollEmployeeInputRequest input = specialPay1Of(employee, new BigDecimal("1500.00"));
+
+        assertThatThrownBy(() -> payrollService.preview(
+                new ProcessPayrollRequest(LocalDate.of(2026, 3, 1), List.of(input)), hr()))
+            .as("a component HR explicitly left unclassified must still 409 -- the merge that fills "
+                + "in defaults for components HR never touched must not also paper over one HR "
+                + "deliberately declined to classify")
+            .isInstanceOf(ApiException.class)
+            .satisfies(ex -> assertThat(((ApiException) ex).getStatus()).isEqualTo(HttpStatus.CONFLICT))
+            .hasMessageContaining("SPECIAL_PAY_1")
+            .hasMessageContaining("EMP-REV-010");
+    }
+
+    private PayrollEmployeeInputRequest specialPay1Of(long employeeId, BigDecimal specialPay1) {
+        BigDecimal zero = BigDecimal.ZERO;
+        return new PayrollEmployeeInputRequest(
+            employeeId,
+            specialPay1, zero, zero, zero, zero, zero, zero, zero, zero, // specialPay1-9
+            zero, // nonTaxableIncome
+            zero, // unpaidLeaveDays
+            zero, // studentLoanDeduction
+            zero, // legalExecutionDeduction
+            zero, // otherPostTaxDeductions
+            zero, zero, zero, zero, zero, // spouse..maternity
+            zero, zero, zero, zero, zero, // life..ssf
+            zero, zero, zero, zero, zero, zero, // pension..political
+            zero, // warningLetterDeduction
+            zero, // customerReturnDeduction
+            zero, // otherPretaxDeduction
+            null, // withholdingTaxOverride
+            zero, // mealAllowance
+            zero, // perDiemExempt
+            zero, // perDiemTaxable
+            null, // perDiemBasis
+            zero, // bonusPay
+            zero, // otherOneOffPay
+            false, // customerReturnAlreadyEarned
+            null, // garnishmentType
+            null // parentCareCount
+        );
+    }
+
     private PayrollEmployeeInputRequest specialPay2Of(long employeeId, BigDecimal specialPay2) {
         BigDecimal zero = BigDecimal.ZERO;
         return new PayrollEmployeeInputRequest(

@@ -648,7 +648,7 @@ public class PayrollRepository {
     // ------------------------------------------------------------------------------------------
     // Payroll withholding classification + SSO inclusion matrices (V95, 2026-07-29), consulted by
     // PayrollCalculator#calculateClassified since task 2. See
-    // docs/agent-handoffs/118_feat-payroll-classification-and-hr-declarations.md.
+    // docs/agent-handoffs/119_feat-payroll-classification-and-hr-declarations.md.
     // ------------------------------------------------------------------------------------------
 
     /**
@@ -841,9 +841,26 @@ public class PayrollRepository {
      * #seedSsoInclusionDefaults} runs for that employee -- this method only returns what is
      * actually stored, it does not synthesize the seed defaults on read.
      *
-     * <p>Defect fix (Opus review, 2026-07-29): resolved PER EMPLOYEE, same as {@link
-     * #findComponentTaxTreatmentsByEmployee} -- see that method's javadoc for why a single
-     * table-wide resolution is wrong.
+     * <p>Defect fix (Opus review, 2026-07-29): resolved PER EMPLOYEE (a single {@code MAX(tax_year)}
+     * per employee, not one table-wide MAX) -- correct as far as it goes, but no longer the same
+     * resolution as {@link #findComponentTaxTreatmentsByEmployee}.
+     *
+     * <p><b>F4 (fifth Opus review, 2026-07-30): this javadoc used to claim it matches {@code
+     * findComponentTaxTreatmentsByEmployee} -- that is now FALSE.</b> That sibling method was later
+     * tightened (D2, fourth reachability audit) to resolve per (EMPLOYEE, COMPONENT) via {@code
+     * DISTINCT ON}, because a per-EMPLOYEE-only resolution has the exact same "one component's new
+     * row flips the year for every other component" cliff the per-employee fix was written to close
+     * one level up (see that method's own javadoc for the full mechanism). This method was never
+     * updated to match and still has that narrower cliff: HR editing ONE SSO-inclusion cell into a
+     * new tax year would flip every OTHER component's resolved year forward too, silently excluding
+     * their still-valid prior-year rows from the wage base. <b>Currently LATENT, not exercised in
+     * production</b> -- the only writer, {@link #seedSsoInclusionDefaults}, always writes a full-year
+     * snapshot (every component, one INSERT batch), so no real caller today produces the partial,
+     * split-year shape this gap requires. It would become live the moment {@code
+     * upsertComponentSsoInclusion} (F3) gets a caller that saves a single edited cell, the same way
+     * {@code TaxTreatmentMatrixSection.save()} does for tax treatment -- and unlike that gate's 409,
+     * the consequence here is a silently WRONG SSO wage base (money), not a blocked run. Recorded as
+     * a known risk, not fixed here (out of this task's scope); fix in lockstep with F3.
      */
     public Map<Long, Map<PayrollComponent, Boolean>> findComponentSsoInclusionByEmployee(int taxYear) {
         record Row(long employeeId, PayrollComponent component, boolean included) {}

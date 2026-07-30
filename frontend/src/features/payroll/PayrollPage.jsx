@@ -1051,6 +1051,15 @@ export function PayrollPage({ showToast }) {
  * decision, section 9c: "never a shrunken fifteen-column table" — this applies just as much to a
  * 16-component matrix as to the pay-input grid it echoes), each with its own unclassified-count badge
  * so HR can find the outliers without opening every employee.
+ *
+ * <p>F2 fix (fifth Opus review, 2026-07-30): `item.byComponent` now carries the EFFECTIVE
+ * classification (synthesized defaults merged in server-side by `PayrollService#treatmentsFor`),
+ * not the raw stored map — a select for a component nobody has classified yet now shows the
+ * treatment the engine actually applies, instead of blank. `item.explicitlyClassifiedComponents`
+ * says which of those values HR (or a backfill) actually set versus which are synthesized; the
+ * "ค่าเริ่มต้นของระบบ" hint below a select renders only for the latter, so HR can tell "the system is
+ * defaulting this" from "someone chose this" — the distinction the branch's back-loading-risk
+ * mitigation depends on.
  */
 function TaxTreatmentMatrixSection({ payrollMonth, showToast }) {
   const taxYear = Number(String(payrollMonth || '').slice(0, 4)) || new Date().getFullYear();
@@ -1083,6 +1092,15 @@ function TaxTreatmentMatrixSection({ payrollMonth, showToast }) {
     const edited = edits[item.employeeId]?.[componentKey];
     if (edited !== undefined) return edited;
     return item.byComponent?.[componentKey] || '';
+  }
+
+  // F2 fix (fifth Opus review, 2026-07-30): true once HR has an actual stored row for this cell (per
+  // `item.explicitlyClassifiedComponents`, from the effective-classification snapshot) OR is setting
+  // one right now in this unsaved session. False means `valueFor` above is showing a value the
+  // backend synthesized, not one anybody chose.
+  function isExplicit(item, componentKey) {
+    if (edits[item.employeeId]?.[componentKey] !== undefined) return true;
+    return item.explicitlyClassifiedComponents?.includes(componentKey) ?? false;
   }
 
   function setValue(employeeId, componentKey, value) {
@@ -1137,6 +1155,8 @@ function TaxTreatmentMatrixSection({ payrollMonth, showToast }) {
       <p className="text-sm text-text-muted mb-3">
         เงินเดือนล็อกเป็น &quot;ประจำ&quot; เสมอ ส่วนประกอบอื่นทุกรายการต้องจัดประเภทก่อนจึงจะประมวลผลเงินเดือนได้
         เมื่อพนักงานมียอดไม่เท่ากับศูนย์ในส่วนนั้นของงวดใดงวดหนึ่ง — รายการที่ยังไม่จัดประเภทและมียอดจะทำให้ระบบปฏิเสธการประมวลผลทั้งรอบ
+        รายการที่ขึ้นป้าย &quot;ค่าเริ่มต้นของระบบ&quot; ยังไม่มีใครกำหนด — ระบบใช้ค่าเริ่มต้นเพื่อให้ประมวลผลได้ก่อน
+        ควรตรวจสอบและเลือกให้ถูกต้องเมื่อสะดวก
       </p>
       {loading ? (
         <p className="text-sm text-text-muted">กำลังโหลด…</p>
@@ -1160,18 +1180,26 @@ function TaxTreatmentMatrixSection({ payrollMonth, showToast }) {
                 <FormGrid>
                   {TAX_TREATMENT_COMPONENTS.map((field) => {
                     const inputId = `tax-treatment-${item.employeeId}-${field.key}`;
+                    const value = valueFor(item, field.key);
+                    // F2 fix (fifth Opus review, 2026-07-30): a non-blank value nobody explicitly set
+                    // is the backend's synthesized default -- flag it so HR does not mistake "the
+                    // system is defaulting this" for "someone already reviewed and chose this".
+                    const isDefaulted = Boolean(value) && !isExplicit(item, field.key);
                     return (
                       <label key={field.key} htmlFor={inputId}>
                         {field.label}
                         <select
                           id={inputId}
-                          value={valueFor(item, field.key)}
+                          value={value}
                           onChange={(event) => setValue(item.employeeId, field.key, event.target.value)}
                         >
                           {TAX_TREATMENT_OPTIONS.map((option) => (
                             <option key={option.value || 'unset'} value={option.value}>{option.label}</option>
                           ))}
                         </select>
+                        {isDefaulted && (
+                          <small className="block text-text-muted">ค่าเริ่มต้นของระบบ — ยังไม่มีใครกำหนด</small>
+                        )}
                       </label>
                     );
                   })}

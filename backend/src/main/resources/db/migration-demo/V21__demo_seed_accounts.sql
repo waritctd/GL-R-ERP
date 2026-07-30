@@ -7,10 +7,17 @@
 -- Safety:
 --   * All demo rows use the 'DEMO-' employee_code / ticket-code prefix so
 --     they are trivially identifiable and removable (see rollback notes).
---   * Demo employees deliberately carry NO current_salary, and
---     PayrollRepository.findActiveEmployees() additionally excludes
---     employee_code LIKE 'DEMO-%' outright, so these rows can never be
---     swept into a real payroll batch / KBank export / payslip run.
+--   * Demo employees deliberately carry NO current_salary (and no
+--     director_remuneration). F8 fix (fifth Opus review, 2026-07-30):
+--     the line above used to claim PayrollRepository.findActiveEmployees()
+--     ALSO excludes employee_code LIKE 'DEMO-%' outright -- it does not;
+--     there is no such filter anywhere in that query. The ONLY thing
+--     keeping these rows out of a real payroll batch is the WHERE clause's
+--     COALESCE(current_salary, 0) > 0 OR COALESCE(director_remuneration, 0) > 0
+--     condition, so a demo row that is ever given a non-zero salary or
+--     director fee (by mistake, or by a future seed edit) WOULD be swept
+--     into a real payroll run -- the code-prefix is for humans to spot the
+--     rows, not a machine-enforced payroll exclusion.
 --   * Shared password for every demo account: Demo@2026
 --     (BCrypt hash below verified against Spring's BCryptPasswordEncoder.)
 --   * Roles resolve from the employee's division via

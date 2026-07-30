@@ -131,7 +131,7 @@ public abstract class AbstractPostgresIntegrationTest {
     /**
      * Task 2 (2026-07-29): {@link th.co.glr.hr.payroll.PayrollCalculator#calculateClassified} rejects
      * any non-zero pay component that has no stored withholding-tax classification (handoff section
-     * 1, docs/agent-handoffs/118_feat-payroll-classification-and-hr-declarations.md). Every payroll
+     * 1, docs/agent-handoffs/119_feat-payroll-classification-and-hr-declarations.md). Every payroll
      * integration test that drives {@code PayrollService#preview}/{@code #process} with a non-zero
      * component now needs a real classification row for that employee/component, or the run 409s --
      * this is the seeding helper for the common case: classify every listed component

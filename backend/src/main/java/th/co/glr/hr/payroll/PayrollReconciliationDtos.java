@@ -30,7 +30,7 @@ public final class PayrollReconciliationDtos {
         String documentReference,
         OffsetDateTime updatedAt,
         // Declaration verification + grandfathering (2026-07-29, V95). See
-        // docs/agent-handoffs/118_feat-payroll-classification-and-hr-declarations.md section 3.
+        // docs/agent-handoffs/119_feat-payroll-classification-and-hr-declarations.md section 3.
         // verificationStatus is one of VERIFIED / GRANDFATHERED_UNVERIFIED / EXPIRED_UNVERIFIED
         // (never null -- the column has a NOT NULL DEFAULT). verifiedById/verifiedAt are nullable:
         // null until HR verifies. verificationDeadline is nullable until the service layer (next

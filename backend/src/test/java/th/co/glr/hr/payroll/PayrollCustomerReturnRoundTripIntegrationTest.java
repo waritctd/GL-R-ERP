@@ -19,7 +19,7 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 /**
  * D1 (fourth reachability audit, 2026-07-30): {@code customer_return_deduction} stopped
  * round-tripping what HR actually typed, a REGRESSION against origin/main -- see
- * {@code V102__payroll_customer_return_requested_amount.sql} for the full failure narrative.
+ * {@code V101__payroll_customer_return_requested_amount.sql} for the full failure narrative.
  *
  * <p>On origin/main the legacy engine passed the field through verbatim, so the stored figure
  * always survived a reload. This branch's classified engine gave the column a second job -- 0 in
