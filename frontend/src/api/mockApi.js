@@ -1289,6 +1289,27 @@ function findTicketRaw(id) {
   return ticket;
 }
 
+// Mirrors AttachmentController.requireTicketAccess: ticket participant (creator or assignee) OR
+// MANAGER_ROLES {hr, sales_manager, ceo}. Note what is NOT here — `account` gets no grant, exactly
+// as in the Java gate. ฝ่ายบัญชี records the closing tax invoice through
+// CommissionService.createFromDeal, which dual-writes the INVOICE ticket attachment itself.
+//
+// This namespace had NO role gate at all until 2026-07-30 — `requireSession()` and nothing else —
+// which is why the same defect was misdiagnosed twice: `deposit-fulfilment-close.spec.js` drove
+// `account` through an attachment upload that 403s against the real service, and passed. That is the
+// issue-#199 shape CLAUDE.md names ("a mock more permissive than production is the dangerous
+// direction"). Keep this in step with the Java gate — and note authz here is still an approximation,
+// never the evidence for a permission claim.
+function requireAttachmentTicketAccess(ticketId) {
+  const user = requireSession();
+  const ticket = findTicketRaw(Number(ticketId));
+  const isParticipant = ticket.createdById === user.id
+    || (ticket.assignedToId != null && ticket.assignedToId === user.id);
+  const isManager = ['hr', 'sales_manager', 'ceo'].includes(user.role);
+  if (!isParticipant && !isManager) fail('Forbidden', 403);
+  return { user, ticket };
+}
+
 // Deal tracking (V83): activities for one ticket, oldest first (matches
 // TicketRepository.findActivitiesByTicket's ORDER BY activity_date, created_at).
 function dealActivitiesForTicket(ticketId) {
@@ -5030,11 +5051,11 @@ export const api = {
   // Mirrors AttachmentController + FileStorageService (attachment/).
   attachments: {
     async list(ticketId) {
-      requireSession();
+      requireAttachmentTicketAccess(ticketId);
       return delay({ attachments: structuredClone(mockAttachments.filter((a) => a.ticketId === Number(ticketId))) });
     },
     async upload(ticketId, file, attachType) {
-      const user = requireSession();
+      const { user } = requireAttachmentTicketAccess(ticketId);
       const attachment = {
         id: mockAttachSeq++, ticketId: Number(ticketId), quotationId: null,
         fileName: file?.name ?? 'file.pdf',
@@ -5049,9 +5070,15 @@ export const api = {
     },
     fileUrl: (id) => `#mock-file-${id}`,
     async delete(id) {
-      requireSession();
+      const user = requireSession();
       const idx = mockAttachments.findIndex((a) => a.id === Number(id));
-      if (idx >= 0) mockAttachments.splice(idx, 1);
+      if (idx < 0) fail('ไม่พบไฟล์', 404);
+      // Mirrors AttachmentController.requireAttachmentAccess: the uploader may always remove their
+      // own file; everyone else goes through the ticket gate.
+      if (mockAttachments[idx].uploadedBy !== user.id) {
+        requireAttachmentTicketAccess(mockAttachments[idx].ticketId);
+      }
+      mockAttachments.splice(idx, 1);
       return delay({ ok: true });
     },
   },
