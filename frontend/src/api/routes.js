@@ -158,8 +158,17 @@ export const API_ROUTES = {
     process: '/api/payroll/process',
     export: (periodId, kind, effectiveDate) =>
       `/api/payroll/${periodId}/export/${kind}${effectiveDate ? `?effectiveDate=${effectiveDate}` : ''}`,
+    // Preview-time detail xlsx export (2026-07-30): HR must be able to review a month's full detail
+    // BEFORE processing it (e.g. a live-but-unprocessed month) -- there is no periodId yet, so this
+    // POSTs the same payload /preview does. Only payroll-detail supports this. Mirrors
+    // PayrollController#exportPreview.
+    exportPreview: (kind, effectiveDate) =>
+      `/api/payroll/preview/export/${kind}${effectiveDate ? `?effectiveDate=${effectiveDate}` : ''}`,
     payslip: (periodId, lineId) => `/api/payroll/${periodId}/lines/${lineId}/payslip.pdf`,
     ownPayslip: (periodId) => `/api/payroll/${periodId}/payslip/me`,
+    // Bulk payslip ZIP (2026-07-30): every payslip for a processed period, so HR can review the
+    // whole batch before distribute() emails it to everyone. Mirrors PayrollController#bulkPayslipZip.
+    payslipsZip: (periodId) => `/api/payroll/${periodId}/payslips.zip`,
     distribute: (periodId) => `/api/payroll/${periodId}/distribute`,
     taxAllowances: '/api/payroll/tax-allowances',
     ytdSeed: '/api/payroll/ytd-seed',

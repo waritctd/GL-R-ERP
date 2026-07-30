@@ -59,6 +59,7 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
             new th.co.glr.hr.payroll.export.KBankPctExporter(),
             new th.co.glr.hr.payroll.export.Pnd1Exporter(),
             new th.co.glr.hr.payroll.export.SsoExporter(),
+            new th.co.glr.hr.payroll.export.PayrollDetailExporter(),
             new th.co.glr.hr.config.AppProperties());
     }
 

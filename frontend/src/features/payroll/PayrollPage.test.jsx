@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { PayrollPage } from './PayrollPage.jsx';
 import { api } from '../../api/index.js';
 
@@ -13,7 +13,9 @@ vi.mock('../../api/index.js', () => ({
       preview: vi.fn(),
       process: vi.fn(),
       exportFile: vi.fn(),
+      exportPreviewFile: vi.fn(),
       downloadPayslip: vi.fn(),
+      downloadPayslipsZip: vi.fn(),
       distributePayslips: vi.fn(),
       suggestedInputs: vi.fn(),
       // P0 fix (Opus review, 2026-07-30): the tax-treatment matrix section PayrollPage now renders
@@ -473,6 +475,108 @@ describe('PayrollPage adjustment inputs', () => {
     // Pay date defaults to the 26th of the current payroll month (kept month-agnostic here).
     await waitFor(() => expect(api.payroll.exportFile)
       .toHaveBeenCalledWith(7, 'pnd1', expect.stringMatching(/^\d{4}-\d{2}-26$/)));
+  });
+
+  // The detailed payroll xlsx export -- reachable from the same dropdown/button as the three
+  // statutory kinds, per PayrollController#export's slug ∈ {kbank,pnd1,sso,payroll-detail}.
+  it('reaches the detailed payroll xlsx export from the same dropdown and downloads it as .xlsx', async () => {
+    api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
+    api.payroll.exportFile.mockResolvedValue(new Blob(['PK'], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }));
+    const showToast = vi.fn();
+
+    render(<PayrollPage showToast={showToast} />);
+
+    const kindSelect = await screen.findByLabelText('ประเภทไฟล์ที่จะสร้าง');
+    // getByRole throws (failing the test) if the option isn't present -- no jest-dom matchers here.
+    within(kindSelect).getByRole('option', { name: /รายละเอียดเงินเดือนรายเดือน/ });
+
+    fireEvent.change(kindSelect, { target: { value: 'payroll-detail' } });
+    fireEvent.click(screen.getByRole('button', { name: /ดาวน์โหลดไฟล์/ }));
+
+    await waitFor(() => expect(api.payroll.exportFile)
+      .toHaveBeenCalledWith(7, 'payroll-detail', expect.stringMatching(/^\d{4}-\d{2}-26$/)));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('รายละเอียดเงินเดือนรายเดือน')));
+  });
+
+  // Owner requirement (2026-07-30): "July 2026 is live and still unprocessed... HR's whole reason
+  // to want this file is to review the month BEFORE committing it." Unlike KBank/PND1/SSO, the
+  // detail export button must work with NO persisted period (id === null) -- it POSTs the same
+  // payrollMonth/inputs payload Preview/Process already send, so the workbook always matches
+  // whatever the on-screen preview shows for those inputs.
+  it('downloads the detail xlsx for an unprocessed preview (period.id === null) via the preview-export endpoint', async () => {
+    api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: null, status: 'PREVIEW', lineCount: 1 }) });
+    api.payroll.exportPreviewFile.mockResolvedValue(new Blob(['PK'], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }));
+    const showToast = vi.fn();
+
+    render(<PayrollPage showToast={showToast} />);
+
+    const kindSelect = await screen.findByLabelText('ประเภทไฟล์ที่จะสร้าง');
+    expect(kindSelect.disabled).toBe(false); // reachable even though period.id is null
+    fireEvent.change(kindSelect, { target: { value: 'payroll-detail' } });
+    const downloadButton = screen.getByRole('button', { name: /ดาวน์โหลดไฟล์/ });
+    expect(downloadButton.disabled).toBe(false);
+    fireEvent.click(downloadButton);
+
+    await waitFor(() => expect(api.payroll.exportPreviewFile).toHaveBeenCalledTimes(1));
+    const [payloadArg, kindArg] = api.payroll.exportPreviewFile.mock.calls[0];
+    expect(kindArg).toBe('payroll-detail');
+    expect(payloadArg.payrollMonth).toBe(`${thisMonth}-01`);
+    expect(api.payroll.exportFile).not.toHaveBeenCalled();
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('รายละเอียดเงินเดือนรายเดือน')));
+  });
+
+  it('keeps the three statutory export kinds gated on a real period id even though payroll-detail is not', async () => {
+    api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: null, status: 'PREVIEW', lineCount: 1 }) });
+
+    render(<PayrollPage showToast={vi.fn()} />);
+
+    const kindSelect = await screen.findByLabelText('ประเภทไฟล์ที่จะสร้าง');
+    fireEvent.change(kindSelect, { target: { value: 'kbank' } });
+
+    expect(screen.getByRole('button', { name: /ดาวน์โหลดไฟล์/ }).disabled).toBe(true);
+  });
+
+  // Bulk payslip ZIP (owner requirement, 2026-07-30): "hr should be able to bulk download payslip
+  // before emailing to all employee for recheck". Sits next to "ส่งอีเมลสลิปเงินเดือน" so the
+  // review-then-send order is obvious, and -- unlike the detail xlsx export -- only works for a
+  // genuinely PROCESSED period.
+  describe('Bulk payslip ZIP download', () => {
+    it('renders next to the email button and hits the payslips.zip endpoint for a processed period', async () => {
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
+      api.payroll.downloadPayslipsZip.mockResolvedValue(new Blob(['PK'], { type: 'application/zip' }));
+      const showToast = vi.fn();
+
+      render(<PayrollPage showToast={showToast} />);
+
+      const zipButton = await screen.findByRole('button', { name: /ดาวน์โหลดสลิปเงินเดือนทั้งหมด/ });
+      expect(zipButton.disabled).toBe(false);
+      fireEvent.click(zipButton);
+
+      await waitFor(() => expect(api.payroll.downloadPayslipsZip).toHaveBeenCalledWith(7));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('ดาวน์โหลดสลิปเงินเดือนทั้งหมด')));
+    });
+
+    it('is disabled for an unprocessed period (no periodId yet)', async () => {
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: null, status: 'PREVIEW' }) });
+
+      render(<PayrollPage showToast={vi.fn()} />);
+
+      const zipButton = await screen.findByRole('button', { name: /ดาวน์โหลดสลิปเงินเดือนทั้งหมด/ });
+      expect(zipButton.disabled).toBe(true);
+    });
+
+    it('is disabled for a VOID period even though it has a real periodId', async () => {
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 1, status: 'VOID' }) });
+
+      render(<PayrollPage showToast={vi.fn()} />);
+
+      const zipButton = await screen.findByRole('button', { name: /ดาวน์โหลดสลิปเงินเดือนทั้งหมด/ });
+      expect(zipButton.disabled).toBe(true);
+    });
   });
 
   // F1: PayrollService#process (backend) doesn't need a period id -- it recomputes from

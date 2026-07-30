@@ -17,6 +17,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.payroll.export.PayrollDetailIdentityDto;
 import th.co.glr.hr.payroll.export.PayrollExportRow;
 import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentSsoInclusionUpsertRequest;
 import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentTaxTreatmentUpsertRequest;
@@ -1253,6 +1254,58 @@ public class PayrollRepository {
                 rs.getBigDecimal("withholding_tax"),
                 rs.getBigDecimal("sso_wage_base"),
                 rs.getBigDecimal("social_security")));
+    }
+
+    /**
+     * Identity/salary-history enrichment for {@code PayrollDetailExporter} only — see {@link
+     * PayrollDetailIdentityDto}'s javadoc for exactly what each field means and why. Read-only,
+     * no payroll math; two cheap queries (not a join into {@link #findLines}) so that method's
+     * shape and every existing caller/test stay untouched.
+     */
+    public Map<Long, PayrollDetailIdentityDto> findDetailIdentity(Collection<Long> employeeIds) {
+        if (employeeIds == null || employeeIds.isEmpty()) {
+            return Map.of();
+        }
+        // Built with a plain mutable map, NOT Map.entry()/Collectors.toMap() -- both reject a null
+        // value, and hire_date is frequently null (an employee seeded/onboarded without one), which
+        // must round-trip as null (no hire date on file), not blow up the whole export.
+        Map<Long, LocalDate> hireDates = new LinkedHashMap<>();
+        jdbc.query("""
+            SELECT employee_id, hire_date
+              FROM hr.employee
+             WHERE employee_id IN (:employeeIds)
+            """,
+            Map.of("employeeIds", employeeIds),
+            (rs, rowNum) -> {
+                hireDates.put(rs.getLong("employee_id"), rs.getObject("hire_date", LocalDate.class));
+                return null;
+            });
+
+        Map<Long, LocalDate[]> lastAdjustedDate = new LinkedHashMap<>();
+        Map<Long, BigDecimal> lastAdjustedAmount = new LinkedHashMap<>();
+        jdbc.query("""
+            SELECT DISTINCT ON (sh.employee_id) sh.employee_id, sh.effective_date, sh.new_amount
+              FROM hr.salary_history sh
+             WHERE sh.employee_id IN (:employeeIds)
+             ORDER BY sh.employee_id, sh.effective_date DESC NULLS LAST, sh.salary_id DESC
+            """,
+            Map.of("employeeIds", employeeIds),
+            (rs, rowNum) -> {
+                long employeeId = rs.getLong("employee_id");
+                lastAdjustedDate.put(employeeId, new LocalDate[] {rs.getObject("effective_date", LocalDate.class)});
+                lastAdjustedAmount.put(employeeId, rs.getBigDecimal("new_amount"));
+                return null;
+            });
+
+        Map<Long, PayrollDetailIdentityDto> result = new LinkedHashMap<>();
+        for (Long employeeId : employeeIds) {
+            LocalDate[] adjustedHolder = lastAdjustedDate.get(employeeId);
+            result.put(employeeId, new PayrollDetailIdentityDto(
+                hireDates.get(employeeId),
+                adjustedHolder == null ? null : adjustedHolder[0],
+                lastAdjustedAmount.get(employeeId)));
+        }
+        return result;
     }
 
     public Map<Long, String> findEmployeeEmailsByIds(Collection<Long> employeeIds) {

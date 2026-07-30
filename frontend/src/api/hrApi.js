@@ -1,4 +1,4 @@
-import { apiRequest } from './client.js';
+import { apiRequest, csrfHeaders } from './client.js';
 import { API_ROUTES } from './routes.js';
 
 function withQuery(path, params = {}) {
@@ -340,6 +340,22 @@ export const api = {
       if (!res.ok) throw new Error('Download failed');
       return res.blob();
     },
+    // Preview-time detail xlsx export (2026-07-30): same idea as exportFile, but POSTs the
+    // payrollMonth/inputs payload (no periodId exists yet for an unprocessed month) and reads the
+    // response as a binary blob so the xlsx bytes survive intact. Mirrors PayrollController#exportPreview.
+    exportPreviewFile: async (payload, kind, effectiveDate) => {
+      const res = await fetch(API_ROUTES.payroll.exportPreview(kind, effectiveDate), {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...csrfHeaders('POST'),
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
     downloadPayslip: async (periodId, lineId) => {
       const res = await fetch(API_ROUTES.payroll.payslip(periodId, lineId), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');
@@ -347,6 +363,13 @@ export const api = {
     },
     downloadOwnPayslip: async (periodId) => {
       const res = await fetch(API_ROUTES.payroll.ownPayslip(periodId), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    // Bulk payslip ZIP (2026-07-30): every payslip for a processed period, so HR can review the
+    // batch before distributePayslips() emails it to everyone. Mirrors PayrollController#bulkPayslipZip.
+    downloadPayslipsZip: async (periodId) => {
+      const res = await fetch(API_ROUTES.payroll.payslipsZip(periodId), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');
       return res.blob();
     },
