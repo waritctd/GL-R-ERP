@@ -659,30 +659,48 @@ public class PayrollRepository {
      * the SQL level and the distinction matters for {@link #upsertComponentTaxTreatment} callers
      * that need to know whether a row exists to update.
      *
-     * <p>Defect fix (Opus review, 2026-07-29): the effective tax year is resolved PER EMPLOYEE (each
-     * employee rolls forward from their own most recent {@code tax_year <= taxYear}), not once for
-     * the whole table. The prior implementation took a single table-wide {@code MAX(tax_year)}: the
-     * first employee hired in a new tax year (seeded at their hire year by {@code EmployeeService
-     * #create}) flipped that single MAX forward for EVERY employee, so every pre-existing employee's
-     * classification map read back completely empty on the very next payroll run -- blocking the run
-     * for anyone with a non-zero non-salary component and silently zeroing the SSO wage base (no
-     * blocker there) for everyone else. Per-employee resolution means a lone new hire in 2027 reads
-     * their own 2027 row while every 2026-only employee keeps reading 2026, exactly like {@link
-     * #findCarryForwardSuggestions} must for the same reason (see that method's LATERAL joins).
+     * <p>Defect fix (Opus review, 2026-07-29): the effective tax year used to be resolved PER
+     * EMPLOYEE (each employee rolling forward from their own most recent {@code tax_year <=
+     * taxYear}), not once for the whole table. The prior-prior implementation took a single
+     * table-wide {@code MAX(tax_year)}: the first employee hired in a new tax year (seeded at their
+     * hire year by {@code EmployeeService#create}) flipped that single MAX forward for EVERY
+     * employee, so every pre-existing employee's classification map read back completely empty on
+     * the very next payroll run.
+     *
+     * <p><b>D2 fix (fourth reachability audit, 2026-07-30): per-employee was still not narrow
+     * enough -- resolution is now PER (EMPLOYEE, COMPONENT).</b> The per-employee {@code
+     * employee_years} CTE resolved ONE effective year for an employee's ENTIRE row set: the instant
+     * a single component gained a row in a new tax year (e.g. HR editing ONE dropdown on {@code
+     * TaxTreatmentMatrixSection} in January of a new year, which saves only the edited cell --
+     * {@code PayrollPage.jsx}'s {@code save()} sends {@code changes}, the diff, not the full
+     * resolved matrix), that employee's effective year flipped to the new year for EVERY component,
+     * and the {@code JOIN ... ON t.tax_year = ey.effective_tax_year} then excluded every OTHER
+     * component's still-valid prior-year row. The other 15+ components read back as "not yet
+     * classified" in the very API response the edit's own save renders, and {@link
+     * PayrollCalculator#calculateClassified}'s classification gate 409s the whole 2027 run for any
+     * of them with a non-zero amount -- a single dropdown edit stranding every other component HR
+     * never touched.
+     *
+     * <p>Fixed by resolving the roll-forward independently per (employee, component) pair with
+     * {@code DISTINCT ON}, rather than fixing the write path to materialise a full-year snapshot or
+     * changing the frontend to submit the whole matrix every save. This is the more robust of the
+     * options: it makes ANY partial write pattern -- today's single-cell save, a future bulk import,
+     * a future screen -- safe by construction, instead of relying on every writer, present and
+     * future, to remember to write a complete per-year snapshot. A lone new hire (or a lone edited
+     * component) in 2027 reads their own 2027 row for that one component while every other
+     * component, for that same employee, keeps independently rolling forward from its own most
+     * recent {@code tax_year <= taxYear} -- exactly like {@link #findCarryForwardSuggestions} must
+     * for the same reason (see that method's LATERAL joins, which resolve per employee+component for
+     * an identical reason).
      */
     public Map<Long, Map<PayrollComponent, PayrollTaxTreatment>> findComponentTaxTreatmentsByEmployee(int taxYear) {
         record Row(long employeeId, PayrollComponent component, PayrollTaxTreatment taxTreatment) {}
         List<Row> rows = jdbc.query("""
-            WITH employee_years AS (
-                SELECT employee_id, MAX(tax_year) AS effective_tax_year
-                  FROM hr.payroll_component_tax_treatment
-                 WHERE tax_year <= :taxYear
-                 GROUP BY employee_id
-            )
-            SELECT t.employee_id, t.component, t.tax_treatment
+            SELECT DISTINCT ON (t.employee_id, t.component)
+                   t.employee_id, t.component, t.tax_treatment
               FROM hr.payroll_component_tax_treatment t
-              JOIN employee_years ey
-                ON ey.employee_id = t.employee_id AND t.tax_year = ey.effective_tax_year
+             WHERE t.tax_year <= :taxYear
+             ORDER BY t.employee_id, t.component, t.tax_year DESC
             """,
             Map.of("taxYear", taxYear),
             (rs, rowNum) -> new Row(
@@ -989,7 +1007,8 @@ public class PayrollRepository {
                    pl.taxable_income_regular_limb, pl.taxable_income_known_limb, pl.taxable_income_cumulative_limb,
                    pl.withholding_tax_regular_limb, pl.withholding_tax_cumulative_limb,
                    pl.customer_return_already_earned, pl.garnishment_type,
-                   pl.meal_allowance, pl.per_diem_exempt, pl.per_diem_taxable, pl.per_diem_basis
+                   pl.meal_allowance, pl.per_diem_exempt, pl.per_diem_taxable, pl.per_diem_basis,
+                   pl.customer_return_requested
               FROM hr.payroll_line pl
               JOIN hr.employee e ON e.employee_id = pl.employee_id
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
@@ -1232,7 +1251,8 @@ public class PayrollRepository {
                 taxable_income_regular_limb, taxable_income_known_limb, taxable_income_cumulative_limb,
                 withholding_tax_regular_limb, withholding_tax_cumulative_limb,
                 customer_return_already_earned, garnishment_type,
-                meal_allowance, per_diem_exempt, per_diem_taxable, per_diem_basis
+                meal_allowance, per_diem_exempt, per_diem_taxable, per_diem_basis,
+                customer_return_requested
             )
             VALUES (
                 :periodId, :employeeId, :baseSalary, :dailyRate, :hourlyRate,
@@ -1256,7 +1276,8 @@ public class PayrollRepository {
                 :taxableIncomeRegularLimb, :taxableIncomeKnownLimb, :taxableIncomeCumulativeLimb,
                 :withholdingTaxRegularLimb, :withholdingTaxCumulativeLimb,
                 :customerReturnAlreadyEarned, :garnishmentType,
-                :mealAllowance, :perDiemExempt, :perDiemTaxable, :perDiemBasis
+                :mealAllowance, :perDiemExempt, :perDiemTaxable, :perDiemBasis,
+                :customerReturnRequested
             )
             """,
             new MapSqlParameterSource()
@@ -1325,7 +1346,10 @@ public class PayrollRepository {
                 // Nullable: null = no per-diem paid this line, matching the
                 // chk_payroll_line_per_diem_basis_present CHECK (no basis required when both
                 // per_diem_exempt/per_diem_taxable are zero).
-                .addValue("perDiemBasis", line.perDiemBasis()));
+                .addValue("perDiemBasis", line.perDiemBasis())
+                // D1 fix (fourth reachability audit, 2026-07-30, V101): the raw entered amount,
+                // always -- see PayrollLineDto#customerReturnRequested's own javadoc.
+                .addValue("customerReturnRequested", safe(line.customerReturnRequested())));
     }
 
     private PayrollPeriodDto toPeriod(PayrollPeriodHeader header, List<PayrollLineDto> lines) {
@@ -1410,7 +1434,8 @@ public class PayrollRepository {
             money(rs.getBigDecimal("meal_allowance")),
             money(rs.getBigDecimal("per_diem_exempt")),
             money(rs.getBigDecimal("per_diem_taxable")),
-            rs.getString("per_diem_basis")
+            rs.getString("per_diem_basis"),
+            money(rs.getBigDecimal("customer_return_requested"))
         );
     }
 

@@ -111,11 +111,26 @@ class PayrollClassificationAndSsoInclusionIntegrationTest extends AbstractPostgr
      * rows -- neither {@code seedSsoInclusionDefaults} nor {@code seedSsoIncluded} (the test-only
      * partial-seed helper) is called for either. Same salary, so any inclusion difference between them
      * can only come from the director fee the second one also carries.
+     *
+     * <p>Finding 2 fix (fourth Opus review, 2026-07-30): both fixtures previously carried {@code
+     * seedEmployee}'s shared hardcoded ฿30,000 salary, which alone already saturates the ฿17,500 SSO
+     * wage-base ceiling ({@code PayrollCalculator#SSO_MAX_BASE}) -- a ฿20,000 director fee therefore
+     * could not move {@code socialSecurity} whether it was included in the wage base or not, so proof
+     * 2 below asserted an equality that would hold under EITHER a correct OR a broken default (it was
+     * mutation-checked as passing with {@code defaultSsoIncluded} wrongly including {@code
+     * DIRECTOR_REMUNERATION} -- the assertion could not fail). Both employees here now use a dedicated
+     * ฿15,000 salary instead (below the ceiling, via {@link #seedEmployeeWithSalary} / the new
+     * salary-taking overload of {@link #seedEmployeeWithDirectorFee}) -- unrelated to and independent
+     * of {@code seedEmployee}'s shared ฿30,000 fixture, which several OTHER tests in this file still
+     * depend on unchanged. With a ฿15,000 base: excluding the director fee leaves the wage base at
+     * ฿15,000 (SSO = ฿750.00); wrongly including it pushes the wage base to {@code min(15000 + 20000,
+     * 17500) = 17500} (SSO = ฿875.00) -- the two now genuinely diverge, giving proof 2 teeth.
      */
     @Test
     void anEmployeeInsertedByRawSqlWithNoSsoInclusionRowsStillGetsTheCompanyWideDefault() {
-        long salaryOnly = seedEmployee("EMP-CLS-011", "จูน", "คลาส");
-        long salaryPlusDirectorFee = seedEmployeeWithDirectorFee("EMP-CLS-012", "กันต์", "คลาส", new BigDecimal("20000.00"));
+        BigDecimal salary = new BigDecimal("15000.00");
+        long salaryOnly = seedEmployeeWithSalary("EMP-CLS-011", "จูน", "คลาส", salary);
+        long salaryPlusDirectorFee = seedEmployeeWithDirectorFee("EMP-CLS-012", "กันต์", "คลาส", salary, new BigDecimal("20000.00"));
         // DIRECTOR_REMUNERATION is the only non-zero, non-SALARY component the second employee carries
         // this run -- classify it so the run is not blocked by the UNRELATED classification gate this
         // test is not exercising. SALARY needs no row (locked to REGULAR_REPROJECT).
@@ -134,13 +149,14 @@ class PayrollClassificationAndSsoInclusionIntegrationTest extends AbstractPostgr
             .withFailMessage("an employee inserted by raw SQL with no SSO-inclusion rows at all must "
                 + "still get the company-wide default (TRUE except DIRECTOR_REMUNERATION/"
                 + "NON_TAXABLE_INCOME), not silently compute ฿0.00 social security")
-            .isGreaterThan(BigDecimal.ZERO);
+            .isEqualByComparingTo("750.00");
 
         // Proof 2, WRONG-WAY-ROUND: the synthesized default must still EXCLUDE DIRECTOR_REMUNERATION,
         // exactly like PayrollRepository#seedSsoInclusionDefaults would have written. Both employees
-        // share the identical ฿30,000 salary (seedEmployee's hardcoded figure); adding a ฿20,000
-        // director fee on top must not move the SSO figure AT ALL. A fix that wrongly defaulted every
-        // absent component (including DIRECTOR_REMUNERATION) to included would fail exactly this
+        // share the identical ฿15,000 salary (below the ฿17,500 ceiling, unlike the old ฿30,000
+        // fixture); adding a ฿20,000 director fee on top must not move the SSO figure AT ALL. A fix
+        // that wrongly defaulted every absent component (including DIRECTOR_REMUNERATION) to included
+        // would push the wage base to the ฿17,500 ceiling (SSO = ฿875.00) and fail exactly this
         // assertion while still passing proof 1 above.
         assertThat(salaryPlusDirectorFeeSso)
             .withFailMessage("DIRECTOR_REMUNERATION must stay excluded from the SSO wage base even "
@@ -182,14 +198,35 @@ class PayrollClassificationAndSsoInclusionIntegrationTest extends AbstractPostgr
         return new UserPrincipal(1L, "hr@glr.co.th", "HR", "hr", 1L, true, LocalDate.now(), false, null, false);
     }
 
-    private long seedEmployeeWithDirectorFee(String code, String firstNameTh, String lastNameTh, BigDecimal directorFee) {
+    // Finding 2 fix (fourth Opus review, 2026-07-30): salary is now an explicit parameter (was
+    // hardcoded to ฿30,000, which saturates the ฿17,500 SSO ceiling on its own -- see the calling
+    // test's javadoc). Only used by that one test, so widening the signature is safe.
+    private long seedEmployeeWithDirectorFee(
+        String code, String firstNameTh, String lastNameTh, BigDecimal salary, BigDecimal directorFee
+    ) {
         return jdbc.queryForObject(
             """
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, director_remuneration, is_active)
-            VALUES (:code, :first, :last, 30000, :directorFee, TRUE)
+            VALUES (:code, :first, :last, :salary, :directorFee, TRUE)
             RETURNING employee_id
             """,
-            Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "directorFee", directorFee),
+            Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "salary", salary, "directorFee", directorFee),
+            Long.class);
+    }
+
+    // Finding 2 fix (fourth Opus review, 2026-07-30): a salary-parameterised sibling to the shared
+    // seedEmployee() helper above, which hardcodes ฿30,000 and is depended on by several OTHER tests
+    // in this file unchanged. Used only by
+    // anEmployeeInsertedByRawSqlWithNoSsoInclusionRowsStillGetsTheCompanyWideDefault, to keep both of
+    // that test's fixtures below the ฿17,500 SSO ceiling.
+    private long seedEmployeeWithSalary(String code, String firstNameTh, String lastNameTh, BigDecimal salary) {
+        return jdbc.queryForObject(
+            """
+            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active)
+            VALUES (:code, :first, :last, :salary, TRUE)
+            RETURNING employee_id
+            """,
+            Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "salary", salary),
             Long.class);
     }
 

@@ -18,6 +18,18 @@ package th.co.glr.hr.payroll;
  * column yet, so neither is a value here -- adding the column is out of scope for this migration.
  * Add {@code BONUS} / {@code OTHER_ONE_OFF_PAY} here (and to {@code hr.payroll_pay_component}) as
  * an appended addition when those columns land.
+ *
+ * <p><b>Finding 6 (fourth Opus review, 2026-07-30) -- adding a value here is not just an enum
+ * edit.</b> {@link PayrollCalculator#requireEveryNonZeroComponentClassified} 409s the ENTIRE payroll
+ * run for any employee/component pair with a non-zero amount and no stored {@code
+ * hr.payroll_component_tax_treatment} row -- so a brand-new component added here with no backfill
+ * blocks payroll for every existing employee who is ever paid a non-zero amount of it, the instant
+ * that value is used, until an {@code INSERT INTO hr.payroll_pay_component} plus a
+ * {@code hr.payroll_component_tax_treatment}/{@code hr.payroll_component_sso_inclusion} backfill
+ * migration exists for it (see {@code V100__payroll_component_tax_treatment_backfill.sql} for the
+ * pattern this repeats: CROSS JOIN every employee, default per the handoff's own recurrence rules).
+ * Adding a value here without that follow-up migration is therefore incomplete by construction, not
+ * merely under-tested.
  */
 public enum PayrollComponent {
     /** เงินเดือน. Locked to {@link PayrollTaxTreatment#REGULAR_REPROJECT} -- see that enum's javadoc. */

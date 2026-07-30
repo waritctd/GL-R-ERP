@@ -1,16 +1,32 @@
 package th.co.glr.hr.payroll;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
+import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.attachment.AttachmentRepository;
+import th.co.glr.hr.attachment.FileStorageService;
+import th.co.glr.hr.audit.AuditService;
+import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.commission.CommissionAttachmentRepository;
+import th.co.glr.hr.commission.CommissionCalculator;
+import th.co.glr.hr.commission.CommissionRepository;
+import th.co.glr.hr.commission.CommissionService;
+import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentSsoInclusionUpsertRequest;
 import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentTaxTreatmentUpsertRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.ticket.TicketRepository;
 
 /**
  * REVIEWER-ADDED coverage for V95 (branch feat/payroll-classification-and-hr-declarations), written
@@ -33,10 +49,31 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  */
 class PayrollClassificationReviewIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository repository;
+    private PayrollService payrollService;
 
     @BeforeEach
     void wireRepository() {
         repository = new PayrollRepository(jdbc);
+        CommissionService commissionService = new CommissionService(
+            new CommissionRepository(jdbc),
+            mock(CommissionAttachmentRepository.class),
+            new CommissionCalculator(),
+            mock(FileStorageService.class),
+            mock(AuditService.class),
+            mock(th.co.glr.hr.notification.NotificationService.class),
+            mock(TicketRepository.class),
+            mock(AttachmentRepository.class));
+        payrollService = new PayrollService(
+            repository,
+            new PayrollCalculator(),
+            commissionService,
+            mock(AuditService.class),
+            mock(PayslipRenderer.class),
+            new LeaveRepository(jdbc),
+            new th.co.glr.hr.payroll.export.KBankPctExporter(),
+            new th.co.glr.hr.payroll.export.Pnd1Exporter(),
+            new th.co.glr.hr.payroll.export.SsoExporter(),
+            new th.co.glr.hr.config.AppProperties());
     }
 
     /**
@@ -203,6 +240,153 @@ class PayrollClassificationReviewIntegrationTest extends AbstractPostgresIntegra
             .as("employee B's SSO inclusion must not silently read as empty (which would zero their wage base)")
             .containsKey(employeeB);
         assertThat(ssoInclusionAtRequestedYear2027.get(employeeB).get(PayrollComponent.SALARY)).isTrue();
+    }
+
+    /**
+     * D2 (fourth reachability audit, 2026-07-30): a partial save into a new tax year must not strand
+     * an employee's OTHER, already-resolved components. Reproduces exactly the shape {@code
+     * TaxTreatmentMatrixSection.save()} (`PayrollPage.jsx`) produces: it saves only the edited cell
+     * ({@code changes}, the diff), never the full resolved matrix. Before the fix, the single 2027
+     * row this test writes for {@code SPECIAL_PAY_1} flipped {@code findComponentTaxTreatmentsByEmployee
+     * }'s per-EMPLOYEE roll-forward to 2027 for the whole employee, and the JOIN then excluded
+     * {@code SPECIAL_PAY_2}/{@code BONUS_PAY}'s still-valid 2026 rows entirely -- they read back as
+     * "not yet classified" in the very API response the edit's own save renders.
+     */
+    @Test
+    void aPartialSaveIntoANewTaxYearDoesNotStrandOtherComponentsAlreadyRolledForward() {
+        long employee = seedEmployee("EMP-REV-007", "ดี", "รีวิว");
+
+        // 2026: full classification, as V100's backfill (or an earlier HR save) would leave it.
+        repository.upsertComponentTaxTreatment(2026, List.of(
+            new ComponentTaxTreatmentUpsertRequest(employee, PayrollComponent.SPECIAL_PAY_1, PayrollTaxTreatment.REGULAR_REPROJECT),
+            new ComponentTaxTreatmentUpsertRequest(employee, PayrollComponent.SPECIAL_PAY_2, PayrollTaxTreatment.EXTRA_CUMULATIVE_ACTUAL),
+            new ComponentTaxTreatmentUpsertRequest(employee, PayrollComponent.BONUS_PAY, PayrollTaxTreatment.EXTRA_KNOWN_FREQUENCY)
+        ), employee);
+        repository.upsertComponentSsoInclusion(2026, List.of(
+            new ComponentSsoInclusionUpsertRequest(employee, PayrollComponent.SALARY, true)
+        ), employee);
+
+        // 2027: HR opens the matrix (which resolves the rolled-forward 2026 values), edits ONE
+        // dropdown, and the frontend's save() sends only that one changed cell.
+        repository.upsertComponentTaxTreatment(2027, List.of(
+            new ComponentTaxTreatmentUpsertRequest(employee, PayrollComponent.SPECIAL_PAY_1, PayrollTaxTreatment.EXTRA_KNOWN_FREQUENCY)
+        ), employee);
+
+        Map<PayrollComponent, PayrollTaxTreatment> resolved =
+            repository.findComponentTaxTreatmentsByEmployee(2027).get(employee);
+
+        assertThat(resolved.get(PayrollComponent.SPECIAL_PAY_1))
+            .as("the edited component resolves to its own new 2027 row")
+            .isEqualTo(PayrollTaxTreatment.EXTRA_KNOWN_FREQUENCY);
+        assertThat(resolved.get(PayrollComponent.SPECIAL_PAY_2))
+            .as("an untouched component must still roll forward from 2026 -- not read as stranded "
+                + "just because a sibling component gained a 2027 row")
+            .isEqualTo(PayrollTaxTreatment.EXTRA_CUMULATIVE_ACTUAL);
+        assertThat(resolved.get(PayrollComponent.BONUS_PAY))
+            .as("a second untouched component must also still roll forward from 2026")
+            .isEqualTo(PayrollTaxTreatment.EXTRA_KNOWN_FREQUENCY);
+    }
+
+    /**
+     * D2, end-to-end through the real service: the stranded component from the test above is not
+     * just a map-reading nuisance -- it is exactly what {@link PayrollCalculator#calculateClassified}
+     * 409s a whole payroll run over the moment it carries a non-zero amount. Proves the fix all the
+     * way up: a partial matrix save into a new tax year must not 409 the next run for the untouched
+     * components.
+     */
+    @Test
+    void payrollRunsForTheFollowingTaxYearAfterOnlyOneComponentWasSavedIntoIt() {
+        long employee = seedEmployee("EMP-REV-008", "อี", "รีวิว");
+
+        repository.upsertComponentTaxTreatment(2026, List.of(
+            new ComponentTaxTreatmentUpsertRequest(employee, PayrollComponent.SPECIAL_PAY_1, PayrollTaxTreatment.REGULAR_REPROJECT),
+            new ComponentTaxTreatmentUpsertRequest(employee, PayrollComponent.SPECIAL_PAY_2, PayrollTaxTreatment.EXTRA_CUMULATIVE_ACTUAL)
+        ), employee);
+        repository.upsertComponentSsoInclusion(2026, List.of(
+            new ComponentSsoInclusionUpsertRequest(employee, PayrollComponent.SALARY, true)
+        ), employee);
+
+        // Only SPECIAL_PAY_1 gets a 2027 row -- SPECIAL_PAY_2 is never re-saved.
+        repository.upsertComponentTaxTreatment(2027, List.of(
+            new ComponentTaxTreatmentUpsertRequest(employee, PayrollComponent.SPECIAL_PAY_1, PayrollTaxTreatment.EXTRA_KNOWN_FREQUENCY)
+        ), employee);
+
+        PayrollEmployeeInputRequest input = specialPay2Of(employee, new BigDecimal("1500.00"));
+
+        assertThatCode(() -> payrollService.preview(
+                new ProcessPayrollRequest(LocalDate.of(2027, 1, 1), List.of(input)), hr()))
+            .as("SPECIAL_PAY_2 must still resolve its rolled-forward 2026 classification for the "
+                + "2027 run, not 409 just because SPECIAL_PAY_1 was saved into 2027 first")
+            .doesNotThrowAnyException();
+    }
+
+    private PayrollEmployeeInputRequest specialPay2Of(long employeeId, BigDecimal specialPay2) {
+        BigDecimal zero = BigDecimal.ZERO;
+        return new PayrollEmployeeInputRequest(
+            employeeId,
+            zero, specialPay2, zero, zero, zero, zero, zero, zero, zero, // specialPay1-9
+            zero, // nonTaxableIncome
+            zero, // unpaidLeaveDays
+            zero, // studentLoanDeduction
+            zero, // legalExecutionDeduction
+            zero, // otherPostTaxDeductions
+            zero, zero, zero, zero, zero, // spouse..maternity
+            zero, zero, zero, zero, zero, // life..ssf
+            zero, zero, zero, zero, zero, zero, // pension..political
+            zero, // warningLetterDeduction
+            zero, // customerReturnDeduction
+            zero, // otherPretaxDeduction
+            null, // withholdingTaxOverride
+            zero, // mealAllowance
+            zero, // perDiemExempt
+            zero, // perDiemTaxable
+            null, // perDiemBasis
+            zero, // bonusPay
+            zero, // otherOneOffPay
+            false, // customerReturnAlreadyEarned
+            null, // garnishmentType
+            null // parentCareCount
+        );
+    }
+
+    private UserPrincipal hr() {
+        return new UserPrincipal(1L, "hr@glr.co.th", "HR", "hr", 1L, true, LocalDate.now(), false, null, false);
+    }
+
+    /**
+     * Minor fix (fourth reachability audit, 2026-07-30): {@code @Valid} on the controller's
+     * {@code List<ComponentTaxTreatmentUpsertRequest>} body does not cascade, so {@code @NotNull
+     * employeeId}/{@code component} never fired. Now validated explicitly in {@link
+     * PayrollService#upsertComponentTaxTreatments}, before the repository is ever reached.
+     */
+    @Test
+    void upsertRejectsAMalformedItemWithANullEmployeeIdBeforeWritingAnything() {
+        long employee = seedEmployee("EMP-REV-009", "เอฟ", "รีวิว");
+
+        assertThatThrownBy(() -> payrollService.upsertComponentTaxTreatments(2026, List.of(
+                new ComponentTaxTreatmentUpsertRequest(null, PayrollComponent.SPECIAL_PAY_1, PayrollTaxTreatment.REGULAR_REPROJECT)
+            ), hr()))
+            .as("a null employeeId must be rejected with a clean 400, not reach the repository")
+            .isInstanceOf(ApiException.class)
+            .satisfies(ex -> assertThat(((ApiException) ex).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+
+        assertThatThrownBy(() -> payrollService.upsertComponentTaxTreatments(2026, List.of(
+                new ComponentTaxTreatmentUpsertRequest(employee, null, PayrollTaxTreatment.REGULAR_REPROJECT)
+            ), hr()))
+            .as("a null component must also be rejected with a clean 400")
+            .isInstanceOf(ApiException.class)
+            .satisfies(ex -> assertThat(((ApiException) ex).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+
+        // Wrong-way-round: a batch with ONE malformed item must write NOTHING, not silently apply
+        // the valid items and skip the bad one.
+        assertThatThrownBy(() -> payrollService.upsertComponentTaxTreatments(2026, List.of(
+                new ComponentTaxTreatmentUpsertRequest(employee, PayrollComponent.SPECIAL_PAY_1, PayrollTaxTreatment.REGULAR_REPROJECT),
+                new ComponentTaxTreatmentUpsertRequest(null, PayrollComponent.SPECIAL_PAY_2, PayrollTaxTreatment.REGULAR_REPROJECT)
+            ), hr()))
+            .isInstanceOf(ApiException.class);
+        assertThat(repository.findComponentTaxTreatmentsByEmployee(2026))
+            .as("the whole batch must be rejected before any write, including the otherwise-valid item")
+            .doesNotContainKey(employee);
     }
 
     private long seedEmployee(String code, String firstNameTh, String lastNameTh) {

@@ -604,6 +604,37 @@ describe('PayrollPage adjustment inputs', () => {
       const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
       expect(submitted.customerReturnAlreadyEarned).toBe(true);
     });
+
+    // D1 fix (fourth reachability audit, 2026-07-30): a processed line's customerReturnDeduction is
+    // the POST-TAX bookkeeping figure -- 0 in the unearned path, where the amount was instead netted
+    // pre-tax out of commission. Hydrating the form from THAT field (the pre-fix bug) silently wiped
+    // both the amount and the checkbox (which only renders once the field is > 0) on every reload.
+    // customerReturnRequested always carries what HR actually typed, regardless of the earned flag.
+    it('hydrates the entered amount (and keeps the checkbox visible) from customerReturnRequested on reload, not the zeroed post-tax figure', async () => {
+      api.payroll.current.mockResolvedValue({
+        period: previewPeriod({
+          id: 7,
+          status: 'PROCESSED',
+          lines: [{
+            ...payrollLine,
+            customerReturnDeduction: 0, // the unearned path's post-tax bookkeeping figure -- always 0
+            customerReturnRequested: 3000, // what HR actually typed
+            customerReturnAlreadyEarned: false,
+          }],
+        }),
+      });
+
+      renderPayrollPage();
+      fireEvent.click(await screen.findByRole('button', { name: /รายการหักก่อนภาษี/, expanded: false }));
+      const customerReturn = await screen.findByLabelText(/หักลูกค้าคืนสินค้า/, { selector: 'input' });
+
+      expect(customerReturn.value).toBe('3000');
+      // The checkbox's render gate is `> 0` on this same field -- if hydration had read the zeroed
+      // customerReturnDeduction instead, findByLabelText below would reject (no such element) rather
+      // than resolve.
+      const alreadyEarned = await screen.findByLabelText(/คอมมิชชันนี้รับไปแล้ว/, { selector: 'input' });
+      expect(alreadyEarned.checked).toBe(false);
+    });
   });
 
   // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix screen. Without a

@@ -296,7 +296,14 @@ function adjustmentFromLine(line, { applyDefaults = false, suggestion = null } =
   adjustment.legalExecutionDeduction = draftValue(line.legalExecutionDeduction, suggestedFallback(suggestion, 'legalExecutionDeduction') ?? '');
   adjustment.otherPostTaxDeductions = draftValue(line.otherPostTaxDeductions);
   adjustment.warningLetterDeduction = draftValue(line.warningLetterDeduction);
-  adjustment.customerReturnDeduction = draftValue(line.customerReturnDeduction);
+  // D1 fix (fourth reachability audit, 2026-07-30): hydrate from customerReturnRequested, NOT
+  // customerReturnDeduction. The latter is the POST-TAX bookkeeping figure the backend persists --
+  // it is 0 whenever customerReturnAlreadyEarned is false (the unearned amount is instead netted
+  // pre-tax out of commission), so reading it back here silently wiped the form field AND the
+  // checkbox below (which gates on this value being > 0) on every reload, and a reprocess of the
+  // same month silently stopped re-applying the netting. customerReturnRequested always echoes what
+  // was actually typed, regardless of the earned flag.
+  adjustment.customerReturnDeduction = draftValue(line.customerReturnRequested);
   adjustment.otherPretaxDeduction = draftValue(line.otherPretaxDeduction);
   // ค่าอาหาร carries forward like the other recurring fields above; the two เบี้ยเลี้ยง amounts and
   // the basis do not (V98's carry-forward flags only cover mealAllowance for this group -- see the

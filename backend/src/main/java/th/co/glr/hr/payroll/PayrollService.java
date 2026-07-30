@@ -356,13 +356,37 @@ public class PayrollService {
      * employee as "not onboarded") while still rejecting a single incidental SALARY-only row, which
      * several tests in this suite seed purely so their OWN unrelated {@code socialSecurity} assertion
      * comes out non-zero (see e.g. {@code PayrollClassifiedEngineIntegrationTest#seedEmployee}).
+     *
+     * <p><b>Finding 1 fix (fourth Opus review, 2026-07-30): the polarity of the "no SSO rows at all"
+     * case was backwards.</b> This method used to {@code return false} the instant {@code
+     * ssoInclusion == null} -- i.e. an employee with ZERO rows in BOTH matrices was treated as "not
+     * onboarded" and got no synthesized default, 409ing the run. That is exactly backwards: V96 (the
+     * SSO backfill) and V100 (the tax-treatment backfill) both {@code CROSS JOIN hr.employee} with no
+     * {@code WHERE}, and {@code EmployeeService#create} seeds both matrices in the SAME transaction --
+     * no real deployment path ever produces "SSO rows present, treatment rows absent" without ALSO
+     * producing the reverse (both present) or "both absent" first. "Both absent" is the population
+     * this safety net exists for in the first place: {@code db/migration-uat/V900} inserts 93
+     * employees by raw {@code INSERT INTO hr.employee}, and on a freshly rebuilt uat Flyway runs V96/
+     * V97/V100 (all merged-location, ordered by version number) BEFORE V900, reaching none of those
+     * 93 rows -- {@code V902} then seeds approved overtime for them, so the payroll page's own initial
+     * GET carries a non-zero component for every one of them with no HR input at all. The previous
+     * logic refused exactly this population the fix's own stated goal was written to cover. Zero rows
+     * in BOTH matrices is therefore unambiguously "never onboarded by any path" and now synthesizes,
+     * same as the pre-existing non-SALARY-row case below (which stays exactly as it was, still
+     * covering {@link PayrollClassificationReachabilityIntegrationTest}'s employee -- seeded through
+     * {@code seedSsoInclusionDefaults} alone, so it has SSO rows but zero treatment rows). The one
+     * state that must still NOT synthesize -- an SSO map that exists but carries only the incidental
+     * SALARY-only convenience row several tests seed (see {@code
+     * PayrollClassifiedEngineIntegrationTest#seedEmployee}) -- is unaffected: {@code ssoInclusion} is
+     * non-null there, so this branch is not taken, and the {@code anyMatch} check below still returns
+     * {@code false} for it exactly as before.
      */
     private static boolean hasBeenOnboardedForPayroll(
         long employeeId, Map<Long, Map<PayrollComponent, Boolean>> ssoInclusionByEmployee
     ) {
         Map<PayrollComponent, Boolean> ssoInclusion = ssoInclusionByEmployee.get(employeeId);
         if (ssoInclusion == null) {
-            return false;
+            return true;
         }
         return ssoInclusion.keySet().stream().anyMatch(component -> component != PayrollComponent.SALARY);
     }
@@ -659,7 +683,14 @@ public class PayrollService {
             // passed straight through from the request so they are still persisted on the line.
             input == null ? BigDecimal.ZERO : safe(input.perDiemExempt()),
             calculation.perDiemTaxable(),
-            input == null || input.perDiemBasis() == null ? null : input.perDiemBasis().name()
+            input == null || input.perDiemBasis() == null ? null : input.perDiemBasis().name(),
+            // D1 fix (fourth reachability audit, 2026-07-30, V101): the raw request value, ALWAYS --
+            // regardless of customerReturnAlreadyEarned -- so the form field (and the checkbox that
+            // gates on it being > 0) round-trip after a reload. Deliberately NOT `customerReturnDeduction`
+            // above, which is calculateClassified's POST-TAX bookkeeping figure and stays 0 in the
+            // unearned path (the amount is instead netted pre-tax out of commissionPay, see this
+            // method's own `effectiveCommissionPay` computation above).
+            customerReturnDeduction
         );
     }
 
@@ -840,12 +871,39 @@ public class PayrollService {
         return componentTaxTreatmentsSnapshot(taxYear);
     }
 
+    /**
+     * Minor fix (fourth reachability audit, 2026-07-30): {@code @Valid} on {@code PayrollController
+     * #putComponentTaxTreatments}'s {@code @RequestBody List<ComponentTaxTreatmentUpsertRequest>} is
+     * INERT -- Spring's {@code SpringValidatorAdapter} does not cascade {@code @Valid} onto the
+     * ELEMENTS of a bare {@code List} request body, only onto fields of an enclosing object. So
+     * {@code ComponentTaxTreatmentUpsertRequest}'s own {@code @NotNull employeeId}/{@code component}
+     * never actually fire, and a malformed body (a null {@code employeeId}, say) reaches this method
+     * and the repository unvalidated -- the frontend always populates both, so this is not a
+     * reachability blocker in practice, but a malformed client would previously hit an unclear
+     * {@code DataIntegrityViolationException} (or worse) instead of a clean 400.
+     *
+     * <p>Not fixed by wrapping the list in a new record: {@code
+     * PayrollClassificationReachabilityIntegrationTest#hrHasSomeHttpWayToClassifyAComponentBeforeTheEngineDemandsIt}
+     * reflects on {@code PayrollController}'s methods for a parameter whose generic type name
+     * literally contains {@code ComponentTaxTreatmentUpsertRequest} -- a wrapper type's name would
+     * not, and that test is kept verbatim per instruction. Validated explicitly here instead, at the
+     * same layer {@link #upsertComponentTaxTreatments}'s sibling validation (F2's per-diem-basis
+     * check) already uses.
+     */
     @Transactional
     public PayrollClassificationDtos.TaxTreatmentListResponse upsertComponentTaxTreatments(
         int taxYear, List<ComponentTaxTreatmentUpsertRequest> items, UserPrincipal actor
     ) {
         requireRole(actor, PAYROLL_EDIT_ROLES);
         List<ComponentTaxTreatmentUpsertRequest> safeItems = items == null ? List.of() : items;
+        for (int index = 0; index < safeItems.size(); index += 1) {
+            ComponentTaxTreatmentUpsertRequest item = safeItems.get(index);
+            if (item == null || item.employeeId() == null || item.component() == null) {
+                throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "รายการที่ " + (index + 1) + " ของการจัดประเภทภาษีหัก ณ ที่จ่ายไม่ถูกต้อง: "
+                        + "ต้องระบุ employeeId และ component เสมอ");
+            }
+        }
         payrollRepository.upsertComponentTaxTreatment(taxYear, safeItems, actor.employeeId());
         PayrollClassificationDtos.TaxTreatmentListResponse result = componentTaxTreatmentsSnapshot(taxYear);
         auditService.record(actor, "UPSERT_PAYROLL_COMPONENT_TAX_TREATMENT", "payroll_component_tax_treatment", null,

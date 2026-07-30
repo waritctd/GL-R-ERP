@@ -48,12 +48,19 @@ ALTER TABLE hr.payroll_line
     ADD COLUMN IF NOT EXISTS per_diem_taxable  NUMERIC(12,2) NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS per_diem_basis    VARCHAR(24);
 
+-- Finding 6 fix (fourth Opus review, 2026-07-30): these two CHECKs were added without the
+-- `DROP CONSTRAINT IF EXISTS` guard the sibling non-negative block below already uses, making this
+-- block non-idempotent on a manual replay (a second run fails on `ADD CONSTRAINT` against a
+-- constraint name that already exists, unlike CREATE/ADD COLUMN IF NOT EXISTS above). Guarded to
+-- match.
 ALTER TABLE hr.payroll_line
+    DROP CONSTRAINT IF EXISTS chk_payroll_line_per_diem_basis,
     ADD CONSTRAINT chk_payroll_line_per_diem_basis CHECK (
         per_diem_basis IS NULL OR per_diem_basis IN ('FLAT_RATE_S42_2', 'REIMBURSED_S42_1')
     ),
     -- A basis must be recorded whenever any per-diem is paid. The exempt figure is a tax position;
     -- an unattributable tax position is one nobody can defend later.
+    DROP CONSTRAINT IF EXISTS chk_payroll_line_per_diem_basis_present,
     ADD CONSTRAINT chk_payroll_line_per_diem_basis_present CHECK (
         (per_diem_exempt = 0 AND per_diem_taxable = 0) OR per_diem_basis IS NOT NULL
     );

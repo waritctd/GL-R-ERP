@@ -1567,16 +1567,22 @@ outside the one new endpoint above.
    keyed on calendar December, not "this employee's last paid period". An employee who leaves mid-year
    never gets the final-period true-up wording or treatment at all. Admitted unimplemented in code
    comments since before this task; now recorded here for the first time.
-5. **SSO inclusion for `MEAL_ALLOWANCE`/`PER_DIEM_TAXABLE`** (added V97, AFTER V96's one-time SSO
-   backfill already ran) has the identical "no row for pre-existing employees" gap V96's backfill had
-   for the original components — NOT fixed by this task's P1 SSO default, which only synthesizes a
-   default when an employee has ZERO SSO rows at all. An employee WITH SOME rows (e.g. from V96's
-   backfill) but missing these two specific components is unaffected and reads as excluded for them.
-   Flagged, not chased — out of this task's named scope (the task named the SQL-inserted-employee case
-   specifically, not this narrower two-component gap).
-6. **V95-V100 are still uncommitted on this branch** — nothing in this task has touched any real
+5. **V95-V100 are still uncommitted on this branch** — nothing in this task has touched any real
    database; every claim above is verified against Testcontainers/real Postgres only, per this session's
    instructions and CLAUDE.md.
+
+**Correction (fourth Opus review, 2026-07-30) — deleted risk, not just reworded**: this section
+previously carried a risk 5 claiming SSO inclusion for `MEAL_ALLOWANCE`/`PER_DIEM_TAXABLE` (added V97,
+after V96's one-time SSO backfill already ran) has "the identical no-row-for-pre-existing-employees
+gap" V96's backfill left for the original components. That claim is factually wrong: verified against
+`V97__payroll_meal_and_per_diem_components.sql` lines 88-96 directly — the SAME migration that
+introduces the two components also backfills SSO inclusion for them, `SELECT DISTINCT i.employee_id,
+i.tax_year, c.component, TRUE, ... FROM hr.payroll_component_sso_inclusion i CROSS JOIN (VALUES
+('MEAL_ALLOWANCE'), ('PER_DIEM_TAXABLE')) AS c(component)` — i.e. every employee who already has ANY
+SSO-inclusion row (which, after V96 runs first in the same migration set, is every pre-existing
+employee) gets these two components backfilled too, in the same deploy that adds them. The gap this
+risk described was closed in the very migration that opened it. Left in place, this risk would have
+invited a future agent to "fix" a non-problem; deleted per instruction rather than reworded.
 
 ## The exact next prompt for the next agent
 
@@ -1589,3 +1595,417 @@ outside the one new endpoint above.
 > (`PayrollService.java` ~line 392, unearned-customer-return truncation) with the owner; (4) rebase onto
 > the latest `origin/main` and merge, per the standing "rebase onto latest main before every PR" rule —
 > this branch has not been rebased since task 4 and V95-V100 are all still uncommitted.
+
+---
+
+# Progress — task 6: fourth Opus review fixes + a coordinator-flagged reachability audit + rebase (2026-07-30)
+
+A FOURTH Opus review returned APPROVE WITH FIXES (not a rejection this time): findings 1/2/4/5/6
+below, plus two P1s (D1, D2) and a minor found separately by the coordinator's own reachability audit
+mid-task and folded into this same pass. Working directory
+`/Users/ploy_warit/Desktop/GL-R-ERP-payroll-hr` (a different worktree from tasks 1-5). One untracked
+file was already in the tree at task start: `PayrollRawSqlEmployeeClassificationReviewTest.java` (the
+fourth reviewer's own RED test, kept verbatim, not modified — Finding 1's acceptance criterion).
+
+## Correction to the record, before anything else
+
+Task 5's own report that `PayrollClassificationReachabilityIntegrationTest` was "GREEN, confirmed" was
+true but incomplete in a way this programme keeps repeating: the test was green only because its
+fixture called `payrollRepository.seedSsoInclusionDefaults(...)` directly on the employee before
+previewing — a call no production code path makes in isolation (every real path that calls it also
+writes tax-treatment rows in the same transaction or migration). That one line manufactured the
+narrow state task 5's fix actually covers (SSO rows present, treatment rows absent), while the state
+that ACTUALLY occurs in production and on a freshly rebuilt uat (zero rows in BOTH matrices) was never
+exercised by any test and, per Finding 1 below, was actively refused by the fix that shipped. A green
+acceptance test is not evidence the underlying gap is closed if the test's own fixture reaches a state
+nothing outside the test can reach — this is the third time this exact shape of defect has surfaced on
+this branch (task 1's SALARY/NULL CHECK gap, task 5's own P0, now this), and it belongs in the record
+as a pattern, not three unrelated incidents.
+
+## Finding 1 (P1) — the classification safety net had backwards polarity
+
+**Defect** (`PayrollService.java`, `hasBeenOnboardedForPayroll`): synthesized a tax-treatment default
+only when an employee had ZERO stored treatment rows AND at least one NON-SALARY row in
+`hr.payroll_component_sso_inclusion`. `ssoInclusion == null` (zero rows in BOTH matrices — the actual
+shape of `db/migration-uat/V900`'s 93 raw-SQL-inserted employees on a freshly rebuilt uat, or any bulk
+import that predates the backfill migrations) short-circuited to `return false`, refusing the default
+for exactly the population the fix's own javadoc named as its target ("uat's V900, db/migration-demo's
+seeds, any bulk import"). Backwards: the ONLY thing that ever produced the "SSO present, treatment
+absent" state the old code required was the test fixture described in the correction above.
+
+**Fix**: `ssoInclusion == null` now returns `true` (zero rows in BOTH matrices is unambiguously "never
+onboarded by any path" — synthesize). The pre-existing non-SALARY-row check is unchanged below it, so
+`PayrollClassificationReachabilityIntegrationTest`'s employee (SSO rows present via
+`seedSsoInclusionDefaults`, treatment rows absent) still synthesizes exactly as before. The one state
+that must still 409 — `PayrollClassifiedEngineIntegrationTest`'s blocking-test employee, whose SSO map
+contains only the incidental SALARY-only convenience row several tests seed — is unaffected: that map
+is non-null, so the `== null` branch is never reached for it, and the existing `anyMatch(component !=
+SALARY)` check still returns `false`.
+
+**Acceptance**: `PayrollRawSqlEmployeeClassificationReviewTest` (the fourth reviewer's RED test) is
+now **GREEN**, kept verbatim, not modified.
+
+**Mutation-check**: reverted `return true` back to `return false`. Ran the whole `th.co.glr.hr.payroll`
+package (221 tests at the time): **exactly 4 failures** —
+`PayrollRawSqlEmployeeClassificationReviewTest` (1, the intended target) plus all 3 tests in this
+task's own NEW `PayrollCustomerReturnRoundTripIntegrationTest` (D1, below — that class's fixtures are
+raw-SQL employees with a non-zero `COMMISSION_PAY`, so they independently depend on this same fix to
+avoid the classification 409; expected collateral, not a separate defect). The other 217 tests,
+including every existing classification/reachability/blocking test, were unaffected. Reverted to an
+empty diff; confirmed via `git diff`.
+
+## Finding 2 (P2) — a wrong-way-round assertion that could not fail
+
+**Defect** (`PayrollClassificationAndSsoInclusionIntegrationTest
+.anEmployeeInsertedByRawSqlWithNoSsoInclusionRowsStillGetsTheCompanyWideDefault`): both fixture
+employees carried `seedEmployee`'s shared hardcoded ฿30,000 salary, which alone saturates the ฿17,500
+SSO wage-base ceiling — a ฿20,000 director fee could not move `socialSecurity` whether it was included
+in the wage base or not, so "proof 2" (director fee must not inflate SSO) asserted an equality that
+would hold under a correct default AND a broken one.
+
+**Fix**: both fixtures now use a dedicated ฿15,000 salary (below the ceiling), via a new
+`seedEmployeeWithSalary` helper and a widened `seedEmployeeWithDirectorFee(..., salary, directorFee)`
+signature — both used ONLY by this one test, so the shared `seedEmployee()` helper (฿30,000, several
+OTHER tests in this file depend on it unchanged) was not touched. With ฿15,000: excluding the director
+fee leaves the wage base at ฿15,000 (SSO ฿750.00); wrongly including it pushes the wage base to
+`min(15000+20000, 17500) = 17500` (SSO ฿875.00) — the two now genuinely diverge.
+
+**Mutation-check — before the fix** (recorded here since the finding claimed, and this session
+independently reproduced, that the pre-fix assertion could not fail): mutating
+`PayrollRepository.defaultSsoIncluded` to include `DIRECTOR_REMUNERATION` and running the OLD
+(฿30,000) fixture produced **zero failures** in this specific test — confirms the finding.
+**Mutation-check — after the fix**: the same mutation (`defaultSsoIncluded` including
+`DIRECTOR_REMUNERATION`) now produces **exactly 2 failures** in
+`PayrollClassificationAndSsoInclusionIntegrationTest`: this task's fixed test (the intended target)
+plus the file's own pre-existing direct-default test,
+`seedsSsoInclusionDefaultsTrueEverywhereExceptDirectorRemunerationAndNonTaxableIncome` (unrelated
+collateral — it asserts `defaultSsoIncluded` directly, so it was always going to catch this specific
+mutation; it is not evidence the ceiling fix itself did anything). All 7 other tests in the file, and
+everything else in the payroll package, stayed green. Reverted to an empty diff.
+
+## Finding 4 (P3) — V98's comment contradicted its own data, and V100 reasoned from it
+
+**V98** (`payroll_component_carry_forward.sql`): the header comment said "SEEDED FOR 29 OF 34
+EMPLOYEES". The actual `VALUES` list contains **16 distinct employee codes / 44 rows** (counted
+directly: `grep -oE "'[0-9]{5}'" ... | sort -u | wc -l` = 16; `grep -c "^    ('1"` = 44). Reconciled,
+not just replaced: 34 total workbook names, 5 could not be resolved to an employee row at all (listed
+in the comment, unchanged), so 34 − 5 = 29 WERE resolved to a real employee — but "resolved to an
+employee" is not "seeded with a recurring flag": of those 29, only 16 actually have a component
+clearing the 70%-same-value bar (44 rows). The other 13 resolved employees are correctly seeded with
+nothing, not because they are unresolved but because nothing they are paid recurs by this rule. Comment
+corrected to state this explicitly rather than silently fixing "29" to "16" with no explanation (which
+would have left the "34" figure looking equally suspect to the next reader).
+
+**V100** (`payroll_component_tax_treatment_backfill.sql`): reasoned from "the 5 employees V98 could
+not resolve" as if the residual defaulting to `EXTRA_CUMULATIVE_ACTUAL` were small. Counted directly
+against the migration's own Step 1/Step 2: 34 employees × 16 classification-eligible components = 544
+pairs considered; V98's real per-employee evidence promotes exactly 44 of them (Step 2) to
+`REGULAR_REPROJECT`; the remaining **544 − 44 = 500 pairs (≈92%)** rely on a company-wide rule rather
+than per-employee-per-component evidence — 34 `DIRECTOR_REMUNERATION` (owner-resolved), 68
+`BONUS_PAY`/`OTHER_ONE_OFF_PAY` (spec-resolved), and the remaining **398** genuinely default to
+`EXTRA_CUMULATIVE_ACTUAL` for lack of any recurrence evidence at all. Comment corrected to state the
+true 500-of-544 proportion and the 398 breakdown, so a reader sizing "how much of this backfill is a
+real per-employee fact versus a company-wide guess" gets the true answer. Comments only; no DDL
+changed in either file.
+
+## Finding 5 (P3) — a handoff known-risk that was factually wrong
+
+Task 5's known risk 5 claimed SSO inclusion for `MEAL_ALLOWANCE`/`PER_DIEM_TAXABLE` (added V97, after
+V96's one-time SSO backfill already ran) has "the identical no-row-for-pre-existing-employees gap."
+Verified against `V97__payroll_meal_and_per_diem_components.sql` lines 88-96 directly: the SAME
+migration that introduces the two components also backfills SSO inclusion for them, for every employee
+who already has ANY SSO-inclusion row — which, since V96 runs first in the same migration set, is
+every pre-existing employee. The gap was closed in the very migration that opened it. **Deleted**, not
+reworded, per instruction — a correction note explaining why it was wrong (not just silently removed)
+is left in its place so a future reader does not wonder where it went or re-add it.
+
+## Finding 6 (P3) — two small ones
+
+1. `V97__payroll_meal_and_per_diem_components.sql`'s `chk_payroll_line_per_diem_basis`/
+   `chk_payroll_line_per_diem_basis_present` CHECKs were added without the `DROP CONSTRAINT IF EXISTS`
+   guard the sibling non-negative-CHECK block in the same file already uses — non-idempotent on a
+   manual replay. Guarded to match. DDL-shape only (guard added, constraint definitions unchanged).
+2. `PayrollComponent.java`'s class javadoc now states explicitly that adding a new enum value is not
+   just an enum edit: `requireEveryNonZeroComponentClassified` 409s the entire run for any employee
+   paid a non-zero amount of an unbackfilled component, so a real deployment blocker exists until a
+   `V100`-shaped backfill migration (plus `hr.payroll_pay_component` row) exists for it too.
+
+## D1 (P1, coordinator-flagged) — `customerReturnDeduction` stopped round-tripping, a REGRESSION vs origin/main
+
+**Defect**: on `origin/main` the legacy engine passed `customerReturnDeduction` through verbatim, so a
+reload always showed what HR typed. `PayrollCalculator.java`'s classified engine gave the column a
+SECOND job — zeroed in the "not yet earned" path (the amount is instead netted pre-tax out of
+`commissionPay`) so it would not ALSO apply as a post-tax deduction. Only one persisted column tried to
+carry both "what HR entered" and "what was actually deducted post-tax," and only the second survived a
+reload. In the unearned path (the ONLY reachable state before this branch — `customerReturnAlreadyEarned`
+had no frontend input until task 5's P1), the entered amount silently vanished from the form on reload,
+the checkbox that gates on it being `> 0` disappeared with it, and a reprocess of the same month
+silently stopped re-netting the commission — net pay would change with no HR action.
+
+**Fix**: new column `hr.payroll_line.customer_return_requested`
+(`V102__payroll_customer_return_requested_amount.sql`, non-negative CHECK, one-time backfill from
+`customer_return_deduction` for already-processed lines) always echoes the raw entered amount,
+regardless of `customerReturnAlreadyEarned`. `customer_return_deduction`'s existing post-tax-bookkeeping
+meaning is UNCHANGED (0 in the unearned path, full amount in the already-earned path) — the
+already-earned path's arithmetic and the payslip are untouched. `PayrollLineDto` gained the field
+appended last (new 59-field canonical record; a new 58-arg legacy constructor preserves every prior
+positional call site, defaulting the new field to whatever `customerReturnDeduction` was given — the
+best available reconstruction for a caller that predates the distinction). `PayrollService#calculateLine`
+now passes the raw request-derived local variable (not the calculator's post-tax output) for the new
+field. `PayrollRepository` SELECT/INSERT/`mapLine` updated. Frontend `PayrollPage.jsx`'s
+`adjustmentFromLine` now hydrates from `line.customerReturnRequested`, not `line.customerReturnDeduction`.
+
+**Tests** (new file, `PayrollCustomerReturnRoundTripIntegrationTest.java`, real-DB, real
+`PayrollService`, 3 tests): (a) entered amount round-trips after a reload even though it was netted
+pre-tax, and the unearned path nets pre-tax exactly once (`commissionPay` = 10,000 − 3,000 = 7,000,
+`customerReturnDeduction` stays 0 — never double-deducted); (b) reprocessing the same month with the
+second run's input hydrated from what the FIRST run persisted (exactly what the frontend now does on a
+reload) produces identical net pay both times — the actual silent-change failure mode; (c) the
+already-earned (post-tax clawback) control case is unchanged: `commissionPay` is NOT netted,
+`customerReturnDeduction` carries the full amount, and `customerReturnRequested` agrees with it.
+Frontend: `PayrollPage.test.jsx`, 1 new test — a PROCESSED period with `customerReturnRequested: 3000`
+/ `customerReturnDeduction: 0` hydrates the input to `'3000'` and keeps the "already earned" checkbox
+mounted (its render gate is `> 0` on this same field).
+
+**Mutation-check**: reverted the `PayrollService#calculateLine` trailing constructor argument from the
+raw local variable back to `calculation.customerReturnDeduction()` (the pre-fix behaviour — the new
+column would just mirror the post-tax figure again). Ran `th.co.glr.hr.payroll` (221 tests): **exactly
+2 failures**, both in `PayrollCustomerReturnRoundTripIntegrationTest` — tests (a) and (b) above (the
+round-trip assertion and the reprocess-idempotency assertion); test (c), the already-earned control
+case, correctly stayed green (requested and applied always agree in that path, so this specific
+mutation cannot be detected by it). Nothing else in the package moved. Reverted to an empty diff.
+
+## D2 (P1, coordinator-flagged) — a partial matrix save stranded the rest of an employee's classification into the next tax year
+
+**Defect** (`PayrollRepository#findComponentTaxTreatmentsByEmployee`): resolved ONE effective tax year
+per EMPLOYEE (`MAX(tax_year) <= :taxYear GROUP BY employee_id`, task 4's own "January cliff" fix). The
+new `TaxTreatmentMatrixSection` screen (task 5) saves only the edited cell (`PayrollPage.jsx`'s
+`save()` sends `changes`, a diff, never the full resolved matrix) — so the instant ONE component
+gained a row in a new tax year, that employee's single effective year flipped forward for EVERY
+component, and the `JOIN ... ON t.tax_year = ey.effective_tax_year` excluded every OTHER component's
+still-valid prior-year row. Those components read back as "not yet classified" in the very API response
+the edit's own save renders, and `PayrollCalculator#calculateClassified` 409s the whole next-year run
+for any of them carrying a non-zero amount — a single dropdown edit stranding every other component HR
+never touched. Task 5's layer-3 default does NOT cover this: the employee ends up with SOME rows, not
+zero, so that safety net's `stored != null` short-circuit returns the (now incomplete) stored map as-is.
+
+**Fix — chosen approach and why**: resolved per **(employee, component)** independently, with
+`SELECT DISTINCT ON (t.employee_id, t.component) ... ORDER BY t.employee_id, t.component, t.tax_year
+DESC` (`WHERE t.tax_year <= :taxYear`), replacing the per-employee CTE entirely. Considered and
+rejected the two alternatives the coordinator offered: (a) materialise the full effective set at save
+time (write every OTHER component's currently-resolved value alongside the edit) — rejected because it
+only fixes the ONE writer that exists today and would need to be re-implemented correctly by every
+future writer (a bulk import, a different screen); (b) have the frontend submit the whole matrix every
+save — rejected for the same reason, plus it turns every single-cell edit into an N-row write. The
+read-side per-(employee, component) fix makes ANY partial write pattern safe by construction, present
+or future, and is a direct generalisation of task 4's own per-employee fix (itself already a narrower
+case of the same underlying bug) and of `findCarryForwardSuggestions`'s existing per-employee+component
+LATERAL joins (Fix 5, task 3) — the same resolution shape already established elsewhere in this file
+for the identical reason.
+
+**Tests** (`PayrollClassificationReviewIntegrationTest.java`, 2 new tests): (1)
+`aPartialSaveIntoANewTaxYearDoesNotStrandOtherComponentsAlreadyRolledForward` — seeds 3 components at
+2026, saves ONE at 2027, asserts the other two still resolve their 2026 values at the repository layer;
+(2) `payrollRunsForTheFollowingTaxYearAfterOnlyOneComponentWasSavedIntoIt` — the same scenario end to
+end through the real `PayrollService`, asserting a 2027 run with a non-zero amount on the UNTOUCHED
+component does not 409. `resolvesTheEffectiveTaxYearPerEmployeeNotForTheWholeTable` (task 4's original
+per-employee test) stays green unmodified — it never exercises a sibling-component stranding, only the
+whole-employee cliff, so it is not redundant with the new tests.
+
+**Mutation-check**: reverted the `DISTINCT ON` query back to the per-employee CTE. Ran
+`th.co.glr.hr.payroll` (221 tests): **exactly 2 failures**, both new D2 tests above (the per-component
+stranding case). `resolvesTheEffectiveTaxYearPerEmployeeNotForTheWholeTable` (task 4's whole-employee
+cliff test) correctly stayed green — its scenario never puts a sibling component at risk. Nothing else
+in the package moved. Reverted to an empty diff.
+
+## Minor — `@Valid` inert on the `PUT /api/payroll/component-tax-treatments` list body
+
+**Defect** (`PayrollController.java`, `putComponentTaxTreatments`): `@Valid` on a bare `@RequestBody
+List<ComponentTaxTreatmentUpsertRequest>` does not cascade to elements under Spring's
+`SpringValidatorAdapter` — only onto fields of an enclosing object. `ComponentTaxTreatmentUpsertRequest`'s
+own `@NotNull employeeId`/`component` never actually fired. The frontend always populates both, so this
+is not a reachability blocker, but a malformed client would reach the repository (or an unclear
+`DataIntegrityViolationException`) instead of a clean 400.
+
+**Fix — deliberately NOT a wrapper record**: `PayrollClassificationReachabilityIntegrationTest
+.hrHasSomeHttpWayToClassifyAComponentBeforeTheEngineDemandsIt` (kept verbatim, per instruction)
+reflects on `PayrollController`'s methods for a parameter whose generic type name literally contains
+`ComponentTaxTreatmentUpsertRequest` — a wrapper type's name would not contain that string, so wrapping
+the list would have broken that test. Validated explicitly instead, in
+`PayrollService#upsertComponentTaxTreatments`, before the repository is ever reached: any item with a
+null `employeeId` or `component` throws `ApiException(BAD_REQUEST)` naming which item (1-based index)
+is malformed, and the WHOLE batch is rejected — not silently applying the valid items and skipping the
+bad one.
+
+**Test** (`PayrollClassificationReviewIntegrationTest
+.upsertRejectsAMalformedItemWithANullEmployeeIdBeforeWritingAnything`): a null `employeeId` alone → 400;
+a null `component` alone → 400; a batch with one valid item and one malformed item → 400 AND zero rows
+written for the valid item either (wrong-way-round — proves validation happens before any write, not
+per-item during the write). Not mutation-checked separately: the test would fail identically if the
+new validation block were removed entirely (the malformed item would instead reach the repository and
+either NPE inside `.name()` or throw a raw `DataIntegrityViolationException`, not the asserted
+`ApiException`/`BAD_REQUEST`), which is sufficient signal for a straightforward guard-clause addition.
+
+## Do NOT fix — Finding 3, recorded as instructed
+
+`V100`'s safe default (`EXTRA_CUMULATIVE_ACTUAL` for ~398 of 544 employee×component pairs with no
+carry-forward evidence — see Finding 4 above for the exact count) is a considered choice, not a defect,
+but it carries a real risk that was not previously recorded:
+
+**Trigger**: an employee has a genuinely FIXED monthly allowance (paid the same amount every month,
+indistinguishable in shape from a recurring component) that V98's carry-forward evidence did not catch
+(e.g. a new employee with fewer than 4 sampled months, or an existing employee whose allowance started
+after the accountant's `2026.xlsx` sample window) — so it defaults to `EXTRA_CUMULATIVE_ACTUAL` instead
+of `REGULAR_REPROJECT`.
+
+**Consequence**: `EXTRA_CUMULATIVE_ACTUAL` taxes the true cumulative amount paid to date every period,
+which gets the ANNUAL total right but back-loads the withholding curve within the year — each period's
+withholding is smaller than a `REGULAR_REPROJECT` classification would produce early in the year and
+larger later, with a December catch-up. On a modest December salary this catch-up could drive net pay
+to zero or close to it — the same shape of incident as the June 2026 negative-net defect this programme
+already fixed (handoff section 6), though the ROOT CAUSE here is different (a default choice reacting
+correctly to genuine uncertainty, not a bug). Separately, a fixed monthly allowance is technically ป.96
+ข้อ 1(4) income (`REGULAR_REPROJECT`'s own bucket), so classifying it as ข้อ 1(6) instead is a
+technical mischaracterisation even where the money comes out approximately right.
+
+**Mitigated, not fixed**: HR now has a real screen (`TaxTreatmentMatrixSection`, task 5) to reclassify
+any component once its true recurrence becomes apparent, one cell at a time, with D2's fix above
+ensuring that reclassification can no longer strand sibling components into the next tax year.
+Changing V100's default itself is the owner's call, not an engineering one — not touched, per this
+branch's explicit instruction.
+
+## Rebase (2026-07-30)
+
+Fetched `origin/main` (`2aba97f0`, merge of PR #346, plus `1b6db578`/PR #342 already the branch's own
+base) and rebased cleanly — **zero conflicts**, 6 commits replayed
+(`5f1a90fa`→`4c3dac28`, new SHAs after replay). Confirmed via `git merge-base HEAD origin/main` == `git
+rev-parse origin/main` (`2aba97f0`) after the rebase.
+
+**Handoff filename collision found and resolved**: `origin/main` already carries
+`docs/agent-handoffs/118_fix-sales-quotation-sticky-cta-dead-click.md` (a different, already-merged
+branch that happened to land on the same number). Not a literal git conflict — the filenames differ in
+their suffix — but a real numbering collision (`118` now names two unrelated branches in the repo's
+history). Renamed this branch's own handoff, via `git mv`, from
+`118_feat-payroll-classification-and-hr-declarations.md` to
+`119_feat-payroll-classification-and-hr-declarations.md` (the next free number — `119` was unused;
+`117` is ALSO already double-used on `origin/main` by two unrelated pre-existing branches, a
+pre-existing gap not introduced or fixed by this session). All references to this file's own name
+within its text are self-referential prose, not links, so nothing else needed updating.
+
+## Files changed (task 6)
+
+| File | Change |
+|---|---|
+| `V102__payroll_customer_return_requested_amount.sql` | new — D1 (`customer_return_requested` column, non-negative CHECK, one-time backfill) |
+| `PayrollService.java` | Finding 1 (`hasBeenOnboardedForPayroll` polarity), D1 (`calculateLine` trailing arg), Minor (`upsertComponentTaxTreatments` validation) |
+| `PayrollRepository.java` | D2 (`findComponentTaxTreatmentsByEmployee` per-component `DISTINCT ON`), D1 (SELECT/INSERT/`mapLine` for the new column) |
+| `PayrollLineDto.java` | D1 (`customerReturnRequested` field appended; new 58-arg legacy constructor) |
+| `PayrollComponent.java` | Finding 6 (javadoc on adding a new component) |
+| `V97__payroll_meal_and_per_diem_components.sql` | Finding 6 (`DROP CONSTRAINT IF EXISTS` guards added; edited in place, still unapplied to any real DB) |
+| `V98__payroll_component_carry_forward.sql` | Finding 4 (comment corrected: 16/44, reconciled against 34/29/5; edited in place) |
+| `V100__payroll_component_tax_treatment_backfill.sql` | Finding 4 (comment corrected: 500-of-544 proportion, 398 breakdown; edited in place) |
+| `docs/agent-handoffs/119_...md` (this file) | renamed from `118_...md` (rebase collision); Finding 5 (risk 5 deleted, correction note added); this section |
+| `frontend/src/features/payroll/PayrollPage.jsx` | D1 (`adjustmentFromLine` hydrates `customerReturnRequested`) |
+| `PayrollClassificationAndSsoInclusionIntegrationTest.java` | Finding 2 (dedicated ฿15,000 fixtures, new helpers, corrected expected values) |
+| `PayrollClassificationReviewIntegrationTest.java` | D2 (2 new tests), Minor (1 new test), test-only wiring (`PayrollService`, `hr()`) added |
+| `PayrollCustomerReturnRoundTripIntegrationTest.java` | new — D1 (3 tests) |
+| `PayrollRawSqlEmployeeClassificationReviewTest.java` | fourth reviewer's file — kept verbatim, not modified (still untracked, per instruction) |
+| `frontend/src/features/payroll/PayrollPage.test.jsx` | D1 (1 new test) |
+
+## Commands run
+
+```
+git fetch origin main && git rebase origin/main
+git mv docs/agent-handoffs/118_...md docs/agent-handoffs/119_...md
+cd backend && ./mvnw -q -B -o test-compile                                          # throughout
+cd backend && ./mvnw -q -B -o -Dtest.fork.count=1 -Dtest=<class[,class...]> test     # targeted, throughout, incl. every mutation-check
+cd backend && ./mvnw -B -o -Dtest.fork.count=1 clean verify                         # full suite, final
+cd frontend && npm run lint
+cd frontend && npm test -- --run
+cd frontend && npm run build
+```
+
+## Tests / build results
+
+**Backend: `./mvnw -B -o -Dtest.fork.count=1 clean verify` — BUILD SUCCESS, 1380 tests, 0 failures, 0
+errors, 0 skipped**, confirmed by the completed full run's own summary line (not inferred from partial
+output). Integration tests **RAN** on Testcontainers (every run's log confirms Flyway migrating through
+v102 — `Successfully applied 99 migrations to schema "hr", now at version v102` on the golden template,
+and to v102 again on every forked clone), not `TEST_DB_URL`. Baseline at task start: 1373 tests + the
+fourth reviewer's 1 red = 1374. This task added: `PayrollCustomerReturnRoundTripIntegrationTest` (3,
+new file) + `PayrollClassificationReviewIntegrationTest` (+3: 2 D2 + 1 Minor) + the fourth reviewer's
+own test going from red to green (+0 net, already counted in baseline) = 1374 + 6 = 1380, exactly
+matching the full run's total. `PayrollRawSqlEmployeeClassificationReviewTest` (the fourth reviewer's
+test) is confirmed **GREEN** in this same full run (1/1), kept verbatim throughout.
+
+**Frontend: `npm run lint` — 0 errors, 1 pre-existing warning** (`PayrollPage.jsx:480`, missing
+`useEffect` dependency `load`, unchanged location/cause, matches every prior task's baseline exactly).
+**`npm test -- --run` — 783/783 tests, 72/72 files pass** (this task added 1 new test in
+`PayrollPage.test.jsx`; the rest of the increase over task 5's 779/72 baseline comes from the 2
+rebased `origin/main` commits, sales-frontend-only, no payroll file). **`npm run build` — succeeds**
+(`vite build`, completed in 209ms).
+
+Every finding/defect above shipped its own real-DB (backend) or component-level (frontend) test, and
+Finding 1, Finding 2, D1, and D2 were each mutation-checked (defect reintroduced, confirmed exactly the
+intended test(s) — and only those — went red, reverted to an empty diff; verified clean afterward with
+`git diff` / `grep MUTATION` finding nothing in any touched file). The Minor fix's guard-clause
+addition was judged simple enough not to need a separate mutation run (see its own section above for
+the reasoning).
+
+## Authz evidence
+
+**No authorization change.** Every fix in this task is a business-logic/data-completeness correction
+(a safety-net's polarity, a partial-save read-resolution bug, a round-trip persistence bug, three
+documentation corrections) or an input-validation guard (the Minor fix — required-field presence, not
+a role/scope/permission check). No role gate, scope filter, or permission check was added, removed, or
+altered. `PayrollService`'s existing `PAYROLL_VIEW_ROLES`/`PAYROLL_EDIT_ROLES`, and the
+`component-tax-treatments` endpoint's double gate (task 5), are untouched.
+
+## Known risks — carried into the next task
+
+1. **Finding 3** (recorded above in full, with its exact trigger and consequence) — V100's safe
+   `EXTRA_CUMULATIVE_ACTUAL` default for ~398 of 544 employee×component pairs is correct FOR GENUINE
+   UNCERTAINTY, but a genuinely-fixed monthly allowance that evidence did not catch would be
+   back-loaded within the year (December catch-up, possible near-zero net pay on a modest December
+   salary) and is technically ป.96 ข้อ 1(4) income misclassified as ข้อ 1(6). Mitigated by the
+   reclassification screen (task 5) + D2's fix (partial saves no longer strand siblings). Changing the
+   default is the owner's call, not fixed here.
+2. **The reachability-audit pattern itself** (recorded above, "Correction to the record") — three
+   times now on this branch, an acceptance test went green because its OWN fixture manufactured a
+   state no production path reaches, masking a real gap in the state that DOES occur. Worth a
+   standing instruction for future reviews on this branch: when a fixture calls an internal seeding
+   method directly (not through `EmployeeService#create`, a migration, or the real HTTP surface), ask
+   explicitly whether that call sequence is reachable by any real deployment path before trusting the
+   test's green result as evidence.
+3. Every known risk from tasks 1-5, still open and unchanged by this task: `parent_care_count` vs the
+   legacy `parent_care_allowance` baht field (two writable sources of truth); the three
+   verification-state writers ignore update row counts; §10's structured dependant records are still
+   unbuilt; the per-head allowance residual in `headCountFor` (pinned, not fixed, per instruction);
+   `calculate()`/`PayrollCalculatorTest` are genuinely dead production code, kept per instruction; F9
+   (unearned-customer-return-truncation `.max(ZERO)`, `PayrollService.java` ~line 392) needs an owner
+   business decision; `taxableAnnualIncome`/`annualTax` understate the true annual liability in any
+   month after a settled `EXTRA_KNOWN_FREQUENCY` payment, by design (task 4's F1); P3-6
+   (`fullAnnualProjection` vs the YTD-inclusive stage-3 base, triggers only once a genuinely
+   percentage-capped allowance meets a settled known-limb payment); ป.96 ข้อ 2.10 (leaver final-period
+   true-up) unimplemented; `mockApi.js` has no payroll preview/process implementation at all, so
+   `VITE_USE_MOCKS=true` verification is not possible for anything in this branch — every claim in
+   this file is Testcontainers/real-Postgres evidence, never mock-driven.
+4. **V95-V101 are still uncommitted on this branch** (every prior task's own note, still true) —
+   nothing in this task has touched any real database; every claim above is verified against
+   Testcontainers/real Postgres only, per this session's explicit instructions and CLAUDE.md. This
+   task's changes are also uncommitted (working tree only) per this session's explicit "do not commit"
+   instruction.
+
+## The exact next prompt for the next agent
+
+> Read this file in full — in particular the AUTHORITATIVE NUMBERING table (task 4) and this task 6
+> section's known risks — before touching anything payroll-related. This branch has now survived FOUR
+> Opus reviews (task 3, the rejection in task 4, the rejection in task 5, and this task's
+> approve-with-fixes); treat that history as a signal to verify claims against the actual code rather
+> than trusting a prior task's "GREEN, confirmed" at face value — see "Correction to the record" above
+> for why. Suggested order: (1) get explicit sign-off to commit and push this branch (V95-V101, six
+> tasks of fixes, all currently sitting uncommitted in this worktree only); (2) build the structured
+> child/parent/disabled-dependant records §10 still calls out as unbuilt; (3) decide F9
+> (`PayrollService.java` ~line 392, unearned-customer-return truncation) and Finding 3 (V100's default,
+> known risk 1 above) with the owner — both are business decisions, not engineering guesses; (4) rebase
+> onto whatever `origin/main` has moved to by then before merging, per the standing rule.

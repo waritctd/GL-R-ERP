@@ -23,9 +23,17 @@ SET search_path = hr, public;
 -- every time (so pre-filling last month's figure is wrong). A component can be recurring for tax and
 -- non-carrying for data entry.
 --
--- ⚠️ SEEDED FOR 29 OF 34 EMPLOYEES. Five workbook names could not be resolved to an employee and are
--- deliberately left unseeded rather than guessed -- they carry nothing until someone sets them, which
--- fails safe:
+-- ⚠️ COUNT CORRECTED (fourth Opus review, 2026-07-30): this comment previously said "SEEDED FOR 29 OF
+-- 34 EMPLOYEES", conflating two different counts. Of the 34 workbook names, 5 could not be resolved
+-- to an employee row at all (listed below) -- 34 - 5 = 29 WERE resolved to a real employee. But
+-- "resolved to an employee" is not "seeded with a recurring flag": of those 29 resolved employees,
+-- only 16 actually have at least one component clearing the 70%-same-value bar below (44 rows total).
+-- The other 13 resolved employees are correctly seeded with NOTHING here, not because they are
+-- unresolved, but because nothing they are paid recurs by this rule -- verify against the VALUES list:
+-- 16 distinct employee codes, 44 rows.
+--
+-- Five workbook names could not be resolved to an employee at all and are deliberately left unseeded
+-- rather than guessed -- they carry nothing until someone sets them, which fails safe:
 --     ศรรักษณ์, อดิเทพ   -- no employee row exists at all, though ศรรักษณ์ is being paid
 --     ศรายุธ, สนั่น       -- two employees share each first name; the workbook keys on first name only
 --     ธันยพร             -- matches 100160 but is_active = false while appearing in the sheet

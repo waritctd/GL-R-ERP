@@ -108,8 +108,107 @@ public record PayrollLineDto(
     BigDecimal perDiemTaxable,
     // PerDiemBasis name, or null when no per-diem was paid this line (matches the DB CHECK: a basis
     // is required only when perDiemExempt/perDiemTaxable are non-zero).
-    String perDiemBasis
+    String perDiemBasis,
+    // D1 fix (fourth reachability audit, 2026-07-30, V101). What HR actually TYPED this run,
+    // verbatim, regardless of customerReturnAlreadyEarned -- distinct from customerReturnDeduction
+    // above, which is the POST-TAX bookkeeping figure (0 in the unearned path, where the amount is
+    // instead netted pre-tax out of commissionPay, per PayrollCalculator's own comment on that field).
+    // Before this field existed, customerReturnDeduction was the ONLY place the entered amount could
+    // round-trip from -- so in the unearned path (the ONLY reachable state before this branch), it
+    // read back as 0 on reload, silently wiping the form field AND the checkbox that gates on it
+    // being > 0 (PayrollPage.jsx), and a reprocess of the same month silently stopped re-applying the
+    // pre-tax netting. Appended last so every prior positional call site keeps compiling via the new
+    // legacy constructor immediately below.
+    BigDecimal customerReturnRequested
 ) {
+    /**
+     * Legacy 58-arg constructor: the full signature as it stood right before {@code
+     * customerReturnRequested} (V101/D1) existed (i.e. through {@code perDiemBasis}). Keeps every
+     * 58-arg positional call site compiling unchanged. Defaults the new field to whatever {@code
+     * customerReturnDeduction} was given -- the best available reconstruction for a caller that
+     * predates the distinction (correct for the already-earned path, where the two always agreed
+     * anyway; a reasonable approximation for the unearned path, where the true entered figure was
+     * never separately available at this arity either).
+     */
+    public PayrollLineDto(
+        Long id,
+        long employeeId,
+        String employeeCode,
+        String employeeName,
+        String departmentName,
+        String bankName,
+        String bankAccount,
+        BigDecimal baseSalary,
+        BigDecimal dailyRate,
+        BigDecimal hourlyRate,
+        List<PayrollSpecialPayDto> specialPays,
+        BigDecimal specialPayTotal,
+        BigDecimal overtimePay,
+        BigDecimal commissionPay,
+        BigDecimal grossEarnings,
+        BigDecimal nonTaxableIncome,
+        BigDecimal unpaidLeaveDays,
+        BigDecimal unpaidLeaveDeduction,
+        BigDecimal grossTaxableIncome,
+        BigDecimal ssoWageBase,
+        BigDecimal socialSecurity,
+        BigDecimal projectedAnnualIncome,
+        BigDecimal taxExpenseDeduction,
+        BigDecimal taxAllowanceTotal,
+        BigDecimal taxableAnnualIncome,
+        BigDecimal annualTax,
+        BigDecimal withholdingTax,
+        BigDecimal studentLoanDeduction,
+        BigDecimal legalExecutionDeduction,
+        BigDecimal otherPostTaxDeductions,
+        BigDecimal totalDeductions,
+        BigDecimal netPay,
+        String calculationNote,
+        BigDecimal directorRemuneration,
+        BigDecimal warningLetterDeduction,
+        BigDecimal customerReturnDeduction,
+        BigDecimal otherPretaxDeduction,
+        BigDecimal leaveRefundDays,
+        BigDecimal leaveDeductionRefund,
+        BigDecimal withholdingTaxOverride,
+        BigDecimal regularTaxableIncome,
+        BigDecimal variableTaxableIncome,
+        BigDecimal regularWithholdingTax,
+        BigDecimal variableWithholdingTax,
+        BigDecimal bonusPay,
+        BigDecimal otherOneOffPay,
+        BigDecimal excessWithheldToDate,
+        BigDecimal taxableIncomeRegularLimb,
+        BigDecimal taxableIncomeKnownLimb,
+        BigDecimal taxableIncomeCumulativeLimb,
+        BigDecimal withholdingTaxRegularLimb,
+        BigDecimal withholdingTaxCumulativeLimb,
+        boolean customerReturnAlreadyEarned,
+        String garnishmentType,
+        BigDecimal mealAllowance,
+        BigDecimal perDiemExempt,
+        BigDecimal perDiemTaxable,
+        String perDiemBasis
+    ) {
+        this(
+            id, employeeId, employeeCode, employeeName, departmentName, bankName, bankAccount,
+            baseSalary, dailyRate, hourlyRate, specialPays, specialPayTotal, overtimePay, commissionPay,
+            grossEarnings, nonTaxableIncome, unpaidLeaveDays, unpaidLeaveDeduction, grossTaxableIncome,
+            ssoWageBase, socialSecurity, projectedAnnualIncome, taxExpenseDeduction, taxAllowanceTotal,
+            taxableAnnualIncome, annualTax, withholdingTax, studentLoanDeduction, legalExecutionDeduction,
+            otherPostTaxDeductions, totalDeductions, netPay, calculationNote,
+            directorRemuneration, warningLetterDeduction, customerReturnDeduction, otherPretaxDeduction,
+            leaveRefundDays, leaveDeductionRefund, withholdingTaxOverride,
+            regularTaxableIncome, variableTaxableIncome, regularWithholdingTax, variableWithholdingTax,
+            bonusPay, otherOneOffPay, excessWithheldToDate,
+            taxableIncomeRegularLimb, taxableIncomeKnownLimb, taxableIncomeCumulativeLimb,
+            withholdingTaxRegularLimb, withholdingTaxCumulativeLimb,
+            customerReturnAlreadyEarned, garnishmentType,
+            mealAllowance, perDiemExempt, perDiemTaxable, perDiemBasis,
+            customerReturnDeduction == null ? BigDecimal.ZERO : customerReturnDeduction
+        );
+    }
+
     /**
      * Legacy 49-arg constructor: the full signature as it stood right before the V97
      * meal-allowance/per-diem fields existed (i.e. through {@code garnishmentType}). Keeps every

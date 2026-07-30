@@ -56,9 +56,26 @@ SET search_path = hr, public;
 --      JOIN against V98's table, not by re-transcribing its VALUES list, so the two migrations can
 --      never silently drift apart.
 --
---      For every (employee, component) pair NOT marked recurring by V98 -- including the 5 employees
---      V98 could not resolve to a row -- the SAFE default is EXTRA_CUMULATIVE_ACTUAL, not
---      REGULAR_REPROJECT or EXTRA_KNOWN_FREQUENCY, for a concrete, worked reason:
+--      REASONING CORRECTED (fourth Opus review, 2026-07-30): the previous wording here said "the 5
+--      employees V98 could not resolve", understating this by roughly two orders of magnitude and
+--      misdescribing WHOSE pairs land here. The 5 unresolvable workbook names (V98's own comment) are
+--      irrelevant to this count -- they have no employee_id to CROSS JOIN against in Step 1 at all, so
+--      they never reach this table in the first place. The real proportion, counted directly against
+--      this migration's own Step 1/Step 2: 34 employees x 16 classification-eligible components = 544
+--      pairs considered. V98's real per-employee evidence promotes exactly 44 of them (Step 2) to
+--      REGULAR_REPROJECT. The remaining 544 - 44 = 500 pairs (roughly 92% of the whole matrix) rely on
+--      a company-wide rule rather than per-employee-per-component evidence: 34 of those 500 are
+--      DIRECTOR_REMUNERATION (resolved by the owner's own words, bucket 3 above), 68 are BONUS_PAY/
+--      OTHER_ONE_OFF_PAY (resolved by the spec's own words, bucket 1 above), and the remaining 398 are
+--      the genuinely-unknown-recurrence case this bucket exists for, defaulted to EXTRA_CUMULATIVE_ACTUAL
+--      below. Recorded here so a reader sizing "how much of this backfill is a real per-employee fact
+--      versus a company-wide guess" gets the true 500-of-544 answer, not a count that reads as a small
+--      residual.
+--
+--      For every (employee, component) pair in that residual 398 -- i.e. NOT DIRECTOR_REMUNERATION,
+--      NOT BONUS_PAY/OTHER_ONE_OFF_PAY, and NOT marked recurring by V98 -- the SAFE default is
+--      EXTRA_CUMULATIVE_ACTUAL, not REGULAR_REPROJECT or EXTRA_KNOWN_FREQUENCY, for a concrete,
+--      worked reason:
 --        - REGULAR_REPROJECT assumes the amount recurs at the SAME figure every remaining month
 --          (annualised x monthsRemaining). Wrong for a genuinely one-off payment, this causes ONE
 --          large over-withholding spike the month it is paid -- inconvenient, but not a compliance
