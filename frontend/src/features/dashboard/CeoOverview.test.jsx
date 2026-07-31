@@ -177,7 +177,7 @@ describe('CeoOverview', () => {
     // OT (MANAGER_APPROVED + manager-less-direct-to-CEO) + ลา (manager-less-direct-to-CEO) = 2 + 1.
     expect(statCardValue('OT·ลา รออนุมัติ')).toBe('3');
     // ยอดขายเดือนนี้: sum of amountPaid for tickets closed this month (only TK-702).
-    expect(statCardValue('ยอดขายเดือนนี้')).toBe('฿50,000');
+    expect(statCardValue('ยอดขายเดือนนี้')).toBe('฿50,000.00');
 
     expect(api.pricingRequests.queue).toHaveBeenCalledWith({ activeOnly: true });
     expect(api.tickets.list).toHaveBeenCalledWith({});
@@ -269,14 +269,14 @@ describe('CeoOverview', () => {
 
     await screen.findByText('ผลบริษัทเดือนนี้');
 
-    expect(screen.getByText('ยอดขายปิดแล้ว').nextSibling.textContent).toBe('฿50,000');
+    expect(screen.getByText('ยอดขายปิดแล้ว').nextSibling.textContent).toBe('฿50,000.00');
     // Prefers the real dashboardSummary.tickets.closedThisMonth (4) over the
     // client-derived count (1) when the summary provides it.
     expect(screen.getByText('ปิดงานแล้ว').nextSibling.textContent).toBe('4 ดีล');
     // Pipeline: active, not-yet-closed tickets only (701 + 703 = 120,000).
-    expect(screen.getByText('Pipeline บริษัท').nextSibling.textContent).toBe('฿120,000');
+    expect(screen.getByText('Pipeline บริษัท').nextSibling.textContent).toBe('฿120,000.00');
     // Overdue receivables: only the overdue ticket's outstanding balance (703).
-    expect(screen.getByText('ลูกหนี้ค้าง/เกินกำหนด').nextSibling.textContent).toBe('฿15,000');
+    expect(screen.getByText('ลูกหนี้ค้าง/เกินกำหนด').nextSibling.textContent).toBe('฿15,000.00');
     expect(screen.getByText('กำลังพล').nextSibling.textContent).toBe('42 คน');
     expect(screen.getByText('มาสายวันนี้').nextSibling.textContent).toBe('3 คน');
   });
