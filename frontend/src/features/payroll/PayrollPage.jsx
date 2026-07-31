@@ -37,27 +37,41 @@ function MoneyCode({ value }) {
   return <code className="payroll-money">{formatMoney(value)}</code>;
 }
 
-const employeeColumn = {
-  key: 'employee',
-  header: 'พนักงาน',
-  sortable: true,
-  sortAccessor: (line) => line.employeeName,
-  searchAccessor: (line) => line.employeeName,
-  render: (line) => (
-    <span>
-      <strong>{line.employeeName}</strong>
-      <small>{line.employeeCode} · {line.departmentName || '-'}</small>
-      {/* Finding 1 fix (Opus review, 2026-07-30): list-level warning so a daily-rate employee with
-          no/zero days-worked is visible WITHOUT having to open their detail panel first -- the gap
-          the ฿0-payslip bug actually lived in (hasPayrollInput below never submits a row with
-          nothing entered, so HR could Process a whole month without ever noticing). Purely a nudge;
-          PayrollService#requireEveryDailyRateEmployeeHasDaysWorked is the real enforcement. */}
-      {line.payType === 'D' && !(Number(line.daysWorked) > 0) && (
-        <small className="block text-warning">⚠ ยังไม่ได้ระบุจำนวนวันทำงาน</small>
-      )}
-    </span>
-  ),
-};
+function createEmployeeColumn(selectedEmployeeId) {
+  return {
+    key: 'employee',
+    header: 'พนักงาน',
+    sortable: true,
+    sortAccessor: (line) => line.employeeName,
+    searchAccessor: (line) => line.employeeName,
+    render: (line) => {
+      const selected = Number(line.employeeId) === Number(selectedEmployeeId);
+      return (
+        <span className="payroll-employee-cell">
+          <span>
+            <strong>{line.employeeName}</strong>
+            <small>{line.employeeCode} · {line.departmentName || '-'}</small>
+            {/* Finding 1 fix (Opus review, 2026-07-30): list-level warning so a daily-rate employee
+                with no/zero days-worked is visible WITHOUT having to open their detail panel first --
+                the gap the ฿0-payslip bug actually lived in (hasPayrollInput below never submits a row
+                with nothing entered, so HR could Process a whole month without ever noticing). Purely
+                a nudge; PayrollService#requireEveryDailyRateEmployeeHasDaysWorked is the real
+                enforcement. */}
+            {line.payType === 'D' && !(Number(line.daysWorked) > 0) && (
+              <small className="block text-warning">⚠ ยังไม่ได้ระบุจำนวนวันทำงาน</small>
+            )}
+          </span>
+          {selected ? (
+            <span className="payroll-selected-cue">
+              <Icon name="check" size={13} />
+              เลือกอยู่
+            </span>
+          ) : null}
+        </span>
+      );
+    },
+  };
+}
 
 const payrollMoneyColumns = [
   {
@@ -547,14 +561,14 @@ function PayrollTotalsRow({ columns, reconciliation }) {
   );
 }
 
-function PayrollMobileSummaryRow({ reconciliation }) {
+function PayrollMobileSummaryRow({ reconciliation, columnCount }) {
   const gross = reconciliation.byColumn.grossEarnings;
   const deductions = reconciliation.byColumn.totalDeductions;
   const net = reconciliation.byColumn.netPay;
   const hasMismatch = reconciliation.mismatches.length > 0;
   return (
     <tr className="payroll-mobile-summary-row">
-      <td colSpan={7}>
+      <td colSpan={columnCount}>
         <div className={`payroll-mobile-summary-bar${hasMismatch ? ' is-mismatch' : ''}`}>
           <span>
             <small>รายได้</small>
@@ -578,7 +592,7 @@ function PayrollTotalsFooter({ columns, reconciliation }) {
   return (
     <>
       <PayrollTotalsRow columns={columns} reconciliation={reconciliation} />
-      <PayrollMobileSummaryRow reconciliation={reconciliation} />
+      <PayrollMobileSummaryRow reconciliation={reconciliation} columnCount={columns.length} />
     </>
   );
 }
@@ -612,6 +626,7 @@ export function PayrollPage({ showToast }) {
   const [period, setPeriod] = useState(null);
   const [adjustments, setAdjustments] = useState({});
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
+  const [detailOpen, setDetailOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [confirmProcess, setConfirmProcess] = useState(false);
@@ -669,6 +684,11 @@ export function PayrollPage({ showToast }) {
     : emptyPeriod
       ? 'ยังไม่มีพนักงานในรอบเงินเดือนนี้ — กดคำนวณตัวอย่างหรือเลือกรอบเดือนที่มีข้อมูลก่อนประมวลผล'
       : null;
+
+  function selectPayrollLine(line) {
+    setSelectedEmployeeId(line.employeeId);
+    setDetailOpen(true);
+  }
 
   async function load() {
     setLoading(true);
@@ -729,6 +749,7 @@ export function PayrollPage({ showToast }) {
 
   useEffect(() => {
     setSelectedEmployeeId(null);
+    setDetailOpen(false);
     setPayDate(`${month}-26`); // default salary pay date is the 26th of the selected month
     load();
   }, [month]);
@@ -863,45 +884,24 @@ export function PayrollPage({ showToast }) {
     () => buildPayrollReconciliation(periodLines, period),
     [periodLines, period],
   );
+  const employeeColumn = useMemo(() => createEmployeeColumn(selectedLine?.employeeId), [selectedLine?.employeeId]);
   const visiblePayrollColumns = useMemo(
     () => [
       employeeColumn,
       ...payrollMoneyColumns.filter((column) => hasNonZeroMoney(periodLines, column)),
     ],
-    [periodLines],
+    [employeeColumn, periodLines],
   );
   const visibleMoneyColumnCount = visiblePayrollColumns.filter((column) => column.isMoney).length;
   const payrollGridColumns = useMemo(
     () => [
       'minmax(150px, 1.1fr)',
       ...Array.from({ length: visibleMoneyColumnCount }, () => 'minmax(7.5rem, 0.86fr)'),
-      'minmax(6.75rem, 0.56fr)',
     ].join(' '),
     [visibleMoneyColumnCount],
   );
 
-  const columns = [
-    ...visiblePayrollColumns,
-    {
-      key: 'actions',
-      header: 'เอกสาร',
-      align: 'right',
-      className: 'payroll-actions-cell',
-      render: (line) => (
-        <span className="row-actions">
-          <Button type="button" variant="text" onClick={() => setSelectedEmployeeId(line.employeeId)}>
-            รายละเอียด
-          </Button>
-          {period?.id && line.id ? (
-            <Button type="button" variant="secondary" onClick={() => downloadPayslip(line)} disabled={saving}>
-              <Icon name="fileText" />
-              Download payslip
-            </Button>
-          ) : null}
-        </span>
-      ),
-    },
-  ];
+  const columns = visiblePayrollColumns;
 
   async function downloadPayslip(line) {
     if (!period?.id || !line?.id) return;
@@ -1000,55 +1000,20 @@ export function PayrollPage({ showToast }) {
           (Tailwind-first per CLAUDE.md) — `cn` is `twMerge`, so these override FilterBar's base
           classes cleanly instead of fighting them. The dead rule was deleted from styles.css. */}
       <FilterBar className="payroll-actions flex-col items-stretch gap-[14px]">
-        <div className="payroll-actions-status">
-          <div>
-            <strong>พนักงาน {period?.lineCount || 0} คน</strong>
-            <span>สถานะรอบเงินเดือน</span>
-          </div>
-          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-        </div>
-
         <div className="payroll-actions-groups">
           {/* Review — safe, read-only recompute. */}
           <div className="payroll-actions-group">
-            <Button type="button" variant="secondary" onClick={preview} disabled={loading || saving}>
+            <Button type="button" onClick={preview} disabled={loading || saving}>
               <Icon name="search" />
               คำนวณตัวอย่าง
             </Button>
           </div>
 
-          {/* Run — the irreversible action. Kept visually apart (its own bordered group) and blocked
-              outright below the 720px mobile breakpoint rather than merely advised against, since a
-              mis-tap here commits payroll. Also blocked when the loaded period has no lines (F1) —
-              see the `emptyPeriod` comment above for why. */}
-          <div className="payroll-actions-group payroll-actions-group-run">
-            <Button
-              type="button"
-              onClick={process}
-              disabled={loading || saving || isMobile || emptyPeriod}
-              aria-describedby={processBlockedReason ? 'payroll-process-block-reason' : undefined}
-              title={processBlockedReason || undefined}
-            >
-              <Icon name="check" />
-              ประมวลผลเงินเดือน
-            </Button>
-            {/* Informational state, not an error: this explains why the button is
-                unavailable right now, so it reads in muted body colour rather than
-                danger red. Utilities at the call site, not a styles.css rule —
-                styles.css sits in @layer legacy and loses to any text utility a
-                future caller adds here. */}
-            {processBlockedReason && (
-              <span
-                id="payroll-process-block-reason"
-                role="note"
-                className="max-w-[34ch] text-xs font-semibold text-text-muted"
-              >
-                {processBlockedReason}
-              </span>
-            )}
-          </div>
-
-          {/* Export — statutory file generation, plus the detail xlsx which also works pre-process. */}
+          {/* Export — statutory file generation, plus the detail xlsx which also works pre-process.
+              Run (ประมวลผลเงินเดือน) is deliberately NOT in this toolbar — it is demoted to its own
+              `payroll-process-region` below the Send group (B-series tablet-safety fix, 2026-07-31):
+              the irreversible action gets visual distance from routine preview/export/send work
+              rather than sharing a bordered group inline with them. */}
           <div className="payroll-actions-group">
             <select
               value={exportKind}
@@ -1106,6 +1071,47 @@ export function PayrollPage({ showToast }) {
               ส่งอีเมลสลิปเงินเดือน
             </Button>
           </div>
+
+          {/* Run — the irreversible action. Kept in its own region with the period state and pushed
+              after routine preview/export/send work. It stays blocked below the 720px mobile
+              breakpoint; tablet keeps it because the tablet table/detail contract is now usable. */}
+          <section className="payroll-process-region" aria-labelledby="payroll-process-title">
+            <div className="payroll-process-copy">
+              <span id="payroll-process-title">ปิดรอบเงินเดือน</span>
+              <small>
+                <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                <span>{period?.lineCount || 0} คน</span>
+              </small>
+            </div>
+            <div className="payroll-process-controls">
+              <Button
+                type="button"
+                variant="danger"
+                size="sm"
+                onClick={process}
+                disabled={loading || saving || isMobile || emptyPeriod}
+                aria-describedby={processBlockedReason ? 'payroll-process-block-reason' : undefined}
+                title={processBlockedReason || undefined}
+              >
+                <Icon name="check" size={15} />
+                ประมวลผลเงินเดือน
+              </Button>
+              {/* Informational state, not an error: this explains why the button is
+                  unavailable right now, so it reads in muted body colour rather than
+                  danger red. Utilities at the call site, not a styles.css rule —
+                  styles.css sits in @layer legacy and loses to any text utility a
+                  future caller adds here. */}
+              {processBlockedReason && (
+                <span
+                  id="payroll-process-block-reason"
+                  role="note"
+                  className="max-w-[34ch] text-xs font-semibold text-text-muted"
+                >
+                  {processBlockedReason}
+                </span>
+              )}
+            </div>
+          </section>
         </div>
       </FilterBar>
 
@@ -1132,6 +1138,8 @@ export function PayrollPage({ showToast }) {
             loading={loading}
             stickyHeader
             showPagination={false}
+            onRowSelect={selectPayrollLine}
+            isRowSelected={(line) => Number(line.employeeId) === Number(selectedLine?.employeeId)}
             footerRow={({ columns: renderedColumns }) => (
               <PayrollTotalsFooter columns={renderedColumns} reconciliation={payrollReconciliation} />
             )}
@@ -1143,12 +1151,35 @@ export function PayrollPage({ showToast }) {
           />
         </div>
 
-        <aside className={cn(PANEL_CLASS, 'payroll-detail-panel')}>
+        <button
+          type="button"
+          className={cn('payroll-detail-backdrop', detailOpen && 'is-open')}
+          aria-hidden="true"
+          tabIndex={-1}
+          onClick={() => setDetailOpen(false)}
+        />
+
+        <aside className={cn(PANEL_CLASS, 'payroll-detail-panel', detailOpen && 'is-open')}>
           {selectedLine && selectedAdjustment ? (
             <>
-              <Panel.Header>
-                <h2 className="m-0 text-lg">{selectedLine.employeeName}</h2>
-                <StatusBadge tone="info">{selectedLine.employeeCode}</StatusBadge>
+              <Panel.Header className="payroll-detail-panel-header">
+                <div>
+                  <h2 className="m-0 text-lg">{selectedLine.employeeName}</h2>
+                  <small>{selectedLine.employeeCode} · {selectedLine.departmentName || '-'}</small>
+                </div>
+                <div className="payroll-detail-header-actions">
+                  <StatusBadge tone="info">{selectedLine.employeeCode}</StatusBadge>
+                  <Button
+                    type="button"
+                    variant="icon"
+                    size="sm"
+                    className="payroll-detail-close"
+                    onClick={() => setDetailOpen(false)}
+                    title="ปิดรายละเอียด"
+                  >
+                    <Icon name="close" size={16} />
+                  </Button>
+                </div>
               </Panel.Header>
 
               <div className="payroll-detail-grid">
@@ -1157,6 +1188,15 @@ export function PayrollPage({ showToast }) {
                 <MiniMetric label="ภาษีงวดนี้" value={formatMoney(selectedLine.withholdingTax)} />
                 <MiniMetric label="เงินโอนสุทธิ" value={formatMoney(selectedLine.netPay)} />
               </div>
+
+              {period?.id && selectedLine.id ? (
+                <div className="payroll-detail-actions">
+                  <Button type="button" variant="secondary" onClick={() => downloadPayslip(selectedLine)} disabled={saving}>
+                    <Icon name="fileText" />
+                    ดาวน์โหลดสลิป
+                  </Button>
+                </div>
+              ) : null}
 
               {/* Daily-rate support (2026-07-30): shown only for a pay_type = 'D' employee --
                   hr.employee.current_salary is that employee's PER-DAY rate (not a monthly figure),
@@ -1454,7 +1494,11 @@ export function PayrollPage({ showToast }) {
         message={(
           <div>
             <p className="confirm-dialog-message">
-              ยืนยันประมวลผลเงินเดือนรอบ {formatThaiMonthYearFromMonthInputValue(month)}? การดำเนินการนี้ไม่สามารถย้อนกลับได้
+              ยืนยันประมวลผลเงินเดือนรอบ {formatThaiMonthYearFromMonthInputValue(month)} สำหรับพนักงาน {period?.lineCount || 0} คน?
+              การดำเนินการนี้ไม่สามารถย้อนกลับได้
+            </p>
+            <p className="confirm-dialog-message">
+              หลังยืนยัน การอนุมัติ OT ของเดือนนี้จะปิดทันที และไม่มีทางยกเลิกการประมวลผล
             </p>
             <p className="confirm-dialog-message">
               รายได้รวม {formatMoney(period?.totalGross)} · เงินหักรวม {formatMoney(period?.totalDeductions)} · ยอดโอนสุทธิ {formatMoney(period?.totalNet)}

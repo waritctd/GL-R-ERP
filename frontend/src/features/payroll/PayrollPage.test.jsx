@@ -172,7 +172,10 @@ describe('PayrollPage adjustment inputs', () => {
 
     renderPayrollPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: /Download payslip/i }));
+    expect(screen.queryByRole('columnheader', { name: /เอกสาร/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Download payslip/i })).toBeNull();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^ดาวน์โหลดสลิป/i }));
 
     await waitFor(() => expect(api.payroll.downloadPayslip).toHaveBeenCalledWith(7, 55));
   });
@@ -220,6 +223,38 @@ describe('PayrollPage adjustment inputs', () => {
     expect(totalRow.textContent).toContain('26 คน');
     expect(totalRow.textContent).toContain('฿780,000.00');
     expect(totalRow.textContent).toContain('฿760,500.00');
+  });
+
+  it('selects a payroll line from the whole row and opens the detail drawer contract', async () => {
+    const lines = [
+      { ...payrollLine, employeeId: 1, employeeName: 'พนักงาน ก' },
+      { ...payrollLine, id: 56, employeeId: 2, employeeCode: 'GLR-002', employeeName: 'พนักงาน ข' },
+    ];
+    api.payroll.current.mockResolvedValue({
+      period: previewPeriod({
+        lineCount: 2,
+        totalGross: 60000,
+        totalDeductions: 1500,
+        totalNet: 58500,
+        totalSocialSecurity: 1500,
+        lines,
+      }),
+    });
+
+    const { container } = renderPayrollPage();
+
+    const secondRow = (await screen.findByText('พนักงาน ข')).closest('tr');
+    expect(secondRow.getAttribute('role')).toBe('row');
+    expect(secondRow.getAttribute('tabindex')).toBe('0');
+    expect(secondRow.getAttribute('aria-selected')).toBe('false');
+
+    fireEvent.click(secondRow);
+
+    expect(secondRow.getAttribute('aria-selected')).toBe('true');
+    expect(secondRow.className).toContain('active');
+    expect(within(secondRow).getByText('เลือกอยู่')).toBeTruthy();
+    expect(container.querySelector('.payroll-detail-panel').className).toContain('is-open');
+    expect(container.querySelector('.payroll-detail-panel h2').textContent).toBe('พนักงาน ข');
   });
 
   it('ties footer sums to the hero totals exactly, including satang', async () => {
@@ -744,6 +779,35 @@ describe('PayrollPage adjustment inputs', () => {
       expect(reason.getAttribute('role')).toBe('note');
       const processButton = screen.getByRole('button', { name: /ประมวลผลเงินเดือน/i });
       expect(processButton.getAttribute('aria-describedby')).toBe(reason.id);
+    });
+
+    it('keeps Preview visually primary and demotes Process into its own status region', async () => {
+      renderPayrollPage();
+
+      const previewButton = await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+      const processButton = screen.getByRole('button', { name: /ประมวลผลเงินเดือน/i });
+      const processRegion = processButton.closest('.payroll-process-region');
+
+      expect(previewButton.className).toContain('bg-primary');
+      expect(processButton.className).toContain('text-danger');
+      expect(processButton.className).not.toContain('bg-primary');
+      expect(processRegion).toBeTruthy();
+      expect(processRegion.textContent).toContain('ปิดรอบเงินเดือน');
+      expect(processRegion.textContent).toContain('ตัวอย่าง');
+      expect(processRegion.textContent).toContain('1 คน');
+    });
+
+    it('names employee count and the OT/no-unprocess consequence in the Process confirmation', async () => {
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ lineCount: 1 }) });
+
+      renderPayrollPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /ประมวลผลเงินเดือน/i }));
+
+      const dialog = await screen.findByRole('dialog', { name: /ประมวลผลเงินเดือน/i });
+      expect(dialog.textContent).toContain('พนักงาน 1 คน');
+      expect(dialog.textContent).toContain('การอนุมัติ OT ของเดือนนี้จะปิดทันที');
+      expect(dialog.textContent).toContain('ไม่มีทางยกเลิกการประมวลผล');
     });
   });
 

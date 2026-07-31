@@ -202,6 +202,12 @@ export function DataTable({
   // (`mobileCard`) already expects callers to give each card its own
   // explicit open affordance (see e.g. TicketListPage's `DealOpenButton`).
   onRowClick,
+  // Optional row selection. Unlike `onRowClick` navigation above, selection is
+  // a stateful table interaction: the row itself becomes focusable and exposes
+  // `aria-selected` so callers can use the whole row as the selection target
+  // without hiding the cells behind a `role="button"` name.
+  onRowSelect,
+  isRowSelected,
 }) {
   // Below 720px a dense grid crushes every column into an unreadable stub
   // (ids as "PR-…", clipped badges). When a page supplies `mobileCard`, render
@@ -361,13 +367,11 @@ export function DataTable({
     setPagination((current) => ({ ...current, pageIndex: 0 }));
   }
 
-  // Mouse-only activation (FIX A/D): there is no row-level keydown handler
-  // any more — the row is not a focusable target, so there is nothing for a
-  // key-repeat guard to protect. Keyboard activation lives on the caller's
-  // own identity `<Link>` instead, which gets native Enter activation (and
-  // no auto-repeat spam, since a browser only fires `click` once per Enter
-  // press on a link) for free.
-  function handleRowActivateClick(event, row) {
+  // Mouse-only navigation activation (FIX A/D): `onRowClick` still does not
+  // make the row a keyboard target. Keyboard selection is handled separately
+  // by the explicit `onRowSelect` contract below.
+  function handleRowActivateClick(event, row, activate) {
+    if (typeof activate !== 'function') return;
     // FIX F5: `cursor-pointer` advertises the whole row as clickable, so a
     // cmd/ctrl/shift/alt-click anywhere in the row (not just on the identity
     // `<Link>`, which already handles this correctly on its own) must bail
@@ -404,7 +408,14 @@ export function DataTable({
       ? window.getSelection()?.toString()
       : '';
     if (selectionText) return;
-    onRowClick(row);
+    activate(row);
+  }
+
+  function handleSelectableRowKeyDown(event, row) {
+    if (event.target !== event.currentTarget) return;
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    onRowSelect?.(row);
   }
 
   function handleExportCsv() {
@@ -593,6 +604,11 @@ export function DataTable({
                   const extraClassName = rowClassName ? ` ${rowClassName(row)}` : '';
                   const style = rowStyle ? rowStyle(row) : undefined;
                   const expanded = renderExpanded ? renderExpanded(row) : null;
+                  const selectable = typeof onRowSelect === 'function';
+                  const selected = selectable && typeof isRowSelected === 'function'
+                    ? Boolean(isRowSelected(row))
+                    : false;
+                  const activateRow = selectable ? onRowSelect : onRowClick;
                   return (
                     <Fragment key={key}>
                       <tr
@@ -606,10 +622,16 @@ export function DataTable({
                           // see the `onRowClick` doc comment above for why. Keyboard
                           // activation and the row's accessible name now come from the
                           // caller's own identity-column `<Link>`.
-                          onRowClick && 'cursor-pointer transition-colors hover:bg-surface-subtle',
+                          (onRowClick || selectable) && 'cursor-pointer transition-colors hover:bg-surface-subtle',
+                          selectable && 'is-selectable',
+                          selected && 'is-selected',
                         )}
                         style={style}
-                        onClick={onRowClick ? (event) => handleRowActivateClick(event, row) : undefined}
+                        role={selectable ? 'row' : undefined}
+                        tabIndex={selectable ? 0 : undefined}
+                        aria-selected={selectable ? selected : undefined}
+                        onClick={activateRow ? (event) => handleRowActivateClick(event, row, activateRow) : undefined}
+                        onKeyDown={selectable ? (event) => handleSelectableRowKeyDown(event, row) : undefined}
                       >
                         {columns.map((column) => (
                           <td

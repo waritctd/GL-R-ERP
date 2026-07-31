@@ -809,6 +809,70 @@ describe('DataTable', () => {
     });
   });
 
+  describe('onRowSelect', () => {
+    function actionColumnsWithButton(onAction) {
+      return [
+        ...baseColumns,
+        {
+          key: 'action',
+          header: 'Action',
+          render: (row) => (
+            <button type="button" onClick={() => onAction(row.id)}>
+              Secondary {row.name}
+            </button>
+          ),
+        },
+      ];
+    }
+
+    it('adds selectable row semantics only for the explicit selection contract', () => {
+      const rows = makeRows(2);
+      render(
+        <DataTable
+          columns={baseColumns}
+          rows={rows}
+          getRowKey={(row) => row.id}
+          gridClassName="employee-table"
+          onRowSelect={() => {}}
+          isRowSelected={(row) => row.id === 2}
+        />,
+      );
+
+      const first = screen.getByText('Employee 01').closest('tr');
+      const second = screen.getByText('Employee 02').closest('tr');
+      expect(first.getAttribute('role')).toBe('row');
+      expect(first.getAttribute('tabindex')).toBe('0');
+      expect(first.getAttribute('aria-selected')).toBe('false');
+      expect(second.getAttribute('aria-selected')).toBe('true');
+    });
+
+    it('selects from click, Enter, and Space without double-firing nested controls', () => {
+      const onRowSelect = vi.fn();
+      const onAction = vi.fn();
+      const rows = makeRows(1);
+      render(
+        <DataTable
+          columns={actionColumnsWithButton(onAction)}
+          rows={rows}
+          getRowKey={(row) => row.id}
+          gridClassName="employee-table"
+          onRowSelect={onRowSelect}
+          isRowSelected={() => false}
+        />,
+      );
+
+      const row = screen.getByText('Employee 01').closest('tr');
+      fireEvent.click(row);
+      fireEvent.keyDown(row, { key: 'Enter' });
+      fireEvent.keyDown(row, { key: ' ' });
+      fireEvent.click(screen.getByRole('button', { name: 'Secondary Employee 01' }));
+
+      expect(onRowSelect).toHaveBeenCalledTimes(3);
+      expect(onRowSelect).toHaveBeenCalledWith(rows[0]);
+      expect(onAction).toHaveBeenCalledWith(1);
+    });
+  });
+
   // FIX F1 (review-remediation): a live region that mounts/unmounts in the
   // same render as its own content change is unreliable per WAI-ARIA — a
   // screen reader needs the node present in the tree *before* the mutation.
