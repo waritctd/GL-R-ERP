@@ -300,7 +300,7 @@ describe('TicketDetailPage', () => {
     expect(screen.getAllByText('เสนอราคาผู้ออกแบบ/เจ้าของ').length).toBeGreaterThan(0);
     expect(screen.getByText('มูลค่าดีล')).not.toBeNull();
     // The payment panel below also renders amountPayable — assert presence, not uniqueness.
-    expect(screen.getAllByText('฿50,000').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('฿50,000.00').length).toBeGreaterThan(0);
   });
 
   it('renders legacy quotation revisions read-only — no revise/mark-sent/mark-decision buttons', async () => {
@@ -408,19 +408,19 @@ describe('TicketDetailPage', () => {
     expect((await screen.findAllByText('ชำระบางส่วน')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('เกินกำหนด').length).toBeGreaterThan(0);
     // DealStateHeader's "มูลค่าดีล" chip also renders amountPayable — assert presence, not uniqueness.
-    expect(screen.getAllByText('฿1,000').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('฿1,000.00').length).toBeGreaterThan(0);
     // Scoped to the "ชำระแล้ว"/"คงเหลือ" summary tiles specifically: by the
     // time this async assertion runs, the receipt-history row below (also
-    // ฿400, same receipt) has settled in too — dom-testing-library's default
+    // ฿400.00, same receipt) has settled in too — dom-testing-library's default
     // text matcher only looks at an element's own direct text children, so
-    // the receipt row's outer wrapper (a bare "฿400" text node next to a
+    // the receipt row's outer wrapper (a bare "฿400.00" text node next to a
     // sibling <small>) matches the same string as the summary tile. A bare
-    // `getByText('฿400')` is therefore genuinely ambiguous on this page, not
+    // `getByText('฿400.00')` is therefore genuinely ambiguous on this page, not
     // a test bug to paper over with getAllByText/greaterThan(0).
     const paidTile = screen.getByText('ชำระแล้ว').parentElement;
-    expect(within(paidTile).getByText('฿400')).not.toBeNull();
+    expect(within(paidTile).getByText('฿400.00')).not.toBeNull();
     const outstandingTile = screen.getByText('คงเหลือ').parentElement;
-    expect(within(outstandingTile).getByText('฿600')).not.toBeNull();
+    expect(within(outstandingTile).getByText('฿600.00')).not.toBeNull();
     expect(await screen.findByText('DEPOSIT')).not.toBeNull();
     // The receipt row itself really did render (not just the tile) — proves
     // the scoped assertion above didn't accidentally start passing vacuously.
@@ -472,7 +472,7 @@ describe('TicketDetailPage', () => {
     expect(screen.queryByRole('tab', { name: /^ราคา/ })).toBeNull();
     await openTab(/การเงิน/);
     expect(await screen.findByText('DEPOSIT')).not.toBeNull();
-    expect(screen.getAllByText('฿400').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('฿400.00').length).toBeGreaterThan(0);
     expect(api.pricingRequests.listForTicket).not.toHaveBeenCalled();
     expect(screen.queryByRole('heading', { name: 'ใบขอราคา (Pricing Request)' })).toBeNull();
   });
@@ -525,7 +525,7 @@ describe('TicketDetailPage', () => {
     // summary.amountOutstanding the payment panel's "คงเหลือ" tile renders
     // (not a separately-computed figure).
     expect(await screen.findByText('ยืนยันการรับชำระครบถ้วน')).not.toBeNull();
-    expect(screen.getAllByText('฿32,500').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('฿32,500.00').length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('button', { name: 'ยืนยันชำระครบ' }));
 

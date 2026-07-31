@@ -84,8 +84,8 @@ describe('AccountOverview', () => {
     expect(screen.getByText('รอรับมัดจำ')).not.toBeNull();
     expect(screen.getByText('รอชำระส่วนที่เหลือ')).not.toBeNull();
     expect(screen.getByText('ออกค่าคอม')).not.toBeNull();
-    // Overdue bucket carries the overdue ticket's outstanding balance (฿100,000).
-    expect(screen.getAllByText('฿100,000').length).toBeGreaterThan(0);
+    // Overdue bucket carries the overdue ticket's outstanding balance (฿100,000.00).
+    expect(screen.getAllByText('฿100,000.00').length).toBeGreaterThan(0);
   });
 
   it('shows the per-status next-action CTA for each worklist row', async () => {

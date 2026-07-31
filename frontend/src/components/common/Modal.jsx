@@ -1,51 +1,13 @@
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import { Icon } from './Icon.jsx';
-
-const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
+import { useDialogFocus } from '../../hooks/useDialogFocus.js';
 
 export function Modal({ title, subtitle, children, footer, onClose, testId }) {
   const panelRef = useRef(null);
-  const previouslyFocused = useRef(null);
-  const onCloseRef = useRef(onClose);
-  // Keep ref current on every render without re-triggering the effect.
-  useEffect(() => { onCloseRef.current = onClose; });
-
-  useEffect(() => {
-    previouslyFocused.current = document.activeElement;
-    const panel = panelRef.current;
-    const focusables = () => Array.from(panel?.querySelectorAll(FOCUSABLE) ?? []);
-
-    const initial = focusables();
-    (initial[0] ?? panel)?.focus();
-
-    function onKeyDown(event) {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        onCloseRef.current?.();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const items = focusables();
-      if (items.length === 0) return;
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    }
-
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      if (previouslyFocused.current instanceof HTMLElement) {
-        previouslyFocused.current.focus();
-      }
-    };
-  }, []);
+  // Modal is only ever mounted while shown, so the trap is unconditionally active for its lifetime
+  // (see useDialogFocus.js -- the payroll detail panel is the other consumer, and gates this on its
+  // >=1280px side-by-side vs <1280px overlay mode instead).
+  useDialogFocus({ active: true, containerRef: panelRef, onClose });
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>

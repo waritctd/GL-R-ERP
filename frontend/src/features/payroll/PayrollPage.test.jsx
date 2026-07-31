@@ -1,5 +1,5 @@
 import React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { PayrollPage } from './PayrollPage.jsx';
 import { api } from '../../api/index.js';
@@ -172,9 +172,359 @@ describe('PayrollPage adjustment inputs', () => {
 
     renderPayrollPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: /Download payslip/i }));
+    expect(screen.queryByRole('columnheader', { name: /เอกสาร/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Download payslip/i })).toBeNull();
+
+    // Exact match, not just anchored-start: upstream's bulk "ดาวน์โหลดสลิปเงินเดือนทั้งหมด" button
+    // (feat/payroll-detail-xlsx-export) also starts with "ดาวน์โหลดสลิป", so a merely-anchored regex
+    // matches both this single-payslip button and the bulk one, ambiguously.
+    fireEvent.click(await screen.findByRole('button', { name: /^ดาวน์โหลดสลิป$/i }));
 
     await waitFor(() => expect(api.payroll.downloadPayslip).toHaveBeenCalledWith(7, 55));
+  });
+
+  it('right-aligns money, shows satang consistently, and reconciles all visible lines without stranding employee 26', async () => {
+    const lines = Array.from({ length: 26 }, (_, index) => ({
+      ...payrollLine,
+      id: 100 + index,
+      employeeId: index + 1,
+      employeeCode: `GLR-${String(index + 1).padStart(3, '0')}`,
+      employeeName: `พนักงาน ${index + 1}`,
+    }));
+    api.payroll.current.mockResolvedValue({
+      period: previewPeriod({
+        lineCount: 26,
+        totalGross: 780000,
+        totalDeductions: 19500,
+        totalNet: 760500,
+        totalSocialSecurity: 19500,
+        lines,
+      }),
+    });
+
+    const { container } = renderPayrollPage();
+
+    expect(await screen.findByText('พนักงาน 26')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Download payslip/i })).toBeNull();
+    expect(screen.queryByText(/หน้า 1 \//)).toBeNull();
+    expect(screen.queryByRole('columnheader', { name: /เงินพิเศษ/i })).toBeNull();
+    expect(screen.queryByRole('columnheader', { name: /OT \/ Commission/i })).toBeNull();
+
+    const firstGrossCell = container.querySelector('tbody td[data-label="รายได้"]');
+    expect(firstGrossCell.className).toContain('text-right');
+    expect(firstGrossCell.className).toContain('payroll-money-cell');
+    expect(firstGrossCell.textContent).toBe('฿30,000.00');
+    expect(container.querySelector('tbody td[data-label="เงินพิเศษ"]')).toBeNull();
+    expect(container.querySelector('tbody td[data-label="OT / Commission"]')).toBeNull();
+
+    const grossHeader = container.querySelector('thead th.payroll-money-cell');
+    expect(grossHeader.className).toContain('text-right');
+
+    const totalRow = container.querySelector('tfoot .payroll-total-row');
+    expect(totalRow).toBeTruthy();
+    expect(totalRow.textContent).toContain('รวมทั้งงวด');
+    expect(totalRow.textContent).toContain('26 คน');
+    expect(totalRow.textContent).toContain('฿780,000.00');
+    expect(totalRow.textContent).toContain('฿760,500.00');
+  });
+
+  it('selects a payroll line from the whole row and opens the detail drawer contract', async () => {
+    const lines = [
+      { ...payrollLine, employeeId: 1, employeeName: 'พนักงาน ก' },
+      { ...payrollLine, id: 56, employeeId: 2, employeeCode: 'GLR-002', employeeName: 'พนักงาน ข' },
+    ];
+    api.payroll.current.mockResolvedValue({
+      period: previewPeriod({
+        lineCount: 2,
+        totalGross: 60000,
+        totalDeductions: 1500,
+        totalNet: 58500,
+        totalSocialSecurity: 1500,
+        lines,
+      }),
+    });
+
+    const { container } = renderPayrollPage();
+
+    const secondRow = (await screen.findByText('พนักงาน ข')).closest('tr');
+    expect(secondRow.getAttribute('role')).toBe('row');
+    expect(secondRow.getAttribute('tabindex')).toBe('0');
+    // Item 4d fix (Opus review, 2026-07-31): `aria-current`, not `aria-selected` -- see
+    // DataTable.jsx's own comment on the render for why (`aria-selected` is only valid ARIA inside a
+    // `grid`/`treegrid`, and this is a plain table). The visible "เลือกอยู่" badge checked below is
+    // unaffected and remains the primary cue.
+    expect(secondRow.getAttribute('aria-current')).toBe('false');
+
+    fireEvent.click(secondRow);
+
+    expect(secondRow.getAttribute('aria-current')).toBe('true');
+    expect(secondRow.className).toContain('active');
+    expect(within(secondRow).getByText('เลือกอยู่')).toBeTruthy();
+    expect(container.querySelector('.payroll-detail-panel').className).toContain('is-open');
+    expect(container.querySelector('.payroll-detail-panel h2').textContent).toBe('พนักงาน ข');
+  });
+
+  // Defect 1 regression guard (Opus review, 2026-07-31): the selected row's `เลือกอยู่` badge used to
+  // paint on top of the employee name because `min-w-0` on the name block only allows the flex item
+  // to SHRINK -- it does nothing to the text once shrunk, so an overlong name simply overflowed its
+  // own box and rendered underneath the badge (a later sibling, so it paints on top). jsdom has no
+  // layout engine, so this can't assert the actual pixel overlap is gone -- it pins down the classes
+  // that prevent it: `<strong>`/`<small>` must each be `block truncate` so they clip with an ellipsis
+  // at their own width, on BOTH the selected row (where the badge is competing for space) and an
+  // unselected one (so the fix isn't accidentally conditioned on `selected`).
+  it('truncates the employee name/code independently instead of letting them overflow under the เลือกอยู่ badge', async () => {
+    const lines = [
+      { ...payrollLine, employeeId: 1, employeeName: 'พนักงานที่มีชื่อยาวมากเกินกว่าจะแสดงในคอลัมน์นี้ได้ทั้งหมด' },
+      { ...payrollLine, id: 56, employeeId: 2, employeeCode: 'GLR-002', employeeName: 'พนักงาน ข' },
+    ];
+    api.payroll.current.mockResolvedValue({
+      period: previewPeriod({
+        lineCount: 2,
+        totalGross: 60000,
+        totalDeductions: 1500,
+        totalNet: 58500,
+        totalSocialSecurity: 1500,
+        lines,
+      }),
+    });
+
+    const { container } = renderPayrollPage();
+
+    // Not `screen.findByText(lines[0].employeeName)`: the first line is auto-selected on first
+    // render, so its name is ALSO already showing in the always-mounted detail panel's own
+    // heading -- an ambiguous match. Grab the rows directly by their DataTable `.data-row` class
+    // (see the `openDetailPanel` helper above for the same reasoning) instead.
+    await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+    const [firstRow, secondRow] = container.querySelectorAll('tr.data-row');
+    fireEvent.click(firstRow);
+    expect(within(firstRow).getByText('เลือกอยู่')).toBeTruthy();
+
+    const selectedNameBlock = within(firstRow).getByText(lines[0].employeeName);
+    expect(selectedNameBlock.tagName).toBe('STRONG');
+    expect(selectedNameBlock.className.split(' ')).toEqual(expect.arrayContaining(['block', 'truncate']));
+    const selectedCodeBlock = firstRow.querySelector('small');
+    expect(selectedCodeBlock.className.split(' ')).toEqual(expect.arrayContaining(['block', 'truncate']));
+
+    // Unselected row: same classes must be present unconditionally, not just when the badge shows up.
+    const unselectedNameBlock = within(secondRow).getByText(lines[1].employeeName);
+    expect(unselectedNameBlock.className.split(' ')).toEqual(expect.arrayContaining(['block', 'truncate']));
+
+    expect(container.querySelectorAll('.data-row')).toHaveLength(2);
+  });
+
+  // B1/B2 fix (Opus review, 2026-07-31): the detail panel has exactly two presentations --
+  // >=1440px is a persistent side panel (no dialog semantics, since the rest of the page beside it
+  // is not hidden), <1440px is a true overlay dialog (focus trap, Escape, role="dialog"). These
+  // tests mock `window.matchMedia` for the `(min-width: 1440px)` query PayrollPage.jsx's
+  // `useMediaQuery` reads (see useIsMobile.js) to pin down each mode independently.
+  //
+  // Item 1 fix (2026-07-31): raised from 1280px -- real-browser measurement showed the side-by-side
+  // track didn't actually fit (money columns hidden behind a scrollbar) until ~1400px; see
+  // index.css's `payroll-wide` custom-variant comment for the full measurement.
+  describe('detail panel: side panel vs. overlay dialog', () => {
+    afterEach(() => {
+      delete window.matchMedia;
+    });
+
+    function mockPanelViewport(isDesktopWidth) {
+      window.matchMedia = vi.fn((query) => ({
+        matches: query === '(min-width: 1440px)' ? isDesktopWidth : false,
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }));
+    }
+
+    // Not `findByText(payrollLine.employeeName)`: with a single line, that name is ALSO the
+    // default `selectedLine` shown in the (always-mounted, just CSS-hidden until opened) detail
+    // panel's own heading from the very first render -- an ambiguous match before any click even
+    // happens, and the employee code has the same problem. Wait on the always-unique Preview
+    // button instead (proof the period finished loading), then grab the row via `.data-row` --
+    // DataTable's own class for a genuine data row (see DataTable.jsx) -- and click it directly.
+    async function openDetailPanel(container) {
+      await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+      const row = container.querySelector('tr.data-row');
+      fireEvent.click(row);
+    }
+
+    it('is a persistent side panel with no dialog semantics at >=1440px', async () => {
+      mockPanelViewport(true);
+      const { container } = renderPayrollPage();
+      await openDetailPanel(container);
+
+      const panel = container.querySelector('.payroll-detail-panel');
+      expect(panel.className).toContain('is-open');
+      expect(panel.getAttribute('role')).toBeNull();
+      expect(panel.getAttribute('aria-modal')).toBeNull();
+      expect(panel.getAttribute('aria-labelledby')).toBeNull();
+    });
+
+    it('is a labelled dialog overlay below 1440px', async () => {
+      mockPanelViewport(false);
+      const { container } = renderPayrollPage();
+      await openDetailPanel(container);
+
+      const panel = container.querySelector('.payroll-detail-panel');
+      expect(panel.getAttribute('role')).toBe('dialog');
+      expect(panel.getAttribute('aria-modal')).toBe('true');
+      const labelledBy = panel.getAttribute('aria-labelledby');
+      expect(labelledBy).toBeTruthy();
+      expect(document.getElementById(labelledBy).textContent).toBe(payrollLine.employeeName);
+    });
+
+    // Regression guard: the dismiss control used to be hidden by a `.payroll-detail-close`
+    // `display` toggle in styles.css, which never applied -- Button.jsx's own `inline-flex`
+    // utility sits in `layer(utilities)` and always beats `layer(legacy)`. So the button rendered
+    // at every width, including the >=1440px side panel where clicking it is inert (that panel's
+    // visibility is not gated by `detailOpen`). Asserting on presence/absence in the DOM, not on
+    // computed `display`: jsdom applies no stylesheets, so a CSS-only fix would pass this test
+    // while still being dead in the browser.
+    it('renders the close button only in the overlay presentation', async () => {
+      mockPanelViewport(false);
+      const overlay = renderPayrollPage();
+      await openDetailPanel(overlay.container);
+      expect(overlay.container.querySelector('.payroll-detail-close')).not.toBeNull();
+      overlay.unmount();
+
+      mockPanelViewport(true);
+      const sidePanel = renderPayrollPage();
+      await openDetailPanel(sidePanel.container);
+      expect(sidePanel.container.querySelector('.payroll-detail-panel')).not.toBeNull();
+      expect(sidePanel.container.querySelector('.payroll-detail-close')).toBeNull();
+    });
+
+    it('closes the overlay on Escape', async () => {
+      mockPanelViewport(false);
+      const { container } = renderPayrollPage();
+      await openDetailPanel(container);
+      expect(container.querySelector('.payroll-detail-panel').getAttribute('role')).toBe('dialog');
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      const panel = container.querySelector('.payroll-detail-panel');
+      expect(panel.className).not.toContain('is-open');
+      // Closed also means "no longer a dialog" -- role/aria-modal are gated on detailOpen too.
+      expect(panel.getAttribute('role')).toBeNull();
+    });
+
+    it('traps Tab inside the overlay panel, wrapping last back to first', async () => {
+      mockPanelViewport(false);
+      const { container } = renderPayrollPage();
+      await openDetailPanel(container);
+
+      const panel = container.querySelector('.payroll-detail-panel');
+      const focusable = panel.querySelectorAll(
+        'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])',
+      );
+      expect(focusable.length).toBeGreaterThan(1);
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      // Opening the overlay moves focus into it immediately (useDialogFocus's initial-focus step).
+      expect(document.activeElement).toBe(first);
+
+      last.focus();
+      fireEvent.keyDown(document, { key: 'Tab' });
+      expect(document.activeElement).toBe(first);
+    });
+
+    it('does not trap focus or steal it for the >=1440px persistent side panel', async () => {
+      mockPanelViewport(true);
+      const { container } = renderPayrollPage();
+      const previewButton = await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+      previewButton.focus();
+      expect(document.activeElement).toBe(previewButton);
+
+      fireEvent.click(container.querySelector('tr.data-row'));
+
+      // A side panel beside the table must never steal focus from what the user was doing --
+      // unlike the overlay case above, where opening moves focus into the panel immediately.
+      expect(document.activeElement).toBe(previewButton);
+    });
+  });
+
+  it('ties footer sums to the hero totals exactly, including satang', async () => {
+    const lines = [
+      {
+        ...payrollLine,
+        id: 101,
+        employeeId: 1,
+        employeeName: 'พนักงาน ก',
+        grossEarnings: 100.10,
+        totalDeductions: 0.05,
+        netPay: 100.05,
+      },
+      {
+        ...payrollLine,
+        id: 102,
+        employeeId: 2,
+        employeeCode: 'GLR-002',
+        employeeName: 'พนักงาน ข',
+        grossEarnings: 200.20,
+        totalDeductions: 0.10,
+        netPay: 200.10,
+      },
+    ];
+    api.payroll.current.mockResolvedValue({
+      period: previewPeriod({
+        lineCount: 2,
+        totalGross: 300.30,
+        totalDeductions: 0.15,
+        totalNet: 300.15,
+        totalSocialSecurity: 0.15,
+        lines,
+      }),
+    });
+
+    const { container } = renderPayrollPage();
+
+    expect(await screen.findByText('พนักงาน ข')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    const totalRow = container.querySelector('tfoot .payroll-total-row');
+    expect(totalRow.textContent).toContain('฿300.30');
+    expect(totalRow.textContent).toContain('฿0.15');
+    expect(totalRow.textContent).toContain('฿300.15');
+    expect(totalRow.textContent).toContain('ตรงกับรายได้รวม');
+    expect(totalRow.textContent).toContain('ตรงกับเงินหักรวม');
+    expect(totalRow.textContent).toContain('ตรงกับยอดโอนสุทธิ');
+
+    const mobileSummary = container.querySelector('.payroll-mobile-summary-row');
+    expect(mobileSummary.textContent).toContain('รายได้');
+    expect(mobileSummary.textContent).toContain('หัก');
+    expect(mobileSummary.textContent).toContain('สุทธิ');
+    expect(mobileSummary.textContent).toContain('฿300.30');
+  });
+
+  it('raises a visible reconciliation alert when a line sum does not match the hero total', async () => {
+    const lines = [
+      {
+        ...payrollLine,
+        grossEarnings: 300.30,
+        totalDeductions: 0.15,
+        netPay: 300.15,
+      },
+    ];
+    api.payroll.current.mockResolvedValue({
+      period: previewPeriod({
+        totalGross: 300.31,
+        totalDeductions: 0.15,
+        totalNet: 300.15,
+        totalSocialSecurity: 0.15,
+        lines,
+      }),
+    });
+
+    const { container } = renderPayrollPage();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('ยอดรวมไม่ตรงกับสรุปด้านบน');
+    expect(alert.textContent).toContain('รายได้');
+    expect(alert.textContent).toContain('฿300.30');
+    expect(alert.textContent).toContain('฿300.31');
+
+    const totalRow = container.querySelector('tfoot .payroll-total-row');
+    expect(totalRow.textContent).toContain('ไม่ตรงกับรายได้รวม: ฿300.31');
   });
 
   it('starts payslip email distribution for a processed payroll period', async () => {
@@ -615,6 +965,35 @@ describe('PayrollPage adjustment inputs', () => {
       expect(reason.getAttribute('role')).toBe('note');
       const processButton = screen.getByRole('button', { name: /ประมวลผลเงินเดือน/i });
       expect(processButton.getAttribute('aria-describedby')).toBe(reason.id);
+    });
+
+    it('keeps Preview visually primary and demotes Process into its own status region', async () => {
+      renderPayrollPage();
+
+      const previewButton = await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+      const processButton = screen.getByRole('button', { name: /ประมวลผลเงินเดือน/i });
+      const processRegion = processButton.closest('.payroll-process-region');
+
+      expect(previewButton.className).toContain('bg-primary');
+      expect(processButton.className).toContain('text-danger');
+      expect(processButton.className).not.toContain('bg-primary');
+      expect(processRegion).toBeTruthy();
+      expect(processRegion.textContent).toContain('ปิดรอบเงินเดือน');
+      expect(processRegion.textContent).toContain('ตัวอย่าง');
+      expect(processRegion.textContent).toContain('1 คน');
+    });
+
+    it('names employee count and the OT/no-unprocess consequence in the Process confirmation', async () => {
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ lineCount: 1 }) });
+
+      renderPayrollPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /ประมวลผลเงินเดือน/i }));
+
+      const dialog = await screen.findByRole('dialog', { name: /ประมวลผลเงินเดือน/i });
+      expect(dialog.textContent).toContain('พนักงาน 1 คน');
+      expect(dialog.textContent).toContain('การอนุมัติ OT ของเดือนนี้จะปิดทันที');
+      expect(dialog.textContent).toContain('ไม่มีทางยกเลิกการประมวลผล');
     });
   });
 

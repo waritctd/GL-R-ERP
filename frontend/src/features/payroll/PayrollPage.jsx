@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
@@ -12,7 +12,8 @@ import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { FilterBar, FormGrid, PageStack, Panel } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { useIsMobile } from '../../hooks/useIsMobile.js';
+import { useDialogFocus } from '../../hooks/useDialogFocus.js';
+import { useIsMobile, useMediaQuery } from '../../hooks/useIsMobile.js';
 import { cn } from '../../utils/cn.js';
 import { formatMoney, formatShortDate, formatThaiMonthYearFromMonthInputValue, payrollStatusLabel as statusInfo } from '../../utils/format.js';
 
@@ -33,64 +34,161 @@ const EXPORT_KINDS = [
   { value: 'payroll-detail', label: 'รายละเอียดเงินเดือนรายเดือน (Excel)', filePrefix: 'PayrollDetail', extension: 'xlsx' },
 ];
 
-const payrollColumns = [
-  {
+function MoneyCode({ value }) {
+  return <code className="payroll-money">{formatMoney(value)}</code>;
+}
+
+function createEmployeeColumn(selectedEmployeeId) {
+  return {
     key: 'employee',
     header: 'พนักงาน',
     sortable: true,
     sortAccessor: (line) => line.employeeName,
     searchAccessor: (line) => line.employeeName,
-    render: (line) => (
-      <span>
-        <strong>{line.employeeName}</strong>
-        <small>{line.employeeCode} · {line.departmentName || '-'}</small>
-        {/* Finding 1 fix (Opus review, 2026-07-30): list-level warning so a daily-rate employee with
-            no/zero days-worked is visible WITHOUT having to open their detail panel first -- the gap
-            the ฿0-payslip bug actually lived in (hasPayrollInput below never submits a row with
-            nothing entered, so HR could Process a whole month without ever noticing). Purely a nudge;
-            PayrollService#requireEveryDailyRateEmployeeHasDaysWorked is the real enforcement. */}
-        {line.payType === 'D' && !(Number(line.daysWorked) > 0) && (
-          <small className="block text-warning">⚠ ยังไม่ได้ระบุจำนวนวันทำงาน</small>
-        )}
-      </span>
-    ),
-  },
+    render: (line) => {
+      const selected = Number(line.employeeId) === Number(selectedEmployeeId);
+      // B4 fix (Opus review, 2026-07-31): moved from `.payroll-employee-cell`/`.payroll-selected-cue`
+      // styles.css rules to Tailwind utilities at the call site (CLAUDE.md Tailwind-first) -- plain
+      // flex/badge layout with no dynamic/cross-component coupling, so nothing here needed a
+      // stylesheet rule in the first place.
+      //
+      // Defect 1 fix (Opus review, 2026-07-31): `min-w-0` on the inner span only lets the flex item
+      // SHRINK -- it does nothing to the text inside once shrunk, so a name too long for the
+      // available space just painted past its own right edge and under the `.payroll-selected-cue`
+      // badge (a later sibling, so it paints on top). The legacy `.data-row > td > span/strong/small`
+      // rule in styles.css used to backstop this with block+ellipsis, but that rule lives in
+      // `@layer legacy` and Tailwind utilities always win over it (see styles-css-loses-to-tailwind-
+      // utilities gotcha), so it can no longer be relied on here now that the cell is Tailwind-first.
+      // `<strong>`/`<small>` are inline by default and render as two separate lines only because nothing
+      // upstream declares `display: block` for them anymore -- each needs its own `block truncate` so
+      // it clips with an ellipsis at ITS OWN width instead of overflowing into the badge.
+      return (
+        <span className="flex items-center justify-between gap-2.5 min-w-0">
+          <span className="min-w-0 overflow-hidden">
+            <strong className="block truncate">{line.employeeName}</strong>
+            <small className="block truncate">{line.employeeCode} · {line.departmentName || '-'}</small>
+            {/* Finding 1 fix (Opus review, 2026-07-30): list-level warning so a daily-rate employee
+                with no/zero days-worked is visible WITHOUT having to open their detail panel first --
+                the gap the ฿0-payslip bug actually lived in (hasPayrollInput below never submits a row
+                with nothing entered, so HR could Process a whole month without ever noticing). Purely
+                a nudge; PayrollService#requireEveryDailyRateEmployeeHasDaysWorked is the real
+                enforcement. */}
+            {line.payType === 'D' && !(Number(line.daysWorked) > 0) && (
+              <small className="block truncate text-warning">⚠ ยังไม่ได้ระบุจำนวนวันทำงาน</small>
+            )}
+          </span>
+          {selected ? (
+            <span className="inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-sm border border-info-border bg-info-bg px-1.5 py-0.5 text-2xs font-black text-info">
+              <Icon name="check" size={13} />
+              เลือกอยู่
+            </span>
+          ) : null}
+        </span>
+      );
+    },
+  };
+}
+
+const payrollMoneyColumns = [
   {
     key: 'grossEarnings',
     header: 'รายได้',
+    heroLabel: 'รายได้รวม',
+    heroAccessor: (period) => period?.totalGross,
     sortable: true,
+    align: 'right',
+    className: 'payroll-money-cell',
+    isMoney: true,
+    totalAccessor: (line) => Number(line.grossEarnings || 0),
     sortAccessor: (line) => Number(line.grossEarnings || 0),
-    render: (line) => <code>{formatMoney(line.grossEarnings)}</code>,
+    render: (line) => <MoneyCode value={line.grossEarnings} />,
   },
   {
     key: 'specialPayTotal',
     header: 'เงินพิเศษ',
     sortable: true,
+    align: 'right',
+    className: 'payroll-money-cell',
+    isMoney: true,
+    hideWhenZero: true,
+    totalAccessor: (line) => Number(line.specialPayTotal || 0),
     sortAccessor: (line) => Number(line.specialPayTotal || 0),
-    render: (line) => <code>{formatMoney(line.specialPayTotal)}</code>,
+    render: (line) => <MoneyCode value={line.specialPayTotal} />,
   },
   {
     key: 'otCommission',
     header: 'OT / Commission',
     sortable: true,
+    align: 'right',
+    className: 'payroll-money-cell',
+    isMoney: true,
+    hideWhenZero: true,
+    totalAccessor: (line) => Number(line.overtimePay || 0) + Number(line.commissionPay || 0),
     sortAccessor: (line) => Number(line.overtimePay || 0) + Number(line.commissionPay || 0),
-    render: (line) => <code>{formatMoney(Number(line.overtimePay || 0) + Number(line.commissionPay || 0))}</code>,
+    render: (line) => <MoneyCode value={Number(line.overtimePay || 0) + Number(line.commissionPay || 0)} />,
   },
   {
     key: 'totalDeductions',
     header: 'เงินหัก',
+    heroLabel: 'เงินหักรวม',
+    heroAccessor: (period) => period?.totalDeductions,
     sortable: true,
+    align: 'right',
+    className: 'payroll-money-cell',
+    isMoney: true,
+    totalAccessor: (line) => Number(line.totalDeductions || 0),
     sortAccessor: (line) => Number(line.totalDeductions || 0),
-    render: (line) => <code>{formatMoney(line.totalDeductions)}</code>,
+    render: (line) => <MoneyCode value={line.totalDeductions} />,
   },
   {
     key: 'netPay',
     header: 'สุทธิ',
+    heroLabel: 'ยอดโอนสุทธิ',
+    heroAccessor: (period) => period?.totalNet,
     sortable: true,
+    align: 'right',
+    className: 'payroll-money-cell',
+    isMoney: true,
+    totalAccessor: (line) => Number(line.netPay || 0),
     sortAccessor: (line) => Number(line.netPay || 0),
-    render: (line) => <code>{formatMoney(line.netPay)}</code>,
+    render: (line) => <MoneyCode value={line.netPay} />,
   },
 ];
+
+function hasNonZeroMoney(rows, column) {
+  if (!column.hideWhenZero) return true;
+  return rows.some((line) => Number(column.totalAccessor?.(line) || 0) !== 0);
+}
+
+function toSatang(value) {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount)) return 0;
+  return Math.round(amount * 100);
+}
+
+function formatSatang(value) {
+  return formatMoney(value / 100);
+}
+
+function sumPayrollSatang(rows, valueFor) {
+  return rows.reduce((sum, row) => sum + toSatang(valueFor(row)), 0);
+}
+
+function buildPayrollReconciliation(rows, period) {
+  const byColumn = Object.fromEntries(payrollMoneyColumns.map((column) => {
+    const sumSatang = sumPayrollSatang(rows, column.totalAccessor);
+    const heroSatang = column.heroAccessor ? toSatang(column.heroAccessor(period)) : null;
+    return [column.key, {
+      column,
+      sumSatang,
+      heroSatang,
+      matchesHero: heroSatang == null || sumSatang === heroSatang,
+      differenceSatang: heroSatang == null ? 0 : sumSatang - heroSatang,
+    }];
+  }));
+  const mismatches = Object.values(byColumn).filter((item) => item.heroSatang != null && !item.matchesHero);
+  return { byColumn, mismatches, rowCount: rows.length };
+}
 
 const thisMonth = new Date().toISOString().slice(0, 7);
 const specialPayFields = [
@@ -440,6 +538,91 @@ function hasPayrollInput(input) {
   return payrollInputKeys.some((key) => parsePayrollNumber(input[key]) > 0);
 }
 
+function ReconciliationNote({ item }) {
+  if (!item?.column?.heroLabel) return null;
+  if (item.matchesHero) {
+    return <small className="payroll-reconcile-note is-ok">ตรงกับ{item.column.heroLabel}</small>;
+  }
+  return (
+    <small className="payroll-reconcile-note is-mismatch">
+      ไม่ตรงกับ{item.column.heroLabel}: {formatSatang(item.heroSatang)}
+    </small>
+  );
+}
+
+function PayrollTotalsRow({ columns, reconciliation }) {
+  return (
+    <tr className="payroll-table payroll-total-row">
+      {columns.map((column) => {
+        if (column.key === 'employee') {
+          return (
+            <th key={column.key} scope="row">
+              <span>รวมทั้งงวด</span>
+              <small>{reconciliation.rowCount} คน</small>
+            </th>
+          );
+        }
+        const item = reconciliation.byColumn[column.key];
+        return (
+          <td key={column.key} className="text-right payroll-money-cell" data-label={column.header}>
+            <code className="payroll-money">{formatSatang(item.sumSatang)}</code>
+            <ReconciliationNote item={item} />
+          </td>
+        );
+      })}
+    </tr>
+  );
+}
+
+function PayrollMobileSummaryRow({ reconciliation, columnCount }) {
+  const gross = reconciliation.byColumn.grossEarnings;
+  const deductions = reconciliation.byColumn.totalDeductions;
+  const net = reconciliation.byColumn.netPay;
+  const hasMismatch = reconciliation.mismatches.length > 0;
+  return (
+    <tr className="payroll-mobile-summary-row">
+      <td colSpan={columnCount}>
+        <div className={`payroll-mobile-summary-bar${hasMismatch ? ' is-mismatch' : ''}`}>
+          <span>
+            <small>รายได้</small>
+            <b>{formatSatang(gross.sumSatang)}</b>
+          </span>
+          <span>
+            <small>หัก</small>
+            <b>{formatSatang(deductions.sumSatang)}</b>
+          </span>
+          <span>
+            <small>สุทธิ</small>
+            <b>{formatSatang(net.sumSatang)}</b>
+          </span>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function PayrollTotalsFooter({ columns, reconciliation }) {
+  return (
+    <>
+      <PayrollTotalsRow columns={columns} reconciliation={reconciliation} />
+      <PayrollMobileSummaryRow reconciliation={reconciliation} columnCount={columns.length} />
+    </>
+  );
+}
+
+function PayrollReconciliationAlert({ mismatches }) {
+  if (mismatches.length === 0) return null;
+  return (
+    <div className="payroll-reconciliation-alert" role="alert">
+      <Icon name="triangleAlert" size={16} />
+      <span>
+        ยอดรวมไม่ตรงกับสรุปด้านบน:
+        {' '}
+        {mismatches.map((item) => `${item.column.header} ${formatSatang(item.sumSatang)} ≠ ${formatSatang(item.heroSatang)}`).join(' · ')}
+      </span>
+    </div>
+  );
+}
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -456,6 +639,23 @@ export function PayrollPage({ showToast }) {
   const [period, setPeriod] = useState(null);
   const [adjustments, setAdjustments] = useState({});
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  // B1 fix (Opus review, 2026-07-31): the detail panel has exactly two presentations, not three.
+  // >=1440px is a persistent side panel next to the table; below that it is the fixed slide-over
+  // overlay tablet already used. The query is the JS-side mirror of the CSS `payroll-wide:` custom
+  // variant (`min-width: 1440px`, see index.css's `@custom-variant`) so the two can never disagree
+  // about which mode is active.
+  //
+  // Item 1 fix (2026-07-31): this used to be Tailwind's own built-in `xl:` breakpoint (1280px,
+  // `--breakpoint-xl: 80rem` in tailwindcss/theme.css) on the theory that was the panel's
+  // content-fit floor. Measured live at :5211 with the panel open, it was not: at 1280px the table
+  // needed 714px against ~598px actually available beside a 340px panel, hiding 116px -- the
+  // money-critical "สุทธิ" (net pay) column -- behind a horizontal scrollbar. See index.css's
+  // `payroll-wide` comment for the full measurement and why 1440px (not the bare ~1397-1400px
+  // crossover, or the ~1360px first estimate) is the number used.
+  const isDesktopPanel = useMediaQuery('(min-width: 1440px)');
+  const isOverlayPanel = !isDesktopPanel;
+  const detailPanelRef = useRef(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [confirmProcess, setConfirmProcess] = useState(false);
@@ -513,6 +713,21 @@ export function PayrollPage({ showToast }) {
     : emptyPeriod
       ? 'ยังไม่มีพนักงานในรอบเงินเดือนนี้ — กดคำนวณตัวอย่างหรือเลือกรอบเดือนที่มีข้อมูลก่อนประมวลผล'
       : null;
+
+  function selectPayrollLine(line) {
+    setSelectedEmployeeId(line.employeeId);
+    setDetailOpen(true);
+  }
+
+  function closeDetailPanel() {
+    setDetailOpen(false);
+  }
+
+  // B2 fix (Opus review, 2026-07-31): focus trap + Escape-to-close + focus-restoration, shared with
+  // Modal.jsx via useDialogFocus (see that hook's own comment). `active` is false whenever the panel
+  // is the >=1440px persistent side panel rather than the <1440px overlay -- a side panel must not
+  // steal Tab or respond to Escape, since the rest of the page beside it is not actually hidden.
+  useDialogFocus({ active: isOverlayPanel && detailOpen, containerRef: detailPanelRef, onClose: closeDetailPanel });
 
   async function load() {
     setLoading(true);
@@ -573,6 +788,7 @@ export function PayrollPage({ showToast }) {
 
   useEffect(() => {
     setSelectedEmployeeId(null);
+    setDetailOpen(false);
     setPayDate(`${month}-26`); // default salary pay date is the 26th of the selected month
     load();
   }, [month]);
@@ -702,24 +918,29 @@ export function PayrollPage({ showToast }) {
     }
   }
 
-  const columns = [
-    ...payrollColumns,
-    {
-      key: 'actions',
-      header: 'เอกสาร',
-      render: (line) => (
-        <span className="row-actions">
-          <Button type="button" variant="text" onClick={() => setSelectedEmployeeId(line.employeeId)}>
-            รายละเอียด
-          </Button>
-          <Button type="button" variant="secondary" onClick={() => downloadPayslip(line)} disabled={!period?.id || !line.id || saving}>
-            <Icon name="fileText" />
-            Download payslip
-          </Button>
-        </span>
-      ),
-    },
-  ];
+  const periodLines = useMemo(() => period?.lines || [], [period?.lines]);
+  const payrollReconciliation = useMemo(
+    () => buildPayrollReconciliation(periodLines, period),
+    [periodLines, period],
+  );
+  const employeeColumn = useMemo(() => createEmployeeColumn(selectedLine?.employeeId), [selectedLine?.employeeId]);
+  const visiblePayrollColumns = useMemo(
+    () => [
+      employeeColumn,
+      ...payrollMoneyColumns.filter((column) => hasNonZeroMoney(periodLines, column)),
+    ],
+    [employeeColumn, periodLines],
+  );
+  const visibleMoneyColumnCount = visiblePayrollColumns.filter((column) => column.isMoney).length;
+  const payrollGridColumns = useMemo(
+    () => [
+      'minmax(150px, 1.1fr)',
+      ...Array.from({ length: visibleMoneyColumnCount }, () => 'minmax(7.5rem, 0.86fr)'),
+    ].join(' '),
+    [visibleMoneyColumnCount],
+  );
+
+  const columns = visiblePayrollColumns;
 
   async function downloadPayslip(line) {
     if (!period?.id || !line?.id) return;
@@ -818,55 +1039,20 @@ export function PayrollPage({ showToast }) {
           (Tailwind-first per CLAUDE.md) — `cn` is `twMerge`, so these override FilterBar's base
           classes cleanly instead of fighting them. The dead rule was deleted from styles.css. */}
       <FilterBar className="payroll-actions flex-col items-stretch gap-[14px]">
-        <div className="payroll-actions-status">
-          <div>
-            <strong>พนักงาน {period?.lineCount || 0} คน</strong>
-            <span>สถานะรอบเงินเดือน</span>
-          </div>
-          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-        </div>
-
         <div className="payroll-actions-groups">
           {/* Review — safe, read-only recompute. */}
           <div className="payroll-actions-group">
-            <Button type="button" variant="secondary" onClick={preview} disabled={loading || saving}>
+            <Button type="button" onClick={preview} disabled={loading || saving}>
               <Icon name="search" />
               คำนวณตัวอย่าง
             </Button>
           </div>
 
-          {/* Run — the irreversible action. Kept visually apart (its own bordered group) and blocked
-              outright below the 720px mobile breakpoint rather than merely advised against, since a
-              mis-tap here commits payroll. Also blocked when the loaded period has no lines (F1) —
-              see the `emptyPeriod` comment above for why. */}
-          <div className="payroll-actions-group payroll-actions-group-run">
-            <Button
-              type="button"
-              onClick={process}
-              disabled={loading || saving || isMobile || emptyPeriod}
-              aria-describedby={processBlockedReason ? 'payroll-process-block-reason' : undefined}
-              title={processBlockedReason || undefined}
-            >
-              <Icon name="check" />
-              ประมวลผลเงินเดือน
-            </Button>
-            {/* Informational state, not an error: this explains why the button is
-                unavailable right now, so it reads in muted body colour rather than
-                danger red. Utilities at the call site, not a styles.css rule —
-                styles.css sits in @layer legacy and loses to any text utility a
-                future caller adds here. */}
-            {processBlockedReason && (
-              <span
-                id="payroll-process-block-reason"
-                role="note"
-                className="max-w-[34ch] text-xs font-semibold text-text-muted"
-              >
-                {processBlockedReason}
-              </span>
-            )}
-          </div>
-
-          {/* Export — statutory file generation, plus the detail xlsx which also works pre-process. */}
+          {/* Export — statutory file generation, plus the detail xlsx which also works pre-process.
+              Run (ประมวลผลเงินเดือน) is deliberately NOT in this toolbar — it is demoted to its own
+              `payroll-process-region` below the Send group (B-series tablet-safety fix, 2026-07-31):
+              the irreversible action gets visual distance from routine preview/export/send work
+              rather than sharing a bordered group inline with them. */}
           <div className="payroll-actions-group">
             <select
               value={exportKind}
@@ -924,6 +1110,47 @@ export function PayrollPage({ showToast }) {
               ส่งอีเมลสลิปเงินเดือน
             </Button>
           </div>
+
+          {/* Run — the irreversible action. Kept in its own region with the period state and pushed
+              after routine preview/export/send work. It stays blocked below the 720px mobile
+              breakpoint; tablet keeps it because the tablet table/detail contract is now usable. */}
+          <section className="payroll-process-region" aria-labelledby="payroll-process-title">
+            <div className="payroll-process-copy">
+              <span id="payroll-process-title">ปิดรอบเงินเดือน</span>
+              <small>
+                <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                <span>{period?.lineCount || 0} คน</span>
+              </small>
+            </div>
+            <div className="payroll-process-controls">
+              <Button
+                type="button"
+                variant="danger"
+                size="sm"
+                onClick={process}
+                disabled={loading || saving || isMobile || emptyPeriod}
+                aria-describedby={processBlockedReason ? 'payroll-process-block-reason' : undefined}
+                title={processBlockedReason || undefined}
+              >
+                <Icon name="check" size={15} />
+                ประมวลผลเงินเดือน
+              </Button>
+              {/* Informational state, not an error: this explains why the button is
+                  unavailable right now, so it reads in muted body colour rather than
+                  danger red. Utilities at the call site, not a styles.css rule —
+                  styles.css sits in @layer legacy and loses to any text utility a
+                  future caller adds here. */}
+              {processBlockedReason && (
+                <span
+                  id="payroll-process-block-reason"
+                  role="note"
+                  className="max-w-[34ch] text-xs font-semibold text-text-muted"
+                >
+                  {processBlockedReason}
+                </span>
+              )}
+            </div>
+          </section>
         </div>
       </FilterBar>
 
@@ -935,38 +1162,178 @@ export function PayrollPage({ showToast }) {
           fifteen-column table" mobile decision (section 9c). */}
       <TaxTreatmentMatrixSection payrollMonth={month} showToast={showToast} />
 
-      <section className="payroll-workspace">
-        <DataTable
-          columns={columns}
-          rows={period?.lines || []}
-          getRowKey={(line) => line.employeeId}
-          gridClassName="payroll-table"
-          pageSize={25}
-          searchable
-          searchPlaceholder="ค้นหาพนักงาน"
-          rowClassName={(line) => `payroll-row${Number(line.employeeId) === Number(selectedLine?.employeeId) ? ' active' : ''}`}
-          loading={loading}
-          emptyState={{
-            icon: 'badgeDollar',
-            title: 'ยังไม่มีข้อมูลเงินเดือน',
-            description: 'เลือกรอบเดือนหรือกดรีเฟรชเพื่อคำนวณตัวอย่าง',
-          }}
+      {/* B1/B4 fix (Opus review, 2026-07-31): layout moved to Tailwind utilities at the call site
+          (CLAUDE.md Tailwind-first) instead of a `.payroll-workspace` styles.css rule -- two states,
+          not three: below the `payroll-wide:` custom variant (the panel's overlay floor, see the
+          isDesktopPanel comment above) the table is the only in-flow column; at >=1440px a second
+          `minmax(340px, 0.35fr)` column holds the sticky side panel. `minmax(0, ...)` on both tracks
+          deliberately, never a bare `1fr`/`0.35fr` -- a bare fr track floors at min-content and was
+          the root cause of the panel-pushed-off-canvas regression this fix replaces.
+
+          Defect 2 fix (Opus review, 2026-07-31): the floor above was briefly dropped to 300px (this
+          comment already said 340px -- the code just never matched it), which squeezed the
+          special-pay money inputs to 107px and wrapped every Thai label to 3 lines. 340px was
+          already the measured content-fit floor referenced in the `max-width: 1439px` comment in
+          styles.css, restoring it costs nothing on the "below the fold" problem B1 actually fixed --
+          that was a THIRD stacked panel state at a stale 1500px breakpoint, unrelated to this
+          track's width.
+
+          Item 1 fix (2026-07-31): the "~630px natural width, comfortable room at every desktop width"
+          claim this comment used to make here was wrong -- measured live, the table's actual grid
+          minimum with the panel open is 714px (150px employee + 4 x 120px money columns + gaps), and
+          at the previous 1280px breakpoint that left only ~598px beside the panel, hiding the
+          "สุทธิ" (net pay) column behind a horizontal scrollbar with 116px unreachable. The `xl:`
+          breakpoint was raised to `payroll-wide:` (1440px, see index.css) specifically because 714px
+          does NOT fit beside a 340px panel until content width clears ~1070px, which this app's
+          sidebar/gutters push out to a ~1397-1400px viewport in practice -- 1440px is that floor plus
+          real margin. Verified at 1440px: table naturally grows past its 714px minimum (to ~758px in
+          the current dataset) with zero columns hidden (see payrollResponsiveCss.test.js and this
+          branch's PR body for the exact measurements). */}
+      <section className="grid grid-cols-[minmax(0,1fr)] payroll-wide:grid-cols-[minmax(0,1fr)_minmax(340px,0.35fr)] gap-4 items-start">
+        {/* B2 fix (Opus review, 2026-07-31): while the detail panel is a genuine overlay dialog
+            (<1440px, open), the rest of the page behind the dim backdrop must be unreachable, not
+            just visually dimmed -- otherwise Tab still walks a screen-reader/keyboard user out of
+            the panel into content that is only hidden by a z-index. `inert` (not just aria-hidden)
+            removes this region from both the accessibility tree and the tab order in one attribute.
+            `'' : undefined`, not a boolean -- React 18 only renders the bare `inert` attribute for a
+            truthy STRING value; `inert={true}` is silently dropped (verified in this repo's jsdom). */}
+        <div
+          className="payroll-table-region"
+          style={{ '--payroll-table-columns': payrollGridColumns }}
+          inert={isOverlayPanel && detailOpen ? '' : undefined}
+        >
+          <PayrollReconciliationAlert mismatches={payrollReconciliation.mismatches} />
+          <DataTable
+            columns={columns}
+            rows={periodLines}
+            getRowKey={(line) => line.employeeId}
+            gridClassName="payroll-table"
+            pageSize={Math.max(periodLines.length, 25)}
+            searchable
+            searchPlaceholder="ค้นหาพนักงาน"
+            // B4 fix (Opus review, 2026-07-31): `cursor-pointer` is a Tailwind utility at the call
+            // site (CLAUDE.md Tailwind-first) instead of a `.payroll-row { cursor: pointer }`
+            // styles.css rule -- `.payroll-row.active`'s background/shadow stay in styles.css (theme
+            // tokens, see the comment on that rule) since this is the one line that was genuinely a
+            // one-property override.
+            rowClassName={(line) => cn('payroll-row cursor-pointer', Number(line.employeeId) === Number(selectedLine?.employeeId) && 'active')}
+            loading={loading}
+            stickyHeader
+            showPagination={false}
+            onRowSelect={selectPayrollLine}
+            isRowSelected={(line) => Number(line.employeeId) === Number(selectedLine?.employeeId)}
+            footerRow={({ columns: renderedColumns }) => (
+              <PayrollTotalsFooter columns={renderedColumns} reconciliation={payrollReconciliation} />
+            )}
+            emptyState={{
+              icon: 'badgeDollar',
+              title: 'ยังไม่มีข้อมูลเงินเดือน',
+              description: 'เลือกรอบเดือนหรือกดรีเฟรชเพื่อคำนวณตัวอย่าง',
+            }}
+          />
+        </div>
+
+        {/* B2 fix (Opus review, 2026-07-31): a <button aria-hidden="true"> was the previous backdrop
+            -- an interactive element deliberately hidden from the accessibility tree is exactly the
+            anti-pattern Modal.jsx's own backdrop avoids. `role="presentation"` on a plain <div> (the
+            established pattern, see Modal.jsx) stops this element being announced as anything at
+            all, while a click still closes the panel via onClick same as before. */}
+        <div
+          className={cn('payroll-detail-backdrop', detailOpen && 'is-open')}
+          role="presentation"
+          onClick={closeDetailPanel}
         />
 
-        <aside className={cn(PANEL_CLASS, 'payroll-detail-panel')}>
+        <aside
+          ref={detailPanelRef}
+          // tabIndex={-1}: lets the panel itself take focus programmatically (useDialogFocus falls
+          // back to it when the panel has no focusable children) without ever joining the Tab order.
+          tabIndex={-1}
+          // Defect 2 fix (Opus review, 2026-07-31): `@container` (Tailwind v4 has this built in, no
+          // plugin) turns the panel itself into a container-query context so the two money-field
+          // grids below can respond to the PANEL's own available width instead of the viewport's --
+          // the panel is a sticky side column at >=1440px and a fixed-width overlay below that, so
+          // its width is not a function of viewport width alone (a `sm:`/`md:` viewport breakpoint
+          // would be lying about what's actually being measured). See the `@sm:grid-cols-2` classes
+          // on payroll-detail-grid/payroll-special-grid below.
+          className={cn(PANEL_CLASS, 'payroll-detail-panel', '@container', detailOpen && 'is-open')}
+          // B2 fix (Opus review, 2026-07-31): dialog semantics apply ONLY in overlay mode (<1440px) --
+          // at >=1440px this is a persistent side panel beside the table, not a dialog stealing focus,
+          // so role/aria-modal/aria-labelledby must not be present there (an always-on role="dialog"
+          // on a panel that never traps focus or blocks the rest of the page would be actively wrong).
+          role={isOverlayPanel && detailOpen ? 'dialog' : undefined}
+          aria-modal={isOverlayPanel && detailOpen ? 'true' : undefined}
+          aria-labelledby={isOverlayPanel && detailOpen ? 'payroll-detail-title' : undefined}
+        >
           {selectedLine && selectedAdjustment ? (
             <>
-              <Panel.Header>
-                <h2 className="m-0 text-lg">{selectedLine.employeeName}</h2>
-                <StatusBadge tone="info">{selectedLine.employeeCode}</StatusBadge>
+              <Panel.Header className="payroll-detail-panel-header">
+                <div>
+                  <h2 id="payroll-detail-title" className="m-0 text-lg">{selectedLine.employeeName}</h2>
+                  <small>{selectedLine.employeeCode} · {selectedLine.departmentName || '-'}</small>
+                </div>
+                <div className="payroll-detail-header-actions">
+                  <StatusBadge tone="info">{selectedLine.employeeCode}</StatusBadge>
+                  {/* Rendered only in the <1440px overlay presentation. At >=1440px the panel is a
+                      persistent side column whose visibility is NOT gated by `detailOpen` at all
+                      (only the overlay's CSS transform states are), so a dismiss control there is
+                      inert -- it would set `detailOpen=false` and nothing would visibly happen.
+
+                      This is a conditional RENDER rather than a `display` toggle on purpose. The
+                      previous attempt lived in styles.css (`.payroll-detail-close { display: none }`
+                      plus an `inline-flex` override under `max-width: 1439px`) and was completely
+                      dead: `buttonVariants`' own `inline-flex` sits in `layer(utilities)`, and
+                      index.css declares `@layer theme, legacy, utilities`, so a Tailwind utility
+                      always beats a styles.css rule for the same property on the same element (the
+                      "styles.css loses to Tailwind utilities" gotcha this repo keeps re-learning).
+                      Not rendering it also keeps it out of the tab order, which a `display: none`
+                      would do but a stale CSS rule never did. */}
+                  {isOverlayPanel && (
+                  <Button
+                    type="button"
+                    variant="icon"
+                    size="sm"
+                    // Item 4b fix (2026-07-31): `variant="icon" size="sm"` resolves to a 36x36
+                    // compound-variant box (Button.jsx) -- too small for the primary dismiss control
+                    // on a full-height overlay a touch user must reach reliably. Fixed at THIS call
+                    // site only (`w-11 min-h-[44px]` after `cn`'s twMerge wins the width/min-height
+                    // conflict against the compound variant's `w-9 min-h-[36px]`, same as
+                    // `buttonVariants`' own `className` override contract everywhere else) rather than
+                    // in the shared `icon`+`sm` compound variant itself -- that variant is also used by
+                    // DataTable's pagination arrows and TicketListPage's filter-panel close button,
+                    // neither of which is a full-height overlay's primary dismiss control, so widening
+                    // it there would be an unrequested, unreviewed change to two unrelated screens.
+                    className="payroll-detail-close w-11 min-h-[44px]"
+                    onClick={closeDetailPanel}
+                    title="ปิดรายละเอียด"
+                  >
+                    <Icon name="close" size={16} />
+                  </Button>
+                  )}
+                </div>
               </Panel.Header>
 
-              <div className="payroll-detail-grid">
+              {/* Defect 2 fix (Opus review, 2026-07-31): `grid-cols-1 @sm:grid-cols-2` at the call
+                  site (Tailwind-first, replaces the old unconditional `repeat(2, ...)` in
+                  styles.css) -- 1 column while the panel container is narrower than Tailwind's
+                  `@sm` (24rem/384px) content-box floor, 2 once there's genuinely room. This is a
+                  container query keyed off `@container` on the `<aside>` above, not a viewport
+                  breakpoint -- see that comment for why viewport width is the wrong signal here. */}
+              <div className="payroll-detail-grid grid grid-cols-1 gap-2.5 @sm:grid-cols-2">
                 <MiniMetric label="ฐานเงินเดือน" value={formatMoney(selectedLine.baseSalary)} />
                 <MiniMetric label="รายได้คิดภาษี" value={formatMoney(selectedLine.grossTaxableIncome)} />
                 <MiniMetric label="ภาษีงวดนี้" value={formatMoney(selectedLine.withholdingTax)} />
                 <MiniMetric label="เงินโอนสุทธิ" value={formatMoney(selectedLine.netPay)} />
               </div>
+
+              {period?.id && selectedLine.id ? (
+                <div className="payroll-detail-actions">
+                  <Button type="button" variant="secondary" onClick={() => downloadPayslip(selectedLine)} disabled={saving}>
+                    <Icon name="fileText" />
+                    ดาวน์โหลดสลิป
+                  </Button>
+                </div>
+              ) : null}
 
               {/* Daily-rate support (2026-07-30): shown only for a pay_type = 'D' employee --
                   hr.employee.current_salary is that employee's PER-DAY rate (not a monthly figure),
@@ -1022,7 +1389,14 @@ export function PayrollPage({ showToast }) {
                 defaultOpen
                 headerRight={<span className="collapsible-total">{formatMoney(specialPayKeys.reduce((sum, key) => sum + parsePayrollNumber(selectedAdjustment[key]), 0))}</span>}
               >
-                <div className="payroll-special-grid">
+                {/* Defect 2 fix (Opus review, 2026-07-31): same `grid-cols-1 @sm:grid-cols-2` swap
+                    as payroll-detail-grid above -- this is the grid the review measured at 107px
+                    money inputs and 3-line labels with the panel pinned to 2 columns at every
+                    width. At 1 column each label/input gets the panel's full content width, which
+                    is what keeps every money input >=140px and every Thai label to <=2 lines at
+                    the panel's current 340px floor (see the `<section>` grid-cols comment above)
+                    without having to keep growing the panel indefinitely as more fields land here. */}
+                <div className="payroll-special-grid grid grid-cols-1 gap-2.5 @sm:grid-cols-2">
                   {specialPayFields.map((field) => {
                     const inputId = `payroll-${field.key}`;
                     return (
@@ -1264,7 +1638,11 @@ export function PayrollPage({ showToast }) {
         message={(
           <div>
             <p className="confirm-dialog-message">
-              ยืนยันประมวลผลเงินเดือนรอบ {formatThaiMonthYearFromMonthInputValue(month)}? การดำเนินการนี้ไม่สามารถย้อนกลับได้
+              ยืนยันประมวลผลเงินเดือนรอบ {formatThaiMonthYearFromMonthInputValue(month)} สำหรับพนักงาน {period?.lineCount || 0} คน?
+              การดำเนินการนี้ไม่สามารถย้อนกลับได้
+            </p>
+            <p className="confirm-dialog-message">
+              หลังยืนยัน การอนุมัติ OT ของเดือนนี้จะปิดทันที และไม่มีทางยกเลิกการประมวลผล
             </p>
             <p className="confirm-dialog-message">
               รายได้รวม {formatMoney(period?.totalGross)} · เงินหักรวม {formatMoney(period?.totalDeductions)} · ยอดโอนสุทธิ {formatMoney(period?.totalNet)}
