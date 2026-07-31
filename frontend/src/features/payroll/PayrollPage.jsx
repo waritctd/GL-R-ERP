@@ -5,7 +5,6 @@ import { CollapsibleSection } from '../../components/common/CollapsibleSection.j
 import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
-import { DesktopOnlyNotice } from '../../components/common/DesktopOnlyNotice.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { InfoTip } from '../../components/common/InfoTip.jsx';
@@ -34,15 +33,41 @@ const EXPORT_KINDS = [
   { value: 'sso', label: 'ประกันสังคม (สปส.1-10)', filePrefix: 'SPS1-10', extension: 'txt' },
   { value: 'payroll-detail', label: 'รายละเอียดเงินเดือนรายเดือน (Excel)', filePrefix: 'PayrollDetail', extension: 'xlsx' },
 ];
+const MOBILE_PROCESS_CONFIRM_PHRASE = 'ประมวลผล';
+const mobileOptionalMoneySummaries = [
+  { key: 'specialPayTotal', label: 'เงินพิเศษ', amount: (line) => Number(line.specialPayTotal || 0) },
+  { key: 'otCommission', label: 'ล่วงเวลา/คอมมิชชัน', amount: (line) => Number(line.overtimePay || 0) + Number(line.commissionPay || 0) },
+];
 
 function MoneyCode({ value }) {
   return <code className="payroll-money">{formatMoney(value)}</code>;
+}
+
+function PayrollMobileZeroDisclosure({ line }) {
+  const zeroItems = mobileOptionalMoneySummaries.filter((item) => item.amount(line) === 0);
+  if (zeroItems.length === 0) return null;
+  return (
+    <details className="col-span-2 mt-2 rounded-sm border border-border-subtle bg-surface-muted px-2">
+      <summary className="flex min-h-[44px] cursor-pointer items-center text-xs font-extrabold text-text-muted">
+        รายการศูนย์ {zeroItems.length} รายการ
+      </summary>
+      <dl className="m-0 grid gap-1 border-t border-border-subtle py-2 text-xs">
+        {zeroItems.map((item) => (
+          <div key={item.key} className="flex items-center justify-between gap-3">
+            <dt className="text-text-muted">{item.label}</dt>
+            <dd className="m-0 font-mono font-extrabold text-text">{formatMoney(0)}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  );
 }
 
 function createEmployeeColumn(selectedEmployeeId) {
   return {
     key: 'employee',
     header: 'พนักงาน',
+    className: 'mobile:[&::before]:hidden',
     sortable: true,
     sortAccessor: (line) => line.employeeName,
     searchAccessor: (line) => line.employeeName,
@@ -63,31 +88,65 @@ function createEmployeeColumn(selectedEmployeeId) {
       // `<strong>`/`<small>` are inline by default and render as two separate lines only because nothing
       // upstream declares `display: block` for them anymore -- each needs its own `block truncate` so
       // it clips with an ellipsis at ITS OWN width instead of overflowing into the badge.
+      const warning = line.payType === 'D' && !(Number(line.daysWorked) > 0)
+        ? '⚠ ยังไม่ได้ระบุจำนวนวันทำงาน'
+        : null;
       return (
-        <span className="flex items-center justify-between gap-2.5 min-w-0">
-          <span className="min-w-0 overflow-hidden">
-            <strong className="block truncate">{line.employeeName}</strong>
-            <small className="block truncate">{line.employeeCode} · {line.departmentName || '-'}</small>
-            {/* Finding 1 fix (Opus review, 2026-07-30): list-level warning so a daily-rate employee
-                with no/zero days-worked is visible WITHOUT having to open their detail panel first --
-                the gap the ฿0-payslip bug actually lived in (hasPayrollInput below never submits a row
-                with nothing entered, so HR could Process a whole month without ever noticing). Purely
-                a nudge; PayrollService#requireEveryDailyRateEmployeeHasDaysWorked is the real
-                enforcement. */}
-            {line.payType === 'D' && !(Number(line.daysWorked) > 0) && (
-              <small className="block truncate text-warning">⚠ ยังไม่ได้ระบุจำนวนวันทำงาน</small>
-            )}
-          </span>
-          {selected ? (
-            <span className="inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-sm border border-info-border bg-info-bg px-1.5 py-0.5 text-2xs font-black text-info">
-              <Icon name="check" size={13} />
-              เลือกอยู่
+        <>
+          <span className="flex items-center justify-between gap-2.5 min-w-0 mobile:hidden">
+            <span className="min-w-0 overflow-hidden">
+              <strong className="block truncate">{line.employeeName}</strong>
+              <small className="block truncate">{line.employeeCode} · {line.departmentName || '-'}</small>
+              {/* Finding 1 fix (Opus review, 2026-07-30): list-level warning so a daily-rate employee
+                  with no/zero days-worked is visible WITHOUT having to open their detail panel first --
+                  the gap the ฿0-payslip bug actually lived in (hasPayrollInput below never submits a row
+                  with nothing entered, so HR could Process a whole month without ever noticing). Purely
+                  a nudge; PayrollService#requireEveryDailyRateEmployeeHasDaysWorked is the real
+                  enforcement. */}
+              {warning && (
+                <small className="block truncate text-warning">{warning}</small>
+              )}
             </span>
-          ) : null}
-        </span>
+            {selected ? (
+              <span className="inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-sm border border-info-border bg-info-bg px-1.5 py-0.5 text-2xs font-black text-info">
+                <Icon name="check" size={13} />
+                เลือกอยู่
+              </span>
+            ) : null}
+          </span>
+          <span className="hidden min-w-0 mobile:grid mobile:grid-cols-[minmax(0,1fr)_auto] mobile:items-start mobile:gap-x-3 mobile:gap-y-1">
+            <span className="min-w-0">
+              <strong className="block truncate text-sm">{line.employeeName}</strong>
+              <small className="block truncate text-xs">{line.employeeCode} · {line.departmentName || '-'}</small>
+              {warning && (
+                <small className="block truncate text-warning">{warning}</small>
+              )}
+            </span>
+            <span className="text-right">
+              <small className="block text-2xs font-black text-text-muted">สุทธิ</small>
+              <MoneyCode value={line.netPay} />
+            </span>
+            {selected ? (
+              <span className="col-span-2 inline-flex w-fit items-center gap-1 whitespace-nowrap rounded-sm border border-info-border bg-info-bg px-1.5 py-0.5 text-2xs font-black text-info">
+                <Icon name="check" size={13} />
+                เลือกอยู่
+              </span>
+            ) : null}
+            <PayrollMobileZeroDisclosure line={line} />
+          </span>
+        </>
       );
     },
   };
+}
+
+function payrollMoneyCellClassName(column, line, options = {}) {
+  const mobileHiddenWhenZero = line && column.hideWhenZero && Number(column.totalAccessor?.(line) || 0) === 0;
+  const mobileHidden = mobileHiddenWhenZero || (line && options.hideOnMobile);
+  return cn(
+    'payroll-money-cell mobile:grid mobile:grid-cols-[minmax(0,1fr)_auto] mobile:items-center mobile:gap-3 mobile:[&::before]:m-0 mobile:[&::before]:normal-case',
+    mobileHidden && 'mobile:hidden',
+  );
 }
 
 const payrollMoneyColumns = [
@@ -98,7 +157,7 @@ const payrollMoneyColumns = [
     heroAccessor: (period) => period?.totalGross,
     sortable: true,
     align: 'right',
-    className: 'payroll-money-cell',
+    className: (line) => payrollMoneyCellClassName(payrollMoneyColumns[0], line),
     isMoney: true,
     totalAccessor: (line) => Number(line.grossEarnings || 0),
     sortAccessor: (line) => Number(line.grossEarnings || 0),
@@ -109,7 +168,7 @@ const payrollMoneyColumns = [
     header: 'เงินพิเศษ',
     sortable: true,
     align: 'right',
-    className: 'payroll-money-cell',
+    className: (line) => payrollMoneyCellClassName(payrollMoneyColumns[1], line),
     isMoney: true,
     hideWhenZero: true,
     totalAccessor: (line) => Number(line.specialPayTotal || 0),
@@ -118,10 +177,10 @@ const payrollMoneyColumns = [
   },
   {
     key: 'otCommission',
-    header: 'OT / Commission',
+    header: 'ล่วงเวลา/คอมมิชชัน',
     sortable: true,
     align: 'right',
-    className: 'payroll-money-cell',
+    className: (line) => payrollMoneyCellClassName(payrollMoneyColumns[2], line),
     isMoney: true,
     hideWhenZero: true,
     totalAccessor: (line) => Number(line.overtimePay || 0) + Number(line.commissionPay || 0),
@@ -135,7 +194,7 @@ const payrollMoneyColumns = [
     heroAccessor: (period) => period?.totalDeductions,
     sortable: true,
     align: 'right',
-    className: 'payroll-money-cell',
+    className: (line) => payrollMoneyCellClassName(payrollMoneyColumns[3], line),
     isMoney: true,
     totalAccessor: (line) => Number(line.totalDeductions || 0),
     sortAccessor: (line) => Number(line.totalDeductions || 0),
@@ -148,7 +207,7 @@ const payrollMoneyColumns = [
     heroAccessor: (period) => period?.totalNet,
     sortable: true,
     align: 'right',
-    className: 'payroll-money-cell',
+    className: (line) => payrollMoneyCellClassName(payrollMoneyColumns[4], line, { hideOnMobile: true }),
     isMoney: true,
     totalAccessor: (line) => Number(line.netPay || 0),
     sortAccessor: (line) => Number(line.netPay || 0),
@@ -705,11 +764,10 @@ export function PayrollPage({ showToast }) {
   // nothing useful. Hidden rather than shown-but-inert, so HR is not misled into thinking a save
   // did something for an already-touched period.
   const canSaveDraft = period?.status === 'PREVIEW' && !period?.id;
-  const processBlockedReason = isMobile
-    ? 'ปิดใช้งานบนหน้าจอมือถือ — การประมวลผลเงินเดือนย้อนกลับไม่ได้ กรุณาใช้เดสก์ท็อป'
-    : emptyPeriod
-      ? 'ยังไม่มีพนักงานในรอบเงินเดือนนี้ — กดคำนวณตัวอย่างหรือเลือกรอบเดือนที่มีข้อมูลก่อนประมวลผล'
-      : null;
+  const processBlockedReason = emptyPeriod
+    ? 'ยังไม่มีพนักงานในรอบเงินเดือนนี้ — กดคำนวณตัวอย่างหรือเลือกรอบเดือนที่มีข้อมูลก่อนประมวลผล'
+    : null;
+  const requiresMobileProcessPhrase = isMobile && !emptyPeriod;
 
   function selectPayrollLine(line) {
     setSelectedEmployeeId(line.employeeId);
@@ -1060,16 +1118,20 @@ export function PayrollPage({ showToast }) {
   ];
 
   return (
-    <PageStack>
-      {isMobile && <DesktopOnlyNotice />}
+    <PageStack className="mobile:gap-3">
       <PageHeader
         title="ประมวลผลเงินเดือน"
         subtitle="Payroll Processing"
         actions={(
-          <div className="toolbar-actions">
+          <div className="toolbar-actions mobile:w-full mobile:items-stretch mobile:gap-2">
             <label>
               รอบเดือน
-              <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
+              <input
+                type="month"
+                value={month}
+                onChange={(event) => setMonth(event.target.value)}
+                className="mobile:min-h-[44px]"
+              />
               {/* The native <input type="month"> always renders Gregorian and cannot show Buddhist
                   era; this is a read-only display of the same value, not a second control. */}
               <small className="font-normal text-text-muted">({formatThaiMonthYearFromMonthInputValue(month)})</small>
@@ -1125,7 +1187,7 @@ export function PayrollPage({ showToast }) {
                 value={payDate}
                 onChange={(event) => setPayDate(event.target.value)}
                 disabled={saving || !(period?.lineCount > 0)}
-                className="w-[9.5rem]"
+                className="w-[9.5rem] mobile:min-h-[44px]"
               />
               <small className="font-normal text-text-muted">({formatShortDate(payDate)})</small>
             </label>
@@ -1139,8 +1201,8 @@ export function PayrollPage({ showToast }) {
           </div>
 
           {/* Run — the irreversible action. Kept in its own region with the period state and pushed
-              after routine preview/export/send work. It stays blocked below the 720px mobile
-              breakpoint; tablet keeps it because the tablet table/detail contract is now usable. */}
+              after routine preview/export/send work. Phone stays editable; the extra mobile-only
+              typed phrase lives in the confirm dialog instead of disabling this button outright. */}
           <section
             className="payroll-process-region ml-auto flex flex-wrap items-center gap-x-3.5 gap-y-2.5 rounded-md border border-danger-border bg-surface-muted px-3 py-2.5 nav-drawer:ml-0 nav-drawer:w-full nav-drawer:justify-between mobile:items-stretch"
             aria-labelledby="payroll-process-title"
@@ -1159,7 +1221,7 @@ export function PayrollPage({ showToast }) {
                 size="sm"
                 className="mobile:w-full"
                 onClick={process}
-                disabled={loading || saving || isMobile || emptyPeriod}
+                disabled={loading || saving || emptyPeriod}
                 aria-describedby={processBlockedReason ? 'payroll-process-block-reason' : undefined}
                 title={processBlockedReason || undefined}
               >
@@ -1234,7 +1296,7 @@ export function PayrollPage({ showToast }) {
             rowClassName={(line) => cn(
               // `.payroll-row.active` uses box-shadow for the selection inset, so focus has to
               // re-apply the shared ring token from the Tailwind utilities layer where it wins.
-              'payroll-row cursor-pointer focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]',
+              'payroll-row cursor-pointer focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] mobile:gap-y-2 mobile:p-3.5',
               Number(line.employeeId) === Number(selectedLine?.employeeId) && 'active',
             )}
             loading={loading}
@@ -1278,7 +1340,13 @@ export function PayrollPage({ showToast }) {
           // its width is not a function of viewport width alone (a `sm:`/`md:` viewport breakpoint
           // would be lying about what's actually being measured). See the `@sm:grid-cols-2` classes
           // on payroll-detail-grid/payroll-special-grid below.
-          className={cn(PANEL_CLASS, 'payroll-detail-panel', '@container', detailOpen && 'is-open')}
+          className={cn(
+            PANEL_CLASS,
+            'payroll-detail-panel',
+            '@container',
+            'mobile:inset-0 mobile:max-h-[100dvh] mobile:w-full mobile:rounded-none mobile:border-0 mobile:p-4 mobile:pt-0 mobile:[&_input:not([type=checkbox])]:min-h-[44px] mobile:[&_select]:min-h-[44px]',
+            detailOpen && 'is-open',
+          )}
           onBlurCapture={handleAdjustmentBlur}
           // B2 fix (Opus review, 2026-07-31): dialog semantics apply ONLY in overlay mode (<1366px) --
           // at >=1366px this is a persistent side panel beside the table, not a dialog stealing focus,
@@ -1290,7 +1358,7 @@ export function PayrollPage({ showToast }) {
         >
           {selectedLine && selectedAdjustment ? (
             <>
-              <Panel.Header className="payroll-detail-panel-header">
+              <Panel.Header className="payroll-detail-panel-header mobile:sticky mobile:top-0 mobile:z-10 mobile:-mx-4 mobile:mb-4 mobile:border-b mobile:border-border mobile:bg-surface mobile:px-4 mobile:py-3">
                 <div>
                   <h2 id="payroll-detail-title" className="m-0 text-lg">{selectedLine.employeeName}</h2>
                   <small>{selectedLine.employeeCode} · {selectedLine.departmentName || '-'}</small>
@@ -1675,6 +1743,11 @@ export function PayrollPage({ showToast }) {
         confirmLabel="ยืนยันประมวลผล"
         tone="danger"
         busy={saving}
+        requireReason={requiresMobileProcessPhrase}
+        reasonLabel="ยืนยันบนมือถือ"
+        reasonPlaceholder={`พิมพ์คำว่า ${MOBILE_PROCESS_CONFIRM_PHRASE}`}
+        validateReason={(value) => value === MOBILE_PROCESS_CONFIRM_PHRASE}
+        reasonInvalidMessage={`พิมพ์คำว่า ${MOBILE_PROCESS_CONFIRM_PHRASE} เพื่อยืนยันบนมือถือ`}
         onConfirm={confirmProcessPayroll}
         onCancel={() => setConfirmProcess(false)}
       />
@@ -1817,7 +1890,7 @@ function TaxTreatmentMatrixSection({ payrollMonth, showToast }) {
                   </span>
                 )}
               >
-                <FormGrid>
+                <FormGrid className="mobile:[&_select]:min-h-[44px]">
                   {TAX_TREATMENT_COMPONENTS.map((field) => {
                     const inputId = `tax-treatment-${item.employeeId}-${field.key}`;
                     const value = valueFor(item, field.key);

@@ -765,6 +765,7 @@ export function DataTable({
                 placeholder={searchPlaceholder}
                 onChange={(event) => setSearch(event.target.value)}
                 aria-label={searchPlaceholder}
+                className="mobile:min-h-[44px]"
               />
             </label>
           ) : null}
