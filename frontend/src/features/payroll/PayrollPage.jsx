@@ -1274,6 +1274,21 @@ export function PayrollPage({ showToast }) {
                 </div>
                 <div className="payroll-detail-header-actions">
                   <StatusBadge tone="info">{selectedLine.employeeCode}</StatusBadge>
+                  {/* Rendered only in the <1440px overlay presentation. At >=1440px the panel is a
+                      persistent side column whose visibility is NOT gated by `detailOpen` at all
+                      (only the overlay's CSS transform states are), so a dismiss control there is
+                      inert -- it would set `detailOpen=false` and nothing would visibly happen.
+
+                      This is a conditional RENDER rather than a `display` toggle on purpose. The
+                      previous attempt lived in styles.css (`.payroll-detail-close { display: none }`
+                      plus an `inline-flex` override under `max-width: 1439px`) and was completely
+                      dead: `buttonVariants`' own `inline-flex` sits in `layer(utilities)`, and
+                      index.css declares `@layer theme, legacy, utilities`, so a Tailwind utility
+                      always beats a styles.css rule for the same property on the same element (the
+                      "styles.css loses to Tailwind utilities" gotcha this repo keeps re-learning).
+                      Not rendering it also keeps it out of the tab order, which a `display: none`
+                      would do but a stale CSS rule never did. */}
+                  {isOverlayPanel && (
                   <Button
                     type="button"
                     variant="icon"
@@ -1294,6 +1309,7 @@ export function PayrollPage({ showToast }) {
                   >
                     <Icon name="close" size={16} />
                   </Button>
+                  )}
                 </div>
               </Panel.Header>
 

@@ -372,6 +372,27 @@ describe('PayrollPage adjustment inputs', () => {
       expect(document.getElementById(labelledBy).textContent).toBe(payrollLine.employeeName);
     });
 
+    // Regression guard: the dismiss control used to be hidden by a `.payroll-detail-close`
+    // `display` toggle in styles.css, which never applied -- Button.jsx's own `inline-flex`
+    // utility sits in `layer(utilities)` and always beats `layer(legacy)`. So the button rendered
+    // at every width, including the >=1440px side panel where clicking it is inert (that panel's
+    // visibility is not gated by `detailOpen`). Asserting on presence/absence in the DOM, not on
+    // computed `display`: jsdom applies no stylesheets, so a CSS-only fix would pass this test
+    // while still being dead in the browser.
+    it('renders the close button only in the overlay presentation', async () => {
+      mockPanelViewport(false);
+      const overlay = renderPayrollPage();
+      await openDetailPanel(overlay.container);
+      expect(overlay.container.querySelector('.payroll-detail-close')).not.toBeNull();
+      overlay.unmount();
+
+      mockPanelViewport(true);
+      const sidePanel = renderPayrollPage();
+      await openDetailPanel(sidePanel.container);
+      expect(sidePanel.container.querySelector('.payroll-detail-panel')).not.toBeNull();
+      expect(sidePanel.container.querySelector('.payroll-detail-close')).toBeNull();
+    });
+
     it('closes the overlay on Escape', async () => {
       mockPanelViewport(false);
       const { container } = renderPayrollPage();

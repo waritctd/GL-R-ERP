@@ -1711,9 +1711,11 @@ textarea:focus {
   gap: 8px;
 }
 
-.payroll-detail-close {
-  display: none;
-}
+/* `.payroll-detail-close`'s `display` toggle used to live here (none by default, `inline-flex`
+   under `max-width: 1439px`). It never applied: Button.jsx's `buttonVariants` base carries the
+   Tailwind `inline-flex` utility, and index.css's `@layer theme, legacy, utilities` means a
+   utility always beats a rule in this file for the same property. The button is now rendered
+   conditionally on `isOverlayPanel` in PayrollPage.jsx instead -- see the comment there. */
 
 .payroll-detail-actions {
   display: flex;
@@ -2659,10 +2661,6 @@ a.status-badge {
     transform: translateX(0);
     visibility: visible;
     transition: transform 180ms ease;
-  }
-
-  .payroll-detail-close {
-    display: inline-flex;
   }
 
   .payroll-detail-backdrop {
