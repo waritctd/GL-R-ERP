@@ -8,11 +8,11 @@ import { api } from '../../api/index.js';
 // PayrollPage.carryForward.test.jsx / PayrollPage.dailyRate.test.jsx) covering the actual bug the
 // owner reported -- HR's in-progress, not-yet-processed payroll inputs had no persistent home, so
 // a browser reload (Ctrl+R / a fresh login) lost anything typed but not yet processed. This file
-// proves the fix end to end: a typed value survives an explicit Save Draft + a real reload (a full
+// proves the fix end to end: a typed value survives autosave-on-blur + a real reload (a full
 // unmount/remount of PayrollPage, driven by a stateful mock so the "saved" draft is actually read
 // back), and that the precedence rule (real persisted line > draft > carry-forward suggestion >
 // blank) does not disturb the two paths that already worked -- July's pre-loaded VOID period, and
-// the in-app รีเฟรช/preview round trip, whose values the owner separately confirmed DO survive.
+// the in-app preview round trip, whose values the owner separately confirmed DO survive.
 
 globalThis.React = React;
 
@@ -99,7 +99,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
     api.payroll.suggestedInputs.mockResolvedValue({ payrollMonth: '2026-07-01', suggestions: [] });
   });
 
-  it('a typed value survives Save Draft followed by a real reload (full unmount/remount)', async () => {
+  it('a typed value survives autosave followed by a real reload (full unmount/remount)', async () => {
     // Stateful mock: whatever saveInputDraft is called with becomes what getInputDraft returns
     // next -- exactly how a real backend round trip through hr.payroll_input_draft behaves, and
     // the only way to prove "survives a reload" rather than merely "the endpoint was called".
@@ -121,7 +121,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
     fireEvent.change(mealAllowance, { target: { value: '1234' } });
     expect(mealAllowance.value).toBe('1234');
 
-    fireEvent.click(screen.getByRole('button', { name: /บันทึกร่าง/ }));
+    fireEvent.blur(mealAllowance);
     await waitFor(() => expect(api.payroll.saveInputDraft).toHaveBeenCalledTimes(1));
     const saved = api.payroll.saveInputDraft.mock.calls[0][0].inputs.find((item) => item.employeeId === 1);
     expect(saved.mealAllowance).toBe(1234);
@@ -139,7 +139,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
   /**
    * The exact defect an Opus review caught before merge: a carry-forward suggestion exists for a
    * field, HR deliberately clears it to blank/zero (e.g. a เบี้ยขยันประจำ that carried forward but
-   * must not repeat this month), saves the draft, then reloads. The suggestion must NOT resurrect
+   * must not repeat this month), autosaves the draft, then reloads. The suggestion must NOT resurrect
    * over the saved zero -- draftFallback used to collapse a drafted 0 to null (indistinguishable
    * from "never drafted"), which fell through to the suggestion and silently un-did HR's correction.
    */
@@ -169,7 +169,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
     fireEvent.change(costOfLiving, { target: { value: '' } });
     expect(costOfLiving.value).toBe('');
 
-    fireEvent.click(screen.getByRole('button', { name: /บันทึกร่าง/ }));
+    fireEvent.blur(costOfLiving);
     await waitFor(() => expect(api.payroll.saveInputDraft).toHaveBeenCalledTimes(1));
     const saved = api.payroll.saveInputDraft.mock.calls[0][0].inputs.find((item) => item.employeeId === 1);
     expect(saved.specialPay1).toBe(0);
@@ -183,7 +183,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
     await waitFor(() => expect(reloadedCostOfLiving.value).toBe(''));
   });
 
-  it('shows an unsaved-changes indicator after typing, which clears once Save Draft succeeds', async () => {
+  it('shows an autosave status indicator after typing, which clears once save succeeds', async () => {
     api.payroll.current.mockResolvedValue({ period: periodWith(freshPayrollLine()) });
     api.payroll.getInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
     api.payroll.saveInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
@@ -191,13 +191,47 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
     render(<PayrollPage showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
-    expect(screen.queryByText(/มีการเปลี่ยนแปลงที่ยังไม่บันทึกร่าง/)).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('บันทึกแล้ว');
+    expect(screen.queryByRole('button', { name: /บันทึกร่าง/ })).toBeNull();
 
     fireEvent.change(costOfLiving, { target: { value: '321' } });
-    expect(screen.getByText(/มีการเปลี่ยนแปลงที่ยังไม่บันทึกร่าง/)).not.toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('รอบันทึกอัตโนมัติ');
 
-    fireEvent.click(screen.getByRole('button', { name: /บันทึกร่าง/ }));
-    await waitFor(() => expect(screen.queryByText(/มีการเปลี่ยนแปลงที่ยังไม่บันทึกร่าง/)).toBeNull());
+    fireEvent.blur(costOfLiving);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('บันทึกแล้ว'));
+  });
+
+  it('queues a second autosave when HR edits again while the first autosave is still running', async () => {
+    api.payroll.current.mockResolvedValue({ period: periodWith(freshPayrollLine()) });
+    api.payroll.getInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
+    const pendingSaves = [];
+    const savedPayloads = [];
+    api.payroll.saveInputDraft.mockImplementation((payload) => {
+      savedPayloads.push(payload);
+      return new Promise((resolve) => pendingSaves.push(resolve));
+    });
+
+    render(<PayrollPage showToast={vi.fn()} />);
+
+    const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
+    fireEvent.change(costOfLiving, { target: { value: '111' } });
+    fireEvent.blur(costOfLiving);
+
+    await waitFor(() => expect(api.payroll.saveInputDraft).toHaveBeenCalledTimes(1));
+    expect(savedPayloads[0].inputs.find((item) => item.employeeId === 1).specialPay1).toBe(111);
+
+    // HR tabs on and changes the same draft before the first network round trip returns. The
+    // explicit Save button is gone, so the blur autosave itself must queue the follow-up write.
+    fireEvent.change(costOfLiving, { target: { value: '222' } });
+    fireEvent.blur(costOfLiving);
+    expect(screen.getByRole('status').textContent).toMatch(/กำลังบันทึก|รอบันทึกอัตโนมัติ/);
+
+    pendingSaves.shift()({ payrollMonth: '2026-07-01', drafts: savedPayloads[0].inputs });
+    await waitFor(() => expect(api.payroll.saveInputDraft).toHaveBeenCalledTimes(2));
+    expect(savedPayloads[1].inputs.find((item) => item.employeeId === 1).specialPay1).toBe(222);
+
+    pendingSaves.shift()({ payrollMonth: '2026-07-01', drafts: savedPayloads[1].inputs });
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('บันทึกแล้ว'));
   });
 
   it('a saved draft loses to a real value already on the line (draft never shadows a persisted/computed figure)', async () => {
@@ -267,7 +301,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
 
     expect(api.payroll.getInputDraft).not.toHaveBeenCalled();
     expect(api.payroll.suggestedInputs).not.toHaveBeenCalled();
-    // A VOID/already-touched period offers no Save Draft either -- there is nothing useful a
+    // A VOID/already-touched period offers no autosave draft status either -- there is nothing useful a
     // draft save would do for it (see canSaveDraft's own comment in PayrollPage.jsx).
     expect(screen.queryByRole('button', { name: /บันทึกร่าง/ })).toBeNull();
   });

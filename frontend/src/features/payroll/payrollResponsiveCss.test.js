@@ -53,11 +53,10 @@ describe('payroll responsive CSS (B1/B3 regression guard)', () => {
     expect(stylesCss).not.toContain('max-width: 1500px');
   });
 
-  it('switches the detail panel to its overlay presentation at exactly the 1440px floor, not 1040px', () => {
-    // Item 1 fix (2026-07-31): raised from 1280px (Tailwind's built-in `xl:`) to 1440px (this app's
-    // own `payroll-wide:` custom variant, see index.css) -- real-browser measurement showed 1280px
-    // still hid the "สุทธิ" (net pay) column behind a horizontal scrollbar with the panel open.
-    const overlayBlocks = extractMediaBlocks(stylesCss, '@media (max-width: 1439px)');
+  it('switches the detail panel to its overlay presentation at exactly the 1366px floor, not 1040px', () => {
+    // Phase A: 1366px gets the persistent side panel with a 310px panel floor; 1280px still stays
+    // overlay because the table's measured 714px minimum cannot fit beside a panel there.
+    const overlayBlocks = extractMediaBlocks(stylesCss, '@media (max-width: 1365px)');
     expect(overlayBlocks).toHaveLength(1);
     expect(overlayBlocks[0]).toContain('.payroll-detail-panel');
     expect(overlayBlocks[0]).toContain('position: fixed');
@@ -74,14 +73,14 @@ describe('payroll responsive CSS (B1/B3 regression guard)', () => {
     });
   });
 
-  it('declares the payroll-wide floor as a named custom variant in index.css, at 1440px', () => {
+  it('declares the payroll-wide floor as a named custom variant in index.css, at 1366px', () => {
     // CLAUDE.md's styling direction requires a new breakpoint value to be a named custom variant in
     // index.css (the single source of truth for this app's responsive bands), not a bare
-    // `min-[1440px]:` literal scattered at call sites -- see the `mobile:`/`tablet:`/`nav-drawer:`
+    // `min-[1366px]:` literal scattered at call sites -- see the `mobile:`/`tablet:`/`nav-drawer:`
     // variants already declared there.
     const variantBlocks = extractMediaBlocks(indexCss, '@custom-variant payroll-wide');
     expect(variantBlocks).toHaveLength(1);
-    expect(variantBlocks[0]).toContain('@media (min-width: 1440px)');
+    expect(variantBlocks[0]).toContain('@media (min-width: 1366px)');
   });
 
   it('does not reflow the payroll table into cards in the 721-1040px tablet band', () => {
@@ -104,13 +103,12 @@ describe('payroll responsive CSS (B1/B3 regression guard)', () => {
 });
 
 // Defect 2 regression guard (Opus review, 2026-07-31): the detail panel's side-by-side track was
-// narrowed from 357px to a 300px floor by the B1 fix above, which squeezed every special-pay money
-// input to 107px and wrapped every Thai label to 3 lines -- a quality regression, not a break. The
-// fix restores the floor to 340px (the value the B1 comment already claimed) and moves the two
-// money-field grids to a Tailwind v4 `@container` query so they collapse to 1 column whenever the
-// PANEL itself is narrow, rather than staying pinned to 2 columns at every width. None of this is
-// reachable from a jsdom render (jsdom has no layout engine, so container queries never evaluate),
-// so -- same as the B1/B3 guard above -- this pins the source text down directly.
+// Phase A narrows the side-panel floor to 310px so the persistent panel can fit at 1366px without
+// stealing the table's money-column floor. The two money-field grids stay on a Tailwind v4
+// `@container` query so they collapse to 1 column whenever the PANEL itself is narrow, rather than
+// staying pinned to 2 columns at every width. None of this is reachable from a jsdom render (jsdom
+// has no layout engine, so container queries never evaluate), so -- same as the B1/B3 guard above --
+// this pins the source text down directly.
 describe('payroll detail panel container-query grids (Defect 2 regression guard)', () => {
   const rawPayrollPageJsx = fs.readFileSync(path.resolve(__dirname, './PayrollPage.jsx'), 'utf8');
   // Strip the same way as styles.css above: this file's own comments narrate the fix in terms of the
@@ -118,27 +116,24 @@ describe('payroll detail panel container-query grids (Defect 2 regression guard)
   // naive `.not.toContain` on the prose describing the fix, not the fix itself.
   const payrollPageJsx = rawPayrollPageJsx.replace(/\/\*[\s\S]*?\*\//g, '');
 
-  it('keeps the >=1440px side panel track at its 340px floor, not the narrowed 300px', () => {
+  it('keeps the >=1366px side panel track at its 310px floor, not the narrowed 300px', () => {
     expect(payrollPageJsx).not.toContain('minmax(300px');
-    // Item 1 fix (2026-07-31): `payroll-wide:` (this app's own 1440px custom variant, see
-    // index.css), not Tailwind's built-in `xl:` (1280px) -- real-browser measurement showed 1280px
-    // still hid the "สุทธิ" net-pay column behind a scrollbar with the panel open.
-    expect(payrollPageJsx).toContain('payroll-wide:grid-cols-[minmax(0,1fr)_minmax(340px,0.35fr)]');
+    expect(payrollPageJsx).toContain('payroll-wide:grid-cols-[minmax(0,1fr)_minmax(310px,0.3fr)]');
     expect(payrollPageJsx).not.toMatch(/\bxl:grid-cols-/);
   });
 
-  it('mirrors the 1440px payroll-wide floor in the JS-side useMediaQuery check', () => {
+  it('mirrors the 1366px payroll-wide floor in the JS-side useMediaQuery check', () => {
     // The CSS `payroll-wide:` variant and this JS check must never be able to drift -- both must
     // name the exact same number (index.css's `@custom-variant payroll-wide` test above pins the CSS
     // side down).
-    expect(payrollPageJsx).toContain("useMediaQuery('(min-width: 1440px)')");
+    expect(payrollPageJsx).toContain("useMediaQuery('(min-width: 1366px)')");
     expect(payrollPageJsx).not.toContain("useMediaQuery('(min-width: 1280px)')");
   });
 
   it('makes the detail panel a container-query context', () => {
     // `@container` (Tailwind v4, no plugin) on the `<aside>` itself -- the two money-field grids
     // below key their column count off THIS element's width, not the viewport's, since the panel
-    // is a sticky side column at >=1440px and a fixed-width overlay below that.
+    // is a sticky side column at >=1366px and a fixed-width overlay below that.
     expect(payrollPageJsx).toMatch(/className=\{cn\(PANEL_CLASS, 'payroll-detail-panel', '@container'/);
   });
 
@@ -169,6 +164,10 @@ describe('payroll detail panel container-query grids (Defect 2 regression guard)
       expect(block).not.toMatch(/\.payroll-detail-grid\b/);
       expect(block).not.toMatch(/\.payroll-special-grid\b/);
     });
+  });
+
+  it('does not use !important on payroll-specific CSS selectors', () => {
+    expect(stylesCss).not.toMatch(/\.payroll-[^{]+{[^}]*!important/);
   });
 });
 

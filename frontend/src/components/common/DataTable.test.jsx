@@ -841,12 +841,60 @@ describe('DataTable', () => {
       const first = screen.getByText('Employee 01').closest('tr');
       const second = screen.getByText('Employee 02').closest('tr');
       expect(first.getAttribute('role')).toBe('row');
-      expect(first.getAttribute('tabindex')).toBe('0');
+      expect(first.getAttribute('tabindex')).toBe('-1');
+      expect(second.getAttribute('tabindex')).toBe('0');
       // Item 4d fix (Opus review, 2026-07-31): `aria-selected` is only valid ARIA on a row inside a
       // `grid`/`treegrid` -- this is a plain `<table>`/`role="row"`, so it now uses `aria-current`
       // (a global ARIA state, valid on any role) instead. See the render in DataTable.jsx.
       expect(first.getAttribute('aria-current')).toBe('false');
       expect(second.getAttribute('aria-current')).toBe('true');
+    });
+
+    it('keeps one row in the Tab order and moves focus within rows with arrow keys', () => {
+      const rows = makeRows(3);
+      render(
+        <DataTable
+          columns={baseColumns}
+          rows={rows}
+          getRowKey={(row) => row.id}
+          gridClassName="employee-table"
+          onRowSelect={() => {}}
+          isRowSelected={() => false}
+        />,
+      );
+
+      const first = screen.getByText('Employee 01').closest('tr');
+      const second = screen.getByText('Employee 02').closest('tr');
+      const third = screen.getByText('Employee 03').closest('tr');
+      expect(first.getAttribute('tabindex')).toBe('0');
+      expect(second.getAttribute('tabindex')).toBe('-1');
+
+      first.focus();
+      fireEvent.keyDown(first, { key: 'ArrowDown' });
+
+      expect(document.activeElement).toBe(second);
+      expect(first.getAttribute('tabindex')).toBe('-1');
+      expect(second.getAttribute('tabindex')).toBe('0');
+
+      fireEvent.keyDown(second, { key: 'End' });
+      expect(document.activeElement).toBe(third);
+      expect(third.getAttribute('tabindex')).toBe('0');
+    });
+
+    it('renders an optional native table caption', () => {
+      render(
+        <DataTable
+          columns={baseColumns}
+          rows={makeRows(1)}
+          getRowKey={(row) => row.id}
+          gridClassName="employee-table"
+          caption="บัญชีเงินเดือน"
+        />,
+      );
+
+      const caption = screen.getByText('บัญชีเงินเดือน');
+      expect(caption.tagName).toBe('CAPTION');
+      expect(caption.className).toContain('sr-only');
     });
 
     it('selects from click, Enter, and Space without double-firing nested controls', () => {
