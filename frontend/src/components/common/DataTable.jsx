@@ -204,8 +204,9 @@ export function DataTable({
   onRowClick,
   // Optional row selection. Unlike `onRowClick` navigation above, selection is
   // a stateful table interaction: the row itself becomes focusable and exposes
-  // `aria-selected` so callers can use the whole row as the selection target
-  // without hiding the cells behind a `role="button"` name.
+  // `aria-current` (see the render below for why not `aria-selected`) so callers
+  // can use the whole row as the selection target without hiding the cells
+  // behind a `role="button"` name.
   onRowSelect,
   isRowSelected,
 }) {
@@ -629,7 +630,18 @@ export function DataTable({
                         style={style}
                         role={selectable ? 'row' : undefined}
                         tabIndex={selectable ? 0 : undefined}
-                        aria-selected={selectable ? selected : undefined}
+                        // Item 4d fix (2026-07-31): `aria-selected` is only valid ARIA on a row that
+                        // is a descendant of a `grid`/`treegrid` (WAI-ARIA `aria-selected` "Used in
+                        // roles": option, row (grid/treegrid only), tab, ...) -- this is a plain
+                        // `<table>`/`role="row"` with no grid ancestor, so assistive tech is not
+                        // guaranteed to announce it (and implementing a real `grid` here would mean
+                        // full arrow-key grid navigation, out of scope for this fix). `aria-current`
+                        // is a GLOBAL ARIA state valid on any role, and "true"/"false" here reads as
+                        // "the current item in this set of rows" -- a legitimate, valid stand-in that
+                        // needs no markup change beyond the attribute name. The visible "✓ เลือกอยู่"
+                        // text cue callers render in their identity column (e.g. PayrollPage.jsx) is
+                        // unaffected and stays the primary, always-reliable signal either way.
+                        aria-current={selectable ? selected : undefined}
                         onClick={activateRow ? (event) => handleRowActivateClick(event, row, activateRow) : undefined}
                         onKeyDown={selectable ? (event) => handleSelectableRowKeyDown(event, row) : undefined}
                       >

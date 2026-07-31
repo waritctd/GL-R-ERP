@@ -842,8 +842,11 @@ describe('DataTable', () => {
       const second = screen.getByText('Employee 02').closest('tr');
       expect(first.getAttribute('role')).toBe('row');
       expect(first.getAttribute('tabindex')).toBe('0');
-      expect(first.getAttribute('aria-selected')).toBe('false');
-      expect(second.getAttribute('aria-selected')).toBe('true');
+      // Item 4d fix (Opus review, 2026-07-31): `aria-selected` is only valid ARIA on a row inside a
+      // `grid`/`treegrid` -- this is a plain `<table>`/`role="row"`, so it now uses `aria-current`
+      // (a global ARIA state, valid on any role) instead. See the render in DataTable.jsx.
+      expect(first.getAttribute('aria-current')).toBe('false');
+      expect(second.getAttribute('aria-current')).toBe('true');
     });
 
     it('selects from click, Enter, and Space without double-firing nested controls', () => {

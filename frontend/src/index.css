@@ -39,6 +39,28 @@
   }
 }
 
+/* Payroll detail-panel side-by-side floor (Item 1 fix, 2026-07-31): this used to just reuse
+   Tailwind's built-in `xl:` (`--breakpoint-xl: 80rem` = 1280px) on the theory that the panel's
+   content-fit floor happened to land near there. It doesn't: measured live at :5211 (1280x900, real
+   Java backend, detail panel open), the side-by-side track needs the table's 714px minimum (150px
+   employee + 4 x 120px money columns + gaps) + the panel's 340px + a 16px gap = 1070px of content,
+   and the app's sidebar+gutters eat ~324px of viewport width before that — so side-by-side didn't
+   actually stop clipping the money-critical "สุทธิ" (net pay) column until somewhere around
+   1397-1400px of real viewport width (measured: 1px still hidden at 1395px, 0 hidden at 1400px).
+   1440px is the value actually used below, not that bare crossover or the ~1360px first estimate:
+   it clears the measured floor with real margin, and it is already this codebase's other stated
+   "primary desktop target" upper bound (see the B1 comment in styles.css), so nothing new is being
+   invented. A NEW named variant (not a bare `min-[1440px]:`) per this file's own single-source-of-
+   truth convention above — PayrollPage.jsx's grid track and `useMediaQuery('(min-width: 1440px)')`
+   JS check (see useIsMobile.js) both key off this exact number, so CSS, Tailwind, and JS state can
+   never disagree about which of the two panel presentations (sticky side-by-side vs. fixed overlay)
+   is active — same pattern as `nav-drawer` above already establishes for its own boundary. */
+@custom-variant payroll-wide {
+  @media (min-width: 1440px) {
+    @slot;
+  }
+}
+
 @theme static {
   /* Typography */
   --font-family: 'Sarabun', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -77,7 +99,14 @@
   --shadow-md: 0 18px 44px rgba(2, 6, 23, 0.28);
   --shadow-lg: 0 24px 70px rgba(2, 6, 23, 0.24);
   --shadow-lg-heavy: 0 24px 70px rgba(2, 6, 23, 0.28);
-  --shadow-focus-ring: 0 0 0 3px rgba(99, 102, 241, 0.13);
+  /* Item 4a fix (WCAG 1.4.11/2.4.11, 2026-07-31): the previous `rgba(99, 102, 241, 0.13)` composites
+     to rgb(235,235,253) on a white surface -- 1.18:1, nowhere near the 3:1 non-text-contrast floor.
+     60% alpha of the same hue only reaches 2.54:1 -- alpha alone cannot fix this, the ring has to be
+     a solid, opaque color. `--color-indigo-ring` (#2563eb, defined below) already exists for exactly
+     this purpose and measures 5.17:1 on white (verified by direct WCAG relative-luminance
+     computation, not just eyeballed) -- reusing it here fixes focus-ring contrast at all 18 call
+     sites from this one token, instead of hunting each one down individually. */
+  --shadow-focus-ring: 0 0 0 3px var(--color-indigo-ring);
   --shadow-inset-active: inset 3px 0 0 #2563eb;
 
   /* Brand / semantic colors */
