@@ -33,64 +33,96 @@ const EXPORT_KINDS = [
   { value: 'payroll-detail', label: 'รายละเอียดเงินเดือนรายเดือน (Excel)', filePrefix: 'PayrollDetail', extension: 'xlsx' },
 ];
 
-const payrollColumns = [
-  {
-    key: 'employee',
-    header: 'พนักงาน',
-    sortable: true,
-    sortAccessor: (line) => line.employeeName,
-    searchAccessor: (line) => line.employeeName,
-    render: (line) => (
-      <span>
-        <strong>{line.employeeName}</strong>
-        <small>{line.employeeCode} · {line.departmentName || '-'}</small>
-        {/* Finding 1 fix (Opus review, 2026-07-30): list-level warning so a daily-rate employee with
-            no/zero days-worked is visible WITHOUT having to open their detail panel first -- the gap
-            the ฿0-payslip bug actually lived in (hasPayrollInput below never submits a row with
-            nothing entered, so HR could Process a whole month without ever noticing). Purely a nudge;
-            PayrollService#requireEveryDailyRateEmployeeHasDaysWorked is the real enforcement. */}
-        {line.payType === 'D' && !(Number(line.daysWorked) > 0) && (
-          <small className="block text-warning">⚠ ยังไม่ได้ระบุจำนวนวันทำงาน</small>
-        )}
-      </span>
-    ),
-  },
+function MoneyCode({ value }) {
+  return <code className="payroll-money">{formatMoney(value)}</code>;
+}
+
+const employeeColumn = {
+  key: 'employee',
+  header: 'พนักงาน',
+  sortable: true,
+  sortAccessor: (line) => line.employeeName,
+  searchAccessor: (line) => line.employeeName,
+  render: (line) => (
+    <span>
+      <strong>{line.employeeName}</strong>
+      <small>{line.employeeCode} · {line.departmentName || '-'}</small>
+      {/* Finding 1 fix (Opus review, 2026-07-30): list-level warning so a daily-rate employee with
+          no/zero days-worked is visible WITHOUT having to open their detail panel first -- the gap
+          the ฿0-payslip bug actually lived in (hasPayrollInput below never submits a row with
+          nothing entered, so HR could Process a whole month without ever noticing). Purely a nudge;
+          PayrollService#requireEveryDailyRateEmployeeHasDaysWorked is the real enforcement. */}
+      {line.payType === 'D' && !(Number(line.daysWorked) > 0) && (
+        <small className="block text-warning">⚠ ยังไม่ได้ระบุจำนวนวันทำงาน</small>
+      )}
+    </span>
+  ),
+};
+
+const payrollMoneyColumns = [
   {
     key: 'grossEarnings',
     header: 'รายได้',
     sortable: true,
+    align: 'right',
+    className: 'payroll-money-cell',
+    isMoney: true,
+    totalAccessor: (line) => Number(line.grossEarnings || 0),
     sortAccessor: (line) => Number(line.grossEarnings || 0),
-    render: (line) => <code>{formatMoney(line.grossEarnings)}</code>,
+    render: (line) => <MoneyCode value={line.grossEarnings} />,
   },
   {
     key: 'specialPayTotal',
     header: 'เงินพิเศษ',
     sortable: true,
+    align: 'right',
+    className: 'payroll-money-cell',
+    isMoney: true,
+    hideWhenZero: true,
+    totalAccessor: (line) => Number(line.specialPayTotal || 0),
     sortAccessor: (line) => Number(line.specialPayTotal || 0),
-    render: (line) => <code>{formatMoney(line.specialPayTotal)}</code>,
+    render: (line) => <MoneyCode value={line.specialPayTotal} />,
   },
   {
     key: 'otCommission',
     header: 'OT / Commission',
     sortable: true,
+    align: 'right',
+    className: 'payroll-money-cell',
+    isMoney: true,
+    hideWhenZero: true,
+    totalAccessor: (line) => Number(line.overtimePay || 0) + Number(line.commissionPay || 0),
     sortAccessor: (line) => Number(line.overtimePay || 0) + Number(line.commissionPay || 0),
-    render: (line) => <code>{formatMoney(Number(line.overtimePay || 0) + Number(line.commissionPay || 0))}</code>,
+    render: (line) => <MoneyCode value={Number(line.overtimePay || 0) + Number(line.commissionPay || 0)} />,
   },
   {
     key: 'totalDeductions',
     header: 'เงินหัก',
     sortable: true,
+    align: 'right',
+    className: 'payroll-money-cell',
+    isMoney: true,
+    totalAccessor: (line) => Number(line.totalDeductions || 0),
     sortAccessor: (line) => Number(line.totalDeductions || 0),
-    render: (line) => <code>{formatMoney(line.totalDeductions)}</code>,
+    render: (line) => <MoneyCode value={line.totalDeductions} />,
   },
   {
     key: 'netPay',
     header: 'สุทธิ',
     sortable: true,
+    align: 'right',
+    className: 'payroll-money-cell',
+    isMoney: true,
+    totalAccessor: (line) => Number(line.netPay || 0),
     sortAccessor: (line) => Number(line.netPay || 0),
-    render: (line) => <code>{formatMoney(line.netPay)}</code>,
+    render: (line) => <MoneyCode value={line.netPay} />,
   },
 ];
+
+function hasNonZeroMoney(rows, column) {
+  if (!column.hideWhenZero) return true;
+  return rows.some((line) => Number(column.totalAccessor?.(line) || 0) !== 0);
+}
 
 const thisMonth = new Date().toISOString().slice(0, 7);
 const specialPayFields = [
@@ -440,6 +472,34 @@ function hasPayrollInput(input) {
   return payrollInputKeys.some((key) => parsePayrollNumber(input[key]) > 0);
 }
 
+function sumPayroll(rows, valueFor) {
+  return rows.reduce((sum, row) => sum + Number(valueFor(row) || 0), 0);
+}
+
+function PayrollTotalsRow({ rows, columns }) {
+  return (
+    <tr className="payroll-table payroll-total-row">
+      {columns.map((column) => {
+        if (column.key === 'employee') {
+          return (
+            <th key={column.key} scope="row">
+              <span>รวมรายการที่แสดง</span>
+              <small>{rows.length} คน</small>
+            </th>
+          );
+        }
+        if (column.key === 'actions') {
+          return <td key={column.key} className="payroll-actions-cell" aria-hidden="true" />;
+        }
+        return (
+          <td key={column.key} className="text-right payroll-money-cell" data-label={column.header}>
+            <MoneyCode value={sumPayroll(rows, column.totalAccessor)} />
+          </td>
+        );
+      })}
+    </tr>
+  );
+}
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -702,20 +762,42 @@ export function PayrollPage({ showToast }) {
     }
   }
 
+  const periodLines = useMemo(() => period?.lines || [], [period?.lines]);
+  const visiblePayrollColumns = useMemo(
+    () => [
+      employeeColumn,
+      ...payrollMoneyColumns.filter((column) => hasNonZeroMoney(periodLines, column)),
+    ],
+    [periodLines],
+  );
+  const visibleMoneyColumnCount = visiblePayrollColumns.filter((column) => column.isMoney).length;
+  const payrollGridColumns = useMemo(
+    () => [
+      'minmax(150px, 1.1fr)',
+      ...Array.from({ length: visibleMoneyColumnCount }, () => 'minmax(7.5rem, 0.86fr)'),
+      'minmax(6.75rem, 0.56fr)',
+    ].join(' '),
+    [visibleMoneyColumnCount],
+  );
+
   const columns = [
-    ...payrollColumns,
+    ...visiblePayrollColumns,
     {
       key: 'actions',
       header: 'เอกสาร',
+      align: 'right',
+      className: 'payroll-actions-cell',
       render: (line) => (
         <span className="row-actions">
           <Button type="button" variant="text" onClick={() => setSelectedEmployeeId(line.employeeId)}>
             รายละเอียด
           </Button>
-          <Button type="button" variant="secondary" onClick={() => downloadPayslip(line)} disabled={!period?.id || !line.id || saving}>
-            <Icon name="fileText" />
-            Download payslip
-          </Button>
+          {period?.id && line.id ? (
+            <Button type="button" variant="secondary" onClick={() => downloadPayslip(line)} disabled={saving}>
+              <Icon name="fileText" />
+              Download payslip
+            </Button>
+          ) : null}
         </span>
       ),
     },
@@ -936,22 +1018,25 @@ export function PayrollPage({ showToast }) {
       <TaxTreatmentMatrixSection payrollMonth={month} showToast={showToast} />
 
       <section className="payroll-workspace">
-        <DataTable
-          columns={columns}
-          rows={period?.lines || []}
-          getRowKey={(line) => line.employeeId}
-          gridClassName="payroll-table"
-          pageSize={25}
-          searchable
-          searchPlaceholder="ค้นหาพนักงาน"
-          rowClassName={(line) => `payroll-row${Number(line.employeeId) === Number(selectedLine?.employeeId) ? ' active' : ''}`}
-          loading={loading}
-          emptyState={{
-            icon: 'badgeDollar',
-            title: 'ยังไม่มีข้อมูลเงินเดือน',
-            description: 'เลือกรอบเดือนหรือกดรีเฟรชเพื่อคำนวณตัวอย่าง',
-          }}
-        />
+        <div style={{ '--payroll-table-columns': payrollGridColumns }}>
+          <DataTable
+            columns={columns}
+            rows={periodLines}
+            getRowKey={(line) => line.employeeId}
+            gridClassName="payroll-table"
+            pageSize={Math.max(periodLines.length, 25)}
+            searchable
+            searchPlaceholder="ค้นหาพนักงาน"
+            rowClassName={(line) => `payroll-row${Number(line.employeeId) === Number(selectedLine?.employeeId) ? ' active' : ''}`}
+            loading={loading}
+            footerRow={({ rows, columns: renderedColumns }) => <PayrollTotalsRow rows={rows} columns={renderedColumns} />}
+            emptyState={{
+              icon: 'badgeDollar',
+              title: 'ยังไม่มีข้อมูลเงินเดือน',
+              description: 'เลือกรอบเดือนหรือกดรีเฟรชเพื่อคำนวณตัวอย่าง',
+            }}
+          />
+        </div>
 
         <aside className={cn(PANEL_CLASS, 'payroll-detail-panel')}>
           {selectedLine && selectedAdjustment ? (

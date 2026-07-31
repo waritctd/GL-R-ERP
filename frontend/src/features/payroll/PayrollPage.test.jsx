@@ -177,6 +177,51 @@ describe('PayrollPage adjustment inputs', () => {
     await waitFor(() => expect(api.payroll.downloadPayslip).toHaveBeenCalledWith(7, 55));
   });
 
+  it('right-aligns money, shows satang consistently, and reconciles all visible lines without stranding employee 26', async () => {
+    const lines = Array.from({ length: 26 }, (_, index) => ({
+      ...payrollLine,
+      id: 100 + index,
+      employeeId: index + 1,
+      employeeCode: `GLR-${String(index + 1).padStart(3, '0')}`,
+      employeeName: `พนักงาน ${index + 1}`,
+    }));
+    api.payroll.current.mockResolvedValue({
+      period: previewPeriod({
+        lineCount: 26,
+        totalGross: 780000,
+        totalDeductions: 19500,
+        totalNet: 760500,
+        totalSocialSecurity: 19500,
+        lines,
+      }),
+    });
+
+    const { container } = renderPayrollPage();
+
+    expect(await screen.findByText('พนักงาน 26')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Download payslip/i })).toBeNull();
+    await waitFor(() => expect(screen.getByText('หน้า 1 / 1')).toBeTruthy());
+    expect(screen.queryByRole('columnheader', { name: /เงินพิเศษ/i })).toBeNull();
+    expect(screen.queryByRole('columnheader', { name: /OT \/ Commission/i })).toBeNull();
+
+    const firstGrossCell = container.querySelector('tbody td[data-label="รายได้"]');
+    expect(firstGrossCell.className).toContain('text-right');
+    expect(firstGrossCell.className).toContain('payroll-money-cell');
+    expect(firstGrossCell.textContent).toBe('฿30,000.00');
+    expect(container.querySelector('tbody td[data-label="เงินพิเศษ"]')).toBeNull();
+    expect(container.querySelector('tbody td[data-label="OT / Commission"]')).toBeNull();
+
+    const grossHeader = container.querySelector('thead th.payroll-money-cell');
+    expect(grossHeader.className).toContain('text-right');
+
+    const totalRow = container.querySelector('tfoot .payroll-total-row');
+    expect(totalRow).toBeTruthy();
+    expect(totalRow.textContent).toContain('รวมรายการที่แสดง');
+    expect(totalRow.textContent).toContain('26 คน');
+    expect(totalRow.textContent).toContain('฿780,000.00');
+    expect(totalRow.textContent).toContain('฿760,500.00');
+  });
+
   it('starts payslip email distribution for a processed payroll period', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
 

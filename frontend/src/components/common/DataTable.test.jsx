@@ -83,6 +83,53 @@ describe('DataTable', () => {
     expect(container.querySelectorAll('tbody .data-row')).toHaveLength(2);
   });
 
+  it('applies numeric alignment and custom column classes to headers and cells', () => {
+    const columns = [
+      baseColumns[0],
+      { ...baseColumns[1], align: 'right', className: 'numeric-cell' },
+    ];
+    render(
+      <DataTable
+        columns={columns}
+        rows={makeRows(1)}
+        getRowKey={(row) => row.id}
+        gridClassName="employee-table"
+      />,
+    );
+
+    const ageHeader = screen.getByRole('columnheader', { name: /Age/ });
+    const ageCell = screen.getByRole('cell', { name: '20' });
+    expect(ageHeader.className).toContain('text-right');
+    expect(ageHeader.className).toContain('numeric-cell');
+    expect(ageCell.className).toContain('text-right');
+    expect(ageCell.className).toContain('numeric-cell');
+  });
+
+  it('renders an optional semantic footer with the filtered/sorted rows before pagination', () => {
+    const rows = makeRows(25);
+    const { container } = render(
+      <DataTable
+        columns={baseColumns}
+        rows={rows}
+        getRowKey={(row) => row.id}
+        gridClassName="employee-table"
+        pageSize={10}
+        footerRow={({ rows: visibleRows }) => (
+          <tr className="employee-table employee-total-row">
+            <th scope="row">Total</th>
+            <td>{visibleRows.length}</td>
+          </tr>
+        )}
+      />,
+    );
+
+    const footer = container.querySelector('tfoot');
+    expect(footer).toBeTruthy();
+    expect(footer.querySelector('th').getAttribute('scope')).toBe('row');
+    expect(footer.textContent).toContain('Total');
+    expect(footer.textContent).toContain('25');
+  });
+
   it('slices rows per page and prev/next buttons navigate', () => {
     const rows = makeRows(25);
     render(

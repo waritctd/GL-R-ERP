@@ -180,6 +180,9 @@ export function DataTable({
   // Optional per-row detail panel. Return an element to expand that row, null to leave it
   // collapsed. Callers should expose their own explicit expand/open control.
   renderExpanded,
+  // Optional semantic table footer. Receives the filtered/sorted rows before pagination so callers
+  // can reconcile the full visible result set, not just the current page.
+  footerRow,
   // Optional row-level navigation/activation. Purely additive and default-off:
   // every existing caller that omits this prop renders and behaves exactly as
   // before. When provided, clicking the desktop `<tr>` (outside of a nested
@@ -414,6 +417,13 @@ export function DataTable({
 
   const skeletonRowCount = Math.min(pageSize, 8);
 
+  function columnClassName(column, row) {
+    const extraClassName = typeof column.className === 'function'
+      ? column.className(row)
+      : column.className;
+    return cn(column.align === 'right' && 'text-right', extraClassName);
+  }
+
   function renderErrorRegion() {
     if (!hasError) return null;
     return (
@@ -549,7 +559,7 @@ export function DataTable({
                     aria-sort={column.sortable
                       ? (sortKey === column.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none')
                       : undefined}
-                    className={column.align === 'right' ? 'text-right' : undefined}
+                    className={columnClassName(column)}
                   >
                     {column.sortable ? (
                       <SortHeader
@@ -603,7 +613,7 @@ export function DataTable({
                         {columns.map((column) => (
                           <td
                             key={column.key}
-                            className={column.align === 'right' ? 'text-right' : undefined}
+                            className={columnClassName(column, row)}
                             data-label={typeof column.header === 'string' ? column.header : undefined}
                           >
                             {column.render(row)}
@@ -624,6 +634,11 @@ export function DataTable({
                 })
               )}
             </tbody>
+            {!loading && sortedRows.length > 0 && footerRow ? (
+              <tfoot>
+                {footerRow({ columns, rows: sortedRows, pageRows })}
+              </tfoot>
+            ) : null}
           </table>
         ) : (
           hasError ? null : (

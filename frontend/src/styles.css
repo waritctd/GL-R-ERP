@@ -935,7 +935,8 @@ textarea:focus {
 }
 
 .data-table-table thead,
-.data-table-table tbody {
+.data-table-table tbody,
+.data-table-table tfoot {
   display: block;
 }
 
@@ -1369,7 +1370,10 @@ textarea:focus {
 }
 
 .payroll-table {
-  grid-template-columns: minmax(0,1.5fr) minmax(0,0.85fr) minmax(0,0.75fr) minmax(0,0.95fr) minmax(0,0.85fr) minmax(0,0.85fr) minmax(150px,0.9fr);
+  grid-template-columns: var(
+    --payroll-table-columns,
+    minmax(150px, 1.1fr) repeat(5, minmax(7.5rem, 0.86fr)) minmax(6.75rem, 0.56fr)
+  );
 }
 
 .toolbar-actions,
@@ -1448,7 +1452,7 @@ textarea:focus {
 
 .payroll-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.65fr);
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.35fr);
   gap: 16px;
   align-items: start;
 }
@@ -1462,9 +1466,171 @@ textarea:focus {
   box-shadow: var(--shadow-inset-active);
 }
 
+.payroll-money-cell {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.payroll-table .payroll-money {
+  display: block;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+}
+
+.payroll-table.table-head > .payroll-money-cell,
+.payroll-table.data-row > .payroll-money-cell,
+.payroll-table.payroll-total-row > .payroll-money-cell {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+}
+
+.payroll-table .text-right .sort-header {
+  margin-left: auto;
+}
+
+.payroll-actions-cell .row-actions {
+  flex-wrap: wrap;
+}
+
+.payroll-total-row {
+  display: grid;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 18px;
+  border-top: 2px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-muted);
+  color: var(--color-text-secondary);
+}
+
+.payroll-total-row > * {
+  min-width: 0;
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+}
+
+.payroll-total-row th,
+.payroll-total-row td {
+  display: block;
+  border: 0;
+  padding: 0;
+}
+
+.payroll-total-row th {
+  color: var(--color-text);
+  text-align: left;
+}
+
+.payroll-total-row th > span,
+.payroll-total-row th > small {
+  display: block;
+  min-width: 0;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.payroll-total-row th > span {
+  font-weight: 800;
+}
+
+.payroll-total-row th > small {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
 .payroll-detail-panel {
   position: sticky;
   top: 18px;
+}
+
+@media (max-width: 1500px) {
+  .payroll-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .payroll-detail-panel {
+    position: static;
+  }
+}
+
+@media (min-width: 721px) and (max-width: 1040px) {
+  .payroll-table,
+  .payroll-table.payroll-total-row {
+    min-width: 0 !important;
+  }
+
+  .payroll-table.table-head {
+    display: none;
+  }
+
+  .payroll-table.data-row,
+  .payroll-table.payroll-total-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px 16px;
+    width: 100%;
+    min-width: 0 !important;
+    padding: 14px 16px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md, 12px);
+    background: var(--color-surface);
+  }
+
+  .payroll-table.data-row + .data-row {
+    margin-top: 10px;
+  }
+
+  .payroll-table.data-row > td,
+  .payroll-table.payroll-total-row > th,
+  .payroll-table.payroll-total-row > td {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .payroll-table.data-row > td:first-child,
+  .payroll-table.payroll-total-row > th {
+    grid-column: 1 / -1;
+  }
+
+  .payroll-table.data-row > td[data-label]:not([data-label=""])::before,
+  .payroll-table.payroll-total-row > td[data-label]:not([data-label=""])::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+  }
+
+  .payroll-table .payroll-money {
+    display: block;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .payroll-table.data-row > td > .row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .payroll-table.payroll-total-row > .payroll-actions-cell {
+    display: none;
+  }
 }
 
 .payroll-detail-grid,
@@ -2713,6 +2879,7 @@ a.status-badge {
      intentionally excluded — they keep scrolling horizontally. */
   .request-table,
   .payroll-table,
+  .payroll-table.payroll-total-row,
   .reflow-cards {
     /* Override the 1040px min-width:900px scroll trap for these classes.
        !important is required: styles.css now loads into @layer legacy,
@@ -2732,6 +2899,7 @@ a.status-badge {
   /* Turn every data row into a full-width card. */
   .request-table.data-row,
   .payroll-table.data-row,
+  .payroll-table.payroll-total-row,
   .reflow-cards.data-row {
     display: grid;
     /* !important: overrides a Tailwind `grid-cols-[...]` arbitrary utility
@@ -2758,6 +2926,8 @@ a.status-badge {
   .request-table.data-row > td,
   .payroll-table.data-row > span,
   .payroll-table.data-row > td,
+  .payroll-table.payroll-total-row > th,
+  .payroll-table.payroll-total-row > td,
   .reflow-cards.data-row > span,
   .reflow-cards.data-row > td {
     display: block;
@@ -2771,6 +2941,7 @@ a.status-badge {
   .request-table.data-row > td[data-label]:not([data-label=""])::before,
   .payroll-table.data-row > span[data-label]:not([data-label=""])::before,
   .payroll-table.data-row > td[data-label]:not([data-label=""])::before,
+  .payroll-table.payroll-total-row > td[data-label]:not([data-label=""])::before,
   .reflow-cards.data-row > span[data-label]:not([data-label=""])::before,
   .reflow-cards.data-row > td[data-label]:not([data-label=""])::before {
     content: attr(data-label);
@@ -2793,6 +2964,10 @@ a.status-badge {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+  }
+
+  .payroll-table.payroll-total-row > .payroll-actions-cell {
+    display: none;
   }
 
   /* --- Ticket items table (Step 12 backlog item C) ---
