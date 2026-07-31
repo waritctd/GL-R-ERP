@@ -1,4 +1,4 @@
-import { Fragment, isValidElement, useEffect, useMemo, useState } from 'react';
+import { Fragment, isValidElement, useEffect, useMemo, useRef, useState } from 'react';
 import {
   getCoreRowModel,
   getFilteredRowModel,
@@ -173,6 +173,7 @@ export function DataTable({
   sort,
   onSortChange,
   toolbarExtra,
+  caption,
   stickyHeader = false,
   exportable = false,
   onExportCsv,
@@ -206,9 +207,15 @@ export function DataTable({
   // a stateful table interaction: the row itself becomes focusable and exposes
   // `aria-current` (see the render below for why not `aria-selected`) so callers
   // can use the whole row as the selection target without hiding the cells
-  // behind a `role="button"` name.
+  // behind a `role="button"` name. Only one selectable row sits in the Tab
+  // order at a time; ArrowUp/ArrowDown/Home/End move focus within the rows.
   onRowSelect,
   isRowSelected,
+  // Overlay/detail callers can opt into focusing the clicked row before the
+  // detail opens so a dialog focus-restoration hook has the row as its origin.
+  // Persistent side panels should leave this false so mouse clicks do not
+  // steal focus from the user's current toolbar/control.
+  focusRowOnSelectClick = false,
 }) {
   // Below 720px a dense grid crushes every column into an unreadable stub
   // (ids as "PR-…", clipped badges). When a page supplies `mobileCard`, render
@@ -248,6 +255,7 @@ export function DataTable({
     onSortChange?.(first ? { key: first.id, dir: first.desc ? 'desc' : 'asc' } : null);
   };
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize });
+  const rowRefs = useRef(new Map());
 
   const columnMap = useMemo(
     () => new Map(columns.map((column) => [column.key, column])),
@@ -297,6 +305,17 @@ export function DataTable({
 
   const sortedRows = table.getPrePaginationRowModel().rows.map((row) => row.original);
   const pageRows = table.getPaginationRowModel().rows.map((row) => row.original);
+  const selectable = typeof onRowSelect === 'function';
+  const pageRowKeys = useMemo(
+    () => pageRows.map((row) => getRowKey(row)),
+    [pageRows, getRowKey],
+  );
+  const selectedPageRow = selectable && typeof isRowSelected === 'function'
+    ? pageRows.find((row) => Boolean(isRowSelected(row)))
+    : null;
+  const selectedRowKey = selectedPageRow ? getRowKey(selectedPageRow) : null;
+  const fallbackRowKey = selectedRowKey ?? pageRowKeys[0] ?? null;
+  const [activeRowKey, setActiveRowKey] = useState(null);
   const totalPages = Math.max(1, table.getPageCount());
   const safePage = Math.min(pagination.pageIndex + 1, totalPages);
   const from = sortedRows.length === 0 ? 0 : (safePage - 1) * pageSize + 1;
@@ -360,6 +379,11 @@ export function DataTable({
     }
   }, [pagination.pageIndex, totalPages]);
 
+  useEffect(() => {
+    if (!selectable) return;
+    setActiveRowKey((current) => (pageRowKeys.some((key) => Object.is(key, current)) ? current : fallbackRowKey));
+  }, [fallbackRowKey, pageRowKeys, selectable]);
+
   function handleSort(key) {
     setSorting((current) => {
       if (current[0]?.id === key) return [{ id: key, desc: !current[0].desc }];
@@ -371,7 +395,7 @@ export function DataTable({
   // Mouse-only navigation activation (FIX A/D): `onRowClick` still does not
   // make the row a keyboard target. Keyboard selection is handled separately
   // by the explicit `onRowSelect` contract below.
-  function handleRowActivateClick(event, row, activate) {
+  function handleRowActivateClick(event, row, activate, rowKey) {
     if (typeof activate !== 'function') return;
     // FIX F5: `cursor-pointer` advertises the whole row as clickable, so a
     // cmd/ctrl/shift/alt-click anywhere in the row (not just on the identity
@@ -409,14 +433,39 @@ export function DataTable({
       ? window.getSelection()?.toString()
       : '';
     if (selectionText) return;
+    if (selectable) {
+      setActiveRowKey(rowKey);
+      if (focusRowOnSelectClick) event.currentTarget.focus();
+    }
     activate(row);
   }
 
-  function handleSelectableRowKeyDown(event, row) {
+  function focusRowByKey(rowKey) {
+    setActiveRowKey(rowKey);
+    rowRefs.current.get(rowKey)?.focus();
+  }
+
+  function handleSelectableRowKeyDown(event, row, rowKey) {
     if (event.target !== event.currentTarget) return;
-    if (event.key !== 'Enter' && event.key !== ' ') return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      setActiveRowKey(rowKey);
+      onRowSelect?.(row);
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const currentIndex = pageRowKeys.findIndex((key) => Object.is(key, rowKey));
+    if (currentIndex === -1) return;
     event.preventDefault();
-    onRowSelect?.(row);
+    const lastIndex = pageRowKeys.length - 1;
+    const nextIndex = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? lastIndex
+        : event.key === 'ArrowDown'
+          ? Math.min(currentIndex + 1, lastIndex)
+          : Math.max(currentIndex - 1, 0);
+    focusRowByKey(pageRowKeys[nextIndex]);
   }
 
   function handleExportCsv() {
@@ -563,6 +612,7 @@ export function DataTable({
       <section className="table-panel" aria-busy={loading ? 'true' : undefined}>
         {(loading || sortedRows.length > 0) ? (
           <table className="data-table-table">
+            {caption ? <caption className="sr-only">{caption}</caption> : null}
             <thead>
               <tr className={`${gridClassName} table-head${stickyHeader ? ' is-sticky' : ''}`}>
                 {columns.map((column) => (
@@ -605,14 +655,21 @@ export function DataTable({
                   const extraClassName = rowClassName ? ` ${rowClassName(row)}` : '';
                   const style = rowStyle ? rowStyle(row) : undefined;
                   const expanded = renderExpanded ? renderExpanded(row) : null;
-                  const selectable = typeof onRowSelect === 'function';
                   const selected = selectable && typeof isRowSelected === 'function'
                     ? Boolean(isRowSelected(row))
                     : false;
                   const activateRow = selectable ? onRowSelect : onRowClick;
+                  const currentTabStop = selectable && Object.is(key, activeRowKey ?? fallbackRowKey);
                   return (
                     <Fragment key={key}>
                       <tr
+                        ref={selectable ? (node) => {
+                          if (node) {
+                            rowRefs.current.set(key, node);
+                          } else {
+                            rowRefs.current.delete(key);
+                          }
+                        } : undefined}
                         className={cn(
                           `${gridClassName} data-row${extraClassName}`,
                           // `hover:bg-surface-hover` (#fbfcff on a white surface) reads as
@@ -629,7 +686,7 @@ export function DataTable({
                         )}
                         style={style}
                         role={selectable ? 'row' : undefined}
-                        tabIndex={selectable ? 0 : undefined}
+                        tabIndex={selectable ? (currentTabStop ? 0 : -1) : undefined}
                         // Item 4d fix (2026-07-31): `aria-selected` is only valid ARIA on a row that
                         // is a descendant of a `grid`/`treegrid` (WAI-ARIA `aria-selected` "Used in
                         // roles": option, row (grid/treegrid only), tab, ...) -- this is a plain
@@ -642,8 +699,8 @@ export function DataTable({
                         // text cue callers render in their identity column (e.g. PayrollPage.jsx) is
                         // unaffected and stays the primary, always-reliable signal either way.
                         aria-current={selectable ? selected : undefined}
-                        onClick={activateRow ? (event) => handleRowActivateClick(event, row, activateRow) : undefined}
-                        onKeyDown={selectable ? (event) => handleSelectableRowKeyDown(event, row) : undefined}
+                        onClick={activateRow ? (event) => handleRowActivateClick(event, row, activateRow, key) : undefined}
+                        onKeyDown={selectable ? (event) => handleSelectableRowKeyDown(event, row, key) : undefined}
                       >
                         {columns.map((column) => (
                           <td

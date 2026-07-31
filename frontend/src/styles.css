@@ -1380,8 +1380,7 @@ textarea:focus {
   );
 }
 
-.toolbar-actions,
-.payroll-actions {
+.toolbar-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
@@ -1401,66 +1400,12 @@ textarea:focus {
   width: 150px;
 }
 
-/* review / export / send / run — routine work stays grouped separately from the irreversible run
-   region so Process never reads as just another button in an undifferentiated row. */
-.payroll-actions-groups {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 16px;
-}
-
-.payroll-actions-group {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding-left: 16px;
-  border-left: 1px solid var(--color-border);
-}
-
-.payroll-actions-group:first-child {
-  padding-left: 0;
-  border-left: none;
-}
-
-.payroll-process-region {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 14px;
-  margin-left: auto;
-  padding: 10px 12px;
-  border: 1px solid var(--color-danger-border, var(--color-border));
-  border-radius: var(--radius-md);
-  background: var(--color-surface-muted);
-}
-
-.payroll-process-copy,
-.payroll-process-controls {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.payroll-process-copy > span {
-  color: var(--color-text);
-  font-size: var(--text-sm);
-  font-weight: 900;
-}
-
-.payroll-process-copy small {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  font-weight: 800;
-}
+/* Phase A command surface: payroll action grouping and Process-region presentation now live as
+   Tailwind utilities at the PayrollPage.jsx call site. Keeping the old `.payroll-actions-*` rules
+   here would be dead CSS because utilities win over this legacy layer. */
 
 /* B1/B4 fix (Opus review, 2026-07-31): `.payroll-workspace`'s grid layout (side-by-side panel
-   >=1440px -- raised from 1280px by the Item 1 fix, same date, see the `payroll-wide` comment
+   >=1366px -- adjusted by the Phase A command-surface fix, same date, see the `payroll-wide` comment
    further down -- single column below it) moved to Tailwind utilities at the PayrollPage.jsx call site
    (CLAUDE.md Tailwind-first); nothing else in this file targets that class, so the rule is gone
    rather than left behind empty. See the two `@media` blocks below for what genuinely could not
@@ -1477,11 +1422,6 @@ textarea:focus {
 .payroll-row.active {
   background: var(--color-info-row-active);
   box-shadow: var(--shadow-inset-active);
-}
-
-.payroll-row.is-selectable:focus-visible {
-  outline: 2px solid var(--color-primary);
-  outline-offset: -2px;
 }
 
 /* B4 fix (Opus review, 2026-07-31): `.payroll-money-cell` itself is plain `tabular-nums` and could
@@ -1712,7 +1652,7 @@ textarea:focus {
 }
 
 /* `.payroll-detail-close`'s `display` toggle used to live here (none by default, `inline-flex`
-   under `max-width: 1439px`). It never applied: Button.jsx's `buttonVariants` base carries the
+   under `max-width: 1365px`). It never applied: Button.jsx's `buttonVariants` base carries the
    Tailwind `inline-flex` utility, and index.css's `@layer theme, legacy, utilities` means a
    utility always beats a rule in this file for the same property. The button is now rendered
    conditionally on `isOverlayPanel` in PayrollPage.jsx instead -- see the comment there. */
@@ -1726,14 +1666,12 @@ textarea:focus {
 
 /* B1 fix (Opus review, 2026-07-30 branch, fixed 2026-07-31): the previous `max-width: 1500px`
    breakpoint here forced a THIRD panel state -- stacked below the table with `position: static` --
-   on top of the real two (sticky side-by-side, and the <1440px fixed overlay below). At the stated
+   on top of the real two (sticky side-by-side, and the <1366px fixed overlay below). At the stated
    primary desktop target (1366-1440px) that pushed the panel ~88px below the fold with no
    scroll-into-view, the worst of both states. Deleted outright; the panel now has exactly two
    states, both handled below: sticky beside the table when the `payroll-wide:` grid track applies
-   (>=1440px, see PayrollPage.jsx and index.css's `@custom-variant payroll-wide` -- raised from the
-   1280px Tailwind `xl:` this comment originally described by the Item 1 fix, 2026-07-31, once real
-   measurement showed 1280px still hid the "สุทธิ" net-pay column behind a scrollbar), and the fixed
-   slide-over overlay in the `max-width: 1439px` block further down for everything under that.
+   (>=1366px, see PayrollPage.jsx and index.css's `@custom-variant payroll-wide`), and the fixed
+   slide-over overlay in the `max-width: 1365px` block further down for everything under that.
 
    B3 fix (same review): a second breakpoint used to live here too, `(min-width: 721px) and
    (max-width: 1040px)`, reflowing `.payroll-table` into 2-column cards in the 721-1040px tablet
@@ -1757,7 +1695,7 @@ textarea:focus {
    (`grid grid-cols-1 gap-2.5 @sm:grid-cols-2`) at the two PayrollPage.jsx call sites so the column
    count can respond to the panel's own container-query width instead of being pinned to 2 columns
    at every width (that pin was the regression: 107px money inputs, 3-line labels, at the panel's
-   300px-then-340px floor). Left as bare selectors here would be dead weight -- this stylesheet is
+   300px/340px floor). Left as bare selectors here would be dead weight -- this stylesheet is
    `@layer legacy` and always loses to a Tailwind utility on the same element (see the
    styles-css-loses-to-tailwind-utilities gotcha) -- so the rule is deleted rather than kept as an
    unreachable fallback. */
@@ -2622,23 +2560,17 @@ a.status-badge {
   }
 }
 
-/* B1 fix (Opus review, 2026-07-31), floor raised by the Item 1 fix (2026-07-31): the payroll detail
-   panel's overlay presentation now switches at 1440px, not 1040px. It used to switch at Tailwind's
-   built-in `xl:` (1280px) instead, on the theory that was the panel's content-fit floor -- measured
-   live in a real browser at :5211, it was not: with the panel open at 1280px the table needed 714px
-   (150px employee + 4 x 120px money columns + gaps) against only ~598px actually available beside a
-   340px panel, so 116px -- specifically the money-critical "สุทธิ" (net pay) column -- was hidden
-   behind a horizontal scrollbar the user had no reason to expect. Real crossover measured around
-   1397-1400px; 1440px is used instead of that bare number (or the ~1360px first estimate) for real
-   margin, and because it is already this codebase's other stated "primary desktop target" upper
-   bound. `payroll-wide:` (see index.css's `@custom-variant`) is the single source of truth both
-   PayrollPage.jsx's grid-track utility and its `useMediaQuery('(min-width: 1440px)')` JS check key
-   off, so CSS, Tailwind, and JS state can never disagree about which of the two modes is active.
-   `max-width: 1439px` here is the exact complement of that `min-width: 1440px` -- deliberately its
-   own block rather than folding into the generic ≤1040px nav-drawer band above, since 1440 is
-   specific to this one panel's measured content-fit floor, not a navigation/layout boundary shared
-   with the rest of the app. */
-@media (max-width: 1439px) {
+/* B1 fix (Opus review, 2026-07-31), floor lowered by the Phase A command-surface fix (2026-07-31):
+   the payroll detail panel's overlay presentation now switches at 1366px, not 1040px. It once tried
+   Tailwind's built-in `xl:` (1280px), but measured live in a real browser at :5211 that width left
+   the table's 714px minimum hidden beside the panel. The later 1440px floor was safe but kept the
+   side panel out of the common 1366px desktop band. Phase A reduces the side-panel floor to 310px so
+   1366px can afford the measured 714px table, the
+   16px gap, and the panel. `payroll-wide:` (see index.css's `@custom-variant`) is the single source
+   of truth both PayrollPage.jsx's grid-track utility and its `useMediaQuery('(min-width: 1366px)')`
+   JS check key off, so CSS, Tailwind, and JS state can never disagree about which mode is active.
+   `max-width: 1365px` here is the exact complement of that `min-width: 1366px`. */
+@media (max-width: 1365px) {
   .payroll-detail-panel {
     position: fixed;
     inset: 66px 0 0 auto;
@@ -2683,11 +2615,6 @@ a.status-badge {
     pointer-events: auto;
   }
 
-  .payroll-process-region {
-    flex: 1 1 100%;
-    margin-left: 0;
-    justify-content: space-between;
-  }
 }
 
 @media (max-width: 720px) {
@@ -2701,16 +2628,6 @@ a.status-badge {
   .login-panel,
   .form-grid {
     grid-template-columns: 1fr;
-  }
-
-  /* F3: this must match `useIsMobile`'s 720px breakpoint, not an earlier 1040px cutoff. Below 720px
-     the run action is actually disabled (isMobile blocks it, see PayrollPage.jsx), so dropping the
-     divider that separates it from Preview is safe there. At 721–1040px (iPad Air/Pro portrait, a
-     half-screen laptop) Process Payroll is still enabled — removing the divider at that width left
-     the irreversible action reading as just another button in an undifferentiated row. */
-  .payroll-actions-group {
-    padding-left: 0;
-    border-left: none;
   }
 
   .payroll-detail-panel {
@@ -2736,15 +2653,6 @@ a.status-badge {
     padding: 16px 20px 12px;
     border-bottom: 1px solid var(--color-border);
     background: var(--color-surface);
-  }
-
-  .payroll-process-region {
-    align-items: stretch;
-  }
-
-  .payroll-process-controls,
-  .payroll-process-controls button {
-    width: 100%;
   }
 
   /* Stat/metric cards: a single stacked column of full-width cards forces
@@ -3113,8 +3021,6 @@ a.status-badge {
      (.commission-table / .commission-payroll-table) are
      intentionally excluded — they keep scrolling horizontally. */
   .request-table,
-  .payroll-table,
-  .payroll-table.payroll-total-row,
   .reflow-cards {
     /* Override the 1040px min-width:900px scroll trap for these classes.
        !important is required: styles.css now loads into @layer legacy,
@@ -3122,6 +3028,11 @@ a.status-badge {
        `min-w-[900px]` utility on the same element would otherwise win by
        layer order regardless of this rule's higher selector specificity. */
     min-width: 0 !important;
+  }
+
+  .payroll-table,
+  .payroll-table.payroll-total-row {
+    min-width: 0;
   }
 
   /* Each cell now carries its own label, so hide the shared header row. */
@@ -3133,8 +3044,6 @@ a.status-badge {
 
   /* Turn every data row into a full-width card. */
   .request-table.data-row,
-  .payroll-table.data-row,
-  .payroll-table.payroll-total-row,
   .reflow-cards.data-row {
     display: grid;
     /* !important: overrides a Tailwind `grid-cols-[...]` arbitrary utility
@@ -3144,6 +3053,19 @@ a.status-badge {
     gap: 8px;
     width: 100%;
     min-width: 0 !important;
+    padding: 14px 16px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md, 12px);
+    background: var(--color-surface);
+  }
+
+  .payroll-table.data-row,
+  .payroll-table.payroll-total-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
     padding: 14px 16px;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md, 12px);
@@ -3204,7 +3126,7 @@ a.status-badge {
   }
 
   .payroll-table.payroll-total-row {
-    display: none !important;
+    display: none;
   }
 
   .payroll-mobile-summary-row {
