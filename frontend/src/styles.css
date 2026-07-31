@@ -1496,6 +1496,35 @@ textarea:focus {
   flex-wrap: wrap;
 }
 
+.payroll-table-region {
+  min-width: 0;
+}
+
+.payroll-table-region .table-panel {
+  max-height: min(68vh, 760px);
+  overflow: auto;
+}
+
+.payroll-table-region .data-table-table tfoot {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+}
+
+.payroll-reconciliation-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-danger-border, var(--color-danger));
+  border-radius: var(--radius-md);
+  background: var(--color-danger-bg, var(--color-surface));
+  color: var(--color-danger);
+  font-size: var(--text-sm);
+  font-weight: 800;
+}
+
 .payroll-total-row {
   display: grid;
   align-items: center;
@@ -1505,6 +1534,7 @@ textarea:focus {
   border-top: 2px solid var(--color-border);
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface-muted);
+  box-shadow: 0 -8px 18px rgb(15 23 42 / 8%);
   color: var(--color-text-secondary);
 }
 
@@ -1545,6 +1575,71 @@ textarea:focus {
   color: var(--color-text-muted);
   font-size: var(--text-xs);
   font-weight: 700;
+}
+
+.payroll-reconcile-note {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  white-space: normal;
+}
+
+.payroll-reconcile-note.is-ok {
+  color: var(--color-success);
+}
+
+.payroll-reconcile-note.is-mismatch {
+  color: var(--color-danger);
+}
+
+.payroll-mobile-summary-row {
+  display: none;
+}
+
+.payroll-mobile-summary-row > td {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+}
+
+.payroll-mobile-summary-bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 2px solid var(--color-border);
+  background: var(--color-surface);
+  box-shadow: 0 -10px 24px rgb(15 23 42 / 14%);
+}
+
+.payroll-mobile-summary-bar.is-mismatch {
+  border-top-color: var(--color-danger);
+}
+
+.payroll-mobile-summary-bar span {
+  min-width: 0;
+}
+
+.payroll-mobile-summary-bar small,
+.payroll-mobile-summary-bar b {
+  display: block;
+  overflow: visible;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  white-space: normal;
+}
+
+.payroll-mobile-summary-bar small {
+  color: var(--color-text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+}
+
+.payroll-mobile-summary-bar b {
+  color: var(--color-text);
+  font-size: var(--text-sm);
 }
 
 .payroll-detail-panel {
@@ -2968,6 +3063,14 @@ a.status-badge {
 
   .payroll-table.payroll-total-row > .payroll-actions-cell {
     display: none;
+  }
+
+  .payroll-table.payroll-total-row {
+    display: none !important;
+  }
+
+  .payroll-mobile-summary-row {
+    display: block;
   }
 
   /* --- Ticket items table (Step 12 backlog item C) ---

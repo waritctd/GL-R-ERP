@@ -200,7 +200,7 @@ describe('PayrollPage adjustment inputs', () => {
 
     expect(await screen.findByText('พนักงาน 26')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Download payslip/i })).toBeNull();
-    await waitFor(() => expect(screen.getByText('หน้า 1 / 1')).toBeTruthy());
+    expect(screen.queryByText(/หน้า 1 \//)).toBeNull();
     expect(screen.queryByRole('columnheader', { name: /เงินพิเศษ/i })).toBeNull();
     expect(screen.queryByRole('columnheader', { name: /OT \/ Commission/i })).toBeNull();
 
@@ -216,10 +216,94 @@ describe('PayrollPage adjustment inputs', () => {
 
     const totalRow = container.querySelector('tfoot .payroll-total-row');
     expect(totalRow).toBeTruthy();
-    expect(totalRow.textContent).toContain('รวมรายการที่แสดง');
+    expect(totalRow.textContent).toContain('รวมทั้งงวด');
     expect(totalRow.textContent).toContain('26 คน');
     expect(totalRow.textContent).toContain('฿780,000.00');
     expect(totalRow.textContent).toContain('฿760,500.00');
+  });
+
+  it('ties footer sums to the hero totals exactly, including satang', async () => {
+    const lines = [
+      {
+        ...payrollLine,
+        id: 101,
+        employeeId: 1,
+        employeeName: 'พนักงาน ก',
+        grossEarnings: 100.10,
+        totalDeductions: 0.05,
+        netPay: 100.05,
+      },
+      {
+        ...payrollLine,
+        id: 102,
+        employeeId: 2,
+        employeeCode: 'GLR-002',
+        employeeName: 'พนักงาน ข',
+        grossEarnings: 200.20,
+        totalDeductions: 0.10,
+        netPay: 200.10,
+      },
+    ];
+    api.payroll.current.mockResolvedValue({
+      period: previewPeriod({
+        lineCount: 2,
+        totalGross: 300.30,
+        totalDeductions: 0.15,
+        totalNet: 300.15,
+        totalSocialSecurity: 0.15,
+        lines,
+      }),
+    });
+
+    const { container } = renderPayrollPage();
+
+    expect(await screen.findByText('พนักงาน ข')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    const totalRow = container.querySelector('tfoot .payroll-total-row');
+    expect(totalRow.textContent).toContain('฿300.30');
+    expect(totalRow.textContent).toContain('฿0.15');
+    expect(totalRow.textContent).toContain('฿300.15');
+    expect(totalRow.textContent).toContain('ตรงกับรายได้รวม');
+    expect(totalRow.textContent).toContain('ตรงกับเงินหักรวม');
+    expect(totalRow.textContent).toContain('ตรงกับยอดโอนสุทธิ');
+
+    const mobileSummary = container.querySelector('.payroll-mobile-summary-row');
+    expect(mobileSummary.textContent).toContain('รายได้');
+    expect(mobileSummary.textContent).toContain('หัก');
+    expect(mobileSummary.textContent).toContain('สุทธิ');
+    expect(mobileSummary.textContent).toContain('฿300.30');
+  });
+
+  it('raises a visible reconciliation alert when a line sum does not match the hero total', async () => {
+    const lines = [
+      {
+        ...payrollLine,
+        grossEarnings: 300.30,
+        totalDeductions: 0.15,
+        netPay: 300.15,
+      },
+    ];
+    api.payroll.current.mockResolvedValue({
+      period: previewPeriod({
+        totalGross: 300.31,
+        totalDeductions: 0.15,
+        totalNet: 300.15,
+        totalSocialSecurity: 0.15,
+        lines,
+      }),
+    });
+
+    const { container } = renderPayrollPage();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('ยอดรวมไม่ตรงกับสรุปด้านบน');
+    expect(alert.textContent).toContain('รายได้');
+    expect(alert.textContent).toContain('฿300.30');
+    expect(alert.textContent).toContain('฿300.31');
+
+    const totalRow = container.querySelector('tfoot .payroll-total-row');
+    expect(totalRow.textContent).toContain('ไม่ตรงกับรายได้รวม: ฿300.31');
   });
 
   it('starts payslip email distribution for a processed payroll period', async () => {

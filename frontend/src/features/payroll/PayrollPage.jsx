@@ -63,6 +63,8 @@ const payrollMoneyColumns = [
   {
     key: 'grossEarnings',
     header: 'รายได้',
+    heroLabel: 'รายได้รวม',
+    heroAccessor: (period) => period?.totalGross,
     sortable: true,
     align: 'right',
     className: 'payroll-money-cell',
@@ -98,6 +100,8 @@ const payrollMoneyColumns = [
   {
     key: 'totalDeductions',
     header: 'เงินหัก',
+    heroLabel: 'เงินหักรวม',
+    heroAccessor: (period) => period?.totalDeductions,
     sortable: true,
     align: 'right',
     className: 'payroll-money-cell',
@@ -109,6 +113,8 @@ const payrollMoneyColumns = [
   {
     key: 'netPay',
     header: 'สุทธิ',
+    heroLabel: 'ยอดโอนสุทธิ',
+    heroAccessor: (period) => period?.totalNet,
     sortable: true,
     align: 'right',
     className: 'payroll-money-cell',
@@ -122,6 +128,36 @@ const payrollMoneyColumns = [
 function hasNonZeroMoney(rows, column) {
   if (!column.hideWhenZero) return true;
   return rows.some((line) => Number(column.totalAccessor?.(line) || 0) !== 0);
+}
+
+function toSatang(value) {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount)) return 0;
+  return Math.round(amount * 100);
+}
+
+function formatSatang(value) {
+  return formatMoney(value / 100);
+}
+
+function sumPayrollSatang(rows, valueFor) {
+  return rows.reduce((sum, row) => sum + toSatang(valueFor(row)), 0);
+}
+
+function buildPayrollReconciliation(rows, period) {
+  const byColumn = Object.fromEntries(payrollMoneyColumns.map((column) => {
+    const sumSatang = sumPayrollSatang(rows, column.totalAccessor);
+    const heroSatang = column.heroAccessor ? toSatang(column.heroAccessor(period)) : null;
+    return [column.key, {
+      column,
+      sumSatang,
+      heroSatang,
+      matchesHero: heroSatang == null || sumSatang === heroSatang,
+      differenceSatang: heroSatang == null ? 0 : sumSatang - heroSatang,
+    }];
+  }));
+  const mismatches = Object.values(byColumn).filter((item) => item.heroSatang != null && !item.matchesHero);
+  return { byColumn, mismatches, rowCount: rows.length };
 }
 
 const thisMonth = new Date().toISOString().slice(0, 7);
@@ -472,32 +508,92 @@ function hasPayrollInput(input) {
   return payrollInputKeys.some((key) => parsePayrollNumber(input[key]) > 0);
 }
 
-function sumPayroll(rows, valueFor) {
-  return rows.reduce((sum, row) => sum + Number(valueFor(row) || 0), 0);
+function ReconciliationNote({ item }) {
+  if (!item?.column?.heroLabel) return null;
+  if (item.matchesHero) {
+    return <small className="payroll-reconcile-note is-ok">ตรงกับ{item.column.heroLabel}</small>;
+  }
+  return (
+    <small className="payroll-reconcile-note is-mismatch">
+      ไม่ตรงกับ{item.column.heroLabel}: {formatSatang(item.heroSatang)}
+    </small>
+  );
 }
 
-function PayrollTotalsRow({ rows, columns }) {
+function PayrollTotalsRow({ columns, reconciliation }) {
   return (
     <tr className="payroll-table payroll-total-row">
       {columns.map((column) => {
         if (column.key === 'employee') {
           return (
             <th key={column.key} scope="row">
-              <span>รวมรายการที่แสดง</span>
-              <small>{rows.length} คน</small>
+              <span>รวมทั้งงวด</span>
+              <small>{reconciliation.rowCount} คน</small>
             </th>
           );
         }
         if (column.key === 'actions') {
           return <td key={column.key} className="payroll-actions-cell" aria-hidden="true" />;
         }
+        const item = reconciliation.byColumn[column.key];
         return (
           <td key={column.key} className="text-right payroll-money-cell" data-label={column.header}>
-            <MoneyCode value={sumPayroll(rows, column.totalAccessor)} />
+            <code className="payroll-money">{formatSatang(item.sumSatang)}</code>
+            <ReconciliationNote item={item} />
           </td>
         );
       })}
     </tr>
+  );
+}
+
+function PayrollMobileSummaryRow({ reconciliation }) {
+  const gross = reconciliation.byColumn.grossEarnings;
+  const deductions = reconciliation.byColumn.totalDeductions;
+  const net = reconciliation.byColumn.netPay;
+  const hasMismatch = reconciliation.mismatches.length > 0;
+  return (
+    <tr className="payroll-mobile-summary-row">
+      <td colSpan={7}>
+        <div className={`payroll-mobile-summary-bar${hasMismatch ? ' is-mismatch' : ''}`}>
+          <span>
+            <small>รายได้</small>
+            <b>{formatSatang(gross.sumSatang)}</b>
+          </span>
+          <span>
+            <small>หัก</small>
+            <b>{formatSatang(deductions.sumSatang)}</b>
+          </span>
+          <span>
+            <small>สุทธิ</small>
+            <b>{formatSatang(net.sumSatang)}</b>
+          </span>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function PayrollTotalsFooter({ columns, reconciliation }) {
+  return (
+    <>
+      <PayrollTotalsRow columns={columns} reconciliation={reconciliation} />
+      <PayrollMobileSummaryRow reconciliation={reconciliation} />
+    </>
+  );
+}
+
+function PayrollReconciliationAlert({ mismatches }) {
+  if (mismatches.length === 0) return null;
+  return (
+    <div className="payroll-reconciliation-alert" role="alert">
+      <Icon name="triangleAlert" size={16} />
+      <span>
+        ยอดรวมไม่ตรงกับสรุปด้านบน:
+        {' '}
+        {mismatches.map((item) => `${item.column.header} ${formatSatang(item.sumSatang)} ≠ ${formatSatang(item.heroSatang)}`).join(' · ')}
+      </span>
+    </div>
   );
 }
 
@@ -763,6 +859,10 @@ export function PayrollPage({ showToast }) {
   }
 
   const periodLines = useMemo(() => period?.lines || [], [period?.lines]);
+  const payrollReconciliation = useMemo(
+    () => buildPayrollReconciliation(periodLines, period),
+    [periodLines, period],
+  );
   const visiblePayrollColumns = useMemo(
     () => [
       employeeColumn,
@@ -1018,7 +1118,8 @@ export function PayrollPage({ showToast }) {
       <TaxTreatmentMatrixSection payrollMonth={month} showToast={showToast} />
 
       <section className="payroll-workspace">
-        <div style={{ '--payroll-table-columns': payrollGridColumns }}>
+        <div className="payroll-table-region" style={{ '--payroll-table-columns': payrollGridColumns }}>
+          <PayrollReconciliationAlert mismatches={payrollReconciliation.mismatches} />
           <DataTable
             columns={columns}
             rows={periodLines}
@@ -1029,7 +1130,11 @@ export function PayrollPage({ showToast }) {
             searchPlaceholder="ค้นหาพนักงาน"
             rowClassName={(line) => `payroll-row${Number(line.employeeId) === Number(selectedLine?.employeeId) ? ' active' : ''}`}
             loading={loading}
-            footerRow={({ rows, columns: renderedColumns }) => <PayrollTotalsRow rows={rows} columns={renderedColumns} />}
+            stickyHeader
+            showPagination={false}
+            footerRow={({ columns: renderedColumns }) => (
+              <PayrollTotalsFooter columns={renderedColumns} reconciliation={payrollReconciliation} />
+            )}
             emptyState={{
               icon: 'badgeDollar',
               title: 'ยังไม่มีข้อมูลเงินเดือน',

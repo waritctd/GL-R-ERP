@@ -183,6 +183,7 @@ export function DataTable({
   // Optional semantic table footer. Receives the filtered/sorted rows before pagination so callers
   // can reconcile the full visible result set, not just the current page.
   footerRow,
+  showPagination = true,
   // Optional row-level navigation/activation. Purely additive and default-off:
   // every existing caller that omits this prop renders and behaves exactly as
   // before. When provided, clicking the desktop `<tr>` (outside of a nested
@@ -540,7 +541,7 @@ export function DataTable({
             })}
           </ul>
         )}
-        {renderPagination()}
+        {showPagination ? renderPagination() : null}
       </section>
     );
   }
@@ -650,7 +651,7 @@ export function DataTable({
             />
           )
         )}
-        {renderPagination()}
+        {showPagination ? renderPagination() : null}
       </section>
     );
   }
