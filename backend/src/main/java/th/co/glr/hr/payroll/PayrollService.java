@@ -29,6 +29,8 @@ import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.leave.LeaveRepository;
+import th.co.glr.hr.payroll.obligation.DeductionObligationKind;
+import th.co.glr.hr.payroll.obligation.DeductionObligationService;
 import th.co.glr.hr.payroll.export.KBankPctExporter;
 import th.co.glr.hr.payroll.export.PayrollDetailExporter;
 import th.co.glr.hr.payroll.export.PayrollDetailIdentityDto;
@@ -74,6 +76,10 @@ public class PayrollService {
     private final SsoExporter ssoExporter;
     private final PayrollDetailExporter payrollDetailExporter;
     private final AppProperties appProperties;
+    // Deduction obligation tracking (issue #373): resolves the obligation-derived monthly amount
+    // during #calculateLine, and records the remittance ledger during #process. See that class's
+    // own javadoc for the full split between its read-only and side-effecting hooks.
+    private final DeductionObligationService deductionObligationService;
 
     public PayrollService(
         PayrollRepository payrollRepository,
@@ -86,7 +92,8 @@ public class PayrollService {
         Pnd1Exporter pnd1Exporter,
         SsoExporter ssoExporter,
         PayrollDetailExporter payrollDetailExporter,
-        AppProperties appProperties
+        AppProperties appProperties,
+        DeductionObligationService deductionObligationService
     ) {
         this.payrollRepository = payrollRepository;
         this.payrollCalculator = payrollCalculator;
@@ -99,6 +106,7 @@ public class PayrollService {
         this.ssoExporter = ssoExporter;
         this.payrollDetailExporter = payrollDetailExporter;
         this.appProperties = appProperties;
+        this.deductionObligationService = deductionObligationService;
     }
 
     public PayrollPeriodDto currentOrPreview(LocalDate payrollMonth, UserPrincipal actor) {
@@ -188,6 +196,14 @@ public class PayrollService {
         // LeaveRepository#resolvePendingCorrections for exactly how that stays consistent with the
         // read (same WHERE-shape, same transaction) and idempotent across re-processing this month.
         leaveRepository.resolvePendingCorrections(periodId);
+        // Deduction obligation tracking (issue #373): record what was ACTUALLY deducted this period
+        // (post every other cap) against each employee's driving obligation, then re-derive
+        // ACTIVE/COMPLETED from the recomputed cumulative total. Idempotent per (obligation,
+        // payrollMonth) -- see DeductionObligationRepository#upsertRemittance -- so reprocessing
+        // this same month self-corrects instead of double-counting, the same guarantee
+        // saveProcessedPeriod's own delete-then-insert already gives hr.payroll_line. Deliberately
+        // NEVER called from #preview, which must stay side-effect-free.
+        deductionObligationService.recordRemittances(month, periodId, preview.lines());
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Payroll period was not saved"));
         // Payroll input draft (2026-07-30): this month's real values are now committed to
@@ -1032,6 +1048,20 @@ public class PayrollService {
         componentAmounts.put(PayrollComponent.NON_TAXABLE_INCOME,
             input == null ? BigDecimal.ZERO : safe(input.nonTaxableIncome()).add(safe(input.perDiemExempt())));
 
+        // Deduction obligation tracking (issue #373, AUTHORISED PAYROLL BUSINESS-LOGIC CHANGE --
+        // see the PR body). When this employee has a driving hr.deduction_obligation row for a
+        // kind, its instructed monthly amount -- clamped to the remaining instructed total, and
+        // auto-stopped at 0 once that total is reached unless HR has recorded an explicit override
+        // -- REPLACES whatever HR typed this run for that field. An employee with no obligation on
+        // file for a kind falls back to the HR-typed figure exactly as before this change (legacy
+        // behaviour is unaffected). See DeductionObligationService#resolveMonthlyAmount.
+        BigDecimal resolvedStudentLoanDeduction = deductionObligationService.resolveMonthlyAmount(
+            employee.employeeId(), DeductionObligationKind.STUDENT_LOAN, payrollMonth,
+            input == null ? null : input.studentLoanDeduction());
+        BigDecimal resolvedLegalExecutionRequested = deductionObligationService.resolveMonthlyAmount(
+            employee.employeeId(), DeductionObligationKind.LEGAL_EXECUTION, payrollMonth,
+            input == null ? null : safe(input.legalExecutionDeduction()));
+
         PayrollClassifiedCalculation calculation = payrollCalculator.calculateClassified(new PayrollClassifiedCalculationInput(
             employee.employeeId(),
             employee.employeeCode() + " " + employee.employeeName(),
@@ -1040,14 +1070,14 @@ public class PayrollService {
             componentSsoInclusion,
             input == null ? BigDecimal.ZERO : input.unpaidLeaveDays(),
             leaveRefundDays == null ? BigDecimal.ZERO : leaveRefundDays,
-            input == null ? BigDecimal.ZERO : input.studentLoanDeduction(),
+            resolvedStudentLoanDeduction,
             input == null ? BigDecimal.ZERO : input.otherPretaxDeduction(),
             input == null ? BigDecimal.ZERO : input.otherPostTaxDeductions(),
             // หักตามใบเตือน (handoff section 6): POST-TAX only now.
             input == null ? BigDecimal.ZERO : input.warningLetterDeduction(),
             customerReturnDeduction,
             customerReturnAlreadyEarned,
-            input == null ? BigDecimal.ZERO : safe(input.legalExecutionDeduction()),
+            resolvedLegalExecutionRequested,
             input == null ? null : input.garnishmentType(),
             mergeAllowances(storedAllowances, input),
             yearToDate,

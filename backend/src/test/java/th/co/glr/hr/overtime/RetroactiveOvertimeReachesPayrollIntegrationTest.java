@@ -94,7 +94,11 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             new th.co.glr.hr.payroll.export.Pnd1Exporter(),
             new th.co.glr.hr.payroll.export.SsoExporter(),
             new th.co.glr.hr.payroll.export.PayrollDetailExporter(),
-            new AppProperties());
+            new AppProperties(),
+            new th.co.glr.hr.payroll.obligation.DeductionObligationService(
+                new th.co.glr.hr.payroll.obligation.DeductionObligationRepository(jdbc),
+                mock(th.co.glr.hr.employee.EmployeeRepository.class),
+                mock(AuditService.class)));
 
         division = insertDivision("SLS", "ฝ่ายขาย");
         manager = insertEmployee("M001", null);

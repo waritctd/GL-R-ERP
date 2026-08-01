@@ -458,6 +458,25 @@ export const api = {
     // Mirrors PayrollController#getInputDraft / #putInputDraft.
     getInputDraft: (params) => apiRequest(withQuery(API_ROUTES.payroll.inputDraft, params)),
     saveInputDraft: (payload) => apiRequest(API_ROUTES.payroll.inputDraft, { method: 'PUT', body: payload }),
+    // Deduction obligation tracking (issue #373): กยศ / กรมบังคับคดี obligation record + remittance
+    // ledger. Mirrors DeductionObligationController. Self-service /me is read-only -- there is
+    // deliberately no employee-facing mutation call anywhere in this group (decision 4: the dispute
+    // route is to the authority, never HR).
+    getMyDeductionObligations: () => apiRequest(API_ROUTES.payroll.deductionObligations.me),
+    getDeductionObligations: (params) => apiRequest(withQuery(API_ROUTES.payroll.deductionObligations.list, params)),
+    getDeductionObligationProgress: (id) => apiRequest(API_ROUTES.payroll.deductionObligations.progress(id)),
+    createDeductionObligation: (payload) =>
+      apiRequest(API_ROUTES.payroll.deductionObligations.create, { method: 'POST', body: payload }),
+    updateDeductionObligation: (id, payload) =>
+      apiRequest(API_ROUTES.payroll.deductionObligations.update(id), { method: 'PUT', body: payload }),
+    stopDeductionObligation: (id) =>
+      apiRequest(API_ROUTES.payroll.deductionObligations.stop(id), { method: 'POST' }),
+    acknowledgeDeductionObligationCompletion: (id) =>
+      apiRequest(API_ROUTES.payroll.deductionObligations.acknowledgeCompletion(id), { method: 'POST' }),
+    overrideDeductionObligationContinue: (id, reason) =>
+      apiRequest(API_ROUTES.payroll.deductionObligations.overrideContinue(id), { method: 'POST', body: { reason } }),
+    clearDeductionObligationOverride: (id) =>
+      apiRequest(API_ROUTES.payroll.deductionObligations.clearOverride(id), { method: 'POST' }),
   },
   priceImport: {
     factories: () => apiRequest(API_ROUTES.priceImport.factories),

@@ -190,6 +190,14 @@ db.taxAllowanceDeclarations = db.taxAllowanceDeclarations || [];
 // scoping, no tax math) -- unlike applyTaxAllowanceDeclaration/estimateMyTaxAllowanceDeclaration,
 // which are NOT.
 db.taxAllowanceAttachments = db.taxAllowanceAttachments || [];
+// Deduction obligation tracking (issue #373): the record + status transitions themselves perform
+// no payroll/tax calculation -- they only track an instruction and its lifecycle -- so, like
+// taxAllowanceDeclarations above, this CAN be faked genuinely here. The remittance ledger is the
+// exception: real remittance rows are only ever written by PayrollService#process (mocked as
+// "not supported"), so db.deductionObligationRemittances stays permanently empty in mock mode and
+// every progress read reports zero paid-to-date -- that is the honest mock answer, not a bug.
+db.deductionObligations = db.deductionObligations || [];
+db.deductionObligationRemittances = db.deductionObligationRemittances || [];
 db.leaveTypes = db.leaveTypes || [
   // PERSONAL quota fix (2026-07-25): seeded at 3, company rule (§5.2) grants 7 paid personal
   // days/year -- see V90__leave_subday_and_contact.sql for the backend-side correction.
@@ -1312,6 +1320,83 @@ function taxAllowanceDeclarationPublic(row) {
     ...row,
     employeeCode: employee?.code ?? null,
     employeeName: employee?.nameTh ?? null,
+  };
+}
+
+/**
+ * Deduction obligation tracking (issue #373). Mirrors DeductionObligationRepository#insert +
+ * mapRow's column set exactly, so a DTO round-tripped through this mock has the same shape the
+ * real backend returns.
+ */
+function newDeductionObligationRow({ employeeId, kind, monthlyInstructedAmount, instructedTotal, authorityReference, startDate, notes, createdById }) {
+  const id = Math.max(0, ...db.deductionObligations.map((row) => row.id)) + 1;
+  const now = new Date().toISOString();
+  return {
+    id,
+    employeeId,
+    kind,
+    monthlyInstructedAmount,
+    instructedTotal: instructedTotal ?? null,
+    authorityReference,
+    startDate,
+    status: 'ACTIVE',
+    completedAt: null,
+    completionAcknowledgedById: null,
+    completionAcknowledgedAt: null,
+    overrideContinuePastTotal: false,
+    overrideById: null,
+    overrideAt: null,
+    overrideReason: null,
+    notes: notes ?? null,
+    createdById,
+    createdAt: now,
+    updatedById: createdById,
+    updatedAt: now,
+  };
+}
+
+function deductionObligationPublic(row) {
+  const employee = db.employees.find((item) => item.id === row.employeeId);
+  return {
+    ...row,
+    employeeCode: employee?.code ?? null,
+    employeeName: employee?.nameTh ?? null,
+  };
+}
+
+/**
+ * Mirrors DeductionObligationService#buildProgress. totalRemitted is always 0 here -- see
+ * db.deductionObligationRemittances' own comment on why mock mode never populates real remittance
+ * rows -- so remaining always equals instructedTotal verbatim and the estimate is computed off
+ * that. instructedTotal === null (no stated total, see V106's header) correctly leaves
+ * remaining/estimatedPeriodsRemaining/estimatedEndMonth all null, same as the real service.
+ */
+function deductionObligationProgressPublic(row) {
+  const totalRemitted = 0;
+  const obligation = deductionObligationPublic(row);
+  let remaining = null;
+  let estimatedPeriodsRemaining = null;
+  let estimatedEndMonth = null;
+  if (row.instructedTotal != null) {
+    remaining = Math.max(0, row.instructedTotal - totalRemitted);
+    if (row.monthlyInstructedAmount > 0) {
+      estimatedPeriodsRemaining = Math.ceil(remaining / row.monthlyInstructedAmount);
+      const end = new Date();
+      end.setDate(1);
+      end.setMonth(end.getMonth() + estimatedPeriodsRemaining);
+      estimatedEndMonth = end.toISOString().slice(0, 10);
+    } else if (remaining === 0) {
+      estimatedPeriodsRemaining = 0;
+    }
+  }
+  return {
+    obligation,
+    totalRemitted,
+    remaining,
+    periodsRemitted: 0,
+    estimatedPeriodsRemaining,
+    estimatedEndMonth,
+    ledger: [],
   };
 }
 
@@ -4820,6 +4905,13 @@ export const api = {
     },
   },
 
+  // Deduction obligation tracking (issue #373): mirrors DeductionObligationRepository/Service.
+  // See db.deductionObligations' own comment above for why the record CAN be faked genuinely here.
+  //
+  // No process()-populated remittance data ever exists in mock mode (see db.deductionObligationRemittances'
+  // comment), so every progress read below reports totalRemitted = 0 -- an honest reflection of
+  // "mock mode never runs real payroll", not a bug to fix.
+
   // No seeded payroll-period data yet — `current` returns an empty period so
   // PayrollPage degrades to its built-in empty state; the mutating actions
   // (preview/process/exportFile) are explicit user-triggered calculations that
@@ -5123,6 +5215,120 @@ export const api = {
         db.payrollInputDrafts.set(`${input.employeeId}-${month}`, { payrollMonth: month, input });
       });
       return this.getInputDraft({ payrollMonth: month ? month.slice(0, 7) : null });
+    },
+    // Deduction obligation tracking (issue #373). Mirrors DeductionObligationController +
+    // DeductionObligationService (payroll/obligation/) -- see db.deductionObligations' own comment
+    // above for why the record/lifecycle CAN be faked genuinely here.
+    async getMyDeductionObligations() {
+      const user = requireSession();
+      if (!user.employeeId) fail('User is not linked to an employee', 400);
+      const items = db.deductionObligations
+        .filter((row) => row.employeeId === user.employeeId)
+        .sort((a, b) => new Date(b.startDate) - new Date(a.startDate))
+        .map(deductionObligationProgressPublic);
+      return delay({ items });
+    },
+    async getDeductionObligations(params = {}) {
+      hasRole('hr', 'ceo');
+      let items = db.deductionObligations;
+      if (params.employeeId) items = items.filter((row) => row.employeeId === Number(params.employeeId));
+      if (params.kind) items = items.filter((row) => row.kind === params.kind);
+      if (params.status) items = items.filter((row) => row.status === params.status);
+      items = [...items].sort((a, b) => new Date(b.startDate) - new Date(a.startDate));
+      return delay({ items: items.map(deductionObligationPublic) });
+    },
+    async getDeductionObligationProgress(id) {
+      hasRole('hr', 'ceo');
+      const row = db.deductionObligations.find((item) => item.id === Number(id));
+      if (!row) fail('Obligation not found', 404);
+      return delay(deductionObligationProgressPublic(row));
+    },
+    async createDeductionObligation(body = {}) {
+      const user = hasRole('hr');
+      if (!body.employeeId || !body.kind || !body.authorityReference || !body.startDate) {
+        fail('employeeId, kind, authorityReference and startDate are required', 400);
+      }
+      const employee = db.employees.find((item) => item.id === Number(body.employeeId));
+      if (!employee) fail('Employee not found', 404);
+      const alreadyActive = db.deductionObligations.some(
+        (row) => row.employeeId === Number(body.employeeId) && row.kind === body.kind && row.status === 'ACTIVE'
+      );
+      if (alreadyActive) {
+        fail('พนักงานคนนี้มีรายการหักที่ยังดำเนินการอยู่ (ACTIVE) สำหรับประเภทนี้แล้ว กรุณาแก้ไขรายการเดิม หรือปิดรายการเดิมก่อนสร้างใหม่', 409);
+      }
+      const row = newDeductionObligationRow({
+        employeeId: Number(body.employeeId),
+        kind: body.kind,
+        monthlyInstructedAmount: Number(body.monthlyInstructedAmount) || 0,
+        instructedTotal: body.instructedTotal == null || body.instructedTotal === '' ? null : Number(body.instructedTotal),
+        authorityReference: body.authorityReference,
+        startDate: body.startDate,
+        notes: body.notes ?? null,
+        createdById: user.employeeId,
+      });
+      db.deductionObligations.push(row);
+      return delay(deductionObligationPublic(row));
+    },
+    async updateDeductionObligation(id, body = {}) {
+      const user = hasRole('hr');
+      const row = db.deductionObligations.find((item) => item.id === Number(id));
+      if (!row) fail('Obligation not found', 404);
+      if (row.status === 'STOPPED') fail('ไม่สามารถแก้ไขรายการที่ปิดแล้ว (STOPPED) ได้', 409);
+      row.monthlyInstructedAmount = Number(body.monthlyInstructedAmount) || 0;
+      row.instructedTotal = body.instructedTotal == null || body.instructedTotal === '' ? null : Number(body.instructedTotal);
+      row.authorityReference = body.authorityReference ?? row.authorityReference;
+      row.notes = body.notes ?? null;
+      row.updatedById = user.employeeId;
+      row.updatedAt = new Date().toISOString();
+      return delay(deductionObligationPublic(row));
+    },
+    async stopDeductionObligation(id) {
+      const user = hasRole('hr');
+      const row = db.deductionObligations.find((item) => item.id === Number(id));
+      if (!row) fail('Obligation not found', 404);
+      if (row.status === 'STOPPED') fail('รายการนี้ถูกปิดไปแล้ว', 409);
+      row.status = 'STOPPED';
+      row.updatedById = user.employeeId;
+      row.updatedAt = new Date().toISOString();
+      return delay(deductionObligationPublic(row));
+    },
+    async acknowledgeDeductionObligationCompletion(id) {
+      const user = hasRole('hr');
+      const row = db.deductionObligations.find((item) => item.id === Number(id));
+      if (!row) fail('Obligation not found', 404);
+      if (row.status !== 'COMPLETED') fail('รายการนี้ยังไม่ครบยอดตามที่หน่วยงานแจ้ง', 409);
+      row.completionAcknowledgedById = user.employeeId;
+      row.completionAcknowledgedAt = new Date().toISOString();
+      row.updatedById = user.employeeId;
+      row.updatedAt = new Date().toISOString();
+      return delay(deductionObligationPublic(row));
+    },
+    async overrideDeductionObligationContinue(id, body = {}) {
+      const user = hasRole('hr');
+      const row = db.deductionObligations.find((item) => item.id === Number(id));
+      if (!row) fail('Obligation not found', 404);
+      if (row.status !== 'COMPLETED') fail('รายการนี้ยังไม่ครบยอด จึงยังไม่มีอะไรให้ override', 409);
+      if (!body.reason) fail('reason is required', 400);
+      row.overrideContinuePastTotal = true;
+      row.overrideById = user.employeeId;
+      row.overrideAt = new Date().toISOString();
+      row.overrideReason = body.reason;
+      row.updatedById = user.employeeId;
+      row.updatedAt = new Date().toISOString();
+      return delay(deductionObligationPublic(row));
+    },
+    async clearDeductionObligationOverride(id) {
+      const user = hasRole('hr');
+      const row = db.deductionObligations.find((item) => item.id === Number(id));
+      if (!row) fail('Obligation not found', 404);
+      if (row.status !== 'COMPLETED') fail('รายการนี้ไม่ได้อยู่ในสถานะ override', 409);
+      row.overrideContinuePastTotal = false;
+      row.overrideById = null;
+      row.overrideAt = null;
+      row.overrideReason = null;
+      row.updatedById = user.employeeId;
+      row.updatedAt = new Date().toISOString();
+      return delay(deductionObligationPublic(row));
     },
   },
 
