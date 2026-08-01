@@ -378,6 +378,28 @@ export const api = {
     // it every run. GET is HR+CEO (view), PUT is HR-only (edit).
     getTaxAllowances: (year) => apiRequest(withQuery(API_ROUTES.payroll.taxAllowances, { year })),
     saveTaxAllowances: (year, items) => apiRequest(withQuery(API_ROUTES.payroll.taxAllowances, { year }), { method: 'PUT', body: { items } }),
+    // Tax-allowance DECLARATION workflow (PR A, 2026-08-01) -- staged separately from the legacy
+    // bulk editor above; a declaration never touches payroll until HR applies it per employee.
+    // Mirrors TaxAllowanceDeclarationController. No UI ships with this PR; these exist so the
+    // endpoint shapes are a settled contract for the declaration screen (PR B).
+    //
+    // Self-service: /me shape, no employeeId anywhere -- the server resolves the caller from the
+    // session, same idiom as downloadOwnPayslip above.
+    getMyTaxAllowanceDeclarations: (year) => apiRequest(withQuery(API_ROUTES.payroll.taxAllowanceDeclarations.me, { year })),
+    submitMyTaxAllowanceDeclaration: (declaration) => apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.me, { method: 'POST', body: declaration }),
+    withdrawMyTaxAllowanceDeclaration: (id) => apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.withdraw(id), { method: 'DELETE' }),
+    // HR/CEO register (view), HR-only mutations (approve/reject/apply/on-behalf).
+    getTaxAllowanceDeclarations: (params) => apiRequest(withQuery(API_ROUTES.payroll.taxAllowanceDeclarations.register, params)),
+    createTaxAllowanceDeclarationOnBehalf: (declaration) =>
+      apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.onBehalf, { method: 'POST', body: declaration }),
+    approveTaxAllowanceDeclaration: (id, reviewerNote) =>
+      apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.approve(id), { method: 'POST', body: { reviewerNote } }),
+    rejectTaxAllowanceDeclaration: (id, reviewerNote) =>
+      apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.reject(id), { method: 'POST', body: { reviewerNote } }),
+    applyTaxAllowanceDeclaration: (id, effectiveMonth) =>
+      apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.apply(id), { method: 'POST', body: { effectiveMonth } }),
+    // Caps metadata, sourced from the backend so the UI never hardcodes a ค่าลดหย่อน cap.
+    getTaxAllowanceCaps: (year) => apiRequest(withQuery(API_ROUTES.payroll.taxAllowanceCaps, { year })),
     // C2: year-to-date backfill seed for a mid-year go-live. Same view/edit split.
     getYtdSeed: (year) => apiRequest(withQuery(API_ROUTES.payroll.ytdSeed, { year })),
     saveYtdSeed: (year, items) => apiRequest(withQuery(API_ROUTES.payroll.ytdSeed, { year }), { method: 'PUT', body: { items } }),

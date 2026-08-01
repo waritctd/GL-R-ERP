@@ -179,6 +179,13 @@ db.commissions = db.commissions || [];
 // `${employeeId}-${payrollMonth}`, mirroring hr.payroll_input_draft's (employee_id, payroll_month)
 // uniqueness.
 db.payrollInputDrafts = db.payrollInputDrafts || new Map();
+// Tax-allowance DECLARATION workflow (PR A, 2026-08-01): unlike getTaxAllowances/saveTaxAllowances
+// above, the workflow itself (submit/withdraw/approve/reject/on-behalf) performs no tax
+// calculation -- it only moves a row between PENDING/APPROVED/REJECTED/SUPERSEDED/WITHDRAWN -- so
+// it CAN be faked genuinely here, same reasoning as payrollInputDrafts. applyTaxAllowanceDeclaration
+// is the exception: it promotes into hr.employee_tax_allowance and changes real withholding, so
+// mock mode surfaces "not supported" for that one call, same as saveTaxAllowances.
+db.taxAllowanceDeclarations = db.taxAllowanceDeclarations || [];
 db.leaveTypes = db.leaveTypes || [
   // PERSONAL quota fix (2026-07-25): seeded at 3, company rule (§5.2) grants 7 paid personal
   // days/year -- see V90__leave_subday_and_contact.sql for the backend-side correction.
@@ -1226,6 +1233,106 @@ function hasRole(...roles) {
   const user = requireSession();
   if (!roles.includes(user.role)) fail('Forbidden', 403);
   return user;
+}
+
+// --- tax-allowance declaration helpers (PR A, 2026-08-01) ---
+// Mirrors TaxAllowanceDeclarationDtos/TaxAllowanceDeclarationService/TaxAllowanceCapCatalog.
+
+function taxAllowanceAllowancesFromBody(body = {}) {
+  return {
+    spouseAllowance: body.spouseAllowance ?? 0,
+    childAllowance: body.childAllowance ?? 0,
+    parentCareAllowance: body.parentCareAllowance ?? 0,
+    disabledCareAllowance: body.disabledCareAllowance ?? 0,
+    maternityAllowance: body.maternityAllowance ?? 0,
+    lifeInsuranceAllowance: body.lifeInsuranceAllowance ?? 0,
+    healthInsuranceAllowance: body.healthInsuranceAllowance ?? 0,
+    parentHealthInsuranceAllowance: body.parentHealthInsuranceAllowance ?? 0,
+    rmfAllowance: body.rmfAllowance ?? 0,
+    ssfAllowance: body.ssfAllowance ?? 0,
+    pensionInsuranceAllowance: body.pensionInsuranceAllowance ?? 0,
+    thaiEsgAllowance: body.thaiEsgAllowance ?? 0,
+    homeLoanInterestAllowance: body.homeLoanInterestAllowance ?? 0,
+    educationDonation: body.educationDonation ?? 0,
+    generalDonation: body.generalDonation ?? 0,
+    politicalDonation: body.politicalDonation ?? 0,
+    childCount: body.childCount ?? 0,
+    childCountDouble: body.childCountDouble ?? 0,
+    disabledCareCount: body.disabledCareCount ?? 0,
+    disabilityCardHolder: Boolean(body.disabilityCardHolder),
+    parentCareCount: body.parentCareCount ?? 0,
+  };
+}
+
+function newTaxAllowanceDeclarationRow({ employeeId, taxYear, effectiveMonth, allowances, documentReference, status, submittedById, onBehalf }) {
+  const declarationId = Math.max(0, ...db.taxAllowanceDeclarations.map((row) => row.declarationId)) + 1;
+  return {
+    declarationId,
+    employeeId,
+    taxYear,
+    effectiveMonth,
+    allowances,
+    documentReference,
+    status,
+    submittedById,
+    submittedAt: new Date().toISOString(),
+    onBehalf,
+    reviewedById: null,
+    reviewedAt: null,
+    reviewerNote: null,
+    appliedAt: null,
+    appliedById: null,
+    appliedEffectiveMonth: null,
+    expiresOn: null,
+    expiredAt: null,
+    reverifiedAt: null,
+    reverifiedById: null,
+    supersededById: null,
+  };
+}
+
+/** Mirrors TaxAllowanceDeclarationRepository#supersedeApproved -- must run BEFORE the new row becomes APPROVED. */
+function supersedeApprovedTaxAllowanceDeclarations(employeeId, taxYear, supersededById) {
+  db.taxAllowanceDeclarations
+    .filter((row) => row.employeeId === employeeId && row.taxYear === taxYear
+      && row.status === 'APPROVED' && row.declarationId !== supersededById)
+    .forEach((row) => {
+      row.status = 'SUPERSEDED';
+      row.supersededById = supersededById;
+    });
+}
+
+function taxAllowanceDeclarationPublic(row) {
+  const employee = db.employees.find((item) => item.id === row.employeeId);
+  return {
+    ...row,
+    employeeCode: employee?.code ?? null,
+    employeeName: employee?.nameTh ?? null,
+  };
+}
+
+function taxAllowanceCapsFor(taxYear) {
+  const ssfDeductible = taxYear < 2025;
+  return [
+    { category: 'personal', kind: 'FLAT', groupId: null, ownCap: 60000, groupCap: null, maxTotal: null, incomeRate: null, multiplier: null, declarable: false },
+    { category: 'spouse', kind: 'FLAT', groupId: null, ownCap: 60000, groupCap: null, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
+    { category: 'child', kind: 'PER_HEAD', groupId: null, ownCap: 30000, groupCap: null, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
+    { category: 'child_double', kind: 'PER_HEAD', groupId: null, ownCap: 30000, groupCap: null, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
+    { category: 'disabled_care', kind: 'PER_HEAD', groupId: null, ownCap: 60000, groupCap: null, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
+    { category: 'parent_care', kind: 'PER_HEAD', groupId: null, ownCap: 30000, groupCap: null, maxTotal: 120000, incomeRate: null, multiplier: null, declarable: true },
+    { category: 'maternity', kind: 'FLAT', groupId: null, ownCap: 60000, groupCap: null, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
+    { category: 'life_insurance', kind: 'SHARED_GROUP', groupId: 'life_health', ownCap: 100000, groupCap: 100000, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
+    { category: 'health_insurance', kind: 'SHARED_GROUP', groupId: 'life_health', ownCap: 25000, groupCap: 100000, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
+    { category: 'parent_health_insurance', kind: 'FLAT', groupId: null, ownCap: 15000, groupCap: null, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
+    { category: 'rmf', kind: 'PERCENT_OF_INCOME', groupId: 'retirement', ownCap: 500000, groupCap: 500000, maxTotal: null, incomeRate: 0.30, multiplier: null, declarable: true },
+    { category: 'ssf', kind: 'PERCENT_OF_INCOME', groupId: 'retirement', ownCap: ssfDeductible ? 200000 : 0, groupCap: 500000, maxTotal: null, incomeRate: ssfDeductible ? 0.30 : 0, multiplier: null, declarable: true },
+    { category: 'pension', kind: 'PERCENT_OF_INCOME', groupId: 'retirement', ownCap: 200000, groupCap: 500000, maxTotal: null, incomeRate: 0.15, multiplier: null, declarable: true },
+    { category: 'thai_esg', kind: 'PERCENT_OF_INCOME', groupId: null, ownCap: 300000, groupCap: null, maxTotal: null, incomeRate: 0.30, multiplier: null, declarable: true },
+    { category: 'home_loan_interest', kind: 'FLAT', groupId: null, ownCap: 100000, groupCap: null, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
+    { category: 'education_donation', kind: 'PERCENT_OF_INCOME', groupId: 'donation', ownCap: null, groupCap: null, maxTotal: null, incomeRate: 0.10, multiplier: 2, declarable: true },
+    { category: 'general_donation', kind: 'PERCENT_OF_INCOME', groupId: 'donation', ownCap: null, groupCap: null, maxTotal: null, incomeRate: 0.10, multiplier: null, declarable: true },
+    { category: 'political_donation', kind: 'FLAT', groupId: null, ownCap: 10000, groupCap: null, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
+  ];
 }
 
 // --- ticket helpers ---
@@ -4746,6 +4853,125 @@ export const api = {
     async saveTaxAllowances() {
       hasRole('hr');
       throw new Error('บันทึกค่าลดหย่อนภาษีไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    // Tax-allowance DECLARATION workflow (PR A, 2026-08-01) -- see db.taxAllowanceDeclarations'
+    // own comment above for why this can be a genuine in-memory implementation (unlike
+    // getTaxAllowances/saveTaxAllowances above), except applyTaxAllowanceDeclaration.
+    async getMyTaxAllowanceDeclarations(params = {}) {
+      const user = requireSession();
+      if (!user.employeeId) fail('User is not linked to an employee', 400);
+      const taxYear = params.year ? Number(params.year) : new Date().getFullYear();
+      const items = db.taxAllowanceDeclarations
+        .filter((row) => row.employeeId === user.employeeId && row.taxYear === taxYear)
+        .sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt))
+        .map(taxAllowanceDeclarationPublic);
+      return delay({ taxYear, items });
+    },
+    async submitMyTaxAllowanceDeclaration(body = {}) {
+      const user = requireSession();
+      if (!user.employeeId) fail('User is not linked to an employee', 400);
+      if (!body.taxYear) fail('taxYear is required', 400);
+      const taxYear = Number(body.taxYear);
+      const alreadyPending = db.taxAllowanceDeclarations.some(
+        (row) => row.employeeId === user.employeeId && row.taxYear === taxYear && row.status === 'PENDING'
+      );
+      if (alreadyPending) {
+        fail('มีแบบแจ้งค่าลดหย่อนที่รอการอนุมัติสำหรับปีนี้อยู่แล้ว กรุณายกเลิกรายการเดิมก่อนยื่นใหม่', 409);
+      }
+      const row = newTaxAllowanceDeclarationRow({
+        employeeId: user.employeeId,
+        taxYear,
+        effectiveMonth: body.effectiveMonth ?? 1,
+        allowances: taxAllowanceAllowancesFromBody(body),
+        documentReference: body.documentReference ?? null,
+        status: 'PENDING',
+        submittedById: user.employeeId,
+        onBehalf: false,
+      });
+      db.taxAllowanceDeclarations.push(row);
+      return delay(taxAllowanceDeclarationPublic(row));
+    },
+    async withdrawMyTaxAllowanceDeclaration(id) {
+      const user = requireSession();
+      const row = db.taxAllowanceDeclarations.find((item) => item.declarationId === Number(id));
+      // 404, not 403, on a foreign row -- mirrors TaxAllowanceDeclarationService#withdrawOwn.
+      if (!row || row.employeeId !== user.employeeId) fail('Declaration not found', 404);
+      if (row.status !== 'PENDING') fail('เฉพาะรายการที่รออนุมัติเท่านั้นที่ยกเลิกได้', 409);
+      row.status = 'WITHDRAWN';
+      return delay(null);
+    },
+    async getTaxAllowanceDeclarations(params = {}) {
+      hasRole('hr', 'ceo');
+      const taxYear = params.year ? Number(params.year) : null;
+      const items = db.taxAllowanceDeclarations
+        .filter((row) => (taxYear ? row.taxYear === taxYear : true) && (params.status ? row.status === params.status : true))
+        .map(taxAllowanceDeclarationPublic);
+      return delay({ items });
+    },
+    async createTaxAllowanceDeclarationOnBehalf(body = {}) {
+      const user = hasRole('hr');
+      if (!body.employeeId || !body.taxYear) fail('employeeId and taxYear are required', 400);
+      const employeeId = Number(body.employeeId);
+      const taxYear = Number(body.taxYear);
+      if (!db.employees.some((employee) => employee.id === employeeId)) fail('Employee not found', 404);
+      // Clear the way, mirroring TaxAllowanceDeclarationService#createOnBehalf.
+      db.taxAllowanceDeclarations
+        .filter((row) => row.employeeId === employeeId && row.taxYear === taxYear && row.status === 'PENDING')
+        .forEach((row) => { row.status = 'WITHDRAWN'; });
+      const row = newTaxAllowanceDeclarationRow({
+        employeeId,
+        taxYear,
+        effectiveMonth: body.effectiveMonth ?? 1,
+        allowances: taxAllowanceAllowancesFromBody(body),
+        documentReference: body.documentReference ?? null,
+        status: 'PENDING',
+        submittedById: user.employeeId,
+        onBehalf: true,
+      });
+      supersedeApprovedTaxAllowanceDeclarations(employeeId, taxYear, row.declarationId);
+      row.status = 'APPROVED';
+      row.reviewedById = user.employeeId;
+      row.reviewedAt = new Date().toISOString();
+      row.reviewerNote = 'สร้างและอนุมัติโดยฝ่ายบุคคลในนามพนักงาน';
+      db.taxAllowanceDeclarations.push(row);
+      return delay(taxAllowanceDeclarationPublic(row));
+    },
+    async approveTaxAllowanceDeclaration(id, body = {}) {
+      const user = hasRole('hr');
+      const row = db.taxAllowanceDeclarations.find((item) => item.declarationId === Number(id));
+      if (!row) fail('Declaration not found', 404);
+      if (row.status !== 'PENDING') fail('รายการนี้ได้รับการพิจารณาไปแล้ว', 409);
+      supersedeApprovedTaxAllowanceDeclarations(row.employeeId, row.taxYear, row.declarationId);
+      row.status = 'APPROVED';
+      row.reviewedById = user.employeeId;
+      row.reviewedAt = new Date().toISOString();
+      row.reviewerNote = body?.reviewerNote ?? null;
+      return delay(taxAllowanceDeclarationPublic(row));
+    },
+    async rejectTaxAllowanceDeclaration(id, body = {}) {
+      const user = hasRole('hr');
+      if (!body?.reviewerNote?.trim()) fail('ต้องระบุเหตุผลในการปฏิเสธ', 400);
+      const row = db.taxAllowanceDeclarations.find((item) => item.declarationId === Number(id));
+      if (!row) fail('Declaration not found', 404);
+      if (row.status !== 'PENDING') fail('รายการนี้ได้รับการพิจารณาไปแล้ว', 409);
+      row.status = 'REJECTED';
+      row.reviewedById = user.employeeId;
+      row.reviewedAt = new Date().toISOString();
+      row.reviewerNote = body.reviewerNote;
+      return delay(taxAllowanceDeclarationPublic(row));
+    },
+    // Applying promotes into hr.employee_tax_allowance and changes real withholding tax -- not
+    // faked here, same "not supported in mock mode" reasoning as saveTaxAllowances above.
+    async applyTaxAllowanceDeclaration() {
+      hasRole('hr');
+      throw new Error('การนำแบบแจ้งค่าลดหย่อนไปใช้ไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    // Caps metadata, mirroring TaxAllowanceCapCatalog -- approximate for the UI, NOT authoritative;
+    // verify every cap figure against the Java service before trusting it (CLAUDE.md).
+    async getTaxAllowanceCaps(params = {}) {
+      requireSession();
+      const taxYear = params.year ? Number(params.year) : new Date().getFullYear();
+      return delay({ taxYear, caps: taxAllowanceCapsFor(taxYear) });
     },
     async getYtdSeed() {
       hasRole('hr', 'ceo');
