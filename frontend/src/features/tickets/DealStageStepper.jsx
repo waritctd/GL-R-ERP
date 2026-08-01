@@ -124,13 +124,12 @@ export function DealStageStepper({ salesStage, lost = false }) {
 }
 
 /**
- * Horizontal 5-phase tracker with proportional fill (from the prototype's
- * phase bar). Lost projects render an empty track.
+ * Horizontal 5-phase tracker. Lost projects render an empty track.
  */
 export function PhaseTracker({ salesStage, lost = false }) {
   const currentIdx = stageIndex(salesStage);
   return (
-    <div className="flex items-end gap-2">
+    <div className="flex items-start gap-2">
       {SALES_PHASES.map((phase) => {
         const steps = SALES_STAGES.filter((s) => s.phase === phase.id);
         const firstIdx = stageIndex(steps[0].code);
@@ -142,7 +141,7 @@ export function PhaseTracker({ salesStage, lost = false }) {
         }
         const isCurrent = !lost && currentIdx >= firstIdx && currentIdx <= lastIdx;
         return (
-          <div key={phase.id} className="min-w-0 flex flex-col gap-1.5" style={{ flex: steps.length }}>
+          <div key={phase.id} className="min-w-0 flex flex-1 basis-0 flex-col gap-1.5">
             <span className={`text-2xs font-extrabold ${isCurrent ? 'text-text-secondary' : 'text-text-muted'}`}>
               เฟส {phase.id}
             </span>

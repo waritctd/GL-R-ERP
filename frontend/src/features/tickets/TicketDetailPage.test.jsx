@@ -303,6 +303,27 @@ describe('TicketDetailPage', () => {
     expect(screen.getAllByText('฿50,000.00').length).toBeGreaterThan(0);
   });
 
+  it('folds updated-at into the header and does not re-render the duplicate overview summary panel', async () => {
+    renderTicketDetailPage();
+
+    const header = await screen.findByTestId('deal-state-header');
+    expect(within(header).getByText('อัปเดตล่าสุด', { exact: false })).not.toBeNull();
+    expect(within(header).getByText('2 ก.ค. 2569')).not.toBeNull();
+    expect(screen.queryByRole('heading', { level: 2, name: 'ข้อมูลทั่วไป' })).toBeNull();
+    expect(await screen.findByRole('heading', { level: 2, name: /^รายการสินค้า/ })).not.toBeNull();
+  });
+
+  it('pins the refresh button out of the mobile flex-wrap flow', async () => {
+    renderTicketDetailPage();
+
+    const header = await screen.findByTestId('deal-state-header');
+    const refresh = within(header).getByRole('button', { name: 'รีเฟรช' });
+    expect(refresh.className).toContain('mobile:absolute');
+    expect(refresh.className).toContain('mobile:right-0');
+    expect(refresh.className).toContain('mobile:top-0');
+    expect(header.querySelector('.mobile\\:pr-12')).not.toBeNull();
+  });
+
   it('keeps the ticket header and tabs in one measured sticky chrome for focus-safe offsets', async () => {
     renderTicketDetailPage();
 
@@ -1850,7 +1871,7 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(pricingTab.getAttribute('aria-selected')).toBe('true'));
       // Overview-only content is absent — proves the panel actually swapped,
       // not just that the tab button LOOKS selected.
-      expect(screen.queryByRole('heading', { level: 2, name: 'ข้อมูลทั่วไป' })).toBeNull();
+      expect(screen.queryByRole('heading', { level: 2, name: /^รายการสินค้า/ })).toBeNull();
     });
 
     it('falls back to ภาพรวม when ?tab= names a tab this role cannot see', async () => {
@@ -1863,7 +1884,7 @@ describe('TicketDetailPage', () => {
 
       const overviewTab = await screen.findByRole('tab', { name: /^ภาพรวม/ });
       await waitFor(() => expect(overviewTab.getAttribute('aria-selected')).toBe('true'));
-      expect(await screen.findByRole('heading', { level: 2, name: 'ข้อมูลทั่วไป' })).not.toBeNull();
+      expect(await screen.findByRole('heading', { level: 2, name: /^รายการสินค้า/ })).not.toBeNull();
     });
 
     // ticketDetailTabs.js's own role-level predicate for "documents" would resolve it for any
@@ -1877,7 +1898,7 @@ describe('TicketDetailPage', () => {
 
       const overviewTab = await screen.findByRole('tab', { name: /^ภาพรวม/ });
       await waitFor(() => expect(overviewTab.getAttribute('aria-selected')).toBe('true'));
-      expect(await screen.findByRole('heading', { level: 2, name: 'ข้อมูลทั่วไป' })).not.toBeNull();
+      expect(await screen.findByRole('heading', { level: 2, name: /^รายการสินค้า/ })).not.toBeNull();
       expect(screen.queryByRole('tab', { name: /เอกสาร/ })).toBeNull();
     });
 

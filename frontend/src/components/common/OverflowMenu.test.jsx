@@ -43,6 +43,28 @@ describe('OverflowMenu', () => {
     expect(trigger.textContent).toContain('เอกสาร');
   });
 
+  it('keeps menu items at the mobile 44px touch target floor without changing desktop density', () => {
+    render(<OverflowMenu items={items()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+
+    for (const item of screen.getAllByRole('menuitem')) {
+      expect(item.className).toContain('mobile:min-h-[44px]');
+      expect(item.className).toContain('mobile:px-4');
+      expect(item.className).toContain('mobile:py-3');
+      expect(item.className).toContain('justify-center');
+    }
+  });
+
+  it('can flip upward on mobile for fixed bottom action bars', () => {
+    render(<OverflowMenu items={items()} mobilePlacement="up" />);
+    fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+
+    const menu = screen.getByRole('menu');
+    expect(menu.className).toContain('mobile:bottom-full');
+    expect(menu.className).toContain('mobile:top-auto');
+    expect(menu.className).toContain('mobile:max-h-[calc(100dvh-7rem)]');
+  });
+
   it('invokes the item\'s onSelect and closes the menu on click', () => {
     const list = items();
     render(<OverflowMenu items={list} />);
