@@ -5241,6 +5241,12 @@ export const api = {
 
   // Mirrors CatalogController (catalog/) — product CRUD delegates to
   // PriceImportService.addProductManual()/updateProduct()/deleteProduct().
+  // Both reads stay requireSession() — open to any logged-in user, matching the
+  // Java exactly. That is a product decision, not a missing gate: #205 (product
+  // owner, 2026-07-16) for search(), and the owner's 2026-08-01 ruling closing
+  // #388 for prices(), which confirmed #205's "browsable by any logged-in user"
+  // covers the supplier purchase price. #388's actual fix is on factoryConfigs /
+  // fxRates / priceCalcConfigs below.
   catalog: {
     async search(q) {
       requireSession();
@@ -5273,8 +5279,8 @@ export const api = {
       return delay({ items: results.slice(0, 50) });
     },
     // addProduct/updateProduct/deleteProduct are ceo/import only (#205), mirroring
-    // CatalogController.requireCatalogEditor. search/prices above stay requireSession()
-    // only — catalog browsing is open to any logged-in user.
+    // CatalogController.requireCatalogEditor. The reads above are open by decision;
+    // only the writes are role-gated on this resource.
     async addProduct(input = {}) {
       hasRole('ceo', 'import');
       if (input.factoryId == null) fail('factoryId จำเป็น', 400);
@@ -5332,9 +5338,11 @@ export const api = {
   },
 
   // Mirrors FactoryConfigController + FactoryEmailService (factory/).
+  // #388: list() mirrors FactoryConfigController.READ_ROLES = ceo/import — the
+  // supplier directory is procurement data. It was requireSession() before.
   factoryConfigs: {
     async list() {
-      requireSession();
+      hasRole('ceo', 'import');
       return delay({ factories: mockFactoryConfigs });
     },
     async sendEmail(ticketId, payload) {
@@ -5347,9 +5355,12 @@ export const api = {
   },
 
   // Mirrors FxRateController + BotFxFetchService (pricing/).
+  // #388: list() mirrors FxRateController.READ_ROLES = ceo/import (a costing
+  // input, so it follows PricingCostingService.RAW_COSTING_ROLES). upsert stays
+  // CEO-only.
   fxRates: {
     async list() {
-      requireSession();
+      hasRole('ceo', 'import');
       return delay({ fxRates: structuredClone(mockFxRates) });
     },
     async upsert(currency, payload) {
@@ -5376,9 +5387,11 @@ export const api = {
   },
 
   // Mirrors PriceCalcConfigController + PriceCalcService (pricing/).
+  // #388: list() mirrors PriceCalcConfigController.READ_ROLES = ceo/import — this
+  // config IS the margin policy (marginPct/importDutyPct). update stays CEO-only.
   priceCalcConfigs: {
     async list() {
-      requireSession();
+      hasRole('ceo', 'import');
       return delay({ configs: structuredClone(mockPriceCalcConfigs.filter((c) => c.isCurrent)) });
     },
     async update(payload) {

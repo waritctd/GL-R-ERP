@@ -33,8 +33,10 @@ import { canAccessPath } from '../src/app/permissions.js';
 //
 // /catalog IS now asserted: its <Route> was moved INSIDE the RequireAccess
 // wrapper (fix/catalog-route-guard) so the canViewCatalog guard is actually
-// enforced — this spec now guards against it regressing back outside. (NOTE:
-// GET /api/catalog still has no backend role check — a separate follow-up.)
+// enforced — this spec now guards against it regressing back outside. What that
+// guard controls is who sees the SCREEN: GET /api/catalog and /api/catalog/prices
+// are open to any authenticated user by product decision (#205; owner ruling
+// 2026-08-01 closing #388), so this is a UX assertion, not a security one.
 // /overtime and /my-requests remain excluded: both are RequireAccess-guarded
 // Navigate ALIASES (to /employee-requests?tab=ot and /profile respectively)
 // with guards identical to their canonical targets, so testing them adds
