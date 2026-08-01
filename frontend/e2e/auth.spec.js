@@ -15,8 +15,10 @@ test.describe('auth — quick login', () => {
       // Not on the login screen anymore.
       await expect(page.getByTestId('login-submit')).toHaveCount(0);
       // The role's landing renders inside the authenticated AppShell —
-      // its sidebar logout control is present on every role's landing.
-      await expect(page.getByRole('button', { name: 'ออกจากระบบ' })).toBeVisible();
+      // the topbar account menu (issue #396: the one identity/logout
+      // control, now that the sidebar footer's duplicate was removed) is
+      // present on every role's landing.
+      await expect(page.getByRole('button', { name: 'เมนูผู้ใช้' })).toBeVisible();
     });
   }
 });
@@ -35,7 +37,7 @@ test('credential login (email + demo1234) works', async ({ page }) => {
   await loginWithCredentials(page, 'hr@glr.co.th', 'demo1234');
 
   await expect(page.getByTestId('login-submit')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'ออกจากระบบ' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'เมนูผู้ใช้' })).toBeVisible();
 });
 
 test('credential login rejects a wrong password', async ({ page }) => {

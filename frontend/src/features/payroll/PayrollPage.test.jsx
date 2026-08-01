@@ -297,13 +297,36 @@ describe('PayrollPage adjustment inputs', () => {
   it('marks preview status in the stat strip and folds ภาษี/ปกส. into the deductions readout', async () => {
     renderPayrollPage();
 
-    const statStrip = await screen.findByTestId('compact-stat-row');
+    // Issue #394 fix: PayrollPage now wires its own `loading` state into
+    // CompactStatRow, so the strip briefly renders as a loading skeleton
+    // (same testid, `aria-busy="true"`, no <dt>s) before the real period
+    // data lands -- wait past that instead of grabbing whichever renders
+    // first.
+    await waitFor(() => {
+      expect(screen.getByTestId('compact-stat-row').getAttribute('aria-busy')).not.toBe('true');
+    });
+    const statStrip = screen.getByTestId('compact-stat-row');
     const labels = Array.from(statStrip.querySelectorAll('dt')).map((node) => node.textContent);
 
     expect(labels.some((label) => label.startsWith('สถานะรอบ'))).toBe(true);
     expect(statStrip.textContent).toContain('ตัวอย่าง');
     expect(labels.some((label) => label.startsWith('ภาษี/ปกส.'))).toBe(false);
     expect(statStrip.textContent).toContain('ภาษี/ปกส. ฿750.00');
+  });
+
+  // Issue #394 fix: the real mockApi.js's `payroll.current()` always resolves
+  // `{ period: null }` (payroll preview/process is intentionally unsupported
+  // in mock mode) -- this used to leave all four KPI tiles rendering a bare
+  // "-" with no explanation. Once loading settles with no period at all, a
+  // real empty state should explain what would populate the strip instead.
+  it('shows an explanatory empty state instead of four bare dashes when no period ever loads', async () => {
+    api.payroll.current.mockResolvedValue({ period: null });
+
+    renderPayrollPage();
+
+    await screen.findByText('ยังไม่มีข้อมูลสรุปเงินเดือน');
+    expect(screen.getByText(/เลือกรอบเดือนที่มีข้อมูลพนักงาน/)).toBeTruthy();
+    expect(screen.queryByTestId('compact-stat-row')).toBeNull();
   });
 
   it('selects a payroll line from the whole row and opens the detail drawer contract', async () => {
@@ -1041,6 +1064,30 @@ describe('PayrollPage adjustment inputs', () => {
       expect(reason.getAttribute('role')).toBe('note');
       const processButton = screen.getByRole('button', { name: /ประมวลผลเงินเดือน/i });
       expect(processButton.getAttribute('aria-describedby')).toBe(reason.id);
+    });
+
+    // Issue #394 fix: the process region's border used to be danger-red
+    // unconditionally, so an unmet precondition (no data loaded yet) looked
+    // like a failure rather than a disabled control waiting on data.
+    it('borders the process region neutral, not danger, while blocked on an empty period', async () => {
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ lineCount: 0, lines: [] }) });
+      renderPayrollPage();
+
+      const blockedButton = await screen.findByRole('button', { name: /ประมวลผลเงินเดือน/i });
+      await waitFor(() => expect(blockedButton.disabled).toBe(true));
+      const blockedRegion = blockedButton.closest('.payroll-process-region');
+      expect(blockedRegion.className).toContain('border-border');
+      expect(blockedRegion.className).not.toContain('border-danger-border');
+    });
+
+    it('borders the process region danger once a real period is loaded and armed', async () => {
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ lineCount: 1 }) });
+      renderPayrollPage();
+
+      const armedButton = await screen.findByRole('button', { name: /ประมวลผลเงินเดือน/i });
+      await waitFor(() => expect(armedButton.disabled).toBe(false));
+      const armedRegion = armedButton.closest('.payroll-process-region');
+      expect(armedRegion.className).toContain('border-danger-border');
     });
 
     it('keeps Preview visually primary and demotes Process into its own status region', async () => {

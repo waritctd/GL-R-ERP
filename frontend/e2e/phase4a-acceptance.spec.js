@@ -29,13 +29,12 @@ const MOBILE = { width: 390, height: 844 };
 // NOT matching these is a real finding and fails the test.
 const KNOWN_NOISE = [/\/api\/auth\/login/, /ERR_ABORTED/, /502/, /Failed to load resource/];
 
-// `loginAs` waits for the "ออกจากระบบ" control, which lives inside the collapsed
-// nav drawer below 1040px (the drawer now covers the whole 721–1040px tablet
-// band too, not just ≤720px — see styles.css's `@media (max-width: 1040px)`
-// drawer rules) and so is not visible at those widths. Always log in at
-// desktop width, then resize — the app is a SPA and the mock session lives in
-// module state, so resizing afterwards costs nothing and keeps the helper's
-// contract intact.
+// `loginAs` waits for the topbar account menu ("เมนูผู้ใช้"), which — unlike the
+// old sidebar footer logout button issue #396 removed — is never inside the
+// collapsed nav drawer and stays visible at every width. Login-then-resize is
+// kept anyway purely as a convenience (the app is a SPA and the mock session
+// lives in module state, so resizing afterwards costs nothing), not because
+// login at a narrow viewport would fail.
 async function loginAtViewport(page, role, viewport) {
   await page.setViewportSize(DESKTOP);
   await loginAs(page, role);
@@ -324,27 +323,30 @@ test.describe('Phase 4A — independent-review regressions', () => {
   // persistent icon-only sidebar was removed and that band now uses the same
   // off-canvas drawer as mobile (styles.css's `@media (max-width: 1040px)`
   // sets `.sidebar { visibility: hidden; transform: translateX(-100%) }`
-  // until `.is-mobile-drawer-open` is applied). At 900px the sidebar (and
-  // everything inside it, `visibility` being inherited) is therefore off-
-  // screen and hidden by default; only opening the drawer via the hamburger
-  // should reveal the logout control. This test guards that contract instead.
-  test('sidebar is off-canvas at 900px; opening the drawer reveals the logout control', async ({ page }) => {
+  // until `.is-mobile-drawer-open` is applied). Issue #396 additionally
+  // removed the sidebar footer's own name/avatar/logout block — it
+  // duplicated the topbar account menu, and doubled the on-screen logout
+  // control. The topbar account menu lives OUTSIDE the sidebar and is never
+  // hidden by the drawer, so this test now guards that: the drawer's nav
+  // links stay off-canvas by default at 900px, but logout stays reachable
+  // without ever opening it.
+  test('sidebar nav is off-canvas at 900px, but logout stays reachable via the topbar account menu without opening the drawer', async ({ page }) => {
     await loginAtViewport(page, 'sales', { width: 900, height: 800 });
 
     const trigger = page.getByRole('button', { name: 'เปิดเมนูนำทาง' });
     await expect(trigger).toBeVisible();
 
-    const logout = page.getByRole('button', { name: 'ออกจากระบบ' });
-    await expect(logout).toBeHidden();
+    // A nav link stands in for "the drawer's contents are off-canvas" -- the
+    // sidebar itself has no accessible name to assert visibility on directly.
+    const navLink = page.getByRole('link', { name: /รายการดีล/ });
+    await expect(navLink).toBeHidden();
 
-    await trigger.click();
+    const accountMenuTrigger = page.getByRole('button', { name: 'เมนูผู้ใช้' });
+    await expect(accountMenuTrigger).toBeVisible();
+    await accountMenuTrigger.click();
 
+    const logout = page.getByRole('menuitem', { name: 'ออกจากระบบ' });
     await expect(logout).toBeVisible();
-    const iconWidth = await logout.evaluate((el) => {
-      const svg = el.querySelector('svg');
-      return svg ? svg.getBoundingClientRect().width : 0;
-    });
-    expect(iconWidth, 'logout icon is collapsed to zero width inside the drawer').toBeGreaterThan(0);
   });
 
 });
